@@ -430,13 +430,12 @@ browser automatically. Configure the dashboard's own login before exposing it
 to other computers:
 
 ```bash
-ai-account-center dashboard auth setup
-ai-account-center dashboard auth show
 ai-account-center dashboard --host localhost --port 3000 --no-open
 ```
 
-`auth setup` prompts for dashboard credentials; these are separate from provider
-logins. Existing `CCS_DASHBOARD_AUTH_ENABLED`, `CCS_DASHBOARD_USERNAME` and
+Open the setup page from localhost. If the service prints a first-run setup code,
+enter it there. Dashboard credentials are separate from provider logins. Existing
+`CCS_DASHBOARD_AUTH_ENABLED`, `CCS_DASHBOARD_USERNAME` and
 `CCS_DASHBOARD_PASSWORD_HASH` overrides remain compatible. Keep credentials and
 hashes private. Browser requests use the same server origin and authenticated
 session. Each tray pairs once with the dashboard password and then keeps its
@@ -516,7 +515,7 @@ its local dashboard and opens the installed app.
 | Command | Purpose |
 | --- | --- |
 | `ai-account-center dashboard` | Run the web dashboard; options `--host/-H`, `--port/-p`, `--no-open` |
-| `ai-account-center dashboard auth setup/show/disable` | Manage dashboard login; `status` aliases `show` |
+| Dashboard setup and Settings | Manage dashboard login |
 | `ai-account-center codex-auth create/login/import-default` | Manage saved Codex logins; native login uses the provider's own CLI |
 | `ai-account-center codex-auth show [name]` | Inspect saved logins; `list` and `status` are aliases |
 | `ai-account-center codex-auth remove <name>` | Remove an inactive saved login with confirmation; `--force` overrides only saved-default protection |

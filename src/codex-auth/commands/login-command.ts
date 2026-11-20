@@ -9,7 +9,7 @@ import { initUI, info, ok } from '../../utils/ui';
 import { exitWithError } from '../../errors';
 import { ExitCode } from '../../errors/exit-codes';
 import { CodexAccountLifecycle } from '../../web-server/services/codex-account-lifecycle';
-import { SignInJobError } from '../../web-server/services/signin-jobs';
+import { SignInJobError } from '../../web-server/services/signin-job-types';
 import { parseArgs, rejectUnsupportedOptions, getProfileNameError } from './types';
 import type { CodexCommandContext } from './types';
 

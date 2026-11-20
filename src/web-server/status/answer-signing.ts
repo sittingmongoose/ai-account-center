@@ -17,6 +17,8 @@ import fs from 'fs';
 import path from 'path';
 import { ValidationError } from '../../errors/error-types';
 import { ANSWER_SCHEMA } from './report-schema';
+import { openStatusHandle } from '../../status-native/pinned';
+import type { NativeStatusHandle } from '../../status-native/native-loader';
 
 export interface AnswerSignature {
   alg: 'ed25519';
@@ -311,4 +313,114 @@ export function verifySignedDocument(
   return good
     ? { ok: true, answer: record as Record<string, unknown> & { signature: AnswerSignature } }
     : { ok: false, reason: 'bad signature' };
+}
+
+// ---------------------------------------------------------------------------------------------
+// R4: the Rust signer (crates/aac-status/src/answer_signing.rs) through the native module.
+// The same canonical JSON, Ed25519 and key lifecycle, proven byte-equal against this file by
+// tests/spec/answer-signing.json. Each helper returns null without the module (or on a refused
+// call), and the caller falls back to the TypeScript implementation above.
+
+let nativeHandle: NativeStatusHandle | null | undefined;
+
+function statusHandle(): NativeStatusHandle | null {
+  if (nativeHandle === undefined) {
+    const opened = openStatusHandle();
+    nativeHandle = 'unavailable' in opened ? null : opened;
+  }
+  return nativeHandle;
+}
+
+const keyInfoCache = new Map<string, { publicKeyPem: string; keyId: string }>();
+
+/** The answer key's public facts from the Rust signer (it owns the key file's lifecycle). */
+export async function answerKeyInfoNative(
+  dir: string
+): Promise<{ publicKeyPem: string; keyId: string } | null> {
+  const held = keyInfoCache.get(dir);
+  if (held) return held;
+  const handle = statusHandle();
+  if (!handle) return null;
+  try {
+    const info = JSON.parse(await handle.call('answerKeyLoad', JSON.stringify({ dir }))) as {
+      publicKeyPem: string;
+      keyId: string;
+    };
+    keyInfoCache.set(dir, info);
+    return info;
+  } catch {
+    return null;
+  }
+}
+
+/** Signs an answer in Rust; null without the module. */
+export async function signAnswerNative(
+  unsigned: UnsignedAnswer,
+  dir: string
+): Promise<SignedAnswer | null> {
+  const handle = statusHandle();
+  if (!handle) return null;
+  try {
+    return JSON.parse(
+      await handle.call('answerSign', JSON.stringify({ dir, unsigned }))
+    ) as SignedAnswer;
+  } catch {
+    return null;
+  }
+}
+
+/** Signs any AAC document in Rust (the send summary); null without the module. */
+export async function signDocumentNative<T extends object>(
+  doc: T,
+  dir: string
+): Promise<(T & { signature: AnswerSignature }) | null> {
+  const handle = statusHandle();
+  if (!handle) return null;
+  try {
+    return JSON.parse(
+      await handle.call('answerSign', JSON.stringify({ dir, unsigned: doc }))
+    ) as T & {
+      signature: AnswerSignature;
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Verifies a signed document in Rust; null without the module. */
+export async function verifySignedDocumentNative(
+  fileText: string | Buffer,
+  publicKeyPem: string,
+  schema: string
+): Promise<
+  | { ok: true; answer: Record<string, unknown> & { signature: AnswerSignature } }
+  | { ok: false; reason: string }
+  | null
+> {
+  const handle = statusHandle();
+  if (!handle) return null;
+  try {
+    const held = JSON.parse(
+      await handle.call(
+        'answerVerify',
+        JSON.stringify({
+          text: typeof fileText === 'string' ? fileText : fileText.toString('utf8'),
+          publicKeyPem,
+          schema,
+        })
+      )
+    ) as {
+      ok: boolean;
+      answer?: Record<string, unknown> & { signature: AnswerSignature };
+      reason?: string;
+    };
+    return held.ok
+      ? {
+          ok: true,
+          answer: held.answer as Record<string, unknown> & { signature: AnswerSignature },
+        }
+      : { ok: false, reason: held.reason ?? 'bad signature' };
+  } catch {
+    return null;
+  }
 }

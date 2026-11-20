@@ -1,5 +1,6 @@
 /** D7: the views this server builds, named on the dashboard answer the page reads first (`server.views`). */
 import type { Response } from 'express';
+import { privateFileOwners } from '../../shared/private-files';
 import { RustService } from '../rust-service';
 import { rustGroupOn } from '../rust-service-groups';
 import type { AccountDashboard } from '../services/account-dashboard-types';
@@ -17,8 +18,9 @@ function homeGroup(service: RustService): boolean {
 }
 
 /**
- * The service that builds Home (GET /api/views/home): the Rust service on, with `AAC_RUST_HOME_VIEW=on` (D7) or
- * the Home group on (R1, `rustService.groups.home`). Both default off. Off, the route is not offered.
+ * The service that builds Home (GET /api/views/home): the Rust service on, with the Home group on (R1,
+ * `rustService.groups.home`, default-ready: on when unset) or `AAC_RUST_HOME_VIEW=on` (D7). Off, the route is
+ * not offered.
  */
 export function homeViewService(res: Response): RustService | null {
   const service: unknown = res.locals.rustService;
@@ -45,4 +47,13 @@ export function withOfferedViews(dashboard: AccountDashboard, res: Response): Ac
     ...dashboard,
     server: { ...(dashboard.server ?? { version: '', commit: null }), views: ['home'] },
   };
+}
+
+export function dashboardCollectionService(res: Response): RustService | null {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService &&
+    service.mode === 'on' &&
+    privateFileOwners()['account-usage-observations'] === 'rust-service'
+    ? service
+    : null;
 }

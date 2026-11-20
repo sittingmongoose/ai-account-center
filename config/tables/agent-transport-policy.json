@@ -1,3 +1,4 @@
 {
-  "artifactMaxBytes": 67108864
+  "artifactMaxBytes": 67108864,
+  "claudeHostPurgeKey": "c8b39547c239c136190decdbca321b388a0aa690d7f0125320ceccc8ddbb1d11"
 }

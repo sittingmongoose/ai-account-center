@@ -29,7 +29,7 @@ import { runManagedCommand } from '../../utils/managed-process';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
 import { sshArgv, sshEnvironment, sshLaunch } from '../services/ssh-policy';
 import {
-  agentVerbs,
+  agentVerbMode,
   collectAgentWithFallback,
   runInventoryAgent,
   runPinsAgent,
@@ -935,7 +935,7 @@ export async function readRemoteMachine(
 ): Promise<MachineSample> {
   const alias = machineSshAlias(machine);
   if (!alias) throw new ValidationError('No ssh host is configured for this machine.');
-  if (agentVerbs() === 'off') return readRemoteMachineTsFallback(machine, alias, run);
+  if (agentVerbMode('inventory') === 'off') return readRemoteMachineTsFallback(machine, alias, run);
   const platform = REMOTE_MACHINES[machine];
   return collectAgentWithFallback(
     'inventory',

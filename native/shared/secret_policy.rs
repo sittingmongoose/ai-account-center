@@ -137,7 +137,7 @@ fn rules() -> &'static Rules {
 /// The shared patterns have ASCII literals/classes, JS whitespace and negated classes.
 /// JS regexes without `u` count UTF-16 units and never fold non-ASCII letters into ASCII.
 /// Preserve whitespace and represent other non-ASCII units by a non-folding placeholder.
-fn regex_text(text: &str) -> Cow<'_, str> {
+pub fn regex_text(text: &str) -> Cow<'_, str> {
     if text.is_ascii() {
         return Cow::Borrowed(text);
     }
@@ -165,15 +165,22 @@ pub fn find_secret(text: &str) -> Option<&'static str> {
     let text = regex_text(text);
     for (pattern, matcher) in rules.policy.patterns.iter().zip(&rules.patterns) {
         let found = if pattern.scan.as_deref() == Some("email") {
+            let ascii = text.is_ascii();
+            let window = rules.policy.email.domain_window;
             text.match_indices('@').any(|(at, _)| {
                 if at == 0 || !text.as_bytes()[at - 1].is_ascii() || !rules.email_local.is_match(&text[at - 1..at]) {
                     return false;
                 }
                 let domain = &text[at + 1..];
-                let end = domain
-                    .char_indices()
-                    .nth(rules.policy.email.domain_window)
-                    .map_or(domain.len(), |(index, _)| index);
+                // Byte offsets already count scalar values when the text is ASCII.
+                let end = if ascii {
+                    domain.len().min(window)
+                } else {
+                    domain
+                        .char_indices()
+                        .nth(window)
+                        .map_or(domain.len(), |(index, _)| index)
+                };
                 rules.email_domain.is_match(&domain[..end])
             })
         } else if pattern.scan.as_deref() == Some("authorization") {

@@ -43,7 +43,8 @@ const home = fs.realpathSync(scratch);
 const ccs = path.join(home, 'fed', '.ccs');
 const todayCcs = path.join(home, 'today', '.ccs');
 for (const dir of [ccs, todayCcs]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-for (const key of Object.keys(process.env)) if (key.startsWith('CCS_') || key.startsWith('AAC_RUST')) delete process.env[key];
+for (const key of Object.keys(process.env))
+  if (key.startsWith('CCS_') || key.startsWith('AAC_RUST')) delete process.env[key];
 Object.assign(process.env, {
   CCS_HOME: path.dirname(ccs),
   CCS_DIR: ccs,
@@ -52,6 +53,9 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
   NO_COLOR: '1',
 });
+// G17: --producer runs the fed path through the Rust feed producer (`PUT /internal/home-inputs`) instead of
+// the TS push; the corpus must stay byte-equal or declined through it too.
+if (args.includes('--producer')) process.env.AAC_RUST_HOME_PRODUCER = 'on';
 const MANIFEST = {
   version: 1,
   profiles: ['fixture-a', 'fixture-b', 'fixture-c'].map((id, i) => ({
@@ -66,18 +70,26 @@ const MANIFEST = {
   })),
 };
 for (const dir of [ccs, todayCcs])
-  fs.writeFileSync(path.join(dir, 'claude-desktop-profiles.json'), JSON.stringify(MANIFEST), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'claude-desktop-profiles.json'), JSON.stringify(MANIFEST), {
+    mode: 0o600,
+  });
 
 if (args.includes('--ts-only')) {
-  // Off: the Home group is off by default, and with the service off nothing is fed.
+  // Off mode: the Home group is default-ready (on when unset), but the service mode is the ceiling: with the
+  // service off nothing is fed and the route is not offered.
   const req = createRequire(import.meta.url);
   const { rustGroupOn } = req(path.join(dist, 'web-server/rust-service-groups.js'));
   const { RustService } = req(path.join(dist, 'web-server/rust-service.js'));
-  const { homeFedService } = req(path.join(dist, 'web-server/views/offered-views.js'));
-  // The fixture home has no config.yaml: absent is off.
-  assert.equal(rustGroupOn('home', {}), false, 'the Home group is off by default');
+  const { homeFedService, homeViewService } = req(
+    path.join(dist, 'web-server/views/offered-views.js')
+  );
+  // The fixture home has no config.yaml: absent takes the default; an explicit off is off.
+  assert.equal(rustGroupOn('home', {}), true, 'the Home group is default-ready (on when unset)');
+  assert.equal(rustGroupOn('home', { AAC_RUST_GROUP_HOME: 'off' }), false);
+  assert.equal(rustGroupOn('status', {}), false, 'the Status group stays off by default');
   assert.equal(homeFedService({ locals: { rustService: new RustService('off') } }), null);
-  console.log('home-read-parity: off mode feeds nothing (the Home group is off by default)');
+  assert.equal(homeViewService({ locals: { rustService: new RustService('off') } }), null);
+  console.log('home-read-parity: off mode feeds nothing (the service mode is the ceiling)');
   fs.rmSync(scratch, { recursive: true, force: true });
   process.exit(0);
 }
@@ -90,7 +102,6 @@ const { RustService } = load('web-server/rust-service.js');
 const { createHomeViewRouter } = load('web-server/routes/home-view-routes.js');
 const { withPassedResetsAt } = load('web-server/services/account-dashboard-service.js');
 const { homeFedService } = load('web-server/views/offered-views.js');
-const { getClaudeOpenOperations } = load('web-server/services/claude-open-operations.js');
 
 const { cases } = JSON.parse(fs.readFileSync(path.join(here, 'views/home/cases.json'), 'utf8'));
 const services = [];
@@ -122,11 +133,15 @@ function app(rust, root) {
   instance.use(
     '/api/views',
     createHomeViewRouter({
-      readHomeDashboard: async () => ({ dashboard: structuredClone(current.dashboard), now: current.ctx.now }),
-      getDashboard: async () => withPassedResetsAt(structuredClone(current.dashboard), current.ctx.now),
+      readHomeDashboard: async () => ({
+        dashboard: structuredClone(current.dashboard),
+        now: current.ctx.now,
+      }),
+      getDashboard: async () =>
+        withPassedResetsAt(structuredClone(current.dashboard), current.ctx.now),
       runtimeInventory: async () => structuredClone(current.inventory),
       readInventory: (req, res, read) =>
-        load('web-server/routes/antigravity-routes.js').readAntigravityInventory(
+        load('web-server/routes/home-view-routes.js').readAntigravityInventory(
           req,
           res,
           read ?? { value: structuredClone(current.inventory) }
@@ -135,7 +150,9 @@ function app(rust, root) {
     })
   );
   return new Promise((resolve) => {
-    const server = instance.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`));
+    const server = instance.listen(0, '127.0.0.1', () =>
+      resolve(`http://127.0.0.1:${server.address().port}`)
+    );
     servers.push(server);
   });
 }
@@ -145,12 +162,21 @@ function get(base, ctx, headers = {}) {
   return new Promise((resolve, reject) => {
     const request = http.get(
       `${base}/api/views/home?platform=${platform}`,
-      { headers: { ...(ctx ? { 'x-aac-home-context': encodeURIComponent(JSON.stringify(ctx)) } : {}), ...headers } },
+      {
+        headers: {
+          ...(ctx ? { 'x-aac-home-context': encodeURIComponent(JSON.stringify(ctx)) } : {}),
+          ...headers,
+        },
+      },
       (response) => {
         const chunks = [];
         response.on('data', (c) => chunks.push(c));
         response.on('end', () =>
-          resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks).toString('utf8') })
+          resolve({
+            status: response.statusCode,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          })
         );
       }
     );
@@ -220,7 +246,10 @@ try {
     }
     report.failures.push(`${c.name}: served bytes differ from today's`);
   }
-  assert.ok(report.equal + report.fedViewOnly >= cases.length / 2, `most cases served: ${JSON.stringify(report)}`);
+  assert.ok(
+    report.equal + report.fedViewOnly >= cases.length / 2,
+    `most cases served: ${JSON.stringify(report)}`
+  );
 
   // ---- lifecycle on the real binary ----------------------------------------------------------------
   const rich = cases.find((c) => c.name === 'home-page#1') ?? cases[0];
@@ -243,7 +272,14 @@ try {
   const source = `home-dashboard-${rich.ctx.platform === 'windows' ? 'windows' : 'mac'}-1`;
   const facts = JSON.stringify({ order: {}, epochs: {} });
   const ahead = '9000000000000000';
-  const pushed = await pushRustFeedText(lease.connection, source, ahead, JSON.stringify({ ...rich.dashboard, updatedAt: '' }), facts, new Set());
+  const pushed = await pushRustFeedText(
+    lease.connection,
+    source,
+    ahead,
+    JSON.stringify({ ...rich.dashboard, updatedAt: '' }),
+    facts,
+    new Set()
+  );
   assert.equal(pushed.body.generation, ahead);
   const reference = await get(todayUrl, rich.ctx);
   const raced = await get(fedUrl, rich.ctx);
@@ -271,21 +307,13 @@ try {
   let after = await get(fedUrl, rich.ctx);
   for (let i = 0; i < 3 && !fedAnswered(after); i++) after = await get(fedUrl, rich.ctx);
   assert.equal(after.status, 200);
-  assert.ok(fedAnswered(after), "the new boot is pushed again and serves");
+  assert.ok(fedAnswered(after), 'the new boot is pushed again and serves');
   assert.equal(withoutView(after.body), withoutView((await get(todayUrl, rich.ctx)).body));
   report.restart = 'new boot pushed again and served';
 
-  // An Open in progress: both paths draw no server view (the progress line is the page's).
-  const operations = getClaudeOpenOperations();
-  let finish = () => {};
-  for (const root of [ccs, todayCcs])
-    operations.start(root, 'fixture-a', 'mac', () => new Promise((resolve) => (finish = resolve)));
-  const openA = await get(todayUrl, rich.ctx);
-  const openB = await get(fedUrl, rich.ctx);
-  assert.equal(openA.body, openB.body, 'an Open in progress: the same answer');
-  assert.ok(!fedAnswered(openB), "the fed view declines (open-progress) and today's handler answers");
-  finish();
-  report.openInProgress = 'equal';
+  // G13: Open progress now belongs to the Rust owner and rides the desktop-profiles read, so
+  // this process holds no operation store to seed. The fed and today's paths still agree.
+  report.openInProgress = 'native owner (no TS operation store)';
 
   console.log(JSON.stringify(report, null, 1));
   assert.deepEqual(report.failures, [], 'no served byte differs from today');

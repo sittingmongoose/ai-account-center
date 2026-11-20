@@ -24,11 +24,152 @@ import {
   type HomeDashboardRead,
 } from '../services/account-dashboard-service';
 import { getCcsDir } from '../../utils/config-manager';
-import { readClaudeDesktopProfiles } from './claude-desktop-routes';
-import { readAntigravityInventory, runtimeInventory } from './antigravity-routes';
+import { ProfileError } from '../../errors/error-types';
+import { listClaudeDesktopProfileMetadata } from '../services/claude-desktop-profile-service';
+import { composeWithRust, readOwnedValueWithRust, RustService } from '../rust-service';
+import {
+  acceptRustDesktopProfiles,
+  acceptRustDesktopProfilesWithOperations,
+  isRustAntigravityInventory,
+  rustAntigravityInventoryInput,
+} from '../rust-profile-input';
+import { publicInventory } from '../../antigravity/public-reads';
+import type { AntigravityInventory } from '../../antigravity/usage-contract';
 import { homeFedService, homeViewService, withOfferedViews } from '../views/offered-views';
 import { homeReadInput, isHomeView, parseHomeContext } from '../views/home-context';
 import { answerHomeFed } from '../views/home-feed';
+
+/**
+ * The runtime's inventory from its native owner: the same read `GET /api/antigravity/profiles`
+ * answers with (`profile_reads` in the Rust listener). The retired TypeScript runtime service is
+ * gone, so an owner that cannot answer is an *unavailable* read (the promise rejects), never an
+ * invented empty inventory the page would draw as "no saved profiles".
+ */
+export async function runtimeInventory(req: Request, res: Response): Promise<unknown> {
+  return readOwnedValueWithRust(
+    req,
+    res,
+    '/api/antigravity/profiles',
+    getCcsDir(),
+    (body) => (isRustAntigravityInventory(body) ? { value: body } : null),
+    async () => {
+      throw new ProfileError('Antigravity accounts could not be read safely.');
+    }
+  );
+}
+
+/**
+ * GET /profiles' answer composed from the read (fed or a fresh owner read), through Rust. An
+ * unavailable read stays unavailable (`null`); it is never composed from an empty inventory.
+ */
+export async function readAntigravityInventory(
+  req: Request,
+  res: Response,
+  read?: { value: unknown }
+): Promise<unknown> {
+  let inventory: unknown;
+  if (read) inventory = read.value;
+  else {
+    try {
+      inventory = await runtimeInventory(req, res);
+    } catch {
+      return null;
+    }
+  }
+  if (!isRustAntigravityInventory(inventory)) return null;
+  return composeWithRust(
+    req,
+    res,
+    '/api/antigravity/profiles',
+    () => rustAntigravityInventoryInput(inventory),
+    () => publicInventory(inventory as AntigravityInventory),
+    isRustAntigravityInventory
+  );
+}
+
+/**
+ * GET /desktop-profiles' list through the native manifest read; the TS reader is the fallback.
+ * The public route adds each profile's live Open progress (`Profiles::open`); the rows keep it.
+ * The TS reader has no Open state (the owner is the Rust boot), so its rows carry no
+ * `openOperation`: unknown, which must not be read as "no Open running".
+ */
+export async function readClaudeDesktopProfiles(req: Request, res: Response): Promise<unknown[]> {
+  const scope = getCcsDir();
+  const bound = opensBound(res);
+  // This process keeps no Open store: without the Rust owner bound, no operation can exist here,
+  // and each id-bearing row says so; with it bound, the owner's field is kept — a missing field
+  // is an answer this process does not have, not "no Open running".
+  const withNone = <T extends { id?: unknown; openOperation?: unknown }>(profiles: T[]) =>
+    profiles.map((profile) =>
+      typeof profile.id === 'string' && profile.id && !('openOperation' in profile)
+        ? { ...profile, openOperation: null }
+        : profile
+    );
+  const body = await readOwnedValueWithRust(
+    req,
+    res,
+    '/api/claude/desktop-profiles',
+    scope,
+    bound
+      ? (value) =>
+          acceptRustDesktopProfilesWithOperations(value) ??
+          acceptRustDesktopProfiles((rows) => rows)(value)
+      : acceptRustDesktopProfiles(withNone),
+    async () => ({ profiles: withNone(await listClaudeDesktopProfileMetadata()) })
+  );
+  const profiles = (body as { profiles?: unknown } | undefined)?.profiles;
+  if (!Array.isArray(profiles)) throw new ProfileError('Claude desktop profiles were not read.');
+  return profiles;
+}
+
+/** The public front door's live Open pairs for this request; undefined when it sent none. */
+type OwnerOpens = unknown[] | null | undefined;
+
+function ownerOpenProgress(req: Request): OwnerOpens {
+  const header = req.get('x-aac-open-progress');
+  if (typeof header !== 'string' || !header) return undefined;
+  try {
+    const value: unknown = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
+    if (value === null) return null;
+    return Array.isArray(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The profiles read with the front door owner's progress: each id row's operation, none when absent. */
+function applyOwnerOpens(profiles: unknown[], pairs: unknown[]): unknown[] {
+  const byId = new Map<string, unknown>();
+  for (const pair of pairs) {
+    if (Array.isArray(pair) && typeof pair[0] === 'string' && pair[0]) byId.set(pair[0], pair[1]);
+  }
+  return profiles.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const { id } = row as { id?: unknown };
+    if (typeof id !== 'string' || !id) return row;
+    return { ...row, openOperation: byId.get(id) ?? null };
+  });
+}
+
+/** Whether this request's service bound the Rust Open owner (mode on + the group on, a Linux host). */
+function opensBound(res: Response): boolean {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService && service.claudeOpenEnabled;
+}
+
+/** The Open progress the profiles read carries, as the fed input's `[profileId, operation]` pairs. Null: unknown. */
+export function openPairs(profiles: unknown[]): unknown[] | null {
+  const pairs: unknown[] = [];
+  for (const row of profiles) {
+    if (!row || typeof row !== 'object') continue;
+    const { id, openOperation } = row as { id?: unknown; openOperation?: unknown };
+    if (typeof id !== 'string' || !id) continue;
+    // A row without the field is an owner answer this process does not have: unavailable, not empty.
+    if (!('openOperation' in row)) return null;
+    if (openOperation !== null && openOperation !== undefined) pairs.push([id, openOperation]);
+  }
+  return pairs;
+}
 
 export interface HomeViewRouterDeps {
   getDashboard?: typeof getAccountDashboard;
@@ -36,8 +177,8 @@ export interface HomeViewRouterDeps {
   readInventory?: (req: Request, res: Response, read?: { value: unknown }) => Promise<unknown>;
   /** R1: the dashboard before its per-response pass, with that pass's clock. */
   readHomeDashboard?: typeof readAccountDashboardForHome;
-  /** R1: the Antigravity runtime's inventory. */
-  runtimeInventory?: () => Promise<unknown>;
+  /** R1: the Antigravity runtime's inventory (the native owner's read). */
+  runtimeInventory?: (req: Request, res: Response) => Promise<unknown>;
   /** R1: the CCS directory the TS readers use. */
   scope?: () => string;
 }
@@ -72,26 +213,50 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
     let read: HomeDashboardRead | null | undefined;
     // R1: the runtime inventory the fed path read, so a fallback answers from the same reads.
     let fedInventory: { value: unknown } | undefined;
+    // One profiles read serves both paths: the fed input's Open progress and the fallback's list.
+    let profilesRead: Promise<unknown[] | null> | null = null;
+    const readProfiles = (): Promise<unknown[] | null> =>
+      (profilesRead ??= Promise.resolve()
+        .then(() => (deps.readProfiles ?? readClaudeDesktopProfiles)(req, res))
+        .then(
+          (profiles) => profiles,
+          () => null
+        ));
+    // The front door (which owns the Open tracker in the sidecar composition) sends its pairs on
+    // this request; the worker has no service lease there. Undefined: no header (another boot).
+    const ownerOpens = ownerOpenProgress(req);
     const fed = homeFedService(res);
     if (fed) {
-      const [homeRead, inventory] = await Promise.all([
+      const [homeRead, inventory, profiles] = await Promise.all([
         (deps.readHomeDashboard ?? readAccountDashboardForHome)(platform, refresh === 'true', {
           secureTransport,
         }).catch(() => null),
-        (deps.runtimeInventory ?? runtimeInventory)().then(
+        (deps.runtimeInventory ?? runtimeInventory)(req, res).then(
           (value) => ({ value }),
           () => null
         ),
+        readProfiles(),
       ]);
       read = homeRead;
       fedInventory = inventory ?? undefined;
-      if (homeRead && inventory) {
+      // The front door's owner is authoritative; otherwise, with the Rust Open owner bound its
+      // progress rides the profiles read, and without it no operation can exist in this boot.
+      const opens =
+        ownerOpens !== undefined
+          ? ownerOpens
+          : profiles
+            ? service.claudeOpenEnabled
+              ? openPairs(profiles)
+              : []
+            : null;
+      if (homeRead && inventory && opens) {
         const answered = await answerHomeFed(req, res, fed, {
           platform,
           secure: secureTransport,
           context,
           read: { dashboard: withOfferedViews(homeRead.dashboard, res), now: homeRead.now },
           inventory: inventory.value,
+          opens: opens,
           scope: (deps.scope ?? getCcsDir)(),
         });
         if (answered) return;
@@ -106,7 +271,9 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
         : (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
             secureTransport,
           }).catch(() => null),
-      (deps.readProfiles ?? readClaudeDesktopProfiles)(req, res).catch(() => null),
+      readProfiles().then((rows) =>
+        rows && ownerOpens ? applyOwnerOpens(rows, ownerOpens) : rows
+      ),
       (deps.readInventory ?? readAntigravityInventory)(req, res, fedInventory).catch(() => null),
     ]);
     if (!dashboard) {

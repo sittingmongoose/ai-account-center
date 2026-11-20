@@ -1,4 +1,6 @@
 import path from 'path';
+import { privateFileOwners } from '../../shared/private-files';
+import { readRustCollectionSources } from '../rust-service-transport';
 import { ConfigError, ValidationError } from '../../errors/error-types';
 import type { DashboardPlatform } from './account-dashboard-types';
 import { parseSourceManifest, readSourceManifestFile } from './account-usage-manifest';
@@ -14,7 +16,7 @@ import {
 import { isSafeUsageSshAlias } from './dashboard-hosts';
 import {
   readPrivateJsonFile,
-  withPrivateFileLock,
+  withRegisteredJsonLock,
   writePrivateJsonFile,
 } from './private-json-store';
 import { classifyAccountRegistry, isUnreadableAccountRegistry } from './account-registry-mode';
@@ -203,6 +205,14 @@ export function accountRegistryPath(ccsDir: string): string {
 
 /** Absent, invalid (never read as empty) or the validated registry. */
 export async function readAccountRegistry(ccsDir: string): Promise<AccountRegistryRead> {
+  if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+    const native = await readRustCollectionSources(ccsDir);
+    if (record(native) && native.state === 'absent') return { state: 'absent' };
+    if (record(native) && native.state === 'ok') {
+      const registry = parseAccountRegistry(native.registry);
+      if (registry) return { state: 'ok', registry };
+    }
+  }
   const read = await readPrivateJsonFile(accountRegistryPath(ccsDir), MAX_REGISTRY_BYTES);
   if (read.state !== 'ok') return read;
   const registry = parseAccountRegistry(read.value);
@@ -266,7 +276,7 @@ export function updateAccountRegistry(
   deps: AccountRegistryUpdateDeps = {}
 ): Promise<AccountRegistryV2> {
   const file = accountRegistryPath(ccsDir);
-  return withPrivateFileLock(file, async () => {
+  return withRegisteredJsonLock(ccsDir, 'account-registry', file, async () => {
     const active = classifyAccountRegistry(await readAccountRegistry(ccsDir));
     if (isUnreadableAccountRegistry(active.mode)) {
       throw new ConfigError('Account list could not be read safely.');
@@ -287,7 +297,7 @@ export function updateAccountRegistry(
       mutate({ version: 2, accounts: base.accounts.map((entry) => ({ ...entry })) })
     );
     if (!next) throw new ValidationError('The account list change is not valid.');
-    await writePrivateJsonFile(file, next);
+    await writePrivateJsonFile(file, next, ccsDir);
     return next;
   });
 }

@@ -27,7 +27,7 @@ describe('cross-platform', () => {
     it('handles relative paths without expansion', () => {
       const relativePath = 'relative/path';
       const expanded = expandPath(relativePath);
-      assert.strictEqual(expanded, relativePath);
+      assert.strictEqual(expanded, path.normalize(relativePath));
     });
 
     it('handles empty string', () => {
@@ -102,7 +102,14 @@ describe('cross-platform', () => {
       const fs = require('fs');
       const distDir = path.join(__dirname, '..', '..', 'dist');
 
-      assert(fs.existsSync(path.join(distDir, 'ccs.js')), 'ccs.js should exist in dist directory');
+      const ext = process.platform === 'win32' ? '.exe' : '';
+      for (const name of ['ai-account-center', 'ccs', 'aac-http']) {
+        assert(fs.existsSync(path.join(distDir, 'native', name + ext)), `Missing native ${name}`);
+      }
+      assert(
+        fs.existsSync(path.join(distDir, 'web-server', 'sidecar.js')),
+        'Missing private worker'
+      );
     });
 
     it('has required script files', () => {
@@ -118,19 +125,15 @@ describe('cross-platform', () => {
       const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 
       assert(packageJson.bin, 'package.json should have bin field');
-      assert.strictEqual(packageJson.bin['ai-account-center'], 'dist/ccs.js');
-      assert.strictEqual(packageJson.bin.ccs, packageJson.bin['ai-account-center']);
+      assert.strictEqual(packageJson.bin['ai-account-center'], 'dist/native/ai-account-center');
+      assert.strictEqual(packageJson.bin.ccs, 'dist/native/ccs');
       for (const alias of ['ccs-droid', 'ccsd', 'ccs-codex', 'ccsx', 'ccsxp']) {
         assert.strictEqual(
           packageJson.bin[alias],
-          'dist/bin/compat-cli.js',
+          `dist/native/${alias}`,
           `${alias} must point only to migration guidance`
         );
       }
-      assert(
-        fs.existsSync(path.join(__dirname, '..', '..', 'src/bin/compat-cli.ts')),
-        'migration-only entrypoint source should exist'
-      );
       assert(packageJson.scripts, 'package.json should have scripts field');
       assert.strictEqual(
         packageJson.scripts.prepack,

@@ -1,3 +1,4 @@
+import { broadcastDashboardEvent } from '../dashboard-events';
 import { ANALYTICS_TOOLS, isActivityKind } from '../usage/analytics-tools';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -68,6 +69,7 @@ import {
 import type { UsageReport } from '../../store/usage-report';
 import { createLogger } from '../../services/logging';
 import { openAacStore } from '../../store/store-service';
+import type { AnalyticsOwnedActivity } from '../rust-analytics-owned-input';
 import type {
   AccountAnalyticsActivity,
   AccountAnalyticsActivityCoverage,
@@ -292,6 +294,8 @@ export function coldScanningSourceStates(): AccountAnalyticsSource[] {
 }
 
 export interface AccountAnalyticsActivityDeps {
+  /** A fresh activity snapshot is available to readers. */
+  onPublished?: () => void;
   /** Dedicated oversized-file worker, independent of normal collection/response budgets. */
   largeCodexReader?: LargeCodexReader;
   largeCodexTimeoutMs?: number;
@@ -1552,6 +1556,7 @@ export class AccountAnalyticsActivityService {
       });
       void this.ingestor().submit(reports);
     }
+    this.deps.onPublished?.();
   }
 
   private ingestorInstance: ActivityIngestor | undefined;
@@ -2179,6 +2184,59 @@ export class AccountAnalyticsActivityService {
     this.backgroundTimer = undefined;
   }
 
+  /**
+   * The live collector state the owned Analytics read forwards (R5/A2), with the same guard and
+   * refresh trigger `answer` runs: the guarded selection's coverage of the published snapshot,
+   * or the store path's source grid and refresh flags. `answer` and the owned composer share it,
+   * so the two paths never drift on what the collector knows right now.
+   */
+  private ownedLive(
+    state: ActivityState,
+    query: AccountAnalyticsQuery,
+    from: number,
+    to: number
+  ): AnalyticsOwnedActivity {
+    // The filter names the provider that served the usage (post-attribution),
+    // so every usage provider selects, not just the tools' own providers.
+    const activityFilters: readonly string[] = ['all', ...USAGE_PROVIDER_ORDER];
+    if (
+      query.refresh !== true &&
+      (query.account !== 'all' || !activityFilters.includes(query.provider))
+    )
+      return {
+        kind: 'guarded',
+        live: {
+          sources: state.sourceStates,
+          refreshing: state.pending !== null,
+          refreshingRemote: [...state.remotePending],
+        },
+        // Already-read history still says which providers have activity, so
+        // the provider list stays stable while a quota-only filter is chosen.
+        coverage: accountAnalyticsActivityCoverage(state.sources, from, to),
+      };
+    if (query.refresh === true && !state.manualRefreshPending) {
+      state.generation++;
+      state.manualRefreshPending = true;
+      if (!state.pending) this.startCollection(state);
+    } else this.startIfDue(state);
+    return {
+      kind: 'store',
+      live: {
+        sources:
+          state.sourceStates.length === 0 && state.pending
+            ? coldScanningSourceStates()
+            : state.sourceStates,
+        refreshing: state.pending !== null,
+        refreshingRemote: [...state.remotePending],
+      },
+    };
+  }
+
+  /** The owned read's live state for the default scope (the route's owned composer). */
+  liveForOwned(query: AccountAnalyticsQuery, from: number, to: number): AnalyticsOwnedActivity {
+    return this.ownedLive(this.stateFor((this.deps.scope ?? getCcsDir)()), query, from, to);
+  }
+
   private async answer(
     state: ActivityState,
     scope: string,
@@ -2187,13 +2245,8 @@ export class AccountAnalyticsActivityService {
     to: number,
     tz: string
   ): Promise<AccountAnalyticsActivityResult> {
-    // The filter names the provider that served the usage (post-attribution),
-    // so every usage provider selects, not just the tools' own providers.
-    const activityFilters: readonly string[] = ['all', ...USAGE_PROVIDER_ORDER];
-    if (
-      query.refresh !== true &&
-      (query.account !== 'all' || !activityFilters.includes(query.provider))
-    )
+    const live = this.ownedLive(state, query, from, to);
+    if (live.kind === 'guarded')
       return {
         ...projectAccountAnalyticsActivity(
           [],
@@ -2204,34 +2257,24 @@ export class AccountAnalyticsActivityService {
           'Local activity is unavailable for this selection.',
           {
             tz,
-            sources: state.sourceStates,
-            refreshing: state.pending !== null,
-            refreshingRemote: [...state.remotePending],
+            sources: live.live.sources,
+            refreshing: live.live.refreshing,
+            refreshingRemote: live.live.refreshingRemote,
           }
         ),
-        // Already-read history still says which providers have activity, so
-        // the provider list stays stable while a quota-only filter is chosen.
-        coverage: accountAnalyticsActivityCoverage(state.sources, from, to),
+        coverage: live.coverage,
       };
-    if (query.refresh === true && !state.manualRefreshPending) {
-      state.generation++;
-      state.manualRefreshPending = true;
-      if (!state.pending) this.startCollection(state);
-    } else this.startIfDue(state);
     // With the history store the answer is read from it at once: a page never waits for a scan.
     const store = this.deps.historyStore ? await this.deps.historyStore().catch(() => null) : null;
     if (store) {
       try {
-        const sourcesNow =
-          state.sourceStates.length === 0 && state.pending
-            ? coldScanningSourceStates()
-            : state.sourceStates;
+        const sourcesNow = live.live.sources;
         const answered = await storeActivityAnswer(store, query, from, to, {
           tz,
           pricing: state.pricing,
           sources: sourcesNow,
-          refreshing: state.pending !== null,
-          refreshingRemote: [...state.remotePending],
+          refreshing: live.live.refreshing,
+          refreshingRemote: live.live.refreshingRemote,
         });
         // Before the first pass of this run the grid comes from the store's last reads.
         if (sourcesNow.length === 0)
@@ -2411,9 +2454,22 @@ export function getAccountAnalyticsActivity(
   return activityService().get(query, from, to, options);
 }
 
+/**
+ * The owned Analytics read's live collector state (R5/A2): the same guard, refresh trigger and
+ * source grid the activity answer itself reads, without projecting or reading the store.
+ */
+export function getAccountAnalyticsActivityLive(
+  query: AccountAnalyticsQuery,
+  from: number,
+  to: number
+): AnalyticsOwnedActivity {
+  return activityService().liveForOwned(query, from, to);
+}
+
 function activityService(): AccountAnalyticsActivityService {
   service ??= new AccountAnalyticsActivityService({
     persistSnapshot: true,
+    onPublished: () => broadcastDashboardEvent({ type: 'analytics-changed' }),
     refreshPricing: startModelsDevRegistryRefresh,
     // The store lives under the default CCS folder only.
     historyStore: async () => (await openAacStore()).store,

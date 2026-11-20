@@ -11,7 +11,10 @@ import { startRustBuilder } from './rust-home-builder.mjs';
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
-	const cli = path.join(root, 'dist', 'ccs.js');
+	const cut = !!ctx.args.cut && ctx.args.cut !== '0';
+	const cli = cut
+		? path.join(root, 'dist', 'native', process.platform === 'win32' ? 'ai-account-center.exe' : 'ai-account-center')
+		: path.join(root, 'dist', 'ccs.js');
 	if (!fs.existsSync(cli) || !fs.existsSync(path.join(root, 'dist', 'ui', 'app', 'index.html'))) {
 		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
 	}
@@ -26,7 +29,12 @@ export default (ctx) => {
 	// then explicitly off.
 	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
 	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
-	const rustStatusFed = !!ctx.args.rustStatusFed && ctx.args.rustStatusFed !== '0';
+	// R4: `--set rustOwned=1` implies rustStatusFed and also turns the store host and the Scoreboard group on
+	// (AAC_RUST_STORE=on, AAC_RUST_GROUP_SCOREBOARD=on): the Rust service reads the kit's fixture reports folder itself
+	// (owned Status readers, runs ingest, readers-check rows in that temporary folder) and answers both routes. Off by
+	// default, and then explicitly off.
+	const rustOwned = !!ctx.args.rustOwned && ctx.args.rustOwned !== '0';
+	const rustStatusFed = (!!ctx.args.rustStatusFed && ctx.args.rustStatusFed !== '0') || rustOwned;
 	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
 	if ((rustHome || rustStatusFed) && !fs.existsSync(rustBinary)) throw new Error(`rustHome/rustStatusFed: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
 	let builder = null;
@@ -81,15 +89,20 @@ export default (ctx) => {
 		// CCS_HOME alone is not enough: some provider collectors read the real home (CLI logins, usage files, ssh keys
 		// for other machines). Every home-like variable points at the temporary folder, so no real account shows up.
 		server: (_, s) => ({
-			command: [process.execPath, cli, 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
+			command: [...(cut ? [cli] : [process.execPath, cli]), 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
 			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'), AAC_AGENT_REPORTS_DIR: s.reports, AAC_PM_MAIL_REGISTRY_DIR: path.join(s.reports, 'pm-mail-registry'), AAC_STATUS_DOORBELL: 'off',
 				// `--set realPins=1`: this machine's real T3 pins, opened read-only by the status module (the other machines'
 				// pins come over ssh, set up above).
 				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),
-				...(rustHome
+				...(cut ? {
+					CCS_DIR: path.join(s.home, '.ccs'), AAC_AGENT_VERBS: 'off', AAC_AGENT_TRANSPORT: 'off',
+					AAC_STORE_SHARE_BACKUP_DIR: 'off', SSH_AUTH_SOCK: ''
+				} : { ...(rustHome
 					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
 					: { AAC_RUST_SERVICE: rustStatusFed ? 'on' : 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off', ...(rustStatusFed ? { AAC_RUST_SERVICE_BINARY: rustBinary } : {}) }),
-				AAC_RUST_GROUP_STATUS: rustStatusFed ? 'on' : 'off' }
+				AAC_RUST_GROUP_STATUS: rustStatusFed ? 'on' : 'off',
+				AAC_RUST_STORE: rustOwned ? 'on' : 'off',
+				AAC_RUST_GROUP_SCOREBOARD: rustOwned ? 'on' : 'off' }) }
 		}),
 		async teardown(_, s) {
 			if (builder) {

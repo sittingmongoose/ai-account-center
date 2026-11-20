@@ -7,11 +7,11 @@ import { join } from 'path';
 import type { Server } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { attachDashboardEventServer } from '../../../src/web-server/dashboard-events';
-import { createResetSourceAdapter } from '../../../src/web-server/services/reset-source-adapter';
+import { createResetSourceAdapter } from '../../fixtures/reset-adapter/reset-source-adapter';
 import {
   createResetClaimRouter,
   type ResetSource,
-} from '../../../src/web-server/routes/reset-claim-routes';
+} from '../../fixtures/reset-adapter/reset-claim-routes';
 const servers: Server[] = [];
 const dirs: string[] = [];
 const socketClosers: Array<() => Promise<void>> = [];

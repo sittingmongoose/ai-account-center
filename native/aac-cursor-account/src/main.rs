@@ -129,10 +129,10 @@ fn main() {
             let read = client.exchange(&stored.secret).and_then(|token| {
                 let account = api::account_hash(&token);
                 api::events(&client, &token, since, until)
-                    .map(|(events, pages, unmeasured)| (account, events, pages, unmeasured))
+                    .map(|(events, counts, unmeasured)| (account, events, counts, unmeasured))
             });
             match read {
-                Ok((account, events, pages, unmeasured)) => print(json!({
+                Ok((account, events, counts, unmeasured)) => print(json!({
                     "state": "read",
                     "readAt": started,
                     "account": account,
@@ -141,7 +141,8 @@ fn main() {
                     // Events whose tokenUsage had no usable counts: not logged, never measured
                     // zeros, and so never a row.
                     "unmeasured": unmeasured,
-                    "pages": pages,
+                    "pages": counts.pages,
+                    "eventCounts": counts.value(),
                     "rows": api::hourly(&events),
                 })),
                 Err(api::Failure::Rejected) => print(json!({"state": "key_rejected",

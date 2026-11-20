@@ -101,6 +101,11 @@ export function localUsageScanTarget(
   return null;
 }
 
+/** The packaged scanner resolved for this computer, or the cause it cannot run here. */
+export type LocalUsageScan =
+  | { ok: true; file: string; sha256: string; size: number; target: UsageScanTarget }
+  | { ok: false; cause: 'binary_not_built' | 'binary_missing' };
+
 /**
  * The packaged scanner for this computer, run in place on the dashboard's own computer: its path
  * and pinned digest, or why there is none (`binary_not_built`: no manifest or no build for this
@@ -108,9 +113,7 @@ export function localUsageScanTarget(
  */
 export function localUsageScan(
   manifest: UsageScanManifest | null = readUsageScanManifest()
-):
-  | { ok: true; file: string; sha256: string; size: number; target: UsageScanTarget }
-  | { ok: false; cause: 'binary_not_built' | 'binary_missing' } {
+): LocalUsageScan {
   const target = localUsageScanTarget();
   const entry = target ? manifest?.targets[target] : undefined;
   if (!manifest || !target || !entry) return { ok: false, cause: 'binary_not_built' };

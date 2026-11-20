@@ -342,8 +342,9 @@ export function preferencesForms(): FileForm[] {
       ),
     },
     {
+      // The admit table is the engine's IANA list now, so this zone is Rust-served.
       name: 'zone outside the admitted list',
-      rust: false,
+      rust: true,
       setup: primary(prefs({ timeZone: 'Asia/Kolkata' })),
     },
     {
@@ -394,11 +395,15 @@ export function preferencesForms(): FileForm[] {
   ];
 }
 
-/** The zones Rust admits, read from the Rust source so there is one list. */
+/**
+ * The zones the engine admits, from its own IANA table. The Rust reader validates the same
+ * table (`chrono-tz`), so the gate is the engine's set rather than a scraped hand list.
+ */
 export function admittedZones(): string[] {
-  const source = fs.readFileSync(path.join(repo, 'crates/aac-http/src/account_reads.rs'), 'utf8');
-  const block = source.slice(source.indexOf('ADMITTED_TIME_ZONES: &[&str] = &['));
-  return [...block.slice(0, block.indexOf('];')).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  const supported = (
+    Intl as unknown as { supportedValuesOf?: (key: string) => string[] }
+  ).supportedValuesOf?.('timeZone');
+  return [...new Set(['UTC', ...(supported ?? [])])];
 }
 
 export function writeMeasureFiles(ccs: string): void {
@@ -565,7 +570,7 @@ export function dashboardAccounts(): DashboardAccount[] {
   ];
 }
 
-function dashboard(accounts = dashboardAccounts()) {
+export function dashboard(accounts = dashboardAccounts()) {
   const facts = {
     lifecycleRoutes: true,
     secureTransport: false,
@@ -866,7 +871,7 @@ const permissionDenied = {
  * pass's full-read age); Nas1's Claude folder is permission denied and its OMP is not installed;
  * Alexis has only partial reads (no complete read recorded).
  */
-async function prepareRemoteCaches(cacheDir: string): Promise<void> {
+export async function prepareRemoteCaches(cacheDir: string): Promise<void> {
   if (fs.existsSync(path.join(cacheDir, 'analytics-remote-v1'))) return;
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   const passes = [NOW - 2 * HOUR, NOW - HOUR];

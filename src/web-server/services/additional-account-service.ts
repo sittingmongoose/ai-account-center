@@ -688,15 +688,19 @@ export class AdditionalAccountService {
   /**
    * Re-check one account now (CONTRACT-registry-lifecycle 6.5): the cache TTL
    * is skipped, the failure backoff and the refresh debounce are not. Null when
-   * the current list does not name the account.
+   * the current list does not name the reviewed account and source.
    */
-  async refreshAccount(id: string): Promise<DashboardAccount | null> {
+  async refreshAccount(
+    id: string,
+    reviewed?: AdditionalUsageSource
+  ): Promise<DashboardAccount | null> {
     const config = await this.loadManifest();
     if (!config.valid) return null;
     const source = config.sources.find(
       (candidate) => (candidate.account?.id ?? `${candidate.provider}:usage`) === id
     );
-    return source ? this.getSource(source, true) : null;
+    if (!source || (reviewed && sourceKey(reviewed) !== sourceKey(source))) return null;
+    return this.getSource(source, true);
   }
 
   /**
@@ -784,6 +788,9 @@ export function getConfiguredAdditionalAccounts(
   return services.get(path.resolve(getCcsDir()))?.configured(opts) ?? null;
 }
 
-export function refreshAdditionalAccount(id: string): Promise<DashboardAccount | null> {
-  return scopedService().refreshAccount(id);
+export function refreshAdditionalAccount(
+  id: string,
+  reviewed: AdditionalUsageSource
+): Promise<DashboardAccount | null> {
+  return scopedService().refreshAccount(id, reviewed);
 }

@@ -64,7 +64,12 @@ impl AgentArtifact {
     }
 
     fn verify(&self) -> Result<(), Failure> {
-        let bytes = aac_files::read_bounded(&self.path, artifact_cap())?;
+        let bytes = aac_files::read_bounded(&self.path, artifact_cap()).map_err(|_| {
+            Failure::new(
+                Cause::AgentMismatch,
+                "pinned agent artifact could not be read",
+            )
+        })?;
         if aac_core::sha256_hex(&bytes) != self.hash {
             return Err(Failure::new(
                 Cause::AgentMismatch,
@@ -103,6 +108,11 @@ impl AgentClient {
             allow_shipping: false,
             ..Self::new(computer, artifact)
         }
+    }
+
+    /// Share this registry entry's pooled computer with a fixed package helper.
+    pub fn computer(&self) -> &Computer {
+        &self.computer
     }
 
     /// Check SHA-256 before every use and cache a successful handshake for this client.

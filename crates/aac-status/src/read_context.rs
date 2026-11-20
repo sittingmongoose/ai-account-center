@@ -17,6 +17,16 @@ pub struct Presentation {
     epochs: HashMap<String, i64>,
     order: HashMap<String, usize>,
 }
+impl Presentation {
+    /// No facts. A caller whose timestamps are already canonical ISO words needs none.
+    pub fn empty() -> Self {
+        Self {
+            dates: HashMap::new(),
+            epochs: HashMap::new(),
+            order: HashMap::new(),
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Date {
@@ -47,6 +57,10 @@ pub struct Context {
     /// R2: the request's `now`, which a fed generation's facts cannot hold.
     now: Option<(i64, Date)>,
     missing: Cell<bool>,
+    /// R4 owned Scoreboard: an instant with no date fact still has its ISO text, which
+    /// `Date#toISOString` writes and aac-num writes exactly; its clock and day words still need
+    /// a fact (a read of them refuses the candidate).
+    iso_any: bool,
 }
 impl Context {
     pub fn new(facts: Presentation) -> Self {
@@ -59,7 +73,13 @@ impl Context {
             facts,
             now,
             missing: Cell::new(false),
+            iso_any: false,
         }
+    }
+    /// See `iso_any`.
+    pub fn with_iso_any(mut self) -> Self {
+        self.iso_any = true;
+        self
     }
     pub fn valid(&self) -> bool {
         !self.missing.get()
@@ -102,7 +122,28 @@ impl Context {
         value
     }
     pub fn iso(&self, ms: Option<i64>) -> V {
-        ms.and_then(|m| self.date(m)).map(|d| json!(d.iso)).unwrap_or(V::Null)
+        let Some(m) = ms else {
+            return V::Null;
+        };
+        if self.iso_any && self.lookup(m).is_none() {
+            return match aac_num::ecma::to_iso_string(m) {
+                Some(text) => json!(text),
+                None => {
+                    self.missing.set(true);
+                    V::Null
+                }
+            };
+        }
+        self.date(m).map(|d| json!(d.iso)).unwrap_or(V::Null)
+    }
+    /// A date fact (the request's `now` first) without marking a miss.
+    fn lookup(&self, ms: i64) -> Option<&Date> {
+        if let Some((at, date)) = &self.now
+            && *at == ms
+        {
+            return Some(date);
+        }
+        self.facts.dates.get(&ms.to_string())
     }
     pub fn clock(&self, ms: i64) -> String {
         self.word(ms, |d| d.clock.as_ref())

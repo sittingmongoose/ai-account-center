@@ -1,0 +1,67 @@
+{
+ "now": 1793982600000,
+ "share": {
+  "v1/writers/Not A Writer/thread.json": "{\n  \"schema\": \"agent-reports/thread@1\",\n  \"writer\": \"vm.other\",\n  \"seq\": 1,\n  \"writtenAt\": \"2026-11-06T16:29:00.000Z\",\n  \"ttlSeconds\": 1800,\n  \"agent\": {\n    \"name\": \"other\",\n    \"model\": \"claude-opus-5-5\",\n    \"effort\": \"high\"\n  },\n  \"project\": \"proj\",\n  \"stream\": \"S\",\n  \"state\": \"working\",\n  \"doing\": \"Building\",\n  \"blockedOn\": null,\n  \"progress\": null,\n  \"links\": []\n}\n",
+  "v1/writers/mac.worker/thread.json": "{\n  \"schema\": \"agent-reports/thread@1\",\n  \"writer\": \"mac.worker\",\n  \"seq\": 7,\n  \"writtenAt\": \"2026-11-06T16:29:55.000Z\",\n  \"ttlSeconds\": 1800,\n  \"agent\": {\n    \"name\": \"worker\",\n    \"model\": \"claude-opus-5-5\",\n    \"effort\": \"high\"\n  },\n  \"project\": \"proj\",\n  \"stream\": \"S\",\n  \"state\": \"working\",\n  \"doing\": \"Building\",\n  \"blockedOn\": null,\n  \"progress\": null,\n  \"links\": []\n}\n",
+  "v1/writers/vm.lead/cards/vm.lead--Q1.json": "{\n  \"schema\": \"agent-reports/card@1\",\n  \"id\": \"vm.lead--Q1\",\n  \"writer\": \"vm.lead\",\n  \"seq\": 4,\n  \"writtenAt\": \"2026-11-06T16:29:00.000Z\",\n  \"project\": \"proj\",\n  \"stream\": \"S\",\n  \"askedBy\": \"lead\",\n  \"replyTo\": {\n    \"pmMail\": \"lead\",\n    \"t3Thread\": null\n  },\n  \"state\": \"open\",\n  \"label\": \"S-Q1\",\n  \"title\": \"Question Q1\",\n  \"now\": \"Plain words.\",\n  \"nowAsOf\": null,\n  \"oldAnswer\": null,\n  \"whatChanged\": null,\n  \"options\": [\n    {\n      \"key\": \"A\",\n      \"label\": \"First\",\n      \"gets\": \"Simple\",\n      \"costs\": null,\n      \"media\": [],\n      \"sections\": []\n    },\n    {\n      \"key\": \"B\",\n      \"label\": \"Second\",\n      \"gets\": null,\n      \"costs\": \"More work\",\n      \"media\": [],\n      \"sections\": []\n    }\n  ],\n  \"recommendation\": {\n    \"key\": \"A\",\n    \"why\": \"Simpler.\"\n  },\n  \"multiple\": false,\n  \"urgency\": \"today\",\n  \"blocks\": null,\n  \"batch\": null,\n  \"evidence\": [],\n  \"replies\": [],\n  \"askedAt\": \"2026-11-06T16:20:00.000Z\"\n}\n",
+  "v1/writers/vm.lead/cards/vm.lead--Q2.json": "{\n  \"schema\": \"agent-reports/card@1\",\n  \"id\": \"vm.lead--Q2\",\n  \"writer\": \"vm.lead\",\n  \"seq\": 1,\n  \"writtenAt\": \"2026-11-06T16:29:00.000Z\",\n  \"project\": \"proj\",\n  \"stream\": \"S\",\n  \"askedBy\": \"lead\",\n  \"replyTo\": {\n    \"pmMail\": \"lead\",\n    \"t3Thread\": null\n  },\n  \"state\": \"open\",\n  \"label\": \"S-Q2\",\n  \"title\": \"\",\n  \"now\": \"Plain words.\",\n  \"nowAsOf\": null,\n  \"oldAnswer\": null,\n  \"whatChanged\": null,\n  \"options\": [\n    {\n      \"key\": \"A\",\n      \"label\": \"First\",\n      \"gets\": \"Simple\",\n      \"costs\": null,\n      \"media\": [],\n      \"sections\": []\n    },\n    {\n      \"key\": \"B\",\n      \"label\": \"Second\",\n      \"gets\": null,\n      \"costs\": \"More work\",\n      \"media\": [],\n      \"sections\": []\n    }\n  ],\n  \"recommendation\": {\n    \"key\": \"A\",\n    \"why\": \"Simpler.\"\n  },\n  \"multiple\": false,\n  \"urgency\": \"today\",\n  \"blocks\": null,\n  \"batch\": null,\n  \"evidence\": [],\n  \"replies\": [],\n  \"askedAt\": \"2026-11-06T16:20:00.000Z\"\n}\n",
+  "v1/writers/vm.lead/tasks.json": "{\n  \"schema\": \"agent-reports/tasks@1\",\n  \"writer\": \"vm.lead\",\n  \"seq\": 1,\n  \"writtenAt\": \"2026-11-06T16:29:00.000Z\",\n  \"project\": \"proj\",\n  \"projectLabel\": \"Project\",\n  \"stream\": \"S\",\n  \"streamLabel\": \"Stream S\",\n  \"owner\": \"lead\",\n  \"goal\": \"Ship it\",\n  \"board\": null,\n  \"items\": [\n    {\n      \"id\": \"t1\",\n      \"title\": \"Item t1\",\n      \"state\": \"doing\",\n      \"updatedAt\": \"2026-11-06T16:28:00.000Z\"\n    },\n    {\n      \"id\": \"t2\",\n      \"title\": \"Item t2\",\n      \"state\": \"done\",\n      \"updatedAt\": \"2026-11-06T16:28:00.000Z\"\n    }\n  ]\n}\n",
+  "v1/writers/vm.lead/thread.json": "{\n  \"schema\": \"agent-reports/thread@1\",\n  \"writer\": \"vm.lead\",\n  \"seq\": 1,\n  \"writtenAt\": \"2026-11-06T16:29:00.000Z\",\n  \"ttlSeconds\": 1800,\n  \"agent\": {\n    \"name\": \"lead\",\n    \"model\": \"claude-opus-5-5\",\n    \"effort\": \"high\",\n    \"t3Thread\": \"T3-ABC-123\"\n  },\n  \"project\": \"proj\",\n  \"stream\": \"S\",\n  \"state\": \"working\",\n  \"doing\": \"Building\",\n  \"blockedOn\": null,\n  \"progress\": null,\n  \"links\": []\n}\n"
+ },
+ "pins": [
+  [
+   "t3-thread://host/t3-abc-123",
+   "Lead thread"
+  ],
+  [
+   "unrelated",
+   "Other"
+  ]
+ ],
+ "runs": {
+  "runs": [
+   {
+    "file": "writers/vm.lead/runs/2026-11-06/r1.json",
+    "doc": {
+     "seq": 3
+    },
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "firstSeenAt": 1793982595000
+   },
+   {
+    "file": "writers/mac.worker/runs/2026-11-05/a.json",
+    "doc": {
+     "seq": 1
+    },
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "firstSeenAt": 1793982591000
+   }
+  ],
+  "problems": [
+   {
+    "file": "writers/vm.lead/runs/bad.json",
+    "reason": "not valid JSON",
+    "since": 1793982599000
+   },
+   {
+    "file": "writers/vm.lead/runs/2026-11-06/r1.json",
+    "reason": "stale",
+    "since": 1793982598000
+   },
+   {
+    "file": "writers/Bad Name/runs/x.json",
+    "reason": "not valid JSON",
+    "since": 1793982597000
+   },
+   {
+    "file": "writers/mac.worker/thread.json",
+    "reason": "not a runs file",
+    "since": 1793982596000
+   }
+  ]
+ },
+ "check": {
+  "v1/readers/aac/mac.worker.json": "{\n  \"schema\": \"agent-reports/reader@1\",\n  \"reader\": \"aac\",\n  \"writer\": \"mac.worker\",\n  \"writtenAt\": \"2026-11-06T16:30:00.000Z\",\n  \"files\": [\n    {\n      \"file\": \"runs/2026-11-05/a.json\",\n      \"seq\": 1,\n      \"sha256\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\n      \"readAt\": \"2026-11-06T16:29:51.000Z\",\n      \"result\": \"accepted\",\n      \"reason\": null\n    },\n    {\n      \"file\": \"thread.json\",\n      \"seq\": 7,\n      \"sha256\": \"822c125068bb77f3c770c9510daf7a434bccb897dafce5ed282355d8913a4096\",\n      \"readAt\": \"2026-11-06T16:30:00.000Z\",\n      \"result\": \"accepted\",\n      \"reason\": null,\n      \"pin\": null\n    }\n  ]\n}\n",
+  "v1/readers/aac/vm.lead.json": "{\n  \"schema\": \"agent-reports/reader@1\",\n  \"reader\": \"aac\",\n  \"writer\": \"vm.lead\",\n  \"writtenAt\": \"2026-11-06T16:30:00.000Z\",\n  \"files\": [\n    {\n      \"file\": \"cards/vm.lead--Q1.json\",\n      \"seq\": 4,\n      \"sha256\": \"e602881e67a6c74a9cf6eb593450ee51083ba2509ab53e42722f8dbf9974ef88\",\n      \"readAt\": \"2026-11-06T16:30:00.000Z\",\n      \"result\": \"accepted\",\n      \"reason\": null\n    },\n    {\n      \"file\": \"cards/vm.lead--Q2.json\",\n      \"seq\": null,\n      \"sha256\": null,\n      \"readAt\": \"2026-11-06T16:30:00.000Z\",\n      \"result\": \"refused\",\n      \"reason\": \"title is missing or not valid\"\n    },\n    {\n      \"file\": \"runs/2026-11-06/r1.json\",\n      \"seq\": 3,\n      \"sha256\": \"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"readAt\": \"2026-11-06T16:29:55.000Z\",\n      \"result\": \"accepted\",\n      \"reason\": null\n    },\n    {\n      \"file\": \"runs/bad.json\",\n      \"seq\": null,\n      \"sha256\": null,\n      \"readAt\": \"2026-11-06T16:29:59.000Z\",\n      \"result\": \"refused\",\n      \"reason\": \"not valid JSON\"\n    },\n    {\n      \"file\": \"tasks.json\",\n      \"seq\": 1,\n      \"sha256\": \"cd0b7c195d3273c8167dff5ad22cd47f0b0424c2324d8d974c68bad7445f5f91\",\n      \"readAt\": \"2026-11-06T16:30:00.000Z\",\n      \"result\": \"accepted\",\n      \"reason\": null\n    },\n    {\n      \"file\": \"thread.json\",\n      \"seq\": 1,\n      \"sha256\": \"1626b4b73cc5d0cfb5755821eea4e33861fbebbb28f1e2623044fa4e2035894e\",\n      \"readAt\": \"2026-11-06T16:30:00.000Z\",\n      \"result\": \"accepted\",\n      \"reason\": null,\n      \"pin\": {\n        \"t3Thread\": \"t3-thread://host/t3-abc-123\",\n        \"title\": \"Lead thread\"\n      }\n    }\n  ]\n}\n"
+ }
+}

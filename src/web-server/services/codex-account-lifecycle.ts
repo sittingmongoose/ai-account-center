@@ -1,5 +1,13 @@
 import { createHash } from 'crypto';
 import fs from 'fs/promises';
+import { getCcsDir } from '../../utils/config-manager';
+import {
+  canonicalLeaseRoot,
+  signInCallback,
+  signInStaging,
+  writeProviderDirectory,
+  writeProviderFile,
+} from '../../shared/private-file-lease';
 import path from 'path';
 import * as lockfile from 'proper-lockfile';
 import { CodexProfileRegistry } from '../../codex-auth/codex-profile-registry';
@@ -26,12 +34,14 @@ import { stateFingerprint } from './account-confirmations';
 import {
   SignInJobError,
   SignInJobStopped,
+  type SignInCommand,
   type SignInCompleteControl,
   type SignInFlowSpec,
-} from './signin-jobs';
+} from './signin-job-types';
 import {
   readCodexLogin,
   readCodexLoginIdentity,
+  readCodexLoginSnapshot,
   sameCodexIdentity,
   sameText as same,
   type CodexLoginIdentity,
@@ -131,7 +141,7 @@ export class CodexAccountLifecycle {
   }
 
   registry(): CodexProfileRegistry {
-    return this.deps.registry?.() ?? new CodexProfileRegistry();
+    return this.deps.registry?.() ?? new CodexProfileRegistry(undefined, true);
   }
 
   private instancesDir(): string {
@@ -237,15 +247,37 @@ export class CodexAccountLifecycle {
     const cli = this.codexCli();
     if (!cli) throw new SignInJobError('tool_missing');
     const staging = this.stagingDir(jobId);
-    await fs.mkdir(this.instancesDir(), { recursive: true, mode: 0o700 });
-    await fs.mkdir(staging, { mode: 0o700 });
-    await fs.chmod(staging, 0o700);
     const shared = path.resolve(this.deps.sharedConfigPath ?? getSharedCodexConfigPath());
-    try {
-      if ((await fs.stat(shared)).isFile())
-        await fs.symlink(shared, path.join(staging, 'config.toml'));
-    } catch {
-      // No shared config yet: Codex signs in without one, and nothing is created in ~/.codex.
+    const root = this.nativeStagingRoot();
+    if (root) {
+      const source = this.deps.env ?? process.env;
+      const sourceEnv: Record<string, unknown> = {};
+      for (const key of PASSED_ENV) sourceEnv[key] = source[key];
+      const answer = signInCallback(root, {
+        action: 'codex-prepare',
+        root,
+        staging: path.basename(staging),
+        shared,
+        cli,
+        env: sourceEnv,
+      });
+      if (answer?.status === 'ok') return answer.command as SignInCommand;
+      if (answer?.status === 'refused' && answer.code === 'tool_missing')
+        throw new SignInJobError('tool_missing');
+    }
+    if (
+      !root ||
+      signInStaging(root, 'codex', ['prepare', path.basename(staging), shared]) === undefined
+    ) {
+      await fs.mkdir(this.instancesDir(), { recursive: true, mode: 0o700 });
+      await fs.mkdir(staging, { mode: 0o700 });
+      await fs.chmod(staging, 0o700);
+      try {
+        if ((await fs.stat(shared)).isFile())
+          await fs.symlink(shared, path.join(staging, 'config.toml'));
+      } catch {
+        // No shared config yet: Codex signs in without one.
+      }
     }
     return {
       file: cli,
@@ -253,6 +285,20 @@ export class CodexAccountLifecycle {
       env: this.env(staging),
       pty: true,
     };
+  }
+
+  private nativeStagingRoot(): string | null {
+    const root = canonicalLeaseRoot(getCcsDir());
+    const instances = path.resolve(this.instancesDir());
+    return instances === path.join(path.resolve(getCcsDir()), 'codex-instances') ? root : null;
+  }
+
+  private async cleanupStaging(jobId: string): Promise<void> {
+    const target = this.stagingDir(jobId);
+    const root = this.nativeStagingRoot();
+    if (root && signInStaging(root, 'codex', ['cleanup', path.basename(target)]) !== undefined)
+      return;
+    await fs.rm(target, { recursive: true, force: true });
   }
 
   private flow(
@@ -275,7 +321,7 @@ export class CodexAccountLifecycle {
         invalidateCodexAuthProfilesCache();
         return { accountId: `codex:${name}`, email: login.email, plan: login.plan };
       },
-      cleanup: (jobId) => fs.rm(this.stagingDir(jobId), { recursive: true, force: true }),
+      cleanup: (jobId) => this.cleanupStaging(jobId),
     };
   }
 
@@ -306,19 +352,43 @@ export class CodexAccountLifecycle {
     }
   }
 
+  private moveProfile(from: string, to: string): boolean {
+    const root = canonicalLeaseRoot(getCcsDir());
+    const instances = path.join(root, 'codex-instances');
+    if (
+      canonicalLeaseRoot(path.dirname(from)) !== instances ||
+      canonicalLeaseRoot(path.dirname(to)) !== instances
+    )
+      return false;
+    const home = canonicalLeaseRoot(this.codexHome());
+    return (
+      writeProviderFile(
+        root,
+        path.join(home, '.ccs-activation.lock'),
+        ['codex-move', home, path.basename(from), path.basename(to)],
+        ''
+      ) === 'committed'
+    );
+  }
+
   /** Add: device-code sign-in into staging, then rename into `codex-instances/<name>`. */
   addFlow(name: string): SignInFlowSpec {
     return this.flow('add', name, async (jobId, control) => {
       const staging = this.stagingDir(jobId);
-      const login = await readCodexLogin(path.join(staging, 'auth.json'));
-      if (!login) throw new SignInJobError('write_failed');
+      const stagedAuth = path.join(staging, 'auth.json');
+      const snapshot = await readCodexLoginSnapshot(stagedAuth);
+      if (!snapshot) throw new SignInJobError('write_failed');
+      const login = snapshot.identity;
       return this.commitUnderLock(control, async () => {
         if (await this.otherProfileWithEmail(login.email, null)) {
           throw new SignInJobError('duplicate_identity');
         }
         if (await this.nameInUse(name)) throw new SignInJobError('write_failed');
+        const checked = await readCodexLoginSnapshot(stagedAuth);
+        if (!checked?.bytes.equals(snapshot.bytes)) throw new SignInJobError('write_failed');
+        if (control.stopped()) throw new SignInJobStopped();
         const target = this.profileDir(name);
-        await fs.rename(staging, target);
+        if (!this.moveProfile(staging, target)) await fs.rename(staging, target);
         try {
           this.registry().createProfile(name, {
             created: new Date(this.now()).toISOString(),
@@ -328,7 +398,11 @@ export class CodexAccountLifecycle {
             ...(login.accountId ? { account_id: login.accountId } : {}),
           });
         } catch {
-          await fs.rename(target, staging).catch(() => undefined);
+          try {
+            if (!this.moveProfile(target, staging)) await fs.rename(target, staging);
+          } catch {
+            /* The job remains failed and the owned folder is preserved for recovery. */
+          }
           throw new SignInJobError('write_failed');
         }
         return login;
@@ -343,8 +417,9 @@ export class CodexAccountLifecycle {
   signInAgainFlow(name: string): SignInFlowSpec {
     return this.flow('signin-again', name, async (jobId, control) => {
       const staged = path.join(this.stagingDir(jobId), 'auth.json');
-      const login = await readCodexLogin(staged);
-      if (!login) throw new SignInJobError('write_failed');
+      const snapshot = await readCodexLoginSnapshot(staged);
+      if (!snapshot) throw new SignInJobError('write_failed');
+      const { identity: login, bytes: content } = snapshot;
       return this.commitUnderLock(control, async () => {
         const registry = this.registry();
         if (!registry.hasProfile(name)) throw new SignInJobError('write_failed');
@@ -356,12 +431,7 @@ export class CodexAccountLifecycle {
           throw new SignInJobError('duplicate_identity');
         }
         const liveAuth = await this.liveLoginToRenew(name, authPath, login);
-        let content: Buffer;
-        try {
-          content = await fs.readFile(staged);
-        } catch {
-          throw new SignInJobError('write_failed');
-        }
+        if (control.stopped()) throw new SignInJobStopped();
         await this.installLogin(`${process.pid}.${jobId}`, content, authPath, liveAuth);
         try {
           registry.updateProfile(name, {
@@ -419,6 +489,24 @@ export class CodexAccountLifecycle {
     authPath: string,
     liveAuth: string | null
   ): Promise<void> {
+    const root = canonicalLeaseRoot(getCcsDir());
+    const profileFolder = path.dirname(authPath);
+    if (canonicalLeaseRoot(path.dirname(profileFolder)) === path.join(root, 'codex-instances')) {
+      const home = canonicalLeaseRoot(this.codexHome());
+      try {
+        const result = writeProviderFile(
+          root,
+          path.join(home, '.ccs-activation.lock'),
+          ['codex-login', home, path.basename(profileFolder), liveAuth ? 'live' : 'saved'],
+          content
+        );
+        if (result === 'committed') return;
+        if (result === 'partial') throw new SignInJobError('live_login_not_updated');
+      } catch (error) {
+        if (error instanceof SignInJobError) throw error;
+        throw new SignInJobError('write_failed');
+      }
+    }
     const temporaries: string[] = [];
     const stage = async (target: string, bytes: Buffer): Promise<string> => {
       const temporary = `${target}.tmp.${tag}.${temporaries.length}`;
@@ -516,7 +604,27 @@ export class CodexAccountLifecycle {
       const registry = this.registry();
       if (!registry.hasProfile(name)) throw new CodexLifecycleError('unknown_account');
       if (registry.listProfiles().length <= 1) throw new CodexLifecycleError('last_account');
-      await removeCodexProfileUnderLock(registry, name, home, { warn: () => undefined });
+      const root = canonicalLeaseRoot(getCcsDir());
+      const realHome = canonicalLeaseRoot(home);
+      const marker = path.join(realHome, '.ccs-activation.lock');
+      const scoped = (target: string) =>
+        canonicalLeaseRoot(path.dirname(target)) === path.join(root, 'codex-instances');
+      await removeCodexProfileUnderLock(registry, name, home, {
+        warn: () => undefined,
+        move: (from, to) => this.moveProfile(from, to),
+        preserve: async (staged, backup) =>
+          scoped(staged) &&
+          scoped(backup) &&
+          writeProviderDirectory(root, marker, [
+            'codex-preserve',
+            realHome,
+            path.basename(staged),
+            path.basename(backup),
+          ]),
+        discard: async (target) =>
+          scoped(target) &&
+          writeProviderDirectory(root, marker, ['codex-discard', realHome, path.basename(target)]),
+      });
     } catch (error) {
       if (error instanceof CodexLifecycleError) throw error;
       if (error instanceof CodexProfileRemovalError) {
@@ -539,6 +647,11 @@ export class CodexAccountLifecycle {
 
   /** Startup: staging folders older than one hour are removed (jobs never resume). */
   async sweepStaging(): Promise<number> {
+    const root = this.nativeStagingRoot();
+    if (root) {
+      const removed = signInStaging(root, 'codex', ['sweep', String(this.now())]);
+      if (removed !== undefined) return removed;
+    }
     let names: string[];
     try {
       names = await fs.readdir(this.instancesDir());

@@ -4,10 +4,10 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   AntigravityProfileRegistry,
-  AntigravitySwitchService,
   credentialFingerprint,
   identityKey,
-} from '../../../src/antigravity';
+} from '../../../src/antigravity/registry';
+import { AntigravitySwitchService } from '../../../src/antigravity/switch-service';
 import type {
   AntigravitySwitchDriver,
   InstallReceipt,
@@ -16,7 +16,7 @@ import type {
   RuntimeProof,
   StopReceipt,
   VerifiedIdentity,
-} from '../../../src/antigravity';
+} from '../../../src/antigravity/types';
 import { updateManagedAntigravity } from '../../../src/antigravity/managed-updater';
 
 const NOW = Date.parse('2026-10-01T18:00:00Z');

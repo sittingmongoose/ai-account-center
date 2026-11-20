@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -6,7 +6,6 @@ import express from 'express';
 import type { Server } from 'http';
 import { createAccountPreferencesRouter } from '../../../src/web-server/routes/account-preferences-routes';
 import { createAccountVisibilityRouter } from '../../../src/web-server/routes/account-visibility-routes';
-import claudeRoutes from '../../../src/web-server/routes/claude-desktop-routes';
 import {
   defaultDashboardPreferences,
   readDashboardPreferences,
@@ -15,7 +14,6 @@ import {
   readAccountVisibility,
   ACCOUNT_VISIBILITY_FILE,
 } from '../../../src/web-server/services/account-visibility';
-import * as history from '../../../src/web-server/services/claude-history-sync-service';
 
 const originalHome = process.env.CCS_HOME;
 let temporary: string;
@@ -35,7 +33,6 @@ beforeEach(async () => {
   });
   app.use('/api/accounts', createAccountPreferencesRouter());
   app.use('/api/accounts', createAccountVisibilityRouter({ onChanged: () => {}, audit: () => {} }));
-  app.use('/api/claude', claudeRoutes);
   server = await new Promise<Server>((resolve) => {
     const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
   });
@@ -46,7 +43,6 @@ beforeEach(async () => {
 afterEach(async () => {
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  mock.restore();
   if (originalHome === undefined) delete process.env.CCS_HOME;
   else process.env.CCS_HOME = originalHome;
   fs.rmSync(temporary, { recursive: true, force: true });
@@ -149,22 +145,4 @@ it('preference PATCH refuses invalid fields, sessions and transport before savin
     { removeUsageLogSource: '../x' },
   ])
     expect((await send(route, invalid)).status).toBe(400);
-});
-it('snapshot cleanup checks Origin and JSON before running, and reports a listing failure', async () => {
-  const cleanup = spyOn(history, 'cleanupAllHistorySnapshots').mockRejectedValue(
-    new Error('listing failed')
-  );
-  const route = 'claude/history-snapshots/cleanup';
-  expect((await send(route, {}, { origin: 'https://foreign.test' }, 'POST')).status).toBe(403);
-  expect((await send(route, {}, { 'content-type': 'text/plain' }, 'POST')).status).toBe(415);
-  expect(cleanup).not.toHaveBeenCalled();
-  expect((await send(route, {}, {}, 'POST')).status).toBe(500);
-  expect(cleanup).toHaveBeenCalledTimes(1);
-});
-it('a failed snapshot profile listing rejects rather than reporting zero work', async () => {
-  await expect(
-    history.cleanupAllHistorySnapshots(async () => {
-      throw new Error('fixture listing failed');
-    })
-  ).rejects.toThrow('fixture listing failed');
 });

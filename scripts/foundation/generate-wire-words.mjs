@@ -51,6 +51,15 @@ for (const file of files(resolve(root, 'src')).filter(f => f.endsWith('.ts'))) {
   }
   visit(source);
 }
+// Reset replies now come from the native HTTP route's refusal allowlist.
+const resetRoute = 'crates/aac-http/src/public_auth/reset_routes.rs';
+const resetSource = readFileSync(resolve(root, resetRoute), 'utf8');
+const resetReasons = /const SAFE_REASONS: &\[&str\] = &\[([^\]]+)\];/.exec(resetSource);
+if (!resetReasons) throw new Error('Rust reset refusal table is missing');
+for (const [, word] of resetReasons[1].matchAll(/"([^"]+)"/g)) add(word, `${resetRoute}:SAFE_REASONS`);
+const resetInventoryUnavailable = /"(reset-inventory-unavailable)"/.exec(resetSource);
+if (!resetInventoryUnavailable) throw new Error('Rust reset inventory refusal is missing');
+add(resetInventoryUnavailable[1], `${resetRoute}:inventory`);
 const python = spawnSync('python3', ['-c', String.raw`
 import ast,json,pathlib,re,sys
 root=pathlib.Path(sys.argv[1]); out=[]
@@ -60,7 +69,7 @@ def emit(node,path,label):
         if isinstance(child,ast.Constant) and isinstance(child.value,str): out.append([child.value,path.relative_to(root).as_posix()+':'+label])
 for path in sorted((root/'scripts').rglob('*.py')):
     if any(p in ('__pycache__','__tests__','node_modules') for p in path.parts) or path.name.startswith('test'): continue
-    tree=ast.parse(path.read_text(),filename=str(path))
+    tree=ast.parse(path.read_text(encoding='utf-8'),filename=str(path))
     for node in ast.walk(tree):
         if isinstance(node,(ast.Assign,ast.AnnAssign)):
             targets=node.targets if isinstance(node,ast.Assign) else [node.target]

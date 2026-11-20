@@ -347,6 +347,12 @@ test('the Cursor account line says each state; the account total is shown beside
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 900 }, now), /900 tokens on the account, none of it matched to the local runs; it is not added to these totals/);
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 0 }, now), /no usage in range/);
   // Events that were never measured are not absence of usage (recheck R1): never "no usage".
+  const counted = { ...base, state: 'read', accountTokens: 0, unmeasured: 0 };
+  assert.match(cursorAccountLine({ ...counted, eventCounts: { fetched: 0, kept: 0 } }, now), /Cursor returned no events/);
+  assert.match(cursorAccountLine({
+    ...counted, eventCounts: { fetched: 7, kept: 0, droppedOutOfWindow: 5, droppedNoTokenUsage: 2 },
+  }, now), /no measured events \(5 outside the date range, 2 without token usage\)/);
+  assert.match(cursorAccountLine({ ...counted, eventCounts: { fetched: 1, kept: 1 } }, now), /zero measured tokens/);
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 0, unmeasured: 3 }, now), /^Cursor account read .*: no tokens logged; 3 events not logged \(token counts missing\)\.$/);
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 0, unmeasured: 1 }, now), /: no tokens logged; 1 event not logged/);
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 1_500_000, matchedTokens: 400_000, unmeasured: 2 }, now), /not added to these totals; 2 events not logged \(token counts missing\)\.$/);

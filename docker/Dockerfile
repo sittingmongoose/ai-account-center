@@ -50,10 +50,14 @@ RUN test -f crates/aac-store/prebuilt/*.node \
 
 # Verify the executable and actual Leptos browser artifacts before packaging.
 # The wasm lives in dist/ui/pkg/<buildId>/; verify-bundle.js checks it against the manifest.
-RUN test -s dist/ccs.js \
+RUN test -x dist/native/ai-account-center \
+  && test -x dist/native/ccs \
+  && test -x dist/native/aac-http \
+  && test -s dist/web-server/sidecar.js \
   && test -s dist/ui/app/index.html \
   && test -s dist/ui/ui-build-manifest.json \
-  && node scripts/verify-bundle.js
+  && node scripts/verify-bundle.js \
+  && node scripts/stage-dashboard-package.js /tmp/aac-package
 
 # Build runtime deps from the committed bun.lock to keep Docker installs pinned.
 # --ignore-scripts avoids user-home side effects from postinstall during image build.
@@ -82,7 +86,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY docker/entrypoint.sh /usr/local/bin/ai-account-center-entrypoint
 RUN chmod +x /usr/local/bin/ai-account-center-entrypoint
 
-COPY --from=build /app/dist ./dist
+COPY --from=build /tmp/aac-package/dist ./dist
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/config/tables ./config/tables
 COPY --from=build /app/config/private-files.json ./config/private-files.json
@@ -98,8 +102,8 @@ COPY --from=build /app/browser-bridge ./browser-bridge
 COPY --from=build /app/README.md ./README.md
 COPY --from=build /app/LICENSE ./LICENSE
 
-RUN ln -s /app/dist/ccs.js /usr/local/bin/ai-account-center \
-  && ln -s /app/dist/ccs.js /usr/local/bin/ccs \
+RUN ln -s /app/dist/native/ai-account-center /usr/local/bin/ai-account-center \
+  && ln -s /app/dist/native/ccs /usr/local/bin/ccs \
   && install -d -m 0700 -o node -g node /home/node/.ccs
 
 ENV CCS_HOME=/home/node NODE_ENV=production

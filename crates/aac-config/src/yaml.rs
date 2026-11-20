@@ -3,13 +3,20 @@
 use crate::RETIRED_SECTIONS;
 use aac_core::{Cause, Failure};
 use std::collections::{BTreeMap, BTreeSet};
-use yaml_rust2::parser::{Event, Parser};
+use yaml_rust2::parser::{Event, Parser, Tag};
 use yaml_rust2::scanner::{Marker, Scanner, TScalarStyle, Token, TokenType};
 
 pub(super) fn damaged() -> Failure {
     Failure::new(
         Cause::Damaged,
         "config.yaml: invalid or unsupported YAML document",
+    )
+}
+
+fn unsupported_security_yaml() -> Failure {
+    Failure::new(
+        Cause::Damaged,
+        "config.yaml: YAML merges and aliases are unsupported in dashboard security settings",
     )
 }
 
@@ -26,9 +33,9 @@ struct Root {
 
 // The scanner's Key marker includes an explicit '?' indicator, unlike the parser's Scalar
 // marker. Pair each scalar token with its entry indicator, or its own marker for a bare flow
-// key. The parser below decides which of those scalars are root keys. This one placement rule
-// covers plain/quoted and implicit/explicit keys without inspecting arbitrary line prefixes.
-fn scalar_sites(source: &str) -> Result<BTreeMap<usize, Marker>, Failure> {
+// key. Keep the indicator optional so a literal scalar value can be distinguished from a
+// mapping key. The parser below decides which keys belong to the root or to security settings.
+fn scalar_sites(source: &str) -> Result<BTreeMap<usize, Option<Marker>>, Failure> {
     let mut scanner = Scanner::new(source.chars());
     let mut sites = BTreeMap::new();
     let mut indicator = None;
@@ -43,11 +50,9 @@ fn scalar_sites(source: &str) -> Result<BTreeMap<usize, Marker>, Failure> {
                 };
             }
             TokenType::Key => indicator = Some(mark),
+            TokenType::Anchor(..) | TokenType::Tag(..) => {}
             TokenType::Scalar(..) => {
-                if sites
-                    .insert(mark.index(), indicator.take().unwrap_or(mark))
-                    .is_some()
-                {
+                if sites.insert(mark.index(), indicator.take()).is_some() {
                     return Err(damaged());
                 }
             }
@@ -55,6 +60,15 @@ fn scalar_sites(source: &str) -> Result<BTreeMap<usize, Marker>, Failure> {
         }
     }
     Err(damaged())
+}
+
+fn is_merge_key(key: &str, style: TScalarStyle, tag: Option<&Tag>) -> bool {
+    match tag {
+        Some(tag) => {
+            "tag:yaml.org,2002:merge".strip_prefix(&tag.handle) == Some(tag.suffix.as_str())
+        }
+        None => style == TScalarStyle::Plain && key == "<<",
+    }
 }
 
 // Parse events iteratively. Aliases remain single events, including recursive aliases; budgets
@@ -76,11 +90,25 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
     let mut documents = 0usize;
     let mut root_seen = false;
     let mut expect_key = true;
+    let mut security_section = false;
     let mut root_end = None;
     let mut flow = false;
     for _ in 0..100_000 {
         let (event, mark) = parser.next_token().map_err(|_| damaged())?;
         let start = *offsets.get(mark.index()).ok_or_else(damaged)?;
+        // Reject inheritance here, before active values are deserialized and defaulted.
+        if security_section && (depth > 1 || (depth == 1 && !expect_key)) {
+            match &event {
+                Event::Alias(..) => return Err(unsupported_security_yaml()),
+                Event::Scalar(key, style, _, tag)
+                    if sites.get(&mark.index()).is_some_and(Option::is_some)
+                        && is_merge_key(key, *style, tag.as_ref()) =>
+                {
+                    return Err(unsupported_security_yaml());
+                }
+                _ => {}
+            }
+        }
         match event {
             Event::StreamStart | Event::DocumentEnd => {}
             Event::DocumentStart => {
@@ -112,7 +140,14 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
                 {
                     return Err(damaged());
                 }
-                let site = sites.get(&mark.index()).ok_or_else(damaged)?;
+                security_section = matches!(
+                    key.as_str(),
+                    "dashboard_auth" | "dashboard_network" | "dashboard_tls"
+                );
+                let site = sites
+                    .get(&mark.index())
+                    .ok_or_else(damaged)?
+                    .unwrap_or(mark);
                 let entry_start = *offsets.get(site.index()).ok_or_else(damaged)?;
                 if entry_start > start {
                     return Err(damaged());
@@ -212,4 +247,63 @@ pub(super) fn separate_retired(
     }
     active.push_str(source.get(copied..).ok_or_else(damaged)?);
     Ok((active, retired))
+}
+
+pub(super) fn render_active(original: &str, value: &serde_json::Value) -> Result<String, Failure> {
+    let block = || serde_yaml::to_string(value).map_err(|_| damaged());
+    let source = original.strip_prefix('\u{feff}').unwrap_or(original);
+    if source.trim().is_empty() {
+        return block();
+    }
+    let root = match root_entries(source) {
+        Ok(root) => root,
+        Err(_)
+            if serde_yaml::from_str::<Option<serde::de::IgnoredAny>>(source)
+                .is_ok_and(|value| value.is_none()) =>
+        {
+            return block();
+        }
+        Err(error) => return Err(error),
+    };
+    let entries: Vec<_> = root
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| RETIRED_SECTIONS.contains(&entry.key.as_str()))
+        .collect();
+    if entries.is_empty() {
+        return block();
+    }
+    let active = value.as_object().ok_or_else(damaged)?;
+    let mut out = String::new();
+    let column = root.entries[0].column;
+    if root.flow {
+        let json = serde_json::to_string(active).map_err(|_| damaged())?;
+        out.push_str(json.strip_suffix('}').ok_or_else(damaged)?);
+        if !active.is_empty() {
+            out.push_str(", ");
+        }
+    } else if !active.is_empty() {
+        for line in block()?.split_inclusive('\n') {
+            out.push_str(&" ".repeat(column));
+            out.push_str(line);
+        }
+    }
+    for (index, entry) in entries {
+        let end = root
+            .entries
+            .get(index + 1)
+            .map_or(root.end, |next| next.start);
+        if !root.flow && (out.is_empty() || out.ends_with('\n')) {
+            out.push_str(&" ".repeat(column));
+        }
+        out.push_str(source.get(entry.start..end).ok_or_else(damaged)?);
+    }
+    if root.flow {
+        out.push('}');
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
 }

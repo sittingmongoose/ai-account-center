@@ -13,6 +13,7 @@
     "sources": [
       "src/web-server/middleware/dashboard-session-store.ts:read.state",
       "src/web-server/services/account-registry-mode.ts:state",
+      "src/web-server/services/account-registry-v2.ts:native.state",
       "src/web-server/services/account-registry-v2.ts:state",
       "src/web-server/services/account-visibility.ts:read.state",
       "src/web-server/services/additional-account-service.ts:state",
@@ -194,7 +195,6 @@
     "word": "available",
     "cause": null,
     "sources": [
-      "src/web-server/services/codex-profile-quota-service.ts:status",
       "src/web-server/usage/codex-quota/codex-extra-usage.ts:credit?.status"
     ]
   },
@@ -203,7 +203,9 @@
     "cause": null,
     "sources": [
       "src/web-server/services/signin-job-types.ts:SignInJobState",
-      "src/web-server/services/signin-jobs.ts:record.job.state"
+      "src/web-server/services/signin-jobs.ts:record.job.state",
+      "src/web-server/services/signin-session-agent.ts:RUNNING_STATES",
+      "src/web-server/services/signin-session-agent.ts:record.job.state"
     ]
   },
   {
@@ -287,8 +289,7 @@
     "word": "blocked_uncertain",
     "cause": "refused",
     "sources": [
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -431,7 +432,7 @@
       "src/web-server/services/account-dashboard-service.ts:status",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
       "src/web-server/services/account-dashboard-types.ts:status",
-      "src/web-server/services/account-lifecycle-actions.ts:reading.status",
+      "src/web-server/services/account-lifecycle-transitions.ts:status",
       "src/web-server/services/additional-account-service.ts:cache.result.status",
       "src/web-server/services/additional-account-service.ts:result.status",
       "src/web-server/services/additional-account-service.ts:status",
@@ -466,8 +467,10 @@
     "sources": [
       "scripts/app-updates/app_update_antigravity.py:UpdateFailure",
       "scripts/app-updates/app_update_antigravity.py:state['phase']",
+      "src/web-server/services/lifecycle-signin-session.ts:state",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
-      "src/web-server/services/signin-jobs.ts:state"
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-session-agent.ts:state"
     ]
   },
   {
@@ -512,15 +515,14 @@
     "word": "check-again-required",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
     "word": "checking",
     "cause": null,
     "sources": [
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -536,7 +538,7 @@
     "word": "claim-token-outstanding",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -683,7 +685,18 @@
     "cause": null,
     "sources": [
       "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError",
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']",
+      "src/codex-auth/codex-profile-registry.ts:native?.status",
+      "src/shared/private-file-lease.ts:answer.status",
+      "src/shared/private-file-lease.ts:status"
+    ]
+  },
+  {
+    "word": "complete",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/signin_driver.py:state",
+      "scripts/antigravity/signin_driver.py:token_state()"
     ]
   },
   {
@@ -700,7 +713,7 @@
     "word": "confirmation-invalid",
     "cause": "damaged",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -714,7 +727,8 @@
     "word": "connect",
     "cause": null,
     "sources": [
-      "src/web-server/rust-service-transport.ts:RustFailureKind"
+      "src/web-server/rust-service-transport.ts:RustFailureKind",
+      "src/web-server/rust-service.ts:rustFailureKind(error)"
     ]
   },
   {
@@ -738,30 +752,14 @@
     "word": "cooldown",
     "cause": "rate_limited",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
     "word": "copying",
     "cause": null,
     "sources": [
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
-    ]
-  },
-  {
-    "word": "create_only_transaction_refused",
-    "cause": "refused",
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:result.reason"
-    ]
-  },
-  {
-    "word": "create_only_transaction_unconfirmed",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-desktop-open-service.ts:historySync?.reason",
-      "src/web-server/services/claude-history-sync-service.ts:reason"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -775,9 +773,7 @@
     "word": "credential-host-unavailable",
     "cause": "provider_error",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS",
-      "src/web-server/routes/reset-claim-routes.ts:reason",
-      "src/web-server/routes/reset-claim-routes.ts:recovery.reason"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -980,8 +976,6 @@
       "src/store/store-service.ts:state",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:state",
-      "src/web-server/services/app-update-service.ts:host.state",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/status/answers.ts:a.state",
       "src/web-server/status/answers.ts:b.state",
       "src/web-server/status/answers.ts:doorbell.state",
@@ -1109,7 +1103,6 @@
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-transport.ts:entry.state",
       "src/web-server/services/analytics-remote-transport.ts:state",
-      "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/usage-failover-antigravity.ts:status",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
@@ -1146,7 +1139,7 @@
     "word": "exact-grant-unavailable",
     "cause": "provider_error",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -1172,7 +1165,8 @@
       "src/web-server/services/dashboard-device-store.ts:record.revokedReason",
       "src/web-server/services/dashboard-device-store.ts:revokedReason",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
-      "src/web-server/services/signin-jobs.ts:state"
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-session-agent.ts:state"
     ]
   },
   {
@@ -1214,6 +1208,7 @@
       "src/codex-auth/codex-renewal-planner.ts:snapshot.processScan.state",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
       "src/store/store-service.ts:state",
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
@@ -1222,18 +1217,13 @@
       "src/web-server/services/app-update-contract.ts:status",
       "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
       "src/web-server/services/app-update-diagnostics.ts:status",
-      "src/web-server/services/app-update-service.ts:job.state",
-      "src/web-server/services/app-update-service.ts:result.status",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/services/claude-desktop-usage-service.ts:state",
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state",
-      "src/web-server/services/codex-profile-quota-service.ts:renewal?.state",
       "src/web-server/services/codex-renewal-notes.ts:entry.state",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
       "src/web-server/services/signin-job-types.ts:state",
       "src/web-server/services/signin-jobs.ts:state",
       "src/web-server/services/signin-process.ts:SignInSpawnFailure",
+      "src/web-server/services/signin-session-agent.ts:state",
       "src/web-server/status/answers.ts:(['done', 'failed', 'skipped'] as const).find((s) => s === record.state)",
       "src/web-server/status/answers.ts:doorbell.state",
       "src/web-server/status/answers.ts:entry.doorbell.state",
@@ -1402,8 +1392,10 @@
     "word": "fulfilled",
     "cause": null,
     "sources": [
+      "src/web-server/compose-server.ts:result.status",
       "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-service.ts:result.status",
+      "src/web-server/services/analytics-writer-feeds.ts:r.status",
       "src/web-server/services/signin-health-service.ts:result.status",
       "src/web-server/usage-hub/usage-hub-accounts.ts:result.status"
     ]
@@ -1441,14 +1433,14 @@
     "word": "grant-changed",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
     "word": "grant-unavailable",
     "cause": "provider_error",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -1497,21 +1489,6 @@
     ]
   },
   {
-    "word": "helper_invalid",
-    "cause": "damaged",
-    "sources": [
-      "src/web-server/services/app-update-service.ts:error.code"
-    ]
-  },
-  {
-    "word": "history_marker_store_full",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:error.reason",
-      "src/web-server/services/claude-history-sync-service.ts:reason"
-    ]
-  },
-  {
     "word": "host_timeout",
     "cause": "timeout",
     "sources": [
@@ -1525,7 +1502,8 @@
       "src/web-server/services/account-lifecycle-actions.ts:error.code",
       "src/web-server/services/account-lifecycle-actions.ts:status",
       "src/web-server/services/account-lifecycle-extras.ts:error.code",
-      "src/web-server/services/account-lifecycle-extras.ts:status"
+      "src/web-server/services/account-lifecycle-extras.ts:status",
+      "src/web-server/services/claude-account-lifecycle.ts:state"
     ]
   },
   {
@@ -1592,17 +1570,17 @@
     "word": "identity-changed",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
     "word": "identity-unconfirmed",
     "cause": null,
     "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
       "scripts/account-usage/claude_usage.py:result.get('resetReason')",
-      "scripts/account-usage/claude_usage.py:result['resetReason']",
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "scripts/account-usage/claude_usage.py:result['resetReason']"
     ]
   },
   {
@@ -1949,8 +1927,7 @@
     "word": "key",
     "cause": null,
     "sources": [
-      "scripts/account-usage/muse_native.py:state",
-      "src/web-server/services/cursor-account-reader.ts:status"
+      "scripts/account-usage/muse_native.py:state"
     ]
   },
   {
@@ -1961,6 +1938,13 @@
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
       "src/web-server/services/cursor-account-reader.ts:STATES",
       "src/web-server/services/cursor-account-reader.ts:answer?.state",
+      "src/web-server/services/cursor-account-reader.ts:status"
+    ]
+  },
+  {
+    "word": "key-status",
+    "cause": null,
+    "sources": [
       "src/web-server/services/cursor-account-reader.ts:status"
     ]
   },
@@ -2107,13 +2091,6 @@
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
       "scripts/app-updates/app_update_t3_rpc.py:cause",
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
-    ]
-  },
-  {
-    "word": "mac",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:pendingMarkerState"
     ]
   },
   {
@@ -2337,8 +2314,8 @@
       "src/web-server/services/account-dashboard-state.ts:account.status",
       "src/web-server/services/account-dashboard-state.ts:status",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
-      "src/web-server/services/account-lifecycle-actions.ts:reading.status",
       "src/web-server/services/account-lifecycle-extras.ts:status",
+      "src/web-server/services/account-lifecycle-transitions.ts:status",
       "src/web-server/services/additional-account-service.ts:cache.result.status",
       "src/web-server/services/additional-account-service.ts:result.status",
       "src/web-server/services/additional-account-service.ts:status",
@@ -2667,13 +2644,6 @@
     ]
   },
   {
-    "word": "not_connected",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-profile-quota-service.ts:status"
-    ]
-  },
-  {
     "word": "not_found",
     "cause": "not_installed",
     "sources": [
@@ -2839,10 +2809,13 @@
       "src/antigravity/usage-service.ts:result.status",
       "src/antigravity/usage-service.ts:sample.status",
       "src/codex-auth/codex-login-family.ts:state",
+      "src/codex-auth/codex-profile-removal.ts:native?.status",
       "src/codex-auth/codex-renewal-dry-run.ts:state",
       "src/codex-auth/codex-renewal-planner.ts:snapshot.live?.state",
       "src/codex-auth/codex-renewal-planner.ts:state",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/shared/private-file-lease.ts:answer.status",
+      "src/shared/private-file-lease.ts:status",
       "src/store/activity-answer.ts:status",
       "src/store/activity-coverage.ts:s.state",
       "src/store/activity-coverage.ts:state",
@@ -2891,10 +2864,12 @@
       "src/web-server/services/account-dashboard-service.ts:publicAccount.status",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
       "src/web-server/services/account-dashboard-types.ts:quotaStatus",
-      "src/web-server/services/account-lifecycle-actions.ts:reading.status",
+      "src/web-server/services/account-lifecycle-antigravity.ts:native?.status",
       "src/web-server/services/account-lifecycle-extras.ts:status",
+      "src/web-server/services/account-lifecycle-transitions.ts:status",
       "src/web-server/services/account-registry-mode.ts:read.state",
       "src/web-server/services/account-registry-mode.ts:state",
+      "src/web-server/services/account-registry-v2.ts:native.state",
       "src/web-server/services/account-registry-v2.ts:read.state",
       "src/web-server/services/account-registry-v2.ts:state",
       "src/web-server/services/account-visibility.ts:current.state",
@@ -2915,11 +2890,14 @@
       "src/web-server/services/claude-account-stores.ts:read.state",
       "src/web-server/services/claude-desktop-live-service.ts:result.status",
       "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
-      "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
+      "src/web-server/services/codex-account-lifecycle.ts:answer?.status",
+      "src/web-server/services/codex-login-file.ts:native?.status",
       "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/dashboard-auth-files.ts:state",
       "src/web-server/services/dashboard-auth-state.ts:read.state",
       "src/web-server/services/dashboard-device-store.ts:read.state",
+      "src/web-server/services/muse-account-lifecycle.ts:answer?.status",
+      "src/web-server/services/muse-account-lifecycle.ts:commands?.status",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:result?.status",
       "src/web-server/services/opencode-console-wallet-service.ts:status",
@@ -3000,16 +2978,14 @@
     "word": "opened",
     "cause": null,
     "sources": [
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
     "word": "opening",
     "cause": null,
     "sources": [
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -3111,9 +3087,7 @@
       "src/store/activity-coverage.ts:s.state",
       "src/store/activity-coverage.ts:state",
       "src/store/activity-reports.ts:state",
-      "src/store/usage-report.ts:UsageReportState",
-      "src/web-server/services/claude-history-sync-service.ts:result.status",
-      "src/web-server/services/claude-open-operations.ts:status"
+      "src/store/usage-report.ts:UsageReportState"
     ]
   },
   {
@@ -3327,13 +3301,6 @@
     ]
   },
   {
-    "word": "protected-check",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:targetProtectedStateUnchanged"
-    ]
-  },
-  {
     "word": "provider_denied",
     "cause": null,
     "sources": [
@@ -3370,7 +3337,7 @@
     "word": "provider-read-only",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -3487,9 +3454,9 @@
     "word": "rate-limited",
     "cause": null,
     "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
-      "scripts/account-usage/plan_usage.py:item.get('status')",
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "scripts/account-usage/plan_usage.py:item.get('status')"
     ]
   },
   {
@@ -3567,7 +3534,6 @@
     "word": "reauth_required",
     "cause": "auth_required",
     "sources": [
-      "src/web-server/services/codex-profile-quota-service.ts:status",
       "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
       "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
@@ -3660,14 +3626,14 @@
     "word": "redeeming",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
     "word": "refill-windows-unconfirmed",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -3696,12 +3662,13 @@
     "sources": [
       "scripts/claude-history/history_index_remote_v2.py:receipt['status']",
       "scripts/claude-history/history_index_remote_v2.py:status",
+      "src/shared/private-file-lease.ts:answer.status",
+      "src/shared/private-file-lease.ts:status",
       "src/web-server/rust-service.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:row.reason",
-      "src/web-server/services/claude-history-sync-service.ts:result.status",
-      "src/web-server/services/claude-history-sync-service.ts:status",
-      "src/web-server/services/claude-open-operations.ts:status"
+      "src/web-server/services/codex-account-lifecycle.ts:answer?.status",
+      "src/web-server/services/muse-account-lifecycle.ts:answer?.status"
     ]
   },
   {
@@ -3802,8 +3769,7 @@
     "word": "reset-inventory-unavailable",
     "cause": "provider_error",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:reason",
-      "src/web-server/routes/reset-claim-routes.ts:recovery.reason ?? safeReason(error)"
+      "crates/aac-http/src/public_auth/reset_routes.rs:inventory"
     ]
   },
   {
@@ -3843,8 +3809,7 @@
       "src/antigravity/managed-updater.ts:status",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
-      "src/web-server/services/app-update-contract.ts:row.status",
-      "src/web-server/services/app-update-service.ts:result.status"
+      "src/web-server/services/app-update-contract.ts:row.status"
     ]
   },
   {
@@ -3945,13 +3910,6 @@
       "src/store/store-service.ts:state",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:state",
-      "src/web-server/services/app-update-service.ts:host.state",
-      "src/web-server/services/app-update-service.ts:host?.state",
-      "src/web-server/services/app-update-service.ts:job.hosts?.[platform].state",
-      "src/web-server/services/app-update-service.ts:job.state",
-      "src/web-server/services/app-update-service.ts:raw.state",
-      "src/web-server/services/app-update-service.ts:state",
-      "src/web-server/services/app-update-service.ts:this.job?.state",
       "src/web-server/services/claude-account-lifecycle.ts:state"
     ]
   },
@@ -4443,6 +4401,8 @@
     "word": "saved",
     "cause": null,
     "sources": [
+      "src/web-server/routes/account-visibility-routes.ts:body.state",
+      "src/web-server/routes/account-visibility-routes.ts:reply.state",
       "src/web-server/routes/account-visibility-routes.ts:result.state",
       "src/web-server/services/account-visibility.ts:state"
     ]
@@ -4619,8 +4579,8 @@
     "word": "signed-out",
     "cause": null,
     "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS",
       "src/web-server/services/account-dashboard-service.ts:macState",
       "src/web-server/services/account-dashboard-service.ts:state",
       "src/web-server/services/claude-account-lifecycle.ts:state",
@@ -4644,7 +4604,8 @@
       "src/web-server/services/account-dashboard-state.ts:state",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
       "src/web-server/services/signin-jobs.ts:state",
-      "src/web-server/services/signin-jobs.ts:states"
+      "src/web-server/services/signin-jobs.ts:states",
+      "src/web-server/services/signin-session-agent.ts:state"
     ]
   },
   {
@@ -4666,9 +4627,6 @@
       "src/web-server/services/app-update-contract.ts:status",
       "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
       "src/web-server/services/app-update-diagnostics.ts:status",
-      "src/web-server/services/app-update-service.ts:result.status",
-      "src/web-server/services/app-update-service.ts:row.status",
-      "src/web-server/services/claude-history-sync-service.ts:status",
       "src/web-server/services/codex-renewal-notes.ts:entry.state",
       "src/web-server/status/answers.ts:doorbell.state",
       "src/web-server/status/answers.ts:entry.doorbell.state",
@@ -4785,7 +4743,7 @@
     "word": "stale-inventory",
     "cause": null,
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -4798,12 +4756,21 @@
     ]
   },
   {
+    "word": "start",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:statusCodes"
+    ]
+  },
+  {
     "word": "starting",
     "cause": null,
     "sources": [
       "src/web-server/services/signin-job-types.ts:SignInJobState",
       "src/web-server/services/signin-jobs.ts:record.job.state",
-      "src/web-server/services/signin-jobs.ts:state"
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-session-agent.ts:RUNNING_STATES",
+      "src/web-server/services/signin-session-agent.ts:state"
     ]
   },
   {
@@ -4815,7 +4782,6 @@
       "src/web-server/scoreboard/catalog.ts:state",
       "src/web-server/scoreboard/runs-reader.ts:state",
       "src/web-server/scoreboard/runs-store.ts:state",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/services/signin-health-service.ts:state",
       "src/web-server/status/agent-reports-reader.ts:state",
       "src/web-server/status/card-schema.ts:state",
@@ -4834,7 +4800,7 @@
       "scripts/antigravity/quota_adapter.py:status",
       "scripts/app-updates/app_update_common.py:(status, code)",
       "src/antigravity/managed-update-command.ts:status",
-      "src/web-server/services/cursor-account-reader.ts:status",
+      "src/web-server/rust-service.ts:statusCodes",
       "src/web-server/services/usage-failover-contract.ts:status"
     ]
   },
@@ -4910,6 +4876,7 @@
     "cause": null,
     "sources": [
       "src/antigravity/ubuntu-runtime-bridge.ts:typeof value.restartState",
+      "src/web-server/rust-profile-input.ts:typeof value.state",
       "src/web-server/services/additional-account-service.ts:museTransientFailure",
       "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
       "src/web-server/services/analytics-remote-cache-limit.ts:typeof item.cause",
@@ -4945,7 +4912,8 @@
     "sources": [
       "scripts/app-updates/app_update_antigravity.py:state['phase']",
       "src/web-server/services/account-lifecycle-runtime.ts:job.state",
-      "src/web-server/services/signin-job-types.ts:SignInJobState"
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-session-agent.ts:state"
     ]
   },
   {
@@ -4954,13 +4922,6 @@
     "sources": [
       "src/web-server/status/card-schema.ts:CARD_STATES",
       "src/web-server/status/card-schema.ts:state"
-    ]
-  },
-  {
-    "word": "synchronized",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-open-operations.ts:status"
     ]
   },
   {
@@ -5267,6 +5228,13 @@
     ]
   },
   {
+    "word": "transport",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "src/web-server/services/signin-session-agent.ts:reason"
+    ]
+  },
+  {
     "word": "trashed",
     "cause": null,
     "sources": [
@@ -5341,8 +5309,8 @@
       "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
       "src/web-server/agent-usage/agent-usage-projection.ts:status",
       "src/web-server/agent-usage/agent-usage-snapshot.ts:state",
+      "src/web-server/routes/account-visibility-routes.ts:body.state",
       "src/web-server/routes/account-visibility-routes.ts:state",
-      "src/web-server/routes/reset-claim-routes.ts:status",
       "src/web-server/routes/store-routes.ts:state",
       "src/web-server/rust-service-values.ts:status",
       "src/web-server/services/account-analytics-activity.ts:state",
@@ -5366,7 +5334,6 @@
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-sources.ts:state.state",
       "src/web-server/services/claude-desktop-usage-service.ts:status",
-      "src/web-server/services/codex-profile-quota-service.ts:status",
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
       "src/web-server/services/cursor-account-reader.ts:STATES",
       "src/web-server/services/cursor-account-reader.ts:state",
@@ -5376,6 +5343,7 @@
       "src/web-server/services/signin-health-service.ts:row.state",
       "src/web-server/services/signin-health-service.ts:state",
       "src/web-server/services/signin-health-service.ts:states",
+      "src/web-server/services/signin-session-agent.ts:reason",
       "src/web-server/services/usage-failover-antigravity.ts:status",
       "src/web-server/services/usage-failover-codex.ts:status",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
@@ -5434,8 +5402,6 @@
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
       "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
       "src/web-server/services/app-update-diagnostics.ts:status",
-      "src/web-server/services/app-update-service.ts:result.status",
-      "src/web-server/services/app-update-service.ts:row.status",
       "src/web-server/services/claude-account-lifecycle.ts:state",
       "src/web-server/status/status-view-types.ts:askerState"
     ]
@@ -5480,7 +5446,7 @@
     "word": "unknown-grant-kind",
     "cause": "provider_error",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -5618,6 +5584,8 @@
     "word": "unsafe",
     "cause": null,
     "sources": [
+      "scripts/antigravity/signin_driver.py:state",
+      "scripts/antigravity/signin_driver.py:token_state()",
       "src/codex-auth/codex-renewal-planner.ts:profile.state",
       "src/codex-auth/codex-renewal-planner.ts:state"
     ]
@@ -5676,7 +5644,7 @@
     "word": "unsupported-grant-id",
     "cause": "refused",
     "sources": [
-      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -5792,10 +5760,15 @@
       "src/web-server/services/account-dashboard-state.ts:AccountJobStates",
       "src/web-server/services/account-dashboard-state.ts:state",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
+      "src/web-server/services/lifecycle-signin-session.ts:job.state",
+      "src/web-server/services/lifecycle-signin-session.ts:parseJournalReply(reply, id)?.state",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
       "src/web-server/services/signin-jobs.ts:record.job.state",
       "src/web-server/services/signin-jobs.ts:state",
-      "src/web-server/services/signin-jobs.ts:states"
+      "src/web-server/services/signin-jobs.ts:states",
+      "src/web-server/services/signin-session-agent.ts:RUNNING_STATES",
+      "src/web-server/services/signin-session-agent.ts:record.job.state",
+      "src/web-server/services/signin-session-agent.ts:state"
     ]
   },
   {
@@ -5847,8 +5820,8 @@
     "cause": null,
     "sources": [
       "src/web-server/services/app-update-contract.ts:state",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-session-agent.ts:RUNNING_STATES",
       "src/web-server/status/report-schema.ts:THREAD_STATES",
       "src/web-server/status/status-view-strip.ts:state",
       "src/web-server/status/status-view-types.ts:state",
@@ -5872,13 +5845,6 @@
       "src/web-server/services/signin-health-service.ts:row.state",
       "src/web-server/services/signin-health-service.ts:state",
       "src/web-server/services/signin-health-service.ts:states"
-    ]
-  },
-  {
-    "word": "windows",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:pendingMarkerState"
     ]
   },
   {
@@ -5924,6 +5890,13 @@
       "src/web-server/services/account-lifecycle-extras.ts:error.code",
       "src/web-server/services/account-lifecycle-extras.ts:status",
       "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "writer",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
     ]
   },
   {

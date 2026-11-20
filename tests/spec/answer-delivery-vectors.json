@@ -1,0 +1,1130 @@
+{
+ "doorbellSender": "aac-answers",
+ "noMailDetail": "No mail name; the agent reads its answers file.",
+ "doorbellOffDetail": "The pm-mail doorbell is turned off on this server.",
+ "scenarios": [
+  {
+   "name": "single",
+   "key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIN+n+PTijjrL1ji465BeTrvaPzm34KARhwn1OuBbxoXk\n-----END PRIVATE KEY-----\n",
+   "entries": [
+    {
+     "id": "c31bd372-6da1-4057-a75c-fbf71e28a3af",
+     "sendId": "298b3f01-abfc-4961-a7ea-8671e330c692",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "vm.lead--Q1",
+      "cardSeq": 3,
+      "cardSha256": "3e63b07c2445400b015b8ec7cc768f6a41218e829e8e08696d889c9ef9236da0",
+      "kind": "answer",
+      "choice": [
+       "A"
+      ],
+      "note": "Keep it inside — but test at 320 px.\n  Thanks",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "iPhone",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "0d07583f0826708e",
+       "value": "cbenJ2vLwfrYrDUJwW41Zt3Fp2T1xuMYiRdepiPnslp+4+ILh0GwZahIbjky0w9bo0ChaO7L8+DBpibUmP/8AA=="
+      }
+     },
+     "card": {
+      "writer": "vm.lead",
+      "seq": 3,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "vm.lead--Q1",
+      "label": "S-Q1",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "lead",
+      "replyTo": {
+       "pmMail": "lead",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q1",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": null,
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Rang lead through pm-mail.",
+      "attempts": 1
+     },
+     "shareFile": "vm.lead--Q1.json"
+    }
+   ],
+   "sends": [
+    {
+     "sendId": "298b3f01-abfc-4961-a7ea-8671e330c692",
+     "at": "2026-11-06T16:30:00.000Z",
+     "device": "iPhone",
+     "entryIds": [
+      "c31bd372-6da1-4057-a75c-fbf71e28a3af"
+     ],
+     "summary": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed send summary written to the share.",
+      "attempts": 1
+     }
+    }
+   ],
+   "files": {
+    "keys/aac-answers.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4udK7gRHNPDxScIYNExA0p3eBo7vpYnli73y0Nct3rM=\n-----END PUBLIC KEY-----\n",
+    "keys/0d07583f0826708e.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4udK7gRHNPDxScIYNExA0p3eBo7vpYnli73y0Nct3rM=\n-----END PUBLIC KEY-----\n",
+    "answers/batches/298b3f01-abfc-4961-a7ea-8671e330c692.json": "{\n  \"schema\": \"agent-reports/send@1\",\n  \"sendId\": \"298b3f01-abfc-4961-a7ea-8671e330c692\",\n  \"at\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"iPhone\",\n  \"entries\": [\n    {\n      \"cardId\": \"vm.lead--Q1\",\n      \"seq\": 3,\n      \"cardSha256\": \"3e63b07c2445400b015b8ec7cc768f6a41218e829e8e08696d889c9ef9236da0\",\n      \"kind\": \"answer\",\n      \"choice\": [\n        \"A\"\n      ],\n      \"note\": \"Keep it inside — but test at 320 px.\\n  Thanks\"\n    }\n  ],\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"0d07583f0826708e\",\n    \"value\": \"XN/7wNxzNyHliOBp4KDIK1RjNLC4J8dUMQ4E9UHcsbGDdZdfahzCsyHsQnZ+sV5mm5D4vULLaEtxaY99ljWEBA==\"\n  }\n}\n",
+    "answers/vm.lead--Q1.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"3e63b07c2445400b015b8ec7cc768f6a41218e829e8e08696d889c9ef9236da0\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Keep it inside — but test at 320 px.\\n  Thanks\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"iPhone\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"0d07583f0826708e\",\n    \"value\": \"cbenJ2vLwfrYrDUJwW41Zt3Fp2T1xuMYiRdepiPnslp+4+ILh0GwZahIbjky0w9bo0ChaO7L8+DBpibUmP/8AA==\"\n  }\n}\n"
+   },
+   "rings": [
+    {
+     "to": "lead",
+     "subject": "1 answer from the owner",
+     "body": "The owner sent 1 answer on the AI Account Center Status tab.\nSend: 298b3f01-abfc-4961-a7ea-8671e330c692\nCards: vm.lead--Q1\n\nCard vm.lead--Q1 (seq 3)\n  Kind: answer\n  Choice: A (First)\n  Words: Keep it inside — but test at 320 px.\n      Thanks\n  Time (UTC): 2026-11-06T16:30:00.000Z\n  Card sha256: 3e63b07c2445400b015b8ec7cc768f6a41218e829e8e08696d889c9ef9236da0\n  Signed file: agent-reports/v1/answers/vm.lead--Q1.json\n\nThe signed files are the authority, with the whole send in agent-reports/v1/answers/batches/298b3f01-abfc-4961-a7ea-8671e330c692.json (key agent-reports/v1/keys/0d07583f0826708e.pub). This mail is only a doorbell."
+    }
+   ]
+  },
+  {
+   "name": "batch",
+   "key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIDp326nw1kf1Z4DWsS09YdiuYa1wC/8xPHoQha8JnEkw\n-----END PRIVATE KEY-----\n",
+   "entries": [
+    {
+     "id": "a817f8ef-52ca-4e99-be6a-9c66d1900e2d",
+     "sendId": "6d4999fd-d529-403f-827c-82d459aa3504",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "vm.lead--Q2",
+      "cardSeq": 1,
+      "cardSha256": "84a5f1c91a52eabe96a0094411c5e2acc309c5e55884aae23301db93297ede03",
+      "kind": "answer",
+      "choice": [
+       "B"
+      ],
+      "note": "",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "c3a1bdef52e5f59c",
+       "value": "lpoOZZJG5JHOAXDOnR21Z/QEle5NWvgfpUVeH0ZZp+Xctx9pbPNC4yh0vxUWl5RKGYUUEH5Mk/ctSNaNBY2ODw=="
+      }
+     },
+     "card": {
+      "writer": "vm.lead",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "vm.lead--Q2",
+      "label": "S-Q2",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "lead",
+      "replyTo": {
+       "pmMail": "lead",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q2",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": "deck-7",
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Rang lead through pm-mail.",
+      "attempts": 1
+     },
+     "shareFile": "vm.lead--Q2.json"
+    },
+    {
+     "id": "4325d4b4-d835-4e7d-94f2-dbf203084d27",
+     "sendId": "6d4999fd-d529-403f-827c-82d459aa3504",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "vm.lead--Q3",
+      "cardSeq": 1,
+      "cardSha256": "0f57973b9f2639e775c4afd1d89ae7ec260f576f6db5f6d6a0f5b5997587c8eb",
+      "kind": "note",
+      "choice": [],
+      "note": "Use the other approach.",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "c3a1bdef52e5f59c",
+       "value": "TV5+qX1VqwYZkvG5dIxnFRAmj2suPRokNbN9bVx9Vb6UL+h1eyrQnNMhBgajxqVJWaKr+fLJLYUfqjd5Yod5Dw=="
+      }
+     },
+     "card": {
+      "writer": "vm.lead",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "vm.lead--Q3",
+      "label": "S-Q3",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "lead",
+      "replyTo": {
+       "pmMail": "lead",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q3",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": null,
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Rang lead through pm-mail.",
+      "attempts": 1
+     },
+     "shareFile": "vm.lead--Q3.note-4325d4b4d835.json"
+    },
+    {
+     "id": "52177d98-065a-40c6-8110-ea6caac7b2c7",
+     "sendId": "6d4999fd-d529-403f-827c-82d459aa3504",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "mac.worker--Q4",
+      "cardSeq": 1,
+      "cardSha256": "695542dad687d0b80ad391013d287f8c4f20a5350e9822588ea2044536f2203e",
+      "kind": "object",
+      "choice": [],
+      "note": "Not yet: blocked\r\nby X.",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "c3a1bdef52e5f59c",
+       "value": "3DS0HIXnPRBzB5lNfo4ht3iey8JrqhJ9eyQ4x0yQ+pZpBPpOBQRnki6p0pFh0Dfc3OQRbmsl0swiphg5dUrKDg=="
+      }
+     },
+     "card": {
+      "writer": "mac.worker",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "mac.worker--Q4",
+      "label": "S-Q4",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "worker",
+      "replyTo": {
+       "pmMail": "worker",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q4",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [],
+      "recommendation": null,
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": "deck-7b",
+      "evidence": [],
+      "kind": "objection",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Rang worker through pm-mail.",
+      "attempts": 1
+     },
+     "shareFile": "mac.worker--Q4.object-52177d98065a.json"
+    },
+    {
+     "id": "506e7c72-fa17-4acb-a7dd-8be53dcd9a06",
+     "sendId": "6d4999fd-d529-403f-827c-82d459aa3504",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "mac.silent--Q5",
+      "cardSeq": 1,
+      "cardSha256": "df3b06f8a5e30e76315b136d816d66b54790e552a94323fd9b82e7d45b9782e2",
+      "kind": "answer",
+      "choice": [
+       "A"
+      ],
+      "note": "",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "c3a1bdef52e5f59c",
+       "value": "ij/x84iAFJvzsFlAjdVtm1GHWerKjIbDBWFOWmRy16WHQFhEFPKHsF2X8B8azksoyMCxF85Sck1nBxttZS7PAg=="
+      }
+     },
+     "card": {
+      "writer": "mac.silent",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "mac.silent--Q5",
+      "label": "S-Q5",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "silent",
+      "replyTo": {
+       "pmMail": null,
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q5",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": null,
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "skipped",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "No mail name; the agent reads its answers file.",
+      "attempts": 1
+     },
+     "shareFile": "mac.silent--Q5.json"
+    }
+   ],
+   "sends": [
+    {
+     "sendId": "6d4999fd-d529-403f-827c-82d459aa3504",
+     "at": "2026-11-06T16:30:00.000Z",
+     "device": "Mac",
+     "entryIds": [
+      "a817f8ef-52ca-4e99-be6a-9c66d1900e2d",
+      "4325d4b4-d835-4e7d-94f2-dbf203084d27",
+      "52177d98-065a-40c6-8110-ea6caac7b2c7",
+      "506e7c72-fa17-4acb-a7dd-8be53dcd9a06"
+     ],
+     "summary": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed send summary written to the share.",
+      "attempts": 1
+     }
+    }
+   ],
+   "files": {
+    "keys/aac-answers.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4b03WY4922SHcc6qL2pB3nULZ21aNhnRwfrv5Jbg/1o=\n-----END PUBLIC KEY-----\n",
+    "keys/c3a1bdef52e5f59c.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4b03WY4922SHcc6qL2pB3nULZ21aNhnRwfrv5Jbg/1o=\n-----END PUBLIC KEY-----\n",
+    "answers/batches/6d4999fd-d529-403f-827c-82d459aa3504.json": "{\n  \"schema\": \"agent-reports/send@1\",\n  \"sendId\": \"6d4999fd-d529-403f-827c-82d459aa3504\",\n  \"at\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"entries\": [\n    {\n      \"cardId\": \"vm.lead--Q2\",\n      \"seq\": 1,\n      \"cardSha256\": \"84a5f1c91a52eabe96a0094411c5e2acc309c5e55884aae23301db93297ede03\",\n      \"kind\": \"answer\",\n      \"choice\": [\n        \"B\"\n      ],\n      \"note\": \"\"\n    },\n    {\n      \"cardId\": \"vm.lead--Q3\",\n      \"seq\": 1,\n      \"cardSha256\": \"0f57973b9f2639e775c4afd1d89ae7ec260f576f6db5f6d6a0f5b5997587c8eb\",\n      \"kind\": \"note\",\n      \"choice\": [],\n      \"note\": \"Use the other approach.\"\n    },\n    {\n      \"cardId\": \"mac.worker--Q4\",\n      \"seq\": 1,\n      \"cardSha256\": \"695542dad687d0b80ad391013d287f8c4f20a5350e9822588ea2044536f2203e\",\n      \"kind\": \"object\",\n      \"choice\": [],\n      \"note\": \"Not yet: blocked\\r\\nby X.\"\n    },\n    {\n      \"cardId\": \"mac.silent--Q5\",\n      \"seq\": 1,\n      \"cardSha256\": \"df3b06f8a5e30e76315b136d816d66b54790e552a94323fd9b82e7d45b9782e2\",\n      \"kind\": \"answer\",\n      \"choice\": [\n        \"A\"\n      ],\n      \"note\": \"\"\n    }\n  ],\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"c3a1bdef52e5f59c\",\n    \"value\": \"N5Zzz6ssH0aSv2tBUpmBLES4/ujhGaqNiT1aiWTf2hbJRftCluPVJDcerLfLYLyvjdoTlv/HtsV8DAkheVevBA==\"\n  }\n}\n",
+    "answers/mac.silent--Q5.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"mac.silent--Q5\",\n  \"cardSeq\": 1,\n  \"cardSha256\": \"df3b06f8a5e30e76315b136d816d66b54790e552a94323fd9b82e7d45b9782e2\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"c3a1bdef52e5f59c\",\n    \"value\": \"ij/x84iAFJvzsFlAjdVtm1GHWerKjIbDBWFOWmRy16WHQFhEFPKHsF2X8B8azksoyMCxF85Sck1nBxttZS7PAg==\"\n  }\n}\n",
+    "answers/mac.worker--Q4.object-52177d98065a.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"mac.worker--Q4\",\n  \"cardSeq\": 1,\n  \"cardSha256\": \"695542dad687d0b80ad391013d287f8c4f20a5350e9822588ea2044536f2203e\",\n  \"kind\": \"object\",\n  \"choice\": [],\n  \"note\": \"Not yet: blocked\\r\\nby X.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"c3a1bdef52e5f59c\",\n    \"value\": \"3DS0HIXnPRBzB5lNfo4ht3iey8JrqhJ9eyQ4x0yQ+pZpBPpOBQRnki6p0pFh0Dfc3OQRbmsl0swiphg5dUrKDg==\"\n  }\n}\n",
+    "answers/vm.lead--Q2.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q2\",\n  \"cardSeq\": 1,\n  \"cardSha256\": \"84a5f1c91a52eabe96a0094411c5e2acc309c5e55884aae23301db93297ede03\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"B\"\n  ],\n  \"note\": \"\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"c3a1bdef52e5f59c\",\n    \"value\": \"lpoOZZJG5JHOAXDOnR21Z/QEle5NWvgfpUVeH0ZZp+Xctx9pbPNC4yh0vxUWl5RKGYUUEH5Mk/ctSNaNBY2ODw==\"\n  }\n}\n",
+    "answers/vm.lead--Q3.note-4325d4b4d835.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q3\",\n  \"cardSeq\": 1,\n  \"cardSha256\": \"0f57973b9f2639e775c4afd1d89ae7ec260f576f6db5f6d6a0f5b5997587c8eb\",\n  \"kind\": \"note\",\n  \"choice\": [],\n  \"note\": \"Use the other approach.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"c3a1bdef52e5f59c\",\n    \"value\": \"TV5+qX1VqwYZkvG5dIxnFRAmj2suPRokNbN9bVx9Vb6UL+h1eyrQnNMhBgajxqVJWaKr+fLJLYUfqjd5Yod5Dw==\"\n  }\n}\n"
+   },
+   "rings": [
+    {
+     "to": "lead",
+     "subject": "2 answers from the owner (deck-7)",
+     "body": "The owner sent 2 answers on the AI Account Center Status tab.\nBatch: deck-7\nSend: 6d4999fd-d529-403f-827c-82d459aa3504\nCards: vm.lead--Q2, vm.lead--Q3\n\nCard vm.lead--Q2 (seq 1)\n  Kind: answer\n  Choice: B (Second)\n  Words: (none)\n  Time (UTC): 2026-11-06T16:30:00.000Z\n  Card sha256: 84a5f1c91a52eabe96a0094411c5e2acc309c5e55884aae23301db93297ede03\n  Signed file: agent-reports/v1/answers/vm.lead--Q2.json\n\nCard vm.lead--Q3 (seq 1)\n  Kind: written response (closes this card; the owner may be asking a question or proposing another solution)\n  Choice: none\n  Words: Use the other approach.\n  Time (UTC): 2026-11-06T16:30:00.000Z\n  Card sha256: 0f57973b9f2639e775c4afd1d89ae7ec260f576f6db5f6d6a0f5b5997587c8eb\n  Signed file: agent-reports/v1/answers/vm.lead--Q3.note-4325d4b4d835.json\n\nThe signed files are the authority, with the whole send in agent-reports/v1/answers/batches/6d4999fd-d529-403f-827c-82d459aa3504.json (key agent-reports/v1/keys/c3a1bdef52e5f59c.pub). This mail is only a doorbell."
+    },
+    {
+     "to": "worker",
+     "subject": "1 answer from the owner (deck-7b)",
+     "body": "The owner sent 1 answer on the AI Account Center Status tab.\nBatch: deck-7b\nSend: 6d4999fd-d529-403f-827c-82d459aa3504\nCards: mac.worker--Q4\n\nCard mac.worker--Q4 (seq 1)\n  Kind: objection (the card stays open; reply on the card or withdraw it)\n  Choice: none\n  Words: Not yet: blocked\n    by X.\n  Time (UTC): 2026-11-06T16:30:00.000Z\n  Card sha256: 695542dad687d0b80ad391013d287f8c4f20a5350e9822588ea2044536f2203e\n  Signed file: agent-reports/v1/answers/mac.worker--Q4.object-52177d98065a.json\n\nThe signed files are the authority, with the whole send in agent-reports/v1/answers/batches/6d4999fd-d529-403f-827c-82d459aa3504.json (key agent-reports/v1/keys/c3a1bdef52e5f59c.pub). This mail is only a doorbell."
+    }
+   ]
+  },
+  {
+   "name": "ring-retry.failed",
+   "key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIOg8WSNg8xajByfQUH3B5iUiLjDYCyAv0Jci4DovF1d1\n-----END PRIVATE KEY-----\n",
+   "entries": [
+    {
+     "id": "81dd6a2b-a5fa-416f-9ebb-2ec29a365747",
+     "sendId": "6d1b4bc1-90d6-40a0-a842-607d8ecaba91",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "vm.lead--Q6",
+      "cardSeq": 1,
+      "cardSha256": "ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6",
+      "kind": "answer",
+      "choice": [
+       "A"
+      ],
+      "note": "",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "4434bf3aaaeebe63",
+       "value": "io24QWNs5sPYgEAVr72UV2C47wJGWV/XhPpC5qW0l2rpxFNx+cib1ChofCJ8LEfTWrIiwzSV8bbXxsE9yvBMCA=="
+      }
+     },
+     "card": {
+      "writer": "vm.lead",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "vm.lead--Q6",
+      "label": "S-Q6",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "lead",
+      "replyTo": {
+       "pmMail": "lead",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q6",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": null,
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "failed",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "pm-mail failed.",
+      "attempts": 1
+     },
+     "shareFile": "vm.lead--Q6.json"
+    }
+   ],
+   "sends": [
+    {
+     "sendId": "6d1b4bc1-90d6-40a0-a842-607d8ecaba91",
+     "at": "2026-11-06T16:30:00.000Z",
+     "device": "Mac",
+     "entryIds": [
+      "81dd6a2b-a5fa-416f-9ebb-2ec29a365747"
+     ],
+     "summary": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed send summary written to the share.",
+      "attempts": 1
+     }
+    }
+   ],
+   "files": {
+    "keys/aac-answers.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4/nqiXYS+YFkpzl4TpwPIIMYw7txInacNMhz6hON8uc=\n-----END PUBLIC KEY-----\n",
+    "keys/4434bf3aaaeebe63.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4/nqiXYS+YFkpzl4TpwPIIMYw7txInacNMhz6hON8uc=\n-----END PUBLIC KEY-----\n",
+    "answers/batches/6d1b4bc1-90d6-40a0-a842-607d8ecaba91.json": "{\n  \"schema\": \"agent-reports/send@1\",\n  \"sendId\": \"6d1b4bc1-90d6-40a0-a842-607d8ecaba91\",\n  \"at\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"entries\": [\n    {\n      \"cardId\": \"vm.lead--Q6\",\n      \"seq\": 1,\n      \"cardSha256\": \"ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6\",\n      \"kind\": \"answer\",\n      \"choice\": [\n        \"A\"\n      ],\n      \"note\": \"\"\n    }\n  ],\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"4434bf3aaaeebe63\",\n    \"value\": \"0joYJcNKZ0QEGR27yu6wUgbACT4rYuc9R4aYOu3F7L0o/eVhiVfIeNDggzjnCyWwn+PYF/sKsAZ9pvBqUj9+Ag==\"\n  }\n}\n",
+    "answers/vm.lead--Q6.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q6\",\n  \"cardSeq\": 1,\n  \"cardSha256\": \"ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"4434bf3aaaeebe63\",\n    \"value\": \"io24QWNs5sPYgEAVr72UV2C47wJGWV/XhPpC5qW0l2rpxFNx+cib1ChofCJ8LEfTWrIiwzSV8bbXxsE9yvBMCA==\"\n  }\n}\n"
+   },
+   "rings": [
+    {
+     "to": "lead",
+     "subject": "1 answer from the owner",
+     "body": "The owner sent 1 answer on the AI Account Center Status tab.\nSend: 6d1b4bc1-90d6-40a0-a842-607d8ecaba91\nCards: vm.lead--Q6\n\nCard vm.lead--Q6 (seq 1)\n  Kind: answer\n  Choice: A (First)\n  Words: (none)\n  Time (UTC): 2026-11-06T16:30:00.000Z\n  Card sha256: ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6\n  Signed file: agent-reports/v1/answers/vm.lead--Q6.json\n\nThe signed files are the authority, with the whole send in agent-reports/v1/answers/batches/6d1b4bc1-90d6-40a0-a842-607d8ecaba91.json (key agent-reports/v1/keys/4434bf3aaaeebe63.pub). This mail is only a doorbell."
+    }
+   ]
+  },
+  {
+   "name": "ring-retry.retried",
+   "key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIOg8WSNg8xajByfQUH3B5iUiLjDYCyAv0Jci4DovF1d1\n-----END PRIVATE KEY-----\n",
+   "entries": [
+    {
+     "id": "81dd6a2b-a5fa-416f-9ebb-2ec29a365747",
+     "sendId": "6d1b4bc1-90d6-40a0-a842-607d8ecaba91",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "vm.lead--Q6",
+      "cardSeq": 1,
+      "cardSha256": "ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6",
+      "kind": "answer",
+      "choice": [
+       "A"
+      ],
+      "note": "",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "4434bf3aaaeebe63",
+       "value": "io24QWNs5sPYgEAVr72UV2C47wJGWV/XhPpC5qW0l2rpxFNx+cib1ChofCJ8LEfTWrIiwzSV8bbXxsE9yvBMCA=="
+      }
+     },
+     "card": {
+      "writer": "vm.lead",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "vm.lead--Q6",
+      "label": "S-Q6",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "lead",
+      "replyTo": {
+       "pmMail": "lead",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q6",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": null,
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Rang lead through pm-mail.",
+      "attempts": 2
+     },
+     "shareFile": "vm.lead--Q6.json"
+    }
+   ],
+   "sends": [
+    {
+     "sendId": "6d1b4bc1-90d6-40a0-a842-607d8ecaba91",
+     "at": "2026-11-06T16:30:00.000Z",
+     "device": "Mac",
+     "entryIds": [
+      "81dd6a2b-a5fa-416f-9ebb-2ec29a365747"
+     ],
+     "summary": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed send summary written to the share.",
+      "attempts": 1
+     }
+    }
+   ],
+   "files": {
+    "keys/aac-answers.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4/nqiXYS+YFkpzl4TpwPIIMYw7txInacNMhz6hON8uc=\n-----END PUBLIC KEY-----\n",
+    "keys/4434bf3aaaeebe63.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4/nqiXYS+YFkpzl4TpwPIIMYw7txInacNMhz6hON8uc=\n-----END PUBLIC KEY-----\n",
+    "answers/batches/6d1b4bc1-90d6-40a0-a842-607d8ecaba91.json": "{\n  \"schema\": \"agent-reports/send@1\",\n  \"sendId\": \"6d1b4bc1-90d6-40a0-a842-607d8ecaba91\",\n  \"at\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"entries\": [\n    {\n      \"cardId\": \"vm.lead--Q6\",\n      \"seq\": 1,\n      \"cardSha256\": \"ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6\",\n      \"kind\": \"answer\",\n      \"choice\": [\n        \"A\"\n      ],\n      \"note\": \"\"\n    }\n  ],\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"4434bf3aaaeebe63\",\n    \"value\": \"0joYJcNKZ0QEGR27yu6wUgbACT4rYuc9R4aYOu3F7L0o/eVhiVfIeNDggzjnCyWwn+PYF/sKsAZ9pvBqUj9+Ag==\"\n  }\n}\n",
+    "answers/vm.lead--Q6.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q6\",\n  \"cardSeq\": 1,\n  \"cardSha256\": \"ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"4434bf3aaaeebe63\",\n    \"value\": \"io24QWNs5sPYgEAVr72UV2C47wJGWV/XhPpC5qW0l2rpxFNx+cib1ChofCJ8LEfTWrIiwzSV8bbXxsE9yvBMCA==\"\n  }\n}\n"
+   },
+   "rings": [
+    {
+     "to": "lead",
+     "subject": "1 answer from the owner",
+     "body": "The owner sent 1 answer on the AI Account Center Status tab.\nSend: 6d1b4bc1-90d6-40a0-a842-607d8ecaba91\nCards: vm.lead--Q6\n\nCard vm.lead--Q6 (seq 1)\n  Kind: answer\n  Choice: A (First)\n  Words: (none)\n  Time (UTC): 2026-11-06T16:30:00.000Z\n  Card sha256: ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6\n  Signed file: agent-reports/v1/answers/vm.lead--Q6.json\n\nThe signed files are the authority, with the whole send in agent-reports/v1/answers/batches/6d1b4bc1-90d6-40a0-a842-607d8ecaba91.json (key agent-reports/v1/keys/4434bf3aaaeebe63.pub). This mail is only a doorbell."
+    },
+    {
+     "to": "lead",
+     "subject": "1 answer from the owner",
+     "body": "The owner sent 1 answer on the AI Account Center Status tab.\nSend: 6d1b4bc1-90d6-40a0-a842-607d8ecaba91\nCards: vm.lead--Q6\n\nCard vm.lead--Q6 (seq 1)\n  Kind: answer\n  Choice: A (First)\n  Words: (none)\n  Time (UTC): 2026-11-06T16:30:00.000Z\n  Card sha256: ce74ece9203ca3de7a49c8b7cc15cede1d21d579cadb4843a4cc0d7f632d65b6\n  Signed file: agent-reports/v1/answers/vm.lead--Q6.json\n\nThe signed files are the authority, with the whole send in agent-reports/v1/answers/batches/6d1b4bc1-90d6-40a0-a842-607d8ecaba91.json (key agent-reports/v1/keys/4434bf3aaaeebe63.pub). This mail is only a doorbell."
+    }
+   ]
+  },
+  {
+   "name": "doorbell-off",
+   "key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIOexElNnvtLmiPK9cqlx9GTniKcJf2CP+B0o3IQyE4j/\n-----END PRIVATE KEY-----\n",
+   "entries": [
+    {
+     "id": "d5fc6ab3-d0aa-4d0e-bf51-617de930dafe",
+     "sendId": "c3b98930-1bb1-40df-bdae-321ca76e72ed",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "vm.lead--Q7",
+      "cardSeq": 1,
+      "cardSha256": "91ad6147e6549470811319343f3a876968e9fd194840a01e021606fad466944c",
+      "kind": "answer",
+      "choice": [
+       "A"
+      ],
+      "note": "",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "f33bca69fc847bf8",
+       "value": "g3j+zkbkRm8+g+2XTVC7m7A6kcoqFha1tydO35TlgirVhehFf9HJEzuU2lMPpO0ZiSmESiiHtf4Guc+LXKJnBA=="
+      }
+     },
+     "card": {
+      "writer": "vm.lead",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "vm.lead--Q7",
+      "label": "S-Q7",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "lead",
+      "replyTo": {
+       "pmMail": "lead",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q7",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": null,
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed copy written to the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "skipped",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "The pm-mail doorbell is turned off on this server.",
+      "attempts": 1
+     },
+     "shareFile": "vm.lead--Q7.json"
+    }
+   ],
+   "sends": [
+    {
+     "sendId": "c3b98930-1bb1-40df-bdae-321ca76e72ed",
+     "at": "2026-11-06T16:30:00.000Z",
+     "device": "Mac",
+     "entryIds": [
+      "d5fc6ab3-d0aa-4d0e-bf51-617de930dafe"
+     ],
+     "summary": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed send summary written to the share.",
+      "attempts": 1
+     }
+    }
+   ],
+   "files": {
+    "keys/aac-answers.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMfAz3yIXJn+PvhYdOOG8JGOTIWecYek9JZqN75/+CwU=\n-----END PUBLIC KEY-----\n",
+    "keys/f33bca69fc847bf8.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMfAz3yIXJn+PvhYdOOG8JGOTIWecYek9JZqN75/+CwU=\n-----END PUBLIC KEY-----\n",
+    "answers/batches/c3b98930-1bb1-40df-bdae-321ca76e72ed.json": "{\n  \"schema\": \"agent-reports/send@1\",\n  \"sendId\": \"c3b98930-1bb1-40df-bdae-321ca76e72ed\",\n  \"at\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"entries\": [\n    {\n      \"cardId\": \"vm.lead--Q7\",\n      \"seq\": 1,\n      \"cardSha256\": \"91ad6147e6549470811319343f3a876968e9fd194840a01e021606fad466944c\",\n      \"kind\": \"answer\",\n      \"choice\": [\n        \"A\"\n      ],\n      \"note\": \"\"\n    }\n  ],\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"f33bca69fc847bf8\",\n    \"value\": \"blFlKwaH9yezIJtWd3i4s3aHLczDJQCp+/gUXWz4SmoFspG2q7uJ5l8ralwad8s1xDg+StXGHcvnn/PHa8PKDw==\"\n  }\n}\n",
+    "answers/vm.lead--Q7.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q7\",\n  \"cardSeq\": 1,\n  \"cardSha256\": \"91ad6147e6549470811319343f3a876968e9fd194840a01e021606fad466944c\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"f33bca69fc847bf8\",\n    \"value\": \"g3j+zkbkRm8+g+2XTVC7m7A6kcoqFha1tydO35TlgirVhehFf9HJEzuU2lMPpO0ZiSmESiiHtf4Guc+LXKJnBA==\"\n  }\n}\n"
+   },
+   "rings": []
+  },
+  {
+   "name": "newer-on-share",
+   "key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIKnwNMrKCmJTqioZGkpW8d0YOPn4xjz/lxNGYx2T0DLn\n-----END PRIVATE KEY-----\n",
+   "entries": [
+    {
+     "id": "dbcbdcfd-3c28-4765-b800-5647b04f11e1",
+     "sendId": "c65860b6-4df4-48ee-92ef-c6716f9fdcfc",
+     "answer": {
+      "schema": "agent-reports/answer@1",
+      "cardId": "vm.lead--Q8",
+      "cardSeq": 1,
+      "cardSha256": "6eb5f1fdd908c478255257d64a8bf6eed25d4f274a0e77820f7262668b097402",
+      "kind": "answer",
+      "choice": [
+       "A"
+      ],
+      "note": "",
+      "via": "deck",
+      "answeredAt": "2026-11-06T16:30:00.000Z",
+      "answeredBy": "owner",
+      "device": "Mac",
+      "signature": {
+       "alg": "ed25519",
+       "keyId": "190c4b6bcd0ec7f1",
+       "value": "EUwj5p28sGdRetRey8r42xHKFlt0OjdOUzk5K4bcKYivyp6mWSdGKHWEJu8UguVyfoR6EkU786ZICBdVs8W2AA=="
+      }
+     },
+     "card": {
+      "writer": "vm.lead",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:29:00.000Z",
+      "id": "vm.lead--Q8",
+      "label": "S-Q8",
+      "project": "proj",
+      "stream": "S",
+      "askedBy": "lead",
+      "replyTo": {
+       "pmMail": "lead",
+       "t3Thread": null
+      },
+      "state": "open",
+      "supersededBy": null,
+      "reason": null,
+      "title": "Question Q8",
+      "now": "Plain words.",
+      "nowAsOf": null,
+      "oldAnswer": null,
+      "whatChanged": null,
+      "options": [
+       {
+        "key": "A",
+        "label": "First",
+        "gets": "Simple",
+        "costs": null,
+        "media": [],
+        "sections": [],
+        "stance": null
+       },
+       {
+        "key": "B",
+        "label": "Second",
+        "gets": null,
+        "costs": "More work",
+        "media": [],
+        "sections": [],
+        "stance": null
+       }
+      ],
+      "recommendation": {
+       "key": "A",
+       "why": "Simpler.",
+       "confidence": null,
+       "flip": null
+      },
+      "multiple": false,
+      "urgency": "today",
+      "blocks": null,
+      "sections": [],
+      "batch": null,
+      "evidence": [],
+      "kind": "question",
+      "neededBy": null,
+      "exception": null,
+      "reversible": null,
+      "verdict": null,
+      "group": null,
+      "agreement": null,
+      "doubt": null,
+      "appliesTo": null,
+      "changesCanon": [],
+      "related": [],
+      "replies": [],
+      "askedAt": "2026-11-06T16:20:00.000Z"
+     },
+     "share": {
+      "state": "skipped",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Not delivered: a newer answer to this card replaced this one before it reached the share.",
+      "attempts": 1
+     },
+     "doorbell": {
+      "state": "skipped",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Not delivered: a newer answer to this card replaced this one before it reached the share.",
+      "attempts": 1
+     },
+     "shareFile": "vm.lead--Q8.json"
+    }
+   ],
+   "sends": [
+    {
+     "sendId": "c65860b6-4df4-48ee-92ef-c6716f9fdcfc",
+     "at": "2026-11-06T16:30:00.000Z",
+     "device": "Mac",
+     "entryIds": [
+      "dbcbdcfd-3c28-4765-b800-5647b04f11e1"
+     ],
+     "summary": {
+      "state": "done",
+      "at": "2026-11-06T16:30:00.000Z",
+      "detail": "Signed send summary written to the share.",
+      "attempts": 1
+     }
+    }
+   ],
+   "files": {
+    "keys/aac-answers.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9VnhHBaFT0GAzqdjKd+ZS93z2hxqK78Y0KcH7QwI1Kk=\n-----END PUBLIC KEY-----\n",
+    "keys/190c4b6bcd0ec7f1.pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9VnhHBaFT0GAzqdjKd+ZS93z2hxqK78Y0KcH7QwI1Kk=\n-----END PUBLIC KEY-----\n",
+    "answers/batches/c65860b6-4df4-48ee-92ef-c6716f9fdcfc.json": "{\n  \"schema\": \"agent-reports/send@1\",\n  \"sendId\": \"c65860b6-4df4-48ee-92ef-c6716f9fdcfc\",\n  \"at\": \"2026-11-06T16:30:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"entries\": [\n    {\n      \"cardId\": \"vm.lead--Q8\",\n      \"seq\": 1,\n      \"cardSha256\": \"6eb5f1fdd908c478255257d64a8bf6eed25d4f274a0e77820f7262668b097402\",\n      \"kind\": \"answer\",\n      \"choice\": [\n        \"A\"\n      ],\n      \"note\": \"\"\n    }\n  ],\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"190c4b6bcd0ec7f1\",\n    \"value\": \"tECNjmnYB22+hTywYvfwHXRb5sHz8Bm1CrduhQhEhdtqiNg5MSVz9EfPXhjsaMM7XgTSPH62ZjKx8Wl1lymfDA==\"\n  }\n}\n",
+    "answers/vm.lead--Q8.json": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q8\",\n  \"cardSeq\": 5,\n  \"cardSha256\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"B\"\n  ],\n  \"note\": \"\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:29:59.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"190c4b6bcd0ec7f1\",\n    \"value\": \"iSPgrNC8GUHmKc5T0+roZledC4jfuboJNFh7TklidCaAvZQH6+u7M9tIN7gigsaGRXQKOfQ4E/ZnCZMUNYARDQ==\"\n  }\n}\n"
+   },
+   "rings": [],
+   "newerOnShare": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--Q8\",\n  \"cardSeq\": 5,\n  \"cardSha256\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"B\"\n  ],\n  \"note\": \"\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-06T16:29:59.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"Mac\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"190c4b6bcd0ec7f1\",\n    \"value\": \"iSPgrNC8GUHmKc5T0+roZledC4jfuboJNFh7TklidCaAvZQH6+u7M9tIN7gigsaGRXQKOfQ4E/ZnCZMUNYARDQ==\"\n  }\n}\n"
+  }
+ ]
+}

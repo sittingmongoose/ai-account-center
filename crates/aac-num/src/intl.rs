@@ -349,6 +349,21 @@ impl Zone {
         Some((ms + minutes * 60_000).div_euclid(60_000))
     }
 
+    /// The zone's UTC offset at `ms` in whole minutes (east positive), or `None` outside the
+    /// window. Analytics' local-day math reads the same offsets the clock and day words use.
+    pub fn offset_minutes(&self, ms: i64) -> Option<i64> {
+        if ms < self.from || ms > self.to {
+            return None;
+        }
+        Some(
+            self.offsets
+                .iter()
+                .take_while(|(start, _)| *start <= ms)
+                .last()
+                .map_or(0, |(_, minutes)| *minutes),
+        )
+    }
+
     /// The display-zone calendar date `(year, month, day)` of `ms`, from the same offsets as [`Zone::words`] (R1: the
     /// page's own date, so no server word is needed for the year), or `None` outside the window.
     pub fn local_date(&self, ms: i64) -> Option<(i64, i64, i64)> {

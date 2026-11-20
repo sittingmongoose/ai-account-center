@@ -6,8 +6,8 @@ import {
   AntigravityProfileRegistry,
   PrivateStorageError,
   pruneSupersededCredentials,
-} from '../../../src/antigravity';
-import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity';
+} from '../../../src/antigravity/registry';
+import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 
 const temporary: string[] = [];
 afterEach(() => {
