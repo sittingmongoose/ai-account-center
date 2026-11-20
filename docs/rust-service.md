@@ -953,15 +953,14 @@ public mode remains available for auth and static fixture tests.
 
 ## H2 quota collection
 
-Enable `rustService.groups.collection: on` (or `AAC_RUST_GROUP_COLLECTION=on`)
-under `rustService.mode: on`. Native agent reads also require `agentVerbs: on`
-and `agentTransport: on`, and an existing verified agent on the configured
-computer. The service uses the same L5 registry and pool.
+The packaged dashboard enables collection by default. Native agent reads use
+`agentVerbs`, `agentTransport` and a verified agent on the configured computer.
+The service uses the same L5 registry and pool.
 
 - `PUT /internal/collection-tick` waits the configured 30–3600-second interval
   after a dashboard sampling pass. A changed interval cancels the pending wait.
-  The TypeScript fallback waits the rest of the same interval if the service
-  goes away. Normal dashboard and Home reads share the existing generation.
+  Dashboard and Home reads share the current collection generation. If
+  an adopted private collector is lost, the public process exits for restart.
 - `POST /internal/collect/{verb}` takes the L5 request envelope for
   `quota-read`, `signin-expiry` or `failover-inventory` with action `inventory`.
   Matching in-flight requests share one bounded pass. Existing DTO validation
@@ -971,8 +970,8 @@ computer. The service uses the same L5 registry and pool.
   or Windows Claude snapshot to the original path through the registry lease.
   The same lease-backed path owns OpenCode's workspace pointer and identity
   cooldown holds. A wallet pointer is saved only for the current configured source.
-  The selected owner is fixed for the service boot. Turning the group off
-  returns writes to TypeScript using the same cache files.
+  The selected owner is fixed for the service boot. With collection disabled
+  and no adopted owner, the dashboard does not start a cache writer.
 
 - `GET /api/accounts/dashboard` uses the prepared collection generation.
   The native route preserves validation, session and device authorization,
@@ -985,7 +984,7 @@ computer. The service uses the same L5 registry and pool.
   share generations with the native listener. Its `hub_dashboards` returns
   the Mac and Windows neutral snapshots in that order. Its `store_observations`
   maps dashboard windows to the existing history store's observations.
-  With the Rust store hosted, the TS boot job also uses that conversion.
+  The hosted Rust store uses that conversion for native observations.
 - `GET /internal/collection-sources` reads the private account registry v2.
   `PUT /internal/collection-provider-cache` takes a Claude profile ID and
   manifest hash, an OpenCode wallet binding hash, or a wallet-source read.
@@ -999,8 +998,8 @@ computer. The service uses the same L5 registry and pool.
   The collection group controls whether the packaged dashboard offers this reader.
 - `POST /internal/collect/failover-collect` can run a selected
   provider helper over the same L5 pool, with at most three active helpers.
-  The release bundles the existing Python source, including OpenCode wallet inventory. A refusal before launch
-  allows the TypeScript fallback. An indeterminate reply ends the attempt.
+  The release bundles the existing Python source, including OpenCode wallet
+  inventory. An indeterminate reply ends the attempt.
 
 The standalone listener can run the collector through
 `serve_with_native_account_usage(boot, shutdown, cache, callbacks)`. Supply
