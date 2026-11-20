@@ -369,7 +369,7 @@ mod tests {
         let fingerprints: Map<String, Value> = serde_json::from_value(json!({
             "codex":{"settled":print,"too-large-active":{"extra":"a".repeat(REQUEST_BYTES)}},
         }))
-        .unwrap();
+        .expect("fixture fingerprints");
         let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
         let batches = requests(
             args,
@@ -381,7 +381,8 @@ mod tests {
         assert_eq!(batches.len(), 2);
         let args = &batches[0].1;
         assert_eq!(args["fingerprints"]["codex"], json!({}));
-        let request = aac_usage::protocol::parse_request(args.to_string().as_bytes()).unwrap();
+        let request = aac_usage::protocol::parse_request(args.to_string().as_bytes())
+            .expect("decode the split scanner frame");
         assert_eq!(request.fingerprints["codex"]["settled"], print);
 
         let mut cache = Cache {
