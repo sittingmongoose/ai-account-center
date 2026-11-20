@@ -150,44 +150,47 @@ describe('route counters', () => {
 
 describe('socket layout (Fable L2)', () => {
   const id = 'a'.repeat(24);
-  it('keeps today’s path while it fits, and binds a short private folder otherwise', () => {
-    const short = '/home/fixture/.ccs';
-    expect(socketLayout(short, id, {})).toEqual({
-      folders: [`${short}/run/aac-http-${id}`],
-      socketPath: `${short}/run/aac-http-${id}/http.sock`,
-    });
-    const long = '/home/fixture/' + 'u'.repeat(150) + '/.ccs';
-    const hash = shortName(long);
-    expect(socketLayout(long, id, { XDG_RUNTIME_DIR: '/run/user/1000' })).toEqual({
-      folders: [`/run/user/1000/aac-${hash}`, `/run/user/1000/aac-${hash}/aac-http-${id}`],
-      socketPath: `/run/user/1000/aac-${hash}/aac-http-${id}/http.sock`,
-    });
-    expect(
-      socketLayout(long, id, { AAC_RUST_RUN_DIR: '/run/aac', XDG_RUNTIME_DIR: '/x' })?.socketPath
-    ).toBe(`/run/aac/aac-${hash}/aac-http-${id}/http.sock`);
-    const uid = process.getuid?.() ?? -1;
-    expect(socketLayout(long, id, {})).toEqual({
-      folders: [
-        `/tmp/aac-${uid}`,
-        `/tmp/aac-${uid}/${hash}`,
-        `/tmp/aac-${uid}/${hash}/aac-http-${id}`,
-      ],
-      socketPath: `/tmp/aac-${uid}/${hash}/aac-http-${id}/http.sock`,
-    });
-    // A relative or over-long runtime folder is skipped.
-    expect(socketLayout(long, id, { XDG_RUNTIME_DIR: 'run' })?.socketPath.startsWith('/tmp/')).toBe(
-      true
-    );
-    expect(
-      socketLayout(long, id, { XDG_RUNTIME_DIR: '/' + 'x'.repeat(90) })?.socketPath.startsWith(
-        '/tmp/'
-      )
-    ).toBe(true);
-    for (const root of [short, long, '/' + 'r'.repeat(200)]) {
-      const layout = socketLayout(root, id, {});
-      expect(layout && Buffer.byteLength(layout.socketPath) <= SOCKET_PATH_LIMIT).toBe(true);
+  it.skipIf(process.platform === 'win32')(
+    'keeps today’s path while it fits, and binds a short private folder otherwise',
+    () => {
+      const short = '/home/fixture/.ccs';
+      expect(socketLayout(short, id, {})).toEqual({
+        folders: [`${short}/run/aac-http-${id}`],
+        socketPath: `${short}/run/aac-http-${id}/http.sock`,
+      });
+      const long = '/home/fixture/' + 'u'.repeat(150) + '/.ccs';
+      const hash = shortName(long);
+      expect(socketLayout(long, id, { XDG_RUNTIME_DIR: '/run/user/1000' })).toEqual({
+        folders: [`/run/user/1000/aac-${hash}`, `/run/user/1000/aac-${hash}/aac-http-${id}`],
+        socketPath: `/run/user/1000/aac-${hash}/aac-http-${id}/http.sock`,
+      });
+      expect(
+        socketLayout(long, id, { AAC_RUST_RUN_DIR: '/run/aac', XDG_RUNTIME_DIR: '/x' })?.socketPath
+      ).toBe(`/run/aac/aac-${hash}/aac-http-${id}/http.sock`);
+      const uid = process.getuid?.() ?? -1;
+      expect(socketLayout(long, id, {})).toEqual({
+        folders: [
+          `/tmp/aac-${uid}`,
+          `/tmp/aac-${uid}/${hash}`,
+          `/tmp/aac-${uid}/${hash}/aac-http-${id}`,
+        ],
+        socketPath: `/tmp/aac-${uid}/${hash}/aac-http-${id}/http.sock`,
+      });
+      // A relative or over-long runtime folder is skipped.
+      expect(
+        socketLayout(long, id, { XDG_RUNTIME_DIR: 'run' })?.socketPath.startsWith('/tmp/')
+      ).toBe(true);
+      expect(
+        socketLayout(long, id, { XDG_RUNTIME_DIR: '/' + 'x'.repeat(90) })?.socketPath.startsWith(
+          '/tmp/'
+        )
+      ).toBe(true);
+      for (const root of [short, long, '/' + 'r'.repeat(200)]) {
+        const layout = socketLayout(root, id, {});
+        expect(layout && Buffer.byteLength(layout.socketPath) <= SOCKET_PATH_LIMIT).toBe(true);
+      }
     }
-  });
+  );
 
   it('names the short folder as aac-http does (first 12 hex of SHA-256 of the root)', () => {
     // crates/aac-http/src/unix.rs short_name_matches_the_front_door
@@ -264,7 +267,18 @@ describe('route table (L1)', () => {
       expect(row.budgetMs).toBe(budget);
       if (String(row.handler).startsWith('agent')) expect(row.method).toBe('POST');
       const internal = String(row.path).startsWith('/internal/');
-      expect((row.roles as string[]).includes('service')).toBe(internal);
+      if (row.handler === 'account-lifecycle') {
+        expect(row.method).toBe('POST');
+        expect(row.group).toBe('internal');
+        if (row.path === '/internal/accounts/lifecycle') {
+          expect(row.roles).toEqual(['admin']);
+        } else {
+          expect(row.path).toBe('/internal/accounts/collection');
+          expect(row.roles).toEqual(['admin', 'device']);
+        }
+      } else {
+        expect((row.roles as string[]).includes('service')).toBe(internal);
+      }
     }
     expect(routes[routes.length - 1]).toEqual({ method: '*', path: '*', owner: 'ts-fallback' });
   });

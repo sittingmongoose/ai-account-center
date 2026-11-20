@@ -1,6 +1,7 @@
 {
   "source": "df2619152437e7939424e51bb286d082f9152bb7",
   "provenance": "Reconstructed from AUDIT.md Appendix C and the M0 inventory selectors.",
+  "supplementalHttp": ["tests/unit/store/store-native-routes.test.ts"],
   "notApplicableCasesAfterCut": {
     "tests/unit/web-server/api-routes-remote-write-guard.test.ts": {
       "protects remote saved Codex profile identity when dashboard auth is disabled": "The Express adapter was retired. The native remote Codex profile and quota test preserves the localhost guard and exact 403 reply."
@@ -116,7 +117,6 @@
     "tests/unit/antigravity/runtime-health.test.ts",
     "tests/unit/commands/bar-lifecycle-hardening.test.ts",
     "tests/unit/store/store-routes.test.ts",
-    "tests/unit/store/store-native-routes.test.ts",
     "tests/unit/store/store-usage.test.ts",
     "tests/unit/utils/fetch-proxy-setup.test.ts",
     "tests/unit/web-server/account-analytics-routes.test.ts",

@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path.cwd()
@@ -27,9 +28,14 @@ RESET_EXECUTABLES = {
 
 def gate_files():
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    selectors = {
+        "safety": manifest["safety"],
+        "http": manifest["http"],
+        "http supplemental": manifest.get("supplementalHttp", []),
+    }
     files = {
-        name: [gate for gate in ("safety", "http") if name in manifest[gate]]
-        for name in sorted(set(manifest["safety"]) | set(manifest["http"]))
+        name: [gate for gate, selected in selectors.items() if name in selected]
+        for name in sorted({name for selected in selectors.values() for name in selected})
     }
     retired = manifest.get("notApplicableAfterCut", {})
     retired_cases = manifest.get("notApplicableCasesAfterCut", {})
@@ -169,7 +175,13 @@ def main():
             results.append(row)
             print(json.dumps(row), flush=True)
     (output / "results.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    for gate in ("safety", "http", "http supplemental"):
+        selected = [row for row in results if gate in row["gates"]]
+        invoked = [row for row in selected if row["state"] == "ran"]
+        passed = sum(row["exitCode"] == 0 for row in invoked)
+        print(f"{gate}: {len(selected)} listed, {passed}/{len(invoked)} invoked passed.")
+    return int(any(row.get("exitCode", 0) for row in results))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
