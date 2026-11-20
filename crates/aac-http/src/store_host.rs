@@ -435,11 +435,8 @@ impl StoreHost {
         self.wait_ready();
         let Some(engine) = self.engine() else {
             let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-            let reason = state
-                .boot_error
-                .as_deref()
-                .and_then(|error| error.split_once(": "))
-                .map_or("missing", |(code, _)| code);
+            let error = state.boot_error.as_deref().ok_or(Decline::Unsupported)?;
+            let reason = error.split_once(": ").map_or("unknown", |(code, _)| code);
             return Ok(json!({"state": "unavailable", "reason": reason}));
         };
         let status = ops::call(&engine, "status", "{}").map_err(|_| Decline::Internal)?;

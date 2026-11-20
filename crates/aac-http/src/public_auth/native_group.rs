@@ -396,6 +396,7 @@ async fn store_status(routes: &Routes, access: &DashboardAccess) -> Reply {
         };
         return match tokio::task::spawn_blocking(move || store.status_value()).await {
             Ok(Ok(value)) => store_json(&value),
+            Ok(Err(Decline::Unsupported)) => unavailable_status(),
             _ => store_failed(),
         };
     }
