@@ -27,7 +27,7 @@ const id = 'zai:acct:0123abcd';
 const credentials = { username: 'fixture-owner', password: 'fixture-only-password' };
 const readJson = async (target) => JSON.parse(await readFile(target, 'utf8'));
 async function until(action) {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + (snapshot ? 45_000 : 15_000);
   for (;;) {
     if (front.exitCode !== null || front.signalCode !== null) {
       throw new Error('The fixture dashboard stopped. ' + log.join('').slice(-2048));
@@ -35,7 +35,9 @@ async function until(action) {
     const answer = await action().catch(() => undefined);
     if (answer) return answer;
     if (Date.now() >= deadline)
-      throw new Error('The fixture did not advance. ' + log.join('').slice(-2048));
+      throw new Error(
+        'The fixture did not advance its native collection feed. ' + log.join('').slice(-2048)
+      );
     await delay(100);
   }
 }
@@ -73,8 +75,10 @@ try {
       session_timeout_hours: 24,
     },
   });
-  if (snapshot)
+  if (snapshot) {
     await write(path.join(root, 'agent-usage-snapshot.json'), { version: 1, directory: share });
+    await write(path.join(root, 'account-refresh-settings.json'), { refreshIntervalSeconds: 30 });
+  }
   await registry('Before');
   await writeFile(calls, '');
   await writeFile(clock, '0');
@@ -94,6 +98,25 @@ try {
       state.fetchedAt = Date.now();
       return [];
     };
+    if (${snapshot}) {
+      const read = globalThis.fetch;
+      globalThis.fetch = async (url, options) => {
+        const response = await read(url, options);
+        if (!response.ok || !String(url).endsWith('/sample')) return response;
+        const generation = await response.json();
+        for (const row of generation.accounts.filter((entry) => entry.id === ${JSON.stringify(id)})) {
+          const usedPercent = row.label === 'Before' ? 20 : 35;
+          row.status = 'ok';
+          row.sampledAt = new Date(generation.sampledAt).toISOString();
+          row.windows = [{
+            key: 'five-hour', label: '5 hours', kind: 'rate_limit', usedPercent,
+            remainingPercent: 100 - usedPercent, windowMinutes: 300, resetAt: null,
+            used: null, limit: null, unit: null,
+          }];
+        }
+        return Response.json(generation);
+      };
+    }
     // Exercise the real snapshot writer without running remote sign-in probes.
     Bun.plugin({ name: 'fixture-sign-in', setup(build) {
       build.onLoad({ filter: /signin-health-service\\.ts$/ }, async ({path}) => {
@@ -173,6 +196,9 @@ try {
   const cookie = login.headers.get('set-cookie').split(';')[0];
   if (snapshot) {
     const file = path.join(share, 'usage.json');
+    const native = await send('/api/accounts/dashboard', { headers: { cookie } });
+    assert.equal(native.status, 200);
+    assert((await native.json()).accounts.some((row) => row.id === id));
     async function sample(label) {
       return until(async () => {
         const usage = await readJson(file);
@@ -181,13 +207,16 @@ try {
     }
     const first = await sample('Before');
     await registry('After');
-    await delay(5500);
-    assert.equal(
-      (await send('/api/accounts/dashboard?refresh=true', { headers: { cookie } })).status,
-      200
-    );
     const second = await sample('After');
     assert(Date.parse(second.generatedAt) > Date.parse(first.generatedAt));
+    const history = await readJson(path.join(root, 'account-analytics', 'quota-history-v1.json'));
+    assert.deepEqual(
+      history.records
+        .filter((row) => row.accountId === id)
+        .map((row) => row.windows[0].usedPercent),
+      [20, 35],
+      'both native generations must be recorded in local quota history'
+    );
     assert(await readJson(path.join(share, 'history.json')));
     assert.equal(
       await readFile(calls, 'utf8'),
