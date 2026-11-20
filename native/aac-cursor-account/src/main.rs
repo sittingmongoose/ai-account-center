@@ -128,11 +128,21 @@ fn main() {
             let client = client();
             let read = client.exchange(&stored.secret).and_then(|token| {
                 let account = api::account_hash(&token);
-                api::events(&client, &token, since, until)
-                    .map(|(events, pages, unmeasured)| (account, events, pages, unmeasured))
+                let (events, pages, unmeasured) = api::events(&client, &token, since, until)?;
+                // No event at all: either no usage, or a key whose token cannot see the events
+                // (Cursor answers both with `{}`). The plan meter tells them apart; when it can't
+                // be read, the empty read stands as before.
+                let hidden = events.is_empty()
+                    && unmeasured == 0
+                    && api::quota(&client, &token).is_ok_and(|quota| api::plan_shows_use(&quota, since, until));
+                Ok((account, events, pages, unmeasured, hidden))
             });
             match read {
-                Ok((account, events, pages, unmeasured)) => print(json!({
+                // The plan shows use the events don't: the account's usage is not visible to this
+                // key, never "no usage in range".
+                Ok((_, _, _, _, true)) => print(json!({"state": "unavailable", "cause": "events_not_visible",
+                    "key": {"fingerprint": stored.fingerprint, "last4": stored.last4}})),
+                Ok((account, events, pages, unmeasured, false)) => print(json!({
                     "state": "read",
                     "readAt": started,
                     "account": account,

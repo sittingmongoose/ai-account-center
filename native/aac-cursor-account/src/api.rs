@@ -342,6 +342,28 @@ pub fn events(
     Ok((kept, pages, unmeasured))
 }
 
+/// Whether the plan meter (`quota`'s answer) shows use in a billing cycle that overlaps
+/// [since, until]. Cursor answers the events call with an empty message (`{}`, protobuf's "no
+/// events") both when the account used nothing and when the key's token may not see its events:
+/// the 2026-11-20 read gave `{}` for the events and the aggregated events while this answer read
+/// 49% used. An empty events read is only "no usage" when this is false. A cycle without a start
+/// cannot be placed and is false, as is a plan that reports no percentage above zero.
+pub fn plan_shows_use(quota: &Value, since_ms: i64, until_ms: i64) -> bool {
+    let used = quota["planUsage"].as_object().is_some_and(|plan| {
+        ["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"]
+            .iter()
+            .any(|key| plan.get(*key).and_then(Value::as_f64).is_some_and(|v| v > 0.0))
+    });
+    let Some(start) = quota["billingCycleStartMs"].as_i64() else {
+        return false;
+    };
+    let end_ok = match quota["billingCycleEndMs"].as_i64() {
+        Some(end) => end >= since_ms,
+        None => true,
+    };
+    used && start <= until_ms && end_ok
+}
+
 /// One hour and model of the account's usage.
 #[derive(Default)]
 struct HourCell {

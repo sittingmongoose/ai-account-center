@@ -1457,6 +1457,10 @@ export function cursorAccountLine(account, now = Date.now()) {
     case 'no_reader':
       return 'Cursor account: its reader is not built for this computer.';
     case 'unavailable':
+      // The key's token reads the plan meter but sees no usage events (Cursor answers `{}`): never "no usage",
+      // and an earlier empty read is not offered as the account's usage.
+      if (account.cause === 'events_not_visible')
+        return "Cursor account: the key reads the plan meter but not the usage events, so the account's per-request usage is not counted; the Cursor quota card shows the share of the plan used.";
       return `Cursor account not read just now (${text(account.cause) || 'unavailable'}); ${finite(at) ? `showing its usage as read ${relTxt(at, now)}` : 'nothing of it is counted'}.`;
     default:
       return '';
