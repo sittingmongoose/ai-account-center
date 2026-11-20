@@ -550,7 +550,7 @@ pub(super) fn write_descriptor(
 
 #[cfg(all(test, unix))]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(unsafe_code, clippy::unwrap_used)]
     use super::*;
     use serde_json::Value;
 
