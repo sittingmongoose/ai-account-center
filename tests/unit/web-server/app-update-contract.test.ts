@@ -627,6 +627,104 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     expect(job.state).toBe('completed');
   });
 
+  it('reports the Antigravity ACP isolation check on the row that stays updated', () => {
+    const row = (
+      messageCode: string,
+      status: string,
+      extra: Record<string, unknown> = {},
+      appId: UpdateAppId = 'antigravity-acp'
+    ) =>
+      normalizeAppUpdateRow(
+        {
+          appId,
+          status,
+          messageCode,
+          previousVersion: '1.4.5',
+          version: status === 'updated' ? '1.4.6' : '1.4.5',
+          manager: 'official-download',
+          updateAttempted: status === 'updated',
+          restartedProcesses: 0,
+          ...extra,
+        },
+        appId,
+        'ubuntu'
+      );
+    // Exit 0: the install happened and the check verified account isolation.
+    const verified = row('antigravity_acp_qualified', 'updated');
+    expect(verified).toMatchObject({ status: 'updated', version: '1.4.6' });
+    expect(verified.message).toBe(
+      'Updated Antigravity ACP to 1.4.6; account isolation verified'
+    );
+    expect(verified.wrapperVersion).toBeUndefined();
+    expect(verified.qualifyReason).toBeUndefined();
+    // Exit 1: the install still happened; T3 keeps the release the wrapper runs.
+    const unverified = row('antigravity_acp_isolation_unverified', 'updated', {
+      wrapperVersion: '1.4.5',
+    });
+    expect(unverified).toMatchObject({
+      status: 'updated',
+      version: '1.4.6',
+      wrapperVersion: '1.4.5',
+    });
+    expect(unverified.message).toBe(
+      'Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so T3 keeps using 1.4.5'
+    );
+    // Exit 2 adds the check's own reason.
+    const cannot = row('antigravity_acp_isolation_unverified', 'updated', {
+      wrapperVersion: '1.4.5',
+      qualifyReason: 'bwrap is missing',
+    });
+    expect(cannot.message).toBe(
+      'Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so T3 keeps using 1.4.5. The check could not test it: bwrap is missing'
+    );
+    // The wrapper runs none, or the check printed no line: the words never invent a release.
+    expect(
+      row('antigravity_acp_isolation_unverified', 'updated', { wrapperVersion: null }).message
+    ).toBe(
+      'Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so no qualified Antigravity ACP runtime is available to T3'
+    );
+    expect(row('antigravity_acp_isolation_unverified', 'updated').message).toBe(
+      'Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so T3 keeps using the release it ran before'
+    );
+    // Only those shapes: a code elsewhere, or a malformed field, reads helper_invalid.
+    for (const status of ['current', 'failed', 'action_required', 'skipped', 'held'])
+      expect(row('antigravity_acp_qualified', status).message).toBe(MESSAGES.helper_invalid);
+    for (const status of ['current', 'failed', 'not_installed'])
+      expect(row('antigravity_acp_isolation_unverified', status).message).toBe(
+        MESSAGES.helper_invalid
+      );
+    for (const appId of ['antigravity-cli', 'muse-code', 't3-acp-adapters'] as const) {
+      expect(row('antigravity_acp_qualified', 'updated', {}, appId).message).toBe(
+        MESSAGES.helper_invalid
+      );
+      expect(
+        row('antigravity_acp_isolation_unverified', 'updated', { wrapperVersion: '1.4.5' }, appId)
+          .message
+      ).toBe(MESSAGES.helper_invalid);
+    }
+    expect(
+      row('antigravity_acp_updated', 'updated', { wrapperVersion: '1.4.5' }).message
+    ).toBe(MESSAGES.helper_invalid);
+    expect(
+      row('antigravity_acp_qualified', 'updated', { qualifyReason: 'bwrap is missing' }).message
+    ).toBe(MESSAGES.helper_invalid);
+    for (const wrapperVersion of ['', 'has space', 'x'.repeat(65), '1.4.5\n2'])
+      expect(
+        row('antigravity_acp_isolation_unverified', 'updated', { wrapperVersion }).message
+      ).toBe(MESSAGES.helper_invalid);
+    for (const qualifyReason of ['', 'line\nbreak', 'x'.repeat(161)])
+      expect(
+        row('antigravity_acp_isolation_unverified', 'updated', { qualifyReason }).message
+      ).toBe(MESSAGES.helper_invalid);
+    // A saved isolation row restores as itself: the wrapper release and reason are part of its words.
+    const root = directory();
+    saveJob(root, { results: [verified, cannot], expectedResults: 40 });
+    const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
+      .job!;
+    expect(job.results).toEqual([verified, cannot]);
+    expect(job.state).toBe('completed');
+  });
+
   it('limits forced-session messages to Windows Codex and truthful outcomes', () => {
     const row = (messageCode: string, status: string, appId: UpdateAppId = 'codex-cli') => ({
       appId,

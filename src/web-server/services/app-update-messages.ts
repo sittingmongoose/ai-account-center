@@ -110,6 +110,9 @@ export const MESSAGES = {
     "T3's Antigravity ACP activation kept changing. Update apps could not verify a stable newest runtime; run it again.",
   antigravity_acp_staged:
     'An earlier update staged Antigravity ACP. Run Update apps again with T3 running so T3 can install and activate its pin.',
+  antigravity_acp_qualified: 'Updated Antigravity ACP; account isolation verified.',
+  antigravity_acp_isolation_unverified:
+    'Updated Antigravity ACP; account isolation is not verified yet.',
   t3_unreachable:
     'Action required: the local T3 server or bundled CLI is unavailable. Start T3 and run Update apps again. AAC did not write its active runtime pointer.',
   t3_auth_failed:
