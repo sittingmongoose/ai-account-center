@@ -63,10 +63,16 @@ and SHA-256, the matching active catalog entry, and the supervised install
 evidence for that host. Verify that the installed agent answers the Update apps
 admission handshake.
 
-For each host whose rollout is incomplete, exercise Update apps against a
-missing or older agent fixture. The dashboard must show an actionable setup or
-upgrade row for that host, with no installer request sent. Keep the admission
-guard in place for every installer request.
+For each host whose rollout is incomplete, require an actionable setup or
+upgrade row and zero installer requests. The Linux gate exercises a missing Mac
+pin and an older pinned Windows agent through the real transport client.
+
+```sh
+bun test tests/unit/scripts/build-agent.test.ts
+cargo test --locked -j2 -p aac-http --test app_updates fixture_transport_and_service_api
+```
+
+Keep the admission guard in place for every installer request.
 
 ## Dashboard rollback
 
