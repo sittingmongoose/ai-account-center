@@ -809,6 +809,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-cursor-account/tests/plan_visibility.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-usage/src/read/antigravity.rs",
       "kind": "internal",
       "evidence": [],
@@ -816,6 +822,12 @@
     },
     {
       "file": "native/aac-usage/src/util.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/activity.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3103,6 +3115,12 @@
         "HTTP",
         "table"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-signin-open-path.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/claude-signin-renewal.test.ts",

@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1103,
+    "totalOccurrences": 1102,
     "filesAffected": 112,
     "hotpathOccurrences": 531,
     "hotpathFilesAffected": 62,
@@ -751,7 +751,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2398
+          "loc": 2426
         },
         {
           "file": "src/web-server/status/answers.ts",
@@ -759,7 +759,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1719
+          "loc": 1745
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -770,12 +770,12 @@
           "loc": 1203
         },
         {
-          "file": "src/antigravity/registry.ts",
-          "loc": 1154
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 1155
         },
         {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1084
+          "file": "src/antigravity/registry.ts",
+          "loc": 1154
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -783,7 +783,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 993
+          "loc": 1000
         },
         {
           "file": "src/web-server/status/status-view.ts",

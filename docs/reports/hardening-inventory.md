@@ -6,7 +6,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1103 |
+| Sync fs occurrences (all) | 1102 |
 | Sync fs files affected (all) | 112 |
 | Sync fs occurrences (runtime hotpaths) | 531 |
 | Sync fs files affected (runtime hotpaths) | 62 |
@@ -84,15 +84,15 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 4028 |
 | `src/web-server/services/account-analytics-activity.ts` | 2431 |
-| `src/web-server/services/analytics-remote-sources.ts` | 2398 |
+| `src/web-server/services/analytics-remote-sources.ts` | 2426 |
 | `src/web-server/status/answers.ts` | 1985 |
-| `src/web-server/services/analytics-remote-transport.ts` | 1719 |
+| `src/web-server/services/analytics-remote-transport.ts` | 1745 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/web-server/status/status-collectors.ts` | 1203 |
+| `src/web-server/services/usage-failover-service.ts` | 1155 |
 | `src/antigravity/registry.ts` | 1154 |
-| `src/web-server/services/usage-failover-service.ts` | 1084 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
-| `src/web-server/services/account-dashboard-service.ts` | 993 |
+| `src/web-server/services/account-dashboard-service.ts` | 1000 |
 | `src/web-server/status/status-view.ts` | 903 |
 | `src/web-server/services/app-update-service.ts` | 889 |
 | `src/web-server/services/account-analytics-service.ts` | 887 |
