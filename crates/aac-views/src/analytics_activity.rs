@@ -1058,6 +1058,9 @@ fn scan_failure_text(cause: &str) -> &'static str {
     match cause {
         "agent_missing" => "agent missing",
         "source_limit" => "some usage log sources exceeded the scan limit",
+        "freshness_unverified" => {
+            "the independent activity check is incomplete; current usage coverage is unverified"
+        }
         "ssh_unreachable" => "the computer did not answer over ssh",
         "ssh_auth" => "the computer refused this account's ssh key",
         "ssh_host_key" => {
@@ -1095,6 +1098,7 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
         let cause = source.get("cause").filter(|v| !v.is_null());
         let state = match state_word {
             _ if cause.and_then(Value::as_str) == Some("agent_missing") => "unavailable",
+            "partial" if cause.and_then(Value::as_str) == Some("newer_activity") => "stale",
             "ok" => "ok",
             "no_usage" => "no_usage",
             "partial" | "cached" => "cached",
@@ -1117,11 +1121,43 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
                 }
             }
         };
-        let detail = match cause {
-            Some(cause) => json!(scan_failure_text(text(Some(cause))?)),
-            None if state == "unavailable" => json!("the last read failed"),
-            None => Value::Null,
+        let mut detail = match cause.and_then(Value::as_str) {
+            Some("newer_activity") => {
+                let clock = source.get("freshness");
+                let date = |key: &str, fallback: &str| -> R<String> {
+                    match opt_num(clock.and_then(|f| f.get(key)))? {
+                        Some(ms) => iso(ms),
+                        None => Ok(fallback.to_owned()),
+                    }
+                };
+                let measured = date("newestDataMs", "no measured usage date")?;
+                let activity = date("newestActivityMs", "unknown")?;
+                Some(format!(
+                    "usage is stale: newest measured data {measured}; newer activity {activity}; activity does not establish token counts or cost"
+                ))
+            }
+            Some(cause) => Some(scan_failure_text(cause).to_owned()),
+            None if state == "unavailable" => Some("the last read failed".into()),
+            None => None,
         };
+        let unmeasured = source
+            .get("unmeasuredFiles")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0);
+        if let Some(count) = unmeasured {
+            let files = if count == 1 {
+                "file exposes"
+            } else {
+                "files expose"
+            };
+            let note = format!(
+                "{count} local chat data {files} no numeric usage; their tokens and cost are not counted"
+            );
+            detail = Some(match detail {
+                Some(detail) => format!("{detail}; {note}"),
+                None => note,
+            });
+        }
         let mut row = json!({
             "tool": tool,
             "host": text(source.get("host"))?,
@@ -1134,6 +1170,9 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
             row.as_object_mut()
                 .ok_or(Decline::Shape)?
                 .insert("cause".into(), cause.clone());
+        }
+        if let Some(count) = unmeasured {
+            row["unmeasuredFiles"] = json!(count);
         }
         grid.push(row);
     }
@@ -1191,7 +1230,7 @@ fn coverage_of(sources_state: &Value) -> R<Value> {
     for source in sources {
         let source = obj(source)?;
         let future = opt_num(source.get("futureDated"))?;
-        source_rows.push(json!({
+        let mut row = json!({
             "host": text(source.get("computer"))?,
             "tool": text(source.get("tool"))?,
             "state": source.get("state").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null),
@@ -1204,7 +1243,16 @@ fn coverage_of(sources_state: &Value) -> R<Value> {
                 Some(n) if n > 0.0 => js_num(n),
                 _ => Value::Null,
             },
-        }));
+        });
+        if let Some(counts) = source.get("counts") {
+            if let Some(freshness) = counts.get("freshness") {
+                row["freshness"] = freshness.clone();
+            }
+            if let Some(count) = counts.get("unmeasured_files") {
+                row["unmeasuredFiles"] = count.clone();
+            }
+        }
+        source_rows.push(row);
     }
     Ok(json!({
         "computers": computer_rows,

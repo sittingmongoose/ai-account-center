@@ -65,6 +65,7 @@ pub const QUALITY_FLAGS: [&str; 1] = ["outputIncludesReasoningTwice"];
 /// Bit of `QUALITY_FLAGS[0]`: the output count holds the reasoning tokens twice (the retired Codex
 /// cache, docs/store.md 12.8). An upper bound, never split; input and cached input are exact.
 pub const Q_OUTPUT_INCLUDES_REASONING_TWICE: u32 = 1;
+pub const MAX_FILE_COUNT: u64 = 100_000_000;
 const MAX_TOKENS: u64 = 1_000_000_000_000_000;
 const MAX_USD: f64 = 1.0e9;
 
@@ -86,6 +87,36 @@ pub struct Counts {
     /// time it read them. The store adds the cells it leaves out for the same reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub future_dated: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmeasured_files: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<Freshness>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Freshness {
+    pub state: FreshnessState,
+    pub newest_data_ms: Option<u64>,
+    pub newest_activity_ms: Option<u64>,
+    pub activity_complete: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FreshnessState {
+    Current,
+    Stale,
+    Unknown,
+}
+
+impl Freshness {
+    pub fn valid_clocks(&self) -> bool {
+        [self.newest_data_ms, self.newest_activity_ms]
+            .into_iter()
+            .flatten()
+            .all(|ms| ms <= MAX_MTIME_MS)
+    }
 }
 
 /// A file time as readers send it: an ISO UTC string (`2026-11-13T14:00:00Z`) or epoch milliseconds.
@@ -421,10 +452,19 @@ pub fn nano(usd: f64) -> u64 {
 }
 
 fn counts_ok(c: &Counts) -> bool {
-    [c.roots, c.files_found, c.files_read, c.files_failed, c.future_dated]
-        .iter()
-        .all(|v| v.map(|n| n <= 100_000_000).unwrap_or(true))
+    [
+        c.roots,
+        c.files_found,
+        c.files_read,
+        c.files_failed,
+        c.future_dated,
+        c.unmeasured_files,
+    ]
+    .into_iter()
+    .flatten()
+    .all(|n| n <= MAX_FILE_COUNT)
         && c.newest_mtime.as_ref().map(|t| t.ms().is_some()).unwrap_or(true)
+        && c.freshness.as_ref().is_none_or(Freshness::valid_clocks)
 }
 
 /// A report checked whole, with its times as milliseconds.
