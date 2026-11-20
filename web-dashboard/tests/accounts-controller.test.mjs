@@ -938,7 +938,7 @@ test('extra usage-log locations add, validate and remove through one preferences
   assert.match(h.ctl.state.prefs.logSourcesError, /absolute path/);
   await h.ctl.handle('logsource-add', 'muse\nunregistered\nC:\\muse\n');
   assert.equal(h.sent.length, count);
-  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on Ubuntu, Mac, Windows, Nas1 and Alexis PC\./);
+  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on Ubuntu, Mac, Windows, Nas1, Alexis PC and Odroid\./);
   await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n');
   assert.equal(h.sent.length, count);
   assert.match(h.ctl.state.prefs.logSourcesError, /field mapping/);

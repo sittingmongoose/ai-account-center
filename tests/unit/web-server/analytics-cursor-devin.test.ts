@@ -118,7 +118,7 @@ describe('Cursor and Devin on a scanned computer', () => {
     );
     const deps = {
       cacheDir: path.join(dir, 'stale-cache'),
-      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null }),
       now: () => NOW,
       localScanner: () => ({ ok: false as const, cause: 'binary_not_built' }),
       runHelper: async () => reply,
@@ -162,7 +162,7 @@ describe('Cursor and Devin on a scanned computer', () => {
     expect(reply.sessions?.[AGENT_KEY]?.t3?.threadId).toBe('thread-cursor-1');
     const { results, states } = await loadAnalyticsRemoteSources(MIN_DATE, {
       cacheDir: cache,
-      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null }),
       now: () => NOW,
       force: true,
       localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
@@ -196,7 +196,7 @@ describe('Cursor and Devin on a scanned computer', () => {
     });
     const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
       cacheDir: path.join(dir, 'cache'),
-      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null }),
       now: () => NOW,
       force: true,
       localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
@@ -235,7 +235,7 @@ describe('Cursor and Devin on a scanned computer', () => {
     });
     const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
       cacheDir: path.join(dir, 'cache'),
-      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null }),
       now: () => NOW,
       force: true,
       localScanner: () => ({ ok: false, cause: 'binary_not_built' }),

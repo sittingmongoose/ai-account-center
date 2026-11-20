@@ -234,7 +234,7 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   return entries;
 }
 
-/** The grid's order: tools in reading order, hosts Ubuntu, Mac, Windows then Nas1. */
+/** The grid's order: tools in reading order, hosts in the registry's order. */
 const SOURCE_TOOL_ORDER = [
   'claude',
   'codex',

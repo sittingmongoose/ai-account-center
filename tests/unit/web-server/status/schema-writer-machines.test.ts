@@ -5,7 +5,7 @@ import { packagedSchemasDir } from '../../../../src/web-server/status/agent-repo
 
 // The machines the reader accepts (crates/aac-status/src/computers.rs). Every published schema
 // must let all of them write: a schema missing one refuses that computer's reports outright.
-const MACHINES = ['alexis', 'mac', 'nas1', 'vm', 'windows'];
+const MACHINES = ['alexis', 'mac', 'nas1', 'odroid', 'vm', 'windows'];
 
 function machineGroups(node: unknown, out: string[][]): string[][] {
   if (Array.isArray(node)) {

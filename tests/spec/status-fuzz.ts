@@ -289,7 +289,7 @@ function caseOf(base: { reports: any; quota: any }) {
       quota.good.doc.streamEstimates ?? quota.good.doc.periods ?? {}
     ) as any[])
       for (const row of period?.rows ?? []) if (chance(0.5)) row.value = pick(NUMBERS);
-  const ids = ['vm', 'mac', 'windows', 'nas1', 'alexis'];
+  const ids = ['vm', 'mac', 'windows', 'nas1', 'alexis', 'odroid'];
   const input: any = {
     now,
     timeZone: pick(ZONES),
@@ -461,7 +461,7 @@ function sweepInput(shared: { reports: any; quota: any }, base: number) {
       },
     ]),
     machines: Object.fromEntries(
-      ['vm', 'mac', 'windows', 'nas1', 'alexis'].map((id) => [id, panel(structuredClone(sample))])
+      ['vm', 'mac', 'windows', 'nas1', 'alexis', 'odroid'].map((id) => [id, panel(structuredClone(sample))])
     ),
     browsers: panel([
       {

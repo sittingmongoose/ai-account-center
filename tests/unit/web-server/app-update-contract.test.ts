@@ -368,7 +368,7 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       'claude-desktop',
       't3-code',
     ];
-    const rows = PLATFORMS.filter((platform) => platform !== 'alexis').flatMap((platform) =>
+    const rows = ['ubuntu', 'mac', 'windows', 'nas1'].flatMap((platform) =>
       normalizeAppUpdateResults(payload(), platform).filter((row) => before.includes(row.appId))
     );
     expect(rows).toHaveLength(32);

@@ -9,26 +9,35 @@ import {
 } from '../../../src/web-server/services/dashboard-hosts';
 
 describe('dashboard host facts', () => {
-  it('names the five fixed computers', () => {
-    expect([...DASHBOARD_HOSTS]).toEqual(['ubuntu', 'mac', 'windows', 'nas1', 'alexis']);
+  it('names the six fixed computers', () => {
+    expect([...DASHBOARD_HOSTS]).toEqual([
+      'ubuntu',
+      'mac',
+      'windows',
+      'nas1',
+      'alexis',
+      'odroid',
+    ]);
   });
 
   it('gives every host exactly one OS kind and one label', () => {
     expect(Object.keys(HOST_OS).sort()).toEqual([...DASHBOARD_HOSTS].sort());
     expect(Object.keys(HOST_LABELS).sort()).toEqual([...DASHBOARD_HOSTS].sort());
-    expect(HOST_OS).toEqual({ ubuntu: 'linux', mac: 'mac', windows: 'windows', nas1: 'linux', alexis: 'windows' });
+    expect(HOST_OS).toEqual({ ubuntu: 'linux', mac: 'mac', windows: 'windows', nas1: 'linux', alexis: 'windows', odroid: 'linux' });
     expect(HOST_LABELS).toEqual({
       ubuntu: 'Ubuntu',
       mac: 'Mac',
       windows: 'Windows',
       nas1: 'Nas1',
       alexis: 'Alexis PC',
+      odroid: 'Odroid',
     });
   });
 
   it.each([
     ['ubuntu', 'ubuntu'],
     ['nas1', 'ubuntu'],
+    ['odroid', 'ubuntu'],
     ['mac', 'mac'],
     ['windows', 'windows'],
     ['alexis', 'windows'],

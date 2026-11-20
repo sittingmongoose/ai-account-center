@@ -580,7 +580,7 @@ describe('the scanner answer and the cells it gives', () => {
 
   it('turns discovery into installed-no-logs, no-reader, counts and origins, and keeps them for a restart', async () => {
     const cache = path.join(dir, 'cache');
-    const hosts = async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null });
+    const hosts = async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null });
     const runHelper = async (): Promise<AnalyticsRemoteResponse> =>
       parseAnalyticsRemoteResponse(JSON.stringify(answer()));
     const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {

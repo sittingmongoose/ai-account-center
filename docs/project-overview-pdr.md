@@ -21,11 +21,11 @@ CCS fork, retaining original authorship, license, private state and history.
 - Dashboard sign-in with password change, paired tray devices and the trusted
   local network setting.
 - Server-confirmed refresh settings and explicitly started allowlisted app-update
-  jobs with Cancel, covering five computers (Ubuntu, Mac, Windows, Nas1 and Alexis PC) and
-  50 result rows.
-- Nas1, a second Ubuntu computer reached over a fixed SSH alias, as the fourth
-  computer for app updates and Analytics. It runs no dashboard and holds no
-  account state; its quota sources stay where they are unless one is saved for it.
+  jobs with Cancel, covering six computers (Ubuntu, Mac, Windows, Nas1, Alexis PC
+  and Odroid) and 72 result rows.
+- Nas1 and Odroid, extra Ubuntu computers reached over fixed SSH aliases, for app
+  updates, Status and Analytics. They run no dashboard, no builds and hold no
+  account state; their quota sources stay where they are unless one is saved for them.
 - Native Mac and Windows clients of the same authenticated account APIs, paired
   with their own device keys.
 - Local source packaging and a dashboard-only Docker build.

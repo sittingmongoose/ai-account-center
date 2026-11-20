@@ -258,6 +258,33 @@ fn FreshStrip() -> impl IntoView {
     }
 }
 
+/// The registered computers as the page names them, in registry order (the same table the server reads).
+fn computer_labels() -> &'static [String] {
+    static LABELS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        let registry: serde_json::Value =
+            serde_json::from_str(include_str!("../../../public/computers.json"))
+                .expect("packaged computer registry");
+        registry
+            .as_object()
+            .map(|rows| {
+                rows.values()
+                    .filter_map(|row| row["label"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    &LABELS
+}
+
+/// "Ubuntu", "Ubuntu and Mac", "Ubuntu, Mac and Windows": the page's list wording.
+fn listed(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// Before the first useful answer: one row per computer saying how far its scan is, over calm placeholders.
 #[component]
 fn LoadingCards() -> impl IntoView {
@@ -266,10 +293,10 @@ fn LoadingCards() -> impl IntoView {
     let rows = move || {
         let list = hosts.get();
         if list.is_empty() {
-            ["Ubuntu", "Mac", "Windows", "Nas1"]
-                .into_iter()
+            computer_labels()
+                .iter()
                 .map(|n| LoadHost {
-                    name: n.into(),
+                    name: n.clone().into(),
                     detail: "queued".into(),
                 })
                 .collect()
@@ -280,7 +307,7 @@ fn LoadingCards() -> impl IntoView {
     view! {
         <section class="plate ax-card ax-loading">
             <CardHead title="Reading usage logs"
-                sub="Reading usage logs on Ubuntu, Mac, Windows and Nas1. The page appears as soon as the first numbers land."/>
+                sub=format!("Reading usage logs on {}. The page appears as soon as the first numbers land.", listed(computer_labels()))/>
             <div class="ax-body">
                 {move || rows().into_iter().map(|h| view! {
                     <div class="ld-host"><b>{h.name}</b><span class="tnum q3">{h.detail}</span></div>
@@ -380,6 +407,16 @@ mod tests {
         let v = parse("{\"version\":7,\"usage\":{\"kpis\":null,\"head\":{\"read\":null}},\"agenda\":{\"a\":null}}")
             .expect("nulls tolerated");
         assert!(v.usage.kpis.is_empty() && v.usage.head.read.is_empty() && v.agenda.a.is_empty());
+    }
+
+    #[test]
+    fn the_loading_fallback_names_every_registered_computer() {
+        let labels = computer_labels();
+        assert!(labels.len() >= 6, "{labels:?}");
+        for label in ["Ubuntu", "Mac", "Windows", "Nas1", "Alexis PC", "Odroid"] {
+            assert!(labels.iter().any(|name| name == label), "{label}: {labels:?}");
+        }
+        assert_eq!(listed(&labels[..2]), format!("{} and {}", labels[0], labels[1]));
     }
 
     #[test]

@@ -25,6 +25,8 @@ import {
   machineSshAlias,
   REMOTE_MACHINES,
 } from '../../../src/web-server/status/status-collectors';
+import { analyticsRemoteTargets } from '../../../src/web-server/services/analytics-remote-sources';
+import { resolveAnalyticsRemoteHosts } from '../../../src/web-server/services/analytics-remote-transport';
 import { parseSourceManifest } from '../../../src/web-server/services/account-usage-manifest';
 import { parseAccountRegistry } from '../../../src/web-server/services/account-registry-v2';
 import { parseMuseUsagePeer } from '../../../src/web-server/services/muse-usage-peer-bindings';
@@ -34,13 +36,13 @@ const isUsageLogSource = (source: unknown) =>
 
 describe('package-owned computer registry', () => {
   it('adds Alexis as another Windows computer while preserving OS kinds', () => {
-    expect(DASHBOARD_HOSTS).toEqual(['ubuntu', 'mac', 'windows', 'nas1', 'alexis']);
+    expect(DASHBOARD_HOSTS).toEqual(['ubuntu', 'mac', 'windows', 'nas1', 'alexis', 'odroid']);
     expect(HOST_OS.alexis).toBe('windows');
     expect(helperPlatform('alexis')).toBe('windows');
     expect(helperPlatform('nas1')).toBe('ubuntu');
     expect(COMPUTERS.alexis.label).toBe('Alexis PC');
     expect(PLATFORMS).toEqual(DASHBOARD_HOSTS);
-    expect(EXPECTED_RESULTS).toBe(60);
+    expect(EXPECTED_RESULTS).toBe(72);
     expect(Object.isFrozen(COMPUTERS.alexis)).toBe(true);
   });
   it('uses only the fixed Alexis SSH alias and a Windows helper command', async () => {
@@ -84,6 +86,33 @@ describe('package-owned computer registry', () => {
     expect(isUsageLogSource({ id: 'fixture', host: 'nas1', tool: 'codex', path: 'C:\\logs' })).toBe(
       false
     );
+  });
+  it('treats Odroid as another remote Ubuntu computer wherever Nas1 is one', async () => {
+    expect(SSH_ALIASES.odroid).toBe('odroid');
+    expect(HOST_OS.odroid).toBe(HOST_OS.nas1);
+    expect(helperPlatform('odroid')).toBe('ubuntu');
+    expect(REMOTE_MACHINES.odroid).toBe('linux');
+    expect(machineSshAlias('odroid')).toBe('odroid');
+    for (const name of ['odroid', 'Odroid', 'odroid.local'])
+      expect(registryMachine(name, null)).toBe('odroid');
+    expect(localComputer('Odroid', 'linux')).toBe('odroid');
+    expect(isWriterName('odroid.fixture')).toBe(true);
+    const invocation = await appUpdateInvocation('odroid', '');
+    expect(invocation.args.at(-2)).toBe('odroid');
+    expect(invocation.args.at(-1)).toContain('--platform ubuntu');
+    expect(await configuredUsageHosts()).toContainEqual({
+      host: 'odroid',
+      platform: 'ubuntu',
+      sshHost: 'odroid',
+    });
+    expect(sourceHost({ platform: 'ubuntu', sshHost: 'odroid' })).toBe('odroid');
+    expect(analyticsRemoteTargets('odroid')).toHaveLength(analyticsRemoteTargets('nas1').length);
+    expect((await resolveAnalyticsRemoteHosts()).odroid).toBe('odroid');
+    // Dynamic: view-model.mjs imports computers.json as an ES module, and a static import here would
+    // replace the CommonJS require dashboard-hosts.ts reads the same file with (a Bun module-cache key).
+    const view = await import('../../../web-dashboard/public/view-model.mjs');
+    expect(view.UPDATE_HOST_IDS).toEqual(DASHBOARD_HOSTS);
+    expect(view.platformLabel('odroid')).toBe('Odroid');
   });
   it('keeps both generations of account files on the existing platform + alias protocol', () => {
     for (const [platform, sshHost, host] of [
