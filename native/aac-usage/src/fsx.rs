@@ -293,6 +293,7 @@ pub fn walk_files(
 ) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+    let counted_root = util::realpath(root);
     let mut visited_dirs = 0usize;
     let mut visited_entries = 0usize;
     while let Some((directory, depth)) = pending.pop() {
@@ -314,6 +315,9 @@ pub fn walk_files(
                 continue;
             }
             let path = directory.join(&name);
+            if accept(&name) && collector.skip_settled(kind, &counted_root, &path) {
+                continue;
+            }
             // Never follow a directory link just to classify it (FIX-ROUND-BIG 9).
             let link = is_link(&path);
             if link && !accept(&name) {
@@ -456,6 +460,20 @@ pub fn identity(path: &Path) -> Option<(u64, u64)> {
     }
 }
 
+/// An existing stat supplies the inode on Unix. Windows uses an attribute-only handle for the
+/// file index, which ordinary Rust metadata doesn't expose.
+pub fn metadata_identity(_path: &Path, _metadata: &fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((_metadata.dev(), _metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        windows_identity(_path)
+    }
+}
+
 #[cfg(windows)]
 fn windows_identity(path: &Path) -> Option<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
@@ -557,6 +575,9 @@ pub fn walk_t3_files(
                 continue;
             }
             let path = directory.join(&name);
+            if accept(&name) && !same_or_inside(&path, exclude) && collector.skip_settled(kind, &start, &path) {
+                continue;
+            }
             let real = if is_link(&path) {
                 link_inside(&path, &start)
             } else {
@@ -566,6 +587,9 @@ pub fn walk_t3_files(
                 continue;
             };
             if same_or_inside(&real, exclude) {
+                continue;
+            }
+            if real != path && accept(&name) && collector.skip_settled(kind, &start, &real) {
                 continue;
             }
             let Some(meta) = discovery_metadata(collector, kind, &real) else {

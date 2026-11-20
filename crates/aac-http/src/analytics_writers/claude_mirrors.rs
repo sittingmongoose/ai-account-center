@@ -1,14 +1,17 @@
 //! Select Claude SSH mirrors across computers before the file keys are aggregated away.
 
-use serde_json::{Value, json};
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::{Path, PathBuf},
+use aac_store::{
+    analytics_cache,
+    engine::Engine,
+    error::{Error, Result},
 };
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashSet};
 
 pub(super) type Owners = BTreeMap<String, String>;
 
-const FILE: &str = "claude-mirror-owners.json";
+pub(super) const LIVE: &str = "live/claude-mirror-owners";
+pub(super) const HISTORY: &str = "history/claude-mirror-owners";
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) struct Part<'a> {
@@ -19,26 +22,22 @@ pub(super) struct Part<'a> {
     pub(super) fingerprints: Value,
 }
 
-fn directory(root: &Path) -> PathBuf {
-    root.join("cache/analytics-remote-v1")
-}
-
-pub(super) fn load(root: &Path) -> Owners {
-    let read = || {
-        let bytes = aac_files::read_bounded(&directory(root).join(FILE), MAX_BYTES).ok()?;
-        let body: Value = serde_json::from_slice(&bytes).ok()?;
-        (body["version"] == 1).then_some(())?;
-        serde_json::from_value(body["owners"].clone()).ok()
-    };
-    read().unwrap_or_default()
-}
-
-pub(super) fn save(root: &Path, owners: &Owners) {
-    let body = json!({ "version": 1, "owners": owners }).to_string();
-    let cache = directory(root);
-    if body.len() <= MAX_BYTES && std::fs::create_dir_all(&cache).is_ok() {
-        let _ = aac_files::share::write_atomically(&cache, FILE, &body, 0o600);
+pub(super) fn load(store: &Engine, key: &str) -> Result<Owners> {
+    match analytics_cache::get(store, key)? {
+        Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
+        None => Ok(Owners::new()),
     }
+}
+
+pub(super) fn save(store: &Engine, key: &str, owners: &Owners) -> Result<()> {
+    let bytes = serde_json::to_vec(owners)?;
+    if bytes.len() > MAX_BYTES {
+        return Err(Error::new(
+            "source_limit",
+            "Claude mirror owner map size limit",
+        ));
+    }
+    analytics_cache::put(store, key, &bytes)
 }
 
 fn identity(print: &Value) -> Option<(&str, bool)> {
@@ -54,10 +53,63 @@ fn row_identity<'a>(row: &Value, fingerprints: &'a Value) -> Option<(&'a str, bo
 
 /// A confirmed original always wins. Otherwise retain a prior owner across failures
 /// and partial reads. An authoritative read without the log lets the next holder win.
+pub(super) fn select_live(
+    store: &Engine,
+    parts: &mut [Part<'_>],
+    states: &mut [Value],
+) -> Result<()> {
+    let previous = load(store, LIVE)?;
+    if let Some(owners) = select(parts, states, &previous) {
+        save(store, LIVE, &owners)?;
+    }
+    Ok(())
+}
+
 pub(super) fn select(
     parts: &mut [Part<'_>],
     states: &mut [Value],
     previous: &Owners,
+) -> Option<Owners> {
+    choose(parts, states, previous, &Owners::new())
+}
+
+/// Historical reports can only raise earlier totals. Once a transcript has a
+/// historical owner, keep that attribution when a previously absent log appears.
+pub(super) fn select_history(
+    parts: &mut [Part<'_>],
+    states: &mut [Value],
+    committed: &Owners,
+) -> Option<Owners> {
+    choose(parts, states, &Owners::new(), committed)
+}
+
+/// Store original readings while evidence from other computers is pending.
+pub(super) fn keep_historical_originals(store: &Engine, part: &mut Part<'_>) -> Result<()> {
+    let mut owners = load(store, HISTORY)?;
+    let mut changed = false;
+    let mut keep = |row: &Value| {
+        let Some((name, false)) = row_identity(row, &part.fingerprints) else {
+            return false;
+        };
+        let owner = owners.entry(name.to_owned()).or_insert_with(|| {
+            changed = true;
+            part.host.to_owned()
+        });
+        owner == part.host
+    };
+    part.rows.retain(&mut keep);
+    part.sessions.retain(keep);
+    if changed {
+        save(store, HISTORY, &owners)?;
+    }
+    Ok(())
+}
+
+fn choose(
+    parts: &mut [Part<'_>],
+    states: &mut [Value],
+    previous: &Owners,
+    committed: &Owners,
 ) -> Option<Owners> {
     let configured: HashSet<&str> = states
         .iter()
@@ -113,8 +165,17 @@ pub(super) fn select(
             .map(|(name, host)| (name.clone(), host.clone())),
     );
 
+    owners.extend(
+        committed
+            .iter()
+            .map(|(name, host)| (name.clone(), host.clone())),
+    );
+
     for part in parts {
         let keep = |row: &Value| match row_identity(row, &part.fingerprints) {
+            Some((name, _)) if committed.contains_key(name) => {
+                committed.get(name).is_some_and(|host| host == part.host)
+            }
             Some((name, true)) => {
                 !originals.contains_key(name)
                     && owners.get(name).is_some_and(|host| host == part.host)
@@ -128,7 +189,12 @@ pub(super) fn select(
             *state = json!("no_usage");
         }
     }
-    (owners != *previous).then_some(owners)
+    let prior = if committed.is_empty() {
+        previous
+    } else {
+        committed
+    };
+    (owners != *prior).then_some(owners)
 }
 
 #[cfg(test)]
@@ -303,8 +369,15 @@ mod tests {
         assert!(parts[1].sessions.is_empty());
 
         let fixture = tempfile::tempdir().expect("fixture directory");
-        save(fixture.path(), &owners);
-        let owners = load(fixture.path());
+        let open = || {
+            ops::open_engine(fixture.path().to_str().expect("path"), None, None)
+                .expect("open activity store")
+        };
+        let engine = open();
+        save(&engine, LIVE, &owners).expect("persist owner in the Store");
+        engine.close().expect("close owner Store");
+        drop(engine);
+        let owners = load(&open(), LIVE).expect("owner survives reopening");
         let mut states = [state("nas1", "unreadable"), state("mac", "ok")];
         let mut parts = [part("mac", 1, true, 0)];
         assert!(select(&mut parts, &mut states, &owners).is_none());

@@ -133,6 +133,21 @@ pub struct Collector {
     pub unanswered_mounts: usize,
     /// Roots their probe found absent: never touched again this scan (the report included).
     pub absent_roots: HashSet<(String, PathBuf)>,
+    pub store_incremental: bool,
+    settled_paths: HashMap<(String, String), String>,
+    settled_slot: u64,
+    pub settled: BTreeMap<String, Map<String, Value>>,
+}
+
+/// The owner and all readers use one ten-minute cadence.
+pub const SETTLED_CHECK_MS: u64 = 10 * 60 * 1000;
+
+pub fn settled_print(print: &Value, cutoff: i64) -> bool {
+    print["pathKey"].is_string()
+        && print["mtimeMs"].as_i64().is_some_and(|mtime| mtime < cutoff)
+        && print["newestUsageMs"].as_i64().is_some_and(|usage| usage < cutoff)
+        && print.get("readThrough").is_none()
+        && print["usageSkipped"] != true
 }
 
 /// Kinds whose reads resume where the deadline cut them (DESIGN 16.1): Codex, whose largest logs
@@ -143,10 +158,33 @@ pub fn resumable(kind: &str) -> bool {
 
 impl Collector {
     pub fn new(min_date_ms: i64, budget_seconds: f64, prior: Map<String, Value>) -> Collector {
+        let store_incremental = prior.contains_key("_store");
+        let mut settled_paths = HashMap::new();
+        if let Some(before) = prior
+            .get("_store")
+            .and_then(|settings| settings["settledBefore"].as_object())
+        {
+            for (kind, cutoff) in before {
+                let (Some(cutoff), Some(prints)) = (cutoff.as_i64(), prior.get(kind).and_then(Value::as_object)) else {
+                    continue;
+                };
+                for (key, print) in prints {
+                    if settled_print(print, cutoff)
+                        && let Some(path_key) = print["pathKey"].as_str()
+                    {
+                        settled_paths.insert((kind.clone(), path_key.to_owned()), key.clone());
+                    }
+                }
+            }
+        }
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+        let settled_slot = prior
+            .get("_store")
+            .and_then(|settings| settings["settledSlot"].as_u64())
+            .unwrap_or(now_ms as u64 / SETTLED_CHECK_MS);
         Collector {
             min_date_ms,
             deadline: Instant::now() + std::time::Duration::from_secs_f64(budget_seconds.max(0.0)),
@@ -190,6 +228,10 @@ impl Collector {
             search_limits: HashMap::new(),
             unanswered_mounts: 0,
             absent_roots: HashSet::new(),
+            store_incremental,
+            settled_paths,
+            settled_slot,
+            settled: BTreeMap::new(),
         }
     }
 
@@ -214,6 +256,37 @@ impl Collector {
 
     pub fn prior_kind(&self, kind: &str) -> Option<&Map<String, Value>> {
         self.prior.get(kind)?.as_object()
+    }
+
+    /// The owner already read this path through EOF and settled every measured hour.
+    pub fn skip_settled(&mut self, kind: &str, root: &Path, path: &Path) -> bool {
+        if self.messages_wanted || self.settled_paths.is_empty() {
+            return false;
+        }
+        let lookup = (kind.to_owned(), util::filekey(kind, path));
+        let Some(key) = self.settled_paths.get(&lookup) else {
+            return false;
+        };
+        let Some(mut print) = self.prior_print(kind, key).cloned() else {
+            return false;
+        };
+        if print["settledCheckedSlot"].as_u64() != Some(self.settled_slot) && !settled_metadata_matches(path, &print) {
+            self.settled_paths.remove(&lookup);
+            return false;
+        }
+        if let Some(print) = print.as_object_mut() {
+            print.remove("readFrom");
+            print.insert("settledCheckedSlot".into(), self.settled_slot.into());
+        }
+        let mtime = print["mtimeMs"].as_i64().unwrap_or(0);
+        self.settled
+            .entry(kind.to_owned())
+            .or_default()
+            .insert(key.clone(), print);
+        let count = self.root_counts.entry((kind.to_owned(), root.to_owned())).or_default();
+        count.0 += 1;
+        count.1 = count.1.max(mtime);
+        true
     }
 
     pub fn note_root(&mut self, kind: &str, path: &Path, origin: &str) {
@@ -307,6 +380,10 @@ impl Collector {
             self.read_failure(kind, key);
             return None;
         };
+        if self.store_incremental && matches!(kind, "claude" | "codex" | "muse" | "omp") {
+            current.path_key = Some(util::filekey(kind, path));
+            current.file_identity = crate::fsx::identity(path).map(|(device, inode)| format!("{device:x}:{inode:x}"));
+        }
         if kind == "claude" {
             let name = path
                 .file_name()
@@ -318,7 +395,14 @@ impl Collector {
         if let Some(deps) = deps {
             current.tail = util::sha256_hex(format!("{}\n{}", current.tail, deps).as_bytes());
         }
-        let same = util::same_print(self.prior_print(kind, &key), &current);
+        let prior = self.prior_print(kind, &key);
+        let same = util::same_print(prior, &current)
+            && prior
+                .and_then(|p| p["fileIdentity"].as_str())
+                .is_none_or(|identity| current.file_identity.as_deref() == Some(identity));
+        if same {
+            current.append_state = prior.and_then(|p| p.get("appendState")).cloned();
+        }
         // Old fingerprints carry no usage clock. Read them once to establish one; keeping an
         // unchanged old print forever would keep both its usage and freshness unverified.
         let clock_known = self
@@ -334,6 +418,7 @@ impl Collector {
         } else {
             None
         };
+        let needs_checkpoint = current.path_key.is_some() && prior.is_some_and(|p| p.get("pathKey").is_none());
         let resuming = resume.is_some();
         if let Some(point) = resume {
             self.resume.insert((kind.to_string(), key.clone()), point);
@@ -355,7 +440,7 @@ impl Collector {
             .entry(kind.to_string())
             .or_default()
             .insert(key.clone(), current);
-        if same && clock_known && !unsent && !resuming {
+        if same && clock_known && !unsent && !resuming && !needs_checkpoint {
             None
         } else {
             Some(key)
@@ -824,6 +909,17 @@ impl Collector {
             cost,
         });
     }
+}
+
+fn settled_metadata_matches(path: &Path, print: &Value) -> bool {
+    let Ok(metadata) = crate::fsx::metadata(path) else {
+        return false;
+    };
+    metadata.is_file()
+        && print["size"].as_u64() == Some(metadata.len())
+        && print["mtimeMs"].as_i64() == Some(util::mtime_ms(&metadata))
+        && crate::fsx::metadata_identity(path, &metadata)
+            .is_some_and(|(device, inode)| print["fileIdentity"].as_str() == Some(&format!("{device:x}:{inode:x}")))
 }
 
 /// A compressed log's decoded size when its first frame header states it (Codex's do); for a plain

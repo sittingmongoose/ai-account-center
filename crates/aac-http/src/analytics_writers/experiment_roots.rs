@@ -1,6 +1,6 @@
 //! The resumable v1 discovery walk for the dashboard computer's PM-Experiments.
 use super::experiment_signatures as signatures;
-use aac_files::read::{self, Ancestors, ReadPolicy};
+use aac_store::{analytics_cache, engine::Engine};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -8,10 +8,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const ROOTS_FILE: &str = "experiment-usage-roots-v1.json";
-const WALK_FILE: &str = "experiment-usage-walk-v1.json";
-const ROOTS_BYTES: u64 = 4 * 1024 * 1024;
-const WALK_BYTES: u64 = 32 * 1024 * 1024;
+const ROOTS_FILE: &str = "legacy/cache/experiment-usage-roots-v1.json";
+const WALK_FILE: &str = "legacy/cache/experiment-usage-walk-v1.json";
+const DISCOVERY: &str = "live/experiments";
+const DISCOVERY_BYTES: usize = 36 * 1024 * 1024;
 const TTL_MS: i64 = 6 * 3_600_000;
 const MAX_DEPTH: usize = 14;
 const MAX_ROOTS: usize = 2048;
@@ -190,7 +190,7 @@ impl Snapshot {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Walk {
     version: u8,
@@ -376,30 +376,20 @@ fn is_compressed_rollout(name: &str) -> bool {
     name.starts_with("rollout-") && name.ends_with(".jsonl.zst")
 }
 
-fn read_cached<T: DeserializeOwned>(cache: &Path, name: &str, cap: u64) -> Option<T> {
-    let policy = ReadPolicy::capped(cap).ancestors(Ancestors::NoLinkBelow(cache.parent()?));
-    match read::read(&cache.join(name), &policy) {
-        read::Read::Bytes(bytes, _) => serde_json::from_slice(&bytes).ok(),
-        _ => None,
-    }
+fn imported<T: DeserializeOwned>(store: &Engine, key: &str) -> Option<T> {
+    serde_json::from_slice(&analytics_cache::archived(store, key).ok()??).ok()
 }
 
-fn save(cache: &Path, name: &str, cap: u64, value: &impl Serialize) -> bool {
-    let Ok(body) = serde_json::to_string(value) else {
-        return false;
-    };
-    if body.len() as u64 > cap {
-        return false;
-    }
-    if let Err(error) = fs::create_dir(cache)
-        && error.kind() != std::io::ErrorKind::AlreadyExists
+fn save(store: &Engine, snapshot: &Snapshot, walk: Option<&Walk>) {
+    if let Ok(bytes) = serde_json::to_vec(&(snapshot, walk))
+        && bytes.len() <= DISCOVERY_BYTES
+        && let Err(error) = analytics_cache::put(store, DISCOVERY, &bytes)
     {
-        return false;
+        tracing::warn!(
+            code = error.code,
+            "Experiment discovery state could not be saved"
+        );
     }
-    cache
-        .symlink_metadata()
-        .is_ok_and(|meta| meta.file_type().is_dir())
-        && aac_files::share::write_atomically(cache, name, &body, 0o600).is_ok()
 }
 
 fn publish(mut old: Snapshot, walk: Walk, now: i64) -> Snapshot {
@@ -447,18 +437,23 @@ fn publish(mut old: Snapshot, walk: Walk, now: i64) -> Snapshot {
 }
 
 fn slice(
-    cache: &Path,
+    store: &Engine,
     home: &Path,
     now: i64,
     max_slice_dirs: usize,
     deadline: Instant,
 ) -> Snapshot {
     let base = home.join("PM-Experiments");
-    let old = read_cached::<Snapshot>(cache, ROOTS_FILE, ROOTS_BYTES)
+    let (cached, checkpoint): (Option<Snapshot>, Option<Walk>) =
+        analytics_cache::get(store, DISCOVERY)
+            .ok()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| (imported(store, ROOTS_FILE), imported(store, WALK_FILE)));
+    let old = cached
         .filter(|file| file.version == 1 && file.base == base && valid_roots(&file.roots, &base))
         .unwrap_or_else(|| Snapshot::empty(base.clone()));
-    let checkpoint =
-        read_cached::<Walk>(cache, WALK_FILE, WALK_BYTES).filter(|walk| walk.valid(&base));
+    let checkpoint = checkpoint.filter(|walk| walk.valid(&base));
     if checkpoint.is_none()
         && old.completed_at > 0
         && now.saturating_sub(old.completed_at) <= TTL_MS
@@ -471,7 +466,7 @@ fn slice(
             completed_at: now,
             ..Snapshot::empty(base)
         };
-        save(cache, ROOTS_FILE, ROOTS_BYTES, &result);
+        save(store, &result, None);
         return result;
     }
     let mut walk = checkpoint.unwrap_or_else(|| Walk::new(&base, now));
@@ -488,19 +483,14 @@ fn slice(
             break;
         }
     }
-    if !walk.stack.is_empty() {
-        save(cache, WALK_FILE, WALK_BYTES, &walk);
-    }
-    let result = publish(old, walk, now);
-    if save(cache, ROOTS_FILE, ROOTS_BYTES, &result) && !result.scanning {
-        let _ = fs::remove_file(cache.join(WALK_FILE));
-    }
+    let result = publish(old, walk.clone(), now);
+    save(store, &result, result.scanning.then_some(&walk));
     result
 }
 
-pub(super) fn run_slice(ccs: &Path, home: &Path, now: i64) -> Snapshot {
+pub(super) fn run_slice(store: &Engine, home: &Path, now: i64) -> Snapshot {
     slice(
-        &ccs.join("cache"),
+        store,
         home,
         now,
         SLICE_DIRS,
@@ -516,7 +506,9 @@ mod tests {
     fn analytics_experiment_walk_resumes_and_excludes_sandbox_and_test_trees() {
         let home = tempfile::tempdir().expect("fixture home");
         let ccs = tempfile::tempdir().expect("fixture CCS_HOME");
-        let cache = ccs.path().join("cache");
+        let store =
+            aac_store::ops::open_engine(&ccs.path().join("store").to_string_lossy(), None, None)
+                .expect("open fixture store");
         let base = home.path().join("PM-Experiments");
         let claude = r#"{"type":"assistant","sessionId":"fixture","version":"1","cwd":"/fixture"}"#;
         for folder in [
@@ -551,15 +543,19 @@ mod tests {
         fs::copy(&zcode, base.join("zcode-copy.db")).expect("copy DB");
 
         let deadline = || Instant::now() + Duration::from_secs(3);
-        let first = slice(&cache, home.path(), 1, 2, deadline());
+        let first = slice(&store, home.path(), 1, 2, deadline());
         assert!(first.scanning);
         assert!(
             first.discovering("claude"),
             "the first round is still discovering"
         );
         assert_eq!(first.roots[&Kind::Claude], [base.join("claude")]);
-        assert!(cache.join(WALK_FILE).is_file());
-        let finished = slice(&cache, home.path(), 2, 100, deadline());
+        assert!(
+            analytics_cache::get(&store, DISCOVERY)
+                .expect("read discovery checkpoint")
+                .is_some()
+        );
+        let finished = slice(&store, home.path(), 2, 100, deadline());
         assert!(!finished.scanning);
         assert_eq!(finished.roots[&Kind::Claude], [base.join("claude")]);
         assert_eq!(finished.roots[&Kind::Muse], [base.join("muse/sessions")]);
@@ -567,11 +563,10 @@ mod tests {
         let mut extra = serde_json::json!({});
         finished.add_zcode_paths(&mut extra, &mut HashSet::new());
         assert_eq!(extra["zcode"].as_array().expect("zcode DBs").len(), 1);
-        assert!(!cache.join(WALK_FILE).exists());
-        let reused = slice(&cache, home.path(), 3, 1, deadline());
+        let reused = slice(&store, home.path(), 3, 1, deadline());
         assert_eq!(reused.completed_at, 2);
         assert_eq!(reused.roots, finished.roots);
-        let renewed = slice(&cache, home.path(), 3 + TTL_MS, 1, deadline());
+        let renewed = slice(&store, home.path(), 3 + TTL_MS, 1, deadline());
         assert!(renewed.scanning);
         assert!(
             !renewed.discovering("claude"),

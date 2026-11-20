@@ -2,7 +2,7 @@
 //! (`scripts/analytics-remote/analytics_usage_remote.py`), so a computer can move from one helper to
 //! the other without its cached rows and fingerprints changing.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -190,6 +190,9 @@ pub struct Print {
     /// means no event was measured, not a zero-token event. `usage_clock` versions this evidence.
     pub newest_usage_ms: Option<i64>,
     pub usage_clock: bool,
+    pub path_key: Option<String>,
+    pub file_identity: Option<String>,
+    pub append_state: Option<Value>,
 }
 
 /// A resumable read's place in one file (DESIGN 16.1). `through` is the decoded byte offset after
@@ -260,6 +263,9 @@ impl Print {
             wal_unread: None,
             newest_usage_ms: None,
             usage_clock: false,
+            path_key: None,
+            file_identity: None,
+            append_state: None,
         }
     }
 
@@ -306,6 +312,15 @@ impl Print {
         }
         if let Some(wal) = self.wal_unread {
             map.insert("walUnread".into(), Value::from(wal));
+        }
+        if let Some(key) = &self.path_key {
+            map.insert("pathKey".into(), json!(key));
+        }
+        if let Some(identity) = &self.file_identity {
+            map.insert("fileIdentity".into(), json!(identity));
+        }
+        if let Some(state) = &self.append_state {
+            map.insert("appendState".into(), state.clone());
         }
         if let Some(progress) = &self.progress {
             if let Some(through) = progress.through {

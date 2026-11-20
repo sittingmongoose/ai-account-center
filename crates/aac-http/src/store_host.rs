@@ -230,6 +230,9 @@ impl StoreHost {
             }),
             ready_changed: Condvar::new(),
         });
+        if let Some(root) = host.boot.dir.parent() {
+            crate::analytics_storage::attach(root, &host);
+        }
         // One queue, STORE_PERMITS takers: a thread parks in recv holding the queue lock, and
         // releases it before running the call, so the next free thread takes the next call.
         // Workers hold a Weak: when the last Arc drops, the sender goes, recv ends, they exit.

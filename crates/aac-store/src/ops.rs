@@ -154,6 +154,17 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
                 "projectedYearBytes": null,
                 "quotaTemporaries": crate::storage_health::quota_temporaries(&engine.dir),
             });
+            for (key, field) in [
+                (crate::sampler::REJECTIONS, "quotaBackfillRejections"),
+                ("analytics_migration_failures", "analyticsMigrationFailures"),
+            ] {
+                if let Some(values) = engine.get_meta(key)?
+                    && let Ok(Json::Object(values)) = serde_json::from_str(&values)
+                    && !values.is_empty()
+                {
+                    status["storageHealth"][field] = Json::Object(values);
+                }
+            }
             status
         }
         "captureReports" => {

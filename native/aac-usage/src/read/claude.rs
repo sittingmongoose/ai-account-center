@@ -121,6 +121,10 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
     };
     if let (Some(id), Some(request)) = (message_id, request_id) {
         let key = format!("{id}\n{}", request.unwrap_or(""));
+        if line_box.claude_previous.take().as_deref() == Some(util::sha256_hex(key.as_bytes()).as_str()) {
+            line_box.claude_retry = true;
+            return;
+        }
         let pending = Pending {
             key: Some(key.clone()),
             ..pending
@@ -133,6 +137,7 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
         line_box.claude_pending = Some(pending);
         return;
     }
+    line_box.claude_previous = None;
     if let Some(previous) = line_box.claude_pending.take() {
         emit(collector, kind, filekey, previous, line_box.message_from);
     }
@@ -224,7 +229,9 @@ fn count(collector: &mut Collector, kind: &str, filekey: &str, pending: &Pending
 }
 
 pub fn flush(collector: &mut Collector, kind: &str, filekey: &str, line_box: &mut LineBox) {
+    line_box.claude_checkpoint = line_box.claude_previous.take();
     if let Some(pending) = line_box.claude_pending.take() {
+        line_box.claude_checkpoint = pending.key.as_ref().map(|key| util::sha256_hex(key.as_bytes()));
         emit(collector, kind, filekey, pending, line_box.message_from);
     }
 }
@@ -449,7 +456,19 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
                 filekey = util::filekey("claude", &owner);
             }
             CHOSEN.with(|cell| *cell.borrow_mut() = if dedupe { Some(HashMap::new()) } else { None });
-            let outcome = read_file(collector, "claude", &path, &filekey, parse, flush_fn);
+            let outcome = if group.len() == 1 {
+                read_file(collector, "claude", &path, &filekey, parse, flush_fn)
+            } else {
+                super::read_into(
+                    collector,
+                    "claude",
+                    &path,
+                    &filekey,
+                    parse,
+                    flush_fn,
+                    &mut LineBox::default(),
+                )
+            };
             let records = CHOSEN.with(|cell| cell.borrow_mut().take());
             if outcome == Outcome::Cut {
                 cut = true;

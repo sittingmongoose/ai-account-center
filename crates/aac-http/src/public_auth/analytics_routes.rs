@@ -120,7 +120,12 @@ fn save_capture(root: &Path, cwd: bool) -> Result<Value, ()> {
     let receipt = if cwd {
         json!({ "cwd": true })
     } else {
-        let (folders, caches) = clear_remote_cwds(root)?;
+        let (mut folders, caches) = clear_remote_cwds(root)?;
+        if let Some(engine) =
+            crate::analytics_storage::host(root).and_then(|host| host.analytics_engine())
+        {
+            folders += aac_store::analytics_cache::clear_remote_folders(&engine).map_err(|_| ())?;
+        }
         json!({ "cwd": false, "cleared": { "folders": folders, "caches": caches } })
     };
     drop(file);

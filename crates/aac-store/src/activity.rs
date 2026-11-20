@@ -659,6 +659,16 @@ fn closed_through<T: ReadableTable<&'static [u8], ()>>(table: &T) -> Result<Opti
 
 pub struct ActivityProjector;
 
+const RECOVERY_EPOCH: &str = "activity_recovery_epoch";
+
+/// Recovery receipts must be renewed after rebuilding the activity projection.
+pub fn recovery_epoch(engine: &Engine) -> Result<u64> {
+    Ok(engine
+        .get_meta(RECOVERY_EPOCH)?
+        .and_then(|epoch| epoch.parse().ok())
+        .unwrap_or(0))
+}
+
 impl Projector for ActivityProjector {
     fn name(&self) -> &'static str {
         "activity"
@@ -701,6 +711,10 @@ impl Projector for ActivityProjector {
         Ok(Vec::new())
     }
     fn reset(&self, txn: &WriteTransaction) -> Result<()> {
+        let epoch: u64 = db::get_meta(txn, RECOVERY_EPOCH)?
+            .and_then(|epoch| epoch.parse().ok())
+            .unwrap_or(0);
+        db::set_meta(txn, RECOVERY_EPOCH, &epoch.saturating_add(1).to_string())?;
         for def in [
             ACT_DICT,
             ACT_HOUR,
@@ -2051,6 +2065,28 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
 pub struct SourcesQuery {
     pub from_ms: u64,
     pub to_ms: u64,
+}
+
+/// The same hour boundary the live projector uses when replacing activity.
+pub fn settled_before(engine: &Engine, computer: &str) -> Result<HashMap<String, u64>> {
+    engine.with_db(|db| {
+        let txn = db.begin_read()?;
+        let dict = txn.open_table(ACT_DICT)?;
+        let mut names = Names::new(&dict);
+        let sources = txn.open_table(ACT_SOURCE)?;
+        let mut result = HashMap::new();
+        for entry in sources.iter()? {
+            let (key, value) = entry?;
+            if names.get(K_COMPUTER, db::be_u32(key.value(), 0))? != computer {
+                continue;
+            }
+            let row: SourceRow = db::unpack(value.value())?;
+            if let Some(hour) = row.settle_h {
+                result.insert(names.get(K_TOOL, db::be_u32(key.value(), 4))?, hour as u64 * HOUR_MS);
+            }
+        }
+        Ok(result)
+    })
 }
 
 /// Per computer and tool: stored span, last read (live and logged), state, backfill, and covered

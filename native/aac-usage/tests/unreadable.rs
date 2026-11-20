@@ -1,9 +1,8 @@
 //! Regression fixtures for the installed Analytics unreadable/cached report, 2026-11-14.
 //! No real tool homes are read. Permission checks require an unprivileged Unix user.
-use aac_usage::{
-    discover::{self, Env},
-    protocol,
-};
+#[cfg(unix)]
+use aac_usage::discover;
+use aac_usage::{discover::Env, protocol};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
 

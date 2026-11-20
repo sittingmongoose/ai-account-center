@@ -7,6 +7,7 @@ pub mod account_usage;
 mod agent_transport;
 mod analytics_live;
 mod analytics_route;
+mod analytics_storage;
 mod analytics_writers;
 mod answers_owned;
 pub mod antigravity_host;

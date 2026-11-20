@@ -15,6 +15,15 @@ fn one_link(file: &std::path::Path) -> bool {
 
 pub(crate) const WALLET_ACCOUNT: &str = "opencode-wallet-account";
 pub(crate) const CURSOR_QUOTA: &str = "cursor-quota-observation";
+pub(crate) const CURSOR_ACCOUNT_FILE: &str = "cursor-account-v1.json";
+pub(crate) const CURSOR_QUOTA_FILE: &str = "cursor-quota-v1.json";
+
+fn cursor_cache(root: &Path, id: &str, file: &str) -> Result<Option<Value>, Decline> {
+    match crate::analytics_storage::read(root, file)? {
+        Some(value) => Ok(value),
+        None => load(root, id, None, true),
+    }
+}
 
 fn hex(s: &str, length: usize) -> bool {
     s.len() == length
@@ -239,7 +248,7 @@ pub(crate) fn cursor_rows(value: &Value) -> Vec<&Value> {
 
 /// Read the saved Cursor account summary. This function only reads the existing cache.
 pub fn cursor_account(root: &Path) -> Result<Option<Value>, Decline> {
-    let Some(value) = load(root, "cursor-account-observation", None, true)? else {
+    let Some(value) = cursor_cache(root, "cursor-account-observation", CURSOR_ACCOUNT_FILE)? else {
         return Ok(None);
     };
     let Some(state) = cursor_state(&value["state"]) else {
@@ -296,7 +305,7 @@ pub(super) fn cursor_quota(root: &Path, fingerprint: &str) -> Result<Option<Valu
     if !cursor_fingerprint(fingerprint) {
         return Err(Decline::Shape);
     }
-    Ok(load(root, CURSOR_QUOTA, None, true)?
+    Ok(cursor_cache(root, CURSOR_QUOTA, CURSOR_QUOTA_FILE)?
         .filter(|value| cursor_quota_matches(value, fingerprint)))
 }
 

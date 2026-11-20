@@ -26,6 +26,9 @@ mod claude_mirrors;
 mod experiment_roots;
 mod experiment_signatures;
 mod fixed_scanner;
+mod history;
+mod migration;
+mod scan_state;
 
 /// The job's tick: the activity background's every-15s cadence; each writer checks its own deadline.
 const TICK_MS: u64 = 15_000;
@@ -47,7 +50,6 @@ const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Default)]
 struct WriterState {
     ingestor: Ingestor,
-    mirror_owners: Option<claude_mirrors::Owners>,
     states: Vec<Value>,
     fetched_at: i64,
     scanning_since: Option<i64>,
@@ -58,6 +60,7 @@ struct WriterState {
 #[derive(Default)]
 struct QuotaState {
     backfilled: bool,
+    archives: Vec<(String, String)>,
     last_quota_ms: i64,
 }
 
@@ -153,7 +156,11 @@ fn read_archive_file(root: &Path, file: &Path) -> Option<Vec<u8>> {
 }
 
 /// The backfill sources the host reads: the archive files plus the main history file.
-fn backfill_sources(ccs_dir: &Path) -> (Vec<BackfillSource>, u64) {
+fn backfill_sources(
+    engine: &aac_store::engine::Engine,
+    ccs_dir: &Path,
+    staged: &[(String, String)],
+) -> (Vec<BackfillSource>, u64) {
     let base = ccs_dir.join("account-analytics");
     let archive = base.join("archive");
     let mut files = Vec::new();
@@ -190,26 +197,38 @@ fn backfill_sources(ccs_dir: &Path) -> (Vec<BackfillSource>, u64) {
             records,
         });
     }
-    let main = base.join("quota-history-v1.json");
-    if main.symlink_metadata().is_ok() {
-        match read_archive_file(ccs_dir, &main) {
-            Some(bytes) => {
-                let (records, parsed) = std::str::from_utf8(&bytes)
-                    .map(sampler::records_from_text)
-                    .unwrap_or_default();
-                if parsed {
-                    sources.push(BackfillSource {
-                        label: "quota-history-v1.json".to_string(),
-                        sha256: sha256_hex(&bytes),
-                        records,
-                    });
-                } else {
-                    unreadable += 1;
-                }
-            }
-            None => unreadable += 1,
+    for (key, digest) in staged {
+        if engine
+            .get_meta(&format!("ts:backfill:{digest}"))
+            .is_ok_and(|receipt| receipt.is_some())
+        {
+            continue;
+        }
+        let Ok(Some(bytes)) = aac_store::analytics_cache::archived(engine, key) else {
+            unreadable += 1;
+            continue;
+        };
+        if sha256_hex(&bytes) != *digest {
+            unreadable += 1;
+            continue;
+        }
+        let (records, parsed) = std::str::from_utf8(&bytes)
+            .map(sampler::records_from_text)
+            .unwrap_or_default();
+        if parsed {
+            sources.push(BackfillSource {
+                label: key
+                    .trim_start_matches("legacy/account-analytics/")
+                    .to_owned(),
+                sha256: digest.clone(),
+                records,
+            });
+        } else if key == migration::QUOTA {
+            unreadable += 1;
         }
     }
+    let mut seen = HashSet::new();
+    sources.retain(|source| seen.insert(source.sha256.clone()));
     (sources, unreadable)
 }
 
@@ -236,11 +255,14 @@ fn quota_pass(
     if merged.is_empty() {
         return;
     }
-    if !state.backfilled {
-        let (sources, unreadable) = backfill_sources(ccs_dir);
+    if let Ok(staged) = aac_store::analytics_cache::archived_index(engine, migration::QUOTA)
+        && (!state.backfilled || staged != state.archives)
+    {
+        let (sources, unreadable) = backfill_sources(engine, ccs_dir, &staged);
         let providers = sampler::providers_of(&merged);
         if sampler::backfill(engine, &sources, &providers, now, unreadable).is_ok() {
             state.backfilled = true;
+            state.archives = staged;
         }
     }
     if sampler::record_sample(engine, &merged, now).is_ok() {
@@ -424,6 +446,37 @@ fn scan_request(
     request
 }
 
+async fn scan_host(
+    agents: &Arc<crate::agent_transport::Agents>,
+    host: &crate::agent_transport::UsageHost,
+    args: &Value,
+    timeout_ms: u64,
+    call_id: &str,
+) -> Result<Value, aac_core::Cause> {
+    let answer = if host.agent_available {
+        agents
+            .scan_usage(
+                host.platform,
+                host.alias.as_deref(),
+                args,
+                timeout_ms,
+                SCAN_MAX_BYTES,
+                call_id,
+            )
+            .await
+    } else {
+        Err(aac_core::Cause::AgentMissing)
+    };
+    if matches!(
+        answer,
+        Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
+    ) {
+        fixed_scanner::scan(agents, host, args, timeout_ms, SCAN_MAX_BYTES).await
+    } else {
+        answer
+    }
+}
+
 fn failed_scan_states(host: &str, kinds: &[String], agent_missing: bool) -> Vec<Value> {
     kinds
         .iter()
@@ -484,6 +537,7 @@ async fn activity_pass(
     let mut remote: Vec<Value> = Vec::new();
     let mut claude = Vec::new();
     let mut states: Vec<Value> = Vec::new();
+    let mut checkpoints = Vec::new();
     let preferences = crate::account_reads::preferences(ccs_dir);
     let kinds = aac_providers::scanner_kinds()
         .map(str::to_owned)
@@ -494,6 +548,17 @@ async fn activity_pass(
     let mut mapped_complete = false;
     for computer in &computers {
         let host = computer.id.as_str();
+        let mut cache = match scan_state::Cache::load(engine, host) {
+            Ok(cache) => cache,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code,
+                    "Stored Analytics scanner state could not be loaded"
+                );
+                states.extend(failed_scan_states(host, &kinds, false));
+                continue;
+            }
+        };
         let (mut extra_roots, mut overflow, generic) = extra_roots(preferences.as_ref(), host);
         let local = computer.alias.is_none();
         let experiments = experiments.as_deref().filter(|_| local);
@@ -518,83 +583,106 @@ async fn activity_pass(
                 .map(experiment_roots::Snapshot::scanner_roots)
                 .as_ref(),
         );
-        let call_id = format!("g14-activity-{generation}-{host}");
-        let mut answer = if computer.agent_available {
-            agents
-                .scan_usage(
-                    computer.platform,
-                    computer.alias.as_deref(),
-                    &args,
-                    SCAN_DEADLINE_MS,
-                    SCAN_MAX_BYTES,
-                    &call_id,
-                )
-                .await
-        } else {
-            Err(aac_core::Cause::AgentMissing)
-        };
-        if matches!(
-            answer,
-            Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
-        ) {
-            answer = fixed_scanner::scan(agents, computer, &args, SCAN_DEADLINE_MS, SCAN_MAX_BYTES)
-                .await;
+        let settled_before = activity::settled_before(engine, host).unwrap_or_default();
+        let batches = scan_state::requests(args, &kinds, &cache.fingerprints, &settled_before, now);
+        let mut scanned = false;
+        let start_state = states.len();
+        for (batch, args) in batches {
+            if args.is_null() {
+                for kind in batch {
+                    states.push(json!({
+                        "tool": kind, "host": host, "state": "unreadable", "cause": "source_limit",
+                    }));
+                }
+                continue;
+            }
+            let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
+            let answer = scan_host(agents, computer, &args, SCAN_DEADLINE_MS, &call_id).await;
+            match answer {
+                Ok(answer) if valid_scan_answer(&answer, &batch) => {
+                    scanned = true;
+                    for kind in &batch {
+                        let (mut state, mut cause) = source_state(&answer, kind);
+                        let packed =
+                            args["fingerprints"]["_store"]["settledPacked"][kind].is_string();
+                        if overflow.contains(kind.as_str())
+                            || experiments.is_some_and(|snapshot| snapshot.limited(kind))
+                        {
+                            (state, cause) = ("unreadable", Some("source_limit"));
+                        } else if matches!(state, "ok" | "not_installed" | "no_usage")
+                            && local
+                            && experiments.map_or_else(
+                                || experiment_roots::tracks(kind),
+                                |snapshot| snapshot.discovering(kind),
+                            )
+                        {
+                            (state, cause) = ("scanning", None);
+                        }
+                        let complete = matches!(state, "ok" | "no_usage");
+                        let compatible = !packed || answer["kinds"][kind]["settledPacked"] == true;
+                        if !cache.apply(kind, &answer, complete && compatible, cutoff) && complete {
+                            (state, cause) = ("scanning", None);
+                        }
+                        let kind_rows: Vec<Value> = cache
+                            .rows
+                            .iter()
+                            .filter(|r| r["k"].as_str() == Some(kind.as_str()))
+                            .cloned()
+                            .collect();
+                        let kind_srows: Vec<Value> = cache
+                            .srows
+                            .iter()
+                            .filter(|r| r["k"].as_str() == Some(kind.as_str()))
+                            .cloned()
+                            .collect();
+                        if kind == "claude" {
+                            claude.push(claude_mirrors::Part {
+                                host,
+                                state_index: states.len(),
+                                rows: kind_rows,
+                                sessions: kind_srows,
+                                fingerprints: cache
+                                    .fingerprints
+                                    .get("claude")
+                                    .cloned()
+                                    .unwrap_or(Value::Null),
+                            });
+                        } else {
+                            let worker = collect::worker_from_scan(
+                                &kind_rows,
+                                &kind_srows,
+                                kind,
+                                host,
+                                now,
+                                &pricing,
+                            );
+                            remote.push(json!({ "tool": kind, "host": host, "data": worker }));
+                        }
+                        states.push(scan_source_state(&answer, kind, host, now, state, cause));
+                    }
+                }
+                Err(aac_core::Cause::AgentMissing) => {
+                    states.extend(failed_scan_states(host, &batch, true))
+                }
+                _ => states.extend(failed_scan_states(host, &batch, false)),
+            }
         }
-        match answer {
-            Ok(mut answer) if valid_scan_answer(&answer, &kinds) => {
-                let rows = answer["rows"].as_array().cloned().unwrap_or_default();
-                let srows = answer["srows"].as_array().cloned().unwrap_or_default();
-                for kind in &kinds {
-                    let kind_rows: Vec<Value> = rows
-                        .iter()
-                        .filter(|r| r["k"].as_str() == Some(kind.as_str()))
-                        .cloned()
-                        .collect();
-                    let kind_srows: Vec<Value> = srows
-                        .iter()
-                        .filter(|r| r["k"].as_str() == Some(kind.as_str()))
-                        .cloned()
-                        .collect();
-                    let (mut state, mut cause) = source_state(&answer, kind);
-                    if overflow.contains(kind.as_str())
-                        || experiments.is_some_and(|snapshot| snapshot.limited(kind))
-                    {
-                        (state, cause) = ("unreadable", Some("source_limit"));
-                    } else if matches!(state, "ok" | "not_installed" | "no_usage")
-                        && local
-                        && experiments.map_or_else(
-                            || experiment_roots::tracks(kind),
-                            |snapshot| snapshot.discovering(kind),
-                        )
-                    {
-                        (state, cause) = ("scanning", None);
+        if scanned {
+            match cache.encode() {
+                Ok(bytes) => checkpoints.push((format!("live/scanner/{host}"), bytes)),
+                Err(error) => {
+                    tracing::warn!(
+                        code = error.code,
+                        "Analytics scanner state could not be saved"
+                    );
+                    for source in &mut states[start_state..] {
+                        if matches!(source["state"].as_str(), Some("ok" | "no_usage")) {
+                            source["state"] = json!("unreadable");
+                            source["cause"] = json!("source_limit");
+                        }
                     }
-                    if kind == "claude" {
-                        claude.push(claude_mirrors::Part {
-                            host,
-                            state_index: states.len(),
-                            rows: kind_rows,
-                            sessions: kind_srows,
-                            fingerprints: answer["kinds"]["claude"]["fingerprints"].take(),
-                        });
-                    } else {
-                        let worker = collect::worker_from_scan(
-                            &kind_rows,
-                            &kind_srows,
-                            kind,
-                            host,
-                            now,
-                            &pricing,
-                        );
-                        remote.push(json!({ "tool": kind, "host": host, "data": worker }));
-                    }
-                    states.push(scan_source_state(&answer, kind, host, now, state, cause));
                 }
             }
-            Err(aac_core::Cause::AgentMissing) => {
-                states.extend(failed_scan_states(host, &kinds, true))
-            }
-            _ => states.extend(failed_scan_states(host, &kinds, false)),
         }
     }
     // Shape and ingest under the lock; a superseding generation drops this pass's writes.
@@ -602,23 +690,38 @@ async fn activity_pass(
     if generation != guard.generation {
         return;
     }
-    let owners = guard
-        .mirror_owners
-        .get_or_insert_with(|| claude_mirrors::load(ccs_dir));
-    if let Some(next) = claude_mirrors::select(&mut claude, &mut states, owners) {
-        claude_mirrors::save(ccs_dir, &next);
-        *owners = next;
+    for (key, bytes) in checkpoints {
+        if let Err(error) = aac_store::analytics_cache::put(engine, &key, &bytes) {
+            tracing::warn!(
+                code = error.code,
+                "Analytics scanner state could not be saved"
+            );
+        }
     }
-    for part in claude {
-        let worker = collect::worker_from_scan(
-            &part.rows,
-            &part.sessions,
-            "claude",
-            part.host,
-            now,
-            &pricing,
-        );
-        remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
+    match claude_mirrors::select_live(engine, &mut claude, &mut states) {
+        Ok(()) => {
+            for part in claude {
+                let worker = collect::worker_from_scan(
+                    &part.rows,
+                    &part.sessions,
+                    "claude",
+                    part.host,
+                    now,
+                    &pricing,
+                );
+                remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                code = error.code,
+                "Claude mirror owners could not be updated"
+            );
+            for part in claude {
+                states[part.state_index]["state"] = json!("unreadable");
+                states[part.state_index]["cause"] = json!("store_unavailable");
+            }
+        }
     }
     let mut local: HashMap<String, Vec<Value>> = HashMap::new();
     let mut local_complete: HashSet<String> = HashSet::new();
@@ -683,6 +786,42 @@ fn refresh_seconds(ccs_dir: &Path) -> i64 {
         .unwrap_or(60)
 }
 
+async fn migrate_files(
+    engine: Arc<aac_store::engine::Engine>,
+    agents: &crate::agent_transport::Agents,
+    root: &Path,
+) -> bool {
+    let local = agents
+        .usage_hosts()
+        .await
+        .into_iter()
+        .find(|host| host.alias.is_none())
+        .map(|host| host.id)
+        .or_else(|| {
+            aac_files::process::hostname()
+                .map(|host| crate::reset_source_route::local_computer(&host))
+        });
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let migration = migration::Migration {
+            store: &engine,
+            root: &root,
+            local: local.as_deref(),
+            now: aac_store::engine::now_ms() as i64,
+            pricing: ResolverPricing::new(&root),
+        };
+        match migration.run() {
+            Ok(done) => done,
+            Err(error) => {
+                tracing::warn!(code = error.code, "Analytics file migration incomplete");
+                false
+            }
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// The hosted store's writer jobs consume the existing collection generation and agent pool.
 pub(crate) async fn analytics_jobs(
     store: Arc<StoreHost>,
@@ -693,6 +832,33 @@ pub(crate) async fn analytics_jobs(
     stop: Arc<AtomicBool>,
 ) {
     tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
+    let mut migrated = loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(engine) = store.analytics_engine() {
+            break migrate_files(engine, &agents, &ccs_dir).await;
+        }
+        tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+    };
+    let migration_store = Arc::clone(&store);
+    let migration_agents = Arc::clone(&agents);
+    let migration_root = ccs_dir.clone();
+    let migration_stop = Arc::clone(&stop);
+    let migration = async move {
+        let mut retry = aac_store::engine::now_ms() + 120_000;
+        while !migrated && !migration_stop.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+            let now = aac_store::engine::now_ms();
+            if now >= retry
+                && !migration_stop.load(Ordering::Acquire)
+                && let Some(engine) = migration_store.analytics_engine()
+            {
+                migrated = migrate_files(engine, &migration_agents, &migration_root).await;
+                retry = now + 120_000;
+            }
+        }
+    };
     let state = Arc::new(Mutex::new(WriterState::default()));
     let quota_store = Arc::clone(&store);
     let quota_stop = Arc::clone(&stop);
@@ -727,9 +893,17 @@ pub(crate) async fn analytics_jobs(
     let activity_live = Arc::clone(&live);
     let activity = async move {
         let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&activity_root));
+        let mut folders_cleared = false;
+        let mut history = history::Job::default();
         while !activity_stop.load(Ordering::Acquire) {
             if let Some(engine) = activity_store.analytics_engine() {
                 let now = aac_store::engine::now_ms() as i64;
+                if crate::analytics_route::capture_cwd(&activity_root) {
+                    folders_cleared = false;
+                } else if !folders_cleared {
+                    folders_cleared =
+                        aac_store::analytics_cache::clear_remote_folders(&engine).is_ok();
+                }
                 if activity_live.take_refresh() {
                     activity_state
                         .lock()
@@ -746,6 +920,22 @@ pub(crate) async fn analytics_jobs(
                     now,
                 )
                 .await;
+                if !activity_stop.load(Ordering::Acquire) {
+                    let experiments = activity_state
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .experiments
+                        .clone();
+                    history
+                        .run(
+                            &engine,
+                            &agents,
+                            &activity_root,
+                            experiments.as_deref(),
+                            aac_store::engine::now_ms() as i64,
+                        )
+                        .await;
+                }
             }
             tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
         }
@@ -757,11 +947,12 @@ pub(crate) async fn analytics_jobs(
         let mut next = 0;
         while !stop.load(Ordering::Acquire) {
             let now = aac_store::engine::now_ms() as i64;
-            if now >= next && store.analytics_engine().is_some() {
-                let root = ccs_dir.clone();
+            if now >= next
+                && let Some(engine) = store.analytics_engine()
+            {
                 let home = home.clone();
                 match tokio::task::spawn_blocking(move || {
-                    experiment_roots::run_slice(&root, &home, now)
+                    experiment_roots::run_slice(&engine, &home, now)
                 })
                 .await
                 {
@@ -784,6 +975,7 @@ pub(crate) async fn analytics_jobs(
         run_writer("quota", quota),
         run_writer("experiment discovery", discovery),
         run_writer("activity", activity),
+        run_writer("migration", migration),
     );
 }
 
@@ -853,7 +1045,10 @@ mod tests {
             ),
         )
         .expect("fixture rollout");
-        let snapshot = experiment_roots::run_slice(ccs.path(), home.path(), 1);
+        let store =
+            aac_store::ops::open_engine(&ccs.path().join("store").to_string_lossy(), None, None)
+                .expect("open fixture store");
+        let snapshot = experiment_roots::run_slice(&store, home.path(), 1);
         let roots = snapshot.scanner_roots();
         let kinds = aac_providers::scanner_kinds()
             .map(str::to_owned)
