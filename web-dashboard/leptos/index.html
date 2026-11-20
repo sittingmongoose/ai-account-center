@@ -23,6 +23,8 @@
     <!-- Chromium's install prompt can come before any module has loaded: it is kept for Settings' "Install app"
     (public/frame-dashboard.mjs), which says so with an `aac-install` event, as is an install made meanwhile. -->
     <script>addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__aacInstallPrompt=e;dispatchEvent(new Event('aac-install'))});addEventListener('appinstalled',function(){window.__aacInstallPrompt=null;dispatchEvent(new Event('aac-install'))});</script>
+    <!-- With scripts off nothing would take the loading splash down: the noscript message shows instead. -->
+    <noscript><style>#aac-boot{display:none}</style></noscript>
     <link rel="stylesheet" href="/status-bar.css" />
     <link rel="stylesheet" href="{{CSS}}" />
     <link rel="modulepreload" href="{{PKG}}/aac_web.js" />
@@ -176,6 +178,9 @@
               history.replaceState(history.state, '', destination);
               await init({ module_or_path: module });
               history.replaceState(history.state, '', destination);
+              // A saved runtime predates the loading splash (and its stylesheet has no rules for it): it never takes
+              // the splash down, so it goes once that copy has started.
+              document.getElementById('aac-boot')?.remove();
               return true;
             } catch (error) {
               console.warn('Saved app recovery failed:', error);

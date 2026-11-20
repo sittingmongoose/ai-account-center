@@ -21,8 +21,10 @@ function instrument() {
 	} catch {}
 	const f = (window.__flash = {
 		docs, armed: false, shellRemoved: 0, routeRemoved: 0, pageRemoved: 0, rowsRemoved: 0, metersAdded: 0, metersRemoved: 0,
-		sweeps: 0, removedEls: 0, blankFrames: 0, frames: 0, signinSeen: 0,
+		sweeps: 0, removedEls: 0, blankFrames: 0, frames: 0, signinSeen: 0, naAtArm: 0, naMax: 0, naRestored: false,
 	});
+	// meters reading "Unavailable" on Home (a window whose reading went away)
+	const unavailable = () => [...document.querySelectorAll('.home .um-na')].filter((e) => e.textContent.trim() === 'Unavailable').length;
 	const count = (node, sel) => (node.nodeType !== 1 ? 0 : (node.matches(sel) ? 1 : 0) + node.querySelectorAll(sel).length);
 	const lastWidth = new WeakMap();
 	const observer = new MutationObserver((records) => {
@@ -49,7 +51,8 @@ function instrument() {
 				const w = Number(m[1]);
 				const before = lastWidth.get(r.target);
 				lastWidth.set(r.target, w);
-				if (before !== undefined && before >= 5 && w < 1) f.sweeps++;
+				// a meter whose reading went away (its track marked unavailable) empties on purpose
+				if (before !== undefined && before >= 5 && w < 1 && !r.target.closest('.um-track.na')) f.sweeps++;
 			}
 		}
 	});
@@ -61,6 +64,11 @@ function instrument() {
 			f.frames++;
 			const page = document.querySelector('.route:not([hidden]) .page');
 			if (!page || page.getBoundingClientRect().height < 50 || document.querySelector('.signin-page')) f.blankFrames++;
+			if (f.frames % 15 === 0) {
+				const n = unavailable();
+				if (n > f.naMax) f.naMax = n;
+				if (f.naMax > f.naAtArm && n === f.naAtArm) f.naRestored = true;
+			}
 		}
 		requestAnimationFrame(frame);
 	};
@@ -75,6 +83,7 @@ function instrument() {
 		f.scroll = scrolled.map((el) => ({ el, top: el.scrollTop }));
 		f.focus = document.activeElement;
 		f.root = document.querySelector('.shell');
+		f.naAtArm = f.naMax = unavailable();
 		try { sessionStorage.setItem('aacFlashArmDocs', String(docs)); } catch {}
 		f.armed = true;
 	};
@@ -84,7 +93,7 @@ function instrument() {
 		navigations: performance.getEntriesByType('navigation').length,
 		shellRemoved: f.shellRemoved, routeRemoved: f.routeRemoved, pageRemoved: f.pageRemoved, rowsRemoved: f.rowsRemoved,
 		metersAdded: f.metersAdded, metersRemoved: f.metersRemoved, sweeps: f.sweeps, removedEls: f.removedEls,
-		blankFrames: f.blankFrames, frames: f.frames, signinSeen: f.signinSeen,
+		blankFrames: f.blankFrames, frames: f.frames, signinSeen: f.signinSeen, naAtArm: f.naAtArm, naMax: f.naMax, naRestored: f.naRestored,
 		sameRoot: f.root === document.querySelector('.shell') && !!f.root?.isConnected,
 		scrollResets: (f.scroll || []).filter((s) => Math.abs(s.el.scrollTop - s.top) > 1).map((s) => `${s.el.className || s.el.tagName}: ${s.top} -> ${s.el.scrollTop}`),
 		scrolledBoxes: (f.scroll || []).length,
@@ -93,7 +102,9 @@ function instrument() {
 	});
 }
 
-/** Home's dashboard, its numbers moved on every read (and its refresh interval 30 s). */
+/** Home's dashboard, its numbers moved on every read (and its refresh interval 30 s). Every fifth read from the third
+ * on, the first Claude account's five-hour reading goes away (the meter must say Unavailable in place), and the next
+ * read brings it back. */
 function changingDashboard(call) {
 	const data = homeAccounts();
 	data.settings = { ...data.settings, refreshIntervalSeconds: 30 };
@@ -106,6 +117,11 @@ function changingDashboard(call) {
 			}
 		}
 		a.fetchedAt = a.sampledAt = new Date().toISOString();
+	}
+	if (call % 5 === 3) {
+		const w = data.accounts.find((a) => a.provider === 'claude').windows.find((x) => x.key === 'five_hour');
+		w.usedPercent = null;
+		w.remainingPercent = null;
 	}
 	return data;
 }
@@ -169,6 +185,10 @@ export const tests = {
 		const last = await t.page.evaluate(() => [...document.querySelectorAll('.home .um')].map((m) => m.textContent).join('|'));
 		await t.check('home: the meters show the changed numbers', first !== last, 'the meters read the same before and after');
 		await judge(t, 'home', r, { updates: reads.dashboard - before });
+		// a live update turned a meter Unavailable mid-run, in place (no meter re-created, above), and the next read
+		// brought its number back
+		await t.check('home: a meter turned Unavailable mid-run', r.naMax > r.naAtArm, `Unavailable meters: ${r.naAtArm} at the start, at most ${r.naMax}`);
+		await t.check('home: the Unavailable meter got its reading back on the next read', r.naRestored, JSON.stringify({ naAtArm: r.naAtArm, naMax: r.naMax }));
 	},
 
 	async 'film desktop home: idle while readings change, for a recording'(t) {
