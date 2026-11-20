@@ -1734,6 +1734,12 @@
       ]
     },
     {
+      "file": "crates/aac-views/src/analytics_activity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-views/src/antigravity.rs",
       "kind": "internal",
       "evidence": [],

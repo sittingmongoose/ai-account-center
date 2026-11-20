@@ -178,7 +178,7 @@ impl Snapshot {
     }
 
     pub(super) fn discovering(&self, tool: &str) -> bool {
-        self.scanning && tracks(tool)
+        self.scanning && self.completed_at == 0 && tracks(tool)
     }
 
     pub(super) fn next_slice(&self, now: i64) -> i64 {
@@ -553,6 +553,10 @@ mod tests {
         let deadline = || Instant::now() + Duration::from_secs(3);
         let first = slice(&cache, home.path(), 1, 2, deadline());
         assert!(first.scanning);
+        assert!(
+            first.discovering("claude"),
+            "the first round is still discovering"
+        );
         assert_eq!(first.roots[&Kind::Claude], [base.join("claude")]);
         assert!(cache.join(WALK_FILE).is_file());
         let finished = slice(&cache, home.path(), 2, 100, deadline());
@@ -569,6 +573,10 @@ mod tests {
         assert_eq!(reused.roots, finished.roots);
         let renewed = slice(&cache, home.path(), 3 + TTL_MS, 1, deadline());
         assert!(renewed.scanning);
+        assert!(
+            !renewed.discovering("claude"),
+            "a renewal keeps the last read's coverage state"
+        );
         assert_eq!(renewed.roots, finished.roots);
     }
 }

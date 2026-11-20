@@ -2752,3 +2752,34 @@ pub(crate) fn activity_selection(query: &Object) -> R<bool> {
     let order = usage_provider_order();
     Ok(refresh || (account == "all" && (provider == "all" || order.contains(&provider))))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analytics_grid_shows_missing_agents_as_unavailable_after_an_ok_read() {
+        let last_full_read = "2026-11-15T12:00:00.000Z";
+        for host in ["mac", "windows", "alexis"] {
+            let previous = grid_from_store(&json!({"sources": [{
+                "host": host, "tool": "codex", "state": "ok", "lastFullReadAt": last_full_read,
+            }]}))
+            .expect("previous grid");
+            assert_eq!(previous[0]["state"], "ok", "{host}");
+
+            let current = grid_from_store(&json!({"sources": [{
+                "host": host, "tool": "codex", "state": "unreadable", "cause": "agent_missing",
+                "lastFullReadAt": last_full_read, "lastReadAt": "2026-11-15T13:00:00.000Z",
+            }]}))
+            .expect("current grid");
+            assert_eq!(
+                current,
+                json!([{
+                    "host": host, "tool": "codex", "state": "unavailable", "cause": "agent_missing",
+                    "detail": "agent missing", "lastScanAt": last_full_read, "rowCount": 0,
+                }]),
+                "{host}"
+            );
+        }
+    }
+}

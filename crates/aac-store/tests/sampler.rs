@@ -188,3 +188,69 @@ fn unavailable_t3_quota_window_never_becomes_a_reading() {
     drop(engine);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn unavailable_t3_quota_window_in_an_archive_never_becomes_a_reading() {
+    let dir = temp_dir("unavailable-archived-t3-quota");
+    let engine = ops::open_engine(dir.to_str().unwrap(), None, None).expect("open engine");
+    let first = 1_794_700_800_000;
+    let later = first + 600_000;
+    let archive_record = |ms, app, cli| {
+        let at = aac_num::ecma::to_iso_string(ms).expect("timestamp");
+        json!({
+            "identity": "a".repeat(64), "accountId": "antigravity:fixture",
+            "sampledAt": at, "observedAt": at, "source": "fixture", "platform": "windows", "status": "ok",
+            "windows": [
+                {"key": "gemini-weekly", "label": "Gemini weekly (app)", "poolId": "gemini-app", "usedPercent": app},
+                cli,
+            ],
+        })
+    };
+    let measured = json!({
+        "key": "cli-gemini-weekly", "label": "Gemini weekly (T3)", "poolId": "gemini-cli", "usedPercent": 40,
+    });
+    let mut unavailable = measured.clone();
+    unavailable["status"] = json!("unavailable");
+    unavailable["usedPercent"] = Value::Null;
+    let records = vec![
+        archive_record(first, 27, measured),
+        archive_record(later, 28, unavailable),
+    ];
+    let source = BackfillSource {
+        label: "quota-history-v1.json".into(),
+        sha256: sha256_hex(&json!(records).to_string()),
+        records,
+    };
+    let report = sampler::backfill(&engine, &[source], &Default::default(), later, 0).expect("backfill archive");
+    assert_eq!(report.sampled, 2, "both app readings were imported");
+    let history = ops::call(
+        &engine,
+        "historyRecords",
+        &json!({
+            "fromMs": first, "toMs": later, "nowMs": later, "thinning": { "kind": "history" }
+        })
+        .to_string(),
+    )
+    .expect("history");
+    let windows = history
+        .as_array()
+        .expect("records")
+        .iter()
+        .filter_map(|record| record["windows"].as_array())
+        .flatten()
+        .collect::<Vec<_>>();
+    assert!(
+        windows
+            .iter()
+            .any(|window| { window["key"] == "gemini-weekly" && window["usedPercent"].as_f64() == Some(28.0) })
+    );
+    let cli_values = windows
+        .iter()
+        .filter(|window| window["key"] == "cli-gemini-weekly")
+        .map(|window| window["usedPercent"].as_f64())
+        .collect::<Vec<_>>();
+    assert!(!cli_values.is_empty(), "the measured T3 reading was imported");
+    assert!(cli_values.iter().all(|value| *value == Some(40.0)), "{cli_values:?}");
+    drop(engine);
+    std::fs::remove_dir_all(&dir).ok();
+}
