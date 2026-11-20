@@ -561,6 +561,9 @@ pub fn walk_t3_files(
                 continue;
             }
             let path = directory.join(&name);
+            if accept(&name) && !same_or_inside(&path, exclude) && collector.skip_settled(kind, &start, &path) {
+                continue;
+            }
             let real = if is_link(&path) {
                 link_inside(&path, &start)
             } else {
@@ -570,6 +573,9 @@ pub fn walk_t3_files(
                 continue;
             };
             if same_or_inside(&real, exclude) {
+                continue;
+            }
+            if real != path && accept(&name) && collector.skip_settled(kind, &start, &real) {
                 continue;
             }
             let Some(meta) = discovery_metadata(collector, kind, &real) else {

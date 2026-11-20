@@ -88,20 +88,35 @@ fn grown_log_reads_only_the_suffix_and_replacements_read_from_zero() {
 fn a_settled_log_is_confirmed_without_reopening_its_path() {
     let home = tempfile::tempdir().unwrap();
     let path = fixture(home.path());
-    fs::write(&path, rollout(1, 100)).unwrap();
+    check_settled(home.path(), &path);
+}
+
+#[test]
+fn a_settled_log_in_a_t3_home_is_confirmed_without_reopening_its_path() {
+    let home = tempfile::tempdir().unwrap();
+    let t3_home = home.path().join(".codex-t3/fixture");
+    let path = fixture(&t3_home);
+    let t3_sessions = t3_home.join("sessions");
+    fs::rename(t3_home.join(".codex/sessions"), &t3_sessions).unwrap();
+    let path = t3_sessions.join(path.strip_prefix(t3_home.join(".codex/sessions")).unwrap());
+    check_settled(home.path(), &path);
+}
+
+fn check_settled(home: &Path, path: &Path) {
+    fs::write(path, rollout(1, 100)).unwrap();
     fs::OpenOptions::new()
         .write(true)
-        .open(&path)
+        .open(path)
         .unwrap()
         .set_modified(UNIX_EPOCH + Duration::from_millis(AT as u64))
         .unwrap();
-    let first = scan(home.path(), None, 0);
+    let first = scan(home, None, 0);
     assert_eq!(first["rows"][0]["i"], 100);
 
     let live = path.with_extension("saved");
-    fs::rename(&path, live).unwrap();
-    fs::write(&path, b"This must not be opened as a log.").unwrap();
-    let settled = scan(home.path(), Some(&first), AT + 3_600_000);
+    fs::rename(path, live).unwrap();
+    fs::write(path, b"This must not be opened as a log.").unwrap();
+    let settled = scan(home, Some(&first), AT + 3_600_000);
     assert_eq!(settled["rows"], json!([]));
     assert_eq!(settled["kinds"]["codex"]["readFailures"], Value::Null);
     assert_eq!(print(&settled), print(&first));
