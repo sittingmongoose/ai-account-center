@@ -438,9 +438,18 @@ pub fn period(w: &Win) -> &'static str {
 /// the Antigravity app. T3's come first: they are what T3 spends. Never added together.
 const ANTIGRAVITY_COLUMNS: [(&str, &str); 8] = [
     ("cli-gemini-5h", "Gemini 5-hour, in T3 (Antigravity CLI)"),
-    ("cli-gemini-weekly", "Gemini weekly, in T3 (Antigravity CLI)"),
-    ("cli-3p-5h", "Claude and GPT 5-hour, in T3 (Antigravity CLI)"),
-    ("cli-3p-weekly", "Claude and GPT weekly, in T3 (Antigravity CLI)"),
+    (
+        "cli-gemini-weekly",
+        "Gemini weekly, in T3 (Antigravity CLI)",
+    ),
+    (
+        "cli-3p-5h",
+        "Claude and GPT 5-hour, in T3 (Antigravity CLI)",
+    ),
+    (
+        "cli-3p-weekly",
+        "Claude and GPT weekly, in T3 (Antigravity CLI)",
+    ),
     ("gemini-5h", "Gemini 5-hour, in the Antigravity app"),
     ("gemini-weekly", "Gemini weekly, in the Antigravity app"),
     ("3p-5h", "Claude and GPT 5-hour, in the Antigravity app"),

@@ -319,8 +319,7 @@ struct Plan {
 }
 
 /// Google keeps separate Antigravity limits for the CLI that T3 runs and for the Antigravity app (2026-11-19).
-const STARTER: &str =
-    "Weekly quota only; no 5-hour refresh. T3 (the Antigravity CLI) and the Antigravity app have separate limits.";
+const STARTER: &str = "Weekly quota only; no 5-hour refresh. T3 (the Antigravity CLI) and the Antigravity app have separate limits.";
 const NO_QUOTA: &str = "This plan does not include Antigravity coding quota.";
 const CLI_QUOTA: &str = "This plan includes separate Gemini CLI quota that AAC does not read; no Antigravity coding quota.";
 const POOLED: &str =
