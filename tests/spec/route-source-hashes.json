@@ -24,7 +24,7 @@
   "src/web-server/routes/codex-routes.ts": "c49b0a4a3cbd76165423140a9abfda25876ead87b7884c5cdae8791934c9b4de",
   "src/web-server/routes/home-view-routes.ts": "72c6d6a020d089ae71c041990de6d3a71a02ff73ba4619585ac2a8e1c37eefa9",
   "src/web-server/routes/index.ts": "0e5af7ae2b8922270575f49135248e3987e428f79b303bbc1fc1361de84d16e0",
-  "src/web-server/routes/reset-claim-routes.ts": "2bdac6d8a12506010c3fd0268dea93a91779855d674a6e0246965fb65d08e693",
+  "src/web-server/routes/reset-claim-routes.ts": "460358e088394783524881293aef6f34daac26a07483af85fc7ba71c32a20765",
   "src/web-server/routes/revalidated-view.ts": "58d7382a0314411bb4e6b5cb079b0a8c73de2d9026521679b270e98b21b7923a",
   "src/web-server/routes/scoreboard-routes.ts": "ce5a57c3a5d52911b4dd77710574ff7c0d562a8a055f890814810c7ee7cadea9",
   "src/web-server/routes/share-route.ts": "6d83030ba0ae887724623a21256852902d3d8ab3eda7d5c84d93e24ac42d2025",
