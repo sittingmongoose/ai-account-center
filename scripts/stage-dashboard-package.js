@@ -9,6 +9,7 @@ const { stageManifest } = require('./build-dashboard-native');
 const { readSourceBuild, recordBuild } = require('./deploy-lineage');
 const store = require('./build-native');
 const status = require('./build-status-native');
+const { verifyLocalDist } = require('./build-usage-scan');
 
 const root = path.resolve(__dirname, '..');
 
@@ -52,6 +53,7 @@ function stagePackage(destination) {
   }
   verifyAddon(store, 'bun run store:build');
   verifyAddon(status, 'bun run status:build');
+  verifyLocalDist();
   const platformAddons = new Set([store.moduleName(), status.moduleName()]);
   const directory = path.resolve(destination);
   const parent = fs.realpathSync(path.dirname(directory));

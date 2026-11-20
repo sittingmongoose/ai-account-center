@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod claude_mirrors;
 mod experiment_roots;
 mod experiment_signatures;
 mod fixed_scanner;
@@ -45,6 +46,7 @@ const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Default)]
 struct WriterState {
     ingestor: Ingestor,
+    mirror_owners: Option<claude_mirrors::Owners>,
     states: Vec<Value>,
     fetched_at: i64,
     scanning_since: Option<i64>,
@@ -421,6 +423,7 @@ async fn activity_pass(
     }
     let pricing = ResolverPricing::new(ccs_dir);
     let mut remote: Vec<Value> = Vec::new();
+    let mut claude = Vec::new();
     let mut states: Vec<Value> = Vec::new();
     let preferences = crate::account_reads::preferences(ccs_dir);
     let kinds = aac_providers::scanner_kinds()
@@ -469,7 +472,7 @@ async fn activity_pass(
                 .await;
         }
         match answer {
-            Ok(answer) if valid_scan_answer(&answer, &kinds) => {
+            Ok(mut answer) if valid_scan_answer(&answer, &kinds) => {
                 let rows = answer["rows"].as_array().cloned().unwrap_or_default();
                 let srows = answer["srows"].as_array().cloned().unwrap_or_default();
                 for kind in &kinds {
@@ -483,15 +486,6 @@ async fn activity_pass(
                         .filter(|r| r["k"].as_str() == Some(kind.as_str()))
                         .cloned()
                         .collect();
-                    let worker = collect::worker_from_scan(
-                        &kind_rows,
-                        &kind_srows,
-                        kind,
-                        host,
-                        now,
-                        &pricing,
-                    );
-                    remote.push(json!({ "tool": kind, "host": host, "data": worker }));
                     let (mut state, mut cause) = scan_state(&answer, kind);
                     if overflow.contains(kind.as_str())
                         || experiments.is_some_and(|snapshot| snapshot.limited(kind))
@@ -505,6 +499,25 @@ async fn activity_pass(
                         )
                     {
                         (state, cause) = ("scanning", None);
+                    }
+                    if kind == "claude" {
+                        claude.push(claude_mirrors::Part {
+                            host,
+                            state_index: states.len(),
+                            rows: kind_rows,
+                            sessions: kind_srows,
+                            fingerprints: answer["kinds"]["claude"]["fingerprints"].take(),
+                        });
+                    } else {
+                        let worker = collect::worker_from_scan(
+                            &kind_rows,
+                            &kind_srows,
+                            kind,
+                            host,
+                            now,
+                            &pricing,
+                        );
+                        remote.push(json!({ "tool": kind, "host": host, "data": worker }));
                     }
                     states.push(json!({
                         "tool": kind,
@@ -525,6 +538,24 @@ async fn activity_pass(
     let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
     if generation != guard.generation {
         return;
+    }
+    let owners = guard
+        .mirror_owners
+        .get_or_insert_with(|| claude_mirrors::load(ccs_dir));
+    if let Some(next) = claude_mirrors::select(&mut claude, &mut states, owners) {
+        claude_mirrors::save(ccs_dir, &next);
+        *owners = next;
+    }
+    for part in claude {
+        let worker = collect::worker_from_scan(
+            &part.rows,
+            &part.sessions,
+            "claude",
+            part.host,
+            now,
+            &pricing,
+        );
+        remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
     }
     let local: HashMap<String, Vec<Value>> = HashMap::new();
     let local_complete: HashSet<String> = HashSet::new();

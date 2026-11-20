@@ -12,11 +12,14 @@
  *     from. Builds happen on Nas1 (Linux), the Mac and Windows, never on the dashboard VM; the landing
  *     collects each machine's prebuilt/<target> folder.
  *
- *   node scripts/build-usage-scan.js --copy-only   (every `build` runs this)
+ *   node scripts/build-usage-scan.js --stage   (every `build` runs this)
+ *     Builds the scanner for this computer, then copies all matching prebuilt targets.
+ *
+ *   node scripts/build-usage-scan.js --copy-only
  *     Copies every prebuilt target built from this checkout's sources into dist/native/aac-usage/
  *     and writes manifest.json there: {name, version, protocol, sourceSha256, targets: {<target>:
  *     {file, sha256, size}}}. A target built from other sources is left out (its protocol could
- *     differ); a computer whose target is missing is read by the Python helper, labelled.
+ *     differ). The dashboard requires its local scanner in every package.
  */
 const fs = require('fs');
 const path = require('path');
@@ -34,6 +37,12 @@ const TARGETS = {
   'win32-x64': 'x86_64-pc-windows-msvc',
 };
 const SUPPORTED = Object.values(TARGETS);
+const LOCAL_TARGET = TARGETS[`${process.platform}-${process.arch}`];
+const PROTOCOL = Number(
+  fs
+    .readFileSync(path.join(CRATE, 'src', 'protocol.rs'), 'utf8')
+    .match(/^pub const PROTOCOL: u64 = (\d+);$/m)?.[1]
+);
 
 function binaryName(target) {
   return target.endsWith('windows-msvc') ? 'aac-usage-scan.exe' : 'aac-usage-scan';
@@ -83,7 +92,7 @@ function versionOf(file) {
 }
 
 function build() {
-  const target = TARGETS[`${process.platform}-${process.arch}`];
+  const target = LOCAL_TARGET;
   if (!target) {
     console.error(`[X] No scanner target for ${process.platform}-${process.arch}.`);
     process.exit(1);
@@ -92,11 +101,15 @@ function build() {
     ? path.resolve(process.env.CARGO_TARGET_DIR)
     : path.join(CRATE, 'target');
   console.log('[i] Building the usage-log scanner (cargo build --release --locked)...');
-  const result = spawnSync('cargo', ['build', '--release', '--locked'], {
-    cwd: CRATE,
-    stdio: 'inherit',
-    env: { ...process.env, CARGO_TARGET_DIR: cargoTarget },
-  });
+  const result = spawnSync(
+    'cargo',
+    ['build', '--release', '--locked', '-j', process.env.CARGO_BUILD_JOBS || '2'],
+    {
+      cwd: CRATE,
+      stdio: 'inherit',
+      env: { ...process.env, CARGO_TARGET_DIR: cargoTarget },
+    }
+  );
   if (result.status !== 0) process.exit(result.status || 1);
   const artifact = path.join(cargoTarget, 'release', binaryName(target));
   const folder = path.join(PREBUILT, target);
@@ -105,7 +118,13 @@ function build() {
   fs.copyFileSync(artifact, destination);
   fs.chmodSync(destination, 0o755);
   const version = versionOf(destination);
-  if (!version || version.target !== target) {
+  if (
+    !version ||
+    version.target !== target ||
+    version.protocol !== PROTOCOL ||
+    version.name !== 'aac-usage-scan' ||
+    version.version !== crateVersion()
+  ) {
     console.error('[X] The built scanner did not answer --version for this target.');
     process.exit(1);
   }
@@ -129,7 +148,6 @@ function build() {
 function copyOnly() {
   const current = sourceHash();
   const targets = {};
-  let protocol = null;
   for (const target of SUPPORTED) {
     const file = path.join(PREBUILT, target, binaryName(target));
     if (!fs.existsSync(file)) continue;
@@ -143,11 +161,10 @@ function copyOnly() {
       console.warn(`[!] ${target} scanner was built from other sources; it is not shipped.`);
       continue;
     }
-    if (protocol !== null && note.protocol !== protocol) {
+    if (note.protocol !== PROTOCOL) {
       console.warn(`[!] ${target} scanner speaks protocol ${note.protocol}; it is not shipped.`);
       continue;
     }
-    protocol = note.protocol;
     const out = path.join(DIST, target);
     fs.mkdirSync(out, { recursive: true });
     fs.copyFileSync(file, path.join(out, binaryName(target)));
@@ -162,7 +179,7 @@ function copyOnly() {
   const manifest = {
     name: 'aac-usage-scan',
     version: crateVersion(),
-    protocol,
+    protocol: PROTOCOL,
     sourceSha256: current,
     targets,
   };
@@ -171,7 +188,7 @@ function copyOnly() {
   console.log(
     count
       ? `[OK] Usage-log scanner for ${Object.keys(targets).join(', ')} copied into dist/native/aac-usage/`
-      : '[i] No usage-log scanner built from these sources: every computer is read by the Python helper.'
+      : '[i] No usage-log scanner built from these sources.'
   );
 }
 
@@ -182,8 +199,10 @@ function verifyDist(dir = DIST) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   for (const [target, entry] of Object.entries(manifest.targets || {})) {
     if (!SUPPORTED.includes(target)) throw new Error(`Unknown scanner target ${target}.`);
-    const file = path.join(dir, entry.file);
+    const expected = `${target}/${binaryName(target)}`;
+    const file = path.join(dir, expected);
     if (
+      entry.file !== expected ||
       !fs.existsSync(file) ||
       fileSha(file) !== entry.sha256 ||
       fs.statSync(file).size !== entry.size
@@ -193,9 +212,40 @@ function verifyDist(dir = DIST) {
   return { present: true, targets: Object.keys(manifest.targets || {}) };
 }
 
-if (require.main === module) {
-  if (process.argv.includes('--copy-only')) copyOnly();
-  else build();
+function verifyLocalDist(dir = DIST) {
+  const result = verifyDist(dir);
+  if (!result.targets.includes(LOCAL_TARGET)) {
+    throw new Error(
+      `Missing usage-log scanner for this computer (${process.platform}-${process.arch}). Run build:server before staging.`
+    );
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  const version = versionOf(path.join(dir, LOCAL_TARGET, binaryName(LOCAL_TARGET)));
+  if (
+    !version ||
+    manifest.name !== 'aac-usage-scan' ||
+    manifest.protocol !== PROTOCOL ||
+    manifest.version !== crateVersion() ||
+    manifest.sourceSha256 !== sourceHash() ||
+    version.name !== manifest.name ||
+    version.target !== LOCAL_TARGET ||
+    version.protocol !== manifest.protocol ||
+    version.version !== manifest.version
+  ) {
+    throw new Error(`The ${LOCAL_TARGET} scanner does not match the current source or protocol.`);
+  }
+  return result;
 }
 
-module.exports = { sourceHash, verifyDist, binaryName, SUPPORTED, TARGETS };
+if (require.main === module) {
+  if (process.argv.includes('--copy-only')) copyOnly();
+  else {
+    build();
+    if (process.argv.includes('--stage')) {
+      copyOnly();
+      verifyLocalDist();
+    }
+  }
+}
+
+module.exports = { sourceHash, verifyDist, verifyLocalDist, binaryName, SUPPORTED, TARGETS };

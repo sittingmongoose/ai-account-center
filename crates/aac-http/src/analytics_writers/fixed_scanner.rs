@@ -1,16 +1,19 @@
-//! The existing standalone Linux reader over the registered, pinned SSH transport.
+//! The packaged standalone reader, run locally or through the registered, pinned SSH transport.
 use crate::agent_transport::{self, Agents, Selector, UsageHost};
 use aac_core::Cause;
 use serde_json::Value;
-use std::ffi::OsString;
+use std::{ffi::OsString, path::Path};
 
 const SCANNER_MISSING: i32 = 87;
+const NAME: &str = "aac-usage-scan";
+const PROTOCOL: u64 = 3;
+const LINUX_TARGET: &str = "x86_64-unknown-linux-gnu";
 
-fn linux_launch(manifest: &Value) -> Option<Vec<OsString>> {
-    if manifest["name"] != "aac-usage-scan" || manifest["protocol"] != 2 {
+fn scanner_hash<'a>(manifest: &'a Value, target: &str) -> Option<&'a str> {
+    if manifest["name"] != NAME || manifest["protocol"] != PROTOCOL {
         return None;
     }
-    let hash = manifest["targets"]["x86_64-unknown-linux-gnu"]["sha256"].as_str()?;
+    let hash = manifest["targets"][target]["sha256"].as_str()?;
     if hash.len() != 64
         || !hash
             .bytes()
@@ -18,6 +21,32 @@ fn linux_launch(manifest: &Value) -> Option<Vec<OsString>> {
     {
         return None;
     }
+    Some(hash)
+}
+
+fn local_launch(directory: &Path, manifest: &Value) -> Option<Vec<OsString>> {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => LINUX_TARGET,
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        _ => return None,
+    };
+    let hash = scanner_hash(manifest, target)?;
+    let name = format!("{NAME}{}", std::env::consts::EXE_SUFFIX);
+    let path = directory.join(target).join(&name);
+    let entry = &manifest["targets"][target];
+    let expected = format!("{target}/{name}");
+    if entry["file"].as_str() != Some(expected.as_str()) {
+        return None;
+    }
+    let bytes = aac_files::read_bounded(&path, aac_transport::artifact_cap()).ok()?;
+    (entry["size"] == bytes.len() && aac_core::sha256_hex(&bytes) == hash)
+        .then(|| vec![path.into_os_string()])
+}
+
+fn linux_launch(manifest: &Value) -> Option<Vec<OsString>> {
+    let hash = scanner_hash(manifest, LINUX_TARGET)?;
     let script = format!(
         r#"case "$(uname -s)-$(uname -m)" in Linux-x86_64) ;; *) exit {SCANNER_MISSING} ;; esac
 p="$HOME/.cache/ai-account-center/bin/aac-usage-scan-{prefix}"
@@ -31,8 +60,7 @@ exec "$p""#,
 }
 
 pub(super) fn eligible(host: &UsageHost) -> bool {
-    host.fixed_ssh_available
-        && host.platform == "ubuntu"
+    (host.alias.is_none() || (host.fixed_ssh_available && host.platform == "ubuntu"))
         && std::env::var("AAC_AGENT_VERBS").as_deref() != Ok("off")
 }
 
@@ -47,11 +75,20 @@ pub(super) async fn scan(
         return Err(Cause::AgentMissing);
     }
     let package = agent_transport::package_root().ok_or(Cause::AgentMissing)?;
-    let bytes =
-        aac_files::read_bounded(&package.join("dist/native/aac-usage/manifest.json"), 65536)
-            .map_err(|_| Cause::AgentMissing)?;
-    let manifest = serde_json::from_slice(&bytes).map_err(|_| Cause::AgentMissing)?;
-    let argv = linux_launch(&manifest).ok_or(Cause::AgentMissing)?;
+    let directory = package.join("dist/native/aac-usage");
+    let local = host.alias.is_none();
+    let argv = tokio::task::spawn_blocking(move || {
+        let bytes = aac_files::read_bounded(&directory.join("manifest.json"), 65536).ok()?;
+        let manifest = serde_json::from_slice(&bytes).ok()?;
+        if local {
+            local_launch(&directory, &manifest)
+        } else {
+            linux_launch(&manifest)
+        }
+    })
+    .await
+    .map_err(|_| Cause::AgentMissing)?
+    .ok_or(Cause::AgentMissing)?;
     let mut input = serde_json::to_vec(args).map_err(|_| Cause::Refused)?;
     input.push(b'\n');
     let output = agents
@@ -89,7 +126,7 @@ mod tests {
         let body = b"#!/bin/sh\nexec cat\n";
         let hash = super::super::sha256_hex(body);
         let mut manifest = serde_json::json!({
-            "name": "aac-usage-scan", "protocol": 2,
+            "name": "aac-usage-scan", "protocol": aac_usage::protocol::PROTOCOL,
             "targets": {"x86_64-unknown-linux-gnu": {"sha256": hash}},
         });
         let argv = linux_launch(&manifest).expect("fixed command");

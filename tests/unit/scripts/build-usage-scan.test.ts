@@ -7,6 +7,7 @@ import * as path from 'path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const build = require('../../../scripts/build-usage-scan.js') as {
   verifyDist: (dir: string) => { present: boolean; targets: string[] };
+  verifyLocalDist: (dir: string) => { present: boolean; targets: string[] };
   binaryName: (target: string) => string;
 };
 
@@ -16,6 +17,13 @@ afterEach(() => {
 });
 
 describe('the packaged usage-log scanners', () => {
+  it('requires a scanner for the package computer', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-usage-dist-'));
+    expect(() => build.verifyLocalDist(dir as string)).toThrow(/Missing usage-log scanner/);
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ targets: {} }));
+    expect(() => build.verifyLocalDist(dir as string)).toThrow(/Missing usage-log scanner/);
+  });
+
   it('are shipped only as their manifest names them, and an altered one fails the bundle', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-usage-dist-'));
     const target = 'x86_64-unknown-linux-gnu';
