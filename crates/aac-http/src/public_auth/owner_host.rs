@@ -764,7 +764,7 @@ pub(super) fn write_descriptor(
             .ok_or_else(|| std::io::Error::other("the private descriptor has no parent"))?,
     )?;
     file.write_all(body.as_bytes())?;
-    file.sync_all()?;
+    file.as_file().sync_all()?;
     file.persist(path).map(|_| ()).map_err(|error| error.error)
 }
 
