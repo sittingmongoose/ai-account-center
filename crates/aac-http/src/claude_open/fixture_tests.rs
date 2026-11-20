@@ -3,7 +3,7 @@
 //! all over a fake remote and disposable 0700 roots. No real app, host or provider is touched.
 use super::js::{sha, stringify};
 use super::manifest::profile_id_pattern;
-use super::open::{ClaudeOpen, Remote, SshError, SshOutput};
+use super::open::{AgentOpen, ClaudeOpen, Remote, SshError, SshOutput};
 use super::sync::NATIVE;
 use super::sync_service::HelperCall;
 use serde_json::{Value, json};
@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 // --- the fake remote -------------------------------------------------------------------------
 #[derive(Default)]
 struct FakeState {
-    host_open_results: VecDeque<Option<Value>>,
+    host_open_results: VecDeque<AgentOpen>,
     host_open_calls: Vec<Value>,
     ssh_results: VecDeque<Result<SshOutput, SshError>>,
     ssh_calls: Vec<(Vec<String>, Option<Vec<u8>>)>,
@@ -69,7 +69,7 @@ impl Remote for FakeRemote {
         _platform: &'a str,
         _ssh_host: &'a str,
         args: Value,
-    ) -> Pin<Box<dyn Future<Output = Option<Value>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<AgentOpen, SshError>> + Send + 'a>> {
         Box::pin(async move {
             let delay = {
                 let mut state = self.state();
@@ -80,10 +80,10 @@ impl Remote for FakeRemote {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
             let mut state = self.state();
-            state
+            Ok(state
                 .host_open_results
                 .pop_front()
-                .unwrap_or(Some(json!({"ok": true})))
+                .unwrap_or(AgentOpen::Opened))
         })
     }
 
@@ -315,7 +315,10 @@ async fn ordinary_open_falls_back_to_the_fixed_ssh_command() {
     let root = Root::new();
     root.write_manifest(json!([gmail_entry(None)]));
     let remote = Arc::new(FakeRemote::new());
-    remote.state().host_open_results.push_back(None);
+    remote
+        .state()
+        .host_open_results
+        .push_back(AgentOpen::NotDispatched);
     let open = owner(&root, Arc::clone(&remote));
     assert_eq!(open.open("gmail", "mac", false).await.status, 200);
     let state = remote.state();
@@ -336,7 +339,7 @@ async fn transport_failures_map_to_502_and_504() {
         let remote = Arc::new(FakeRemote::new());
         {
             let mut state = remote.state();
-            state.host_open_results.push_back(None);
+            state.host_open_results.push_back(AgentOpen::NotDispatched);
             state.ssh_results.push_back(Err(error));
         }
         let open = owner(&root, Arc::clone(&remote));

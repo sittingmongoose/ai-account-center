@@ -62,9 +62,6 @@ pub(crate) struct Call {
 }
 struct Entry {
     config: aac_config::ComputerConfig,
-    client: Option<AgentClient>,
-    /// The same checked computer without the agent artifact: the Open orchestrator's
-    /// reference commands run over the identical SSH policy when no verb can prove a step.
     computer: Option<Computer>,
 }
 pub(crate) struct UsageHost {
@@ -75,7 +72,11 @@ pub(crate) struct UsageHost {
 
 struct Registry {
     entries: Vec<Entry>,
+    package: PathBuf,
+    agent_enabled: bool,
 }
+
+type AgentClients = Vec<Option<AgentClient>>;
 struct Active {
     input: mpsc::Sender<Vec<u8>>,
     done: watch::Receiver<Option<bool>>,
@@ -86,6 +87,7 @@ pub(crate) struct Agents {
     root: PathBuf,
     enabled_by_default: bool,
     registry: watch::Sender<Option<Arc<Result<Registry, Failure>>>>,
+    clients: watch::Sender<Option<Arc<Result<AgentClients, Failure>>>>,
     loading: AtomicBool,
     slots: Arc<Semaphore>,
     active: Mutex<BTreeMap<String, Active>>,
@@ -118,9 +120,7 @@ fn word(id: &str) -> bool {
 /// A random correlation id for an in-process orchestrator call (hex, as the front door's).
 fn random_call_id() -> Option<String> {
     let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut bytes))
-        .ok()?;
+    getrandom::fill(&mut bytes).ok()?;
     Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 pub(crate) fn line(value: &Value) -> Bytes {
@@ -162,10 +162,7 @@ pub(crate) fn package_root() -> Option<PathBuf> {
 
 impl Registry {
     fn load(root: &Path, enabled_by_default: bool) -> Result<Self, Failure> {
-        // No real-home discovery. The package paths are supplied by the trusted front door.
-        if std::env::var("AAC_AGENT_TRANSPORT").is_ok_and(|v| v != "on") {
-            return Err(refused());
-        }
+        // Fixed commands and agent calls share the same admitted computer and SSH pool.
         let package = package_root().ok_or_else(refused)?;
         let mut options = LoadOptions::new(
             root.into(),
@@ -181,18 +178,6 @@ impl Registry {
             },
             |v| v == "on",
         );
-        if !enabled {
-            return Err(refused());
-        }
-        let catalog_path = std::env::var_os("AAC_AGENT_CATALOG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| package.join("config/agent-artifacts.json"));
-        let catalog: Catalog =
-            serde_json::from_slice(&aac_files::read_bounded(&catalog_path, 65536)?)
-                .map_err(|_| refused())?;
-        if catalog.artifacts.len() > 16 {
-            return Err(refused());
-        }
         let settings = &config.values()["agentTransportSsh"];
         let identity = std::env::var_os("AAC_AGENT_IDENTITY_FILE")
             .map(PathBuf::from)
@@ -222,93 +207,102 @@ impl Registry {
             } else {
                 None
             };
-            let client = computer.clone().and_then(|computer| {
-                let artifact = catalog
-                    .artifacts
-                    .iter()
-                    .find(|a| compatible_target(definition.os, &a.target));
-                artifact
-                    .and_then(|a| {
-                        let path = package.join(&a.file);
-                        AgentArtifact::load(
-                            path,
-                            a.sha256.clone(),
-                            Handshake {
-                                name: "aac-agent".into(),
-                                version: a.version.clone(),
-                                protocol: PROTOCOL_VERSION,
-                                target: a.target.clone(),
-                            },
-                        )
-                        .ok()
-                    })
-                    .map(|artifact| AgentClient::existing(computer, artifact))
-            });
-            // Missing trust configuration disables this computer, never another computer.
             entries.push(Entry {
                 config: definition,
-                client,
                 computer,
             });
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            package,
+            agent_enabled: enabled,
+        })
     }
-    fn client(&self, selector: &Selector) -> Option<AgentClient> {
+
+    fn load_clients(&self) -> Result<AgentClients, Failure> {
+        if !self.agent_enabled {
+            return Err(refused());
+        }
+        let catalog_path = std::env::var_os("AAC_AGENT_CATALOG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.package.join("config/agent-artifacts.json"));
+        let catalog: Catalog =
+            serde_json::from_slice(&aac_files::read_bounded(&catalog_path, 65536)?)
+                .map_err(|_| refused())?;
+        if catalog.artifacts.len() > 16 {
+            return Err(refused());
+        }
+        Ok(self
+            .entries
+            .iter()
+            .map(|entry| {
+                let computer = entry.computer.clone()?;
+                let artifact = catalog
+                    .artifacts
+                    .iter()
+                    .find(|artifact| compatible_target(entry.config.os, &artifact.target))?;
+                let artifact = AgentArtifact::load(
+                    self.package.join(&artifact.file),
+                    artifact.sha256.clone(),
+                    Handshake {
+                        name: "aac-agent".into(),
+                        version: artifact.version.clone(),
+                        protocol: PROTOCOL_VERSION,
+                        target: artifact.target.clone(),
+                    },
+                )
+                .ok()?;
+                Some(AgentClient::existing(computer, artifact))
+            })
+            .collect())
+    }
+
+    fn selected(&self, selector: &Selector) -> Option<usize> {
         let os = match selector.platform.as_str() {
             "linux" | "ubuntu" => OperatingSystem::Linux,
             "mac" => OperatingSystem::Mac,
             "windows" => OperatingSystem::Windows,
             _ => return None,
         };
-        let found = self
-            .entries
-            .iter()
-            .filter(|e| {
-                e.config.os == os
-                    && match &selector.ssh_host {
-                        Some(alias) => {
-                            matches!(e.config.transport, TransportConfig::Ssh { .. })
-                                && (e.config.id.as_str() == alias
-                                    || e.config.metadata.get("sshAlias").and_then(Value::as_str)
-                                        == Some(alias))
-                        }
-                        None => matches!(e.config.transport, TransportConfig::Local),
+        let mut matches = self.entries.iter().enumerate().filter(|(_, entry)| {
+            entry.config.os == os
+                && match &selector.ssh_host {
+                    Some(alias) => {
+                        matches!(entry.config.transport, TransportConfig::Ssh { .. })
+                            && (entry.config.id.as_str() == alias
+                                || entry
+                                    .config
+                                    .metadata
+                                    .get("sshAlias")
+                                    .and_then(Value::as_str)
+                                    == Some(alias))
                     }
-            })
-            .collect::<Vec<_>>();
-        if found.len() != 1 {
-            return None;
-        }
-        found[0].client.clone()
+                    None => matches!(entry.config.transport, TransportConfig::Local),
+                }
+        });
+        let (index, _) = matches.next()?;
+        matches.next().is_none().then_some(index)
     }
-    fn computer(&self, selector: &Selector) -> Option<Computer> {
-        let os = match selector.platform.as_str() {
-            "linux" | "ubuntu" => OperatingSystem::Linux,
-            "mac" => OperatingSystem::Mac,
-            "windows" => OperatingSystem::Windows,
-            _ => return None,
-        };
-        let found = self
-            .entries
-            .iter()
-            .filter(|e| {
-                e.config.os == os
-                    && match &selector.ssh_host {
-                        Some(alias) => {
-                            matches!(e.config.transport, TransportConfig::Ssh { .. })
-                                && (e.config.id.as_str() == alias
-                                    || e.config.metadata.get("sshAlias").and_then(Value::as_str)
-                                        == Some(alias))
-                        }
-                        None => matches!(e.config.transport, TransportConfig::Local),
-                    }
-            })
-            .collect::<Vec<_>>();
-        if found.len() != 1 {
-            return None;
+}
+
+/// Wait for one boot initialization result without extending the caller's deadline.
+async fn loaded<T>(
+    mut receiver: watch::Receiver<Option<Arc<T>>>,
+    deadline: tokio::time::Instant,
+) -> Option<Arc<T>> {
+    tokio::time::timeout_at(deadline, async {
+        loop {
+            if let Some(value) = receiver.borrow_and_update().clone() {
+                return Some(value);
+            }
+            if receiver.changed().await.is_err() {
+                return None;
+            }
         }
-        found[0].computer.clone()
-    }
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 impl Call {
@@ -409,6 +403,7 @@ impl Agents {
             root,
             enabled_by_default,
             registry: watch::channel(None).0,
+            clients: watch::channel(None).0,
             loading: AtomicBool::new(false),
             slots: Arc::new(Semaphore::new(16)),
             active: Mutex::new(BTreeMap::new()),
@@ -418,36 +413,71 @@ impl Agents {
         &self,
         deadline: tokio::time::Instant,
     ) -> Option<Arc<Result<Registry, Failure>>> {
-        let mut loaded = self.registry.subscribe();
         if !self.loading.swap(true, Ordering::AcqRel) {
             let root = self.root.clone();
             let enabled_by_default = self.enabled_by_default;
             let ready = self.registry.clone();
+            let client_ready = self.clients.clone();
             tokio::spawn(async move {
-                // Exactly one initialization job per boot, even if its waiting HTTP request
-                // expires. A missing catalog, a known_hosts file added later, and computer or
-                // identity edits stay unavailable until the service restarts (L5 review L5).
-                // A slow mount cannot accumulate abandoned config/hash workers.
-                let result =
+                let registry =
                     tokio::task::spawn_blocking(move || Registry::load(&root, enabled_by_default))
                         .await
                         .unwrap_or_else(|_| Err(refused()));
-                ready.send_replace(Some(Arc::new(result)));
+                let registry = Arc::new(registry);
+                // Publish fixed command access before any artifact checks. Both phases settle
+                // once per boot even if the first request expires.
+                ready.send_replace(Some(registry.clone()));
+                let clients = tokio::task::spawn_blocking(move || match registry.as_ref() {
+                    Ok(registry) => registry.load_clients(),
+                    Err(_) => Err(refused()),
+                })
+                .await
+                .unwrap_or_else(|_| Err(refused()));
+                client_ready.send_replace(Some(Arc::new(clients)));
             });
         }
-        tokio::time::timeout_at(deadline, async {
-            loop {
-                if let Some(registry) = loaded.borrow_and_update().clone() {
-                    break Some(registry);
-                }
-                if loaded.changed().await.is_err() {
-                    break None;
-                }
-            }
-        })
-        .await
-        .ok()
-        .flatten()
+        loaded(self.registry.subscribe(), deadline).await
+    }
+
+    pub(crate) async fn computer(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Option<Computer> {
+        let registered = self.registered(deadline).await?;
+        let registry = registered.as_ref().as_ref().ok()?;
+        registry
+            .entries
+            .get(registry.selected(selector)?)?
+            .computer
+            .clone()
+    }
+
+    async fn checked_client(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Result<AgentClient, Failure> {
+        let timeout = || Failure::new(Cause::Timeout, "agent discovery deadline exceeded");
+        let missing = || {
+            Failure::new(
+                Cause::AgentMissing,
+                "no usable pinned agent for this computer",
+            )
+        };
+        let registered = self.registered(deadline).await.ok_or_else(timeout)?;
+        let registry = registered.as_ref().as_ref().map_err(|_| missing())?;
+        let index = registry.selected(selector).ok_or_else(missing)?;
+        let clients = loaded(self.clients.subscribe(), deadline)
+            .await
+            .ok_or_else(timeout)?;
+        clients
+            .as_ref()
+            .as_ref()
+            .ok()
+            .and_then(|clients| clients.get(index))
+            .and_then(Clone::clone)
+            .ok_or_else(missing)
     }
 
     pub(crate) async fn client(
@@ -455,12 +485,7 @@ impl Agents {
         selector: &Selector,
         deadline: tokio::time::Instant,
     ) -> Option<AgentClient> {
-        self.registered(deadline)
-            .await?
-            .as_ref()
-            .as_ref()
-            .ok()?
-            .client(selector)
+        self.checked_client(selector, deadline).await.ok()
     }
 
     pub(crate) async fn usage_hosts(&self) -> Vec<UsageHost> {
@@ -471,11 +496,18 @@ impl Agents {
         let Ok(registry) = registered.as_ref() else {
             return Vec::new();
         };
+        let Some(clients) = loaded(self.clients.subscribe(), deadline).await else {
+            return Vec::new();
+        };
+        let Ok(clients) = clients.as_ref() else {
+            return Vec::new();
+        };
         registry
             .entries
             .iter()
-            .filter(|entry| entry.client.is_some())
-            .map(|entry| {
+            .zip(clients)
+            .filter(|(_, client)| client.is_some())
+            .map(|(entry, _)| {
                 let platform = match entry.config.os {
                     OperatingSystem::Linux => "ubuntu",
                     OperatingSystem::Mac => "mac",
@@ -509,7 +541,7 @@ impl Agents {
         let client = tokio::select! {
             biased;
             _ = options.cancel.cancelled() => return Err(Failure::new(Cause::Cancelled, "app call cancelled before dispatch")),
-            ready = self.client(&selector, deadline) => ready.ok_or_else(refused)?,
+            ready = self.checked_client(&selector, deadline) => ready?,
         };
         let deadline_ms = aac_protocol::deadline_cap("apps", &args).min(
             u64::try_from(
@@ -536,6 +568,15 @@ impl Agents {
     }
 
     pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
+        self.call_inner(verb, bytes, false).await
+    }
+
+    async fn call_inner(
+        self: &Arc<Self>,
+        verb: &str,
+        bytes: &[u8],
+        internal_host: bool,
+    ) -> Response {
         let started = tokio::time::Instant::now();
         #[allow(unused_mut)]
         let Some(mut call) = Call::parse(bytes) else {
@@ -566,7 +607,8 @@ impl Agents {
         };
         #[cfg(not(unix))]
         let verb = verb;
-        if !call.valid(verb) {
+        // Only the in-process host orchestration may use the mutation verb directly.
+        if !(call.valid(verb) || internal_host && verb == "claude-host" && call.bounded(verb)) {
             return unavailable(&call.call_id, "shape");
         }
         // End before the front door's own `timeoutMs` timer, leaving time to reap the owned child
@@ -738,8 +780,7 @@ impl Agents {
             .filter(|ms| *ms > 0)?;
         let permit = self.slots.clone().try_acquire_owned().ok()?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(budget);
-        let registry = self.registered(deadline).await?;
-        let client = registry.as_ref().as_ref().ok()?.client(&computer)?;
+        let client = self.client(&computer, deadline).await?;
         let call_id = random_call_id()?;
         let args_text = serde_json::to_string(&args).ok()?;
         let wire = format!(
@@ -764,8 +805,7 @@ impl Agents {
         argv: &[std::ffi::OsString],
     ) -> Option<aac_transport::InteractiveCommand> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        let registry = self.registered(deadline).await?;
-        let computer = registry.as_ref().as_ref().ok()?.computer(selector)?;
+        let computer = self.computer(selector, deadline).await?;
         tokio::time::timeout_at(deadline, computer.interactive_command(argv, deadline))
             .await
             .ok()?
@@ -784,13 +824,9 @@ impl Agents {
         max_bytes: usize,
     ) -> Result<ProcessOutput, Cause> {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-        let registry = self.registered(deadline).await.ok_or(Cause::Refused)?;
-        let handle = registry
-            .as_ref()
-            .as_ref()
-            .ok()
-            .ok_or(Cause::Refused)?
-            .computer(&computer)
+        let handle = self
+            .computer(&computer, deadline)
+            .await
             .ok_or(Cause::Refused)?;
         let permit = self
             .slots
@@ -835,11 +871,9 @@ impl Agents {
             .try_acquire_owned()
             .map_err(|_| "busy".to_string())?;
         let deadline = started + Duration::from_millis(budget);
-        let registry = self.registered(deadline).await;
-        let client = registry
-            .as_deref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.client(&selector))
+        let client = self
+            .client(&selector, deadline)
+            .await
             .ok_or_else(|| "unavailable".to_string())?;
         let args_text = serde_json::to_string(args).map_err(|_| "shape".to_string())?;
         let wire = format!(
@@ -925,7 +959,9 @@ impl Agents {
             "computer":computer,"args":args,"deadlineMs":deadline_ms,"timeoutMs":deadline_ms+2000,
             "maxBytes":4096,"callId":id
         });
-        let response = self.call(verb, call.to_string().as_bytes()).await;
+        let response = self
+            .call_inner(verb, call.to_string().as_bytes(), true)
+            .await;
         let Ok(bytes) = axum::body::to_bytes(response.into_body(), 4096).await else {
             return MutationReply::Uncertain;
         };

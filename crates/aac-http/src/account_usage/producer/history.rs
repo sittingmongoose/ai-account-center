@@ -63,9 +63,9 @@ impl Producer {
         let options = CallOptions::new(Duration::from_secs(15), CAP);
         let selector = Selector::usage("mac", Some(alias));
         let _permit = self.agents.permit()?;
-        let client = self.agents.client(&selector, options.deadline).await?;
+        let computer = self.agents.computer(&selector, options.deadline).await?;
         let args = ["/bin/sh", "-c", READ, "aac-desktop-history", path].map(OsString::from);
-        let read = client.computer().execute(&args, &[], &options).await.ok()?;
+        let read = computer.execute(&args, &[], &options).await.ok()?;
         if read.code != Some(0) {
             return None;
         }

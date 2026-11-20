@@ -37,6 +37,15 @@ async fn json_reply(response: Response, status: StatusCode, no_store: bool) -> V
 
 #[tokio::test]
 async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker() {
+    public_transport_fixture(false).await;
+}
+
+#[tokio::test]
+async fn the_lifecycle_session_probe_reaches_the_pinned_agent() {
+    public_transport_fixture(true).await;
+}
+
+async fn public_transport_fixture(agent_on: bool) {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let password = "fixture-public-password";
@@ -46,6 +55,8 @@ async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker
         json!({
             "dashboard_auth": {"enabled":true, "username":"fixture-admin",
                 "password_hash":bcrypt::hash(password, 4).unwrap()},
+            "agentTransportSsh":{"identityFile":root.join("fixture-key"),
+                "knownHostsFile":root.join("fixture-known-hosts")}
         }),
     );
     file(
@@ -63,35 +74,118 @@ async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker
             "id":"fixture-mac","email":"fixture@example.invalid",
             "mac":{"launcherName":"Claude Fixture","launcherPath":"/Applications/Claude Fixture.app",
                 "profilePath":"/Users/fixture/Library/Application Support/Claude-fixture",
-                "sshHost":"fixture-mac"}
+                "sshHost":"jared-mac"}
+        },{
+            "id":"fixture-win","email":"windows@example.invalid",
+            "windows":{"launcherName":"Claude Fixture","profilePath":"C:\\Users\\fixture\\AppData\\Roaming\\Claude-fixture",
+                "sshHost":"jared-windows","isDefault":false}
         }]}),
     );
+    fs::write(root.join("fixture-key"), "test identity").unwrap();
+    fs::write(root.join("fixture-known-hosts"), "test host pin").unwrap();
+    fs::set_permissions(root.join("fixture-key"), fs::Permissions::from_mode(0o600)).unwrap();
+    let run = root.join("run");
+    fs::create_dir(&run).unwrap();
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
     let ssh = root.join("ssh");
     fs::write(
         &ssh,
         r#"#!/usr/bin/python3
+import base64
 import json
 from pathlib import Path
+import re
+import shlex
 import sys
 
+root = Path(__file__).parent
 args = sys.argv[1:]
 if args[0] == "-G":
     sys.exit(0)
-assert args[-3:-1] == ["--", "fixture-mac"]
+assert args[-3] == "--"
 assert "StrictHostKeyChecking=yes" in args
-assert args[-1].startswith('/usr/bin/python3 -c ')
-envelope = json.load(sys.stdin)
-assert envelope["request"] == {
-    "op": "session",
-    "profilePath": "/Users/fixture/Library/Application Support/Claude-fixture",
-    "launcherName": "Claude Fixture",
-}
-Path(__file__).with_name("host-session").write_text("session fixture-mac")
-print('{"signedIn":false}')
+host, command = args[-2:]
+assert host in {"jared-mac", "jared-windows", "nas1-agent", "alexis-windows"}
+if command.startswith("powershell.exe"):
+    assert len(command) < 8191
+    outer = base64.b64decode(command.rsplit(" ", 1)[1]).decode("utf-16-le")
+    command = base64.b64decode(re.search(r"'-EncodedCommand' '([A-Za-z0-9+/=]+)'", outer)[1]).decode("utf-16-le")
+    if "$encoded = [Console]::In.ReadToEnd()" in command:
+        command = base64.b64decode(sys.stdin.buffer.read(), validate=True).decode("utf-16-le")
+agent_program = shlex.split(command)[-1] if host == "jared-mac" else ""
+if "case 'probe'" in agent_program:
+    assert host == "jared-mac"
+    print(json.dumps({"name":"aac-agent","version":"0.1.0","protocol":1,"target":"aarch64-apple-darwin"}))
+elif "case 'run'" in agent_program:
+    request = json.loads(sys.stdin.buffer.readline())
+    if request["verb"] == "claude-host":
+        assert host == "jared-mac"
+        if request["args"]["op"] == "open":
+            (root / "agent-open").write_text(host)
+            sys.exit(1)
+        assert request["args"]["op"] == "session"
+        assert request["args"]["launcher"]["sshHost"] == host
+        receipt = "pending-session" if request["args"]["launcher"]["profilePath"].endswith("Claude-pending") else "agent-session"
+        (root / receipt).write_text(host)
+        value = {"signedIn":False}
+    else:
+        value = {"fallback":"python"}
+    print(json.dumps({"type":"result","protocol":1,"id":request["id"],"value":value}))
+elif command.startswith('/usr/bin/python3 -c '):
+    assert host == "jared-mac"
+    envelope = json.load(sys.stdin)
+    assert envelope["request"] == {
+        "op": "session",
+        "profilePath": "/Users/fixture/Library/Application Support/Claude-fixture",
+        "launcherName": "Claude Fixture",
+    }
+    (root / "host-session").write_text(host)
+    print('{"signedIn":false}')
+elif "aac-desktop-history" in command or "[IO.File]::ReadAllText($history)" in command:
+    (root / (host + "-history")).write_text(host)
+    print("CCS_DESKTOP_USAGE_MISSING")
+else:
+    if host == "jared-mac":
+        argv = shlex.split(command)
+        assert argv[:2] == ["/bin/sh", "-c"]
+        assert "/Applications/Claude Fixture.app" in argv[2]
+    else:
+        assert host == "jared-windows"
+        assert "Start-ScheduledTask" in command and "fixture-win" in command
+    (root / (host + "-open")).write_text(host)
 "#,
     )
     .unwrap();
     fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    if agent_on {
+        let accounts = root.join("accounts");
+        fs::create_dir(&accounts).unwrap();
+        fs::set_permissions(&accounts, fs::Permissions::from_mode(0o700)).unwrap();
+        file(
+            &accounts,
+            "claude-pending.json",
+            json!({"version":1,"profiles":[{
+                "id":"fixture-pending","label":"Pending fixture","createdAt":"2026-11-19T20:00:00.000Z",
+                "mac":{"launcherName":"Claude Pending","launcherPath":"/Applications/Claude Pending.app",
+                    "profilePath":"/Users/fixture/Library/Application Support/Claude-pending",
+                    "sshHost":"jared-mac"},
+                "windows":{"launcherName":"Claude Pending","profilePath":"C:\\Users\\fixture\\AppData\\Roaming\\Claude-pending",
+                    "sshHost":"jared-windows"}
+            }]}),
+        );
+        file(
+            &root,
+            "agent-catalog.json",
+            json!({"artifacts":[{
+                "file":ssh,"target":"aarch64-apple-darwin","version":"0.1.0",
+                "sha256":aac_core::sha256_hex(&fs::read(&ssh).unwrap())
+            }]}),
+        );
+    }
+    let package = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
     let path = std::env::join_paths([root.clone(), "/usr/bin".into(), "/bin".into()]).unwrap();
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
@@ -103,7 +197,10 @@ print('{"signedIn":false}')
         .env("CCS_HOME", &root)
         .env("CCS_DIR", &root)
         .env("AAC_TS_SIDECAR", "off")
-        .env("AAC_AGENT_TRANSPORT", "off")
+        .env("AAC_AGENT_TRANSPORT", if agent_on { "on" } else { "off" })
+        .env("AAC_AGENT_PACKAGE_ROOT", package)
+        .env("AAC_AGENT_CATALOG", root.join("agent-catalog.json"))
+        .env("CCS_CLAUDE_HOST_LIFECYCLE", "on")
         .env("AAC_RUST_GROUP_COLLECTION", "on")
         .env("AAC_RUST_GROUP_WRITES", "on")
         .env("AAC_RUST_GROUP_APP_UPDATES", "on")
@@ -188,10 +285,98 @@ print('{"signedIn":false}')
         "agent-off Mac sign-in probe"
     );
     assert_eq!(profile["status"], "needs_sign_in");
+    if agent_on {
+        assert_eq!(
+            fs::read_to_string(root.join("agent-session"))
+                .ok()
+                .as_deref(),
+            Some("jared-mac"),
+            "agent-on lifecycle session reached the pinned agent"
+        );
+        assert!(!root.join("host-session").exists());
+        let recheck = client
+            .post(format!(
+                "{base}/api/accounts/claude:fixture-pending/recheck"
+            ))
+            .header(header::COOKIE, cookie)
+            .header(header::ORIGIN, &base)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(r#"{"platform":"mac"}"#)
+            .send()
+            .await
+            .unwrap();
+        let state = json_reply(recheck, StatusCode::OK, true).await;
+        assert_eq!(state["account"]["status"], "needs_sign_in");
+        assert_eq!(
+            fs::read_to_string(root.join("pending-session")).unwrap(),
+            "jared-mac"
+        );
+        let uncertain = client
+            .post(format!(
+                "{base}/api/claude/desktop-profiles/fixture-mac/open"
+            ))
+            .header(header::COOKIE, cookie)
+            .header(header::ORIGIN, &base)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(r#"{"platform":"mac"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(uncertain.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            fs::read_to_string(root.join("agent-open")).unwrap(),
+            "jared-mac"
+        );
+        assert!(
+            !root.join("jared-mac-open").exists(),
+            "indeterminate Open replayed via fixed SSH"
+        );
+        child.kill().await.unwrap();
+        return;
+    }
+
     assert_eq!(
         fs::read_to_string(root.join("host-session")).unwrap(),
-        "session fixture-mac"
+        "jared-mac"
     );
+    for (platform, profile_id, host) in [
+        ("mac", "fixture-mac", "jared-mac"),
+        ("windows", "fixture-win", "jared-windows"),
+    ] {
+        let response = client
+            .post(format!(
+                "{base}/api/claude/desktop-profiles/{profile_id}/open"
+            ))
+            .header(header::COOKIE, cookie)
+            .header(header::ORIGIN, &base)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(json!({"platform":platform}).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "agent-off {platform} Open"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(format!("{host}-open"))).unwrap(),
+            host
+        );
+        let response = client
+            .get(format!(
+                "{base}/api/claude/desktop-profiles/usage?platform={platform}"
+            ))
+            .header(header::COOKIE, cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            fs::read_to_string(root.join(format!("{host}-history"))).unwrap(),
+            host
+        );
+    }
     let current = get()
         .header(header::IF_NONE_MATCH, tag.clone())
         .send()

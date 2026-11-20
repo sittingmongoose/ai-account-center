@@ -341,7 +341,7 @@ impl Profiles {
         let Some(_permit) = self.agents.permit() else {
             return HistoryRead::Failed;
         };
-        let Some(client) = self.agents.client(&selector, options.deadline).await else {
+        let Some(computer) = self.agents.computer(&selector, options.deadline).await else {
             return HistoryRead::Failed;
         };
         let argv: Vec<OsString> = if platform == "mac" {
@@ -366,7 +366,7 @@ impl Profiles {
                 OsString::from(encoded),
             ]
         };
-        let Ok(output) = client.computer().execute(&argv, &[], &options).await else {
+        let Ok(output) = computer.execute(&argv, &[], &options).await else {
             return HistoryRead::Failed;
         };
         if output.code != Some(0) {

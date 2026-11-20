@@ -26,6 +26,7 @@ pub use super::operations::CLAUDE_HISTORY_UNCONFIRMED_MESSAGE;
 const SSH_TIMEOUT_MS: u64 = 8000;
 const MAX_HISTORY_BYTES: usize = 1024 * 1024;
 const MAX_WINDOWS_COMMAND: usize = 7600;
+const WINDOWS_OPEN_BOOTSTRAP: &str = "$encoded = [Console]::In.ReadToEnd(); $script = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded)); & ([scriptblock]::Create($script)); exit $LASTEXITCODE";
 const RECENT_OPEN_MS: u64 = 1000;
 
 /// One Open's progress callbacks (the TS `ClaudeOpenObserver`).
@@ -69,13 +70,13 @@ impl SyncObserver for ObserverSync<'_> {
 /// The remote boundary: lane F's launcher verb, lane E's history verb and the reference SSH
 /// commands. The production implementation lives in `remote`; fixtures implement it in memory.
 pub trait Remote: HelperCall {
-    /// The `claude-host` open verb attempt; None when the agent cannot prove it.
+    /// Try the agent launcher and distinguish a definite non-dispatch from a transport error.
     fn host_open<'a>(
         &'a self,
         platform: &'a str,
         ssh_host: &'a str,
         args: Value,
-    ) -> Pin<Box<dyn Future<Output = Option<Value>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<AgentOpen, SshError>> + Send + 'a>>;
 
     /// One fixed reference command over the existing SSH policy.
     fn ssh_exec<'a>(
@@ -87,6 +88,15 @@ pub trait Remote: HelperCall {
         timeout_ms: u64,
         max_bytes: usize,
     ) -> Pin<Box<dyn Future<Output = Result<SshOutput, SshError>> + Send + 'a>>;
+}
+
+/// A proven outcome from the agent's Open attempt.
+#[derive(PartialEq, Eq)]
+pub enum AgentOpen {
+    /// The agent confirmed launch.
+    Opened,
+    /// The agent definitely did not run the launcher.
+    NotDispatched,
 }
 
 /// Captured reference command output.
@@ -533,12 +543,7 @@ impl ClaudeOpen {
                 "sshHost": ssh_host
             }
         });
-        if self
-            .remote
-            .host_open("mac", ssh_host, args)
-            .await
-            .is_some_and(|row| row["ok"] == json!(true))
-        {
+        if self.remote.host_open("mac", ssh_host, args).await? == AgentOpen::Opened {
             return Ok(());
         }
         let command = mac_open_command(Some(launcher_path))?;
@@ -576,24 +581,30 @@ impl ClaudeOpen {
         if let Some(list) = account_list {
             args["accountList"] = json!(list);
         }
-        if self
-            .remote
-            .host_open("windows", ssh_host, args)
-            .await
-            .is_some_and(|row| row["ok"] == json!(true))
-        {
+        if self.remote.host_open("windows", ssh_host, args).await? == AgentOpen::Opened {
             return Ok(());
         }
         let command = windows_open_command(profile_id, account_list)?;
-        // The command is the fixed powershell argv; the transport carries it as data.
-        let argv: Vec<String> = command.splitn(4, ' ').map(str::to_string).collect();
+        let (_, payload) = command.rsplit_once(' ').ok_or(OpenErrorKind::Other)?;
+        // The SSH transport wraps argv in PowerShell. Send the generated program on stdin
+        // so wrapping it cannot exceed Windows' command-line limit.
+        let argv = [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            &encode_powershell(WINDOWS_OPEN_BOOTSTRAP),
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
         let output = self
             .remote
             .ssh_exec(
                 "windows",
                 ssh_host,
                 argv,
-                None,
+                Some(payload.as_bytes().to_vec()),
                 SSH_TIMEOUT_MS,
                 MAX_HISTORY_BYTES,
             )

@@ -2,7 +2,7 @@
 //! and lane F's `claude-host` open verb through the service's L5 pool, with the packaged
 //! reference helpers and the fixed Open commands over the identical SSH policy as the
 //! fallback — exactly the attempts the TS transports make, in the same order.
-use super::open::{Remote, SshError, SshOutput};
+use super::open::{AgentOpen, Remote, SshError, SshOutput};
 use super::sync_service::HelperCall;
 use crate::agent_transport::{Agents, Selector};
 use aac_core::Cause;
@@ -219,18 +219,23 @@ impl Remote for AgentRemote {
         platform: &'a str,
         ssh_host: &'a str,
         args: Value,
-    ) -> Pin<Box<dyn Future<Output = Option<Value>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<AgentOpen, SshError>> + Send + 'a>> {
+        use crate::agent_transport::MutationReply;
         Box::pin(async move {
-            self.agents
-                .call_value(
+            match self
+                .agents
+                .call_mutation(
                     "claude-host",
-                    Self::selector(platform, ssh_host),
+                    &Self::selector(platform, ssh_host),
                     args,
-                    60000,
-                    65000,
-                    65536,
+                    60_000,
                 )
                 .await
+            {
+                MutationReply::Result(receipt) if receipt["ok"] == true => Ok(AgentOpen::Opened),
+                MutationReply::NotDispatched => Ok(AgentOpen::NotDispatched),
+                _ => Err(SshError::Failed),
+            }
         })
     }
 
