@@ -725,8 +725,12 @@ mod tests {
 
     #[test]
     fn writer_names() {
-        let machines = ["vm", "mac", "windows", "nas1"];
+        let machines = ["vm", "mac", "windows", "nas1", "alexis", "odroid", "1070ti"];
         assert!(is_writer_name("vm.t3-bdbeeaaa", &machines));
+        assert!(is_writer_name("odroid.t3-6f470382", &machines));
+        // A machine id may start with a digit; the 1070ti's writers are valid.
+        assert!(is_writer_name("1070ti.t3-bdbeeaaa", &machines));
+        assert!(!is_writer_name("gtx1070ti.lead", &machines));
         assert!(is_writer_name("windows.opus-typed-decisions", &machines));
         assert!(!is_writer_name("ubuntu.lead", &machines));
         assert!(!is_writer_name("vm.a--b", &machines));

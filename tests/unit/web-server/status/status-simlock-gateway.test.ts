@@ -136,3 +136,44 @@ describe('Status > Phones reads Simlock', () => {
     expect(view.sources.find((s) => s.id === 'simlock')?.state).toBe('error');
   });
 });
+
+describe('Status > Browsers knows which machines run a Simlock worker', () => {
+  const slot = (name: string, hostnames: string[]) => ({
+    machine: { name, label: name, hostnames },
+    state: { caps: { max_browsers: 2 }, browsers: 0, recordings: 0, sessions: [], phones: null },
+  });
+  const SLOTS = { rows: [slot('odroid', ['Odroid']), slot('gtx1070ti', ['1070ti'])] };
+  const WITH_1070TI = {
+    ...GATEWAY,
+    workers: [
+      ...GATEWAY.workers,
+      { id: 'w4', label: '1070ti', connection: 'connected', lastSeenAt: START },
+    ],
+  };
+  const browserRows = (service: StatusService) =>
+    (service as unknown as { browsers: { data: { machine: string; notes?: string[] }[] } }).browsers
+      .data;
+
+  it("takes the gateway's workers: the 1070ti's missing phone count is a problem, Odroid's is not", async () => {
+    const { service } = setup((args) =>
+      args[0] === 'slots' ? answer(SLOTS) : answer(WITH_1070TI)
+    );
+    await service.collectSimlock();
+    await service.collectBrowsers();
+    const rows = Object.fromEntries(browserRows(service).map((r) => [r.machine, r.notes]));
+    expect(Object.keys(rows)).toEqual(['odroid', '1070ti']);
+    expect(rows.odroid).toEqual([]);
+    expect(rows['1070ti']).toEqual([
+      'reported no phone count (phones: null), so phones here are unknown',
+    ]);
+  });
+
+  it('keeps every non-Windows computer as a possible worker until the gateway answers', async () => {
+    const { service } = setup((args) => (args[0] === 'slots' ? answer(SLOTS) : refused()));
+    await service.collectSimlock();
+    await service.collectBrowsers();
+    const rows = Object.fromEntries(browserRows(service).map((r) => [r.machine, r.notes]));
+    expect(rows.odroid).toHaveLength(1);
+    expect(rows['1070ti']).toHaveLength(1);
+  });
+});

@@ -95,15 +95,22 @@ export function sourceComputer(source: {
     ) ?? source.platform
   );
 }
+/** The computer a name spells exactly (its id, machine id, ssh alias or one of its names); no partial match. */
+export function exactComputer(name: string): DashboardHost | null {
+  const lower = name.toLowerCase();
+  return (
+    DASHBOARD_HOSTS.find((id) =>
+      [id, COMPUTERS[id].machineId, COMPUTERS[id].sshAlias, ...COMPUTERS[id].names].some(
+        (value) => value?.toLowerCase() === lower
+      )
+    ) ?? null
+  );
+}
 /** Exact known names first: AlexisGamingPC must never fall through to generic 'PC'. */
 export function namedComputer(name: string): DashboardHost | null {
   const lower = name.toLowerCase();
   return (
-    DASHBOARD_HOSTS.find((id) =>
-      [id, COMPUTERS[id].sshAlias, ...COMPUTERS[id].names].some(
-        (value) => value?.toLowerCase() === lower
-      )
-    ) ??
+    exactComputer(name) ??
     [...DASHBOARD_HOSTS]
       .sort((a, b) => Number(COMPUTERS[a].legacy) - Number(COMPUTERS[b].legacy))
       .find((id) => COMPUTERS[id].names.some((value) => lower.includes(value.toLowerCase()))) ??

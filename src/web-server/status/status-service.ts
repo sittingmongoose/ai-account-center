@@ -55,6 +55,7 @@ import {
   mergeBrowserRows,
   nextProblem,
   parseBrowserSlots,
+  simlockWorkerMachines,
   parseSimlockStatus,
   PmMailRegistryReader,
   SIMLOCK_FALLBACK_ITEM,
@@ -176,6 +177,8 @@ export class StatusService {
   ) as Record<MachineId, Collected<MachineSample>>;
   private browsers: Collected<BrowserMachine[]> = empty();
   private simlock: Collected<SimlockStatus> = empty();
+  /** The machines the Simlock gateway last named as running a worker; null until it answers. */
+  private simlockWorkers: MachineId[] | null = null;
   private usage: UsageInput | null = null;
   /** The aac-status handle for the spend-by-stream composer; null when there is no module. */
   private readonly spendNative: NativeStatusHandle | null;
@@ -502,7 +505,7 @@ export class StatusService {
       try {
         const rows = mergeBrowserRows(
           this.browsers.data,
-          parseBrowserSlots(JSON.parse(result.stdout)),
+          parseBrowserSlots(JSON.parse(result.stdout), this.simlockWorkers ?? undefined),
           now
         );
         this.browsers = {
@@ -540,7 +543,9 @@ export class StatusService {
       this.simlock = failed(this.simlock, commandFailure('simlock', result), now, result.missing);
     } else {
       try {
-        const status = parseSimlockStatus(JSON.parse(result.stdout));
+        const raw: unknown = JSON.parse(result.stdout);
+        const status = parseSimlockStatus(raw);
+        if (!workerOnly) this.simlockWorkers = simlockWorkerMachines(raw) ?? this.simlockWorkers;
         const before = this.simlock.problems ?? [];
         const problems: ReadProblem[] = [
           ...(workerOnly
@@ -650,8 +655,10 @@ export class StatusService {
       this.lastCollect = this.now();
       this.collecting = Promise.all([
         this.collectMachines(),
-        this.collectBrowsers(),
-        this.collectSimlock(),
+        // Simlock first: its gateway names the machines that run a worker, which the browser rows need.
+        this.collectSimlock()
+          .catch(() => undefined)
+          .then(() => this.collectBrowsers()),
         this.collectPins(),
       ])
         .then(() => undefined)
