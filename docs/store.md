@@ -260,13 +260,13 @@ recovered.
 | One app-global seglog plus successor-generation compaction for retention | changed: two logs by retention class; expiry deletes whole sealed segments |
 | Canonical non-rebuildable redb families, mandatory backup snapshots before mutation | changed: redb snapshots retain Analytics recovery copies and scanner state |
 | Tantivy, JSONL mirror, blob store, regex index | left out: no search need; the share export is the human-readable copy |
+| Project scopes, legal holds, deletion lifecycle, fallback roots and divergence commands, the I/O class taxonomy | left out: one machine, one owner, one root under `getCcsDir()` |
+| `AppendReceipt` custody (SP-286) | left out: acknowledgement is the durable append itself |
 
 The `analytics_cache` table holds scanner checkpoints and verified byte copies of retired
 Analytics caches. A redb snapshot retains these copies. A rebuild from the event logs restores the
 projected usage. To recover the original archived files or saved offsets after a quarantine, use
 the previous redb or restore a backup that includes redb.
-| Project scopes, legal holds, deletion lifecycle, fallback roots and divergence commands, the I/O class taxonomy | left out: one machine, one owner, one root under `getCcsDir()` |
-| `AppendReceipt` custody (SP-286) | left out: acknowledgement is the durable append itself |
 
 ## 3. redb tables
 
