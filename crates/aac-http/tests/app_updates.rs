@@ -117,10 +117,10 @@ async fn service_fixture_child() {
     let rows = done["results"].as_array().expect("job rows");
     assert_eq!(rows.len(), 72);
     for (status, expected) in [
-        ("updated", 5),
-        ("held", 5),
-        ("action_required", 5),
-        ("not_installed", 45),
+        ("updated", HOSTS.len()),
+        ("held", HOSTS.len()),
+        ("action_required", HOSTS.len()),
+        ("not_installed", 9 * HOSTS.len()),
     ] {
         assert_eq!(
             rows.iter().filter(|r| r["status"] == status).count(),
@@ -169,7 +169,7 @@ async fn service_fixture_child() {
             .iter()
             .filter(|v| v["status"] == "skipped")
             .count(),
-        5
+        HOSTS.len()
     );
     assert_eq!(owner.cancel().await.status, 200);
     for (_, host) in HOSTS {
