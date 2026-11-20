@@ -2362,7 +2362,7 @@
           },
           "server": {
             "version": "8.10.0",
-            "commit": "4ddd69fc",
+            "commit": "<build-commit>",
             "views": [
               "home"
             ]
@@ -2913,7 +2913,7 @@
           },
           "server": {
             "version": "8.10.0",
-            "commit": "4ddd69fc",
+            "commit": "<build-commit>",
             "views": [
               "home"
             ]
@@ -3659,6 +3659,30 @@
                 "detail": "Waiting for the first reading."
               },
               "warnings": []
+            },
+            {
+              "id": "odroid",
+              "label": "Odroid",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
             }
           ]
         },
@@ -3771,7 +3795,7 @@
                 "short": "not current",
                 "tone": "warn",
                 "section": null,
-                "detail": "Not current: Agent reports: No agent reports folder at <fixture-home>/reports; Machines: Ubuntu VM unreachable: No ssh host is configured for this machine (since <clock>). Mac unreachable: ssh failed (since <clock>). Windows PC unreachable: ssh failed (since <clock>). Alexis PC unreachable: ssh failed (since <clock>); Browsers and recordings: browser-check is not installed here (since <clock>); Simlock: simlock is not installed here (since <clock>); Account usage: Waiting for the dashboard’s first account sample; Quota watch (estimates): No quota-watch report at v1/quota/report.json."
+                "detail": "Not current: Agent reports: No agent reports folder at <fixture-home>/reports; Machines: Ubuntu VM unreachable: No ssh host is configured for this machine (since <clock>). Mac unreachable: ssh failed (since <clock>). Windows PC unreachable: ssh failed (since <clock>). Alexis PC unreachable: ssh failed (since <clock>). Odroid unreachable: ssh failed (since <clock>); Browsers and recordings: browser-check is not installed here (since <clock>); Simlock: simlock is not installed here (since <clock>); Account usage: Waiting for the dashboard’s first account sample; Quota watch (estimates): No quota-watch report at v1/quota/report.json."
               }
             ],
             "worst": null
@@ -3803,7 +3827,7 @@
             "ageSeconds": "<elapsed-seconds>",
             "staleAfterSeconds": 180,
             "state": "stale",
-            "detail": "Ubuntu VM unreachable: No ssh host is configured for this machine (since <clock>). Mac unreachable: ssh failed (since <clock>). Windows PC unreachable: ssh failed (since <clock>). Alexis PC unreachable: ssh failed (since <clock>)."
+            "detail": "Ubuntu VM unreachable: No ssh host is configured for this machine (since <clock>). Mac unreachable: ssh failed (since <clock>). Windows PC unreachable: ssh failed (since <clock>). Alexis PC unreachable: ssh failed (since <clock>). Odroid unreachable: ssh failed (since <clock>)."
           },
           {
             "id": "browsers",
@@ -3820,7 +3844,7 @@
             "asOf": null,
             "ageSeconds": null,
             "staleAfterSeconds": 180,
-            "state": "error",
+            "state": "missing",
             "detail": "simlock is not installed here (since <clock>)."
           },
           {
@@ -3883,6 +3907,11 @@
               "machine": "alexis",
               "label": "Alexis PC",
               "text": "Pinned threads unavailable on Alexis PC: it did not answer."
+            },
+            {
+              "machine": "odroid",
+              "label": "Odroid",
+              "text": "Pinned threads unavailable on Odroid: it did not answer."
             }
           ],
           "statusProblems": [],
@@ -4009,6 +4038,30 @@
             {
               "id": "alexis",
               "label": "Alexis PC",
+              "state": "unreachable",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "ssh failed (since <clock>).",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "browser-check is not installed here (since <clock>)."
+              },
+              "warnings": []
+            },
+            {
+              "id": "odroid",
+              "label": "Odroid",
               "state": "unreachable",
               "asOf": null,
               "ageSeconds": null,
