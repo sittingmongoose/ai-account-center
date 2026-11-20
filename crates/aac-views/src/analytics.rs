@@ -8,7 +8,7 @@ use crate::spread::{Admit, Refuse, Spread, req, truthy, utf16_len};
 use aac_core::{AccountKey, ProviderId};
 use aac_status::read_context::{Context, Envelope};
 use serde_json::{Map, Value, json};
-use std::{cmp::Ordering, collections::HashMap};
+use std::{borrow::Cow, cmp::Ordering, collections::HashMap};
 
 const HOUR_MS: f64 = 3_600_000.0;
 const DAY_MS: f64 = 86_400_000.0;
@@ -120,7 +120,11 @@ impl Range {
 
 /// `accountAnalyticsIdentity` (`aac_core::AccountKey`). Only ASCII addresses are admitted, so
 /// JavaScript and Rust lowercase them identically.
-fn account_identity(account: &Spread) -> Admit<String> {
+fn account_identity(account: &Account) -> Admit<Cow<'_, str>> {
+    if let Some(identity) = &account.stored_identity {
+        return Ok(Cow::Borrowed(identity));
+    }
+    let account = &account.value;
     let provider = ProviderId::new(req(account.get("provider").and_then(Value::as_str))?)
         .map_err(|_| Refuse)?;
     let id = req(account.get("id").and_then(Value::as_str))?;
@@ -130,7 +134,7 @@ fn account_identity(account: &Spread) -> Admit<String> {
         Some(_) => return Err(Refuse),
     };
     AccountKey::derive(&provider, id, email)
-        .map(|key| key.as_str().to_owned())
+        .map(|key| Cow::Owned(key.as_str().to_owned()))
         .map_err(|_| Refuse)
 }
 
@@ -157,6 +161,7 @@ fn window_identity(window: &Spread) -> Admit<String> {
 /// A dashboard account (entries) and its windows (each entries).
 struct Account {
     value: Spread,
+    stored_identity: Option<String>,
     windows: Vec<Spread>,
 }
 
@@ -168,7 +173,11 @@ fn decode_account(value: &Value) -> Admit<Account> {
         .collect::<Admit<Vec<_>>>()?;
     req(value.get("provider").and_then(Value::as_str))?;
     req(value.get("id").and_then(Value::as_str))?;
-    Ok(Account { value, windows })
+    Ok(Account {
+        value,
+        stored_identity: None,
+        windows,
+    })
 }
 
 /// One retained quota observation, with its windows decoded.
@@ -192,6 +201,49 @@ fn decode_record(value: &Value) -> Admit<Record> {
         value: object.clone(),
         windows,
     })
+}
+
+/// The historical account's identity was already resolved when the reading was stored.
+/// Desktop Claude rows are selected per platform. Other quota accounts are shared.
+fn historical_inventory(records: &[Record], registry: &Registry) -> Vec<Account> {
+    let mut seen = std::collections::HashSet::new();
+    let mut accounts = Vec::new();
+    for record in records.iter().rev() {
+        let (Some(provider), Some(id)) = (
+            record.value.get("provider").and_then(Value::as_str),
+            record.value.get("accountId").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let Some((_, label, _)) = registry
+            .table
+            .iter()
+            .find(|(known, _, _)| known == provider)
+        else {
+            continue;
+        };
+        if !seen.insert(&record.identity) {
+            continue;
+        }
+        let mut value = Spread::default();
+        for (key, field) in [
+            ("id", json!(id)),
+            ("provider", json!(provider)),
+            ("providerLabel", label.clone()),
+            ("label", json!(id)),
+            ("status", json!("unavailable")),
+            ("platform", record.value["platform"].clone()),
+        ] {
+            value.set(key, Some(field));
+        }
+        accounts.push(Account {
+            value,
+            stored_identity: Some(record.identity.clone()),
+            windows: Vec::new(),
+        });
+    }
+    accounts.reverse();
+    accounts
 }
 
 /// `dashboardRegistryFacts`.
@@ -398,10 +450,10 @@ fn account_series(
     range: &Range,
     hidden: bool,
 ) -> Admit<Series> {
-    let identity = account_identity(&account.value)?;
+    let identity = account_identity(account)?;
     let mut selected: Vec<&Record> = Vec::new();
     for record in records {
-        if record.identity != identity {
+        if record.identity != identity.as_ref() {
             continue;
         }
         let Some(sampled) = parse_time(ctx, Some(&json!(record.sampled_at)))? else {
@@ -572,11 +624,7 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
 
     let tz = text(input, "tz")?;
     let dashboard = req(input.get("dashboard").and_then(Value::as_object))?;
-    let all_accounts = req(dashboard.get("accounts").and_then(Value::as_array))?
-        .iter()
-        .map(decode_account)
-        .collect::<Admit<Vec<_>>>()?;
-    let records = match input.get("history") {
+    let mut records = match input.get("history") {
         None | Some(Value::Null) => None,
         Some(Value::Object(history)) => Some((
             history.get("collectedSince").cloned(),
@@ -587,10 +635,29 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
         )),
         Some(_) => return Err(Refuse),
     };
-    let empty = Vec::new();
-    let record_list = records.as_ref().map_or(&empty, |(_, list)| list);
+    let inventory = req(dashboard.get("accounts"))?;
+    let inventory_available = !inventory.is_null();
+    // Without the live inventory, the stored source platform can select desktop Claude history.
+    // Omit the other desktop's samples even when both desktops wrote the same identity.
+    if !inventory_available && let Some((_, list)) = records.as_mut() {
+        let platform = text(query, "platform")?;
+        list.retain(|record| {
+            record.value["provider"] != "claude" || record.value["platform"] == platform
+        });
+    }
+    let record_list = records
+        .as_ref()
+        .map_or(&[][..], |(_, list)| list.as_slice());
     let table = req(input.get("providerTable").and_then(Value::as_array))?;
     let registry = Registry::new(ctx, dashboard, table)?;
+    let all_accounts = if inventory_available {
+        req(inventory.as_array())?
+            .iter()
+            .map(decode_account)
+            .collect::<Admit<Vec<_>>>()?
+    } else {
+        historical_inventory(record_list, &registry)
+    };
     let provider_filter = text(query, "provider")?;
     let account_filter = text(query, "account")?;
     let field = |account: &Account, key: &str| -> Option<String> {
@@ -665,7 +732,7 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
             .collect();
         let mut sampled = Vec::new();
         for account in &matching {
-            if let Some(found) = latest.get(&account_identity(&account.value)?) {
+            if let Some(found) = latest.get(account_identity(account)?.as_ref()) {
                 sampled.push(found.clone());
             }
         }
@@ -738,7 +805,9 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
             Some(value) => value,
         }
     };
-    let message = if !available_history {
+    let message = if !inventory_available {
+        "Current account inventory is unavailable. Stored quota readings are shown where the account can be identified."
+    } else if !available_history {
         "Quota history could not be saved or read. Current account usage remains available."
     } else if sample_count == 0 {
         "No measured quota history is available for this selection yet."
@@ -757,7 +826,7 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
             "account": account_filter,
         },
         "history": {
-            "status": if available_history { "ok" } else { "unavailable" },
+            "status": if available_history && inventory_available { "ok" } else { "unavailable" },
             "retentionDays": if stored { STORE_RETENTION_DAYS } else { 30 },
             "collectedSince": collected_since,
             "oldestSampleAt": stamps.first(),

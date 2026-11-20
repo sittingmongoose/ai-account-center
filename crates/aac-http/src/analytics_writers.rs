@@ -593,41 +593,64 @@ pub(crate) async fn analytics_jobs(
     stop: Arc<AtomicBool>,
 ) {
     tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
-    let quota = async {
+    let state = Arc::new(Mutex::new(WriterState::default()));
+    let quota_store = Arc::clone(&store);
+    let quota_stop = Arc::clone(&stop);
+    let quota_root = ccs_dir.clone();
+    let quota = async move {
         let state = Arc::new(Mutex::new(QuotaState::default()));
         let dashboard = Arc::new(dashboard);
-        while !stop.load(Ordering::Acquire) {
-            if let Some(engine) = store.analytics_engine() {
+        while !quota_stop.load(Ordering::Acquire) {
+            if let Some(engine) = quota_store.analytics_engine() {
                 let state = state.clone();
                 let dashboard = dashboard.clone();
-                let root = ccs_dir.clone();
-                let _ = tokio::task::spawn_blocking(move || {
+                let root = quota_root.clone();
+                if let Err(error) = tokio::task::spawn_blocking(move || {
                     let now = aac_store::engine::now_ms() as i64;
                     let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
                     if now - state.last_quota_ms >= quota_interval_ms(refresh_seconds(&root)) {
                         quota_pass(&engine, dashboard(now).as_ref(), &root, &mut state, now);
                     }
                 })
+                .await
+                {
+                    report_writer_failure("quota", &error);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+        }
+    };
+    let activity_store = Arc::clone(&store);
+    let activity_stop = Arc::clone(&stop);
+    let activity_root = ccs_dir.clone();
+    let activity_state = Arc::clone(&state);
+    let activity_live = Arc::clone(&live);
+    let activity = async move {
+        let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&activity_root));
+        while !activity_stop.load(Ordering::Acquire) {
+            if let Some(engine) = activity_store.analytics_engine() {
+                let now = aac_store::engine::now_ms() as i64;
+                if activity_live.take_refresh() {
+                    activity_state
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .fetched_at = 0;
+                }
+                activity_pass(
+                    &engine,
+                    &agents,
+                    &activity_state,
+                    &activity_root,
+                    &models_dev,
+                    &activity_live,
+                    now,
+                )
                 .await;
             }
             tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
         }
     };
-    let state = Mutex::new(WriterState::default());
-    let activity = async {
-        let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&ccs_dir));
-        while !stop.load(Ordering::Acquire) {
-            if let Some(engine) = store.analytics_engine() {
-                let now = aac_store::engine::now_ms() as i64;
-                if live.take_refresh() {
-                    state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = 0;
-                }
-                activity_pass(&engine, &agents, &state, &ccs_dir, &models_dev, &live, now).await;
-            }
-            tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
-        }
-    };
-    let discovery = async {
+    let discovery = async move {
         let Some(home) = std::env::home_dir() else {
             return;
         };
@@ -637,29 +660,73 @@ pub(crate) async fn analytics_jobs(
             if now >= next && store.analytics_engine().is_some() {
                 let root = ccs_dir.clone();
                 let home = home.clone();
-                if let Ok(snapshot) = tokio::task::spawn_blocking(move || {
+                match tokio::task::spawn_blocking(move || {
                     experiment_roots::run_slice(&root, &home, now)
                 })
                 .await
                 {
-                    next = snapshot.next_slice(now);
-                    let done = next > now;
-                    state.lock().unwrap_or_else(|p| p.into_inner()).experiments =
-                        Some(Arc::new(snapshot));
-                    if done {
-                        live.request_refresh();
+                    Ok(snapshot) => {
+                        next = snapshot.next_slice(now);
+                        let done = next > now;
+                        state.lock().unwrap_or_else(|p| p.into_inner()).experiments =
+                            Some(Arc::new(snapshot));
+                        if done {
+                            live.request_refresh();
+                        }
                     }
+                    Err(error) => report_writer_failure("experiment discovery", &error),
                 }
             }
             tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
         }
     };
-    tokio::join!(quota, discovery, activity);
+    tokio::join!(
+        run_writer("quota", quota),
+        run_writer("experiment discovery", discovery),
+        run_writer("activity", activity),
+    );
+}
+
+async fn run_writer(name: &'static str, writer: impl Future<Output = ()> + Send + 'static) {
+    if let Err(error) = tokio::spawn(writer).await {
+        report_writer_failure(name, &error);
+    }
+}
+
+fn report_writer_failure(name: &'static str, error: &tokio::task::JoinError) {
+    use std::io::Write as _;
+
+    // The packaged dashboard can launch without a tracing subscriber.
+    let cause = if error.is_panic() {
+        "panicked"
+    } else {
+        "cancelled"
+    };
+    let _ = writeln!(
+        std::io::stderr(),
+        "aac-http: Analytics {name} writer task {cause}"
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn analytics_writer_failure_leaves_a_later_quota_pass_running() {
+        let (failed, after_failure) = tokio::sync::oneshot::channel();
+        let (sampled, sample) = tokio::sync::oneshot::channel();
+        let activity = async {
+            run_writer("activity", async { panic!("fixture activity failure") }).await;
+            failed.send(()).expect("quota still waiting");
+        };
+        let quota = run_writer("quota", async {
+            after_failure.await.expect("activity failure observed");
+            sampled.send(()).expect("later quota pass observed");
+        });
+        tokio::join!(activity, quota);
+        sample.await.expect("quota ran after the activity panic");
+    }
 
     #[test]
     fn analytics_local_scan_request_carries_experiment_folders() {

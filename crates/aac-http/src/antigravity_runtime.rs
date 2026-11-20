@@ -185,15 +185,54 @@ fn read_private(base: &Path, path: &Path, cap: u64) -> Option<Vec<u8>> {
     }
 }
 
-/// The newest `registry-<12 digits>.json` by name, checked as `validateState` checks it.
+/// The validated registry for callers that need a saved profile.
 pub(crate) fn read_state(ccs: &Path) -> Option<RegistryState> {
     read_document(ccs).map(|(_, state, _)| state)
 }
 
+pub(crate) enum RegistryRead<T> {
+    Absent,
+    Available(T),
+    Unreadable,
+}
+
+/// Reads the newest committed registry and preserves the reason a state is unavailable.
+pub(crate) fn read_registry(ccs: &Path) -> RegistryRead<RegistryState> {
+    match registry_document(ccs) {
+        RegistryRead::Absent => RegistryRead::Absent,
+        RegistryRead::Available((_, state, _)) => RegistryRead::Available(state),
+        RegistryRead::Unreadable => RegistryRead::Unreadable,
+    }
+}
+
 pub(crate) fn read_document(ccs: &Path) -> Option<(Value, RegistryState, i64)> {
+    match registry_document(ccs) {
+        RegistryRead::Available(document) => Some(document),
+        RegistryRead::Absent | RegistryRead::Unreadable => None,
+    }
+}
+
+fn registry_document(ccs: &Path) -> RegistryRead<(Value, RegistryState, i64)> {
     let profiles_directory = ccs.join("antigravity-profiles");
-    let name = newest_generation(&profiles_directory).ok()??;
-    let bytes = read_private(ccs, &profiles_directory.join(&name), MAX_REGISTRY_BYTES)?;
+    match profiles_directory.symlink_metadata() {
+        Ok(metadata) if metadata.is_dir() => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return RegistryRead::Absent,
+        _ => return RegistryRead::Unreadable,
+    }
+    match newest_generation(&profiles_directory) {
+        Ok(Some(name)) => decode_document(ccs, &profiles_directory, &name)
+            .map_or(RegistryRead::Unreadable, RegistryRead::Available),
+        Ok(None) => RegistryRead::Absent,
+        Err(_) => RegistryRead::Unreadable,
+    }
+}
+
+fn decode_document(
+    ccs: &Path,
+    profiles_directory: &Path,
+    name: &str,
+) -> Option<(Value, RegistryState, i64)> {
+    let bytes = read_private(ccs, &profiles_directory.join(name), MAX_REGISTRY_BYTES)?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
     let state = validate_state(&value)?;
     if name["registry-".len().."registry-".len() + 12]
@@ -510,7 +549,18 @@ pub fn inventory_with_probes(
     paused: Option<&Value>,
     problem: Option<&Value>,
 ) -> Option<Value> {
-    let mut out = inventory(ccs, live, now_ms)?;
+    Some(inventory_probe_fields(
+        inventory(ccs, live, now_ms)?,
+        paused,
+        problem,
+    ))
+}
+
+pub(crate) fn inventory_probe_fields(
+    mut out: Value,
+    paused: Option<&Value>,
+    problem: Option<&Value>,
+) -> Value {
     if let Some(problem) = aac_views::antigravity::runtime_problem_value(problem) {
         out["runtimeServiceProblem"] = problem;
     }
@@ -519,7 +569,7 @@ pub fn inventory_with_probes(
             "installedVersion": aac_views::antigravity::native_version_word(paused.get("installedVersion")),
         });
     }
-    Some(out)
+    out
 }
 
 /// [`inventory`] at the wall clock, for a route answer that has no clock of its own.
@@ -532,8 +582,21 @@ pub fn inventory_now(ccs: &Path) -> Option<Value> {
 /// proof alone. `None` declines (unreadable or invalid storage).
 pub fn inventory(ccs: &Path, live: Option<&LiveIdentity>, now_ms: i64) -> Option<Value> {
     let state = read_state(ccs)?;
-    let overlay = read_inventory(&state, live, now_ms);
-    public_inventory(&map_profiles(ccs, &state, &overlay))
+    inventory_from_state(ccs, &state, live, now_ms)
+}
+
+pub(crate) fn inventory_from_state(
+    ccs: &Path,
+    state: &RegistryState,
+    live: Option<&LiveIdentity>,
+    now_ms: i64,
+) -> Option<Value> {
+    let overlay = read_inventory(state, live, now_ms);
+    public_inventory(&map_profiles(ccs, state, &overlay))
+}
+
+pub(crate) fn empty_inventory() -> Value {
+    json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []})
 }
 
 /// `readSelectedProfileId()`.

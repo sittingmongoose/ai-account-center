@@ -28,7 +28,8 @@ pub(crate) fn encode(result: Answer, query: Option<&str>) -> Result<(u16, Vec<u8
             let activity = body.get("activity").ok_or(Decline::Shape)?;
             let refreshing = activity["refreshing"] == true || activity["status"] == "loading";
             body.insert("asOf".to_owned(), as_of);
-            body.insert("stale".to_owned(), json!(false));
+            let stale = body["history"]["status"] == "unavailable";
+            body.insert("stale".to_owned(), json!(stale));
             body.insert("refreshing".to_owned(), json!(refreshing));
             (200, value)
         }
@@ -192,27 +193,21 @@ fn platform_label(entry: &Value) -> Option<&str> {
 }
 
 /// The platform's dashboard from the fed document (`analytics-dashboard`), when the host has one.
-fn dashboard_of(snapshot: Option<&Value>, platform: &str) -> Result<Value, Decline> {
-    let Some(doc) = snapshot else {
-        return Ok(json!({ "accounts": [] }));
-    };
-    let Some(list) = doc.get("dashboards").and_then(Value::as_array) else {
-        return Ok(json!({ "accounts": [] }));
-    };
-    let found = if list.iter().any(|entry| platform_label(entry).is_some()) {
+fn dashboard_of<'a>(snapshot: Option<&'a Value>, platform: &str) -> Option<&'a Value> {
+    let list = snapshot?.get("dashboards")?.as_array()?;
+    if list.iter().any(|entry| platform_label(entry).is_some()) {
         list.iter()
             .find(|entry| platform_label(entry) == Some(platform))
             .and_then(|entry| entry.get("dashboard"))
-            .cloned()
     } else {
         // The older bare form: mac then windows, both present or neither proven.
         match (list.len(), platform) {
-            (2, "mac") => list.first().cloned(),
-            (2, _) => list.get(1).cloned(),
+            (2, "mac") => list.first(),
+            (2, _) => list.get(1),
             _ => None,
         }
-    };
-    Ok(found.unwrap_or_else(|| json!({ "accounts": [] })))
+    }
+    .filter(|dashboard| !dashboard.is_null())
 }
 
 /// IANA admission and case normalization use the same table as dashboard preferences.
@@ -273,8 +268,19 @@ pub(crate) fn compose(
     // The query object the answer carries: the route object, with the resolved tz in its place.
     query.insert("tz".into(), json!(tz.clone()));
 
-    let dashboard = dashboard_of(snapshot, &platform)?;
-    let dashboard = dashboard_entries(&dashboard)?;
+    let dashboard = if let Some(dashboard) = dashboard_of(snapshot, &platform) {
+        dashboard_entries(dashboard)?
+    } else {
+        Map::from_iter([
+            ("accounts".to_owned(), Value::Null),
+            (
+                "settings".to_owned(),
+                crate::account_reads::visibility(root)
+                    .and_then(|mut value| value.get_mut("visibility").map(Value::take))
+                    .unwrap_or(Value::Null),
+            ),
+        ])
+    };
     let now = now as f64;
     let store_engine = Arc::clone(&engine);
     let with_store = |store: &mut EngineStore| {
@@ -366,7 +372,8 @@ impl aac_views::analytics_owned::AnalyticsStore for EngineStore {
             .map_err(|_| aac_views::decline::Decline::Internal)
     }
     fn history_records(&mut self, query: Value) -> Result<Value, aac_views::decline::Decline> {
-        aac_store::ops::call(&self.engine, "historyRecords", &query.to_string())
+        let query = serde_json::from_value(query).map_err(|_| Decline::Shape)?;
+        aac_store::usage::history_records_with_provider(&self.engine, &query)
             .map_err(|_| aac_views::decline::Decline::Internal)
     }
 }
@@ -381,17 +388,31 @@ mod tests {
         let store = root.path().join("store");
         let engine = aac_store::ops::open_engine(store.to_str().expect("store path"), None, None)
             .expect("open fixture store");
+        let engine = Arc::new(engine);
+        let empty_inventory =
+            json!({"dashboards":[{"platform":"windows","dashboard":{"accounts":[]}}]});
         let answer = compose(
-            Arc::new(engine),
+            Arc::clone(&engine),
             root.path(),
-            None,
+            Some(&empty_inventory),
             &crate::analytics_live::Live::default(),
-            Some("range=7d&tz=UTC"),
+            Some("platform=windows&range=7d&tz=UTC"),
             1_795_046_400_000,
         )
         .expect("compose with the real store method schema");
         assert_eq!(answer["range"]["preset"], "7d");
         assert_eq!(answer["range"]["tz"], "UTC");
-        assert!(answer["accounts"].is_array());
+        assert_eq!(answer["accounts"], json!([]));
+        assert_eq!(answer["history"]["status"], "ok");
+        let answer = compose(
+            engine,
+            root.path(),
+            Some(&empty_inventory),
+            &crate::analytics_live::Live::default(),
+            Some("platform=mac&range=7d&tz=UTC"),
+            1_795_046_400_000,
+        )
+        .expect("missing platform leaves coverage unavailable");
+        assert_eq!(answer["history"]["status"], "unavailable");
     }
 }

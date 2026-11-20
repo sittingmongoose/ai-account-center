@@ -465,10 +465,10 @@ pub fn aggregate_sessions(rows: &[Value], pricing: &dyn Pricing) -> Vec<Value> {
         let mut breakdowns: Vec<Value> = Vec::new();
         for (model_key, mut model) in bucket.models {
             let model_name = model["modelName"].as_str().unwrap_or("").to_string();
-            let provider = model["provider"].as_str().map(str::to_string);
+            let provider = model.get("provider").and_then(Value::as_str);
             let resolved = cache
                 .entry(model_key.clone())
-                .or_insert_with(|| pricing.resolve(&model_name, provider.as_deref()))
+                .or_insert_with(|| pricing.resolve(&model_name, provider))
                 .clone();
             let rates = resolved.rates;
             let [input, output, write, read] = bucket.unlogged.get(&model_key).copied().unwrap_or([0.0; 4]);
