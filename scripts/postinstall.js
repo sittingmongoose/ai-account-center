@@ -62,7 +62,6 @@ function checkInstalledDashboard(packageRoot, platform = process.platform) {
   for (const relative of [
     ...Object.values(bin),
     'dist/native/aac-http' + suffix,
-    'dist/web-server/sidecar.js',
     'dist/antigravity/terminal-signin-entry.js',
     'dist/ui/app/index.html',
   ]) {

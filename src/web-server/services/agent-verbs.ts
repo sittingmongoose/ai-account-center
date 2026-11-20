@@ -22,9 +22,7 @@ const logger = createLogger('agent-verbs');
 export function agentTransport(): 'off' | 'on' {
   try {
     const configured = process.env.AAC_AGENT_TRANSPORT ?? loadUnifiedConfig()?.agentTransport;
-    return (configured ?? (process.env.AAC_RUST_CUT_WORKER === '1' ? 'on' : 'off')) === 'on'
-      ? 'on'
-      : 'off';
+    return configured === 'on' ? 'on' : 'off';
   } catch {
     return 'off';
   }
@@ -54,7 +52,6 @@ export interface AgentArtifact {
 /** Invalid and absent settings stay off. The environment override supports isolated gates. */
 export function agentVerbs(): AgentVerbs {
   const value = process.env.AAC_AGENT_VERBS ?? loadUnifiedConfig()?.agentVerbs;
-  if (process.env.AAC_RUST_CUT_WORKER === '1') return value === 'off' ? 'off' : 'on';
   return value === 'on' || value === 'shadow' ? value : 'off';
 }
 
@@ -122,9 +119,7 @@ export function agentVerbMode(verb: AgentVerb): AgentVerbs {
   const ceiling = agentVerbs();
   if (ceiling === 'off') return 'off';
   const families = agentVerbFamilies();
-  const cut = process.env.AAC_RUST_CUT_WORKER === '1';
-  const requested = families ? (families[verb] ?? (cut ? 'on' : 'off')) : ceiling;
-  if (cut) return requested === 'off' ? 'off' : 'on';
+  const requested = families ? (families[verb] ?? 'off') : ceiling;
   const mode = MODE_RANK[requested] <= MODE_RANK[ceiling] ? requested : ceiling;
   return mode === 'shadow' && WRITE_VERBS[verb] ? 'off' : mode;
 }

@@ -1,6 +1,6 @@
 # AI Account Center Maintainer Documentation
 
-These guides describe the Rust dashboard, its private compatibility sidecar, native bars
+These guides describe the Rust dashboard, its native owners, native bars
 and local source packaging in this continuing CCS fork. Current product source is
 [sittingmongoose/ai-account-center](https://github.com/sittingmongoose/ai-account-center).
 The original [CCS project](https://github.com/kaitranntt/ccs), authorship,

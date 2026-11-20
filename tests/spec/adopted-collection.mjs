@@ -31,7 +31,6 @@ const env = {
   CCS_HOME: base,
   HOME: base,
   CODEX_HOME: path.join(root, '.codex'),
-  AAC_TS_SIDECAR: 'off',
   AAC_AGENT_VERBS: 'off',
   AAC_AGENT_TRANSPORT: 'off',
   AAC_RUST_STORE: 'off',
@@ -101,6 +100,8 @@ const claudeHosts = purgeHosts || process.argv.includes('--claude-hosts');
 const wallet = process.argv.includes('--wallet-binding');
 const lease = process.argv.includes('--collection-lease');
 const incompatible = process.argv.includes('--incompatible-owner');
+const ownerLoss = process.argv.includes('--owner-loss');
+const storeMismatch = process.argv.includes('--store-mismatch');
 const configOff = process.argv.includes('--collection-off-config');
 const envOff = process.argv.includes('--collection-off-env');
 
@@ -405,42 +406,21 @@ try {
     assert.equal(attempt.exitCode, 1, 'a second collection owner must refuse startup');
   }
   const frontEnv = { ...env };
-  const workerSelection = path.join(root, 'worker-selection.json');
+  if (storeMismatch) frontEnv.AAC_RUST_STORE = 'on';
   if (configOff || envOff) {
     delete frontEnv.AAC_RUST_GROUP_COLLECTION;
     if (envOff) frontEnv.AAC_RUST_GROUP_COLLECTION = 'off';
-    const worker = path.join(root, 'worker.cjs');
-    await writeFile(
-      worker,
-      `
-const { writeFileSync } = require('node:fs');
-const input = require('node:readline').createInterface({ input: process.stdin });
-input.once('line', () => {
-  const selection = {
-    native: process.env.AAC_CUT_PUBLIC_COLLECTION,
-    worker: process.env.AAC_CUT_WORKER_COLLECTION,
-  };
-  writeFileSync(${JSON.stringify(workerSelection)}, JSON.stringify(selection), { mode: 0o600 });
-  const server = require('node:http').createServer((_request, response) => {
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ accounts: [], from: 'worker' }));
-  }).listen(0, '127.0.0.1', () => {
-    console.log(JSON.stringify({ sidecar: 1, port: server.address().port }));
-  });
-  input.once('close', () => server.close());
-});
-`,
-      { mode: 0o600 }
-    );
-    frontEnv.AAC_TS_SIDECAR = worker;
   }
   const front = spawn(
     launcher,
     ['dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(port)],
-    { env: frontEnv, stdio: ['ignore', 'ignore', incompatible ? 'pipe' : 'inherit'] }
+    {
+      env: frontEnv,
+      stdio: ['ignore', 'ignore', incompatible || storeMismatch ? 'pipe' : 'inherit'],
+    }
   );
   children.push(front);
-  if (incompatible) {
+  if (incompatible || storeMismatch) {
     let startupError = '';
     front.stderr.setEncoding('utf8');
     front.stderr.on('data', (text) => {
@@ -448,8 +428,8 @@ input.once('line', () => {
     });
     for (let i = 0; i < 200 && front.exitCode === null; i++) await delay(20);
     assert.equal(front.exitCode, 1, 'a live incompatible owner must prevent public startup');
-    assert.match(startupError, /an incompatible private lifecycle service must stop/);
-    console.log('Incompatible lifecycle owner regression: 1 scenario passed.');
+    assert.match(startupError, /an incompatible private service must stop/);
+    console.log('Incompatible private owner regression: 1 scenario passed.');
     process.exitCode = 0;
   } else {
     const origin = h2 ? 'https://127.0.0.1:' + tlsPort : 'http://127.0.0.1:' + port;
@@ -542,13 +522,10 @@ input.once('line', () => {
         });
         const dashboard = await send(dashboardPath, { headers: { cookie } });
         assert.equal(dashboard.status, 200);
-        assert.deepEqual(
-          {
-            ...JSON.parse(await readFile(workerSelection, 'utf8')),
-            label: label(await dashboard.json()),
-          },
-          { native: '1', worker: '0', label: 'Before' },
-          'collection off keeps the live native producer and leaves worker collection disabled'
+        assert.equal(
+          label(await dashboard.json()),
+          'Before',
+          'collection off keeps the already-leased native producer'
         );
       }
       const initial = await send(dashboardPath, { headers: { cookie } });
@@ -562,6 +539,16 @@ input.once('line', () => {
       assert.equal((await noOrigin.json()).code, 'origin_required');
       if (dead) {
         console.log('Abandoned lifecycle socket regression: 1 scenario passed.');
+      } else if (ownerLoss) {
+        await stop(service);
+        const [code] = await once(front, 'exit', { signal: AbortSignal.timeout(25_000) });
+        assert.equal(code, 1, 'a lost adopted owner asks the launcher supervisor to restart');
+        assert.equal(
+          JSON.parse(await readFile(path.join(run, 'aac-http.json'), 'utf8')).bootId,
+          bootId,
+          'the public listener does not remove an adopted service descriptor'
+        );
+        console.log('Adopted private owner loss: 1 scenario passed.');
       } else {
         const homePath = '/api/views/home?platform=mac';
         const nativeHome = process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on';

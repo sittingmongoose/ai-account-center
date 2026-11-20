@@ -41,7 +41,7 @@ const VERIFY_EVERY_MS: u64 = 7 * DAY_MS;
 /// The boot's store config, resolved once by TS at start: the open arguments it would have
 /// given the NAPI module, plus the backup job's share inputs. Absent in the boot JSON, the
 /// store stays in the TS process exactly as before.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreBoot {
     /// The Node module's compiled identity: checked before opening or migrating any files.

@@ -42,6 +42,8 @@ struct CollectionEndpoint {
     boot_id: String,
     #[serde(default)]
     native_lifecycle: bool,
+    #[serde(default)]
+    store: Option<crate::store_host::StoreBoot>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -50,6 +52,7 @@ pub(super) struct ServiceLink {
     secret: String,
     boot_id: String,
     native_lifecycle: bool,
+    store: Option<crate::store_host::StoreBoot>,
 }
 
 impl ServiceLink {
@@ -59,6 +62,7 @@ impl ServiceLink {
             secret,
             boot_id,
             native_lifecycle: false,
+            store: None,
         }
     }
 
@@ -103,6 +107,7 @@ impl ServiceLink {
                 secret: endpoint.secret,
                 boot_id: endpoint.boot_id,
                 native_lifecycle: endpoint.native_lifecycle,
+                store: endpoint.store,
             })
     }
 
@@ -113,6 +118,7 @@ impl ServiceLink {
             return Ok(None);
         };
         if link.native_lifecycle
+            && link.store == crate::store_host::StoreBoot::for_public(&root.canonicalize()?)
             && let Some(health) = link
                 .request("GET", "/api/health", HEALTH_PRINCIPAL, &[], None)
                 .await
@@ -145,6 +151,28 @@ impl ServiceLink {
                 io::ErrorKind::AlreadyExists,
                 "an incompatible private service must stop before the dashboard can start",
             )),
+        }
+    }
+
+    /// Refresh the hub projection from the adopted collector's cached dashboard.
+    /// Keep the previous publication if neither transport-neutral generation is ready.
+    pub(super) async fn publish_hub(&self, hub: &super::HubCache) {
+        let read = |path| async move {
+            let principal = r#"{"kind":"session","id":"front-door","role":"admin"}"#;
+            let reply = self.request("GET", path, principal, &[], None).await?;
+            if reply.status != 200 {
+                return None;
+            }
+            let dashboard: serde_json::Value = serde_json::from_slice(&reply.body).ok()?;
+            dashboard["accounts"].is_array().then_some(dashboard)
+        };
+        let (mac, windows) = tokio::join!(
+            read("/api/accounts/dashboard?platform=mac"),
+            read("/api/accounts/dashboard?platform=windows")
+        );
+        let dashboards: Vec<_> = mac.into_iter().chain(windows).collect();
+        if !dashboards.is_empty() {
+            hub.publish_dashboard_cache(&dashboards);
         }
     }
 
@@ -196,7 +224,7 @@ impl ServiceLink {
         .flatten()
     }
 
-    pub(super) async fn follow_status(&self, events: &super::DashboardEvents) {
+    pub(super) async fn follow_events(&self, events: &super::DashboardEvents, cut: bool) {
         let principal = r#"{"kind":"session","id":"front-door","role":"service"}"#;
         let Ok(request) = self
             .request_builder("GET", "/internal/events", principal)
@@ -211,7 +239,9 @@ impl ServiceLink {
                     .get("content-type")
                     .is_some_and(|type_| type_ == "application/x-ndjson")
             {
-                let _ = events.read_status_feed(Body::new(reply.into_body())).await;
+                let _ = events
+                    .read_owner_feed(Body::new(reply.into_body()), cut && self.native_lifecycle)
+                    .await;
             }
             drive.abort();
         }

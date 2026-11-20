@@ -87,15 +87,11 @@ apiRoutes.use((req, res, next) => {
 });
 
 // The account dashboard, native account controls and the Status tab are mounted.
-if (process.env.AAC_RUST_CUT_WORKER !== '1') {
-  apiRoutes.use('/accounts', accountDashboardRoutes);
-}
+apiRoutes.use('/accounts', accountDashboardRoutes);
 apiRoutes.use('/accounts', accountPreferencesRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
 apiRoutes.use('/accounts', accountVisibilityRoutes);
-if (process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1') {
-  apiRoutes.use('/accounts', accountLifecycleRoutes);
-}
+apiRoutes.use('/accounts', accountLifecycleRoutes);
 apiRoutes.use('/auth', authRoutes);
 apiRoutes.use('/bar', barRoutes);
 

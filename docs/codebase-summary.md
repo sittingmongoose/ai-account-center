@@ -1,14 +1,14 @@
 # AI Account Center Codebase Summary
 
-AI Account Center is a Leptos 0.9 account dashboard with a Rust public service,
-a private TypeScript compatibility worker, and Swift/WPF clients. It retains
+AI Account Center is a Leptos 0.9 account dashboard with a Rust service
+and Swift/WPF clients. It retains
 the account and private-state contracts from the original CCS fork.
 
 | Surface | Current source |
 | --- | --- |
 | Primary CLI/bootstrap | [Native command entry points](../crates/aac-http/src/cli.rs) |
 | Installed command and compatibility bins | [package.json](../package.json) |
-| Dashboard HTTP/session boundary | [Rust public listener](../crates/aac-http/src/public_auth/mod.rs), [private compatibility worker](../src/web-server/sidecar.ts) |
+| Dashboard HTTP/session boundary | [Rust public listener](../crates/aac-http/src/public_auth/mod.rs), [native owner host](../crates/aac-http/src/public_auth/owner_host.rs) |
 | Account projection | [native producer](../crates/aac-http/src/account_usage/producer.rs), [compatibility collection](../src/web-server/services/account-dashboard-service.ts) |
 | Codex saved logins | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [renewal](../src/codex-auth/codex-profile-renewal.ts), [quota reader](../src/web-server/usage/codex-quota/quota-fetcher-codex.ts) |
 | Analytics | [analytics service](../src/web-server/services/account-analytics-service.ts) |

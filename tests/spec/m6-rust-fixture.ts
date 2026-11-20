@@ -79,7 +79,6 @@ export async function startRustFixture(
       AAC_RUST_PUBLIC_LISTEN: '127.0.0.1:0',
       AAC_RUST_PUBLIC_EVENT_STDIN: eventPipe ? '1' : '0',
       ...(gracefulStdin ? { AAC_RUST_CUT_FIXTURE_STOP_STDIN: '1' } : {}),
-      AAC_TS_SIDECAR: mode === 'cut-rust-only' ? 'off' : env.AAC_TS_SIDECAR,
     },
     stdio: [eventPipe || gracefulStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     windowsHide: true,

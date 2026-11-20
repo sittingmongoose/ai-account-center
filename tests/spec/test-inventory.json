@@ -694,20 +694,6 @@
       ]
     },
     {
-      "file": "crates/aac-http/src/public_auth/collection_feed.rs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "crates/aac-http/src/public_auth/compose.rs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
       "file": "crates/aac-http/src/public_auth/dashboard_events.rs",
       "kind": "safety",
       "evidence": [
@@ -985,9 +971,8 @@
     },
     {
       "file": "crates/aac-http/tests/native_public_collection.rs",
-      "kind": "HTTP",
+      "kind": "helper",
       "evidence": [
-        "HTTP",
         "helper"
       ]
     },

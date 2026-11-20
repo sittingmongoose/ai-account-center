@@ -107,8 +107,8 @@ describe('cross-platform', () => {
         assert(fs.existsSync(path.join(distDir, 'native', name + ext)), `Missing native ${name}`);
       }
       assert(
-        fs.existsSync(path.join(distDir, 'web-server', 'sidecar.js')),
-        'Missing private worker'
+        !fs.existsSync(path.join(distDir, 'web-server', 'sidecar.js')),
+        'The native package must omit the retired worker entry point'
       );
     });
 

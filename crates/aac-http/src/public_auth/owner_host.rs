@@ -149,7 +149,7 @@ impl OwnerHost {
     /// An adopted owner keeps its own process and lease. Losing it shuts down the public
     /// listener so the next boot can reselect both the store and collection generations.
     #[cfg(unix)]
-    pub(super) async fn watch_cut(&self) {
+    pub(super) async fn watch_cut(&self, hub: &HubCache) {
         if self.embedded.lock().await.is_some() {
             loop {
                 if self
@@ -169,12 +169,13 @@ impl OwnerHost {
         };
         let mut misses = 0;
         while misses < 3 {
-            tokio::time::sleep(Duration::from_secs(5)).await;
             if link.healthy().await {
                 misses = 0;
+                link.publish_hub(hub).await;
             } else {
                 misses += 1;
             }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
 
@@ -490,7 +491,7 @@ impl OwnerHost {
             loop {
                 let started = tokio::time::Instant::now();
                 if let Some(link) = self.status_event_link().await {
-                    link.follow_status(&events).await;
+                    link.follow_events(&events, self.embed).await;
                     self.forget_link(&link);
                 }
                 if started.elapsed() >= Duration::from_secs(30) {
@@ -502,7 +503,7 @@ impl OwnerHost {
         }
         #[cfg(not(unix))]
         if let Some(owner) = self.local().await {
-            let _ = events.read_status_feed(owner.feeds.stream()).await;
+            let _ = events.read_owner_feed(owner.feeds.stream(), false).await;
         }
     }
 
@@ -845,7 +846,11 @@ mod tests {
         .unwrap();
         let ccs = root.canonicalize().unwrap();
         let descriptor = run.join("aac-http.json");
+        let target = ccs.join("untouched");
+        std::fs::write(&target, b"original").unwrap();
+        std::os::unix::fs::symlink(&target, descriptor.with_extension("json.tmp")).unwrap();
         write_descriptor(&descriptor, &ccs, &socket, &"b".repeat(64), &"c".repeat(24)).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
         let written: Value = serde_json::from_slice(&std::fs::read(&descriptor).unwrap()).unwrap();
         assert_eq!(written["ccsDir"], ccs.to_str().unwrap());
         assert_eq!(written["socketPath"], socket.to_str().unwrap());
@@ -856,6 +861,10 @@ mod tests {
         // The socket here is a regular file, so the link's socket check refuses it: the test
         // proves the descriptor, not a live link.
         assert!(ServiceLink::load(&ccs).is_none());
+        remove_descriptor(&descriptor, &ccs, &"d".repeat(24));
+        assert!(descriptor.exists());
+        remove_descriptor(&descriptor, &ccs, &"c".repeat(24));
+        assert!(!descriptor.exists());
     }
 
     /// M7: an empty private local root with neither share override opens the store. The share

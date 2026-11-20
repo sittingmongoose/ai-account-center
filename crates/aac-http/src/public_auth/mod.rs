@@ -57,19 +57,6 @@ pub use dashboard_events::{
 };
 pub use hub::HubCache;
 
-/// Publish the native producer's transport-neutral Accounts rows to the public usage hub.
-#[cfg(unix)]
-pub fn publish_native_hub(
-    directory: &std::path::Path,
-    cache: &crate::account_usage::AccountUsageCache,
-) {
-    let now = now();
-    let Some(timestamp) = storage::iso(now) else {
-        return;
-    };
-    hub::publish_native_snapshot(directory, cache.hub_dashboards(&timestamp, now));
-}
-
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
 pub struct DashboardAccess {
@@ -293,7 +280,7 @@ impl DashboardAuth {
         native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
-        let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
+        let hub = hub::Hub::new(self.0.clone(), cache, snapshot);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         let capture_writes = Arc::new(tokio::sync::Mutex::new(()));
@@ -650,7 +637,7 @@ pub(crate) async fn run_public_at(
     }
     let edges = auth.edges(
         api,
-        hub,
+        hub.clone(),
         ui_root,
         snapshot,
         !cut && !composed,
@@ -758,8 +745,9 @@ pub(crate) async fn run_public_at(
         let host = host.clone();
         let shutdown = shutdown.clone();
         let lost = owner_lost.clone();
+        let hub = hub.clone();
         tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            host.watch_cut().await;
+            host.watch_cut(&hub).await;
             lost.store(true, std::sync::atomic::Ordering::Release);
             shutdown.graceful_shutdown(Some(Duration::from_secs(3)));
         }))

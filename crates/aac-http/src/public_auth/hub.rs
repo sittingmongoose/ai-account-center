@@ -25,68 +25,6 @@ use subtle::ConstantTimeEq;
 const MOUNT: &str = "/v0/management";
 const KEY_FILE: &str = "auth/usage-hub-key.json";
 const CACHE_LIMIT: u64 = 4 * 1024 * 1024;
-pub(super) const NATIVE_SNAPSHOT: &str = "native-hub.json";
-
-#[cfg(unix)]
-pub(crate) fn publish_native_snapshot(directory: &std::path::Path, dashboards: Vec<Value>) {
-    let dashboards = dashboards
-        .into_iter()
-        .filter_map(|mut dashboard| {
-            let accounts = dashboard["accounts"].as_array_mut()?;
-            accounts.retain(|row| matches!(row["provider"].as_str(), Some("codex" | "claude")));
-            for row in &mut *accounts {
-                if let Some(fields) = row.as_object_mut() {
-                    fields.retain(|key, _| {
-                        matches!(
-                            key.as_str(),
-                            "id" | "provider"
-                                | "label"
-                                | "email"
-                                | "plan"
-                                | "sampledAt"
-                                | "fetchedAt"
-                                | "status"
-                                | "lifecycle"
-                                | "windows"
-                        )
-                    });
-                    if let Some(lifecycle) =
-                        fields.get_mut("lifecycle").and_then(Value::as_object_mut)
-                    {
-                        lifecycle.retain(|key, _| key == "state");
-                    }
-                    if let Some(windows) = fields.get_mut("windows").and_then(Value::as_array_mut) {
-                        for window in windows {
-                            if let Some(window) = window.as_object_mut() {
-                                window.retain(|key, _| {
-                                    matches!(
-                                        key.as_str(),
-                                        "key"
-                                            | "label"
-                                            | "usedPercent"
-                                            | "resetPassed"
-                                            | "kind"
-                                            | "resetAt"
-                                            | "windowMinutes"
-                                    )
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            Some(json!({"accounts": accounts}))
-        })
-        .collect::<Vec<_>>();
-    if !dashboards.is_empty()
-        && let Ok(text) = serde_json::to_string(&dashboards)
-        && text.len() as u64 <= CACHE_LIMIT
-        && aac_files::share::write_atomically(directory, NATIVE_SNAPSHOT, &text, 0o600).is_err()
-    {
-        tracing::warn!("dashboard.hub_snapshot.unpublished");
-    }
-}
-
 #[derive(Clone, Default)]
 /// Latest projection of the Mac and Windows dashboard cache, shared with the public router.
 pub struct HubCache {
@@ -120,7 +58,6 @@ impl HubCache {
 
 struct SnapshotFeed {
     path: PathBuf,
-    native: Option<PathBuf>,
     next_poll: Mutex<Option<Instant>>,
 }
 
@@ -134,12 +71,7 @@ impl SnapshotFeed {
             return;
         }
         *next_poll = Some(now + Duration::from_secs(5));
-        let dashboards = self
-            .native
-            .as_deref()
-            .and_then(Self::read)
-            .or_else(|| Self::read(&self.path));
-        if let Some(dashboards) = dashboards {
+        if let Some(dashboards) = Self::read(&self.path) {
             cache.publish_dashboard_cache(&dashboards);
         }
     }
@@ -179,15 +111,9 @@ pub(super) struct Hub {
 }
 
 impl Hub {
-    pub(super) fn new(
-        dashboard: Dashboard,
-        cache: HubCache,
-        snapshot: Option<PathBuf>,
-        cut: bool,
-    ) -> Self {
+    pub(super) fn new(dashboard: Dashboard, cache: HubCache, snapshot: Option<PathBuf>) -> Self {
         let feed = snapshot.filter(|path| path.is_absolute()).map(|path| {
             Arc::new(SnapshotFeed {
-                native: (cut && cfg!(unix)).then(|| path.with_file_name(NATIVE_SNAPSHOT)),
                 path,
                 next_poll: Mutex::new(None),
             })

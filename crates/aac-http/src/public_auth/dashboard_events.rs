@@ -199,12 +199,23 @@ impl DashboardEvents {
             .await
     }
 
-    /// Bridge only the Status hint from the existing private service feeds.
-    pub(super) async fn read_status_feed(&self, body: Body) -> io::Result<()> {
+    /// Bridge Status and, for an adopted collector, its lifecycle hints.
+    pub(super) async fn read_owner_feed(&self, body: Body, lifecycle: bool) -> io::Result<()> {
         let stream = body.into_data_stream().map_err(io::Error::other);
         self.read_frames(tokio_util::io::StreamReader::new(stream), |frame| {
             let event = serde_json::from_slice::<serde_json::Value>(frame).ok()?;
-            (event["event"] == "status-changed").then_some(DashboardEvent::StatusChanged {})
+            if event["event"] == "status-changed" {
+                return Some(DashboardEvent::StatusChanged {});
+            }
+            if lifecycle
+                && matches!(
+                    event["type"].as_str(),
+                    Some("accounts-changed" | "signin-job")
+                )
+            {
+                return serde_json::from_value(event).ok();
+            }
+            None
         })
         .await
     }

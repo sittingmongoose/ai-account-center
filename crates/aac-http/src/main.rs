@@ -184,36 +184,13 @@ async fn run() {
     let native =
         std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--native-collection"));
     let result = if native {
-        let mut inputs = aac_http::NativeAccountUsage::default();
-        if std::env::var("AAC_RUST_CUT_WORKER").as_deref() == Ok("1") {
-            let directory = std::env::var_os("AAC_CUT_HUB_DIRECTORY")
-                .map(std::path::PathBuf::from)
-                .filter(|path| path.is_absolute());
-            let facts_directory = directory.clone();
-            inputs.companions = std::sync::Arc::new(move || {
-                let mut facts = aac_http::account_usage::producer::CompanionInputs::default();
-                if let Some(directory) = &facts_directory {
-                    facts.load_lifecycle(directory);
-                }
-                let build = env!("AAC_BUILD_COMMIT");
-                let commit = build.get(..8).filter(|prefix| {
-                    build.len() == 40 && prefix.bytes().all(|byte| byte.is_ascii_hexdigit())
-                });
-                let mut server =
-                    serde_json::json!({"version": env!("AAC_VERSION"), "commit": commit});
-                if std::env::var("AAC_CUT_OFFER_HOME").as_deref() == Ok("1") {
-                    server["views"] = serde_json::json!(["home"]);
-                }
-                facts.server = Some(server);
-                facts
-            });
-            if let Some(directory) = directory {
-                inputs.published = std::sync::Arc::new(move |cache| {
-                    aac_http::public_auth::publish_native_hub(&directory, cache);
-                });
-            }
-        }
-        aac_http::serve_with_native_account_usage(boot, shutdown, Default::default(), inputs).await
+        aac_http::serve_with_native_account_usage(
+            boot,
+            shutdown,
+            Default::default(),
+            Default::default(),
+        )
+        .await
     } else if std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1") {
         aac_http::serve_composed(boot, shutdown).await
     } else {
