@@ -328,6 +328,9 @@ fn stored_window(safe: &Map<String, Value>) -> Option<WindowObs> {
 
 /// `storeWindow`: one whitelisted window in the store's shape.
 pub fn store_window(value: &Value) -> Option<WindowObs> {
+    if value["status"] == "unavailable" {
+        return None;
+    }
     stored_window(&analytics_window(value)?)
 }
 

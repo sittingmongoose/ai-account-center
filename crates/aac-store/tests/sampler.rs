@@ -115,3 +115,76 @@ fn sampler_matches_the_ts_writer_end_to_end() {
     let _ = tally;
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn unavailable_t3_quota_window_never_becomes_a_reading() {
+    let dir = temp_dir("unavailable-t3-quota");
+    let engine = ops::open_engine(dir.to_str().unwrap(), None, None).expect("open engine");
+    let now = 1_794_700_800_000;
+    let at = |ms| aac_num::ecma::to_iso_string(ms).expect("timestamp");
+    let snapshot = |ms, used, cli| {
+        json!({
+            "id": "antigravity:fixture", "provider": "antigravity", "status": "ok", "source": "fixture", "host": "windows",
+            "sampledAt": at(ms), "windows": [
+                {"key": "gemini-weekly", "label": "Gemini weekly (app)", "poolId": "gemini-app", "usedPercent": used},
+                cli,
+            ]
+        })
+    };
+    let first = snapshot(
+        now,
+        27,
+        json!({
+            "key": "cli-gemini-weekly", "label": "Gemini weekly (T3)", "poolId": "gemini-cli", "usedPercent": 40,
+        }),
+    );
+    let later = now + 600_000;
+    let failed = snapshot(
+        later,
+        28,
+        json!({
+            "key": "cli-gemini-weekly", "label": "Gemini weekly (T3)", "poolId": "gemini-cli",
+            "status": "unavailable", "usedPercent": null,
+        }),
+    );
+    assert_eq!(
+        sampler::record_sample(&engine, &[first], now)
+            .expect("first sample")
+            .sampled,
+        1
+    );
+    assert_eq!(
+        sampler::record_sample(&engine, &[failed], later)
+            .expect("later sample")
+            .sampled,
+        1
+    );
+    let history = ops::call(
+        &engine,
+        "historyRecords",
+        &json!({
+            "fromMs": now, "toMs": later, "nowMs": later, "thinning": { "kind": "history" }
+        })
+        .to_string(),
+    )
+    .expect("history");
+    let records = history.as_array().expect("records");
+    let windows = records
+        .iter()
+        .filter_map(|record| record["windows"].as_array())
+        .flatten()
+        .collect::<Vec<_>>();
+    let cli = windows
+        .iter()
+        .filter(|window| window["key"] == "cli-gemini-weekly")
+        .collect::<Vec<_>>();
+    assert!(!cli.is_empty(), "the original CLI reading stays in history");
+    assert!(cli.iter().all(|window| window["usedPercent"].as_f64() == Some(40.0)));
+    assert!(
+        windows
+            .iter()
+            .any(|window| window["key"] == "gemini-weekly" && window["usedPercent"].as_f64() == Some(28.0))
+    );
+    drop(engine);
+    std::fs::remove_dir_all(&dir).ok();
+}
