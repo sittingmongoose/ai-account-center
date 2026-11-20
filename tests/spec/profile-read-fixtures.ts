@@ -599,14 +599,14 @@ export function antigravityInventoryForms(): Form[] {
       setup: inventory({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
     },
     {
-      name: 'inventory: paused update, runtime problem, Unicode, offsets',
+      name: 'inventory: leftover paused marker ignored, runtime problem, Unicode, offsets',
       route,
       rust: true,
       setup: inventory(full),
     },
     { name: 'inventory: device token', route, rust: true, role: 'device', setup: inventory(full) },
     {
-      name: 'inventory: truthy non-object pause, unknown problem reason',
+      name: 'inventory: truthy leftover pause ignored, unknown problem reason',
       route,
       rust: true,
       setup: inventory({
