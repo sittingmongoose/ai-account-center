@@ -2371,6 +2371,30 @@
                 "detail": "Waiting for the first reading."
               },
               "warnings": []
+            },
+            {
+              "id": "1070ti",
+              "label": "1070ti",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
             }
           ]
         },
@@ -2700,6 +2724,30 @@
             {
               "id": "odroid",
               "label": "Odroid",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "1070ti",
+              "label": "1070ti",
               "state": "stale",
               "asOf": null,
               "ageSeconds": null,
