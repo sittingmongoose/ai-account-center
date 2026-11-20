@@ -20,7 +20,7 @@ fn freshness_cycle_boundary_and_missing_numbers_are_honest() {
 }
 
 #[test]
-fn a_new_install_signal_without_measured_data_is_not_current() {
+fn a_new_install_signal_does_not_establish_activity() {
     let home = tempfile::tempdir().unwrap();
     let bin = home.path().join(".local/bin").join(if cfg!(windows) {
         "cursor-agent.cmd"
@@ -35,7 +35,13 @@ fn a_new_install_signal_without_measured_data_is_not_current() {
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let answer = scan(home.path(), None);
-    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    let found = &answer["discovery"]["kinds"]["cursor"];
+    assert_eq!(found["installed"], true);
+    assert_eq!(found["signals"], json!(["binary"]));
+    assert_eq!(
+        found["freshness"],
+        json!({"state":"unknown","newestDataMs":null,"newestActivityMs":null,"activityComplete":true}),
+    );
     assert!(answer["rows"].as_array().unwrap().is_empty());
 }
 

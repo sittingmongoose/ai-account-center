@@ -402,8 +402,7 @@ pub fn omp_config_roots(home: &Path, instances: &[T3Instance]) -> Vec<PathBuf> {
     roots
 }
 
-fn binary_mtime(home: &Path, env: &Env, names: &[&str]) -> Option<i64> {
-    let mut newest: Option<i64> = None;
+fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
     let mut dirs: Vec<PathBuf> = env
         .get("PATH")
         .map(|path| std::env::split_paths(path).collect())
@@ -426,22 +425,18 @@ fn binary_mtime(home: &Path, env: &Env, names: &[&str]) -> Option<i64> {
                     {
                         use std::os::unix::fs::PermissionsExt;
                         if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
-                            newest = newest.into_iter().chain([util::mtime_ms(&meta)]).max();
+                            return true;
                         }
                     }
                     #[cfg(not(unix))]
                     if meta.is_file() {
-                        newest = newest.into_iter().chain([util::mtime_ms(&meta)]).max();
+                        return true;
                     }
                 }
             }
         }
     }
-    newest
-}
-
-fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
-    binary_mtime(home, env, names).is_some()
+    false
 }
 
 fn tool_binaries(kind: &str) -> &'static [&'static str] {
@@ -607,27 +602,6 @@ pub fn freshness(
         _ => "unknown",
     };
     json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity, "activityComplete": activity_complete})
-}
-
-fn install_activity(home: &Path, env: &Env, kind: &str) -> Option<i64> {
-    let relative = match kind {
-        "claude" => ".claude",
-        "codex" => ".codex",
-        "omp" => ".omp",
-        "muse" => ".local/share/muse",
-        "zcode" => ".zcode",
-        "antigravity" => ".gemini/antigravity",
-        "cursor" => ".cursor",
-        "devin" => ".local/share/devin",
-        _ => return None,
-    };
-    // Stat a link itself: its target may be an unavailable mount.
-    fs::symlink_metadata(home.join(relative))
-        .ok()
-        .map(|m| util::mtime_ms(&m))
-        .into_iter()
-        .chain(binary_mtime(home, env, tool_binaries(kind)))
-        .max()
 }
 
 /// Read only T3's provider projection metadata. The tool's own instance configuration resolves
@@ -984,7 +958,8 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
     }) + failed.map_or(0, |s| s.len());
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
-    let mut activity = newest.into_iter().chain(install_activity(home, env, kind)).max();
+    // Tool homes and binaries show installation. Only the logs and thread records date activity.
+    let mut activity = newest;
     let activity_deadline = collector.deadline().min(Instant::now() + Duration::from_millis(750));
     let mut activity_limited = false;
     // Independent metadata also catches log formats the usage reader did not recognize.

@@ -80,6 +80,93 @@ fn origins(answer: &Value, kind: &str) -> Vec<(String, u64)> {
 }
 
 #[test]
+fn credential_and_settings_refreshes_leave_usage_freshness_at_the_log() {
+    use std::io::Write;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let at = aac_usage::util::iso_ms(AT).unwrap();
+    let set_mtime = |path: &Path, millis: i64| {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_millis(millis as u64)))
+            .unwrap();
+    };
+    for (kind, log_dir, filename, auth, settings, line) in [
+        (
+            "claude",
+            "projects/project",
+            "fixture.jsonl",
+            ".credentials.json",
+            "settings.json",
+            claude_line("m1", "s1", "/home/u/proj"),
+        ),
+        (
+            "codex",
+            "sessions/2026/10/01",
+            "rollout-2026-10-01T15-00-00-fixture.jsonl",
+            "auth.json",
+            "config.toml",
+            codex_rollout("s1", 100),
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let tool_home = h.join(format!(".{kind}"));
+        let log = tool_home.join(log_dir).join(filename);
+        write(&log, &line);
+        set_mtime(&log, at);
+
+        // Atomic refreshes change the parent directory mtime.
+        for name in [auth, settings, "token.json"] {
+            let file = tool_home.join(name);
+            write(&file, "{}");
+            let replacement = file.with_extension("tmp");
+            write(&replacement, "{\"fixture\":true}");
+            fs::rename(replacement, file).unwrap();
+        }
+
+        let scan = || protocol::scan(&request(&[kind]), h, &env(h));
+        let idle = scan();
+        assert_eq!(events(&idle, kind), 1, "{kind}");
+        assert_eq!(
+            idle["discovery"]["kinds"][kind]["freshness"],
+            json!({"state":"current","newestDataMs":at,"newestActivityMs":at,"activityComplete":true}),
+            "{kind}",
+        );
+
+        // A changed session log may contain newer activity without a new measured usage row.
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .unwrap()
+            .write_all(b"{}\n")
+            .unwrap();
+        let grown_at = at + 3_600_000;
+        set_mtime(&log, grown_at);
+        let grown = scan();
+        assert_eq!(
+            grown["discovery"]["kinds"][kind]["freshness"],
+            json!({"state":"stale","newestDataMs":at,"newestActivityMs":grown_at,"activityComplete":true}),
+            "{kind}",
+        );
+
+        let new = log.with_file_name("rollout-2026-10-01T17-00-00-new.jsonl");
+        write(&new, "{}\n");
+        let new_at = grown_at + 3_600_000;
+        set_mtime(&new, new_at);
+        let added = scan();
+        assert_eq!(events(&added, kind), 1, "{kind}");
+        assert_eq!(
+            added["discovery"]["kinds"][kind]["freshness"],
+            json!({"state":"stale","newestDataMs":at,"newestActivityMs":new_at,"activityComplete":true}),
+            "{kind}",
+        );
+    }
+}
+
+#[test]
 fn codex_reads_archived_sessions_of_every_home() {
     let home = tempfile::tempdir().unwrap();
     let h = home.path();
