@@ -1354,19 +1354,19 @@
         "logs": null,
         "checkpoints": {
           "activity/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "capture/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "runs/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 3
           },
           "usage/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           }
         },
@@ -1403,19 +1403,19 @@
         "logs": null,
         "checkpoints": {
           "activity/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "capture/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "runs/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 3
           },
           "usage/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           }
         },
@@ -1453,19 +1453,19 @@
         "logs": null,
         "checkpoints": {
           "activity/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "capture/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "runs/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 3
           },
           "usage/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           }
         },
@@ -3851,7 +3851,7 @@
           "complete": false
         },
         "pinned": {
-          "asOfMs": 1795132185943,
+          "asOfMs": "<pin-time>",
           "head": "0 pinned in T3",
           "counts": {
             "pinned": 0,
