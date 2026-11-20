@@ -8,7 +8,6 @@ import {
   startNativeStoreServer,
 } from '../../../support/native-store-server';
 
-const worker = process.env.AAC_STATUS_TEST_WORKER;
 describe.skipIf(!haveNativeStoreServer)('Status with the history store off', () => {
   const switches = [
     ['AAC_STORE=off', 'off', {}],
@@ -23,7 +22,7 @@ describe.skipIf(!haveNativeStoreServer)('Status with the history store off', () 
         const root = await mkdtemp(path.join(os.tmpdir(), 'aac-status-store-off-'));
         let fixture: Awaited<ReturnType<typeof startNativeStoreServer>> | undefined;
         try {
-          fixture = await startNativeStoreServer(root, store, { ...settings, worker });
+          fixture = await startNativeStoreServer(root, store, settings);
           const { send, cookie, url } = fixture;
           const headers = { cookie, origin: url };
           for (const [route, view] of [
@@ -76,7 +75,7 @@ describe.skipIf(!haveNativeStoreServer)('Status with the history store off', () 
         JSON.stringify({ version: 2, accounts: [account] }),
         { mode: 0o600 }
       );
-      fixture = await startNativeStoreServer(root, 'off', { collection: true, worker });
+      fixture = await startNativeStoreServer(root, 'off', { collection: true });
       const { send, cookie, url } = fixture;
       const headers = { cookie, origin: url };
       const dashboard = await send('/api/accounts/dashboard', { headers });

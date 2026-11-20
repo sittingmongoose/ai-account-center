@@ -31,6 +31,7 @@ const ENDPOINT_HEADER: &str = "x-aac-service-boot";
 /// The private transport's reply cap: the largest route answer (a media chunk or a view).
 const REPLY_CAP: usize = 16 * 1024 * 1024;
 const DEADLINE: Duration = Duration::from_secs(10);
+const HEALTH_PRINCIPAL: &str = r#"{"kind":"session","id":"public-health","role":"public"}"#;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +42,8 @@ struct CollectionEndpoint {
     boot_id: String,
     #[serde(default)]
     native_lifecycle: bool,
+    #[serde(default)]
+    store: Option<crate::store_host::StoreBoot>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -49,9 +52,26 @@ pub(super) struct ServiceLink {
     secret: String,
     boot_id: String,
     native_lifecycle: bool,
+    store: Option<crate::store_host::StoreBoot>,
 }
 
 impl ServiceLink {
+    pub(super) fn embedded(socket: PathBuf, secret: String, boot_id: String) -> Self {
+        Self {
+            socket,
+            secret,
+            boot_id,
+            native_lifecycle: false,
+            store: None,
+        }
+    }
+
+    pub(super) async fn healthy(&self) -> bool {
+        self.request("GET", "/api/health", HEALTH_PRINCIPAL, &[], None)
+            .await
+            .is_some_and(|reply| reply.status == 200)
+    }
+
     /// `run/aac-http.json` under the boot root, checked exactly as the store publisher does:
     /// the file is private, the socket is the named boot folder's own socket with the private
     /// owner and mode, and the tokens are the shapes the service writes.
@@ -87,19 +107,21 @@ impl ServiceLink {
                 secret: endpoint.secret,
                 boot_id: endpoint.boot_id,
                 native_lifecycle: endpoint.native_lifecycle,
+                store: endpoint.store,
             })
     }
 
     /// Select a ready, compatible boot once. A live incompatible listener may still own
     /// collection, including a pre-lease build. Its supervisor must stop it before startup.
     pub(super) async fn acquire_lifecycle(root: &Path) -> io::Result<Option<Self>> {
-        let Some(link) = Self::load(root).filter(|link| link.native_lifecycle) else {
+        let Some(link) = Self::load(root) else {
             return Ok(None);
         };
-        let principal = r#"{"kind":"session","id":"public-health","role":"public"}"#;
-        if let Some(health) = link
-            .request("GET", "/api/health", principal, &[], None)
-            .await
+        if link.native_lifecycle
+            && link.store == crate::store_host::StoreBoot::for_public(&root.canonicalize()?)
+            && let Some(health) = link
+                .request("GET", "/api/health", HEALTH_PRINCIPAL, &[], None)
+                .await
         {
             let binary = std::env::current_exe()?.with_file_name("aac-http");
             let expected =
@@ -127,8 +149,30 @@ impl ServiceLink {
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "an incompatible private lifecycle service must stop before collection can start",
+                "an incompatible private service must stop before the dashboard can start",
             )),
+        }
+    }
+
+    /// Refresh the hub projection from the adopted collector's cached dashboard.
+    /// Keep the previous publication if neither transport-neutral generation is ready.
+    pub(super) async fn publish_hub(&self, hub: &super::HubCache) {
+        let read = |path| async move {
+            let principal = r#"{"kind":"session","id":"front-door","role":"admin"}"#;
+            let reply = self.request("GET", path, principal, &[], None).await?;
+            if reply.status != 200 {
+                return None;
+            }
+            let dashboard: serde_json::Value = serde_json::from_slice(&reply.body).ok()?;
+            dashboard["accounts"].is_array().then_some(dashboard)
+        };
+        let (mac, windows) = tokio::join!(
+            read("/api/accounts/dashboard?platform=mac"),
+            read("/api/accounts/dashboard?platform=windows")
+        );
+        let dashboards: Vec<_> = mac.into_iter().chain(windows).collect();
+        if !dashboards.is_empty() {
+            hub.publish_dashboard_cache(&dashboards);
         }
     }
 
@@ -180,7 +224,7 @@ impl ServiceLink {
         .flatten()
     }
 
-    pub(super) async fn follow_status(&self, events: &super::DashboardEvents) {
+    pub(super) async fn follow_events(&self, events: &super::DashboardEvents, cut: bool) {
         let principal = r#"{"kind":"session","id":"front-door","role":"service"}"#;
         let Ok(request) = self
             .request_builder("GET", "/internal/events", principal)
@@ -195,7 +239,9 @@ impl ServiceLink {
                     .get("content-type")
                     .is_some_and(|type_| type_ == "application/x-ndjson")
             {
-                let _ = events.read_status_feed(Body::new(reply.into_body())).await;
+                let _ = events
+                    .read_owner_feed(Body::new(reply.into_body()), cut && self.native_lifecycle)
+                    .await;
             }
             drive.abort();
         }

@@ -1782,9 +1782,7 @@ async fn serve_inner(
     fs::set_permissions(&boot.socket_path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
-    let cut_boot = boot.embedded_dashboard
-        || native.is_some()
-        || std::env::var("AAC_RUST_CUT_WORKER").as_deref() == Ok("1");
+    let cut_boot = boot.embedded_dashboard || native.is_some();
     let agents = Arc::new(crate::agent_transport::Agents::with_default(
         boot.ccs_dir.clone(),
         cut_boot,

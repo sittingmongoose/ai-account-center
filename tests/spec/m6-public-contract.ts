@@ -1,6 +1,6 @@
 /**
  * Replay the M0 request/role inventory against a Rust TCP front door.
- * --cut uses the shipped CLI with its private worker. --cut-rust-only disables the worker.
+ * --cut exercises the shipped default. --cut-rust-only requires all selected native replies.
  * Unix cut modes require a parity-fixtures binary for the original synthetic app jobs.
  * --require-complete fails for any changed answer or explicit unmounted route.
  * --route-group=<name> selects one worker-removal lane and implies --require-complete.
@@ -133,26 +133,6 @@ if (mode !== 'fixture') {
   // The recorded registry fixture has no Codex CLI. Mask command discovery as well as homes.
   environment.CCS_CODEX_PATH = path.join(root, 'fixture-missing-codex');
 }
-if (mode === 'cut') {
-  const preload = path.join(spec, 'm6-cut-worker-fixture.cjs').split(path.sep).join('/');
-  Object.assign(environment, {
-    NODE_OPTIONS: [environment.NODE_OPTIONS, '--require=' + JSON.stringify(preload)]
-      .filter(Boolean)
-      .join(' '),
-    AAC_RUST_STORE: 'on',
-    AAC_RUST_GROUP_STATUS: 'on',
-    AAC_RUST_GROUP_SCOREBOARD: 'on',
-    AAC_RUST_GROUP_HOME: 'on',
-    AAC_RUST_HOME_VIEW: 'off',
-    AAC_RUST_GROUP_APP_UPDATES: 'off',
-    // Both boots exercise the same native collection and public route owners.
-    AAC_RUST_GROUP_COLLECTION: 'on',
-    AAC_AGENT_VERBS: 'off',
-    AAC_AGENT_TRANSPORT: 'off',
-    AAC_STATUS_DOORBELL: 'off',
-    AAC_STORE_SHARE_BACKUP_DIR: 'off',
-  });
-}
 if (mode !== 'fixture') {
   // Capture recorded the profile reads with these homes, and the strict Rust-only front door
   // reads the same Codex and Claude locations.
@@ -165,6 +145,11 @@ if (mode !== 'fixture') {
     LOCALAPPDATA: path.join(root, 'AppData', 'Local'),
     CODEX_HOME: path.join(root, '.codex'),
     CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
+    AAC_AGENT_VERBS: 'off',
+    AAC_AGENT_TRANSPORT: 'off',
+    AAC_STATUS_DOORBELL: 'off',
+    AAC_STORE_SHARE_BACKUP_DIR: 'off',
+    AAC_RUST_GROUP_RENEWAL: 'off',
     AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
     AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
     AAC_T3_STATE_DB: path.join(root, 'fixture-pins.sqlite'),
@@ -173,16 +158,12 @@ if (mode !== 'fixture') {
       : {}),
   });
 }
-if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')) {
+if (mode !== 'fixture') {
   Object.assign(environment, {
     AAC_RUST_CUT_NATIVE_ROUTES:
       mode === 'cut-rust-only' ? 'on' : (environment.AAC_RUST_CUT_NATIVE_ROUTES ?? 'off'),
     AAC_RUST_GROUP_APP_UPDATES: 'on',
     AAC_RUST_GROUP_COLLECTION: 'on',
-    AAC_AGENT_VERBS: 'off',
-    AAC_AGENT_TRANSPORT: 'off',
-    AAC_STATUS_DOORBELL: 'off',
-    AAC_STORE_SHARE_BACKUP_DIR: 'off',
   });
 }
 
@@ -393,7 +374,6 @@ try {
     // Use the same local collection generation in the recording and replay.
     Object.assign(environment, {
       AAC_RUST_GROUP_HOME: 'on',
-      AAC_TS_SIDECAR: 'off',
     });
   }
   if (group === undefined && mode !== 'fixture') {
@@ -703,7 +683,10 @@ console.log('M0 declines: ' + [...declined].join(', '));
 if (different.length) console.log('M0 differences:\n' + different.join('\n'));
 assert.equal(owned.failed, 0, 'M6-owned M0 contract');
 assert.equal(resets.failed, 0, 'Rust reset M0 contract');
-if (!recordNative && (group !== undefined || process.argv.includes('--require-complete')))
+if (
+  !recordNative &&
+  (mode === 'cut-rust-only' || group !== undefined || process.argv.includes('--require-complete'))
+)
   assert.equal(counts.decline + counts.different, 0, 'Rust M0 cutover gate');
 if (registryOutput !== undefined) {
   assert.equal(Object.keys(registryRecords).length, 2, 'record both registry roles');

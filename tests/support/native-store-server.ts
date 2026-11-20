@@ -19,7 +19,7 @@ const credentials = { username: 'fixture-admin', password: 'fixture-password-onl
 export async function startNativeStoreServer(
   root: string,
   store = 'on',
-  options: { rustStore?: 'off'; configStore?: 'off'; worker?: string; collection?: boolean } = {}
+  options: { rustStore?: 'off'; configStore?: 'off'; collection?: boolean } = {}
 ) {
   await writeFile(
     path.join(root, 'config.yaml'),
@@ -57,22 +57,9 @@ export async function startNativeStoreServer(
       AAC_AGENT_TRANSPORT: 'off',
       AAC_AGENT_VERBS: 'off',
       AAC_STATUS_DOORBELL: 'off',
-      ...(options.worker
-        ? {
-            AAC_TS_SIDECAR: options.worker,
-            NODE_OPTIONS:
-              '--require=' +
-              JSON.stringify(
-                path
-                  .resolve(__dirname, '../spec/m6-cut-worker-fixture.cjs')
-                  .split(path.sep)
-                  .join('/')
-              ),
-          }
-        : {}),
     },
     false,
-    options.worker ? 'cut' : 'cut-rust-only'
+    'cut-rust-only'
   );
   const send = (route: string, options: RequestInit = {}) =>
     fetch(server.url + route, {

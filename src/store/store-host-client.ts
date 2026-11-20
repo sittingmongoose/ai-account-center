@@ -15,39 +15,12 @@ import {
   RustStoreError,
 } from '../web-server/rust-service-transport';
 import { loadNativeStore, type NativeLoadResult, type NativeStoreHandle } from './native-loader';
-import { requestNativeStore } from '../web-server/native-collection-feed';
 
 /** Shutdown must reach the supervisor even when a store call never settles. */
 export const STORE_CLOSE_DEADLINE_MS = 3000;
 
 function serviceDown(): Error {
   return new RustStoreError('service_down: the store service is not answering');
-}
-
-/** Windows worker clients attach to the dashboard's in-process store. The dashboard owns close. */
-export class DashboardStoreHandle implements NativeStoreHandle {
-  private closed = false;
-
-  async call(method: string, args: string): Promise<string> {
-    if (method === 'close') {
-      this.closed = true;
-      return '{"closed":true}';
-    }
-    if (this.closed) throw new RustStoreError('closed: the store client is stopping');
-    if (!/^[A-Za-z0-9]{1,32}$/.test(method))
-      throw new RustStoreError('invalid: unknown store method');
-    const route = method === 'open' ? 'status' : method;
-    const response = await requestNativeStore(`/store/${route}`, {
-      method: 'POST',
-      body: method === 'open' ? '{}' : args,
-    }).catch(() => {
-      throw serviceDown();
-    });
-    if (response.ok) return response.text();
-    const failure = (await response.json().catch(() => null)) as { error?: unknown } | null;
-    if (typeof failure?.error === 'string') throw new RustStoreError(failure.error);
-    throw serviceDown();
-  }
 }
 
 export class SocketStoreHandle implements NativeStoreHandle {
@@ -68,7 +41,6 @@ export class SocketStoreHandle implements NativeStoreHandle {
       env?: NodeJS.ProcessEnv;
       load?: () => NativeLoadResult;
       onFallback?: () => void;
-      fallback?: boolean;
     } = {}
   ) {}
 
@@ -127,7 +99,7 @@ export class SocketStoreHandle implements NativeStoreHandle {
 
   /** The supervisor gave up: fall back now, not on some later sample. Never rejects. */
   hostGaveUp(): void {
-    if (this.closing || this.options.fallback === false) return;
+    if (this.closing) return;
     void this.fallbackToNative().catch(() => {
       /* The next call retries; the failure names itself there. */
     });
@@ -225,7 +197,6 @@ export class SocketStoreHandle implements NativeStoreHandle {
    * holds the lock; a `lock_held` here names a holder this dashboard does not own.
    */
   private async fallbackToNative(): Promise<void> {
-    if (this.options.fallback === false) throw serviceDown();
     if (this.native) return;
     this.nativeOpening ??= (async () => {
       const loaded = (this.options.load ?? (() => loadNativeStore({ env: this.options.env })))();

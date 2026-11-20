@@ -233,7 +233,6 @@ else:
         .env("PATH", path)
         .env("CCS_HOME", &root)
         .env("CCS_DIR", &root)
-        .env("AAC_TS_SIDECAR", "off")
         .env("AAC_AGENT_TRANSPORT", if agent_on { "on" } else { "off" })
         .env("AAC_AGENT_PACKAGE_ROOT", package)
         .env("AAC_AGENT_CATALOG", root.join("agent-catalog.json"))
@@ -646,29 +645,6 @@ async fn rust_answers_disabled_collection(env_override: bool) {
             "rustService":{"groups":{"collection":if env_override {"on"} else {"off"}}}
         }),
     );
-    let script = root.join("worker.js");
-    fs::write(&script, r#"
-        const http = require('node:http');
-        const readline = require('node:readline');
-        const input = readline.createInterface({input: process.stdin});
-        input.once('line', proof => {
-            const server = http.createServer((req, res) => {
-                const context = JSON.parse(Buffer.from(req.headers['x-aac-compose-access'], 'base64url'));
-                if (req.headers['x-aac-compose-proof'] !== proof ||
-                    context.principal.kind !== 'session' ||
-                    process.env.AAC_CUT_WORKER_COLLECTION === '1') {
-                    res.writeHead(403).end();
-                    return;
-                }
-                res.writeHead(200, {'Content-Type': 'application/json'});
-                res.end(JSON.stringify({from: 'worker', method: req.method, path: req.url}));
-            }).listen(0, '127.0.0.1', () => {
-                console.log(JSON.stringify({sidecar:1,port:server.address().port}));
-            });
-            input.once('close', () => server.close());
-        });
-    "#).unwrap();
-
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
     drop(socket);
@@ -678,7 +654,7 @@ async fn rust_answers_disabled_collection(env_override: bool) {
         .arg(address.port().to_string())
         .env("CCS_HOME", &root)
         .env("CCS_DIR", &root)
-        .env("AAC_TS_SIDECAR", &script)
+        .env("AAC_TS_SIDECAR", root.join("worker-must-not-start.js"))
         .env("AAC_AGENT_TRANSPORT", "off")
         .env("AAC_RUST_GROUP_HOME", "off")
         .env("AAC_RUST_GROUP_USAGESNAPSHOT", "off")

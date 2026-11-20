@@ -347,7 +347,7 @@ impl ResetRoutes {
         let account = &work.account;
         let result = self.path();
         let source =
-            reset_source_route::SourceContext::from_env(&self.root, super::sidecar::package_root())
+            reset_source_route::SourceContext::from_env(&self.root, super::running_package_root())
                 .with_log(self.log.clone());
         if matches!(route, Route::Inventory) {
             let inventory = result.and_then(|db| {

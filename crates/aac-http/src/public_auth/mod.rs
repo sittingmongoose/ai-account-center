@@ -4,7 +4,6 @@
 #![allow(clippy::result_large_err)]
 mod analytics_routes;
 mod app_updates_owner;
-mod collection_feed;
 mod compose;
 mod dashboard_events;
 mod devices;
@@ -25,7 +24,6 @@ mod reset_routes;
 mod routes;
 #[cfg(unix)]
 mod service_link;
-mod sidecar;
 mod static_ui;
 mod storage;
 mod tls;
@@ -58,19 +56,6 @@ pub use dashboard_events::{
     SignInError, SignInResult, SignInVerification,
 };
 pub use hub::HubCache;
-
-/// Publish the native producer's transport-neutral Accounts rows to the public usage hub.
-#[cfg(unix)]
-pub fn publish_native_hub(
-    directory: &std::path::Path,
-    cache: &crate::account_usage::AccountUsageCache,
-) {
-    let now = now();
-    let Some(timestamp) = storage::iso(now) else {
-        return;
-    };
-    hub::publish_native_snapshot(directory, cache.hub_dashboards(&timestamp, now));
-}
 
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
@@ -295,7 +280,7 @@ impl DashboardAuth {
         native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
-        let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
+        let hub = hub::Hub::new(self.0.clone(), cache, snapshot);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         let capture_writes = Arc::new(tokio::sync::Mutex::new(()));
@@ -366,13 +351,11 @@ impl DashboardAuth {
                 };
                 return native_group::handle(group.as_ref(), &access, request).await;
             }
-            if let Some(backend) = backend
+            if !cut
+                && let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
             {
-                if !cut || compose::cut_route(request.method(), request.uri().path()) {
-                    return backend.forward(request).await;
-                }
-                return plain(404, "API endpoint was not found.");
+                return backend.forward(request).await;
             }
             let headers = request.headers();
             let session = (!api_path(&request.uri().path().to_ascii_lowercase()))
@@ -519,16 +502,8 @@ pub(crate) async fn run_public_at(
         }
         groups
     });
-    let mut worker = if cut {
-        sidecar::Sidecar::start(&root, address, native_collection).await?
-    } else {
-        None
-    };
     let (snapshot, backend) = if cut {
-        (
-            worker.as_ref().map(|child| child.cache.clone()),
-            worker.as_ref().map(|child| child.backend.clone()),
-        )
+        (None, None)
     } else {
         (
             std::env::var_os("AAC_RUST_HUB_CACHE").map(PathBuf::from),
@@ -539,31 +514,22 @@ pub(crate) async fn run_public_at(
     let composed = backend.is_some();
     let owner_host =
         (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    #[cfg(unix)]
+    if let Some(host) = owner_host.as_ref().filter(|_| cut) {
+        host.start_cut(adopted.clone(), groups.is_some_and(|groups| groups.renewal))
+            .await?;
+    }
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
-        host.start_public(groups, hub.clone(), auth.events())?;
+        if let Err(error) = host.start_public(groups, hub.clone(), auth.events()) {
+            host.stop().await;
+            return Err(error);
+        }
         host.public_owners()
     } else {
         None
     };
-    if let Some(feed) = worker
-        .as_ref()
-        .and_then(|worker| worker.collection.as_ref())
-    {
-        #[cfg(windows)]
-        if let Some(host) = &owner_host {
-            feed.set_store(host);
-        }
-        #[cfg(unix)]
-        if let Some(link) = adopted.clone() {
-            feed.set_adopted(link);
-        }
-        if let Some(cache) = native.as_ref().and_then(|owner| owner.profile_inputs().1) {
-            feed.set_local(cache);
-        }
-    }
-    // The settings group registers its own routes when the owner host is on; without the host
-    // the `edges` fallback answers them, so the shipped worker keeps its cutover switch.
+    // Settings may register directly or use the native edge handlers.
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let group_routes = owner_host
@@ -669,10 +635,10 @@ pub(crate) async fn run_public_at(
     }
     let edges = auth.edges(
         api,
-        hub,
+        hub.clone(),
         ui_root,
         snapshot,
-        !composed,
+        !cut && !composed,
         backend,
         cut.then(|| root.clone()),
         native,
@@ -742,42 +708,48 @@ pub(crate) async fn run_public_at(
     // G10: Windows has no private service, so the public process runs the saved-login timer.
     // Unix keeps the one timer the private service starts (two would renew the same logins).
     #[cfg(not(unix))]
-    if cut {
-        let home = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let service = aac_renewal::service::CodexProfileRenewalService::new(
-            aac_renewal::service::CodexProfileRenewalServiceDeps {
-                ccs_dir: root.clone(),
-                renewal: aac_renewal::renewal::CodexProfileRenewalOptions {
-                    env: aac_renewal::planner::CodexRenewalEnvironment {
-                        ccs_dir: root.clone(),
-                        codex_home: Some(home.join(".codex")),
-                        home_dir: Some(home),
+    let renewal = groups
+        .filter(|groups| groups.renewal)
+        .and_then(|_| owner_host::renewal_home())
+        .map(|home| {
+            let service = aac_renewal::service::CodexProfileRenewalService::new(
+                aac_renewal::service::CodexProfileRenewalServiceDeps {
+                    ccs_dir: root.clone(),
+                    renewal: aac_renewal::renewal::CodexProfileRenewalOptions {
+                        env: aac_renewal::planner::CodexRenewalEnvironment {
+                            ccs_dir: root.clone(),
+                            codex_home: Some(home.join(".codex")),
+                            home_dir: Some(home),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
                     ..Default::default()
                 },
-                ..Default::default()
-            },
-        );
-        let (keep, stop) = tokio::sync::watch::channel(false);
-        tokio::spawn(async move {
-            let _keep = keep;
-            std::future::pending::<()>().await;
+            );
+            let (keep, stop) = tokio::sync::watch::channel(false);
+            (
+                keep,
+                tokio::spawn(async move { service.run_until(stop).await }),
+            )
         });
-        tokio::spawn(async move {
-            service.run_until(stop).await;
-        });
-    }
     let shutdown = axum_server::Handle::new();
     let signal = shutdown.clone();
     let feed_shutdown = shutdown.clone();
-    let worker_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let worker_feed = worker
-        .as_mut()
-        .and_then(|child| child.attach(auth.events(), shutdown.clone(), worker_lost.clone()));
+    #[cfg(unix)]
+    let owner_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    #[cfg(unix)]
+    let owner_watch = owner_host.as_ref().filter(|_| cut).map(|host| {
+        let host = host.clone();
+        let shutdown = shutdown.clone();
+        let lost = owner_lost.clone();
+        let hub = hub.clone();
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            host.watch_cut(&hub).await;
+            lost.store(true, std::sync::atomic::Ordering::Release);
+            shutdown.graceful_shutdown(Some(Duration::from_secs(3)));
+        }))
+    });
     let feed_task = (!cut && std::env::var("AAC_RUST_PUBLIC_EVENT_STDIN").as_deref() == Ok("1"))
         .then(|| {
             let events = auth.events();
@@ -827,24 +799,23 @@ pub(crate) async fn run_public_at(
     if let Some(feed) = feed_task {
         feed.abort();
     }
-    if let Some(feed) = worker_feed {
-        feed.abort();
-        let _ = feed.await;
-    }
+    #[cfg(unix)]
+    drop(owner_watch);
     if let Some(host) = &owner_host {
         host.stop_public().await;
     }
-    if let Some(worker) = worker {
-        worker.stop().await;
+    #[cfg(not(unix))]
+    if let Some((stop, task)) = renewal {
+        let _ = stop.send(true);
+        let _ = task.await;
     }
     if let Some(host) = &owner_host {
         host.stop().await;
     }
     auth.flush();
-    if result.is_ok() && worker_lost.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err(std::io::Error::other(
-            "the private dashboard sidecar stopped",
-        ));
+    #[cfg(unix)]
+    if result.is_ok() && owner_lost.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(std::io::Error::other("the private dashboard owner stopped"));
     }
     result
 }
@@ -859,9 +830,17 @@ async fn cut_diagnostics(axum::Extension(access): axum::Extension<DashboardAcces
     reply
 }
 
+fn running_package_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors()
+        .skip(1)
+        .find(|root| root.join("package.json").is_file() && root.join("dist").is_dir())
+        .map(std::path::Path::to_path_buf)
+}
+
 fn record_public_build(root: &std::path::Path) {
     use aac_files::deployed_build::{read_packaged_build, record_running_build};
-    let build = sidecar::package_root()
+    let build = running_package_root()
         .as_deref()
         .and_then(read_packaged_build);
     let home = std::env::home_dir().unwrap_or_default();

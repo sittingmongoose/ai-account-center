@@ -53,7 +53,6 @@ RUN test -f crates/aac-store/prebuilt/*.node \
 RUN test -x dist/native/ai-account-center \
   && test -x dist/native/ccs \
   && test -x dist/native/aac-http \
-  && test -s dist/web-server/sidecar.js \
   && test -s dist/ui/app/index.html \
   && test -s dist/ui/ui-build-manifest.json \
   && node scripts/verify-bundle.js \

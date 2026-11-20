@@ -92,9 +92,9 @@ export default (ctx) => {
 					CCS_DIR: path.join(s.home, '.ccs'), AAC_AGENT_VERBS: 'off', AAC_AGENT_TRANSPORT: 'off',
 					AAC_STORE_SHARE_BACKUP_DIR: 'off', SSH_AUTH_SOCK: '',
 					...(rustOwned ? {
-						AAC_TS_SIDECAR: 'off', AAC_RUST_CUT_NATIVE_ROUTES: 'off',
+						AAC_RUST_CUT_NATIVE_ROUTES: 'off',
 						AAC_RUST_GROUP_COLLECTION: 'off', AAC_RUST_GROUP_RENEWAL: 'off'
-					} : rustHome ? { AAC_TS_SIDECAR: 'off' } : {})
+					} : {})
 				} : { ...(rustHome
 					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
 					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off' }),

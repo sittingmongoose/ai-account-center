@@ -1,17 +1,8 @@
 //! The public front door's one owner host.
 //!
-//! A worker-removal route group needs the owners that already exist (readers, store, journal,
-//! feed producers). There is exactly one owner per fact:
-//!
-//! - When a private service is running, its descriptor (`run/aac-http.json`) is the endpoint and
-//!   every request goes over that socket. Nothing is started here.
-//! - When no endpoint exists (the worker-less cut boot, and Windows once the service compiles
-//!   there), this host starts the *same* private service in-process with the boot the
-//!   supervisor resolves, and writes the same descriptor. The service's own jobs, store and
-//!   readers run once; no group copies a collector, a cache or a journal.
-//!
-//! A group registers with [`OwnerHost::request`] (and its own admission/encoding), never with a
-//! second copy of an owner. The cut always uses this host for migrated routes.
+//! Unix pins a compatible private service for the lifetime of the dashboard or starts the
+//! same service in its own runtime. Windows runs the shared owners and store in-process.
+//! Route groups keep public admission and encoding and use the host for owner operations.
 
 #[cfg(unix)]
 use super::service_link::ServiceLink;
@@ -41,8 +32,9 @@ pub(super) struct ServiceReply {
 
 pub(super) struct OwnerHost {
     root: PathBuf,
-    /// Start the in-process service for a worker-less cut boot (`dashboard` with no backend).
-    /// A composition fixture has a backend and its own supervisor: never a second service there.
+    /// The cut pins its private generation. The legacy composition fixture follows its
+    /// reference supervisor's descriptor.
+    #[cfg(unix)]
     embed: bool,
     #[cfg(unix)]
     link: Mutex<Option<ServiceLink>>,
@@ -75,8 +67,10 @@ struct PublicOwners {
 #[cfg(unix)]
 struct Embedded {
     stop: tokio::sync::oneshot::Sender<()>,
-    task: tokio::task::JoinHandle<()>,
-    descriptor: PathBuf,
+    task: tokio_util::task::AbortOnDropHandle<()>,
+    descriptor: aac_files::OwnedStore,
+    boot_id: String,
+    link: ServiceLink,
 }
 
 /// Whether this boot answers its groups itself.
@@ -93,8 +87,11 @@ fn random_hex<const N: usize>() -> Option<String> {
 
 impl OwnerHost {
     pub(super) fn new(root: PathBuf, embed: bool) -> std::sync::Arc<Self> {
+        #[cfg(not(unix))]
+        let _ = embed;
         std::sync::Arc::new(Self {
             root,
+            #[cfg(unix)]
             embed,
             #[cfg(unix)]
             link: Mutex::new(None),
@@ -118,6 +115,60 @@ impl OwnerHost {
 
     pub(super) fn root(&self) -> &Path {
         &self.root
+    }
+
+    #[cfg(unix)]
+    pub(super) async fn start_cut(
+        &self,
+        adopted: Option<ServiceLink>,
+        renewal: bool,
+    ) -> std::io::Result<()> {
+        let mut embedded = self.embedded.lock().await;
+        let link = if let Some(link) = adopted {
+            link
+        } else {
+            let boot = self.start_embedded(renewal).await.ok_or_else(|| {
+                std::io::Error::other("could not start the private dashboard owner")
+            })?;
+            let link = boot.link.clone();
+            *embedded = Some(boot);
+            link
+        };
+        *self.link.lock().unwrap_or_else(|p| p.into_inner()) = Some(link);
+        Ok(())
+    }
+
+    /// An adopted owner keeps its own process and lease. Losing it shuts down the public
+    /// listener so the next boot can reselect both the store and collection generations.
+    #[cfg(unix)]
+    pub(super) async fn watch_cut(&self, hub: &HubCache) {
+        if self.embedded.lock().await.is_some() {
+            loop {
+                if self
+                    .embedded
+                    .lock()
+                    .await
+                    .as_ref()
+                    .is_none_or(|boot| boot.task.is_finished())
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+        let Some(link) = self.published_link() else {
+            return;
+        };
+        let mut misses = 0;
+        while misses < 3 {
+            if link.healthy().await {
+                misses = 0;
+                link.publish_hub(hub).await;
+            } else {
+                misses += 1;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
     }
 
     /// Register one named in-process route group. Its router is merged into the public API
@@ -302,7 +353,7 @@ impl OwnerHost {
     #[cfg(unix)]
     fn published_link(&self) -> Option<ServiceLink> {
         let mut held = self.link.lock().unwrap_or_else(|p| p.into_inner());
-        if held.is_none() {
+        if held.is_none() && !self.embed {
             #[cfg(test)]
             self.descriptor_lookups
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -313,35 +364,32 @@ impl OwnerHost {
 
     #[cfg(unix)]
     fn forget_link(&self, failed: &ServiceLink) {
+        if self.embed {
+            return;
+        }
         let mut held = self.link.lock().unwrap_or_else(|p| p.into_inner());
         if held.as_ref() == Some(failed) {
             *held = None;
         }
     }
 
-    /// The service's endpoint: a running one's descriptor, else the in-process service this
-    /// host starts for a worker-less boot. Windows has no private service yet: no link there.
+    /// The cut selects its owner before starting the listener. The reference can still be
+    /// waiting on its own supervisor.
     #[cfg(unix)]
     async fn link(&self) -> Option<ServiceLink> {
         if let Some(link) = self.published_link() {
             return Some(link);
         }
-        if !self.embed {
-            // A supervisor-owned service may still be starting (the public listener binds
-            // first). Wait briefly for its descriptor instead of declining the first request.
-            for _ in 0..100 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if let Some(link) = self.published_link() {
-                    return Some(link);
-                }
-            }
+        if self.embed {
             return None;
         }
-        let mut embedded = self.embedded.lock().await;
-        if embedded.as_ref().is_none_or(|boot| boot.task.is_finished()) {
-            *embedded = self.start_embedded().await;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if let Some(link) = self.published_link() {
+                return Some(link);
+            }
         }
-        self.published_link()
+        None
     }
 
     /// Whether a private service (running or started here) answers this boot.
@@ -435,7 +483,7 @@ impl OwnerHost {
             loop {
                 let started = tokio::time::Instant::now();
                 if let Some(link) = self.status_event_link().await {
-                    link.follow_status(&events).await;
+                    link.follow_events(&events, self.embed).await;
                     self.forget_link(&link);
                 }
                 if started.elapsed() >= Duration::from_secs(30) {
@@ -447,7 +495,7 @@ impl OwnerHost {
         }
         #[cfg(not(unix))]
         if let Some(owner) = self.local().await {
-            let _ = events.read_status_feed(owner.feeds.stream()).await;
+            let _ = events.read_owner_feed(owner.feeds.stream(), false).await;
         }
     }
 
@@ -479,7 +527,7 @@ impl OwnerHost {
         if let Some(embedded) = embedded {
             let _ = embedded.stop.send(());
             let _ = embedded.task.await;
-            let _ = std::fs::remove_file(&embedded.descriptor);
+            remove_descriptor(&embedded.descriptor, &embedded.boot_id);
         }
         #[cfg(not(unix))]
         {
@@ -492,9 +540,7 @@ impl OwnerHost {
         }
     }
 
-    /// The boot the supervisor resolves for a plain cut: the store under `<ccs>/store` and the
-    /// owned readers on the share roots. The readers resolve their own defaults when no root is
-    /// named (the worker's rule).
+    /// The private boot combines the store settings and share readers under one owner.
     #[cfg(unix)]
     fn boot_config(&self) -> Option<Json> {
         let reports = std::env::var("AAC_AGENT_REPORTS_DIR").ok();
@@ -529,10 +575,15 @@ impl OwnerHost {
     }
 
     #[cfg(unix)]
-    async fn start_embedded(&self) -> Option<Embedded> {
-        let config = self.boot_config()?;
+    async fn start_embedded(&self, renewal: bool) -> Option<Embedded> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let mut config = self.boot_config()?;
+        if renewal && let Some(home) = renewal_home() {
+            config["renewal"] = json!({"codexHome": home.join(".codex"), "homeDir": home});
+        }
         let socket = PathBuf::from(config.get("socketPath")?.as_str()?);
         let ccs = PathBuf::from(config.get("ccsDir")?.as_str()?);
+        let uid = std::fs::metadata(&ccs).ok()?.uid();
         let secret = config.get("secret")?.as_str()?.to_owned();
         let boot_id = config.get("bootId")?.as_str()?.to_owned();
         let boot = crate::unix::Boot::from_json(config.to_string().as_bytes()).ok()?;
@@ -540,9 +591,16 @@ impl OwnerHost {
         if !prepare_run_dir(&ccs, &socket) {
             return None;
         }
-        let descriptor = ccs.join("run").join("aac-http.json");
+        let descriptor = match aac_files::OwnedStore::claim_dashboard_service(&ccs) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                tracing::warn!(%error, "could not claim the private owner descriptor");
+                let _ = std::fs::remove_dir(socket.parent()?);
+                return None;
+            }
+        };
         let (stop, stopped) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(async move {
+        let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             if let Err(error) = crate::unix::serve(boot, async {
                 let _ = stopped.await;
             })
@@ -550,27 +608,58 @@ impl OwnerHost {
             {
                 tracing::warn!(%error, "the in-process private service stopped");
             }
-        });
-        // The service binds before it serves; the socket appearing is its readiness signal.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !socket.exists() {
-            if task.is_finished() || tokio::time::Instant::now() >= deadline {
-                task.abort();
-                return None;
+        }));
+        let link = ServiceLink::embedded(socket.clone(), secret.clone(), boot_id.clone());
+        // Binding proves the owner started. Optional Status and Scoreboard share reads must
+        // not hold the public listener's readiness behind their filesystem latency.
+        let ready = tokio::time::timeout(Duration::from_secs(10), async {
+            while !task.is_finished() {
+                if std::fs::symlink_metadata(&socket).is_ok_and(|meta| {
+                    meta.file_type().is_socket()
+                        && meta.uid() == uid
+                        && meta.mode() & 0o777 == 0o600
+                }) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            false
+        })
+        .await
+        .is_ok_and(|ready| ready);
+        if !ready {
+            task.abort();
+            let _ = task.await;
+            let _ = std::fs::remove_dir(socket.parent()?);
+            return None;
         }
         if write_descriptor(&descriptor, &ccs, &socket, &secret, &boot_id).is_err() {
             let _ = stop.send(());
             let _ = task.await;
+            remove_descriptor(&descriptor, &boot_id);
             return None;
         }
         Some(Embedded {
             stop,
             task,
             descriptor,
+            boot_id,
+            link,
         })
     }
+}
+
+pub(super) fn renewal_home() -> Option<PathBuf> {
+    let variables = if cfg!(windows) {
+        &["USERPROFILE", "HOME"][..]
+    } else {
+        &["HOME"][..]
+    };
+    variables.iter().find_map(|variable| {
+        std::env::var_os(variable)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    })
 }
 
 /// The supervisor's socket layout, including a private short path on deeply nested homes.
@@ -649,7 +738,7 @@ fn prepare_run_dir(ccs: &Path, socket: &Path) -> bool {
 #[cfg(unix)]
 fn owned_0700(meta: &std::fs::Metadata, euid: u32) -> bool {
     use std::os::unix::fs::MetadataExt;
-    meta.uid() == euid && meta.mode() & 0o777 == 0o700
+    meta.is_dir() && meta.uid() == euid && meta.mode() & 0o777 == 0o700
 }
 
 /// The readers' roots for a boot that names none: each resolves the worker's default (the
@@ -664,15 +753,13 @@ fn share_roots(reports: Option<&str>, registry: Option<&str>) -> (PathBuf, PathB
 /// The supervisor's descriptor (`run/aac-http.json`), written the way the front door reads it:
 /// private 0600, replaced atomically, holding the boot's own id and secret.
 #[cfg(unix)]
-pub(super) fn write_descriptor(
-    path: &Path,
+fn write_descriptor(
+    descriptor: &aac_files::OwnedStore,
     ccs: &Path,
     socket: &Path,
     secret: &str,
     boot_id: &str,
 ) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let body = json!({
         "ccsDir": ccs,
         "socketPath": socket,
@@ -680,16 +767,18 @@ pub(super) fn write_descriptor(
         "bootId": boot_id,
     })
     .to_string();
-    let temporary = path.with_extension("json.tmp");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    file.write_all(body.as_bytes())?;
-    file.sync_all()?;
-    std::fs::rename(&temporary, path)
+    descriptor
+        .write(body.as_bytes())
+        .map_err(std::io::Error::other)
+}
+
+#[cfg(unix)]
+fn remove_descriptor(descriptor: &aac_files::OwnedStore, boot_id: &str) {
+    if let Ok(bytes) = descriptor.read()
+        && serde_json::from_slice::<Json>(&bytes).is_ok_and(|row| row["bootId"] == boot_id)
+    {
+        let _ = descriptor.remove();
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -754,18 +843,30 @@ mod tests {
         )
         .unwrap();
         let ccs = root.canonicalize().unwrap();
-        let descriptor = run.join("aac-http.json");
-        write_descriptor(&descriptor, &ccs, &socket, &"b".repeat(64), &"c".repeat(24)).unwrap();
-        let written: Value = serde_json::from_slice(&std::fs::read(&descriptor).unwrap()).unwrap();
+        let lease = aac_files::OwnedStore::claim_dashboard_service(&ccs).unwrap();
+        assert!(aac_files::OwnedStore::claim_dashboard_service(&ccs).is_err());
+        let descriptor = lease.path();
+        let target = ccs.join("untouched");
+        std::fs::write(&target, b"original").unwrap();
+        std::os::unix::fs::symlink(&target, descriptor.with_extension("json.tmp")).unwrap();
+        write_descriptor(&lease, &ccs, &socket, &"b".repeat(64), &"c".repeat(24)).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        let written: Value = serde_json::from_slice(&std::fs::read(descriptor).unwrap()).unwrap();
         assert_eq!(written["ccsDir"], ccs.to_str().unwrap());
         assert_eq!(written["socketPath"], socket.to_str().unwrap());
         let mode = std::os::unix::fs::PermissionsExt::mode(
-            &std::fs::metadata(&descriptor).unwrap().permissions(),
+            &std::fs::metadata(descriptor).unwrap().permissions(),
         );
         assert_eq!(mode & 0o777, 0o600);
         // The socket here is a regular file, so the link's socket check refuses it: the test
         // proves the descriptor, not a live link.
         assert!(ServiceLink::load(&ccs).is_none());
+        remove_descriptor(&lease, &"d".repeat(24));
+        assert!(descriptor.exists());
+        remove_descriptor(&lease, &"c".repeat(24));
+        assert!(!descriptor.exists());
+        drop(lease);
+        assert!(aac_files::OwnedStore::claim_dashboard_service(&ccs).is_ok());
     }
 
     /// M7: an empty private local root with neither share override opens the store. The share
@@ -956,7 +1057,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, ccs.join("run")).unwrap();
         let host = OwnerHost::new(ccs.clone(), true);
         assert!(
-            host.start_embedded().await.is_none(),
+            host.start_embedded(false).await.is_none(),
             "a symlinked run refuses the boot"
         );
         let meta = std::fs::symlink_metadata(&target).unwrap();

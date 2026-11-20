@@ -1,4 +1,4 @@
-// The real shipping worker and launcher, with its provider boundaries replaced by fixtures.
+// Exercise native dashboard collection and snapshot publication through the public launcher.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -8,20 +8,15 @@ import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const launcher = process.env.AAC_M6_TARGET_CLI;
 assert(launcher && path.isAbsolute(launcher), 'set AAC_M6_TARGET_CLI to a native build');
 const snapshot = process.argv.includes('--snapshot');
 const disabled = process.argv.includes('--collection-off');
 assert(!(snapshot && disabled), 'select one collection fixture');
-const source =
-  process.env.AAC_TEST_WORKER_SOURCE ?? fileURLToPath(new URL('../..', import.meta.url));
-const base = await mkdtemp(path.join(os.tmpdir(), 'aac-native-worker-'));
+const base = await mkdtemp(path.join(os.tmpdir(), 'aac-native-collection-'));
 const root = path.join(base, '.ccs');
 const share = path.join(base, 'usage-share');
-const calls = path.join(base, 'collector-calls');
-const clock = path.join(base, 'clock-offset');
 const log = [];
 let front;
 const write = (target, value) => writeFile(target, JSON.stringify(value), { mode: 0o600 });
@@ -92,37 +87,6 @@ try {
     });
   }
   await registry('Before');
-  await writeFile(calls, '');
-  await writeFile(clock, '0');
-
-  const entry = path.join(base, 'worker.ts');
-  const script = path.join(base, 'worker.cjs');
-  const module = (file) => pathToFileURL(path.join(source, 'src/web-server', file)).href;
-  await writeFile(
-    entry,
-    `
-    import fs from 'node:fs';
-    const wallClock = Date.now;
-    Date.now = () => wallClock() + Number(fs.readFileSync(${JSON.stringify(clock)}, 'utf8'));
-    const { AccountDashboardService } = await import(${JSON.stringify(module('services/account-dashboard-service.ts'))});
-    AccountDashboardService.prototype.collect = async function (state) {
-      fs.appendFileSync(${JSON.stringify(calls)}, 'collect\\n');
-      state.fetchedAt = Date.now();
-      return [];
-    };
-    await import(${JSON.stringify(module('sidecar.ts'))});
-  `
-  );
-  await writeFile(
-    script,
-    `
-    const child = require('node:child_process').spawn(${JSON.stringify(process.execPath)},
-      [${JSON.stringify(entry)}], { stdio: 'inherit', windowsHide: true });
-    child.once('error', () => process.exit(1));
-    child.once('exit', (code) => process.exit(code ?? 1));
-  `
-  );
-
   const socket = createServer().listen(0, '127.0.0.1');
   await once(socket, 'listening');
   const { port } = socket.address();
@@ -142,7 +106,7 @@ try {
         CCS_CODEX_PATH: path.join(base, 'no-codex'),
         AAC_AGENT_TRANSPORT: 'off',
         AAC_AGENT_VERBS: 'off',
-        AAC_RUST_STORE: snapshot ? 'on' : 'off',
+        AAC_RUST_STORE: disabled ? 'off' : 'on',
         AAC_RUST_CUT_NATIVE_ROUTES: 'off',
         AAC_RUST_HOME_VIEW: 'off',
         AAC_RUST_GROUP_HOME: 'on',
@@ -150,11 +114,13 @@ try {
         AAC_RUST_GROUP_APP_UPDATES: 'off',
         AAC_STATUS_DOORBELL: 'off',
         AAC_STORE_SHARE_BACKUP_DIR: 'off',
+        AAC_RUST_GROUP_RENEWAL: 'off',
+        AAC_RUST_CUT_FIXTURE_STOP_STDIN: '1',
         AAC_AGENT_REPORTS_DIR: path.join(base, 'reports'),
         AAC_PM_MAIL_REGISTRY_DIR: path.join(base, 'registry'),
-        AAC_TS_SIDECAR: script,
+        AAC_TS_SIDECAR: path.join(base, 'worker-must-not-start.cjs'),
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [process.platform === 'win32' ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       windowsHide: true,
     }
   );
@@ -202,13 +168,12 @@ try {
     assert.deepEqual(await checked.json(), unavailable);
     assert.equal((await recheck('[]')).status, 400);
     assert.equal((await recheck('{}', { cookie, 'content-type': 'application/json' })).status, 403);
-    assert.equal(await readFile(calls, 'utf8'), '');
     const hub = await send('/v0/management/auth-files', {
       headers: { 'x-management-key': hubKey },
     });
     assert.equal(hub.status, 503);
     assert.deepEqual(await hub.json(), unavailable);
-    console.log('Disabled collection: 7 HTTP checks passed with the worker present.');
+    console.log('Disabled collection: 7 HTTP checks passed.');
   } else if (snapshot) {
     const file = path.join(share, 'usage.json');
     const native = await send('/api/accounts/dashboard', { headers: { cookie } });
@@ -233,40 +198,23 @@ try {
       );
     }
     assert(await readJson(path.join(share, 'history.json')));
-    assert.equal(
-      await readFile(calls, 'utf8'),
-      '',
-      'snapshot publication must not collect in the worker'
-    );
     console.log('Native usage share: 1 scenario passed (two native generations).');
   } else {
-    const routes = [
-      '/api/views/home?platform=mac',
-      '/api/accounts/analytics?platform=windows&range=7d&tz=UTC',
-    ];
-    for (const due of [false, true]) {
-      if (due) await writeFile(clock, String(2 * 60 * 60 * 1000));
-      const results = [];
-      for (const route of routes) {
-        const reply = await send(route, { headers: { cookie, origin } });
-        assert.equal(reply.status, 200, route);
-        results.push(await reply.json());
-      }
-      assert.equal(
-        await readFile(calls, 'utf8'),
-        '',
-        'shipping Home and Analytics must not collect in the worker'
-      );
-      assert(results[0].dashboard.accounts.some((row) => row.id === id && row.label === 'Before'));
-    }
-    console.log(
-      'Shipping Home and Analytics: 2 scenarios passed (cold and due, zero worker collections).'
-    );
+    const home = await send('/api/views/home?platform=mac', { headers: { cookie, origin } });
+    assert.equal(home.status, 200);
+    const view = await home.json();
+    assert(view.dashboard.accounts.some((row) => row.id === id && row.label === 'Before'));
+    const analytics = await send('/api/accounts/analytics?platform=windows&range=7d&tz=UTC', {
+      headers: { cookie, origin },
+    });
+    assert.equal(analytics.status, 200);
+    console.log('Native Home and Analytics: 2 HTTP checks passed.');
   }
 } finally {
   if (front && front.exitCode === null && front.signalCode === null) {
     const exited = once(front, 'exit');
-    front.kill('SIGTERM');
+    if (process.platform === 'win32') front.stdin.end();
+    else front.kill('SIGTERM');
     await exited;
   }
   await rm(base, { recursive: true, force: true, maxRetries: 4 });

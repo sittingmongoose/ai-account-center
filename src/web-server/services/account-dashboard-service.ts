@@ -1,4 +1,3 @@
-import { readNativeCollection, workerReadsNative } from '../native-collection-feed';
 import { broadcastDashboardEvent } from '../dashboard-events';
 import {
   getCodexAuthProfilesSummary,
@@ -951,27 +950,12 @@ function dashboardService(): AccountDashboardService {
     onUsagePublished: () => broadcastDashboardEvent({ type: 'accounts-changed' }),
   }));
 }
-async function nativeDashboard(
-  platform: ClaudeDashboardPlatform,
-  refresh: boolean,
-  context: AccountDashboardRequestContext
-): Promise<AccountDashboard> {
-  const query = new URLSearchParams({
-    platform,
-    secure: String(context.secureTransport === true),
-    refresh: String(refresh),
-  });
-  return (await readNativeCollection(`/dashboard?${query}`)) as AccountDashboard;
-}
-
 export function getAccountDashboard(
   platform: ClaudeDashboardPlatform = 'mac',
   refresh = false,
   context: AccountDashboardRequestContext = {}
 ): Promise<AccountDashboard> {
-  return workerReadsNative()
-    ? nativeDashboard(platform, refresh, context)
-    : dashboardService().get(platform, refresh, context);
+  return dashboardService().get(platform, refresh, context);
 }
 
 /** R1: `getAccountDashboard` before its per-response pass, with that pass's clock (Home, fed). */
@@ -980,12 +964,7 @@ export function readAccountDashboardForHome(
   refresh = false,
   context: AccountDashboardRequestContext = {}
 ): Promise<HomeDashboardRead> {
-  return workerReadsNative()
-    ? nativeDashboard(platform, refresh, context).then((dashboard) => ({
-        dashboard,
-        now: Date.now(),
-      }))
-    : dashboardService().readForHome(platform, refresh, context);
+  return dashboardService().readForHome(platform, refresh, context);
 }
 
 /** Cache only: never starts a collection (see AccountDashboardService.peek). */

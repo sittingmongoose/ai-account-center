@@ -97,17 +97,13 @@ function checkRecheckLimit(env: LifecycleEnv, id: string): void {
 export async function recheck(
   env: LifecycleEnv,
   id: string,
-  body: Record<string, unknown>,
-  native?: (id: string) => Promise<{ status: 200 | 404; body: unknown } | null>
+  body: Record<string, unknown>
 ): Promise<LifecycleResult> {
   const account = await resolveIn(env, id);
   if (account.kind === 'claude') return recheckClaude(env, account, body);
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
   keys(body, []);
   checkRecheckLimit(env, id);
-  const reply = await native?.(account.id);
-  if (reply?.status === 404) throw new LifecycleHttpError(404, 'unknown_account');
-  if (reply) return { status: 200, body: reply.body as Record<string, unknown> };
   const { entry } = account;
   const reviewed = registrySource(entry);
   if (account.mode === 'v1') delete reviewed.account;

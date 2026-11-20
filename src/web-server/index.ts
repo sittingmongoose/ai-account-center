@@ -74,8 +74,6 @@ export interface ServerOptions {
   rustServiceBinary?: string;
   /** Per-boot proof for a single loopback-only Rust composition companion. */
   compositionProof?: string;
-  /** Start the private cut worker without public-only TS listeners or deployment bookkeeping. */
-  sidecar?: boolean;
   /** Publishes an admitted Rust-held account snapshot to the usage hub. */
   onRustDashboard?: (platform: ClaudeDashboardPlatform, dashboard: AccountDashboard) => void;
   /** Optional inherited stdin of the Rust public dashboard event receiver. */
@@ -135,11 +133,10 @@ function logRequestFailure(status: number, error: unknown, headersSent: boolean)
  */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
   if (
-    (options.sidecar && !options.compositionProof) ||
-    (options.compositionProof &&
-      (options.host !== '127.0.0.1' ||
-        options.port !== 0 ||
-        !/^[0-9a-f]{64}$/.test(options.compositionProof)))
+    options.compositionProof &&
+    (options.host !== '127.0.0.1' ||
+      options.port !== 0 ||
+      !/^[0-9a-f]{64}$/.test(options.compositionProof))
   )
     throw new ConfigError('The composition backend requires an ephemeral loopback listener.');
   const app = express();
@@ -249,12 +246,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // The T3 usage hub: read-only CLIProxyAPI-shaped usage from the dashboard's
   // cache, off until a key is set (ai-account-center dashboard usage-hub).
-  if (!options.sidecar) {
-    app.use(USAGE_HUB_MOUNT, createUsageHubRouter());
-    app.use(precompressedStatic(staticUi));
-    app.use(express.static(staticDir, { index: false, setHeaders: uiStaticHeaders(staticUi) }));
-    app.get('/{*splat}', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
-  }
+  app.use(USAGE_HUB_MOUNT, createUsageHubRouter());
+  app.use(precompressedStatic(staticUi));
+  app.use(express.static(staticDir, { index: false, setHeaders: uiStaticHeaders(staticUi) }));
+  app.get('/{*splat}', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
   // Last: whatever failed above answers in JSON, never with a stack trace.
   app.use(
     (
@@ -404,7 +399,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         dev: Boolean(options.dev),
       });
       // Only a build that is actually serving becomes the one installers must keep.
-      if (!options.sidecar && recordRunningBuild(getCcsDir(), packagedBuild) > 0)
+      if (recordRunningBuild(getCcsDir(), packagedBuild) > 0)
         logger.warn('web.deployed_build.unrecorded', 'Running build could not be recorded');
       // The history store (docs/store.md): opened before the first sample, which waits for it;
       // without the native module the dashboard runs as before, without stored history.
@@ -434,12 +429,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           });
       });
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
-      if (
-        !rustService.lifecycleInPrivate &&
-        (!options.sidecar || process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1')
-      ) {
-        startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
-      }
+      startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
       // First run with sign-in on and no password: this run's one-time setup code.
       if (!options.compositionProof) void prepareFirstRunSetupCode();
       // The optional HTTPS listener (dashboard_tls.https_listener, off by default).

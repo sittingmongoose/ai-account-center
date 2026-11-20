@@ -149,13 +149,6 @@
       "fs::read:90b197d15d837eec7d5810ee996d74179ab0a3ace34bb609f5b7dbb2ace2a0d6"
     ]
   },
-  "crates/aac-http/src/public_auth/owner_host.rs": {
-    "reason": "The embedded Unix owner publishes its boot-specific private service descriptor for adoption by the listener.",
-    "uses": [
-      "OpenOptions:1fe162af1ed0f38b79fff37f5f2e759c8976d661e8d3b100524e2d0d1ac0ea50",
-      "fs::rename:520fd379438f1115fae4dea06f52a07da00bc91112724d5350bab6e297caabe5"
-    ]
-  },
   "crates/aac-http/src/status_owned.rs": {
     "reason": "Status initializes the shared report schemas from files shipped in the dashboard package.",
     "uses": [

@@ -1,4 +1,4 @@
-import { rustAnalyticsWritersOn, rustComposeSelected, rustGroupOn } from './rust-service-groups';
+import { rustComposeSelected, rustGroupOn } from './rust-service-groups';
 /** Starts or attaches to one private Rust boot. No PID from disk is ever signalled. */
 import fs from 'fs';
 import net from 'net';
@@ -557,15 +557,7 @@ async function acquireWithinBudget(
   if (!layout) return { ...result, failure: 'socket_path' };
   const directory = layout.folders[layout.folders.length - 1];
   const agent = rustAgent();
-  const publicOwners = process.env.AAC_CUT_PUBLIC_OWNERS === '1';
-  const nativeCollection =
-    (!publicOwners || process.env.AAC_CUT_PRIVATE_LIFECYCLE === '1') &&
-    process.env.AAC_RUST_CUT_WORKER === '1' &&
-    rustGroupOn('collection');
   const files = privateFileOwners();
-  const nativeLifecycle = nativeCollection && files['opencode-wallet-source'] === 'rust-service';
-  const nativeUsageSnapshot =
-    nativeLifecycle && rustGroupOn('usageSnapshot') && rustAnalyticsWritersOn();
   const boot: RustBoot = {
     ccsDir,
     binary,
@@ -578,8 +570,6 @@ async function acquireWithinBudget(
     store,
     owned,
     renewal,
-    ...(nativeLifecycle ? { nativeLifecycle: true } : {}),
-    ...(nativeUsageSnapshot ? { nativeUsageSnapshot: true } : {}),
     agent,
   };
   let child: ChildProcess | undefined;
@@ -653,16 +643,13 @@ async function acquireWithinBudget(
         }
       }
     });
-    child = spawn(binary, nativeCollection ? ['--native-collection'] : [], {
+    child = spawn(binary, [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
         // Windows already returned above; the default re-detects the platform in its own scope.
         ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
         AAC_RUST_NATIVE_APP_UPDATES:
-          !publicOwners && rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
-        AAC_RUST_CUT_WORKER: process.env.AAC_RUST_CUT_WORKER,
-        AAC_CUT_HUB_DIRECTORY: process.env.AAC_CUT_HUB_DIRECTORY,
-        AAC_CUT_OFFER_HOME: process.env.AAC_CUT_OFFER_HOME,
+          rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
         AAC_RUST_GROUP_CLAUDE_OPEN: rustGroupOn('claude-open') ? 'on' : 'off',
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, '../../config/agent-artifacts.json'),
@@ -695,8 +682,6 @@ async function acquireWithinBudget(
         store: boot.store,
         owned: boot.owned,
         renewal: boot.renewal,
-        nativeLifecycle: boot.nativeLifecycle,
-        nativeUsageSnapshot: boot.nativeUsageSnapshot,
       }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.

@@ -11,7 +11,11 @@ import path from 'node:path';
 import type { Request, Response } from 'express';
 import { RustService } from '../../../src/web-server/rust-service';
 import { shortName, sweepStaleBoots } from '../../../src/web-server/rust-service-lifecycle';
-import { getRecentLogEntries, clearRecentLogEntries } from '../../../src/services/logging';
+import {
+  getRecentLogEntries,
+  clearRecentLogEntries,
+  invalidateLoggingConfigCache,
+} from '../../../src/services/logging';
 import { rustServiceEnvironment } from '../../../src/web-server/rust-service-env';
 import { requestRustAgent } from '../../../src/web-server/rust-service-transport';
 
@@ -103,6 +107,7 @@ afterEach(async () => {
   }
   restoreEnv('CCS_HOME', saved.home);
   restoreEnv('CCS_DIR', saved.dir);
+  invalidateLoggingConfigCache();
   fs.rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -370,6 +375,12 @@ describe('Rust service lifecycle (L1)', () => {
 
   it('opens a route breaker after three timeouts and probes again after 30 s', async () => {
     let now = 1_000_000;
+    // A warning would spawn the Node fixture again as the log file's lease helper.
+    // Keep the wall-clock assertion on the breaker path itself.
+    fs.writeFileSync(path.join(ccs, 'config.yaml'), 'version: 10\nlogging:\n  enabled: false\n', {
+      mode: 0o600,
+    });
+    invalidateLoggingConfigCache();
     writeSettings('"hang"');
     const service = await started('on', binaryCopy(), { now: () => now });
     for (let i = 0; i < 3; i++) expect(await settings(service)).toEqual({ ts: true });

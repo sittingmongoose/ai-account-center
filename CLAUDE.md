@@ -11,9 +11,8 @@ dashboard authentication, existing profiles (add, remove, sign in again),
 Analytics, explicit app-update jobs and native Mac/Windows bars. It does not
 switch accounts: account switching (Codex activation and auto-switch,
 Antigravity activation and auto-switch) was removed on 2026-11-14, because the
-agents pick their own accounts. Rust owns the public dashboard listener and CLI. The cut removes
-the TypeScript public server. The packaged private sidecar still supports compatibility boots.
-Rust serves the public routes and owns collection, Status, the history Store and Analytics.
+agents pick their own accounts. Rust owns the public dashboard listener, CLI, collection,
+Status, history Store and Analytics. The installed dashboard starts its native owners directly.
 The remote Codex update runtime and build tooling retain Node.
 The web UI is Leptos **0.9** compiled to WebAssembly. Native bars remain Swift and WPF.
 
@@ -47,7 +46,7 @@ or API routing product.
 | Area | Inputs |
 | --- | --- |
 | Dashboard listener, CLI and native owners | `crates/`, `config/` |
-| Compatibility sidecar and remote Codex update runtime | `src/web-server/sidecar.ts`, `src/codex-auth/codex-update-runtime-entry.ts` |
+| Historical HTTP reference and remote Codex update runtime | `src/web-server/index.ts`, `src/codex-auth/codex-update-runtime-entry.ts` |
 | Dashboard | `web-dashboard/leptos/`, `web-dashboard/public/` |
 | Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
 | Native clients | `macos-bar/`, `windows-bar/` |

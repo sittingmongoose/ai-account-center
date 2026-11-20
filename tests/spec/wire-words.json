@@ -4729,7 +4729,6 @@
     "cause": null,
     "sources": [
       "src/antigravity/ubuntu-runtime-bridge.ts:typeof value.restartState",
-      "src/store/store-host-client.ts:typeof failure?.error",
       "src/web-server/rust-profile-input.ts:typeof value.state",
       "src/web-server/services/additional-account-service.ts:museTransientFailure",
       "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
