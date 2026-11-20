@@ -113,7 +113,14 @@ control.unref();
       }
       const [start, end, onMain, pid] = text.split(/\s+/).map(Number);
       if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-      return { start, end, ms: end - start, onMainThread: onMain === 1, pid, complete: end > start };
+      return {
+        start,
+        end,
+        ms: end - start,
+        onMainThread: onMain === 1,
+        pid,
+        complete: end > start,
+      };
     };
     // In shadow mode the lifecycle read runs on the supervisor's schedule, sometimes seconds
     // after listening: keep the loop busy until that delay has finished, so the window below is
@@ -153,24 +160,43 @@ control.unref();
     );
     // What the main loop did inside the injected delay: a tick means it ran there. A delay paid
     // on this thread leaves the loop silent for its whole length; one paid elsewhere does not.
+    // Each loop's silence is its longest stretch without progress inside the window, edges
+    // included. A loaded machine silences the control worker as much as the main loop; a block
+    // on the main thread silences only the main loop, so main minus control is the block.
     let windowTicks = 0;
     let controlWindowTicks = 0;
     let silentMs = 0;
+    let controlSilentMs = 0;
     let windowHttp = 0;
+    let httpSilentMs = 0;
     if (injection) {
       const inside = (at) => at > injection.start && at < injection.end;
-      const ticks = gaps.map(([, end]) => end).filter(inside).sort((a, b) => a - b);
-      windowTicks = ticks.length;
-      const marks = [injection.start, ...ticks, injection.end];
-      silentMs = marks.reduce(
-        (worst, at, index) => (index ? Math.max(worst, at - marks[index - 1]) : 0),
-        0
-      );
-      windowHttp = httpDone.filter(inside).length;
-      let controlInside = 0;
+      const silence = (times) => {
+        const marks = [
+          injection.start,
+          ...times.filter(inside).sort((a, b) => a - b),
+          injection.end,
+        ];
+        return {
+          count: marks.length - 2,
+          ms: marks.reduce(
+            (worst, at, index) => (index ? Math.max(worst, at - marks[index - 1]) : 0),
+            0
+          ),
+        };
+      };
+      const main = silence(gaps.map(([, end]) => end));
+      windowTicks = main.count;
+      silentMs = main.ms;
+      const answers = silence(httpDone);
+      windowHttp = answers.count;
+      httpSilentMs = answers.ms;
+      const controlTimes = [];
       for (let index = 0; index < Math.min(controlMetrics[1], RING); index++)
-        if (inside(controlMetrics[2 + index])) controlInside++;
-      controlWindowTicks = controlInside;
+        controlTimes.push(controlMetrics[2 + index]);
+      const controlLoop = silence(controlTimes);
+      controlWindowTicks = controlLoop.count;
+      controlSilentMs = controlLoop.ms;
     }
     console.log(
       JSON.stringify({
@@ -183,7 +209,9 @@ control.unref();
         windowTicks,
         controlWindowTicks,
         silentMs,
+        controlSilentMs,
         windowHttp,
+        httpSilentMs,
         responses,
         delayed: injection !== null,
         listeningMs,
