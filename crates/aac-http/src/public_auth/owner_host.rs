@@ -141,13 +141,15 @@ impl OwnerHost {
                 return Some(owners.clone());
             }
             let ccs = self.root.canonicalize().ok()?;
+            // The explicit switch is the user's: with it off, no store is opened here either.
+            let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off");
             let (reports, registry_dir) = share_roots(
                 std::env::var("AAC_AGENT_REPORTS_DIR").ok().as_deref(),
                 std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok().as_deref(),
             );
             let config = crate::owners::Config {
                 ccs_dir: ccs.clone(),
-                store: Some(crate::store_host::StoreBoot {
+                store: (!store_off).then(|| crate::store_host::StoreBoot {
                     binding_identity: aac_store::build_identity(),
                     dir: ccs.join("store"),
                     retention_days: 0,
@@ -419,17 +421,10 @@ impl OwnerHost {
         let secret = config.get("secret")?.as_str()?.to_owned();
         let boot_id = config.get("bootId")?.as_str()?.to_owned();
         let boot = crate::unix::Boot::from_json(config.to_string().as_bytes()).ok()?;
-        // The supervisor's job: the socket's own private folder, or the service has nowhere
-        // to bind and the boot never becomes ready.
-        let folder = socket.parent()?;
-        std::fs::create_dir_all(folder).ok()?;
-        std::fs::create_dir_all(ccs.join("run")).ok()?;
-        for path in [folder, &ccs.join("run")] {
-            std::fs::set_permissions(
-                path,
-                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
-            )
-            .ok()?;
+        // The supervisor's job: the socket's own private folder, made here without following
+        // a link, adopting a foreign directory, or changing anyone else's mode (M1).
+        if !prepare_run_dir(&ccs, &socket) {
+            return None;
         }
         let descriptor = ccs.join("run").join("aac-http.json");
         let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -462,6 +457,55 @@ impl OwnerHost {
             descriptor,
         })
     }
+}
+
+/// The run folder and this boot's socket leaf, prepared without following a link or adopting
+/// a directory this boot did not make: a symlink, a non-directory, a foreign owner or a mode
+/// other than 0700 refuses the boot before anything is touched. A missing folder is created
+/// 0700 at creation time; an existing leaf is never reused.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn prepare_run_dir(ccs: &Path, socket: &Path) -> bool {
+    use std::os::unix::fs::DirBuilderExt;
+    // SAFETY: geteuid has no preconditions and touches no memory.
+    let euid = unsafe { libc::geteuid() };
+    let run = ccs.join("run");
+    match std::fs::symlink_metadata(&run) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() || !meta.is_dir() || !owned_0700(&meta, euid) {
+                return false;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            if builder.create(&run).is_err() {
+                return false;
+            }
+        }
+        Err(_) => return false,
+    }
+    let Some(leaf) = socket.parent() else {
+        return false;
+    };
+    if leaf.parent() != Some(run.as_path()) {
+        return false;
+    }
+    match std::fs::symlink_metadata(leaf) {
+        Ok(_) => return false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return false,
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(leaf).is_ok()
+}
+
+/// A directory this user owns at exactly `0700`. Other modes are refused, never changed.
+#[cfg(unix)]
+fn owned_0700(meta: &std::fs::Metadata, euid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.uid() == euid && meta.mode() & 0o777 == 0o700
 }
 
 /// The readers' roots for a boot that names none: each resolves the worker's default (the
@@ -609,5 +653,171 @@ mod tests {
             .status_value()
             .expect("the opened store answers its status");
         assert!(status.get("openedAt").is_some(), "{status}");
+    }
+
+    /// M1: a fresh boot makes its run folder and leaf 0700; a leaf that already exists is
+    /// never reused (it belongs to another boot).
+    #[test]
+    fn a_fresh_boot_makes_its_own_run_folder_and_leaf() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        std::fs::create_dir(&ccs).unwrap();
+        std::fs::set_permissions(&ccs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = ccs
+            .join("run")
+            .join(format!("aac-http-{}", "c".repeat(24)))
+            .join("http.sock");
+        assert!(prepare_run_dir(&ccs, &socket));
+        let run = std::fs::symlink_metadata(ccs.join("run")).unwrap();
+        let leaf = std::fs::symlink_metadata(socket.parent().unwrap()).unwrap();
+        for meta in [&run, &leaf] {
+            assert!(meta.is_dir());
+            assert_eq!(meta.mode() & 0o777, 0o700);
+            // SAFETY: geteuid has no preconditions.
+            assert_eq!(meta.uid(), unsafe { libc::geteuid() });
+        }
+        assert!(
+            !prepare_run_dir(&ccs, &socket),
+            "an existing leaf is refused"
+        );
+    }
+
+    /// M1: a `run` symlink is refused before anything is created or changed at its target.
+    #[test]
+    fn a_run_symlink_is_refused_and_its_target_is_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let target = scratch.path().join("target");
+        for path in [&ccs, &target] {
+            std::fs::create_dir(path).unwrap();
+        }
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&target, ccs.join("run")).unwrap();
+        let socket = ccs
+            .join("run")
+            .join(format!("aac-http-{}", "c".repeat(24)))
+            .join("http.sock");
+        assert!(!prepare_run_dir(&ccs, &socket));
+        let meta = std::fs::symlink_metadata(&target).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o755);
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        assert!(
+            std::fs::symlink_metadata(ccs.join("run"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    /// M1: a `run` regular file is refused and left exactly as it was.
+    #[test]
+    fn a_run_file_is_refused_and_kept() {
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        std::fs::create_dir(&ccs).unwrap();
+        std::fs::write(ccs.join("run"), b"not a folder").unwrap();
+        let socket = ccs
+            .join("run")
+            .join(format!("aac-http-{}", "c".repeat(24)))
+            .join("http.sock");
+        assert!(!prepare_run_dir(&ccs, &socket));
+        assert_eq!(std::fs::read(ccs.join("run")).unwrap(), b"not a folder");
+    }
+
+    /// M1: an existing run folder this boot did not make 0700 is refused, never chmodded.
+    #[test]
+    fn an_existing_run_folder_is_never_chmodded() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        std::fs::create_dir(&ccs).unwrap();
+        std::fs::create_dir(ccs.join("run")).unwrap();
+        std::fs::set_permissions(ccs.join("run"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let socket = ccs
+            .join("run")
+            .join(format!("aac-http-{}", "c".repeat(24)))
+            .join("http.sock");
+        assert!(!prepare_run_dir(&ccs, &socket));
+        let meta = std::fs::symlink_metadata(ccs.join("run")).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o755);
+        assert!(!socket.parent().unwrap().exists());
+    }
+
+    /// M1: the owner rule is exact: our uid at 0700, nothing else.
+    #[test]
+    fn only_this_users_own_0700_folder_is_usable() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::tempdir().unwrap();
+        let folder = scratch.path().join("run");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let meta = std::fs::symlink_metadata(&folder).unwrap();
+        // SAFETY: geteuid has no preconditions.
+        let euid = unsafe { libc::geteuid() };
+        assert!(owned_0700(&meta, euid));
+        assert!(!owned_0700(&meta, euid.wrapping_add(1)));
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let meta = std::fs::symlink_metadata(&folder).unwrap();
+        assert!(!owned_0700(&meta, euid));
+    }
+
+    /// M1, through the boot itself: a `run` symlink refuses to serve and its target is
+    /// untouched (the pre-fix boot created a leaf there and changed the target to 0700).
+    #[tokio::test]
+    async fn the_embedded_boot_refuses_a_run_symlink_without_touching_its_target() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let target = scratch.path().join("target");
+        for path in [&ccs, &target] {
+            std::fs::create_dir(path).unwrap();
+        }
+        std::fs::set_permissions(&ccs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&target, ccs.join("run")).unwrap();
+        let host = OwnerHost::new(ccs.clone(), true);
+        assert!(
+            host.start_embedded().await.is_none(),
+            "a symlinked run refuses the boot"
+        );
+        let meta = std::fs::symlink_metadata(&target).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o755);
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+    }
+}
+
+/// M2: the local owner honours the explicit store switch, as the Unix boot does.
+#[cfg(all(test, not(unix)))]
+mod windows_tests {
+    #![allow(unsafe_code)]
+    use super::*;
+
+    #[tokio::test]
+    async fn the_local_owner_opens_no_store_with_the_switch_off() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("ccs");
+        std::fs::create_dir_all(&root).unwrap();
+        let previous = std::env::var_os("AAC_RUST_STORE");
+        // SAFETY: the Windows tests are the only readers of this variable in this process.
+        unsafe { std::env::set_var("AAC_RUST_STORE", "off") };
+        let host = OwnerHost::new(root.clone(), true);
+        let owners = host.local().await;
+        match previous {
+            // SAFETY: as above.
+            Some(value) => unsafe { std::env::set_var("AAC_RUST_STORE", value) },
+            // SAFETY: as above.
+            None => unsafe { std::env::remove_var("AAC_RUST_STORE") },
+        }
+        let owners = owners.expect("the owners still start with the store off");
+        assert!(
+            owners.store.is_none(),
+            "the store is not opened with the switch off"
+        );
+        assert!(
+            !root.join("store").exists(),
+            "the switch off creates no store folder"
+        );
     }
 }
