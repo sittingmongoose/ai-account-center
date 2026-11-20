@@ -189,9 +189,10 @@ fn reads_every_page_and_drops_the_copies_a_boundary_repeats() {
 #[test]
 fn an_event_without_measured_counts_is_unmeasured_never_measured_zeros() {
     // The review's M3 input, beside the neighbours it must not be confused with: a measured
-    // event, one with no tokenUsage at all (outside), one outside the window, and two whose
-    // tokenUsage is empty or incomplete ({}, and inputTokens only). The last two must read as
-    // not logged (counted separately), never as an hour of zeros.
+    // event, one in range with no tokenUsage at all, one outside the window, and two whose
+    // tokenUsage is empty or incomplete ({}, and inputTokens only). The in-range ones without
+    // counts read as not logged (counted separately), never as an hour of zeros; the one without
+    // tokenUsage is usage too (review wave 82, Low 1), so three are unmeasured.
     let (base, _) = fake(|path, _| {
         if let Some(answer) = exchange_ok(path) {
             return answer;
@@ -216,7 +217,7 @@ fn an_event_without_measured_counts_is_unmeasured_never_measured_zeros() {
     let access = client.exchange(KEY).unwrap();
     let (events, counts, unmeasured) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(unmeasured, 2);
+    assert_eq!(unmeasured, 3);
     assert_eq!(
         counts.value(),
         json!({"pages":1,"fetched":5,"kept":1,
@@ -518,4 +519,181 @@ fn the_binary_prints_no_key_token_or_account_id() {
     for secret in [KEY, SUB, token().as_str(), "conv-0"] {
         assert!(!text.contains(secret), "{secret} was printed");
     }
+}
+
+/// The binary with a fresh key store, asked to read [since, until]: (the answer, the calls seen).
+fn read_with_fake<F>(since: i64, until: i64, answer: F) -> (Value, Vec<Seen>)
+where
+    F: Fn(&str, &Value) -> Reply + Send + 'static,
+{
+    let ccs = tempfile::tempdir().unwrap();
+    let (base, seen) = fake(answer);
+    let run = |args: &[&str], input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_aac-cursor-account"))
+            .args(args)
+            .args(["--ccs-dir", ccs.path().to_str().unwrap()])
+            .env("AAC_CURSOR_API_BASE", &base)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()
+    };
+    assert_eq!(run(&["key", "put"], &format!("{KEY}\n"))["ok"], true);
+    let read = run(&["read"], &json!({"sinceMs": since, "untilMs": until}).to_string());
+    let calls = seen.lock().unwrap().clone();
+    (read, calls)
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+const DAY: i64 = 86_400_000;
+
+/// The plan answer as Cursor gave it on 2026-11-20 (field names recorded; values synthetic): a
+/// cycle from `start` to `end`, `total` percent used.
+fn recorded_plan(start: i64, end: i64, total: f64) -> String {
+    json!({"billingCycleStart": start.to_string(), "billingCycleEnd": end.to_string(),
+           "planUsage": {"totalPercentUsed": total, "autoPercentUsed": total / 2.0,
+                         "remainingBonus": "0", "bonusTooltip": "synthetic"},
+           "spendLimitUsage": {"limitType": "synthetic"}, "displayMessage": "synthetic",
+           "displayThreshold": 50, "enabled": true, "autoBucketModels": [],
+           "autoModelSelectedDisplayMessage": "synthetic", "namedModelSelectedDisplayMessage": "synthetic"})
+    .to_string()
+}
+
+const EVENTS: &str = "/aiserver.v1.DashboardService/GetFilteredUsageEvents";
+const PLAN: &str = "/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+
+/// A fake that answers the events call with Cursor's recorded `{}` and the plan call with `plan`
+/// (status, body).
+fn empty_events_with_plan(plan: (u16, String)) -> impl Fn(&str, &Value) -> Reply + Send + 'static {
+    move |path, _| {
+        if let Some(answer) = exchange_ok(path) {
+            return answer;
+        }
+        match path {
+            EVENTS => (200, vec![], "{}".to_string()),
+            PLAN => (plan.0, vec![], plan.1.clone()),
+            _ => (404, vec![], "{}".to_string()),
+        }
+    }
+}
+
+fn assert_private(read: &Value) {
+    let text = read.to_string();
+    for secret in [KEY, SUB, token().as_str()] {
+        assert!(!text.contains(secret), "{secret} was printed");
+    }
+}
+
+#[test]
+fn an_empty_events_answer_while_the_plan_shows_use_in_range_is_not_visible() {
+    // The 2026-11-20 read: `{}` for the production window (31 days through now) while the
+    // meter reads 49% for a cycle that started inside it.
+    let t = now();
+    let plan = recorded_plan(t - 10 * DAY, t + 20 * DAY, 49.36);
+    let (read, calls) = read_with_fake(t - 31 * DAY, t, empty_events_with_plan((200, plan)));
+    assert_eq!(read["state"], "unavailable", "{read}");
+    assert_eq!(read["cause"], "events_not_visible");
+    assert_eq!(read["key"]["last4"], "REAL");
+    assert!(read.get("events").is_none() && read.get("rows").is_none(), "{read}");
+    assert_eq!(calls.iter().filter(|c| c.path == PLAN).count(), 1);
+    assert_private(&read);
+}
+
+#[test]
+fn an_empty_events_answer_is_unverified_when_the_plan_cannot_be_read() {
+    // Review wave 82, Medium 2: a failed meter never makes the empty answer "no usage". One call.
+    let t = now();
+    let (read, calls) = read_with_fake(t - 31 * DAY, t, empty_events_with_plan((503, "{}".into())));
+    assert_eq!(read["state"], "unavailable", "{read}");
+    assert_eq!(read["cause"], "events_unverified");
+    assert_eq!(calls.iter().filter(|c| c.path == PLAN).count(), 1);
+    assert_private(&read);
+}
+
+#[test]
+fn an_unused_plan_proves_no_usage_only_for_a_range_inside_its_cycle() {
+    let t = now();
+    let plan = recorded_plan(t - 10 * DAY, t + 20 * DAY, 0.0);
+    // The range lies inside the metered part of the cycle: the zero covers it, so no usage.
+    let (read, calls) = read_with_fake(t - 5 * DAY, t, empty_events_with_plan((200, plan.clone())));
+    assert_eq!(read["state"], "read", "{read}");
+    assert_eq!(read["events"], 0);
+    assert_eq!(read["unmeasured"], 0);
+    assert_eq!(calls.iter().filter(|c| c.path == PLAN).count(), 1);
+    // Review wave 82, Medium 2: the 31-day range starts before this cycle, whose zero says
+    // nothing about the days before it: unverified, never "no usage in range".
+    let (read, _) = read_with_fake(t - 31 * DAY, t, empty_events_with_plan((200, plan)));
+    assert_eq!(read["state"], "unavailable", "{read}");
+    assert_eq!(read["cause"], "events_unverified");
+}
+
+#[test]
+fn a_used_plan_cannot_place_its_use_in_a_shorter_range() {
+    // Review wave 82, Low 2: a range that ends before now holds only part of the cycle; the
+    // meter's use may lie after it, so the empty answer stays unverified.
+    let t = now();
+    let plan = recorded_plan(t - 10 * DAY, t + 20 * DAY, 49.36);
+    let (read, _) = read_with_fake(t - 31 * DAY, t - 5 * DAY, empty_events_with_plan((200, plan)));
+    assert_eq!(read["state"], "unavailable", "{read}");
+    assert_eq!(read["cause"], "events_unverified");
+}
+
+#[test]
+fn an_in_range_event_without_token_usage_is_unmeasured_and_never_asks_the_plan() {
+    // Review wave 82, Low 1: Cursor showed an event, so the meter is not asked; the event's
+    // missing counts read as not logged.
+    let t = now();
+    let plan = recorded_plan(t - 10 * DAY, t + 20 * DAY, 49.36);
+    let (read, calls) = read_with_fake(t - 31 * DAY, t, move |path, _| {
+        if let Some(answer) = exchange_ok(path) {
+            return answer;
+        }
+        match path {
+            EVENTS => (
+                200,
+                vec![],
+                json!({"totalUsageEventsCount": 1,
+                       "usageEventsDisplay": [{"timestamp": (t - DAY).to_string(), "model": "grok-4.7"}]})
+                .to_string(),
+            ),
+            PLAN => (200, vec![], plan.clone()),
+            _ => (404, vec![], "{}".to_string()),
+        }
+    });
+    assert_eq!(read["state"], "read", "{read}");
+    assert_eq!(read["events"], 0);
+    assert_eq!(read["unmeasured"], 1);
+    assert_eq!(read["eventCounts"]["droppedNoTokenUsage"], 1);
+    assert!(calls.iter().all(|c| c.path != PLAN));
+}
+
+#[test]
+fn a_read_with_events_never_asks_the_plan() {
+    let (read, calls) = read_with_fake(WINDOW.0, WINDOW.1, |path, _| {
+        if let Some(answer) = exchange_ok(path) {
+            return answer;
+        }
+        match path {
+            EVENTS => (
+                200,
+                vec![],
+                json!({"totalUsageEventsCount": 1, "usageEventsDisplay": [event(0, "grok-4.7", Some(1.0))]})
+                    .to_string(),
+            ),
+            PLAN => (200, vec![], recorded_plan(WINDOW.0, WINDOW.1, 49.36)),
+            _ => (404, vec![], "{}".to_string()),
+        }
+    });
+    assert_eq!(read["state"], "read", "{read}");
+    assert_eq!(read["events"], 1);
+    assert!(calls.iter().all(|c| c.path != PLAN));
 }

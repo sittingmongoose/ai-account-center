@@ -128,11 +128,23 @@ fn main() {
             let client = client();
             let read = client.exchange(&stored.secret).and_then(|token| {
                 let account = api::account_hash(&token);
-                api::events(&client, &token, since, until)
-                    .map(|(events, counts, unmeasured)| (account, events, counts, unmeasured))
+                let (events, counts, unmeasured) = api::events(&client, &token, since, until)?;
+                // Cursor answers `{}` both when the account used nothing and when the key's token
+                // may not see its events. Only a page with no event at all asks the plan meter,
+                // once; its verdict decides whether the empty answer is "no usage".
+                let empty = (counts.fetched == 0)
+                    .then(|| api::empty_verdict(api::quota(&client, &token).ok().as_ref(), since, until, started));
+                Ok((account, events, counts, unmeasured, empty))
             });
             match read {
-                Ok((account, events, counts, unmeasured)) => print(json!({
+                // The meter places use inside the range the events don't show.
+                Ok((_, _, _, _, Some(api::Empty::NotVisible))) => print(json!({"state": "unavailable",
+                    "cause": "events_not_visible", "key": {"fingerprint": stored.fingerprint, "last4": stored.last4}})),
+                // The meter could not be read, or cannot place use in (or rule it out of) the range:
+                // the empty answer is unverified, never "no usage in range".
+                Ok((_, _, _, _, Some(api::Empty::Unverified))) => print(json!({"state": "unavailable",
+                    "cause": "events_unverified", "key": {"fingerprint": stored.fingerprint, "last4": stored.last4}})),
+                Ok((account, events, counts, unmeasured, _)) => print(json!({
                     "state": "read",
                     "readAt": started,
                     "account": account,

@@ -166,7 +166,8 @@ fn count_of(usage: &serde_json::Map<String, Value>, key: &str) -> Result<Option<
 /// One raw event's verdict. `Unmeasured`: the event carries a `tokenUsage` without every
 /// measured count (the wire format documents no guarantee they are present, and an empty or
 /// incomplete object must never become measured zeros); it is counted separately and reads as
-/// not logged. The two discarded verdicts keep their distinct reasons.
+/// not logged. `NoTokenUsage`: an in-range event with no `tokenUsage` at all; it is counted in
+/// `droppedNoTokenUsage` and, as usage whose counts were not logged, in the unmeasured count too.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Parsed {
     Outside,
@@ -257,6 +258,7 @@ pub struct EventCounts {
     pub fetched: usize,
     pub kept: usize,
     pub dropped_out_of_window: usize,
+    /// In-range events without `tokenUsage`; each is also in the unmeasured count.
     pub dropped_no_token_usage: usize,
     pub dropped_duplicate: usize,
 }
@@ -361,7 +363,12 @@ pub fn events(
                 Parsed::Measured(event) => kept.push(event),
                 Parsed::Unmeasured => unmeasured += 1,
                 Parsed::Outside => counts.dropped_out_of_window += 1,
-                Parsed::NoTokenUsage => counts.dropped_no_token_usage += 1,
+                // An in-range event without `tokenUsage` is usage whose counts were not logged
+                // (review wave 82, Low 1): unmeasured, never skipped as if nothing happened.
+                Parsed::NoTokenUsage => {
+                    counts.dropped_no_token_usage += 1;
+                    unmeasured += 1;
+                }
             }
         }
     }
@@ -370,6 +377,58 @@ pub fn events(
     }
     counts.kept = kept.len();
     Ok((kept, counts, unmeasured))
+}
+
+/// What an events answer with no event at all means, by the plan meter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Empty {
+    /// The meter shows no use over a span that holds the whole range: no usage.
+    NoUse,
+    /// The meter shows use, all of it inside the range: the key's token cannot see the events.
+    NotVisible,
+    /// The meter was not read, or cannot place its use inside the range or rule it out of it.
+    Unverified,
+}
+
+/// A range whose end is this close to the read's time reaches "now" (the server asks through its
+/// own clock, a moment before the reader starts).
+pub const NOW_SKEW_MS: i64 = 5 * 60 * 1000;
+
+/// The verdict on an events answer with no event at all, from `quota`'s answer (None: it failed).
+/// Cursor answers `{}` both for no usage and for a key whose token may not see the events (the
+/// 2026-11-20 read: `{}` for the events while the meter read 49% used). The meter's figure covers
+/// its cycle from the start to `now_ms`: its use is inside [since, until] only when that whole span
+/// is, and its zero rules use out only when the span holds the whole range. Anything else, a cycle
+/// without a start, or a plan without a percentage, is unverified.
+pub fn empty_verdict(quota: Option<&Value>, since_ms: i64, until_ms: i64, now_ms: i64) -> Empty {
+    let Some(quota) = quota else {
+        return Empty::Unverified;
+    };
+    let Some(start) = quota["billingCycleStartMs"].as_i64() else {
+        return Empty::Unverified;
+    };
+    let percents: Vec<f64> = ["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"]
+        .iter()
+        .filter_map(|key| quota["planUsage"][*key].as_f64())
+        .collect();
+    if percents.is_empty() {
+        return Empty::Unverified;
+    }
+    let span_end = quota["billingCycleEndMs"]
+        .as_i64()
+        .map_or(now_ms, |end| end.min(now_ms));
+    if span_end < start {
+        return Empty::Unverified;
+    }
+    let reaches = |edge: i64| until_ms >= edge || (edge == now_ms && until_ms >= now_ms - NOW_SKEW_MS);
+    if percents.iter().any(|p| *p > 0.0) {
+        if since_ms <= start && reaches(span_end) {
+            return Empty::NotVisible;
+        }
+    } else if start <= since_ms && until_ms <= span_end {
+        return Empty::NoUse;
+    }
+    Empty::Unverified
 }
 
 /// One hour and model of the account's usage.
