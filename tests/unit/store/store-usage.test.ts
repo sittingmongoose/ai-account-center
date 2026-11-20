@@ -4,7 +4,7 @@ import { loadStoreTestModule } from '../../support/store-handle';
  * Skipped, and said so, when this computer has no module. Every store lives in a temporary
  * folder; never the real home.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll,beforeAll,describe,expect,it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -17,24 +17,16 @@ import { buildRollupExports } from '../../../src/store/usage-exports';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
 import { storeObservationFromAccount } from '../../../src/store/usage-observations';
 import {
-  AccountAnalyticsService,
-  type AccountAnalyticsSampleEvent,
-  onAccountAnalyticsSample,
-} from '../../../src/web-server/services/account-analytics-service';
-import {
-  appendAccountAnalyticsSnapshot,
-  FileAccountAnalyticsHistoryStore,
-  type AccountAnalyticsHistoryData,
-  type AccountAnalyticsHistoryStore,
+appendAccountAnalyticsSnapshot,
+FileAccountAnalyticsHistoryStore,
+type AccountAnalyticsHistoryData,
+type AccountAnalyticsHistoryStore,
 } from '../../../src/web-server/services/account-analytics-history';
-import { usageHistory } from '../../../src/web-server/agent-usage/agent-usage-history';
-import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
-import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
 import { createUsageRouter } from '../../../src/web-server/routes/store-routes';
 import { handleStoreCommand } from '../../../src/commands/store-command';
 import type {
-  AccountDashboard,
-  DashboardAccount,
+AccountDashboard,
+DashboardAccount,
 } from '../../../src/web-server/services/account-dashboard-types';
 import type { AccountAnalyticsActivity } from '../../../src/web-server/services/account-analytics-types';
 
@@ -226,93 +218,6 @@ function richAccountsAt(now: number): DashboardAccount[] {
 }
 
 describe.skipIf(!haveModule)('history store with the native module', () => {
-  it('serves the analytics route and burn rates as the JSON history did', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'equal-'));
-    const store = await openStore(path.join(dir, 'store'));
-    try {
-      let clock = START;
-      const jsonService = new AccountAnalyticsService({
-        getDashboard: async () => dashboardAt(clock),
-        getActivity: async () => ({ ...noActivity, coverage: null }) as never,
-        createHistoryStore: () => memory(),
-        now: () => clock,
-        scope: () => path.join(dir, 'json'),
-      });
-      const storeService = new AccountAnalyticsService({
-        getDashboard: async () => dashboardAt(clock),
-        getActivity: async () => ({ ...noActivity, coverage: null }) as never,
-        usageStore: async () => store,
-        now: () => clock,
-        scope: () => path.join(dir, 'store-scope'),
-      });
-      const events: AccountAnalyticsSampleEvent[] = [];
-      const stop = onAccountAnalyticsSample((event) => {
-        events.push(event);
-      });
-      for (let minute = 0; minute <= 180; minute++) {
-        clock = START + minute * MIN;
-        await jsonService.sample();
-        await storeService.sample();
-      }
-      stop();
-      const query = { platform: 'mac', range: '24h', provider: 'all', account: 'all' } as const;
-      const fromJson = await jsonService.get({ ...query, tz: 'UTC' });
-      const fromStore = await storeService.get({ ...query, tz: 'UTC' });
-      expect(fromStore.history.status).toBe('ok');
-      expect(fromStore.history.retentionDays).toBe(90);
-      for (const account of fromJson.accounts) {
-        const other = fromStore.accounts.find((candidate) => candidate.id === account.id);
-        expect(other).toBeDefined();
-        for (const window of account.windows) {
-          const twin = other?.windows.find((candidate) => candidate.key === window.key);
-          const value = (p: { usedPercent: number | null; remaining: number | null }) =>
-            p.usedPercent ?? p.remaining;
-          // The same measured value in every bucket both show, and the same latest reading.
-          const bucket = fromJson.range.bucketMinutes * MIN;
-          const byBucket = new Map(
-            window.points.map((p) => [Math.floor(Date.parse(p.sampledAt) / bucket), value(p)])
-          );
-          for (const point of twin?.points ?? []) {
-            const key = Math.floor(Date.parse(point.sampledAt) / bucket);
-            if (byBucket.has(key)) expect(value(point)).toBe(byBucket.get(key) as number);
-          }
-          expect(value(twin?.points.at(-1) as never)).toBe(value(window.points.at(-1) as never));
-          expect((twin?.points.length ?? 0) > 0).toBe(true);
-        }
-      }
-      // Burn rates from the store-backed history equal the JSON history's for every span.
-      const jsonEvent = events[events.length - 2];
-      const storeEvent = events[events.length - 1];
-      const rows = storeEvent.accounts;
-      const projected = projectAgentUsage(rows, { now: clock, includeHidden: true }).accounts;
-      const a = usageHistory(rows, projected, jsonEvent.history, clock);
-      const b = usageHistory(rows, projected, storeEvent.history, clock);
-      for (const [id, rates] of a.rates) {
-        for (const [key, rate] of rates) {
-          const other = b.rates.get(id)?.get(key);
-          expect({ key, ...other }).toEqual({ key, ...rate });
-        }
-      }
-      // The snapshot carries the 7- and 30-day burn only with the store.
-      expect(storeEvent.longBurn?.size).toBeGreaterThan(0);
-      const files = buildSnapshotFiles(storeEvent, 60);
-      const burn = files.snapshot.accounts
-        .flatMap((acc) => acc.windows)
-        .find((w) => w.key === 'five_hour')?.burn;
-      expect(burn && 'coverage7Days' in burn).toBe(true);
-      expect(burn?.last7Days).toBeNull(); // three hours of readings cover under half of 7 days
-      const jsonFiles = buildSnapshotFiles(jsonEvent, 60);
-      const jsonBurn = jsonFiles.snapshot.accounts
-        .flatMap((acc) => acc.windows)
-        .find((w) => w.key === 'five_hour')?.burn;
-      expect(jsonBurn && 'last7Days' in jsonBurn).toBe(false);
-      // Reset periods and consumption across the reset.
-      const status = await store.status();
-      expect(status.state).toBe('ready');
-    } finally {
-      await store.close();
-    }
-  });
 
   it('answers ranges across UTC days from the packed day values, and after a rebuild', async () => {
     const dir = path.join(fs.mkdtempSync(path.join(sandbox, 'days-')), 'store');
@@ -371,87 +276,6 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       await store.close();
     }
   });
-
-  it('draws every analytics point the JSON history draws, across thinning, gaps and failures', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'parity-'));
-    const store = await openStore(path.join(dir, 'store'));
-    try {
-      let clock = START;
-      const dashboard = async () =>
-        ({
-          schemaVersion: 1,
-          updatedAt: new Date(clock).toISOString(),
-          accounts: richAccountsAt(clock),
-          settings: { refreshIntervalSeconds: 60 },
-        }) as unknown as AccountDashboard;
-      const activity = async () => ({ ...noActivity, coverage: null }) as never;
-      const jsonService = new AccountAnalyticsService({
-        getDashboard: dashboard,
-        getActivity: activity,
-        createHistoryStore: () => memory(),
-        now: () => clock,
-        scope: () => path.join(dir, 'json'),
-      });
-      const storeService = new AccountAnalyticsService({
-        getDashboard: dashboard,
-        getActivity: activity,
-        usageStore: async () => store,
-        now: () => clock,
-        scope: () => path.join(dir, 'store-scope'),
-      });
-      for (let minute = 0; minute <= RICH_MINUTES; minute += 2) {
-        if (richSkipped(minute)) continue;
-        clock = START + minute * MIN;
-        await jsonService.sample();
-        await storeService.sample();
-      }
-      // The store rebuilds records on the JSON history's grid inside each observed span, not at
-      // each sample's own minute, so points are compared by analytics bucket: the same buckets in
-      // the same order (gaps included), with every field equal and both times inside the bucket.
-      const shape = (result: Awaited<ReturnType<typeof jsonService.get>>) => {
-        const bucket = result.range.bucketMinutes * MIN;
-        const slot = (iso: string) => Math.floor(Date.parse(iso) / bucket);
-        return result.accounts.map((account) => ({
-          id: account.id,
-          windows: account.windows.map((window) => ({
-            key: window.key,
-            points: window.points.map(({ sampledAt, observedAt, ...fields }) => ({
-              bucket: slot(sampledAt),
-              observedBucket: slot(observedAt),
-              ...fields,
-            })),
-          })),
-        }));
-      };
-      for (const range of ['24h', '7d'] as const) {
-        const query = {
-          platform: 'mac',
-          range,
-          provider: 'all',
-          account: 'all',
-          tz: 'UTC',
-        } as const;
-        const fromJson = await jsonService.get(query);
-        const fromStore = await storeService.get(query);
-        // The store keeps every reading, so its history may start before the thinned file's.
-        const { availableFrom, ...jsonRange } = fromJson.range;
-        const { availableFrom: storeFrom, ...storeRange } = fromStore.range;
-        expect(storeRange).toEqual(jsonRange);
-        expect(Date.parse(storeFrom as string)).toBeLessThanOrEqual(
-          Date.parse(availableFrom as string)
-        );
-        const expected = shape(fromJson);
-        // The fixture really has what it claims: many points, and the cached window among them.
-        const points = expected.flatMap((a) => a.windows.flatMap((w) => w.points));
-        expect(points.length).toBeGreaterThan(range === '24h' ? 300 : 100);
-        if (range === '7d') expect(points.some((p) => p.status === 'cached')).toBe(true);
-        // Every account, window and point: membership, order, values and gaps.
-        expect(shape(fromStore)).toEqual(expected);
-      }
-    } finally {
-      await store.close();
-    }
-  }, LARGE_FIXTURE_TIMEOUT_MS);
 
   it('the burn route finds every series, however many hourly points they hold', async () => {
     const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
@@ -652,28 +476,5 @@ describe.skipIf(!haveModule)('a store from an unreleased test build', () => {
       if (previous === undefined) delete process.env.CCS_HOME;
       else process.env.CCS_HOME = previous;
     }
-  });
-});
-
-describe('the dashboard without the native module', () => {
-  it('keeps the JSON history path when no store is available', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'nostore-'));
-    const service = new AccountAnalyticsService({
-      getDashboard: async () => dashboardAt(START),
-      getActivity: async () => ({ ...noActivity, coverage: null }) as never,
-      usageStore: async () => null,
-      createHistoryStore: () => memory(),
-      now: () => START,
-      scope: () => dir,
-    });
-    const result = await service.get({
-      platform: 'mac',
-      range: '24h',
-      provider: 'all',
-      account: 'all',
-      tz: 'UTC',
-    });
-    expect(result.history.retentionDays).toBe(30);
-    expect(result.accounts.length).toBe(2);
   });
 });

@@ -29,7 +29,7 @@ import type { AddressInfo } from 'net';
 import { startServer } from '../../../src/web-server';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
 import { apiRoutes } from '../../../src/web-server/routes';
-import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
+import * as accountAnalytics from '../../../src/web-server/agent-usage/usage-sample-events';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
 
 const FIXTURE_ENVIRONMENT = [
@@ -59,7 +59,6 @@ interface ApiRoute {
 const ROUTES: ApiRoute[] = [
   { family: 'accounts', method: 'GET', path: '/api/accounts/dashboard', status: 200 },
   { family: 'accounts', method: 'GET', path: '/api/accounts/settings', status: 200 },
-  { family: 'accounts', method: 'GET', path: '/api/accounts/analytics', status: 200 },
   { family: 'accounts', method: 'GET', path: '/api/accounts/visibility', status: 200 },
   { family: 'app-updates', method: 'GET', path: '/api/app-updates/status', status: 200 },
   { family: 'claude', method: 'GET', path: '/api/claude/desktop-profiles', status: 200 },
@@ -179,11 +178,10 @@ beforeEach(async () => {
   process.on('uncaughtException', recordProcessFailure);
 
   // Background work started by startServer is unrelated to these checks.
-  spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
+  spyOn(accountAnalytics, 'startNativeUsageSamples').mockImplementation(() => () => {});
   // Data behind every route is stubbed, so a guard failure shows as a stub call.
   serviceStubs = [
     spyOn(accountDashboard, 'getAccountDashboard').mockResolvedValue({ stub: true } as never),
-    spyOn(accountAnalytics, 'getAccountAnalytics').mockResolvedValue({ stub: true } as never),
   ];
 
   const realFetch = globalThis.fetch;

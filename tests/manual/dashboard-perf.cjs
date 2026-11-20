@@ -28,10 +28,6 @@ async function server() {
     timelines.push(row);
     return row;
   };
-  const { AccountAnalyticsActivityService } = load(
-    'web-server/services/account-analytics-activity'
-  );
-  const { AccountAnalyticsService } = load('web-server/services/account-analytics-service');
   const { accountAnalyticsIdentity } = load('web-server/services/account-analytics-history');
   const { ScoreboardService } = load('web-server/scoreboard/scoreboard-service');
   const { StatusService } = load('web-server/status/status-service');
@@ -162,28 +158,6 @@ async function server() {
       })
     );
   }
-  const activity = new AccountAnalyticsActivityService({
-    scope: () => root,
-    now: () => Date.now(),
-    requests: () =>
-      tools.map((provider) => ({ provider, request: { kind: provider, roots: ['/fixture'] } })),
-    loadWorker: async (request) =>
-      JSON.parse(fs.readFileSync(sourceFiles.get(request.kind), 'utf8')),
-    remote: async () => ({ results: [], states: [] }),
-    pricing: () => null,
-  });
-  const analytics = new AccountAnalyticsService({
-    scope: () => root,
-    usageStore: async () => null,
-    createHistoryStore: () => ({
-      read: async () => history,
-      write: async (value) => {
-        history = value;
-      },
-    }),
-    getDashboard: async () => dashboard,
-    getActivity: (...args) => activity.get(...args),
-  });
   const scoreboard = new ScoreboardService({
     root: () => reportRoot,
     native: null,
@@ -221,27 +195,10 @@ async function server() {
     notify: () => {},
     timeZone: () => 'UTC',
   });
-  const baseQuery = { platform: 'mac', range: '30d', provider: 'all', account: 'all', tz: 'UTC' };
   memory('fixture-loaded');
-  // Repeated minute/range heads exercise the wave 3 answer and projection retention bounds.
-  for (let i = 0; i < 36; i++) {
-    await analytics.get({
-      ...baseQuery,
-      range: 'custom',
-      tz: i % 2 ? 'America/New_York' : 'UTC',
-      from: new Date(now - (720 - i * 12) * 3600000).toISOString().slice(0, 10),
-      to: new Date(now - 86400000).toISOString().slice(0, 10),
-    });
-    await sleep(1);
-  }
   global.gc?.();
   const retained = memory('warm-cache-gc');
-  const caches = {
-    answers: analytics.answers?.size ?? 0,
-    latestProjections: activity.latestProjections?.size ?? 0,
-    answerBytes: analytics.answers?.bytes ?? null,
-    projectionBytes: activity.latestProjections?.bytes ?? null,
-  };
+  const caches = {};
   await scoreboard.view();
   await status.scanReports();
   const app = express();
@@ -252,12 +209,6 @@ async function server() {
   app.use(
     '/api/scoreboard',
     load('web-server/routes/scoreboard-routes').createScoreboardRouter(() => scoreboard)
-  );
-  app.use(
-    '/api/accounts',
-    load('web-server/routes/account-analytics-routes').createAccountAnalyticsRouter({
-      getAnalytics: (query) => analytics.get(query),
-    })
   );
   app.use(
     '/api/status',
@@ -312,15 +263,6 @@ async function server() {
       global.gc?.();
       retention.push(memory(phase));
     };
-    analytics.answers?.clear();
-    release('released-answers');
-    for (const state of activity.states?.values() ?? [])
-      activity.projections?.delete(state.sources);
-    activity.latestProjections?.clear();
-    release('released-projections');
-    activity.states?.clear();
-    release('released-sources');
-    await activity.shutdown();
     listener.close();
     let brokerRss = null;
     try {
@@ -392,7 +334,6 @@ async function main() {
     });
     const paths = [
       '/api/scoreboard',
-      '/api/accounts/analytics?range=30d&tz=UTC',
       '/api/status',
       '/api/auth/check',
     ];

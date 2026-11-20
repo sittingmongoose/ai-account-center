@@ -29,7 +29,7 @@ import { RecentReadings } from '../agent-usage/agent-usage-history';
 import {
   onAccountAnalyticsSample,
   type AccountAnalyticsSampleListener,
-} from '../services/account-analytics-service';
+} from '../agent-usage/usage-sample-events';
 import { getAccountRefreshIntervalSeconds } from '../services/account-refresh-settings';
 import {
   DEFAULT_DASHBOARD_TIME_ZONE,

@@ -256,10 +256,6 @@ await stub('src/utils/managed-process.ts', {
   stopProcessBroker: async () => {},
   runManagedCommand: async () => ({ stdout: '', stderr: '', exitCode: 1, timedOut: false }),
 });
-await stub('src/web-server/services/account-analytics-service.ts', {
-  startAccountAnalyticsSampling: noop,
-  stopAccountAnalyticsSampling: noop,
-});
 await stub('src/web-server/services/account-lifecycle-runtime.ts', {
   startAccountLifecycleMaintenance: noop,
   stopAccountLifecycleMaintenance: noop,

@@ -27,10 +27,7 @@ import {
 import { requestLoggingMiddleware } from './middleware/request-logging-middleware';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
-import {
-  startAccountAnalyticsSampling,
-  stopAccountAnalyticsSampling,
-} from './services/account-analytics-service';
+import { startNativeUsageSamples } from './agent-usage/usage-sample-events';
 import { ConfigError } from '../errors/error-types';
 import {
   isStaticUiFileRequest,
@@ -58,7 +55,7 @@ import {
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
 import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
-import { rustAnalyticsWritersOn, rustGroupOn } from './rust-service-groups';
+import { rustGroupOn } from './rust-service-groups';
 import {
   closeAacStore,
   onStoreHostFallback,
@@ -368,7 +365,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     detachDashboardEvents();
     detachRustEvents?.();
     stopAccountLifecycleMaintenance();
-    stopAccountAnalyticsSampling();
     stopAgentUsageSnapshot?.();
     stopAgentUsageSnapshot = null;
     stopStoreMaintenance?.();
@@ -429,10 +425,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // accounts; the service's store answers history, burn and rollups). Every other
       // composition keeps the TypeScript publisher.
       stopAgentUsageSnapshot =
-        process.platform !== 'win32' &&
-        rustService.mode === 'on' &&
-        rustGroupOn('usageSnapshot') &&
-        rustAnalyticsWritersOn()
+        process.platform !== 'win32' && rustService.mode === 'on' && rustGroupOn('usageSnapshot')
           ? null
           : startAgentUsageSnapshot({
               signIn: async () => {
@@ -482,10 +475,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       stopStatusService = startStatusService();
       // Scoreboard catalog seeds (runs are read on demand).
       startScoreboardService();
-      startAccountAnalyticsSampling(
-        rustService,
-        options.sidecar === true && process.env.AAC_CUT_PUBLIC_COLLECTION === '1'
-      );
+      const stopSamples = startNativeUsageSamples();
+      const stopSnapshot = stopAgentUsageSnapshot;
+      stopAgentUsageSnapshot = () => {
+        stopSamples();
+        stopSnapshot?.();
+      };
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
       if (
         !rustService.lifecycleInPrivate &&
@@ -493,8 +488,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       ) {
         startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
       }
-      // Usage cache loads on-demand when Analytics page is visited
-      // This keeps server startup instant for users who don't need analytics
       // First run with sign-in on and no password: this run's one-time setup code.
       if (!options.compositionProof) void prepareFirstRunSetupCode();
       // The optional HTTPS listener (dashboard_tls.https_listener, off by default).

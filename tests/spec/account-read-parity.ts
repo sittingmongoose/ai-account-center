@@ -217,8 +217,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
     await import('../../src/web-server/routes/account-preferences-routes');
   const { createAccountLifecycleRouter } =
     await import('../../src/web-server/routes/account-lifecycle-routes');
-  const { createAccountAnalyticsRouter } =
-    await import('../../src/web-server/routes/account-analytics-routes');
   const { createAccountRefreshSettingsRouter } =
     await import('../../src/web-server/routes/account-refresh-settings-routes');
   const visibilityModule = await import('../../src/web-server/services/account-visibility');
@@ -260,7 +258,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
   }) as never);
 
   const registryFixture = fixtures.registryFixture(spyOn, accountsModule);
-  let analytics = await fixtures.analyticsService(canonicalCcs, null);
   const app = express();
   app.use((req, res, next) => {
     res.locals.rustService = bridge;
@@ -274,10 +271,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
   app.use('/api/accounts', createAccountVisibilityRouter());
   app.use('/api/accounts', createAccountPreferencesRouter());
   app.use('/api/accounts', createAccountRefreshSettingsRouter({ onChanged: () => {} }));
-  app.use(
-    '/api/accounts',
-    createAccountAnalyticsRouter({ getAnalytics: (q, c) => analytics.get(q, c) })
-  );
   app.use('/api/accounts', createAccountLifecycleRouter({ env: () => registryFixture.env }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
@@ -347,19 +340,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
         form.compared ?? true
       );
     }
-    for (const form of fixtures.analyticsForms()) {
-      analytics = await fixtures.analyticsService(
-        canonicalCcs,
-        form.dashboard ?? null,
-        form.history
-      );
-      await run(
-        `analytics: ${form.name}`,
-        `/api/accounts/analytics?${form.query}`,
-        form.rust,
-        form.compared ?? true
-      );
-    }
 
     // Composition tables over the private socket: TS composer vs Rust, byte for byte.
     const tables = {
@@ -411,13 +391,11 @@ async function runWorker(mode: string, destination: string): Promise<void> {
       metrics = {};
       fixtures.resetCcs(ccs);
       fixtures.writeMeasureFiles(ccs);
-      analytics = await fixtures.analyticsService(canonicalCcs, null);
       const routes: Array<[string, string]> = [
         ['settings', '/api/accounts/settings'],
         ['visibility', '/api/accounts/visibility'],
         ['preferences', '/api/accounts/preferences'],
         ['registry', '/api/accounts/registry'],
-        ['analytics', '/api/accounts/analytics?range=7d&tz=UTC'],
       ];
       for (const [name, route] of routes) {
         const samples: number[] = [];

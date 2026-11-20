@@ -8,8 +8,8 @@ import {
   type AccountAnalyticsHistoryData,
   type AccountAnalyticsObservation,
 } from '../../../../src/web-server/services/account-analytics-history';
-import { longBurnKey } from '../../../../src/web-server/services/account-analytics-service';
-import type { AccountAnalyticsSampleEvent } from '../../../../src/web-server/services/account-analytics-service';
+import { longBurnKey } from '../../../../src/web-server/agent-usage/usage-sample-events';
+import type { AccountAnalyticsSampleEvent } from '../../../../src/web-server/agent-usage/usage-sample-events';
 import type {
   DashboardAccount,
   DashboardAccountWindow,

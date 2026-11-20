@@ -22,7 +22,16 @@ pub(crate) const INVALID_RANGE: &str = "Select whole days from the oldest stored
 
 pub(crate) fn encode(result: Answer, query: Option<&str>) -> Result<(u16, Vec<u8>), Decline> {
     let (status, value) = match result {
-        Ok(value) => (200, value),
+        Ok(mut value) => {
+            let body = value.as_object_mut().ok_or(Decline::Shape)?;
+            let as_of = body.get("updatedAt").cloned().ok_or(Decline::Shape)?;
+            let activity = body.get("activity").ok_or(Decline::Shape)?;
+            let refreshing = activity["refreshing"] == true || activity["status"] == "loading";
+            body.insert("asOf".to_owned(), as_of);
+            body.insert("stale".to_owned(), json!(false));
+            body.insert("refreshing".to_owned(), json!(refreshing));
+            (200, value)
+        }
         Err(Decline::Unsupported)
             if url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
                 .any(|(key, value)| key == "range" && value == "custom") =>
@@ -35,6 +44,26 @@ pub(crate) fn encode(result: Answer, query: Option<&str>) -> Result<(u16, Vec<u8
         Err(reason) => return Err(reason),
     };
     Ok((status, aac_views::js_json::write(&value)))
+}
+
+pub(crate) fn snapshot(cache: &crate::account_usage::AccountUsageCache, now: i64) -> Option<Value> {
+    let timestamp = aac_num::ecma::to_iso_string(now)?;
+    let dashboards = cache.labeled_dashboards(&timestamp, now);
+    (!dashboards.is_empty()).then(|| json!({ "dashboards": dashboards }))
+}
+
+pub(crate) fn capture_cwd(root: &Path) -> bool {
+    crate::registered::file(root, "analytics-capture")
+        .and_then(|(file, policy)| {
+            let policy = policy.ancestors(aac_files::read::Ancestors::NoLinkBelow(root));
+            if let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) {
+                serde_json::from_slice::<Value>(&bytes).ok()
+            } else {
+                None
+            }
+        })
+        .and_then(|value| value.get("cwd").and_then(Value::as_bool))
+        .unwrap_or(true)
 }
 
 /// One parsed route query with the service defaults, in the route's own object order.
@@ -250,9 +279,14 @@ pub(crate) fn compose(
     let store_engine = Arc::clone(&engine);
     let with_store = |store: &mut EngineStore| {
         let oldest = aac_views::analytics_owned::oldest_bound(store, now);
+        let span = if query["range"] == "90d" {
+            90.0 * DAY_MS
+        } else {
+            RETAINED_MS
+        };
         // The proven zone window: floor(oldest/DAY)*DAY - DAY .. floor(now/DAY)*DAY + 2*DAY.
         #[allow(clippy::cast_possible_truncation)]
-        let (window_from, window_now) = (oldest.min(now - RETAINED_MS).max(0.0) as i64, now as i64);
+        let (window_from, window_now) = (oldest.min(now - span).max(0.0) as i64, now as i64);
         let zone = (tz != "UTC")
             .then(|| {
                 aac_files::zoneinfo::zone_for_window(&tz, window_from, window_now)

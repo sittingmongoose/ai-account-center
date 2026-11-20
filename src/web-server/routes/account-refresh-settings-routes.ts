@@ -6,7 +6,6 @@ import { respondWithRust, writeWithRust } from '../rust-service';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
-import { rescheduleAccountAnalyticsSampling } from '../services/account-analytics-service';
 import {
   ACCOUNT_REFRESH_SETTINGS_FILE,
   isAccountRefreshSettings,
@@ -74,7 +73,7 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
                   value.refreshIntervalSeconds === input.refreshIntervalSeconds,
                 () => writeAccountRefreshSettings(input, ccs)
               );
-          (deps.onChanged ?? rescheduleAccountAnalyticsSampling)();
+          deps.onChanged?.();
           return value;
         }
       );

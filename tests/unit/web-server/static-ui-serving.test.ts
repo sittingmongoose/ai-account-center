@@ -15,7 +15,7 @@ import zlib from 'zlib';
 
 import { requestErrorKind, startServer } from '../../../src/web-server';
 import { readLogEntries } from '../../../src/services/logging';
-import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
+import * as accountAnalytics from '../../../src/web-server/agent-usage/usage-sample-events';
 import { negotiateEncoding, resolvePageRoute } from '../../../src/web-server/static-ui';
 
 import {
@@ -118,7 +118,7 @@ beforeEach(async () => {
   process.env.CODEX_HOME = path.join(tempRoot, 'home', '.codex');
   process.env.CLAUDE_CONFIG_DIR = path.join(tempRoot, 'home', '.claude');
   delete process.env.CCS_DASHBOARD_AUTH_ENABLED;
-  spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
+  spyOn(accountAnalytics, 'startNativeUsageSamples').mockImplementation(() => () => {});
   manifest = buildFixtureUi(tempRoot);
   staticDir = path.join(tempRoot, 'dist', 'ui');
   // A file next to the UI that must never be reachable through a path trick.

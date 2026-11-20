@@ -12,10 +12,6 @@ const replacements = {
     stopProcessBroker: async () => {},
     runManagedCommand: async () => ({ stdout: '', stderr: '', exitCode: 1, timedOut: false }),
   },
-  '/web-server/services/account-analytics-service.js': {
-    startAccountAnalyticsSampling: noop,
-    stopAccountAnalyticsSampling: noop,
-  },
   '/web-server/services/account-lifecycle-runtime.js': {
     startAccountLifecycleMaintenance: noop,
     stopAccountLifecycleMaintenance: noop,

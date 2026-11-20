@@ -59,6 +59,8 @@ pub(super) struct OwnerHost {
     local_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     #[cfg(not(unix))]
     analytics_live: std::sync::Arc<crate::analytics_live::Live>,
+    #[cfg(not(unix))]
+    analytics_reads: crate::limits::Limits,
 }
 
 struct PublicOwners {
@@ -102,6 +104,8 @@ impl OwnerHost {
             local_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(not(unix))]
             analytics_live: std::sync::Arc::default(),
+            #[cfg(not(unix))]
+            analytics_reads: crate::limits::Limits::new(),
         })
     }
 
@@ -348,20 +352,23 @@ impl OwnerHost {
             let root = self.root.clone();
             let live = self.analytics_live.clone();
             let cache = self.public_owners().and_then(|owner| owner.usage_cache());
-            tokio::task::spawn_blocking(move || {
-                let now = super::now();
-                let snapshot = cache.and_then(|cache| {
-                    let timestamp = super::storage::iso(now)?;
-                    Some(serde_json::json!({"dashboards": cache.labeled_dashboards(&timestamp, now)}))
-                });
-                let answer = crate::analytics_route::compose(
-                    engine, &root, snapshot.as_ref(), &live, query.as_deref(), now,
-                );
-                crate::analytics_route::encode(answer, query.as_deref()).ok()
-            })
-            .await
-            .ok()
-            .flatten()
+            self.analytics_reads
+                .blocking(crate::table::Pool::Reads, move || {
+                    let now = super::now();
+                    let snapshot =
+                        cache.and_then(|cache| crate::analytics_route::snapshot(&cache, now));
+                    let answer = crate::analytics_route::compose(
+                        engine,
+                        &root,
+                        snapshot.as_ref(),
+                        &live,
+                        query.as_deref(),
+                        now,
+                    );
+                    crate::analytics_route::encode(answer, query.as_deref())
+                })
+                .await
+                .ok()
         }
     }
 
@@ -372,6 +379,26 @@ impl OwnerHost {
         {
             let _ = self.link().await;
         }
+    }
+
+    #[cfg(windows)]
+    pub(super) async fn start_analytics_jobs(&self) {
+        let Some((store, (agents, cache))) = self
+            .local()
+            .await
+            .and_then(|owners| owners.store.clone())
+            .zip(self.public_owners().map(|owners| owners.profile_inputs()))
+        else {
+            return;
+        };
+        tokio::spawn(crate::analytics_writers::analytics_jobs(
+            store,
+            move |now| crate::analytics_route::snapshot(cache.as_ref()?, now),
+            agents,
+            self.root.clone(),
+            self.analytics_live.clone(),
+            self.local_stop.clone(),
+        ));
     }
 
     /// Stop the service this boot started, if any (a running one belongs to its own supervisor).
@@ -426,6 +453,7 @@ impl OwnerHost {
             "socketPath": socket,
             "secret": secret,
             "bootId": boot_id,
+            "embeddedDashboard": true,
             "store": {
                 "dir": ccs.join("store"),
                 "retentionDays": 0,

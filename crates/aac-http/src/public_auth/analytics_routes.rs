@@ -94,18 +94,7 @@ fn session(access: &DashboardAccess) -> Result<(), Reply> {
 
 /// `{cwd: <boolean>}` from the file. Missing or unreadable settings keep the default on.
 fn read_capture(root: &Path) -> Value {
-    let cwd = crate::registered::file(root, CAPTURE)
-        .and_then(|(file, policy)| {
-            let policy = policy.ancestors(aac_files::read::Ancestors::NoLinkBelow(root));
-            if let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) {
-                serde_json::from_slice::<Value>(&bytes).ok()
-            } else {
-                None
-            }
-        })
-        .and_then(|value| value.get("cwd").and_then(Value::as_bool))
-        .unwrap_or(true);
-    json!({ "cwd": cwd })
+    json!({ "cwd": crate::analytics_route::capture_cwd(root) })
 }
 
 /// Keep the registered writer lease through cache cleanup and receipt construction. Persist

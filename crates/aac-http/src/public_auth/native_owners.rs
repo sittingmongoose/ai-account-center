@@ -47,8 +47,6 @@ pub(super) struct Groups {
     pub(super) lifecycle: bool,
     writes: bool,
     pub(super) home: bool,
-    #[cfg(unix)]
-    analytics_writers: bool,
     /// G18: the service owns the aac-usage share writer this boot.
     #[cfg(unix)]
     usage_snapshot: bool,
@@ -77,9 +75,6 @@ impl Groups {
             lifecycle: false,
             #[cfg(unix)]
             store,
-            #[cfg(unix)]
-            analytics_writers: on("analytics-writers", "AAC_RUST_GROUP_ANALYTICS_WRITERS")
-                && on("analytics", "AAC_RUST_GROUP_ANALYTICS"),
             collection: on("collection", "AAC_RUST_GROUP_COLLECTION"),
             writes: on("writes", "AAC_RUST_GROUP_WRITES"),
             home: on("home", "AAC_RUST_GROUP_HOME")
@@ -156,8 +151,6 @@ struct PublicSampling {
     server: Value,
     #[cfg(unix)]
     store: bool,
-    #[cfg(unix)]
-    analytics_writers: bool,
     #[cfg(unix)]
     usage_snapshot: bool,
     #[cfg(windows)]
@@ -287,8 +280,6 @@ impl NativeOwners {
                 server,
                 #[cfg(unix)]
                 store: groups.store && worker_directory.is_some(),
-                #[cfg(unix)]
-                analytics_writers: groups.analytics_writers,
                 #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
                 #[cfg(windows)]
@@ -666,7 +657,6 @@ impl Usage {
                                 owner.root.clone(),
                                 &cache,
                                 super::now(),
-                                sampling.analytics_writers,
                             )
                             .await;
                         }
@@ -686,7 +676,6 @@ impl Usage {
                         // writer.
                         #[cfg(unix)]
                         if sampling.usage_snapshot
-                            && sampling.analytics_writers
                             && let Some(payload) =
                                 owner.share_sample(&cache, &sampling.signins).await
                         {

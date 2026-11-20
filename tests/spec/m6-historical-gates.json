@@ -11,6 +11,8 @@
     }
   },
   "notApplicableAfterCut": {
+    "tests/unit/web-server/account-analytics-routes.test.ts": "The Analytics Express adapter was retired. Strict Analytics M0 and the native HTTP tests replay the public read and capture contracts.",
+    "tests/integration/web-server/usage-worker.test.ts": "The Analytics Node worker scheduler was retired. The Rust scanner and native Analytics writer tests cover the new path.",
     "tests/integration/web-server/claude-desktop-profiles-endpoint.test.ts": "The TypeScript profiles endpoint was retired. The native profiles group covers its public contract.",
     "tests/integration/web-server/codex-profiles-endpoint.test.ts": "The TypeScript Codex endpoint was retired. The native profiles group and Codex profile view tests cover it.",
     "tests/unit/antigravity/routes.test.ts": "The TypeScript Antigravity router was retired. Native profiles M0 and Antigravity owner tests cover its responses.",

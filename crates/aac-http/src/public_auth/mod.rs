@@ -754,6 +754,11 @@ pub(crate) async fn run_public_at(
         tokio::spawn(async move { host.warm().await });
     }
     if cut {
+        #[cfg(windows)]
+        if let Some(host) = &owner_host {
+            let host = host.clone();
+            tokio::spawn(async move { host.start_analytics_jobs().await });
+        }
         record_public_build(&root);
     }
     if browser {

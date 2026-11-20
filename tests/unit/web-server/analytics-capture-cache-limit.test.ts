@@ -5,33 +5,30 @@
  * - M3: one size limit for saving and loading a computer's cache; a cache over it is trimmed to fit,
  *   and one the load discards says why.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import express from 'express';
+import { afterEach,beforeEach,describe,expect,it } from 'bun:test';
 import * as fs from 'fs';
 import type { Server } from 'http';
 import * as os from 'os';
 import * as path from 'path';
-import { createAccountAnalyticsRouter } from '../../../src/web-server/routes/account-analytics-routes';
 import {
-  readAnalyticsCaptureSettings,
-  writeAnalyticsCaptureSettings,
+writeAnalyticsCaptureSettings
 } from '../../../src/web-server/services/analytics-capture-settings';
 import {
-  MAX_REMOTE_CACHE_BYTES,
-  fitRemoteCache,
-  remoteCacheBytes,
+MAX_REMOTE_CACHE_BYTES,
+fitRemoteCache,
+remoteCacheBytes,
 } from '../../../src/web-server/services/analytics-remote-cache-limit';
 import {
-  clearAnalyticsRemoteCwds,
-  loadAnalyticsRemoteCachedSources,
-  loadAnalyticsRemoteSources,
+clearAnalyticsRemoteCwds,
+loadAnalyticsRemoteCachedSources,
+loadAnalyticsRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
 import {
-  AnalyticsRemoteTransportError,
-  parseAnalyticsRemoteResponse,
-  type AnalyticsRemoteKind,
-  type AnalyticsRemoteRow,
-  type AnalyticsRemoteSessionRow,
+AnalyticsRemoteTransportError,
+parseAnalyticsRemoteResponse,
+type AnalyticsRemoteKind,
+type AnalyticsRemoteRow,
+type AnalyticsRemoteSessionRow,
 } from '../../../src/web-server/services/analytics-remote-transport';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
@@ -146,75 +143,7 @@ const scan = (withFolder = true) =>
     runHelper: async () => answer(withFolder),
   });
 
-async function listen(): Promise<string> {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    if (req.headers['x-test-session'] === 'true')
-      Object.assign(req, { session: { authenticated: true } });
-    next();
-  });
-  app.use(
-    '/api/accounts',
-    createAccountAnalyticsRouter({ clearCwds: () => clearAnalyticsRemoteCwds(cache) })
-  );
-  server = await new Promise<Server>((resolve) => {
-    const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Missing port');
-  return `http://127.0.0.1:${address.port}`;
-}
-
 describe('turning cwd capture off', () => {
-  it('clears the folders already saved, keeps the usage, and saves none afterwards', async () => {
-    await scan();
-    expect(cacheText()).toContain(FOLDER);
-    const base = await listen();
-    const url = `${base}/api/accounts/analytics/capture`;
-    const put = (body: unknown, origin = base, session = true) =>
-      fetch(url, {
-        method: 'PUT',
-        headers: {
-          'content-type': 'application/json',
-          origin,
-          ...(session ? { 'x-test-session': 'true' } : {}),
-        },
-        body: JSON.stringify(body),
-      });
-    // The guards: a session, the dashboard origin, and exactly {cwd: boolean}.
-    expect((await fetch(url)).status).toBe(401);
-    expect((await put({ cwd: false }, base, false)).status).toBe(401);
-    expect((await put({ cwd: false }, 'https://untrusted.example')).status).toBe(403);
-    for (const body of [null, [], {}, { cwd: 'false' }, { cwd: false, extra: 1 }])
-      expect((await put(body)).status).toBe(400);
-    expect(readAnalyticsCaptureSettings().cwd).toBe(true);
-    expect(cacheText()).toContain(FOLDER);
-
-    const off = await put({ cwd: false });
-    expect(off.status).toBe(200);
-    expect(off.headers.get('cache-control')).toBe('no-store');
-    expect(await off.json()).toEqual({ cwd: false, cleared: { folders: 1, caches: 0 } });
-    expect(readAnalyticsCaptureSettings().cwd).toBe(false);
-    const cleared = JSON.parse(cacheText());
-    expect(cacheText()).not.toContain(FOLDER);
-    expect(cleared.sessions[SESSION]).toEqual({ hash: `${SESSION}${'d'.repeat(48)}`, cwd: null });
-    expect(cleared.rows).toHaveLength(1);
-    expect(cleared.srows).toHaveLength(1);
-
-    // An answer that still names a folder (a scan started before the change) saves none.
-    await scan(true);
-    expect(cacheText()).not.toContain(FOLDER);
-    expect(JSON.parse(cacheText()).sessions[SESSION].cwd).toBeNull();
-    const read = await fetch(url, { headers: { 'x-test-session': 'true' } });
-    expect(await read.json()).toEqual({ cwd: false });
-
-    // On again: new answers keep their folder; nothing is cleared.
-    const on = await put({ cwd: true });
-    expect(await on.json()).toEqual({ cwd: true });
-    await scan(true);
-    expect(cacheText()).toContain(FOLDER);
-  });
 
   it('removes a cache it cannot read, since it may hold folders too', () => {
     fs.mkdirSync(path.join(cache, 'analytics-remote-v1'), { recursive: true });

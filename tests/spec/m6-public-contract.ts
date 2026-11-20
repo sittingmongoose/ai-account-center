@@ -423,8 +423,47 @@ try {
       AAC_AGENT_VERBS: 'off',
     });
   }
+  if (group === 'analytics' && mode === 'cut-rust-only') {
+    Object.assign(environment, {
+      AAC_RUST_CUT_NATIVE_ROUTES: 'off',
+      AAC_RUST_STORE: 'on',
+      AAC_STORE: 'on',
+    });
+  }
   let rust = await startRustFixture(binary, root, environment, false, mode);
   try {
+    if (group === 'analytics' && mode === 'cut-rust-only') {
+      const headers = await roleHeaders(rust.url, 'session');
+      const endpoint = '/api/accounts/analytics?platform=windows&range=7d';
+      const response = await send(rust.url, endpoint, { headers });
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      const answer = await response.json();
+      assert.equal(answer.range.tz, 'America/New_York');
+      assert(
+        answer.accounts.every(
+          (account: { status: string; windows: unknown[]; sampledAt: unknown }) =>
+            account.status === 'unavailable' && account.windows.length === 0 && account.sampledAt === null
+        )
+      );
+      assert.equal(answer.activity.accountAttribution, 'unavailable');
+      const head = await send(rust.url, endpoint, { method: 'HEAD', headers });
+      assert.equal(head.status, 200);
+      assert.equal(head.headers.get('cache-control'), 'no-store');
+      assert.match(head.headers.get('etag') ?? '', /^W\//);
+      assert.equal(await head.text(), '');
+      const custom = await send(
+        rust.url,
+        '/api/accounts/analytics?range=custom&from=2000-01-01&to=2000-01-02',
+        { headers }
+      );
+      assert.equal(custom.status, 400);
+      assert.equal((await custom.json()).code, 'invalid_range');
+      const longer = await send(rust.url, '/api/accounts/analytics?range=90d', { headers });
+      assert.equal(longer.status, 200, await longer.clone().text());
+      assert.equal((await longer.json()).range.preset, '90d');
+      console.log('Native Analytics composed reads with the owner-host switch off: 4/4.');
+    }
     let windowsPreflightReason: string | undefined;
     if (registryOutput !== undefined) {
       const { antigravitySignInPreflight } = await import('../../src/antigravity/signin-sandbox');

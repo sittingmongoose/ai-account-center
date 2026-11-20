@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { extraActivityRequests } from '../../../src/web-server/services/account-analytics-activity';
+import { extraActivityRequests } from '../../../src/web-server/usage/analytics-request-plan';
 import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
 import { remoteExtraRoots } from '../../../src/web-server/services/analytics-remote-sources';
 import {

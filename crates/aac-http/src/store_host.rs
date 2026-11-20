@@ -227,7 +227,7 @@ impl StoreHost {
         }
     }
 
-    fn wait_ready(&self) {
+    pub(crate) fn wait_ready(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         while !state.ready {
             state = self
@@ -267,19 +267,6 @@ impl StoreHost {
         answer
             .await
             .map_err(|_| "service_down: the store host is stopping".to_string())?
-    }
-
-    pub(crate) fn record_native_account_usage(
-        &self,
-        cache: &crate::account_usage::AccountUsageCache,
-    ) {
-        self.wait_ready();
-        let now = aac_store::engine::now_ms() as i64;
-        if let (Some(engine), Some(updated_at)) = (self.engine(), aac_num::ecma::to_iso_string(now))
-            && let Ok(observations) = cache.store_observations(&updated_at, now, i64::MIN)
-        {
-            let _ = aac_store::usage::record(&engine, observations);
-        }
     }
 
     fn record_dashboard(&self, args: &str) -> Result<String, String> {

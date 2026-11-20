@@ -7,7 +7,7 @@ import { spawn, execFileSync } from 'child_process';
 
 import { startServer } from '../../../src/web-server';
 import { CodexProfileRenewalService } from '../../../src/web-server/services/codex-profile-renewal-service';
-import * as analyticsSampling from '../../../src/web-server/services/account-analytics-service';
+import * as analyticsSampling from '../../../src/web-server/agent-usage/usage-sample-events';
 
 const instances: Array<Awaited<ReturnType<typeof startServer>>> = [];
 const staticDirs: string[] = [];
@@ -17,7 +17,7 @@ let originalEnv: Partial<Record<(typeof fixtureEnvKeys)[number], string | undefi
 let renewalStart: ReturnType<typeof spyOn<CodexProfileRenewalService, 'start'>>;
 let renewalStop: ReturnType<typeof spyOn<CodexProfileRenewalService, 'stop'>>;
 let analyticsStart: ReturnType<
-  typeof spyOn<typeof analyticsSampling, 'startAccountAnalyticsSampling'>
+  typeof spyOn<typeof analyticsSampling, 'startNativeUsageSamples'>
 >;
 
 beforeEach(() => {
@@ -32,8 +32,8 @@ beforeEach(() => {
   // account activation and usage helpers unrelated to these server fixtures.
   renewalStart = spyOn(CodexProfileRenewalService.prototype, 'start').mockImplementation(() => {});
   renewalStop = spyOn(CodexProfileRenewalService.prototype, 'stop');
-  analyticsStart = spyOn(analyticsSampling, 'startAccountAnalyticsSampling').mockImplementation(
-    () => {}
+  analyticsStart = spyOn(analyticsSampling, 'startNativeUsageSamples').mockImplementation(
+    () => () => {}
   );
   const realFetch = globalThis.fetch;
   spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
