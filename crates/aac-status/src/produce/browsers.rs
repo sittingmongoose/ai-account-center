@@ -569,8 +569,13 @@ mod tests {
             ["1070ti", "odroid"]
         );
         assert!(rows[0].error.is_none());
-        assert!(rows[0].notes.is_some());
-        assert!(rows[1].notes.is_none());
+        assert_eq!(
+            rows[0].notes,
+            Some(vec![
+                "reported no phone count (phones: null), so phones here are unknown".to_owned()
+            ])
+        );
+        assert_eq!(rows[1].notes, Some(Vec::new()));
         Ok(())
     }
 }
