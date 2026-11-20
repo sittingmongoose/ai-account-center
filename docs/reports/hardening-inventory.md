@@ -50,14 +50,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 33.8% (244/722) |
+| typed-error adoption (typed/total throws) | 33.4% (238/712) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
-| hotpath console.error/warn occurrences | 52 (222 total, 170 CLI-UX exempt) |
-| hotpath console.error/warn files | 14 |
-| files with createLogger | 39/440 |
+| hotpath console.error/warn occurrences | 51 (221 total, 170 CLI-UX exempt) |
+| hotpath console.error/warn files | 13 |
+| files with createLogger | 39/438 |
 | subdomains with zero createLogger | 8 (antigravity, config, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 65 |
-| files > 600 LOC | 28 |
+| files > 600 LOC | 27 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -76,7 +76,6 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/errors/cleanup-registry.ts` | 1 |
 | `src/web-server/middleware/auth-middleware.ts` | 1 |
 | `src/web-server/services/ssh-policy.ts` | 1 |
-| `src/web-server/sidecar.ts` | 1 |
 
 ### Files > 400 LOC (top 15)
 
@@ -91,10 +90,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/status/status-collectors.ts` | 1158 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
 | `src/web-server/services/usage-failover-service.ts` | 1095 |
-| `src/web-server/rust-service.ts` | 1060 |
+| `src/web-server/rust-service.ts` | 1035 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
-| `src/web-server/services/account-dashboard-service.ts` | 1005 |
+| `src/web-server/services/account-dashboard-service.ts` | 984 |
 | `src/web-server/status/status-view.ts` | 903 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
-| `src/web-server/services/agent-verbs.ts` | 801 |
+| `src/web-server/usage/codex-quota/quota-fetcher-codex.ts` | 798 |
 

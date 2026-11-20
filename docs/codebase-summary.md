@@ -11,7 +11,7 @@ the account and private-state contracts from the original CCS fork.
 | Dashboard HTTP/session boundary | [Rust public listener](../crates/aac-http/src/public_auth/mod.rs), [native owner host](../crates/aac-http/src/public_auth/owner_host.rs) |
 | Account projection | [native producer](../crates/aac-http/src/account_usage/producer.rs), [compatibility collection](../src/web-server/services/account-dashboard-service.ts) |
 | Codex saved logins | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [renewal](../src/codex-auth/codex-profile-renewal.ts), [quota reader](../src/web-server/usage/codex-quota/quota-fetcher-codex.ts) |
-| Analytics | [analytics service](../src/web-server/services/account-analytics-service.ts) |
+| Analytics | [native routes](../crates/aac-http/src/public_auth/analytics_routes.rs), [native writers](../crates/aac-http/src/analytics_writers.rs) |
 | Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
 | Leptos app frame | [lib.rs](../web-dashboard/leptos/src/lib.rs), [frame.rs](../web-dashboard/leptos/src/frame.rs) and the pages beside them; map of pages, controllers, view models and rules: [UI architecture](../web-dashboard/README-ARCHITECTURE.md) |
 | Browser controllers | [frame-dashboard.mjs](../web-dashboard/public/frame-dashboard.mjs), [frame-session.mjs](../web-dashboard/public/frame-session.mjs), [frame-analytics.mjs](../web-dashboard/public/frame-analytics.mjs) |
@@ -45,7 +45,7 @@ tool, edit the JSON. `tests/spec/tables.test.ts`, `cargo test -p aac-providers` 
 and each typed union that still needs the new row.
 
 The service build stages the native commands in `dist/native/`, compiles the
-compatibility worker into `dist/` and
+Antigravity terminal sign-in helper and
 [bundles](../scripts/build-codex-update-runtime.js) the Codex stop/start runtime
 into `dist/app-updates/`; the update helpers carry that bundle to Linux hosts
 without AAC, such as Nas1. The

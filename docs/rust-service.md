@@ -2,11 +2,10 @@
 
 The shipped native `ai-account-center dashboard` and `ccs config` commands own
 the public HTTP and HTTPS listeners. Rust handles authentication, sessions, devices,
-origin checks, WebSockets, the static Leptos bundle and the T3 hub. The remaining
-compatibility routes and background jobs run in a private TypeScript worker.
-The native launcher enables the Rust service groups by default and starts without
-shadow comparison. See [Private worker and reference fixtures](#private-worker-and-reference-fixtures)
-for the current boundary and the verification commands.
+origin checks, WebSockets, the static Leptos bundle and the T3 hub. Rust also
+supervises the native collection and Store owners. The native launcher enables the
+Rust service groups by default. See [Native supervision and reference fixtures](#native-supervision-and-reference-fixtures)
+for the current boundary and verification commands.
 
 ## Historical M3 read-route reference
 
@@ -830,11 +829,9 @@ private-file registry. Set the same `CCS_SESSION_SECRET` in both processes if
 the installation overrides the file secret. Stop the TS server before starting
 Rust on the same private root. Rust refuses the TS session-owner marker.
 Use separate private roots while comparing the legacy server and the Rust
-listener. The packaged compatibility sidecar still starts behind the Rust listener.
-The public cut allowlist is empty. Native owners serve Accounts and Re-check,
-Status and Scoreboard, Home, the history store and Analytics on both platforms.
-On Windows a compatibility client can read the single hosted Store through its
-authenticated private channel, including when native collection is disabled.
+listener. Native owners serve Accounts and Re-check, Status and Scoreboard, Home,
+the history store and Analytics on both platforms. Windows runs one in-process
+Store and Unix hosts Store in the leased Rust service.
 
 To integrate the other public routes, supply the composed public router to
 `DashboardAuth::protect`. Handlers read `DashboardAccess` from the request
@@ -922,35 +919,32 @@ revalidating. Static files skip session persistence. Page and hub responses
 preserve rolling browser cookies.
 
 The native `ai-account-center` and `ccs` binaries share the same command parser.
-Both supervise the private compatibility worker for the remaining dashboard
-adapters. Settings covers dashboard sign-in, network and session controls.
+Both start the same native listener and background owners. Settings covers
+dashboard sign-in, network and session controls.
 The native CLI handles `usage-hub`, `usage-snapshot` and `cursor-key` under
 `dashboard` and the `ccs config` alias. The five retired executable names
 print migration guidance.
 
-### Private worker and reference fixtures
+### Native supervision and reference fixtures
 
-The native CLI loads the packaged worker and owns the public listener without
-a configuration switch. The worker defaults its Rust groups to on and uses
-the private socket for handlers it delegates. The former `frontDoor` selector
-and `AAC_RUST_COMPOSE` switch apply to legacy reference fixtures.
+The native CLI owns the public listener at startup. Unix adopts a compatible
+live private Rust service or starts an embedded one under the descriptor lease.
+The dashboard stops a service it started and exits nonzero if its adopted
+service is lost. Windows runs its single collection and Store owners in the
+public process. The former `frontDoor` selector and `AAC_RUST_COMPOSE` switch
+apply to legacy reference fixtures.
 
-The Rust listener forwards only explicitly listed compatibility routes to the
-private loopback worker. Those adapters delegate to the enabled Rust groups
-where available. Rust supplies a per-boot proof and verified transport facts,
-which the receiver strips before dispatch. The worker refuses direct HTTP
-requests and uses the authorization decision supplied by Rust. On Unix the
-public Rust process owns Accounts collection, Re-check and App Updates. These
-routes use its L5 pool. Accounts, the hub and the WebSocket use the public
-process's cache. Home still takes the compatibility route. The corresponding
-Windows routes still use the worker.
+Accounts collection, Re-check, App Updates and Home use native owners on both
+platforms. Accounts, the hub and WebSocket use the selected collection generation.
+The package retains separate Node helpers for Antigravity terminal sign-in and
+remote Codex stop/start.
 
 Lane H fixture tests use synthetic installers. The composed M0 capture uses its
 existing synthetic app-update owner and disables agent transport for that run.
 `bun tests/spec/compose-app-update-parity.ts` exercises the actual H/J route
 binding and native progress through the public WebSocket with agent transport off.
 Use `bun tests/spec/m6-public-contract.ts <native-cli> --cut-rust-only --require-complete`
-for the release gate and `--cut` to exercise the shipped listener with its worker.
+for the release gate and `--cut` to exercise packaged startup.
 Use `tests/spec/capture.ts --composed` to compare the historical composition fixture with its TS goldens.
 The --plain-home flag matches the original Home setting. With Home enabled,
 the two signed-in Home rows return the newly offered view. The standalone Rust
@@ -982,12 +976,11 @@ computer. The service uses the same L5 registry and pool.
 
 - `GET /api/accounts/dashboard` uses the prepared collection generation.
   The native route preserves validation, session and device authorization,
-  no-store and ETag on Unix and Windows. With the compatibility worker
-  enabled, setting `rustService.groups.collection` or
-  `AAC_RUST_GROUP_COLLECTION` to `off` selects the TypeScript handlers when
-  no native collector owns the root. If boot adopts a running private
-  collector, that collector continues to serve dashboard and Re-check.
-  Stop the private collector and restart the dashboard to select TypeScript.
+  no-store and ETag on Unix and Windows. Setting
+  `rustService.groups.collection` or `AAC_RUST_GROUP_COLLECTION` to `off`
+  reports collection as unavailable when no native collector owns the root.
+  If boot adopts a running private collector, that collector continues to
+  serve dashboard and Re-check.
 - `AccountUsageCache` can be supplied to `serve_with_account_usage_cache` to
   share generations with the native listener. Its `hub_dashboards` returns
   the Mac and Windows neutral snapshots in that order. Its `store_observations`
@@ -1003,7 +996,7 @@ computer. The service uses the same L5 registry and pool.
   Its fixed key-status and quota subcommands also serve the Cursor quota-card
   transport. The quota-card cache is a separate fingerprint-bound file. The
   lease owner clears it when the reader confirms absence of a key.
-  The existing TS reader serves when the Rust collection group is off.
+  The collection group controls whether the packaged dashboard offers this reader.
 - `POST /internal/collect/failover-collect` can run a selected
   provider helper over the same L5 pool, with at most three active helpers.
   The release bundles the existing Python source, including OpenCode wallet inventory. A refusal before launch

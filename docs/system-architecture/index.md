@@ -7,7 +7,7 @@ Leptos browser app / native Mac or Windows bar
                  |
           Rust public listener
                  |
-     Rust owners / private compatibility worker
+     Rust route and background owners
         /            |             \
  native profiles   observed history  existing-host collectors
  saved logins        Analytics      Python / browser bridge
@@ -15,8 +15,8 @@ Leptos browser app / native Mac or Windows bar
 
 The Leptos 0.9 dashboard compiles to WebAssembly. The Rust public service owns
 HTTP, authentication, sessions, devices, WebSocket, the usage hub and static
-assets. Remaining compatibility adapters run in a private TypeScript worker.
-Remote Codex stop/start still uses its standalone Node bundle. The native bars
+assets. Rust supervises the private collection and Store owners. Remote Codex
+stop/start still uses its standalone Node bundle. The native bars
 remain Swift/WPF. Use `ai-account-center dashboard` or `ccs config` to start the service.
 
 ## Computers

@@ -233,7 +233,7 @@ flowchart LR
 
 | Layer | Built with |
 | --- | --- |
-| Backend | Rust public HTTP and WebSocket listener and native route owners. The package retains a private Node compatibility worker. |
+| Backend | Rust public HTTP and WebSocket listener, native route owners and native Store supervision. |
 | Web UI | [Leptos](https://leptos.dev) 0.9 (client-side rendered), compiled from Rust to WebAssembly; installable PWA |
 | Mac app | Swift and SwiftUI menu-bar app |
 | Windows app | C# and WPF on .NET 10 |

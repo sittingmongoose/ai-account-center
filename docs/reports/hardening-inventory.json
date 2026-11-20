@@ -530,16 +530,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 722,
-      "typedThrows": 244,
+      "totalThrows": 712,
+      "typedThrows": 238,
       "plainThrows": 40,
-      "otherThrows": 438,
-      "adoptionRatio": 0.338,
+      "otherThrows": 434,
+      "adoptionRatio": 0.3343,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 427,
-          "typed": 178,
+          "count": 420,
+          "typed": 172,
           "plain": 7
         },
         {
@@ -567,12 +567,6 @@
           "plain": 0
         },
         {
-          "subdomain": "store",
-          "count": 10,
-          "typed": 1,
-          "plain": 0
-        },
-        {
           "subdomain": "utils",
           "count": 10,
           "typed": 0,
@@ -583,6 +577,12 @@
           "count": 9,
           "typed": 8,
           "plain": 1
+        },
+        {
+          "subdomain": "store",
+          "count": 7,
+          "typed": 1,
+          "plain": 0
         }
       ]
     },
@@ -600,8 +600,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 39,
-      "totalSourceFiles": 440,
-      "coverageRatio": 0.0886,
+      "totalSourceFiles": 438,
+      "coverageRatio": 0.089,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "config",
@@ -615,7 +615,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 251,
+          "count": 249,
           "withLogger": 25
         },
         {
@@ -666,10 +666,10 @@
       ]
     },
     "hotpathConsoleErrors": {
-      "totalOccurrences": 222,
+      "totalOccurrences": 221,
       "exemptOccurrences": 170,
-      "hotpathOccurrences": 52,
-      "filesAffected": 14,
+      "hotpathOccurrences": 51,
+      "filesAffected": 13,
       "topFiles": [
         {
           "file": "src/errors/error-handler.ts",
@@ -722,16 +722,12 @@
         {
           "file": "src/web-server/services/ssh-policy.ts",
           "count": 1
-        },
-        {
-          "file": "src/web-server/sidecar.ts",
-          "count": 1
         }
       ]
     },
     "largeFiles": {
       "countOver400": 65,
-      "countOver600": 28,
+      "countOver600": 27,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -771,7 +767,7 @@
         },
         {
           "file": "src/web-server/rust-service.ts",
-          "loc": 1060
+          "loc": 1035
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -779,7 +775,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 1005
+          "loc": 984
         },
         {
           "file": "src/web-server/status/status-view.ts",
@@ -790,8 +786,8 @@
           "loc": 815
         },
         {
-          "file": "src/web-server/services/agent-verbs.ts",
-          "loc": 801
+          "file": "src/web-server/usage/codex-quota/quota-fetcher-codex.ts",
+          "loc": 798
         }
       ]
     }
