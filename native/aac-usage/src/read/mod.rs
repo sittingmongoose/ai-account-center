@@ -39,6 +39,11 @@ pub struct LineBox {
     pub through: u64,
     /// Set when a resumed read could not trust its saved place and read the file from 0 instead.
     pub restarted: bool,
+    /// Whether the last line ended at a safe append boundary.
+    pub line_ended: bool,
+    pub claude_checkpoint: Option<String>,
+    pub claude_previous: Option<String>,
+    pub claude_retry: bool,
 }
 
 impl LineBox {
@@ -243,6 +248,7 @@ pub fn read_lines<R: Read>(
         }
         let start = offset;
         offset += read as u64;
+        line_box.line_ended = chunk.ends_with(b"\n");
         let body = if chunk.ends_with(b"\n") {
             &chunk[..chunk.len() - 1]
         } else {
@@ -267,6 +273,7 @@ pub fn read_lines<R: Read>(
                 }
             }
             line_box.through = offset;
+            line_box.line_ended = chunk.ends_with(b"\n");
             continue;
         }
         let Ok(line) = std::str::from_utf8(&chunk) else {
@@ -275,6 +282,9 @@ pub fn read_lines<R: Read>(
         };
         line_box.offset = start;
         parse(line.trim_start_matches('\u{feff}'), collector, kind, filekey, line_box);
+        if line_box.claude_retry {
+            return Outcome::Cut;
+        }
         line_box.through = offset;
         collector.count_line();
         if collector.row_cap {
@@ -309,7 +319,107 @@ pub fn read_file_with(
     flush: Option<Flush>,
     mut line_box: LineBox,
 ) -> Outcome {
-    read_into(collector, kind, path, filekey, parse, flush, &mut line_box)
+    let from = append_from(collector, kind, path, filekey, &mut line_box);
+    let mut outcome = read_into(collector, kind, path, filekey, parse, flush, &mut line_box);
+    let mut saved_from = from;
+    if line_box.claude_retry {
+        // The append finished updating the same response. A whole read replaces that row
+        // according to Claude's existing response deduplication rule.
+        line_box = LineBox::default();
+        outcome = read_into(collector, kind, path, filekey, parse, flush, &mut line_box);
+        saved_from = 0;
+    }
+    if outcome == Outcome::Ok {
+        save_append(collector, kind, path, filekey, &line_box, saved_from);
+    }
+    outcome
+}
+
+/// Check the saved identity and both ends of the previous extent. Read the short probes
+/// from the file's old extent, even when the last or first block has grown since then.
+fn append_from(collector: &Collector, kind: &str, path: &Path, key: &str, line: &mut LineBox) -> u64 {
+    if collector.messages_wanted
+        || collector.capture.is_some()
+        || collector.skip.is_some()
+        || !collector.store_incremental
+        || path_text(path).ends_with(".zst")
+    {
+        return 0;
+    }
+    let Some(prior) = collector.prior_print(kind, key) else {
+        return 0;
+    };
+    let Some(current) = collector.pending.get(kind).and_then(|files| files.get(key)) else {
+        return 0;
+    };
+    let (Some(size), Some(identity), Some(state)) = (
+        prior["size"].as_u64(),
+        prior["fileIdentity"].as_str(),
+        prior.get("appendState"),
+    ) else {
+        return 0;
+    };
+    if size == 0
+        || size >= current.size
+        || current.file_identity.as_deref() != Some(identity)
+        || prior["pathKey"].as_str() != current.path_key.as_deref()
+    {
+        return 0;
+    }
+    let (Some(head), Some(tail)) = (state["head"].as_str(), state["tail"].as_str()) else {
+        return 0;
+    };
+    let Ok(mut file) = fsx::open_regular(path) else {
+        return 0;
+    };
+    if end_hashes(&mut file, size).is_none_or(|(h, t)| h != head || t != tail) {
+        return 0;
+    }
+    line.restore_codex(&state["parser"]);
+    line.claude_previous = state["parser"]["claudeLast"].as_str().map(str::to_owned);
+    line.through = size;
+    size
+}
+
+fn end_hashes(file: &mut std::fs::File, size: u64) -> Option<(String, String)> {
+    let mut buffer = [0; 256];
+    let sample = &mut buffer[..size.min(256) as usize];
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_exact(sample).ok()?;
+    let head = util::sha256_hex(sample);
+    file.seek(SeekFrom::Start(size.saturating_sub(256))).ok()?;
+    file.read_exact(sample).ok()?;
+    Some((head, util::sha256_hex(sample)))
+}
+
+fn save_append(collector: &mut Collector, kind: &str, path: &Path, key: &str, line: &LineBox, from: u64) {
+    if !collector.store_incremental {
+        return;
+    }
+    collector.set_pending(kind, key, |print| {
+        if line.line_ended
+            && line.through == print.size
+            && !path_text(path).ends_with(".zst")
+            && print.file_identity.is_some()
+            && let Some((head, tail)) = fsx::open_regular(path)
+                .ok()
+                .and_then(|mut file| end_hashes(&mut file, print.size))
+        {
+            let mut parser = line.codex_state();
+            if let Some(key) = &line.claude_checkpoint {
+                parser["claudeLast"] = json!(key);
+            }
+            print.append_state = Some(json!({
+                "head": head, "tail": tail, "parser": parser,
+            }));
+        }
+        if from > 0 {
+            print.progress = Some(util::ReadProgress {
+                from: Some(from),
+                ..Default::default()
+            });
+        }
+    });
 }
 
 /// Read one file from `line_box.through` (0, or where an earlier call stopped), leaving in
@@ -353,10 +463,25 @@ pub fn read_into(
         }
         return read_lines(collector, kind, file, filekey, parse, flush, line_box);
     }
-    let expected = collector
-        .resume
-        .get(&(kind.to_string(), filekey.to_string()))
-        .and_then(|(_, state)| state.get("sessionDigest").and_then(Value::as_str).map(str::to_string));
+    let append = collector.store_incremental && collector.resume_point(kind, filekey).0 != skip;
+    if append && kind != "codex" {
+        let mut file = file;
+        if file.seek(SeekFrom::Start(skip)).is_err() {
+            return Outcome::Unreadable;
+        }
+        return read_lines(collector, kind, file, filekey, parse, flush, line_box);
+    }
+    let expected = if append {
+        collector
+            .prior_print(kind, filekey)
+            .and_then(|p| p["appendState"]["parser"]["sessionDigest"].as_str())
+            .map(str::to_owned)
+    } else {
+        collector
+            .resume
+            .get(&(kind.to_string(), filekey.to_string()))
+            .and_then(|(_, state)| state.get("sessionDigest").and_then(Value::as_str).map(str::to_string))
+    };
     let restart = |collector: &mut Collector, line_box: &mut LineBox| {
         *line_box = LineBox {
             message_from,
@@ -884,16 +1009,23 @@ fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse,
             if from > 0 {
                 line_box.restore_codex(&state);
             }
+            let append = if from == 0 {
+                append_from(collector, "codex", path, &key, &mut line_box)
+            } else {
+                0
+            };
             let outcome = read_into(collector, "codex", path, &key, parse, flush, &mut line_box);
             let from = if line_box.restarted { 0 } else { from };
+            let append = if line_box.restarted { 0 } else { append };
             match outcome {
                 Outcome::Cut => {
-                    if !collector.row_cap {
+                    if !collector.row_cap && append == 0 {
                         collector.cut_file("codex", &key, from, line_box.through, line_box.codex_state(), path);
                     }
                     return true;
                 }
                 Outcome::Ok => {
+                    save_append(collector, "codex", path, &key, &line_box, append);
                     collector.sent_through("codex", &key, path);
                     collector.confirm_file("codex", &key);
                     collector.finish_resumed("codex", &key, from);

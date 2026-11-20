@@ -314,6 +314,9 @@ pub fn walk_files(
                 continue;
             }
             let path = directory.join(&name);
+            if accept(&name) && collector.skip_settled(kind, root, &path) {
+                continue;
+            }
             // Never follow a directory link just to classify it (FIX-ROUND-BIG 9).
             let link = is_link(&path);
             if link && !accept(&name) {

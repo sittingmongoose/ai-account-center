@@ -453,11 +453,10 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     }
     let mut kinds = Map::new();
     for kind in &request.kinds {
-        let prints: Map<String, Value> = collector
-            .fresh
-            .get(kind)
-            .map(|m| m.iter().map(|(k, p)| (k.clone(), p.to_json())).collect())
-            .unwrap_or_default();
+        let mut prints = collector.settled.remove(kind).unwrap_or_default();
+        if let Some(fresh) = collector.fresh.get(kind) {
+            prints.extend(fresh.iter().map(|(k, p)| (k.clone(), p.to_json())));
+        }
         let mut entry = Map::new();
         entry.insert("state".into(), states.get(kind).cloned().unwrap_or(json!("pending")));
         entry.insert("fingerprints".into(), Value::Object(prints));
@@ -516,7 +515,9 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                     prior
                         .keys()
                         .filter(|key| {
-                            !collector.fresh.get(kind).is_some_and(|fresh| fresh.contains_key(*key))
+                            !entry["fingerprints"]
+                                .as_object()
+                                .is_some_and(|fresh| fresh.contains_key(*key))
                                 && !(kind == "claude" && collector.replaced_files.contains(*key))
                         })
                         .count()
