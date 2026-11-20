@@ -1,10 +1,13 @@
 import type { Router } from 'express';
-import { respondWithRust } from '../rust-service';
+import path from 'node:path';
+import { getCcsDir } from '../../utils/config-manager';
+import { withPrivateFileLock } from '../services/private-json-store';
+import { respondWithRust, writeWithRust } from '../rust-service';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
-import { rescheduleAccountAnalyticsSampling } from '../services/account-analytics-service';
 import {
+  ACCOUNT_REFRESH_SETTINGS_FILE,
   isAccountRefreshSettings,
   readAccountRefreshSettings,
   writeAccountRefreshSettings,
@@ -34,7 +37,7 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
   router.get('/settings', (req, res) =>
     respondWithRust(req, res, '/api/accounts/settings', deps.read ?? readAccountRefreshSettings)
   );
-  router.put('/settings', (req, res) => {
+  router.put('/settings', async (req, res) => {
     if (
       typeof req.headers.origin !== 'string' ||
       !req.headers.origin ||
@@ -52,8 +55,28 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
       return;
     }
     try {
-      const saved = (deps.write ?? writeAccountRefreshSettings)(req.body);
-      (deps.onChanged ?? rescheduleAccountAnalyticsSampling)();
+      const input = req.body;
+      const ccs = getCcsDir();
+      const saved = await withPrivateFileLock(
+        path.join(ccs, ACCOUNT_REFRESH_SETTINGS_FILE),
+        async () => {
+          const value = deps.write
+            ? deps.write(input)
+            : await writeWithRust(
+                req,
+                res,
+                '/api/accounts/settings',
+                'account-refresh-settings',
+                () => input,
+                (value): value is AccountRefreshSettings =>
+                  isAccountRefreshSettings(value) &&
+                  value.refreshIntervalSeconds === input.refreshIntervalSeconds,
+                () => writeAccountRefreshSettings(input, ccs)
+              );
+          deps.onChanged?.();
+          return value;
+        }
+      );
       res.json(saved);
     } catch {
       res.status(500).json({ error: 'Usage refresh settings could not be saved.' });

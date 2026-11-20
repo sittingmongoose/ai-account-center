@@ -41,7 +41,6 @@ import {
 } from '../../../src/web-server/services/dashboard-auth-files';
 import { resetDeviceStoreForTests } from '../../../src/web-server/services/dashboard-device-store';
 import { resetSetupCodeForTests } from '../../../src/web-server/services/dashboard-setup-code';
-import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
 
 interface RawResponse {
@@ -278,7 +277,6 @@ beforeEach(async () => {
   );
   fs.writeFileSync(path.join(staticDir, 'view-model.mjs'), 'export default 1;\n'.repeat(200));
 
-  spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
   // Compression needs stable synthetic bytes. The real dashboard collector can
   // read shared quota snapshots even with CCS_HOME isolated, and cache aging
   // between these two requests changes the payload independently of compression.
@@ -407,7 +405,15 @@ describe('startServer: compression, session skip and the upgrade', () => {
     const page = await rawRequest(port, 'GET', '/');
     expect(page.headers['x-ccs-request-id']).toBeDefined();
 
-    const logged = getRecentLogEntries()
+    const entries =
+      process.env.AAC_M6_FIXTURE_REPORT === '1'
+        ? fs
+            .readFileSync(path.join(tempRoot, '.ccs', 'logs', 'current.jsonl'), 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line) as ReturnType<typeof getRecentLogEntries>[number])
+        : getRecentLogEntries();
+    const logged = entries
       .filter((entry) => entry.event === 'request.completed')
       .map((entry) => entry.context?.path)
       .filter((path) => path === '/view-model.mjs' || path === '/api/health');

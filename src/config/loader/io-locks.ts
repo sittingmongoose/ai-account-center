@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as yaml from 'js-yaml';
 import { ConfigError } from '../../errors/error-types';
+import { claimWriterLease } from '../../shared/private-file-lease';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   isUnifiedConfig,
@@ -67,13 +68,22 @@ function getLockFilePath(): string {
 // Process check
 // ---------------------------------------------------------------------------
 
-function processExists(pid: number): boolean {
+function deadClaim(content: string): boolean {
+  const pidLine = content.trim().split(/\r?\n/, 1)[0];
+  const pid = Number(pidLine);
+  if (!/^\d+$/.test(pidLine) || pid <= 0 || pid > 0x7fffffff) return false;
   try {
     process.kill(pid, 0);
-    return true;
-  } catch {
     return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
   }
+}
+
+function readClaim(lockPath: string): string {
+  const stat = fs.lstatSync(lockPath);
+  if (!stat.isFile() || stat.size > 1024) throw new ConfigError('Invalid config writer claim.');
+  return fs.readFileSync(lockPath, 'utf8');
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +93,7 @@ function processExists(pid: number): boolean {
 /**
  * Acquire lockfile for config write operations.
  * Returns a lock token if acquired, null if already locked by another process.
- * Cleans up stale locks (older than LOCK_STALE_MS).
+ * Reclaims an unchanged claim only after proving its owner is dead.
  */
 export function acquireLock(): string | null {
   const lockPath = getLockFilePath();
@@ -91,38 +101,36 @@ export function acquireLock(): string | null {
   const lockToken = crypto.randomUUID();
   const lockData = `${process.pid}\n${Date.now()}\n${lockToken}`;
 
+  const pending = path.join(lockDir, '.config-claim-' + lockToken);
   try {
-    if (!fs.existsSync(lockDir)) {
-      fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(pending, lockData, { flag: 'wx', mode: 0o600 });
+    try {
+      fs.linkSync(pending, lockPath);
+      return lockToken;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return null;
     }
 
-    // Check if lock exists
-    if (fs.existsSync(lockPath)) {
-      const content = fs.readFileSync(lockPath, 'utf8');
-      const [pidStr, timestampStr] = content.trim().split('\n');
-      const pid = Number.parseInt(pidStr, 10);
-      const timestamp = Number.parseInt(timestampStr, 10);
-      const hasLiveOwner = Number.isInteger(pid) && pid > 0 && processExists(pid);
-      const isStale = !Number.isFinite(timestamp) || Date.now() - timestamp > LOCK_STALE_MS;
-
-      if (hasLiveOwner) {
-        return null;
-      }
-
-      if (isStale || !hasLiveOwner) {
-        fs.unlinkSync(lockPath);
-      }
+    const held = readClaim(lockPath);
+    if (!deadClaim(held)) return null;
+    const takeover = claimWriterLease(lockDir, path.join(lockDir, 'config.yaml.reclaim.lock'));
+    try {
+      const again = readClaim(lockPath);
+      if (again !== held || !deadClaim(again)) return null;
+      fs.renameSync(pending, lockPath);
+      return lockToken;
+    } finally {
+      takeover.close();
     }
-
-    // Acquire lock
-    fs.writeFileSync(lockPath, lockData, { flag: 'wx', mode: 0o600 });
-    return lockToken;
-  } catch (error) {
-    // EEXIST means another process acquired the lock between our check and write
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      return null;
-    }
+  } catch {
     return null;
+  } finally {
+    try {
+      fs.unlinkSync(pending);
+    } catch {
+      // The claim was moved into place or the temporary file was never written.
+    }
   }
 }
 
@@ -203,7 +211,7 @@ export function withConfigWriteLock<T>(callback: () => T): T {
   }
 
   if (!lockToken) {
-    throw new Error('Config file is locked by another process. Wait a moment and try again.');
+    throw new ConfigError('Config file is locked by another process. Wait a moment and try again.');
   }
 
   try {
@@ -238,7 +246,7 @@ export function loadUnifiedConfigWithLockHeld(
   const parsed = yaml.load(content);
 
   if (!isUnifiedConfig(parsed)) {
-    throw new Error(`Invalid config format in ${yamlPath}`);
+    throw new ConfigError(`Invalid config format in ${yamlPath}`);
   }
 
   return mergeWithDefaults(parsed);
@@ -330,9 +338,9 @@ export function writeUnifiedConfigWithLockHeld(
       );
     }
     if (err.code === 'ENOSPC') {
-      throw new Error('Disk full - cannot save config. Free up space and try again.');
+      throw new ConfigError('Disk full - cannot save config. Free up space and try again.');
     } else if (err.code === 'EROFS' || err.code === 'EACCES') {
-      throw new Error(`Cannot write config - check file permissions: ${err.message}`);
+      throw new ConfigError(`Cannot write config - check file permissions: ${err.message}`);
     }
     throw error;
   }

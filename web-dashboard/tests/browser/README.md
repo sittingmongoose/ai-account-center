@@ -35,7 +35,7 @@ CSS pixels, including the Duo rail.
 
 ## What a run does
 
-- **Build needed.** It serves this checkout's `dist/ccs.js` and `dist/ui` (it needs `dist/ui/app/index.html`), so run `bun install` and `bun run build:server` first. Build `dist/ui` with `bun run ui:build` on a build host (the VM refuses: `AAC_NO_LOCAL_RUST_BUILD=1`), or for a first look copy the installed package's `dist/ui`.
+- **Build needed.** Use `--set cut=1` for the shipped native launcher in `dist/native` and its private worker. The legacy fixture uses `dist/ccs.js`. Run `bun run build:server` and build `dist/ui` on a build host, or use the corresponding packaged assets.
 - **Isolated home.** The server starts with `CCS_HOME` and every home-like variable pointing at a temporary folder: `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, the XDG folders, `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Some collectors read the real home, so with only `CCS_HOME` set, real account emails and usage appear. Never point `home=` at a real home.
 - **Real sign-in.** `t.app.signIn()` goes through the real loopback setup (`POST /api/auth/setup`), or logs in once setup has happened. It runs as a `fetch` inside the page, so the session cookie lands in that page's jar.
 - **Pages.** `t.app.open({ page })` opens `/app/<page>?e2e` and waits for the frame (or, with `signIn: false`, the sign-in page). With `?e2e` the controllers keep their last views and toasts on `window` (`__aacLastAccounts`, `__aacLastAnalytics`, `__aacToasts`) and controls carry `data-probe` names; checks judge the DOM, so `t.audit` checks every control itself.
@@ -84,10 +84,9 @@ polling. It uses only synthetic status responses and media.
 viewport and combined probe dimensions. For those edge regressions, add `--set rawProbe=1` to exercise the
 computed-padding seam. Each edge must update safe properties and content clearance without a viewport event.
 
-**Home built by Rust (D7, opt-in).** `--set rustHome=1` starts the server with `AAC_RUST_SERVICE=on` and
-`AAC_RUST_HOME_VIEW=on` and the binary in `dist/native/aac-http` (`--set rustBinary=<path>` for another; build it on
-a build host). Without it both are explicitly off. Stubbed Home data never reaches the server, so the kit runs an
-aac-http of its own (`rust-home-builder.mjs`): `t.app.stub` then offers the server view on the dashboard answer and
+**Home built by Rust.** The cut launcher serves Home natively. `--set rustHome=1` starts that launcher with
+the worker disabled and enables the kit's Rust renderer for fixture data. The kit runs
+`dist/native/aac-http` (`--set rustBinary=<path>` for another build) so `t.app.stub` can offer the server view on the dashboard answer and
 answers `/api/views/home` with the Rust view of the stubbed data, from the first read. The envelope is the real
 front door's (`homeReadInput`, run under Bun by `tests/spec/views/home/envelope.ts`, so `bun` must be on PATH).
 `t.app.rustHome()` and the run folder's `rust-home.json` count what it built and refused. `checks/home-server-view.check.mjs` covers the
@@ -95,15 +94,13 @@ switch, the real front-door wiring, and the fixture Home drawn from Rust against
 DOM and pixels). The device fixture proxy takes `AAC_FIXTURE_RUST_HOME=<aac-http>` for the same, and then serves
 `/__d7/home-spec`, which runs the Home spec in the device's own browser.
 
-**Home fed (R1, opt-in).** `--set rustHomeFed=1` implies `rustHome=1` and also starts the server with
-`AAC_RUST_GROUP_HOME=on`, so the server's own `GET /api/views/home` (the real-wiring check) is answered from fed
-generations; stubbed Home data still goes through the kit's own builder. Without it the group is explicitly off.
+`--set rustHomeFed=1` is an alias for `rustHome=1`. Use `--set cut=1` for the native shipping
+launcher with its worker and the default Home fixtures.
 
-**Status fed (R2, opt-in).** `--set rustStatusFed=1` starts the server with `AAC_RUST_SERVICE=on` and
-`AAC_RUST_GROUP_STATUS=on` and the binary in `dist/native/aac-http` (`--set rustBinary=<path>` for another), so the
-server's own `GET /api/status` is answered from fed generations. `status end to end on the server` (the only Status
-check without stubs) then requires the bridge's `/api/status` counters to show fed answers and no decline; with the
-switch off it requires none. Without it the group is explicitly off.
+**Native Status and Scoreboard.** Run `browser-check run web-dashboard/tests/browser/checks --grep status --set rustOwned=1`
+and then the same command with `--grep scoreboard`. The kit starts `dist/native/ai-account-center` with a temporary
+reports share and the worker off. The end-to-end checks use the public Rust routes, verify the view headers, and
+exercise card media, answers, and the Scoreboard's run ingest.
 
 ## Recording, machines and parallel runs
 

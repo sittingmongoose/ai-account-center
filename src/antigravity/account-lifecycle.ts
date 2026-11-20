@@ -15,6 +15,7 @@ import {
   liveLoginFileExists,
   liveLoginToRenew,
   renewLiveLogin,
+  type DispatchLiveRenewal,
   type LiveLoginAccess,
 } from './live-login-renewal';
 import type { NativeCredential, ProfileDto, VerifiedIdentity } from './types';
@@ -72,6 +73,7 @@ export interface AntigravityLifecycleDeps {
   readNativeCredential?: () => Promise<NativeCredential>;
   /** Installs the live native login only while it still has `expected`; the guarded store by default. */
   installNativeCredential?: (credential: NativeCredential, expected: string) => Promise<unknown>;
+  dispatchLiveRenewal?: DispatchLiveRenewal;
   now?: () => number;
 }
 
@@ -246,7 +248,7 @@ export class AntigravityAccountLifecycle {
     if (!this.existingRegistry()) throw new AntigravityLifecycleError('unknown_account');
     let registry: AntigravityProfileRegistry;
     try {
-      registry = new AntigravityProfileRegistry(this.ccsDir());
+      registry = new AntigravityProfileRegistry(this.ccsDir(), { lifecycleWrites: true });
     } catch {
       throw new AntigravityLifecycleError('remove_failed');
     }
@@ -279,7 +281,7 @@ export class AntigravityAccountLifecycle {
    */
   async sweepOrphans(): Promise<{ removed: number; leftInPlace: number }> {
     if (!this.existingRegistry()) return { removed: 0, leftInPlace: 0 };
-    const registry = new AntigravityProfileRegistry(this.ccsDir());
+    const registry = new AntigravityProfileRegistry(this.ccsDir(), { lifecycleWrites: true });
     try {
       return await registry.withLock(async () => registry.sweepOrphanedInstances());
     } catch (error) {
@@ -310,7 +312,7 @@ export class AntigravityAccountLifecycle {
     if (this.nameError(profileId)) throw new AntigravityLifecycleError('write_failed');
     let registry: AntigravityProfileRegistry;
     try {
-      registry = new AntigravityProfileRegistry(this.ccsDir());
+      registry = new AntigravityProfileRegistry(this.ccsDir(), { lifecycleWrites: true });
     } catch {
       throw new AntigravityLifecycleError('write_failed');
     }
@@ -375,7 +377,8 @@ export class AntigravityAccountLifecycle {
             previous,
             credential,
             liveFingerprint,
-            save
+            save,
+            this.deps.dispatchLiveRenewal
           );
           if (outcome !== 'renewed') throw new AntigravityLifecycleError(outcome);
         } else {

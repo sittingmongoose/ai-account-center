@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import express from 'express';
-import { createResetClaimRouter } from '../../../src/web-server/routes/reset-claim-routes';
+import { createResetClaimRouter } from '../../fixtures/reset-adapter/reset-claim-routes';
 const require = createRequire(import.meta.url);
 
 const nativeTest = test.skipIf(!process.env.AAC_RESET_TEST_MODULE);

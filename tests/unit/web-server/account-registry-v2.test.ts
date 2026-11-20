@@ -316,6 +316,7 @@ describe('account registry v2 file', () => {
     expect(fs.statSync(v1).mode & 0o777).toBe(0o644);
     expect(fs.readdirSync(dir).sort()).toEqual([
       ACCOUNT_REGISTRY_FILE,
+      `${ACCOUNT_REGISTRY_FILE}.lock`,
       'account-usage-sources.json',
     ]);
     // A second write builds on the saved registry and does not migrate again.
@@ -354,7 +355,10 @@ describe('account registry v2 file', () => {
       read.state === 'ok' &&
         read.registry.accounts.filter((entry) => entry.provider === 'zai').map((entry) => entry.id)
     ).toEqual(['zai:usage', 'zai:acct:00000001', 'zai:acct:00000002', 'zai:acct:00000003']);
-    expect(fs.readdirSync(dir)).toEqual([ACCOUNT_REGISTRY_FILE]);
+    expect(fs.readdirSync(dir).sort()).toEqual([
+      ACCOUNT_REGISTRY_FILE,
+      `${ACCOUNT_REGISTRY_FILE}.lock`,
+    ]);
   });
 
   it('refuses a lifecycle write that would add a dashboard discover row', async () => {

@@ -107,8 +107,7 @@ export const tests = {
 	async 'scoreboard without the by-model view'(t) {
 		await t.viewport(1440, 900);
 		await t.app.signIn();
-		// The server's own answer without `byModel`: a server whose aac-status native module is built sends it
-		// (scoreboard-service.ts), one without the module does not, and this is the page's word for the second.
+		// Remove the projection in the fixture to exercise the page's unavailable state.
 		await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', async (r) => {
 			const response = await r.fetch();
 			const json = await response.json();
@@ -120,6 +119,28 @@ export const tests = {
 		await t.text('.sb-unavail', /isn't available from this server yet/);
 		await t.count('.picks, .sb-matrix', 0);
 		await t.audit('scoreboard unavailable');
+	},
+
+	// No stubs: the Rust service ingests the kit's fixture runs and catalog and serves the page.
+	async 'scoreboard end to end on the server'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		// The owned ingest is a background pass: the page's first read may come before it lands, so wait for the data.
+		await t.until('the server answers with the fixture runs', async () => {
+			const r = await fetch('/api/scoreboard', { credentials: 'same-origin' });
+			if (!r.ok) return false;
+			const view = await r.json();
+			return Array.isArray(view.uses) && view.uses.length > 0 && (view.history?.runs ?? 0) > 0;
+		}, null, { timeout: 60000 });
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.waitForSelector('.picks');
+		await t.count('.sb-unavail', 0);
+		await t.audit('scoreboard end to end 1440');
+		const result = await t.page.evaluate(async () => {
+			const response = await fetch('/api/scoreboard', { cache: 'reload' });
+			return { status: response.status, view: response.headers.get('x-aac-view') };
+		});
+		await t.check('Rust served the Scoreboard view', result.status === 200 && result.view === 'scoreboard@1', JSON.stringify(result));
 	},
 
 	async 'scoreboard desktop'(t) {

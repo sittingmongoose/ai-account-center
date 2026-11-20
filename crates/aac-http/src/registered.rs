@@ -20,6 +20,14 @@ pub(crate) fn file(root: &Path, id: &str) -> Option<(PathBuf, ReadPolicy<'static
     ))
 }
 
+pub(crate) fn snapshot_settings(root: &Path) -> Option<aac_snapshot::SnapshotSettings> {
+    let (file, policy) = file(root, "agent-usage-snapshot")?;
+    let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
+        return None;
+    };
+    aac_snapshot::settings::validate_settings(&serde_json::from_slice(&bytes).ok()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

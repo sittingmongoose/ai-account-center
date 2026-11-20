@@ -1,5 +1,5 @@
 /**
- * M3 part 3: GET /api/accounts/{visibility,preferences,registry,analytics} through the real TS
+ * M3 part 3: GET /api/accounts/{visibility,preferences,registry} through the real TS
  * routers over HTTP, in off, on and shadow modes, against the goldens in
  * contract/m3-part3-account-reads.json. On mode must serve every case marked `rust` from the
  * Rust service with no TS reader/composer call, and log a TS fallback for every other case;
@@ -88,14 +88,22 @@ if (worker < 0) {
         throw new Error(result.stderr || result.stdout || `${mode}: account read worker failed`);
       reports.push(JSON.parse(fs.readFileSync(file, 'utf8')) as Report);
     }
-    const expected = (JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Array<{ name: string }>).filter(
-      (row) => !HOSTLESS.has(row.name)
-    );
+    // Keep the nine original Analytics HTTP replies as references. The public native Analytics
+    // M0 run and positive store-backed tests cover the retired Express adapter now.
+    const analytics = (row: Row) => row.route.startsWith('/api/accounts/analytics?');
+    const golden = JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Row[];
+    const archivedAnalytics = golden.filter(analytics);
+    assert.equal(archivedAnalytics.length, 9, 'the original Analytics reference rows are retained');
+    assert.ok(!reports[0].rows.some(analytics), 'the Express route is retired');
+    const expected = golden.filter((row) => !HOSTLESS.has(row.name) && !analytics(row));
     const expectedText = JSON.stringify(expected, null, 2) + '\n';
     const bytes = JSON.stringify(reports[0].rows, null, 2) + '\n';
     if (process.argv.includes('--regenerate')) {
       assert.equal(HOSTLESS.size, 0, 'record the goldens on a POSIX host');
-      fs.writeFileSync(GOLDEN, bytes);
+      fs.writeFileSync(
+        GOLDEN,
+        JSON.stringify([...reports[0].rows, ...archivedAnalytics], null, 2) + '\n'
+      );
     } else assert.ok(expectedText === bytes, 'account read golden bytes changed');
     for (const report of reports) {
       for (const [index, row] of report.rows.entries())
@@ -217,8 +225,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
     await import('../../src/web-server/routes/account-preferences-routes');
   const { createAccountLifecycleRouter } =
     await import('../../src/web-server/routes/account-lifecycle-routes');
-  const { createAccountAnalyticsRouter } =
-    await import('../../src/web-server/routes/account-analytics-routes');
   const { createAccountRefreshSettingsRouter } =
     await import('../../src/web-server/routes/account-refresh-settings-routes');
   const visibilityModule = await import('../../src/web-server/services/account-visibility');
@@ -260,7 +266,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
   }) as never);
 
   const registryFixture = fixtures.registryFixture(spyOn, accountsModule);
-  let analytics = await fixtures.analyticsService(canonicalCcs, null);
   const app = express();
   app.use((req, res, next) => {
     res.locals.rustService = bridge;
@@ -274,10 +279,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
   app.use('/api/accounts', createAccountVisibilityRouter());
   app.use('/api/accounts', createAccountPreferencesRouter());
   app.use('/api/accounts', createAccountRefreshSettingsRouter({ onChanged: () => {} }));
-  app.use(
-    '/api/accounts',
-    createAccountAnalyticsRouter({ getAnalytics: (q, c) => analytics.get(q, c) })
-  );
   app.use('/api/accounts', createAccountLifecycleRouter({ env: () => registryFixture.env }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
@@ -347,19 +348,6 @@ async function runWorker(mode: string, destination: string): Promise<void> {
         form.compared ?? true
       );
     }
-    for (const form of fixtures.analyticsForms()) {
-      analytics = await fixtures.analyticsService(
-        canonicalCcs,
-        form.dashboard ?? null,
-        form.history
-      );
-      await run(
-        `analytics: ${form.name}`,
-        `/api/accounts/analytics?${form.query}`,
-        form.rust,
-        form.compared ?? true
-      );
-    }
 
     // Composition tables over the private socket: TS composer vs Rust, byte for byte.
     const tables = {
@@ -411,13 +399,11 @@ async function runWorker(mode: string, destination: string): Promise<void> {
       metrics = {};
       fixtures.resetCcs(ccs);
       fixtures.writeMeasureFiles(ccs);
-      analytics = await fixtures.analyticsService(canonicalCcs, null);
       const routes: Array<[string, string]> = [
         ['settings', '/api/accounts/settings'],
         ['visibility', '/api/accounts/visibility'],
         ['preferences', '/api/accounts/preferences'],
         ['registry', '/api/accounts/registry'],
-        ['analytics', '/api/accounts/analytics?range=7d&tz=UTC'],
       ];
       for (const [name, route] of routes) {
         const samples: number[] = [];

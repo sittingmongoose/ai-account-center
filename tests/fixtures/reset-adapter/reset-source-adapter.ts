@@ -1,0 +1,137 @@
+/** Registry/manifest glue only. Native Rust owns normalization and all claim policy.
+ * Host credentials stay inside the existing collector's verified Windows process.
+ */
+import * as fs from 'fs';
+import * as path from 'path';
+import { ProviderError } from '../../../src/errors/error-types';
+import { getCodexAuthProfilesSummary } from '../../../src/codex-auth/codex-auth-dashboard-service';
+import { loadNativeStatus } from '../../../src/status-native/native-loader';
+import type { ResetSource, ResetWrite } from './reset-source-contract';
+import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
+import { listClaudeDesktopProfiles } from '../../../src/web-server/services/claude-desktop-profile-service';
+import { isDefaultClaudeDataFolder } from '../../../src/web-server/services/claude-account-records';
+import { sshLaunch } from '../../../src/web-server/services/ssh-policy';
+import {
+  localUsageHost,
+  privateUsageInvocation,
+  runPrivateUsageHelper,
+} from '../../../src/web-server/services/usage-failover-transport';
+import { getCcsDir } from '../../../src/utils/config-manager';
+import type {
+  UsageHelperRequest,
+  UsageHost,
+} from '../../../src/web-server/services/usage-failover-contract';
+
+export function createResetSourceAdapter(): ResetSource {
+  /** A ticketed read uses the route's claims-file writer; a write never opens that file. */
+  async function native(method: string, input: unknown, file?: NativeStatusHandle) {
+    if (file) return JSON.parse(await file.call(method, JSON.stringify(input)));
+    const loaded = loadNativeStatus();
+    if (!loaded.module) throw new ProviderError('Reset module unavailable.', 'reset-claims');
+    return JSON.parse(await new loaded.module.NativeStatus().call(method, JSON.stringify(input)));
+  }
+  async function execute(
+    account: string,
+    write?: ResetWrite,
+    beforeHostDispatch?: () => void,
+    claimsFile?: NativeStatusHandle
+  ): Promise<unknown> {
+    let context: { dbPath: string; routeAccount: string } | undefined;
+    const file = write ? undefined : claimsFile;
+    if (!write) {
+      const dir = path.join(getCcsDir(), 'account-usage', 'reset-claims');
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      context = { dbPath: path.join(dir, 'claims.sqlite'), routeAccount: account };
+    }
+    if (account.startsWith('codex:')) {
+      const name = account.slice('codex:'.length);
+      const summary = await getCodexAuthProfilesSummary();
+      const profile = summary.profiles.find((p) => p.name === name && p.authValid);
+      if (!profile || !profile.accountId)
+        throw new ProviderError(
+          'credential-host-unavailable: Exact saved profile unavailable.',
+          'codex'
+        );
+      return native(
+        'resetCodexSource',
+        {
+          home: profile.codexHome,
+          expectedAccount: profile.accountId,
+          profile: profile.name,
+          host: localUsageHost().host,
+          write: write ?? null,
+          ...context,
+        },
+        file
+      );
+    }
+    if (!account.startsWith('claude:'))
+      throw new ProviderError('provider-read-only: Provider read only.', 'reset-claims');
+    const profiles = await listClaudeDesktopProfiles();
+    const profile = profiles.find((p) => `claude:${p.id ?? p.email}` === account);
+    const win = profile?.windows;
+    if (!profile || !win || (!win.sshHost && process.platform !== 'win32')) {
+      throw new ProviderError(
+        'credential-host-unavailable: Credential host unavailable.',
+        'claude'
+      );
+    }
+    const host: UsageHost = { host: 'windows', platform: 'windows', sshHost: win.sshHost ?? null };
+    const input = {
+      action: write ? 'claim' : 'read',
+      profile: profile.id ?? 'default',
+      expectedEmail: profile.email,
+      profileDir: win.profilePath ?? null,
+      isDefault: win.isDefault === true || isDefaultClaudeDataFolder(win.profilePath),
+      host: `windows:${win.sshHost ?? 'local'}`,
+      write: write ?? null,
+    };
+    const script = await fs.promises.readFile(
+      path.resolve(__dirname, '../../../scripts/account-usage/claude_usage.py'),
+      'utf8'
+    );
+    // Strings are JSON literals in Python; no shell interpolation or temporary remote file.
+    const source = [
+      'import json,sys',
+      'scope={"__name__":"aac_private_reset"}',
+      `exec(compile(json.loads(${JSON.stringify(JSON.stringify(script))}),"managed-reset","exec"),scope)`,
+      'request=json.load(sys.stdin)',
+      'print(json.dumps(scope["reset_host"](request),allow_nan=False))',
+    ].join('\n');
+    const transportRequest: UsageHelperRequest = {
+      version: 1,
+      action: 'inventory',
+      provider: 'claude',
+    };
+    if (write) {
+      beforeHostDispatch?.();
+      return JSON.parse(await runPrivateUsageHelper(host, transportRequest, source, input));
+    }
+    const command = await privateUsageInvocation(host, transportRequest, source, input);
+    // The native helper spawns exactly the probed ssh file, checked just before the call.
+    return native(
+      'resetClaudeSource',
+      {
+        ...context,
+        command: { ...command, executable: await sshLaunch(command.executable, command.args) },
+      },
+      file
+    );
+  }
+  return {
+    read: (account, claimsFile) => execute(account, undefined, undefined, claimsFile),
+    send: async (write) => {
+      let dispatched = false;
+      try {
+        return (await execute(write.routeAccount, write, () => {
+          dispatched = true;
+        })) as { outcome: string; retryAfterMs?: number };
+      } catch (error) {
+        // A manifest/script failure before starting the Claude host command
+        // proves nothing was sent. A lost host response cannot prove that.
+        if (write.routeAccount.startsWith('claude:') && !dispatched) return { outcome: 'not-sent' };
+        throw error;
+      }
+    },
+  };
+}

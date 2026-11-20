@@ -227,6 +227,7 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
         }
         "activitySources" => activity::sources(engine, &parse(args)?)?,
         "activityOldest" => activity::oldest(engine)?,
+        "activityModels" => activity::models(engine)?,
         "activityCounts" => activity::counts(engine)?,
         "activityBackfill" => {
             #[derive(Deserialize)]

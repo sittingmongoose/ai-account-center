@@ -144,20 +144,12 @@ stub('utils/managed-process.js', {
   stopProcessBroker: async () => {},
   runManagedCommand: async () => ({ stdout: '', stderr: '', exitCode: 1, timedOut: false }),
 });
-stub('web-server/services/account-analytics-service.js', {
-  startAccountAnalyticsSampling: noop,
-  stopAccountAnalyticsSampling: noop,
-});
 stub('web-server/services/account-lifecycle-runtime.js', {
   startAccountLifecycleMaintenance: noop,
   stopAccountLifecycleMaintenance: noop,
 });
 if (!owners) {
-  stub('web-server/status/status-service.js', { startStatusService: () => noop });
-  stub('web-server/scoreboard/scoreboard-service.js', { startScoreboardService: noop });
 }
-stub('web-server/services/cgroup-foreign-check.js', { startCgroupForeignCheck: () => noop });
-stub('web-server/agent-usage/agent-usage-snapshot.js', { startAgentUsageSnapshot: () => noop });
 stub('antigravity/production-runtime.js', { getInstalledAntigravityRuntimeFactory: () => null });
 stub('store/store-service.js', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),

@@ -13,6 +13,7 @@ import concurrent.futures
 import contextlib
 import hashlib
 import http.client
+import http.server
 import json
 import os
 from pathlib import Path
@@ -39,13 +40,14 @@ class UnixHttp(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 class Service:
-    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None):
+    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False, remote_env=None, cursor_fixture=False, local_helper=False):
         self.temp = tempfile.TemporaryDirectory(prefix='a5-')
         self.root = Path(self.temp.name)
         self.agent = str(Path(agent).resolve())
         self.trace = self.root / 'trace.jsonl'
         self.scenario = self.root / 'scenario'
         self.scenario.write_text(scenario)
+        (self.root / 'remote-env.json').write_text(json.dumps(remote_env or {}))
         identity = json.loads(subprocess.check_output([self.agent, '--version'], env={'PATH': os.defpath}))
         self.identity = identity
         artifact = self.agent
@@ -60,24 +62,41 @@ class Service:
         folder = run / ('aac-http-' + BOOT)
         folder.mkdir(mode=0o700)
         self.socket = folder / 'http.sock'
-        config = {'agentTransport': mode, 'computers': {'fixture': {
+        config = {'version': 1, 'agentTransport': mode, 'computers': {'fixture': {
             'label': 'Fixture', 'os': 'linux', 'sshAlias': 'fixture',
             'transport': {'kind': 'ssh', 'host': 'fixture.invalid', 'key': str(self.root / 'no-key'), 'user': None, 'port': None}}},
             'agentTransportSsh': {'knownHostsFile': str(self.root / 'no-known-hosts')}}
+        if local_helper:
+            config['computers']['fixture-local'] = {
+                'label':'Fixture local', 'os':'linux', 'transport':{'kind':'local'},
+            }
         (self.root / 'config.yaml').write_text(json.dumps(config))
         recorder = self.root / 'ssh'
-        recorder.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,' + repr(str(Path(__file__).parent)) + ')\nfrom transport import record\nrecord(' + repr(str(self.root)) + ',' + repr(self.agent) + ')\n')
+        recorder.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,' + repr(str(Path(__file__).parent)) + ')\nfrom transport import record\nrecord(' + repr(str(self.root)) + ',' + repr(self.agent) + ',' + repr(json.dumps(dict(os.environ))) + ')\n')
         recorder.chmod(0o700)
         scp = self.root / 'scp'
         scp.write_text('#!/bin/sh\nexit 99\n')
         scp.chmod(0o700)
         env = {**os.environ, 'PATH': str(self.root) + ':' + os.environ.get('PATH', os.defpath),
                'AAC_AGENT_PACKAGE_ROOT': str(ROOT), 'AAC_AGENT_CATALOG': str(self.root / 'catalog.json')}
+        if cursor_fixture:
+            package = self.root / 'cursor-package'
+            install_cursor_fixture(package, self.root)
+            env['AAC_AGENT_PACKAGE_ROOT'] = str(package)
+        if local_helper:
+            home = self.root / 'local-home'
+            home.mkdir()
+            env['HOME'] = str(home)
         env.pop('AAC_AGENT_TRANSPORT', None)
         self.child = subprocess.Popen([str(Path(service).resolve())], stdin=subprocess.PIPE,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
-        self.child.stdin.write((json.dumps({'ccsDir': str(self.root), 'socketPath': str(self.socket),
-                                           'secret': SECRET, 'bootId': BOOT}) + '\n').encode())
+        boot = {'ccsDir': str(self.root), 'socketPath': str(self.socket),
+                'secret': SECRET, 'bootId': BOOT}
+        if collection:
+            rows = json.loads((ROOT / 'config/private-files.json').read_text())['rows']
+            boot['files'] = {row['id']: ('rust-service' if row['movesWith'] == 'collection' else row['owner'])
+                             for row in rows}
+        self.child.stdin.write((json.dumps(boot) + '\n').encode())
         self.child.stdin.flush()
         until = time.monotonic() + 10
         while True:
@@ -118,11 +137,142 @@ class Service:
     def __enter__(self): return self
     def __exit__(self, *unused): self.close()
 
-def record(root, agent):
+def install_cursor_fixture(package, root):
+    target = 'x86_64-unknown-linux-gnu'
+    folder = package / 'dist/native/aac-cursor-account'
+    binary = folder / target / 'aac-cursor-account'
+    binary.parent.mkdir(parents=True)
+    source = """#!/usr/bin/python3
+import json, sys, time
+from pathlib import Path
+assert sys.argv[-2:] == ['--ccs-dir', ROOT]
+root = Path(ROOT)
+command = sys.argv[1:-2]
+if command == ['key', 'status']:
+    print(json.dumps({'present':True,'fingerprint':'sha256:1234567890abcdef'}))
+    sys.exit(0)
+if command == ['quota']:
+    print(json.dumps({'state':'read','quota':{'planUsage':{'totalPercentUsed':7,'autoPercentUsed':2}}}))
+    sys.exit(0)
+assert command == ['read']
+bounds = json.load(sys.stdin)
+with (root / 'cursor-trace.jsonl').open('a') as trace:
+    trace.write(json.dumps(bounds) + '\\n')
+if (root / 'cursor-failure').exists():
+    print(json.dumps({'state':'unavailable','cause':'fixture_failure'}))
+    sys.exit(1)
+if (root / 'cursor-slow').exists():
+    until = time.monotonic() + 10
+    while not (root / 'cursor-barrier').exists():
+        assert time.monotonic() < until
+        time.sleep(.01)
+rows = [{'h':'2026-01-01 00:00','m':'fixture-model','i':3,'o':0,'cr':0,'cw':0,
+         'n':1,'uncosted':0,'cents':2}, {'h':'bad'}]
+print(json.dumps({'state':'read','readAt':bounds['untilMs'],'account':'fixture',
+                  'key':{'last4':'long-ab12','fingerprint':'fixture'},'rows':rows,
+                  'events':1,'unmeasured':2,'eventCounts':{'pages':1,'fetched':7,'kept':1,'droppedOutOfWindow':2,'droppedNoTokenUsage':1,'droppedDuplicate':1}}))
+"""
+    binary.write_text(source.replace("ROOT", repr(str(root))))
+    binary.chmod(0o700)
+    body = binary.read_bytes()
+    manifest = {'name':'aac-cursor-account','targets':{target:{
+        'file':f'{target}/aac-cursor-account','size':len(body),
+        'sha256':hashlib.sha256(body).hexdigest(),
+    }}}
+    (folder / 'manifest.json').write_text(json.dumps(manifest))
+
+
+def cursor_gates(agent, service):
+    route = '/internal/collection-cursor'
+    since, until = 1_767_225_600_000, 1_767_229_200_000
+    payload = {'sinceMs':since,'untilMs':until,'force':False}
+    with Service(agent, service, cursor_fixture=True) as fixture:
+        assert fixture.ask(route, payload, method='PUT')[0] == 503
+        assert not (fixture.root / 'cursor-trace.jsonl').exists()
+    with Service(agent, service, collection=True, cursor_fixture=True) as fixture:
+        trace = fixture.root / 'cursor-trace.jsonl'
+        public = {'kind':'session','id':'fixture-admin','role':'admin'}
+        assert fixture.ask(route, payload, method='PUT', principal=public)[0] == 401
+        assert fixture.ask(route, dict(payload, sinceMs=until+1), method='PUT')[0] == 503
+        assert not trace.exists()
+        assert fixture.ask(route, {'command':'key-delete'}, method='PUT')[0] == 503
+        status, raw = fixture.ask(route, {'command':'key-status'}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'present':True,'fingerprint':'sha256:1234567890abcdef'}
+        status, raw = fixture.ask(route, {'command':'quota'}, method='PUT')
+        assert status == 200 and json.loads(raw)['quota']['planUsage'] == {'totalPercentUsed':7,'autoPercentUsed':2}
+        quota_cache = '/internal/collection-cache/cursor-quota-observation/'
+        quota_read = '/internal/collection-provider-cache'
+        fingerprint = 'sha256:1234567890abcdef'
+        checked = '2026-01-01T01:00:00.000Z'
+        card = {'provider':'cursor','source':'Cursor API key','status':'ok','windows':[]}
+        quota = {'version':1,'fingerprint':fingerprint,'checkedAt':checked,'account':card}
+        assert fixture.ask(quota_cache + 'fedcba0987654321', quota, method='PUT') == (200, '{"saved":false}')
+        assert fixture.ask(quota_cache + '1234567890abcdef', quota, method='PUT') == (200, '{"saved":true}')
+        status, raw = fixture.ask(quota_read, {'cursorFingerprint':fingerprint}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value':quota}
+        status, raw = fixture.ask(quota_read, {'cursorFingerprint':'sha256:fedcba0987654321'}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value':None}
+        quota_file = fixture.root / 'cache/cursor-quota-v1.json'
+        assert quota_file.stat().st_mode & 0o777 == 0o600
+        alias = quota_file.with_suffix('.fixture')
+        alias.hardlink_to(quota_file)
+        assert fixture.ask(quota_cache + 'no-key', {'clear':True}, method='PUT') == (200, '{"saved":false}')
+        assert quota_file.exists()
+        alias.unlink()
+        assert fixture.ask(quota_cache + 'no-key', {'clear':True}, method='PUT') == (200, '{"saved":true}')
+        assert not quota_file.exists()
+        (fixture.root / 'cursor-slow').touch()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(fixture.ask, route, payload, method='PUT')
+            until_spawn = time.monotonic() + 5
+            while not trace.exists():
+                assert time.monotonic() < until_spawn
+                time.sleep(.01)
+            b = pool.submit(fixture.ask, route, dict(payload, force=True), method='PUT')
+            time.sleep(.1)
+            (fixture.root / 'cursor-barrier').touch()
+            status, raw = a.result()
+            assert status == 200 and b.result() == (status, raw)
+        first = json.loads(raw)
+        assert first['state'] == 'read' and first['readAt'] == '2026-01-01T01:00:00.000Z'
+        assert first['key']['last4'] == 'ab12' and len(first['rows']) == 1
+        assert first['events'] == 1 and first['unmeasured'] == 2
+        assert first['eventCounts'] == {'pages':1,'fetched':7,'kept':1,'droppedOutOfWindow':2,'droppedNoTokenUsage':1,'droppedDuplicate':1}
+        assert fixture.ask(route, payload, method='PUT') == (200, raw)
+        assert trace.read_text().splitlines() == [json.dumps({'sinceMs':since,'untilMs':until})]
+        (fixture.root / 'cursor-failure').touch()
+        status, raw = fixture.ask(route, dict(payload, force=True), method='PUT')
+        failed = json.loads(raw)
+        assert status == 200 and failed['state'] == 'unavailable'
+        assert failed['cause'] == 'fixture_failure'
+        for name in ('rows', 'readAt', 'account', 'events', 'unmeasured', 'eventCounts', 'key'):
+            assert failed[name] == first[name]
+        saved = fixture.root / 'cache/cursor-account-v1.json'
+        assert json.loads(saved.read_text()) == failed
+        assert saved.stat().st_mode & 0o777 == 0o600
+        binary = (fixture.root / 'cursor-package/dist/native/aac-cursor-account'
+                  / 'x86_64-unknown-linux-gnu/aac-cursor-account')
+        binary.write_bytes(binary.read_bytes() + b'\n# changed after packaging\n')
+        status, raw = fixture.ask(route, dict(payload, force=True), method='PUT')
+        missing = json.loads(raw)
+        assert status == 200 and missing['state'] == 'no_reader' and missing['rows'] == []
+        assert len(trace.read_text().splitlines()) == 2
+    print('PASS H2 Cursor: digest-bound local reader, shared pending read, TTL, atomic save and last-good rows')
+
+
+def record(root, agent, harness_env=None):
     if '-G' in sys.argv[1:]:
         sys.exit(0)  # No-connect capability probes are not agent launcher calls.
     root = Path(root)
-    command = shlex.split(sys.argv[-1])[-1]
+    argv = shlex.split(sys.argv[-1])
+    if len(argv) == 6 and argv[:2] == ['/bin/sh', '-c'] and argv[3] == 'aac-failover':
+        with (root / 'trace.jsonl').open('a') as f:
+            f.write(json.dumps({'stage': 'helper', 'pid': os.getpid()}) + '\n')
+        home = root / 'fixture-home'
+        home.mkdir(exist_ok=True)
+        os.environ['HOME'] = str(home)
+        os.execv(argv[0], argv)
+    command = argv[-1]
     stage = re.search(r"case '(probe|prepare|commit|run)'", command)
     assert stage, command
     stage = stage[1]
@@ -138,6 +288,19 @@ def record(root, agent):
             identity['version'] = '0.0.0'
             print(json.dumps(identity)); sys.exit(0)
         os.execv(agent, [agent, '--version'])
+    if scenario == 'collect-slow':
+        request = json.loads(sys.stdin.buffer.readline())
+        while not (root / 'barrier').exists():
+            time.sleep(.01)
+        print(json.dumps({'type': 'result', 'protocol': 1, 'id': request['id'],
+                          'value': {'schemaVersion': 1, 'profiles': []}}), flush=True)
+        sys.exit(0)
+    if scenario == 'signin-rows':
+        request = json.loads(sys.stdin.buffer.readline())
+        assert request['verb'] == 'signin-expiry', request
+        value = json.loads((root / 'signin-fixture.json').read_text())
+        print(json.dumps({'type': 'result', 'protocol': 1, 'id': request['id'], 'value': value}), flush=True)
+        sys.exit(0)
     if scenario == 'burst':
         request = json.loads(sys.stdin.buffer.readline())
         for n in range(16):
@@ -172,9 +335,31 @@ def record(root, agent):
                 time.sleep(.1)
                 sys.exit(1)
         sys.exit(1)
-    os.execv(agent, [agent])
+    # The SSH policy strips the caller's environment on the way out. The fixture recorder is the
+    # far computer: it restores the harness's own env (the proxy process inherited exactly what
+    # the in-place run gives the agent), so ambient-selector and LD_PRELOAD witnesses compare
+    # equal in place and through the service. The product's SSH env policy is unchanged.
+    if harness_env is not None:
+        os.execve(agent, [agent], json.loads(harness_env))
+    else:
+        os.environ.update(json.loads((root / 'remote-env.json').read_text()))
+        os.execv(agent, [agent])
 
-def proxy(agent, service):
+def fixture_remote_env():
+    # A real SSH account has its own environment. The fake remote reproduces only
+    # corpus fixtures, never an ambient provider token or home.
+    result = {}
+    for key in ('ZAI_API_KEY', 'KIMI_API_KEY', 'OPENCODE_GO_API_KEY'):
+        value = os.environ.get(key)
+        if value in ('fixture-environment-key', 'non-ascii-\u00e9', 'surrogate-\udcff'):
+            result[key] = value
+    for key in ('HOME', 'XDG_CONFIG_HOME'):
+        value = os.environ.get(key, '')
+        if re.fullmatch(r'/+tmp/aac-(?:m2p4|signin-review)-[a-z0-9_]+(?:/[^/]+)*', value):
+            result[key] = value
+    return result
+
+def proxy(agent, service, collection=False):
     wire = sys.stdin.read()
     request = json.loads(wire)
     # Keep raw args: serde must not erase duplicate keys before the verb's original proof gate.
@@ -186,11 +371,13 @@ def proxy(agent, service):
     # the original whole-request cap witness without changing any semantic argument.
     trailing = len(wire.rstrip('\n')) - len(wire.rstrip())
     if trailing and args.endswith('}'): args = args[:-1] + ' ' * trailing + '}'
-    with Service(agent, service) as fixture:
+    with Service(agent, service, collection=collection, remote_env=fixture_remote_env()) as fixture:
+        family = 'collect' if collection and request['verb'] in (
+            'quota-read', 'signin-expiry', 'failover-inventory') else 'agent'
         payload = fixture.payload(id=request['id'], deadline=request['deadlineMs'], cap=16*1024*1024 if request['verb']=='scan-usage' else 1024*1024)
         payload.pop('args')
         body = json.dumps(payload)[:-1] + ',"args":' + args + '}'
-        status, response = fixture.ask('/internal/agent/' + request['verb'], body)
+        status, response = fixture.ask('/internal/' + family + '/' + request['verb'], body)
         assert status == 200, (status, response)
         events = [json.loads(line) for line in response.splitlines()]
         assert len(events) == 1, events
@@ -271,13 +458,211 @@ def gates(agent, service):
             conn.close()
     print('PASS L5 service: reuse, principal, breaker, hash, artifact cap, off, existing-only, progress/input, exit-confirmed cancel and no-ack termination')
 
+def collection_gates(agent, service):
+    with Service(agent, service) as s:
+        status, _ = s.ask('/internal/collect/signin-expiry', s.payload())
+        assert status == 503 and not s.traces()
+
+    with Service(agent, service, collection=True, scenario='collect-slow') as s:
+        route = '/internal/collect/signin-expiry'
+        public = {'kind': 'session', 'id': 'fixture-admin', 'role': 'admin'}
+        assert s.ask(route, s.payload(), principal=public)[0] == 401
+        assert json.loads(s.ask('/internal/collect/failover-inventory',
+                                s.payload({'action': 'collect'}))[1])['reason'] == 'shape'
+        assert not s.traces()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(s.ask, route, s.payload(id='collection-a'))
+            b = pool.submit(s.ask, route, s.payload(id='collection-b'))
+            until = time.monotonic() + 5
+            while not any(t['stage'] == 'run' for t in s.traces()):
+                assert time.monotonic() < until, s.traces()
+                time.sleep(.01)
+            time.sleep(.1)
+            (s.root / 'barrier').touch()
+            for expected, future in [('collection-a', a), ('collection-b', b)]:
+                code, raw = future.result()
+                assert code == 200
+                assert json.loads(raw) == {'type':'result','protocol':1,'id':expected,
+                                           'value':{'schemaVersion':1,'profiles':[]}}
+        assert [t['stage'] for t in s.traces()] == ['probe', 'run']
+
+        helper_route = '/internal/collect/failover-collect'
+        # This candidate deliberately fails validation before credential lookup or HTTP.
+        helper_args = {'version': 1, 'provider': 'claude', 'action': 'collect', 'candidate': {}}
+        assert s.ask(helper_route, s.payload(helper_args), principal=public)[0] == 401
+        status, raw = s.ask(helper_route, s.payload(helper_args))
+        event = json.loads(raw)
+        assert status == 200 and event['type'] == 'result', event
+        assert event['value']['failureCode'] == 'invalid_response', event
+        assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'helper']
+        wallet_inv = {'version':1, 'provider':'opencode-wallet', 'action':'inventory'}
+        status, raw = s.ask('/internal/collect/failover-inventory', s.payload(wallet_inv))
+        event = json.loads(raw)
+        assert status == 200 and event['type'] == 'result'
+        assert event['value'] == {'version':1,'action':'inventory','candidates':[]}, event
+        assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'helper', 'helper']
+
+        source_route = '/internal/collection-sources'
+        assert s.ask(source_route, method='GET') == (200, '{"state":"absent"}')
+        registry = s.root / 'account-usage-accounts.json'
+        binding = {'id':'kimi-code:usage', 'provider':'kimi-code', 'platform':'ubuntu',
+                   'credential':{'kind':'discover'}}
+        registry.write_text(json.dumps({'version':2,'accounts':[binding]}))
+        registry.chmod(0o600)
+        status, raw = s.ask(source_route, method='GET')
+        assert status == 200 and json.loads(raw) == {'state':'ok','registry':{
+            'version':2,'accounts':[dict(binding, sshHost=None, label=None, createdAt=None, createdBy=None)]}}
+        registry.write_text(json.dumps({'version':2,'accounts':[binding,binding]}))
+        assert s.ask(source_route, method='GET')[0] == 503
+
+        key = 'a' * 64
+        route = '/internal/collection-cache/account-usage-observations/' + key
+        sample = {'version':1,'key':key,'identity':None,'primary':None,'saved':None,'nextAttempt':1234}
+        assert s.ask(route, sample, method='PUT', principal=public)[0] == 401
+        assert s.ask(route, {**sample, 'nextAttempt': 'bad'}, method='PUT') == (200, '{"saved":false}')
+        assert s.ask(route, sample, method='PUT') == (200, '{"saved":true}')
+        gate_key = '9' * 64
+        gate_route = '/internal/collection-cache/account-usage-cooldown/' + gate_key
+        gate_file = s.root / 'account-usage-failover' / ('cooldown-' + gate_key + '.json')
+        moment = 1_767_225_600_000
+        assert s.ask(gate_route, {'now':moment,'until':moment+150000,'claude429Streak':2}, method='PUT') == (200, '{"saved":true}')
+        assert s.ask(gate_route, {'now':moment+50,'until':moment+100,'claude429Streak':0}, method='PUT') == (200, '{"saved":true}')
+        assert json.loads(gate_file.read_text()) == {
+            'version':1,'key':gate_key,'until':moment+150000,'claude429Streak':2,
+        }
+        assert gate_file.stat().st_mode & 0o777 == 0o600
+        assert s.ask(gate_route, {'now':moment,'until':moment+100,'claude429Streak':6}, method='PUT') == (200, '{"saved":false}')
+        disk = s.root / 'account-usage-failover' / (key + '.json')
+        assert disk.read_text() == json.dumps(sample)
+        assert disk.stat().st_mode & 0o777 == 0o600
+        link = disk.with_name('b' * 64 + '.json')
+        link.hardlink_to(disk)
+        assert s.ask(route, {**sample, 'nextAttempt': 5678}, method='PUT') == (200, '{"saved":false}')
+        assert json.loads(disk.read_text()) == sample
+        # Invalid files and peer/cooldown state are outside observation retention.
+        for n in range(257):
+            old = format(n, '064x')
+            entry = disk.with_name(old + '.json')
+            entry.write_text(json.dumps({**sample, 'key': old}))
+            entry.chmod(0o600)
+        name = 'c' * 64
+        cooldown = disk.with_name('cooldown-' + name + '.json')
+        cooldown.write_text('{}')
+        write_route = '/internal/collection-cache/account-usage-observations/' + name
+        assert s.ask(write_route, {**sample, 'key': name}, method='PUT') == (200, '{"saved":true}')
+        assert disk.exists() and link.exists() and cooldown.exists()
+        valid = [p for p in disk.parent.iterdir()
+                 if re.fullmatch('[a-f0-9]{64}.json', p.name) and p.stat().st_nlink == 1]
+        assert len(valid) == 256 and disk.with_name(name + '.json') in valid
+        profile = 'fixture-profile'
+        remote_route = '/internal/collection-cache/claude-live-snapshots/' + profile
+        remote = {'schemaVersion':1, 'manifestHash':'b'*64,
+                  'sample':{'profileId':profile, 'platform':'windows', 'windows':[]}}
+        assert s.ask(remote_route, remote, method='PUT') == (200, '{"saved":true}')
+        assert (s.root / 'claude-desktop-live-cache' / (profile + '.json')).read_text() == json.dumps(remote)
+        cache_route = '/internal/collection-provider-cache'
+        request = {'profileId': profile, 'manifestHash': remote['manifestHash']}
+        status, raw = s.ask(cache_route, request, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value': remote['sample']}
+        assert s.ask(cache_route, dict(request, manifestHash='a'*64), method='PUT') == (200, '{"value":null}')
+        source = s.root / 'opencode-console-wallet-source.json'
+        configuration = {'version':1,'platform':'mac','sshHost':'fixture'}
+        source.write_text(json.dumps(configuration))
+        source.chmod(0o600)
+        binding = hashlib.sha256(json.dumps(configuration, separators=(',', ':')).encode()).hexdigest()
+        wallet = s.root / 'opencode-console-wallet-account.json'
+        account = 'plan-opencode-go-console-mac-123456abcdef'
+        write_wallet = '/internal/collection-cache/opencode-wallet-account/' + binding
+        pointer = {'version':1,'binding':binding,'accountId':account}
+        assert s.ask(write_wallet, dict(pointer, binding='e'*64), method='PUT') == (200, '{"saved":false}')
+        assert s.ask(write_wallet, pointer, method='PUT') == (200, '{"saved":true}')
+        assert json.loads(wallet.read_text()) == pointer and wallet.stat().st_mode & 0o777 == 0o600
+        status, raw = s.ask(cache_route, {'walletSource':True}, method='PUT')
+        assert status == 200 and json.loads(json.loads(raw)['value']) == json.loads(source.read_text())
+        status, raw = s.ask(cache_route, {'bindingHash':binding}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value':account}
+
+    with Service(agent, service, collection=True, local_helper=True) as s:
+        request = s.payload({'version':1,'provider':'claude','action':'collect','candidate':{},
+                             'ccsDir':str(s.root)})
+        request['computer']['sshHost'] = None
+        status, raw = s.ask('/internal/collect/failover-collect', request)
+        event = json.loads(raw)
+        assert status == 200 and event['type'] == 'result', event
+        assert event['value']['failureCode'] == 'invalid_response'
+        request['args']['ccsDir'] = str(s.root / 'other')
+        assert json.loads(s.ask('/internal/collect/failover-collect', request)[1])['reason'] == 'unsupported'
+        assert not s.traces()
+    print('PASS H2 collection: switch, principal, read-only verbs, coalescing, row bytes and private cache writes')
+
+
+def collection_projection(agent, service):
+    import threading
+    from unittest import mock
+    from quota import (Handler, LocalOpener, KIMI, NOW, STAMP, common, response, usage)
+    import failover_usage
+
+    with Service(agent, service, collection=True) as s:
+        home = s.root / 'fixture-home'
+        auth = home / '.local/share/opencode/auth.json'
+        auth.parent.mkdir(parents=True)
+        auth.write_text(json.dumps({'kimi-for-coding': {'type': 'api', 'key': 'fixture-dummy-token'}}))
+        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            endpoint = 'http://127.0.0.1:' + str(server.server_port)
+            Handler.queue = [response(KIMI), response(KIMI)]
+            Handler.calls = []
+            client = common.HttpClient()
+            client.opener = LocalOpener(client.opener, endpoint)
+            try:
+                with mock.patch.dict(os.environ, {}, clear=True), \
+                        mock.patch.object(common, 'utc_now', return_value=STAMP), \
+                        mock.patch.object(usage, 'utc_now', return_value=STAMP):
+                    reference = usage.collect('kimi-code', 'ubuntu', home=home, client=client)
+                    inventory = failover_usage.run({
+                        'version': 1, 'action': 'inventory', 'provider': 'kimi-code',
+                        'homeDir': str(home), 'ccsDir': str(s.root),
+                    })
+                payload = {'root': str(s.root), 'socketPath': str(s.socket), 'secret': SECRET, 'bootId': BOOT,
+                           'args': {'provider': 'kimi-code', 'platform': 'ubuntu', 'home': str(home),
+                                    'endpoint': endpoint, 'now': NOW}, 'reference': reference, 'inventory': inventory}
+                command = [os.environ.get('BUN', 'bun'), str(Path(__file__).with_name('collection-dashboard.ts'))]
+                env = {**os.environ, 'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config')}
+                subprocess.run(command, input=json.dumps(payload), env=env, text=True, check=True)
+                assert len(Handler.calls) == 2 and not Handler.queue
+                assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'run']
+            finally:
+                server.shutdown()
+
+
+def signin_gates(agent, service):
+    """G5: the private sign-in poll and the settle/merge projection against the TS adapters."""
+    with Service(agent, service, scenario='signin-rows') as fixture:
+        payload = {'root': str(fixture.root), 'socketPath': str(fixture.socket),
+                   'secret': SECRET, 'bootId': BOOT}
+        script = ROOT / 'tests/spec/agent/signin-projection.ts'
+        run = subprocess.run(['bun', str(script)], input=json.dumps(payload), text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=ROOT)
+        print(run.stdout, end='', flush=True)
+        assert run.returncode == 0, 'sign-in projection parity failed'
+    print('PASS G5 sign-in poll, crossed expiry and Claude renewal merge')
+
 def main():
     agent, service = map(lambda p: str(Path(p).resolve()), sys.argv[1:3])
-    gates(agent,service)
+    if '--signin' in sys.argv:
+        signin_gates(agent, service)
+        return
+    collection = '--collection' in sys.argv
+    if collection:
+        collection_gates(agent, service)
+        collection_projection(agent, service)
+        cursor_gates(agent, service)
+    else:
+        gates(agent, service)
     if '--gates-only' in sys.argv: return
     with tempfile.TemporaryDirectory(prefix='aac-l5-proxy-') as tmp:
         wrapper = Path(tmp)/'agent-proxy'
-        wrapper.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,'+repr(str(Path(__file__).parent))+')\nfrom transport import proxy\nsys.exit(proxy('+repr(agent)+','+repr(service)+'))\n')
+        wrapper.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,'+repr(str(Path(__file__).parent))+')\nfrom transport import proxy\nsys.exit(proxy('+repr(agent)+','+repr(service)+','+repr(collection)+'))\n')
         wrapper.chmod(0o700)
         for suite in [('run.py','--part3','--part4'), ('signin_review.py',), ('quota.py',), ('quota-review.py',), ('deadline_review.py',)]:
             outputs=[]
@@ -289,5 +674,5 @@ def main():
             # Deadline timings and temporary paths vary; all harness counts and result labels stay.
             mask=lambda t: re.sub(r'in \d+\.\d+s', 'in <time>s', re.sub(r'after \d+\.\d+ s','after <time>',t))
             assert mask(outputs[0])==mask(outputs[1]), ('harness counts changed',suite,outputs)
-            print('PASS identical harness counts in-place / service:',suite[0],flush=True)
+            print('PASS identical harness counts in-place / ' + ('collection' if collection else 'service') + ':', suite[0], flush=True)
 if __name__=='__main__': main()

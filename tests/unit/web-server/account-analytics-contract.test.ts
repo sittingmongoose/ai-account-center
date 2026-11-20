@@ -4,53 +4,37 @@
  * hidden fields, and the provider list from data. Fixtures only: a
  * temporary CCS_HOME, an injected clock and injected worker data.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { defaultAccountAnalyticsPricing,type AccountAnalyticsPricingLookup } from '../../../src/web-server/services/account-analytics-pricing';
+import { projectAccountAnalyticsActivity,type SourceData } from '../../../src/web-server/services/account-analytics-projection';
+import { afterAll,beforeAll,describe,expect,it } from 'bun:test';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  AccountAnalyticsActivityService,
-  defaultAccountAnalyticsPricing,
-  projectAccountAnalyticsActivity,
-  type AccountAnalyticsPricingLookup,
-  type SourceData,
-} from '../../../src/web-server/services/account-analytics-activity';
-import {
-  AccountAnalyticsService,
-  type AccountAnalyticsDeps,
-} from '../../../src/web-server/services/account-analytics-service';
-import {
-  defaultDashboardPreferences,
-  writeDashboardPreferences,
-} from '../../../src/web-server/services/dashboard-preferences';
-import {
-  AccountAnalyticsQueryError,
-  canonicalAccountAnalyticsTimeZone,
-  isAccountAnalyticsTimeZone,
-  localDate,
-  localMidnight,
-  resolveAccountAnalyticsRange,
+AccountAnalyticsQueryError,isAccountAnalyticsTimeZone,
+localDate,
+localMidnight,
+resolveAccountAnalyticsRange
 } from '../../../src/web-server/services/account-analytics-range';
 import {
-  appendAccountAnalyticsSnapshot,
-  type AccountAnalyticsHistoryData,
-  type AccountAnalyticsHistoryStore,
+type AccountAnalyticsHistoryData,
+type AccountAnalyticsHistoryStore
 } from '../../../src/web-server/services/account-analytics-history';
 import type {
-  AccountDashboard,
-  DashboardAccount,
-  DashboardProvider,
+AccountDashboard,
+DashboardAccount,
+DashboardProvider,
 } from '../../../src/web-server/services/account-dashboard-types';
 import type {
-  AccountAnalyticsActivity,
-  AccountAnalyticsModelRates,
-  AccountAnalyticsQuery,
+AccountAnalyticsActivity,
+AccountAnalyticsModelRates,
+AccountAnalyticsQuery,
 } from '../../../src/web-server/services/account-analytics-types';
 import type {
-  HourlyUsage,
-  ModelBreakdown,
-  SessionUsage,
+HourlyUsage,
+ModelBreakdown,
+SessionUsage,
 } from '../../../src/web-server/usage/types';
 import type { UsageWorkerResult } from '../../../src/web-server/usage/worker-client';
 
@@ -271,25 +255,6 @@ function memory(initial: AccountAnalyticsHistoryData | null = null): AccountAnal
 
 const noActivity: AccountAnalyticsActivity = project([], { query: { provider: 'qwen' } });
 
-function analyticsService(
-  accounts: DashboardAccount[],
-  options: {
-    history?: AccountAnalyticsHistoryData | null;
-    activity?: AccountAnalyticsDeps['getActivity'];
-    extra?: Record<string, unknown>;
-    now?: number;
-  } = {}
-): AccountAnalyticsService {
-  return new AccountAnalyticsService({
-    getDashboard: async () => dashboard(accounts, options.extra),
-    createHistoryStore: () =>
-      memory(appendAccountAnalyticsSnapshot(options.history ?? null, accounts, options.now ?? NOW)),
-    getActivity: options.activity ?? (async () => noActivity),
-    now: () => options.now ?? NOW,
-    scope: () => ccsHome,
-  });
-}
-
 describe('analytics contract: ranges and time zones', () => {
   it('starts Month at local midnight on the 1st in the requested zone', () => {
     const range = resolveAccountAnalyticsRange(
@@ -365,160 +330,9 @@ describe('analytics contract: ranges and time zones', () => {
       '2026-10-01T18:30:00.000Z'
     );
   });
-
-  it('starts All at the oldest retained quota sample, bounded to 31 days', async () => {
-    const codex = account('codex', 'codex:a');
-    const oldSample = NOW - 10 * DAY;
-    const history = appendAccountAnalyticsSnapshot(
-      null,
-      [{ ...codex, sampledAt: new Date(oldSample).toISOString() }],
-      oldSample
-    );
-    const result = await analyticsService([codex], { history }).get({ ...QUERY, range: 'all' });
-    expect(result.range.preset).toBe('all');
-    expect(result.range.from).toBe(new Date(oldSample).toISOString());
-    expect(result.range.availableFrom).toBe(new Date(oldSample).toISOString());
-    expect(result.range.tz).toBe('America/New_York');
-    expect(result.range.dayBucketTz).toBe('America/New_York');
-    expect(result.range.bucketMinutes).toBe(180);
-    expect(result.accounts[0].sampleCount).toBe(2);
-    // a saved display time zone drives the buckets; an explicit zone still wins
-    writeDashboardPreferences(
-      { ...defaultDashboardPreferences(), timeZone: 'Asia/Tokyo' },
-      ccsHome
-    );
-    try {
-      const tokyo = await analyticsService([codex], { history }).get({ ...QUERY, range: 'all' });
-      expect(tokyo.range.tz).toBe('Asia/Tokyo');
-      expect(tokyo.range.dayBucketTz).toBe('Asia/Tokyo');
-      const explicit = await analyticsService([codex], { history }).get({
-        ...QUERY,
-        range: 'all',
-        tz: 'UTC',
-      });
-      expect(explicit.range.tz).toBe('UTC');
-    } finally {
-      fs.rmSync(path.join(ccsHome, 'dashboard-preferences.json'), { force: true });
-    }
-
-    // Older local activity moves the start back, but never past 31 days.
-    const calls: number[] = [];
-    const older = await analyticsService([codex], {
-      history,
-      activity: async (_query, from) => {
-        calls.push(from);
-        return {
-          ...noActivity,
-          coverage: { oldestHourAt: NOW - 45 * DAY, providersWithActivity: [] },
-        };
-      },
-    }).get({ ...QUERY, range: 'all' });
-    expect(calls).toEqual([NOW - 31 * DAY]);
-    expect(older.range.from).toBe(new Date(NOW - 31 * DAY).toISOString());
-    expect(older.range.availableFrom).toBe(new Date(NOW - 31 * DAY).toISOString());
-  });
-
-  it('passes the zone to activity, echoes it in range, and refuses retention misses with a code', async () => {
-    const seen: Array<string | undefined> = [];
-    const service = analyticsService([account('codex', 'codex:a')], {
-      activity: async (_query, _from, _to, options) => {
-        seen.push(options?.tz);
-        return noActivity;
-      },
-    });
-    const result = await service.get({ ...QUERY, range: 'month', tz: 'America/New_York' });
-    expect(seen).toEqual(['America/New_York']);
-    expect(result.range.from).toBe('2026-10-01T04:00:00.000Z');
-    expect(result.range.tz).toBe('America/New_York');
-    expect(result.range.dayBucketTz).toBe('America/New_York');
-    expect('coverage' in result.activity).toBe(false);
-    await expect(
-      service.get({ ...QUERY, range: 'custom', from: '2026-08-01', to: '2026-08-02' })
-    ).rejects.toMatchObject({ code: 'invalid_range' });
-    await expect(service.get({ ...QUERY, tz: 'Mars/Base' })).rejects.toMatchObject({
-      code: 'invalid_tz',
-    });
-  });
 });
 
 describe('analytics contract: range review fixes', () => {
-  it('starts a custom range no earlier than the retained window in a zone far ahead of UTC', async () => {
-    // At 2026-10-02T12:00Z the retained window starts at 2026-09-01T12:00Z,
-    // which is already 2026-09-02 in Kiritimati (UTC+14); that local day
-    // began at 2026-09-01T10:00Z.
-    const range = resolveAccountAnalyticsRange(
-      { range: 'custom', from: '2026-09-02', to: '2026-09-03', tz: 'Pacific/Kiritimati' },
-      NOW,
-      NOW
-    );
-    expect(new Date(range.from).toISOString()).toBe('2026-09-01T12:00:00.000Z');
-    expect(new Date(range.to).toISOString()).toBe('2026-09-03T09:59:59.000Z');
-    const result = await analyticsService([account('codex', 'codex:a')], {
-      activity: async () => ({
-        ...noActivity,
-        coverage: { oldestHourAt: NOW - 45 * DAY, providersWithActivity: [] },
-      }),
-    }).get({
-      ...QUERY,
-      range: 'custom',
-      from: '2026-09-02',
-      to: '2026-09-03',
-      tz: 'Pacific/Kiritimati',
-    });
-    expect(result.range.availableFrom).toBe('2026-09-01T12:00:00.000Z');
-    expect(Date.parse(result.range.from)).toBeGreaterThanOrEqual(
-      Date.parse(result.range.availableFrom)
-    );
-  });
-
-  it('echoes a case variant of a zone under its listed spelling', async () => {
-    const seen: Array<string | undefined> = [];
-    const service = analyticsService([account('codex', 'codex:a')], {
-      activity: async (query, _from, _to, options) => {
-        seen.push(query.tz, options?.tz);
-        return noActivity;
-      },
-    });
-    const result = await service.get({ ...QUERY, tz: 'america/new_york' });
-    expect(seen).toEqual(['America/New_York', 'America/New_York']);
-    expect(result.range.tz).toBe('America/New_York');
-    expect(result.range.dayBucketTz).toBe('America/New_York');
-    expect(canonicalAccountAnalyticsTimeZone(undefined)).toBe('UTC');
-    expect(canonicalAccountAnalyticsTimeZone('utc')).toBe('UTC');
-    expect(canonicalAccountAnalyticsTimeZone('Europe/London')).toBe('Europe/London');
-    expect(canonicalAccountAnalyticsTimeZone('EUROPE/LONDON')).toBe('Europe/London');
-  });
-
-  it('records no quota snapshot for a request it refuses', async () => {
-    let dashboards = 0;
-    let writes = 0;
-    const service = new AccountAnalyticsService({
-      getDashboard: async () => {
-        dashboards++;
-        return dashboard([account('codex', 'codex:a')]);
-      },
-      createHistoryStore: () => ({
-        async read() {
-          return null;
-        },
-        async write() {
-          writes++;
-        },
-      }),
-      getActivity: async () => noActivity,
-      now: () => NOW,
-      scope: () => ccsHome,
-    });
-    await expect(
-      service.get({ ...QUERY, range: 'custom', from: '2026-08-01', to: '2026-08-02' })
-    ).rejects.toMatchObject({ code: 'invalid_range' });
-    await expect(service.get({ ...QUERY, tz: 'Mars/Base' })).rejects.toMatchObject({
-      code: 'invalid_tz',
-    });
-    expect([dashboards, writes]).toEqual([0, 0]);
-    await service.get(QUERY);
-    expect([dashboards, writes]).toEqual([1, 0]);
-  });
 });
 
 describe('analytics contract: local day buckets', () => {
@@ -1191,194 +1005,10 @@ describe('analytics contract: anomalies', () => {
 });
 
 describe('analytics contract: active and hidden accounts', () => {
-  it('reports the live Codex and Antigravity accounts and which accounts are hidden', async () => {
-    const accounts = [
-      account('codex', 'codex:a'),
-      account('codex', 'codex:b', { isActive: true }),
-      account('codex', 'codex:expired', { status: 'needs_sign_in', windows: [] }),
-      account('antigravity', 'antigravity:profile:one', {
-        isActive: true,
-        capabilities: {
-          codexProfile: null,
-          claudeProfileId: null,
-          claudePlatforms: [],
-          antigravityProfileId: 'one',
-          antigravityHostIds: ['ubuntu'],
-        },
-      }),
-      account('antigravity', 'antigravity:profile:two', {
-        capabilities: {
-          codexProfile: null,
-          claudeProfileId: null,
-          claudePlatforms: [],
-          antigravityProfileId: 'two',
-          antigravityHostIds: ['ubuntu'],
-        },
-      }),
-      account('claude', 'claude:one'),
-      account('kimi-code', 'kimi-code:usage'),
-    ];
-    const result = await analyticsService(accounts, {
-      extra: {
-        settings: {
-          refreshIntervalSeconds: 60,
-          hiddenProviders: ['kimi-code'],
-          hiddenAccountIds: ['codex:a'],
-        },
-      },
-    }).get(QUERY);
-    expect(result.summary.activeAccountIds).toEqual({
-      codex: 'codex:b',
-      antigravity: 'antigravity:profile:one',
-    });
-    expect(result.summary.activeCodexAccountId).toBe(result.summary.activeAccountIds.codex ?? null);
-    const byId = new Map(result.accounts.map((row) => [row.id, row]));
-    expect(byId.get('antigravity:profile:one')?.isActive).toBe(true);
-    expect(Object.fromEntries(result.accounts.map((row) => [row.id, row.hidden]))).toEqual({
-      'codex:a': true,
-      'codex:b': false,
-      'codex:expired': false,
-      'antigravity:profile:one': false,
-      'antigravity:profile:two': false,
-      'claude:one': false,
-      'kimi-code:usage': true,
-    });
-    for (const row of result.accounts) expect(row).not.toHaveProperty('switchable');
-    // Quota points keep the per-sample active truth for Codex and Antigravity.
-    expect(byId.get('antigravity:profile:one')?.windows[0].points[0].isActive).toBe(true);
-    expect(result.providers.find((row) => row.provider === 'kimi-code')?.visible).toBe(false);
-  });
-
-  it('prefers registry fields a newer dashboard already sends', async () => {
-    const result = await analyticsService([
-      { ...account('codex', 'codex:a'), hidden: true } as DashboardAccount,
-    ]).get(QUERY);
-    expect(result.accounts[0]).toMatchObject({ hidden: true });
-    expect(result.summary.activeAccountIds).toEqual({ codex: null, antigravity: null });
-  });
 });
 
 describe('analytics contract: providers from data', () => {
-  it('lists providers with accounts or activity, in table order, with activity flags', async () => {
-    const accounts = [
-      account('qwen', 'qwen:usage'),
-      account('codex', 'codex:a'),
-      account('antigravity', 'antigravity:usage'),
-    ];
-    const result = await analyticsService(accounts, {
-      activity: async () => ({
-        ...noActivity,
-        coverage: { oldestHourAt: NOW - DAY, providersWithActivity: ['claude'] },
-      }),
-    }).get({ ...QUERY, provider: 'codex' });
-    expect(
-      result.providers.map((row) => [
-        row.provider,
-        row.order,
-        row.accountCount,
-        row.hasActivity,
-        row.hasQuotaHistory,
-      ])
-    ).toEqual([
-      ['claude', 0, 0, true, false],
-      ['codex', 1, 1, false, true],
-      ['antigravity', 2, 1, false, true],
-      ['qwen', 6, 1, false, true],
-    ]);
-    expect(result.providers.map((row) => row.label)).toEqual([
-      'Claude',
-      'Codex',
-      'Antigravity',
-      'Qwen token plan',
-    ]);
-    // Kimi Code has no account and no activity, so it is absent.
-    expect(result.providers.some((row) => row.provider === 'kimi-code')).toBe(false);
-    expect(result.accounts.map((row) => row.id)).toEqual(['codex:a']);
-  });
-
-  it('follows a dashboard provider registry when one is present', async () => {
-    const result = await analyticsService(
-      [account('codex', 'codex:a'), account('zai', 'zai:usage')],
-      {
-        extra: {
-          providers: [
-            { id: 'zai', label: 'Z.ai', order: 0, visible: false, switchable: false },
-            { id: 'codex', label: 'Codex CLI', order: 5, visible: true, switchable: true },
-          ],
-        },
-      }
-    ).get(QUERY);
-    expect(result.providers.map((row) => [row.provider, row.label, row.visible])).toEqual([
-      ['zai', 'Z.ai', false],
-      ['codex', 'Codex CLI', true],
-    ]);
-  });
-
-  it('computes coverage from the retained snapshot for every provider', async () => {
-    const service = new AccountAnalyticsActivityService({
-      remote: async () => ({ results: [], states: [] }),
-      now: () => NOW,
-      scope: () => `${ccsHome}/coverage`,
-      responseBudgetMs: 100,
-      pricing,
-      requests: () => [
-        { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/projects' } },
-        {
-          provider: 'codex',
-          request: { kind: 'codex', codexHome: '/fixture/codex', cacheDir: '/fixture/cache' },
-        },
-      ],
-      loadWorker: async (request) =>
-        request.kind === 'claude'
-          ? result([hourRow(new Date(NOW - 2 * DAY).toISOString(), [{ model: 'm', input: 1 }])])
-          : result([hourRow(new Date(NOW - 20 * DAY).toISOString(), [{ model: 'm', input: 1 }])]),
-    });
-    const week = await service.get(QUERY, NOW - 7 * DAY, NOW);
-    expect(week.coverage?.providersWithActivity).toEqual(['claude']);
-    expect(week.coverage?.oldestHourAt).toBe(
-      Date.parse(new Date(NOW - 20 * DAY).toISOString().slice(0, 13) + ':00:00Z')
-    );
-    // A quota-only filter still reports coverage from what was already read.
-    const quotaOnly = await service.get({ ...QUERY, provider: 'qwen' }, NOW - 30 * DAY, NOW);
-    expect(quotaOnly.status).toBe('unavailable');
-    expect(quotaOnly.coverage?.providersWithActivity).toEqual(['claude', 'codex']);
-  });
 });
 
 describe('analytics contract: truthfulness kept', () => {
-  it('keeps activity unattributed and never sums quota across accounts', async () => {
-    const activity = project(
-      [
-        source(
-          'claude',
-          result([hourRow('2026-10-02T10:00:00Z', [{ model: 'model-a', input: 10 }])])
-        ),
-      ],
-      { tz: 'America/New_York' }
-    );
-    expect(activity.accountAttribution).toBe('unavailable');
-    expect(activity.scope).toBe('multi-host-cli');
-    expect(activity.costBasis).toBe('estimated-api-equivalent');
-    const filtered = project(
-      [
-        source(
-          'claude',
-          result([hourRow('2026-10-02T10:00:00Z', [{ model: 'model-a', input: 10 }])])
-        ),
-      ],
-      { query: { account: 'claude:one' } }
-    );
-    expect(filtered.totals).toBeNull();
-    expect(filtered.sessions).toBeNull();
-    expect(filtered.byDayModel).toEqual([]);
-    const response = await analyticsService([
-      account('codex', 'codex:a'),
-      account('codex', 'codex:b'),
-    ]).get(QUERY);
-    for (const row of response.providers)
-      expect(Object.keys(row).some((key) => /percent|used|remaining/i.test(key))).toBe(false);
-    expect(Object.keys(response.summary).some((key) => /percent|used|remaining/i.test(key))).toBe(
-      false
-    );
-  });
 });

@@ -195,6 +195,28 @@ impl Feeds {
         }
         let put: Put = crate::json_object::from_slice(body, &["generation", "data", "facts"])
             .map_err(|_| Decline::Shape)?;
+        self.put_decoded(source, put, false)
+    }
+
+    pub(crate) fn put_dashboard(
+        &self,
+        source: &str,
+        body: &[u8],
+    ) -> Result<serde_json::Value, Decline> {
+        if body.len() > 4 * 1024 * 1024 || !home_source(source) {
+            return Err(Decline::Shape);
+        }
+        let put: Put = crate::json_object::from_slice(body, &["generation", "data", "facts"])
+            .map_err(|_| Decline::Shape)?;
+        self.put_decoded(source, put, true)
+    }
+
+    fn put_decoded(
+        &self,
+        source: &str,
+        put: Put,
+        require_prepared: bool,
+    ) -> Result<serde_json::Value, Decline> {
         let ordered = home_source(source) || crate::status_fed::source(source);
         if !generation_word(&put.generation)
             || (source.starts_with("home-") && !home_source(source))
@@ -221,8 +243,16 @@ impl Feeds {
             }
         }
         // Prepared outside the lock (a large dashboard takes a moment); the order is checked again.
+        let prepared = prepare(source, &put.data, &put.facts);
+        if require_prepared {
+            match &prepared {
+                Prepared::Dashboard(Ok(_)) => {}
+                Prepared::Dashboard(Err(reason)) => return Err(*reason),
+                _ => return Err(Decline::Shape),
+            }
+        }
         let generation = Arc::new(Generation {
-            prepared: prepare(source, &put.data, &put.facts),
+            prepared,
             digest: digest(&put.data, &put.facts),
             id: put.generation.clone(),
             data: put.data,
@@ -259,6 +289,15 @@ impl Feeds {
         Ok(reply)
     }
 
+    pub(crate) fn latest(&self, source: &str) -> Result<Arc<Generation>, Decline> {
+        self.held
+            .lock()
+            .map_err(|_| Decline::Internal)?
+            .get(source)
+            .cloned()
+            .ok_or(Decline::Stale)
+    }
+
     /// The generation held for a source, if it is the one named.
     pub(crate) fn current(
         &self,
@@ -273,6 +312,7 @@ impl Feeds {
     }
 
     /// The generation held for a source, or `stale` when none is.
+    #[cfg(any(unix, test))]
     pub(crate) fn status(&self, source: &str) -> Result<serde_json::Value, Decline> {
         let held = self.held.lock().map_err(|_| Decline::Internal)?;
         let feed = held.get(source).ok_or(Decline::Stale)?;
@@ -290,6 +330,11 @@ impl Feeds {
             "bytes": feed.data.get().len(),
             "declined": declined.map(Decline::as_str),
         }))
+    }
+
+    /// Publish one event on the front door's stream (R4: `status-changed`, `scoreboard-changed`).
+    pub(crate) fn publish_event(&self, event: serde_json::Value) {
+        self.publish(event);
     }
 
     /// An NDJSON body that streams every event published after it opened.

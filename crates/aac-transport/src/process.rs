@@ -16,6 +16,16 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+/// The locally prepared, identity-checked executable and its launch arguments.
+pub struct InteractiveCommand {
+    /// Absolute path of the verified SSH executable.
+    pub file: PathBuf,
+    /// SSH arguments, including the quoted fixed remote command.
+    pub args: Vec<OsString>,
+    /// Filtered environment, to install after clearing the child's inherited environment.
+    pub env: Vec<(OsString, OsString)>,
+}
+
 /// Pinned SSH policy and executable locations, injectable for offline fake-SSH tests.
 #[derive(Clone, Debug)]
 pub struct SshPolicy {
@@ -492,6 +502,8 @@ pub struct CallOptions {
     pub output_cap: usize,
     /// Whether the longer scan keepalive applies.
     pub scan: bool,
+    /// Trusted dashboard scope for a local app-update agent. SSH never inherits it.
+    pub local_app_update_state_dir: Option<PathBuf>,
 }
 
 impl CallOptions {
@@ -502,6 +514,7 @@ impl CallOptions {
             cancel: CancellationToken::new(),
             output_cap,
             scan: false,
+            local_app_update_state_dir: None,
         }
     }
 }
@@ -616,6 +629,36 @@ impl Computer {
         .await
     }
 
+    /// Prepare the same verified command for a local interactive agent to run.
+    /// The only caller supplies fixed SSH commands and the already reviewed target.
+    pub async fn interactive_command(
+        &self,
+        argv: &[OsString],
+        deadline: Instant,
+    ) -> Result<InteractiveCommand, Failure> {
+        if matches!(self.config.transport, TransportConfig::Local) {
+            return Err(Failure::new(
+                Cause::Refused,
+                "interactive remote command needs SSH",
+            ));
+        }
+        let mut options = CallOptions::new(Duration::ZERO, 4096);
+        options.deadline = deadline;
+        let (command, invocation) = self.command(argv, &options).await?;
+        if let Some(invocation) = invocation {
+            self.policy.verify(&invocation).await?;
+        }
+        let command = command.as_std();
+        Ok(InteractiveCommand {
+            file: command.get_program().into(),
+            args: command.get_args().map(OsString::from).collect(),
+            env: command
+                .get_envs()
+                .filter_map(|(key, value)| Some((key.into(), value?.into())))
+                .collect(),
+        })
+    }
+
     async fn command(
         &self,
         argv: &[OsString],
@@ -628,6 +671,15 @@ impl Computer {
             TransportConfig::Local => {
                 let mut cmd = Command::new(&argv[0]);
                 cmd.args(&argv[1..]);
+                if let Some(directory) = &options.local_app_update_state_dir {
+                    if !directory.is_absolute() {
+                        return Err(Failure::new(
+                            Cause::Refused,
+                            "invalid local app update state directory",
+                        ));
+                    }
+                    cmd.env("AAC_APP_UPDATE_STATE_DIR", directory);
+                }
                 (cmd, None)
             }
             TransportConfig::Ssh {

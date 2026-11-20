@@ -1,4 +1,16 @@
-import type { SignInCommand } from './signin-process';
+export interface SignInCommand {
+  file: string;
+  args: string[];
+  /** The complete environment; nothing else is inherited. */
+  env: Record<string, string>;
+  pty: boolean;
+}
+
+export const MUSE_DEVICE_AUTH_ORIGINS: readonly string[] = Object.freeze([
+  'https://dev.meta.ai',
+  'https://auth.meta.com',
+  'https://www.meta.ai',
+]);
 
 /**
  * The sign-in job's public shape, its fixed messages and errors, and the flow

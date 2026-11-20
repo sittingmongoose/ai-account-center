@@ -1,7 +1,16 @@
 #!/usr/bin/python3
-import json, os, sys
+import json, os, sys, time
 home = os.environ['CODEX_HOME']
 who = json.load(open(os.path.join(home, 'auth.json')))['tokens']['account_id']
+barrier = os.path.join(os.path.dirname(os.path.dirname(home)), 'queue-fixture')
+def mark(name):
+    with open(os.path.join(barrier, name), 'w') as marker:
+        marker.write(str(time.monotonic()))
+def wait_for(name):
+    path = os.path.join(barrier, name)
+    while not os.path.exists(path):
+        time.sleep(0.01)
+    return path
 for line in sys.stdin:
     request = json.loads(line)
     if 'id' not in request:
@@ -13,6 +22,18 @@ for line in sys.stdin:
         result = {'account': {'type': 'chatgpt', 'email': 'fixture-' + who}}
     elif method == 'account/rateLimits/read':
         state = json.load(open(os.path.join(home, 'fixture-state.json')))
+        if os.path.isdir(barrier):
+            if who.startswith('holder-'):
+                mark(who)
+                release = wait_for('release-holders')
+                while not os.path.getsize(release):
+                    time.sleep(0.01)
+                with open(release) as marker:
+                    time.sleep(max(0, float(marker.read()) - time.monotonic()))
+            elif state.get('spentB') and not os.path.exists(os.path.join(barrier, 'verify-start')):
+                mark('verify-start')
+                time.sleep(19.8)
+                mark('verify-end')
         result = {'accountId': who,
                   'rateLimits': {'primary': {'usedPercent': state['primary']},
                                  'secondary': {'usedPercent': state['secondary']}},
@@ -21,6 +42,18 @@ for line in sys.stdin:
                                    'status': 'redeemed' if state['spentA'] else 'available'},
                                   {'id': 'credit-b', 'resetType': 'codexRateLimits',
                                    'status': 'redeemed' if state.get('spentB',False) else 'available'}]}}
+    elif (method == 'account/rateLimitResetCredit/consume'
+          and os.path.exists(os.path.join(home, 'allow-fixture-send'))
+          and request['params'].get('creditId') == 'credit-b'):
+        with open(os.path.join(home, 'fixture-sends'), 'a') as sends:
+            sends.write('sent\n')
+        with open(os.path.join(home, 'fixture-state.json'), 'w') as state:
+            json.dump({'primary': 0, 'secondary': 20, 'spentA': False, 'spentB': True}, state)
+        if os.path.isdir(barrier):
+            mark('send-waiting')
+            wait_for('release-send')
+            mark('send-end')
+        result = {'outcome': 'reset'}
     else:
         open(os.path.join(home, 'unexpected-send'), 'w').close()
         result = {}

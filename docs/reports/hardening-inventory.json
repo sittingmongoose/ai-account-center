@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1103,
-    "filesAffected": 112,
-    "hotpathOccurrences": 531,
-    "hotpathFilesAffected": 62,
+    "totalOccurrences": 1079,
+    "filesAffected": 107,
+    "hotpathOccurrences": 486,
+    "hotpathFilesAffected": 54,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -39,25 +39,8 @@
         "markers": []
       },
       {
-        "file": "src/web-server/services/app-update-service.ts",
-        "count": 23,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
-          "renameSync",
-          "rmSync",
-          "statSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/web-server/services/dashboard-preferences.ts",
-        "count": 21,
+        "count": 22,
         "calls": [
           "closeSync",
           "fstatSync",
@@ -172,6 +155,19 @@
           "statSync"
         ],
         "markers": []
+      },
+      {
+        "file": "src/web-server/services/cursor-account-reader.ts",
+        "count": 13,
+        "calls": [
+          "mkdirSync",
+          "readFileSync",
+          "renameSync",
+          "statSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
       }
     ],
     "topFilesOverall": [
@@ -274,12 +270,13 @@
       },
       {
         "file": "src/config/loader/io-locks.ts",
-        "count": 29,
+        "count": 30,
         "calls": [
           "chmodSync",
           "closeSync",
           "existsSync",
           "fsyncSync",
+          "linkSync",
           "lstatSync",
           "mkdirSync",
           "openSync",
@@ -339,17 +336,19 @@
         "markers": []
       },
       {
-        "file": "src/web-server/services/app-update-service.ts",
-        "count": 23,
+        "file": "src/web-server/services/dashboard-preferences.ts",
+        "count": 22,
         "calls": [
-          "chmodSync",
           "closeSync",
+          "fstatSync",
+          "fsyncSync",
+          "lstatSync",
           "mkdirSync",
           "openSync",
-          "readFileSync",
+          "readdirSync",
+          "readSync",
+          "realpathSync",
           "renameSync",
-          "rmSync",
-          "statSync",
           "unlinkSync",
           "writeFileSync"
         ],
@@ -358,12 +357,12 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 211,
-    "filesAffected": 64,
+    "totalMarkers": 182,
+    "filesAffected": 56,
     "topFiles": [
       {
         "file": "src/web-server/rust-service.ts",
-        "count": 27,
+        "count": 29,
         "calls": [],
         "markers": [
           ": legacy();",
@@ -379,9 +378,11 @@
           "if (!verified) return legacy();",
           "if (service instanceof RustService) await service.owned(req, res, route, root, accept, legacy);",
           "legacy: () => Promise<unknown>",
+          "legacy: () => T | Promise<T>",
           "legacy: () => unknown | Promise<unknown>,",
           "reference = await legacy();",
-          "return legacy();"
+          "return legacy();",
+          "return withTsPrivateFileLeases(getCcsDir(), stores, legacy, preferredRust);"
         ]
       },
       {
@@ -454,22 +455,6 @@
         ]
       },
       {
-        "file": "src/web-server/services/app-update-service.ts",
-        "count": 9,
-        "calls": [],
-        "markers": [
-          "// Bind the companion to this exact legacy save. If an old package later",
-          "// Rows carry diagnostics in the expanded file only; the legacy view keeps the older limit.",
-          "const LATER_PLATFORMS = PLATFORMS.filter((host) => !COMPUTERS[host].legacy);",
-          "const legacy = JSON.stringify({ job: legacyJob });",
-          "const legacy = path.join(this.directory, 'dashboard-job.json');",
-          "createHash('sha256').update(fs.readFileSync(legacy)).digest('hex') !==",
-          "if (fs.statSync(legacy).size > MAX_OUTPUT) return false;",
-          "JSON.stringify({ legacyDigest: createHash('sha256').update(legacy).digest('hex'), job })",
-          "this.saveFile('dashboard-job.json', legacy);"
-        ]
-      },
-      {
         "file": "src/commands/bar/native-app-paths.ts",
         "count": 8,
         "calls": [],
@@ -485,31 +470,6 @@
         ]
       },
       {
-        "file": "src/web-server/scoreboard/scoreboard-service.ts",
-        "count": 7,
-        "calls": [],
-        "markers": [
-          ": await legacy();",
-          "? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)",
-          "const legacy = () =>",
-          "legacy: () => Promise<ScoreboardView>"
-        ]
-      },
-      {
-        "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 7,
-        "calls": [],
-        "markers": [
-          "* Unlike legacy merged caches, each worker keeps the native tool dimension. `key` names the logs",
-          "/** Unpublished Claude/legacy replacements survive capped passes, but never a later failed read. */",
-          "// An unplanned legacy share has no safe request-to-request replacement.",
-          "// Stage replacements until their legacy unit or Claude mirror election can advance.",
-          "const legacy = path.join(scope, 'cache', 'codex-native-usage-v1.json');",
-          "const result = await store.activityImportCodexV1(legacy, 'ubuntu').catch(() => null);",
-          "if (path.isAbsolute(scope) && fs.existsSync(legacy)) {"
-        ]
-      },
-      {
         "file": "src/codex-auth/commands/import-default-command.ts",
         "count": 5,
         "calls": [],
@@ -522,6 +482,17 @@
         ]
       },
       {
+        "file": "src/web-server/routes/account-visibility-routes.ts",
+        "count": 5,
+        "calls": [],
+        "markers": [
+          "await legacy();",
+          "const forward = async (legacy: () => Promise<AccountVisibilityUpdateResult>) => {",
+          "const legacy = async (): Promise<unknown> => {",
+          "legacy"
+        ]
+      },
+      {
         "file": "src/commands/bar/uninstall-subcommand.ts",
         "count": 4,
         "calls": [],
@@ -531,30 +502,49 @@
           "(!target.stat.isSymbolicLink() && target.source === paths.legacy)",
           "const executables = [paths.canonical, paths.legacy].map((app) =>"
         ]
+      },
+      {
+        "file": "src/config/schemas/auth.ts",
+        "count": 4,
+        "calls": [],
+        "markers": [
+          "* `session_lifetime_days` wins; otherwise a legacy `session_timeout_hours`",
+          "* Disabled by default for backward compatibility.",
+          "/** A legacy `session_timeout_hours` value maps to the nearest offered lifetime. */",
+          "/** Session timeout in hours (default: 24; legacy mirror of session_lifetime_days) */"
+        ]
+      },
+      {
+        "file": "src/web-server/services/account-visibility.ts",
+        "count": 4,
+        "calls": [],
+        "markers": [
+          ": withVisibilityWriter(ccsDir, legacy);",
+          "? withPrivateFileLock(accountVisibilityPath(ccsDir), () => forward(legacy))",
+          "legacy: () => Promise<AccountVisibilityUpdateResult>",
+          "legacy: () => Promise<AccountVisibilityUpdateResult>,"
+        ]
       }
     ],
-    "explicitShimFiles": [
-      "src/bin/compat-cli.ts",
-      "src/utils/profile-compat.ts"
-    ]
+    "explicitShimFiles": []
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 688,
-      "typedThrows": 227,
-      "plainThrows": 47,
-      "otherThrows": 414,
-      "adoptionRatio": 0.3299,
+      "totalThrows": 722,
+      "typedThrows": 244,
+      "plainThrows": 40,
+      "otherThrows": 438,
+      "adoptionRatio": 0.338,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 405,
-          "typed": 174,
+          "count": 427,
+          "typed": 178,
           "plain": 7
         },
         {
           "subdomain": "antigravity",
-          "count": 138,
+          "count": 137,
           "typed": 0,
           "plain": 0
         },
@@ -571,28 +561,28 @@
           "plain": 0
         },
         {
-          "subdomain": "utils",
-          "count": 10,
-          "typed": 0,
-          "plain": 10
-        },
-        {
-          "subdomain": "config",
-          "count": 9,
-          "typed": 4,
-          "plain": 5
+          "subdomain": "shared",
+          "count": 14,
+          "typed": 12,
+          "plain": 0
         },
         {
           "subdomain": "store",
-          "count": 7,
+          "count": 10,
           "typed": 1,
           "plain": 0
         },
         {
-          "subdomain": "shared",
-          "count": 4,
-          "typed": 3,
-          "plain": 0
+          "subdomain": "utils",
+          "count": 10,
+          "typed": 0,
+          "plain": 7
+        },
+        {
+          "subdomain": "config",
+          "count": 9,
+          "typed": 8,
+          "plain": 1
         }
       ]
     },
@@ -609,14 +599,12 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 44,
-      "totalSourceFiles": 462,
-      "coverageRatio": 0.0952,
+      "filesWithCreateLogger": 39,
+      "totalSourceFiles": 440,
+      "coverageRatio": 0.0886,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
-        "bin",
         "config",
-        "cursor",
         "management",
         "shared",
         "status-native",
@@ -627,8 +615,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 266,
-          "withLogger": 30
+          "count": 251,
+          "withLogger": 25
         },
         {
           "subdomain": "codex-auth",
@@ -637,12 +625,12 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 33,
+          "count": 32,
           "withLogger": 0
         },
         {
           "subdomain": "utils",
-          "count": 32,
+          "count": 30,
           "withLogger": 0
         },
         {
@@ -652,12 +640,12 @@
         },
         {
           "subdomain": "config",
-          "count": 18,
+          "count": 17,
           "withLogger": 0
         },
         {
           "subdomain": "store",
-          "count": 11,
+          "count": 12,
           "withLogger": 1
         },
         {
@@ -671,17 +659,17 @@
           "withLogger": 0
         },
         {
-          "subdomain": "shared",
-          "count": 6,
-          "withLogger": 0
+          "subdomain": "errors",
+          "count": 5,
+          "withLogger": 1
         }
       ]
     },
     "hotpathConsoleErrors": {
-      "totalOccurrences": 224,
-      "exemptOccurrences": 169,
-      "hotpathOccurrences": 55,
-      "filesAffected": 13,
+      "totalOccurrences": 222,
+      "exemptOccurrences": 170,
+      "hotpathOccurrences": 52,
+      "filesAffected": 14,
       "topFiles": [
         {
           "file": "src/errors/error-handler.ts",
@@ -693,10 +681,6 @@
         },
         {
           "file": "src/antigravity/registry.ts",
-          "count": 5
-        },
-        {
-          "file": "src/bin/compat-cli.ts",
           "count": 5
         },
         {
@@ -724,6 +708,10 @@
           "count": 2
         },
         {
+          "file": "src/antigravity/terminal-signin-entry.ts",
+          "count": 1
+        },
+        {
           "file": "src/errors/cleanup-registry.ts",
           "count": 1
         },
@@ -734,48 +722,56 @@
         {
           "file": "src/web-server/services/ssh-policy.ts",
           "count": 1
+        },
+        {
+          "file": "src/web-server/sidecar.ts",
+          "count": 1
         }
       ]
     },
     "largeFiles": {
-      "countOver400": 66,
-      "countOver600": 27,
+      "countOver400": 65,
+      "countOver600": 28,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
           "loc": 4028
         },
         {
-          "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 2431
-        },
-        {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2398
+          "loc": 2399
         },
         {
           "file": "src/web-server/status/answers.ts",
-          "loc": 1985
+          "loc": 2069
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1719
+          "loc": 1765
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
           "loc": 1337
         },
         {
+          "file": "src/antigravity/registry.ts",
+          "loc": 1206
+        },
+        {
           "file": "src/web-server/status/status-collectors.ts",
           "loc": 1158
         },
         {
-          "file": "src/antigravity/registry.ts",
-          "loc": 1154
+          "file": "src/web-server/rust-service-transport.ts",
+          "loc": 1124
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1084
+          "loc": 1095
+        },
+        {
+          "file": "src/web-server/rust-service.ts",
+          "loc": 1060
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -783,23 +779,19 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 993
+          "loc": 1005
         },
         {
           "file": "src/web-server/status/status-view.ts",
           "loc": 903
         },
         {
-          "file": "src/web-server/services/account-analytics-service.ts",
-          "loc": 887
-        },
-        {
-          "file": "src/web-server/status/status-service.ts",
-          "loc": 828
-        },
-        {
           "file": "src/web-server/usage/native-quota-collector.ts",
           "loc": 815
+        },
+        {
+          "file": "src/web-server/services/agent-verbs.ts",
+          "loc": 801
         }
       ]
     }

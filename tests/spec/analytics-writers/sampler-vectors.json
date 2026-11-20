@@ -1,0 +1,447 @@
+{
+  "note": "G14 sampler end-to-end parity: TS writer + NAPI Engine answers (synthetic only).",
+  "now": 1794744000000,
+  "dashboards": [
+    {
+      "accounts": [
+        {
+          "provider": "claude",
+          "id": "alpha",
+          "email": "alpha@example.test",
+          "status": "ok",
+          "sampledAt": "2026-11-15T11:30:00.000Z",
+          "fetchedAt": "2026-11-15T11:30:00.000Z",
+          "source": "cli",
+          "isActive": true,
+          "host": "mac",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour limit",
+              "kind": "rate_limit",
+              "windowMinutes": 300,
+              "usedPercent": 42.5,
+              "resetAt": "2026-11-15T13:00:00.000Z"
+            }
+          ]
+        },
+        {
+          "provider": "codex",
+          "id": "beta",
+          "email": "beta@example.test",
+          "status": "cached",
+          "sampledAt": "2026-11-15T11:40:00.000Z",
+          "fetchedAt": "2026-11-15T11:50:00.000Z",
+          "source": "cli",
+          "isActive": true,
+          "host": "mac",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour limit",
+              "kind": "rate_limit",
+              "windowMinutes": 300,
+              "usedPercent": 42.5,
+              "resetAt": "2026-11-15T13:00:00.000Z"
+            }
+          ]
+        },
+        {
+          "provider": "gemini",
+          "id": "gamma",
+          "email": "gamma@example.test",
+          "status": "error",
+          "sampledAt": "2026-11-15T11:45:00.000Z",
+          "fetchedAt": "2026-11-15T11:50:00.000Z",
+          "source": "cli",
+          "isActive": true,
+          "host": "mac",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour limit",
+              "kind": "rate_limit",
+              "windowMinutes": 300,
+              "usedPercent": 42.5,
+              "resetAt": "2026-11-15T13:00:00.000Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "accounts": [
+        {
+          "provider": "claude",
+          "id": "alpha",
+          "email": "alpha@example.test",
+          "status": "ok",
+          "sampledAt": "2026-11-15T11:55:00.000Z",
+          "fetchedAt": "2026-11-15T11:55:00.000Z",
+          "source": "cli",
+          "isActive": true,
+          "host": "windows",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour limit",
+              "kind": "rate_limit",
+              "windowMinutes": 300,
+              "usedPercent": 42.5,
+              "resetAt": "2026-11-15T13:00:00.000Z"
+            }
+          ]
+        },
+        {
+          "provider": "codex",
+          "id": "beta",
+          "email": "beta@example.test",
+          "status": "unavailable",
+          "sampledAt": "2026-11-15T11:59:00.000Z",
+          "fetchedAt": "2026-11-15T11:50:00.000Z",
+          "source": "cli",
+          "isActive": true,
+          "host": "windows",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour limit",
+              "kind": "rate_limit",
+              "windowMinutes": 300,
+              "usedPercent": 42.5,
+              "resetAt": "2026-11-15T13:00:00.000Z"
+            }
+          ]
+        },
+        {
+          "provider": "qwen",
+          "id": "delta",
+          "email": "delta@example.test",
+          "status": "ok",
+          "sampledAt": "2026-11-15T11:52:00.000Z",
+          "fetchedAt": "2026-11-15T11:50:00.000Z",
+          "source": "cli",
+          "isActive": true,
+          "host": "windows",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour limit",
+              "kind": "rate_limit",
+              "windowMinutes": 300,
+              "usedPercent": 42.5,
+              "resetAt": "2026-11-15T13:00:00.000Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "label": "archive/a.jsonl",
+      "sha256": "ad504ac5450b5678c150886c58333d74c3521510b2e3e6f352eb6c665785a283",
+      "text": "{\"identity\":\"0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2\",\"accountId\":\"claude:alpha\",\"sampledAt\":\"2026-11-15T08:40:00.000Z\",\"observedAt\":\"2026-11-15T08:40:00.000Z\",\"platform\":\"mac\",\"status\":\"ok\",\"source\":\"cli\",\"isActive\":true,\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"kind\":\"rate_limit\",\"windowMinutes\":300,\"usedPercent\":30,\"resetAt\":\"2026-11-15T09:40:00.000Z\"}]}\n{\"identity\":\"0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2\",\"accountId\":\"claude:alpha\",\"sampledAt\":\"2026-11-15T09:00:00.000Z\",\"observedAt\":\"2026-11-15T09:00:00.000Z\",\"platform\":\"mac\",\"status\":\"ok\",\"source\":\"cli\",\"isActive\":true,\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"kind\":\"rate_limit\",\"windowMinutes\":300,\"usedPercent\":30,\"resetAt\":\"2026-11-15T10:00:00.000Z\"}]}\n{\"nope\":true}\n{\"identity\":\"cbd0a8ef446658ed1c2d938c201d80835cb5b01c5fc430e1f10774efcdae49d7\",\"accountId\":\"codex:beta\",\"sampledAt\":\"2026-11-15T09:10:00.000Z\",\"observedAt\":\"2026-11-15T09:10:00.000Z\",\"platform\":\"mac\",\"status\":\"ok\",\"source\":\"cli\",\"isActive\":true,\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"kind\":\"rate_limit\",\"windowMinutes\":300,\"usedPercent\":30,\"resetAt\":\"2026-11-15T10:10:00.000Z\"}]}"
+    },
+    {
+      "label": "archive/nested/b.json",
+      "sha256": "587ab299f5289de73c5c9a37189372838d28e25a39678150c99d2066ddb7a441",
+      "text": "[{\"identity\":\"2894a6b083ff9f3d5cd4480182ebd2f4b37ebb76d03abaec9f02ede603affa97\",\"accountId\":\"gemini:gamma\",\"sampledAt\":\"2026-11-15T09:20:00.000Z\",\"observedAt\":\"2026-11-15T09:20:00.000Z\",\"platform\":\"mac\",\"status\":\"ok\",\"source\":\"cli\",\"isActive\":true,\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"kind\":\"rate_limit\",\"windowMinutes\":300,\"usedPercent\":30,\"resetAt\":\"2026-11-15T10:20:00.000Z\"}]},{\"identity\":\"87914adcb4289fc50cbc295da39e81b2dc390066ad20947816374075ea227892\",\"accountId\":\"qwen:delta\",\"sampledAt\":\"2026-11-15T09:30:00.000Z\",\"observedAt\":\"2026-11-15T09:30:00.000Z\",\"platform\":\"mac\",\"status\":\"ok\",\"source\":\"cli\",\"isActive\":true,\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"kind\":\"rate_limit\",\"windowMinutes\":300,\"usedPercent\":30,\"resetAt\":\"2026-11-15T10:30:00.000Z\"}]},{\"identity\":\"short\",\"accountId\":\"x\"}]"
+    },
+    {
+      "label": "quota-history-v1.json",
+      "sha256": "c8c889483611a300d8f8ac6ac02ea29d2b4879e3a2d674e85a5e1a2c87453565",
+      "text": "{\n  \"schemaVersion\": 1,\n  \"collectedSince\": \"2026-11-15T08:40:00.000Z\",\n  \"records\": [\n    {\n      \"identity\": \"0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2\",\n      \"accountId\": \"claude:alpha\",\n      \"sampledAt\": \"2026-11-15T09:40:00.000Z\",\n      \"observedAt\": \"2026-11-15T09:40:00.000Z\",\n      \"platform\": \"mac\",\n      \"status\": \"ok\",\n      \"source\": \"cli\",\n      \"isActive\": true,\n      \"windows\": [\n        {\n          \"key\": \"five_hour\",\n          \"label\": \"5-hour limit\",\n          \"kind\": \"rate_limit\",\n          \"windowMinutes\": 300,\n          \"usedPercent\": 30,\n          \"resetAt\": \"2026-11-15T10:40:00.000Z\"\n        }\n      ]\n    },\n    {\n      \"identity\": \"cbd0a8ef446658ed1c2d938c201d80835cb5b01c5fc430e1f10774efcdae49d7\",\n      \"accountId\": \"codex:beta\",\n      \"sampledAt\": \"2026-11-15T09:50:00.000Z\",\n      \"observedAt\": \"2026-11-15T09:50:00.000Z\",\n      \"platform\": \"mac\",\n      \"status\": \"ok\",\n      \"source\": \"cli\",\n      \"isActive\": true,\n      \"windows\": [\n        {\n          \"key\": \"five_hour\",\n          \"label\": \"5-hour limit\",\n          \"kind\": \"rate_limit\",\n          \"windowMinutes\": 300,\n          \"usedPercent\": 30,\n          \"resetAt\": \"2026-11-15T10:50:00.000Z\"\n        }\n      ]\n    }\n  ]\n}\n"
+    }
+  ],
+  "expectedMerged": [
+    "0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2",
+    "cbd0a8ef446658ed1c2d938c201d80835cb5b01c5fc430e1f10774efcdae49d7",
+    "2894a6b083ff9f3d5cd4480182ebd2f4b37ebb76d03abaec9f02ede603affa97",
+    "87914adcb4289fc50cbc295da39e81b2dc390066ad20947816374075ea227892"
+  ],
+  "expectedReport": {
+    "files": 3,
+    "filesAlreadyImported": 0,
+    "filesUnreadable": 0,
+    "records": 7,
+    "recordsSkipped": 2,
+    "sampled": 7,
+    "seen": 0,
+    "duplicates": 0,
+    "rejected": 0
+  },
+  "expectedHistory": [
+    {
+      "accountId": "alpha",
+      "identity": "0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2",
+      "isActive": true,
+      "observedAt": "2026-11-15T08:40:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T08:40:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T09:40:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 30,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "alpha",
+      "identity": "0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2",
+      "isActive": true,
+      "observedAt": "2026-11-15T09:00:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T09:00:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T10:00:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 30,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "beta",
+      "identity": "cbd0a8ef446658ed1c2d938c201d80835cb5b01c5fc430e1f10774efcdae49d7",
+      "isActive": true,
+      "observedAt": "2026-11-15T09:10:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T09:10:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T10:10:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 30,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "gamma",
+      "identity": "2894a6b083ff9f3d5cd4480182ebd2f4b37ebb76d03abaec9f02ede603affa97",
+      "isActive": true,
+      "observedAt": "2026-11-15T09:20:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T09:20:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T10:20:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 30,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "delta",
+      "identity": "87914adcb4289fc50cbc295da39e81b2dc390066ad20947816374075ea227892",
+      "isActive": true,
+      "observedAt": "2026-11-15T09:30:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T09:30:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T10:30:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 30,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "alpha",
+      "identity": "0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2",
+      "isActive": true,
+      "observedAt": "2026-11-15T09:40:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T09:40:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T10:40:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 30,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "beta",
+      "identity": "cbd0a8ef446658ed1c2d938c201d80835cb5b01c5fc430e1f10774efcdae49d7",
+      "isActive": true,
+      "observedAt": "2026-11-15T09:50:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T09:50:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T10:50:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 30,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "beta",
+      "identity": "cbd0a8ef446658ed1c2d938c201d80835cb5b01c5fc430e1f10774efcdae49d7",
+      "isActive": true,
+      "observedAt": "2026-11-15T12:00:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T11:40:00.000Z",
+      "source": "cli",
+      "status": "cached",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T13:00:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 42.5,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "delta",
+      "identity": "87914adcb4289fc50cbc295da39e81b2dc390066ad20947816374075ea227892",
+      "isActive": true,
+      "observedAt": "2026-11-15T12:00:00.000Z",
+      "platform": "windows",
+      "sampledAt": "2026-11-15T11:52:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T13:00:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 42.5,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "alpha",
+      "identity": "0223f09776413f812d4310c7cb3be0311fb5b4ce0f3913543e1bdf7cc7a28da2",
+      "isActive": true,
+      "observedAt": "2026-11-15T12:00:00.000Z",
+      "platform": "windows",
+      "sampledAt": "2026-11-15T11:55:00.000Z",
+      "source": "cli",
+      "status": "ok",
+      "windows": [
+        {
+          "expiresAt": null,
+          "key": "five_hour",
+          "kind": "rate_limit",
+          "label": "5-hour limit",
+          "limit": null,
+          "remaining": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-15T13:00:00.000Z",
+          "unit": null,
+          "used": null,
+          "usedPercent": 42.5,
+          "windowMinutes": 300
+        }
+      ]
+    },
+    {
+      "accountId": "gamma",
+      "identity": "2894a6b083ff9f3d5cd4480182ebd2f4b37ebb76d03abaec9f02ede603affa97",
+      "isActive": true,
+      "observedAt": "2026-11-15T12:00:00.000Z",
+      "platform": "mac",
+      "sampledAt": "2026-11-15T12:00:00.000Z",
+      "source": "cli",
+      "status": "error",
+      "windows": []
+    }
+  ]
+}

@@ -331,7 +331,7 @@ export const tests = {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         const response = await route.fetch();
         view = await response.json();
-        if (view.sources.find((s) => s.id === 'agent-reports')?.detail.includes(writer)) break;
+        if (view.sources?.find((s) => s.id === 'agent-reports')?.detail.includes(writer)) break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       view.pinned = {
@@ -574,19 +574,11 @@ export const tests = {
       { timeout: 15000 }
     );
     await t.audit('end to end 1440');
-    // R2 (`--set rustStatusFed=1`): the page's reads of the real route were answered from fed generations, and none
-    // fell back. Off, the bridge serves nothing.
-    const bridge = await t.page.evaluate(async () => {
-      const r = await fetch('/api/diag?bridge=1', { credentials: 'same-origin' });
-      return r.ok ? (await r.json()).bridge : null;
+    const view = await t.page.evaluate(async () => {
+      const response = await fetch('/api/status', { cache: 'reload' });
+      return { status: response.status, view: response.headers.get('x-aac-view') };
     });
-    const route = bridge?.routes?.['/api/status'] ?? null;
-    if (t.args.rustStatusFed) {
-      await t.check('the fed path served the real Status reads', (route?.served ?? 0) > 0, JSON.stringify(route));
-      // A read racing a push answers through today's handler (`stale`); any other reason is a finding.
-      const reasons = [...Object.keys(route?.declined ?? {}), ...Object.keys(route?.unavailable ?? {})];
-      await t.check('no Status read fell back but for a race', reasons.every((r) => r === 'stale'), reasons.join(', '));
-    } else await t.check('switch off: no Rust Status read', (route?.served ?? 0) === 0, JSON.stringify(route));
+    await t.check('Rust served the Status view', view.status === 200 && view.view === 'status@1', JSON.stringify(view));
   },
 
   async 'status desktop'(t) {

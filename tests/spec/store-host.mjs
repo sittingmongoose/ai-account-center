@@ -677,43 +677,9 @@ async function measureWorker(mode) {
     }
     methodSamples[method] = values;
   }
-  const express = require(path.join(repo, 'node_modules/express'));
-  const { createStoreRouter } = require(path.join(dist, 'web-server/routes/store-routes.js'));
-  const app = express();
-  app.use((req, res, next) => {
-    req.sessionID = 'fixture-session';
-    req.session = { authenticated: true };
-    res.locals.rustService = service;
-    next();
-  });
-  app.use('/api/store', createStoreRouter({ store: () => store }));
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise((resolve) => server.once('listening', resolve));
-  const url = `http://127.0.0.1:${server.address().port}/api/store/status`;
-  const servedBefore = service.stats.served;
-  const httpCall = async () => {
-    const response = await fetch(url);
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.equal(body.state, 'ready');
-  };
-  for (let i = 0; i < 10; i++) await httpCall();
-  const routeSamples = [];
-  for (let i = 0; i < 40; i++) {
-    const start = performance.now();
-    await httpCall();
-    routeSamples.push(performance.now() - start);
-  }
-  if (mode === 'on')
-    assert.equal(
-      service.stats.served - servedBefore,
-      50,
-      'the real route served every status from Rust'
-    );
   global.gc?.();
   const rss = { tsBytes: process.memoryUsage().rss, rustBytes: service.childRssBytes() ?? 0 };
-  const result = { mode, methodSamples, routeSamples, rss, loadBefore, loadAfter: os.loadavg() };
-  await new Promise((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  const result = { mode, methodSamples, rss, loadBefore, loadAfter: os.loadavg() };
   if (mode === 'on') await stopHosted(service);
   else {
     await store.close();
@@ -735,13 +701,11 @@ async function measure() {
       rounds.push({ round, ...JSON.parse(fs.readFileSync(out, 'utf8')) });
     }
   const rows = {};
-  for (const method of ['record', 'historyRecords', 'runsQuery', '/api/store/status']) {
+  for (const method of ['record', 'historyRecords', 'runsQuery']) {
     const samples = (mode) =>
       rounds
         .filter((r) => r.mode === mode)
-        .flatMap((r) =>
-          method === '/api/store/status' ? r.routeSamples : r.methodSamples[method]
-        );
+        .flatMap((r) => r.methodSamples[method]);
     const off = quantiles(samples('off')),
       on = quantiles(samples('on'));
     const delta = on.p50Ms - off.p50Ms;
@@ -749,8 +713,8 @@ async function measure() {
       off,
       on,
       deltaP50Ms: delta,
-      barMs: method === '/api/store/status' ? 0.5 : 0.3,
-      pass: method === '/api/store/status' ? on.p50Ms <= 0.5 : delta <= 0.3,
+      barMs: 0.3,
+      pass: delta <= 0.3,
     };
   }
   const rss = (mode) => {

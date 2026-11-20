@@ -1,9 +1,14 @@
 //! The shared validators of the agent report documents, ported field for field from
 //! `src/web-server/status/schema-helpers.ts`: same caps counted the same way (string lengths
 //! are UTF-16 code units, as in JavaScript), same fixed refusal reasons, nothing echoing a
-//! file's text. The secret check is deliberately not ported: TypeScript checks status
-//! reports for secrets; the native module only reads reports TypeScript accepted (owner
-//! decision 2026-11-09).
+//! file's text.
+//!
+//! Exactly one secret filter, the Rust one (owner, 2026-11-19): `crate::secret_policy` (the
+//! packaged `src/shared/secret-policy.json`, compiled as aac-store compiles it) plus
+//! `crate::typed_secrets` for notes. On the NAPI path TypeScript's `jsonFromBytes` calls it
+//! through this module before the bytes reach the parse, so [`json_from_bytes`] does not run it
+//! a second time; the R4 owned readers in the service read through [`share_json_from_bytes`],
+//! which runs it in place.
 
 use serde_json::{Map, Value as Json};
 
@@ -249,16 +254,13 @@ pub fn head(doc: &Map<String, Json>, schema: &str, writer: &str) -> Valid<DocHea
 }
 
 /// Bytes of one share file -> its JSON value, under the byte rules every reader applies: the
-/// size cap, no NUL bytes (a damaged write), UTF-8, valid JSON. Every refusal is a fixed
-/// reason, the same strings as `jsonFromBytes` in schema-helpers.ts.
+/// size cap, no NUL bytes (a damaged write), UTF-8, valid JSON that Rust can hold (an
+/// overflowing number, a lone surrogate or nesting past serde's limit is "not valid JSON",
+/// as `nativeUnreadable` makes it in TypeScript). Every refusal is a fixed reason, the same
+/// strings as `jsonFromBytes` in schema-helpers.ts.
 ///
-/// The secret check is not here: TypeScript checks status reports for secrets
-/// (`jsonFromBytes` in schema-helpers.ts, the one secret filter); the native module only
-/// reads reports TypeScript accepted (owner decision 2026-11-09).
-///
-/// One honest divergence: serde_json refuses JSON nested deeper than its limit (128) as
-/// "not valid JSON", where the TypeScript reader parses it and then refuses or projects it.
-/// Such a file is refused either way; only the reason differs.
+/// The secret check is not here: on the NAPI path TypeScript's `jsonFromBytes` already ran the
+/// one (Rust) filter over these bytes; the owned readers use [`share_json_from_bytes`].
 pub fn json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
     if bytes.len() > cap_bytes {
         return Err(format!("larger than the {} KB cap", cap_bytes / 1024));
@@ -271,4 +273,192 @@ pub fn json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
     }
     let source = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
     serde_json::from_str(source).map_err(|_| "not valid JSON".to_string())
+}
+
+/// [`json_from_bytes`] plus the one secret filter, for the R4 owned share readers: the service
+/// reads the share itself and no TypeScript `jsonFromBytes` runs, so the filter runs here (same
+/// fixed words). Not on the NAPI path, where TypeScript already ran the same filter.
+pub fn share_json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
+    let value = json_from_bytes(bytes, cap_bytes)?;
+    // Valid UTF-8 is established above.
+    let source = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
+    if let Some(kind) = crate::secret_policy::find_secret_in(source, &value) {
+        return Err(format!("refused: it contains what looks like {kind}"));
+    }
+    Ok(value)
+}
+
+/// `optIso`: null or absent is null; anything else must be a real calendar moment.
+pub fn opt_iso(value: Option<&Json>, field: &str) -> Valid<Option<String>> {
+    match value {
+        None | Some(Json::Null) => Ok(None),
+        other => iso(other, field).map(Some),
+    }
+}
+
+/// `optSlug`: null or absent is null; anything else must be a slug.
+pub fn opt_slug(value: Option<&Json>, field: &str) -> Valid<Option<String>> {
+    match value {
+        None | Some(Json::Null) => Ok(None),
+        other => slug(other, field).map(Some),
+    }
+}
+
+/// `optObj`: null or absent is null; anything else is an object the reader projects.
+pub fn opt_obj<T>(
+    value: Option<&Json>,
+    field: &str,
+    read: impl FnOnce(&Map<String, Json>) -> Valid<T>,
+) -> Valid<Option<T>> {
+    match value {
+        None | Some(Json::Null) => Ok(None),
+        other => read(obj(other, field)?).map(Some),
+    }
+}
+
+/// `bool`: absent or null takes the fallback; anything else must be a boolean.
+pub fn bool_value(value: Option<&Json>, field: &str, fallback: bool) -> Valid<bool> {
+    match value {
+        None | Some(Json::Null) => Ok(fallback),
+        Some(Json::Bool(flag)) => Ok(*flag),
+        _ => Err(fail(field)),
+    }
+}
+
+/// `text`, with a refusal that says the length rule when that is the one broken.
+pub fn bounded_text(value: Option<&Json>, field: &str, max: usize) -> Valid<String> {
+    if let Some(Json::String(text)) = value {
+        let len = utf16_len(text);
+        if len > max {
+            return Err(Invalid(format!(
+                "{field} is too long: {len} characters, over the {max} allowed"
+            )));
+        }
+    }
+    text(value, field, max)
+}
+
+/// A report link: `{label, path}` in that order, the label's bound published per kind.
+pub fn link(value: Option<&Json>, field: &str, label_max: usize) -> Valid<Json> {
+    let item = obj(value, field)?;
+    Ok(serde_json::json!({
+        "label": bounded_text(item.get("label"), &format!("{field}.label"), label_max)?,
+        "path": text(item.get("path"), &format!("{field}.path"), 600)?,
+    }))
+}
+
+/// `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$` (a card option key).
+pub fn option_key(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    value.chars().count() <= 32 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Which rule a `<writer>--<local id>` id breaks, in fixed words, or None when it keeps them
+/// all: the writer prefix, then the local id's length, then its grammar.
+pub fn id_problem(value: Option<&Json>, writer: &str, local_max: usize) -> Option<String> {
+    let Some(Json::String(value)) = value else {
+        return Some("id is missing or not valid".to_string());
+    };
+    if value.is_empty() {
+        return Some("id is missing or not valid".to_string());
+    }
+    let prefix = format!("{writer}--");
+    if !value.starts_with(&prefix) {
+        return Some(format!(
+            "id does not name its writer: it must start with \"{writer}--\""
+        ));
+    }
+    let local = &value[prefix.len()..];
+    if local.is_empty() {
+        return Some("id has no local part after its writer and \"--\"".to_string());
+    }
+    let len = utf16_len(local);
+    if len > local_max {
+        return Some(format!(
+            "id is too long: the part after \"{writer}--\" is {len} characters, over the {local_max} allowed"
+        ));
+    }
+    if !local_id_grammar(local) {
+        return Some(
+            "id is not valid: the part after its writer and \"--\" must start with a letter or digit and hold only letters, digits, \".\", \"_\" and \"-\""
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// `^[A-Za-z0-9][A-Za-z0-9._-]*$` with no bound (the local id grammar).
+fn local_id_grammar(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// A card id: `<writer>--<local id>`, at most 130 characters, the local part at most 64.
+pub fn is_card_id(value: Option<&Json>) -> bool {
+    let Some(Json::String(value)) = value else {
+        return false;
+    };
+    if utf16_len(value) > 130 {
+        return false;
+    }
+    let Some(at) = value.find("--") else {
+        return false;
+    };
+    if at == 0 || !is_writer_name(&value[..at]) {
+        return false;
+    }
+    let local = &value[at + 2..];
+    local_id_grammar(local) && utf16_len(local) <= 64
+}
+
+/// pm-mail's own name rule (`NAME_OK`): lowercase, no dots; `all` is the broadcast, never a card target.
+pub fn is_pm_mail_name(value: Option<&Json>) -> bool {
+    let Some(Json::String(value)) = value else {
+        return false;
+    };
+    if value == "all" {
+        return false;
+    }
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit() => {}
+        _ => return false,
+    }
+    value.chars().count() <= 64 && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-'))
+}
+
+/// A relative path inside a writer's folder: plain segments, no `..`, no absolute or Windows
+/// paths (`IMAGE_PATH`: at most six segments of at most 100 characters).
+pub fn is_writer_file_path(value: Option<&Json>) -> bool {
+    let Some(Json::String(value)) = value else {
+        return false;
+    };
+    if utf16_len(value) > 300 {
+        return false;
+    }
+    let segments: Vec<&str> = value.split('/').collect();
+    if segments.len() > 6 {
+        return false;
+    }
+    segments.iter().all(|segment| {
+        if segment.is_empty() || *segment == "." || *segment == ".." {
+            return false;
+        }
+        let mut chars = segment.chars();
+        let first_ok = match chars.next() {
+            Some(first) => first.is_ascii_alphanumeric() || matches!(first, '_' | '-'),
+            None => false,
+        };
+        first_ok
+            && segment.chars().count() <= 100
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    })
 }

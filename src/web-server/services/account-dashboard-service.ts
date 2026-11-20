@@ -1,15 +1,11 @@
+import { readNativeCollection, workerReadsNative } from '../native-collection-feed';
+import { broadcastDashboardEvent } from '../dashboard-events';
 import {
   getCodexAuthProfilesSummary,
   type CodexAuthProfilesSummary,
 } from '../../codex-auth/codex-auth-dashboard-service';
 import { readClaudeSignInRenewal, type ClaudeSignInRenewal } from './claude-signin-renewal';
 import { getCcsDir } from '../../utils/config-manager';
-import {
-  getAntigravityAccounts,
-  getCachedAntigravityAccounts,
-  hasAntigravityProfiles,
-  readSelectedAntigravityProfileId,
-} from '../../antigravity/runtime-service';
 import { publicDashboardAccount } from '../../antigravity/usage-normalization';
 import type { AntigravityDashboardAccount } from '../../antigravity/usage-contract';
 import {
@@ -89,6 +85,8 @@ import {
 export type { AccountDashboard, DashboardAccount } from './account-dashboard-types';
 
 export interface AccountDashboardDeps {
+  /** The collector has published dashboard usage rows. */
+  onUsagePublished?: () => void;
   getCodexSummary?: () => Promise<CodexAuthProfilesSummary>;
   getCodexRows?: (names: string[], refresh: boolean) => Promise<BarSummaryRow[]>;
   getCachedCodexRows?: (names: string[]) => BarSummaryRow[];
@@ -567,13 +565,12 @@ export class AccountDashboardService {
     refresh: boolean
   ): Promise<DashboardAccount[]> {
     const generation = ++state.generation;
-    const registeredAntigravity = (
-      this.deps.hasAntigravityProfiles ?? (() => hasAntigravityProfiles(scope))
-    )();
+    const registeredAntigravity = (this.deps.hasAntigravityProfiles ?? (() => false))();
     if (refresh) (this.deps.invalidateClaudeCache ?? invalidateClaudeDesktopUsageCache)();
     // Sources that already published a successful reading in this cycle. A slow optional
     // part (the OpenCode wallet) must not relabel those current rows as cached on timeout.
     const publishedThisCycle = new Set<string>();
+    let completed = false;
     const parts = [
       ['codex', this.collectCodex(scope, refresh), () => this.cachedCodex(scope)],
       [
@@ -614,12 +611,7 @@ export class AccountDashboardService {
         'antigravity',
         registeredAntigravity
           ? Promise.resolve()
-              .then(() =>
-                (
-                  this.deps.getAntigravityAccounts ??
-                  ((force) => getAntigravityAccounts(force, scope))
-                )(refresh)
-              )
+              .then(() => (this.deps.getAntigravityAccounts ?? (async () => []))(refresh))
               .then((accounts) => {
                 const rows = accounts.map(publicDashboardAccount);
                 return this.deps.getAntigravityAccounts || this.deps.failover === null
@@ -631,10 +623,7 @@ export class AccountDashboardService {
           : Promise.resolve([]),
         () =>
           registeredAntigravity
-            ? (
-                this.deps.getCachedAntigravityAccounts ??
-                (() => getCachedAntigravityAccounts(scope))
-              )().map(publicDashboardAccount)
+            ? (this.deps.getCachedAntigravityAccounts ?? (() => []))().map(publicDashboardAccount)
             : [],
       ],
     ] as const;
@@ -643,7 +632,10 @@ export class AccountDashboardService {
         // Slow sources can finish after the response deadline. Retain their safe
         // projections without allowing an older cycle to overwrite a newer one.
         const retained = pending.then((accounts) => {
-          if (state.generation === generation) state[key] = accounts;
+          if (state.generation === generation) {
+            state[key] = accounts;
+            if (completed) this.deps.onUsagePublished?.();
+          }
           return accounts;
         });
         const result = await this.bounded(retained, () =>
@@ -665,6 +657,8 @@ export class AccountDashboardService {
       })
     );
     state.fetchedAt = (this.deps.now ?? Date.now)();
+    completed = true;
+    if (state.generation === generation) this.deps.onUsagePublished?.();
     return [...state.codex, ...state.claude, ...state.additional, ...state.antigravity];
   }
 
@@ -769,9 +763,7 @@ export class AccountDashboardService {
     else if (state.pending) void state.pending.catch(() => {});
     // Account switches invalidate the native summary by live auth file signature.
     // Refresh this inexpensive identity even when quota samples are still cached.
-    const registeredAntigravity = (
-      this.deps.hasAntigravityProfiles ?? (() => hasAntigravityProfiles(scope))
-    )();
+    const registeredAntigravity = (this.deps.hasAntigravityProfiles ?? (() => false))();
     const remainingBudget = Math.max(
       0,
       (this.deps.responseBudgetMs ?? 2500) - (Date.now() - startedAt)
@@ -785,10 +777,7 @@ export class AccountDashboardService {
       registeredAntigravity
         ? this.bounded(
             Promise.resolve().then(() =>
-              (
-                this.deps.readSelectedAntigravityProfileId ??
-                (() => readSelectedAntigravityProfileId(scope))
-              )()
+              (this.deps.readSelectedAntigravityProfileId ?? (async () => null))()
             ),
             () => null,
             remainingBudget
@@ -822,24 +811,24 @@ export class AccountDashboardService {
     // cache hits. This synchronous cache projection never starts a provider call.
     if (registeredAntigravity) {
       const previousAntigravity = state.antigravity;
-      state.antigravity = (
-        this.deps.getCachedAntigravityAccounts ?? (() => getCachedAntigravityAccounts(scope))
-      )().map((account) => {
-        const publicAccount = publicDashboardAccount(account);
-        const retained = previousAntigravity.find((row) => row.id === publicAccount.id);
-        if (
-          retained?.status === 'cached' &&
-          publicAccount.status === 'ok' &&
-          retained.sampledAt === publicAccount.sampledAt &&
-          retained.fetchedAt === publicAccount.fetchedAt
-        )
-          return retained;
-        return this.deps.getCachedAntigravityAccounts || this.deps.failover === null
-          ? publicAccount
-          : peekAntigravityUsage(publicAccount, scope, {
-              failover: this.deps.failover ?? undefined,
-            });
-      });
+      state.antigravity = (this.deps.getCachedAntigravityAccounts ?? (() => []))().map(
+        (account) => {
+          const publicAccount = publicDashboardAccount(account);
+          const retained = previousAntigravity.find((row) => row.id === publicAccount.id);
+          if (
+            retained?.status === 'cached' &&
+            publicAccount.status === 'ok' &&
+            retained.sampledAt === publicAccount.sampledAt &&
+            retained.fetchedAt === publicAccount.fetchedAt
+          )
+            return retained;
+          return this.deps.getCachedAntigravityAccounts || this.deps.failover === null
+            ? publicAccount
+            : peekAntigravityUsage(publicAccount, scope, {
+                failover: this.deps.failover ?? undefined,
+              });
+        }
+      );
     }
     const claudeIds = new Set(state.claude.map((account) => account.id));
     const accounts = [
@@ -956,13 +945,33 @@ export class AccountDashboardService {
 }
 
 let service: AccountDashboardService | null = null;
+
+function dashboardService(): AccountDashboardService {
+  return (service ??= new AccountDashboardService({
+    onUsagePublished: () => broadcastDashboardEvent({ type: 'accounts-changed' }),
+  }));
+}
+async function nativeDashboard(
+  platform: ClaudeDashboardPlatform,
+  refresh: boolean,
+  context: AccountDashboardRequestContext
+): Promise<AccountDashboard> {
+  const query = new URLSearchParams({
+    platform,
+    secure: String(context.secureTransport === true),
+    refresh: String(refresh),
+  });
+  return (await readNativeCollection(`/dashboard?${query}`)) as AccountDashboard;
+}
+
 export function getAccountDashboard(
   platform: ClaudeDashboardPlatform = 'mac',
   refresh = false,
   context: AccountDashboardRequestContext = {}
 ): Promise<AccountDashboard> {
-  service ??= new AccountDashboardService();
-  return service.get(platform, refresh, context);
+  return workerReadsNative()
+    ? nativeDashboard(platform, refresh, context)
+    : dashboardService().get(platform, refresh, context);
 }
 
 /** R1: `getAccountDashboard` before its per-response pass, with that pass's clock (Home, fed). */
@@ -971,8 +980,12 @@ export function readAccountDashboardForHome(
   refresh = false,
   context: AccountDashboardRequestContext = {}
 ): Promise<HomeDashboardRead> {
-  service ??= new AccountDashboardService();
-  return service.readForHome(platform, refresh, context);
+  return workerReadsNative()
+    ? nativeDashboard(platform, refresh, context).then((dashboard) => ({
+        dashboard,
+        now: Date.now(),
+      }))
+    : dashboardService().readForHome(platform, refresh, context);
 }
 
 /** Cache only: never starts a collection (see AccountDashboardService.peek). */
@@ -980,8 +993,7 @@ export function peekAccountDashboard(
   platform: ClaudeDashboardPlatform = 'mac',
   context: AccountDashboardRequestContext = {}
 ): Promise<AccountDashboard> {
-  service ??= new AccountDashboardService();
-  return service.peek(platform, context);
+  return dashboardService().peek(platform, context);
 }
 
 export function invalidateAccountDashboard(): void {

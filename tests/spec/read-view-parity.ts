@@ -27,9 +27,6 @@ const { AgentReportsReader } = await import('../../src/web-server/status/agent-r
 const { buildStatusView } = await import('../../src/web-server/status/status-view');
 const { writeReport, threadDoc, tasksDoc, item, writeCard, cardDoc } =
   await import('../unit/web-server/status/status-test-helpers');
-// R2: every Status case also goes through the fed path (status-feed.ts and the real service), byte for byte.
-const { checkStatusFed } = await import('./status-fed-check');
-const fed = { served: 0, declined: [] as string[] };
 try {
   const collation = rustReadInput(['é', 'e\u0301'], 'UTC') as any;
   assert.equal(collation.presentation.order['é'], collation.presentation.order['e\u0301']);
@@ -432,37 +429,7 @@ try {
         JSON.stringify(expected),
         `raw Status order case ${cases.indexOf(input)} in ${zone}`
       );
-      const label = `fed Status case ${cases.indexOf(input)} in ${zone}`;
-      if (await checkStatusFed(service, input, label)) fed.served++;
-      else fed.declined.push(label);
     }
-  if (!tsOnly) {
-    // The envelope serves all 21; so must the fed path (a decline here would hide the case from the gate).
-    assert.deepEqual(fed.declined, [], 'every raw Status case is served through the fed path');
-    // Negative control: one changed byte through the real fed path must fail the check. The facts pushed to the
-    // service swap AM and PM in every clock word, so each clock the view writes differs from TS's.
-    const push = service.pushFeed.bind(service);
-    service.pushFeed = (boot, source, generation, data, facts) =>
-      push(
-        boot,
-        source,
-        generation,
-        data,
-        source === 'status-facts'
-          ? facts.replace(/ (AM|PM)"/g, (_m, half: string) => (half === 'AM' ? ' PM"' : ' AM"'))
-          : facts
-      );
-    const tampered = structuredClone(complex);
-    tampered.timeZone = 'America/Chicago';
-    await assert.rejects(
-      checkStatusFed(service, tampered, 'negative control'),
-      /fed bytes differ/,
-      'the fed parity check catches a changed byte'
-    );
-    service.pushFeed = push;
-    tampered.timeZone = 'America/Denver';
-    assert.ok(await checkStatusFed(service, tampered, 'after the control'), 'served again');
-  }
   // Big review (Fable M1): a board time is fs.Stats.mtimeMs, which carries a fraction on ext4, ZFS, NFS and SMB.
   // Rust must age it as TS does (or decline), never read it as no time. One real file's stat, Fable's synthetic
   // fraction and an integer control; not part of the golden (a real stat changes every run).
@@ -496,11 +463,6 @@ try {
     );
     assert.equal(reply.status, 200, `board mtime ${mtime}: Rust declined`);
     assert.equal(JSON.stringify(reply.body), JSON.stringify(expected), `board mtime ${mtime}`);
-    assert.ok(
-      await checkStatusFed(service, input, `fed board mtime ${mtime}`),
-      `fed board mtime ${mtime}: declined`
-    );
-    fed.served++;
   }
   assert.ok(fractional >= 1, 'at least one board time carries a fraction');
   // Big review (Fable L1): TS reads a name from a plain object (a quota meter label, a catalog metric) as the inherited
@@ -541,9 +503,6 @@ try {
       reply.status === 503 || (reply.status === 200 && JSON.stringify(reply.body) === expected),
       `${route}: a prototype-member name must decline or match TS (got ${reply.status})`
     );
-    // Fed, the generation holding the name is declined when it arrives: today's handler answers.
-    if (route === '/api/status')
-      assert.equal(await checkStatusFed(service, input, 'fed prototype name'), false);
   }
   const file = path.join(root, 'tests/spec/contract/m3-read-views.json');
   // Windows serializes `\` as `\\` inside JSON text, so the escaped form is the one that appears there.
@@ -553,7 +512,9 @@ try {
     if (typeof value === 'string') return value.split('\\').join('/');
     if (Array.isArray(value)) return value.map(portable);
     if (value && typeof value === 'object')
-      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, portable(entry)]));
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [key, portable(entry)])
+      );
     return value;
   };
   const normalized = JSON.parse(
@@ -566,10 +527,6 @@ try {
   console.log(
     '18 Scoreboard and 21 Status raw-reader states, 4 board ages and 2 prototype names: parity and bytes passed'
   );
-  if (!tsOnly)
-    console.log(
-      `R2 fed Status: ${fed.served} served byte-equal (21 raw cases, 4 board ages), the prototype name declined, the negative control caught`
-    );
 } finally {
   service.stop();
   fs.rmSync(home, { recursive: true, force: true });

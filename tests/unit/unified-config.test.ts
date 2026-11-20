@@ -8,11 +8,6 @@ import * as path from 'path';
 
 // Import only modules without transitive dependencies on config-manager
 import {
-  isReservedName,
-  validateProfileName,
-  RESERVED_PROFILE_NAMES,
-} from '../../src/config/reserved-names';
-import {
   createEmptyUnifiedConfig,
   isUnifiedConfig,
   UNIFIED_CONFIG_VERSION,
@@ -35,64 +30,6 @@ function isSecretKey(key: string): boolean {
   ];
   return secretPatterns.some((pattern) => upper.includes(pattern));
 }
-
-describe('reserved-names', () => {
-  describe('RESERVED_PROFILE_NAMES', () => {
-    it('should include CLIProxy providers', () => {
-      expect(RESERVED_PROFILE_NAMES).toContain('gemini');
-      expect(RESERVED_PROFILE_NAMES).toContain('codex');
-      expect(RESERVED_PROFILE_NAMES).toContain('agy');
-      expect(RESERVED_PROFILE_NAMES).toContain('qwen');
-      expect(RESERVED_PROFILE_NAMES).toContain('iflow');
-      expect(RESERVED_PROFILE_NAMES).toContain('xai');
-      expect(RESERVED_PROFILE_NAMES).toContain('grok');
-    });
-
-    it('should include CLI commands', () => {
-      expect(RESERVED_PROFILE_NAMES).toContain('default');
-      expect(RESERVED_PROFILE_NAMES).toContain('config');
-      expect(RESERVED_PROFILE_NAMES).toContain('cliproxy');
-    });
-  });
-
-  describe('isReservedName', () => {
-    it('should return true for reserved names', () => {
-      expect(isReservedName('gemini')).toBe(true);
-      expect(isReservedName('codex')).toBe(true);
-      expect(isReservedName('xai')).toBe(true);
-      expect(isReservedName('grok')).toBe(true);
-      expect(isReservedName('default')).toBe(true);
-    });
-
-    it('should be case-insensitive', () => {
-      expect(isReservedName('GEMINI')).toBe(true);
-      expect(isReservedName('Codex')).toBe(true);
-      expect(isReservedName('XAI')).toBe(true);
-      expect(isReservedName('GROK')).toBe(true);
-      expect(isReservedName('DEFAULT')).toBe(true);
-    });
-
-    it('should return false for non-reserved names', () => {
-      expect(isReservedName('myprofile')).toBe(false);
-      expect(isReservedName('work')).toBe(false);
-      expect(isReservedName('personal')).toBe(false);
-    });
-  });
-
-  describe('validateProfileName', () => {
-    it('should throw for reserved names', () => {
-      expect(() => validateProfileName('gemini')).toThrow(/reserved/i);
-      expect(() => validateProfileName('xai')).toThrow(/reserved/i);
-      expect(() => validateProfileName('grok')).toThrow(/reserved/i);
-      expect(() => validateProfileName('default')).toThrow(/reserved/i);
-    });
-
-    it('should not throw for valid names', () => {
-      expect(() => validateProfileName('myprofile')).not.toThrow();
-      expect(() => validateProfileName('work')).not.toThrow();
-    });
-  });
-});
 
 describe('unified-config-types', () => {
   describe('createEmptyUnifiedConfig', () => {

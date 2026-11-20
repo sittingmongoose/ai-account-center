@@ -1,7 +1,6 @@
-//! Bounded read-only file candidates. The source handle is confined before any bytes are read.
-//! The TS front door keeps MIME/cache/security headers, range policy and the legacy stream for
-//! unsupported hosts or files larger than the private JSON transport's cap.
+//! Bounded read-only Status files. The source handle is confined before any bytes are read.
 use aac_files::read::{ReadPolicy, opened_path};
+#[cfg(unix)]
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -11,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Input {
@@ -45,7 +45,11 @@ fn confined(root: &Path, base: &str, relative: &str) -> Option<(File, u64)> {
     let target = fs::canonicalize(root.join(relative)).ok()?;
     if !target.starts_with(&base)
         || target == base
-        || !plain(target.strip_prefix(&base).ok()?.to_str()?)
+        || !target
+            .strip_prefix(&base)
+            .ok()?
+            .iter()
+            .all(|part| part.to_str().is_some_and(plain))
     {
         return None;
     }
@@ -98,6 +102,7 @@ fn media_path(path: &str) -> bool {
         })
 }
 
+#[cfg(unix)]
 fn legacy(route: &str, bytes: &[u8]) -> Option<Value> {
     let input: Input = crate::json_object::from_slice(
         bytes,
@@ -266,6 +271,7 @@ fn range(raw: Option<&str>, size: u64) -> Range {
     }
     Range::Part(start as u64, end as u64)
 }
+#[cfg(unix)]
 pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
     if serde_json::from_slice::<Value>(bytes)
         .ok()?
@@ -274,9 +280,43 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
     {
         return legacy(route, bytes);
     }
+    let (reply, body) = prepare(route, bytes)?;
+    let Some((file, length)) = body else {
+        return Some(reply);
+    };
+    // The compatibility JSON transport is bounded. The public route streams the same handle.
+    if length > 1024 * 1024 {
+        return None;
+    }
+    let mut body = Vec::new();
+    file.take(length).read_to_end(&mut body).ok()?;
+    if body.len() as u64 != length {
+        return None;
+    }
+    let mut reply = reply;
+    reply["bytes"] = json!(STANDARD.encode(body));
+    Some(reply)
+}
+
+type FileReply = (Value, Option<(File, u64)>);
+
+/// Prepare a public file reply and, for GET, its verified handle positioned at the range start.
+pub(crate) fn prepare(route: &str, bytes: &[u8]) -> Option<FileReply> {
     let input: FileInput =
         crate::json_object::from_slice(bytes, &["kind", "root", "writer", "path", "range", "head"])
             .ok()?;
+    match open_file(route, input)? {
+        Ok((headers, status, body)) => Some((
+            json!({"status":status,"headers":headers,"json":null,"bytes":""}),
+            body,
+        )),
+        Err(refusal) => Some((refusal, None)),
+    }
+}
+
+type Opened = (Value, u16, Option<(File, u64)>);
+
+fn open_file(route: &str, input: FileInput) -> Option<Result<Opened, Value>> {
     let media = match input.kind.as_str() {
         "media" if route.starts_with("/api/status/files/") => true,
         "deliverable" if route == "/api/status/deliverable" => false,
@@ -295,19 +335,19 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
     let (base, relative) = if media {
         let writer = input.writer.as_deref()?;
         if !writer_ok(writer) || !media_path(&input.path) {
-            return Some(not_found());
+            return Some(Err(not_found()));
         }
         let base = format!("v1/writers/{writer}");
         (base.clone(), format!("{base}/{}", input.path))
     } else {
         if !plain(&input.path) {
-            return Some(refusal(
+            return Some(Err(refusal(
                 false,
                 400,
                 "invalid_path",
                 "Use a share-relative file path.",
                 headers,
-            ));
+            )));
         }
         let parts: Vec<_> = input.path.split('/').collect();
         let base = if parts[0] == "share" && parts.len() > 1 {
@@ -323,13 +363,13 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
         {
             parts[..5].join("/")
         } else {
-            return Some(refusal(
+            return Some(Err(refusal(
                 false,
                 400,
                 "invalid_path",
                 "Use a share-relative file path.",
                 headers,
-            ));
+            )));
         };
         (base, input.path.clone())
     };
@@ -339,38 +379,35 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
         match share_type(&input.path) {
             Some(t) => Some(t),
             None => {
-                return Some(refusal(
+                return Some(Err(refusal(
                     false,
                     415,
                     "unsupported_type",
                     "This file type is not supported.",
                     headers,
-                ));
+                )));
             }
         }
     };
-    if !cfg!(target_os = "linux") {
-        return None;
-    }
     let opened = if media {
         confined_media(&input.root, input.writer.as_deref()?, &input.path)
     } else {
         confined(&input.root, &base, &relative)
     };
     let Some((mut file, size)) = opened else {
-        return Some(not_found());
+        return Some(Err(not_found()));
     };
     let content_type = if media {
         let mut head = [0u8; 64];
         let read = file.read(&mut head).ok()?;
         let Some(t) = media_type(&head[..read]) else {
-            return Some(refusal(
+            return Some(Err(refusal(
                 true,
                 415,
                 "not_media",
                 "This file is not a PNG, JPEG or WebP image or an MP4 or WebM video.",
                 headers,
-            ));
+            )));
         };
         let cap = if t.starts_with("video/") {
             50 * 1024 * 1024
@@ -378,24 +415,24 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
             2 * 1024 * 1024
         };
         if size > cap {
-            return Some(refusal(
+            return Some(Err(refusal(
                 true,
                 413,
                 "too_large",
                 "This file is larger than its limit (images 2 MB, videos 50 MB).",
                 headers,
-            ));
+            )));
         }
         t
     } else {
         if size > 100 * 1024 * 1024 {
-            return Some(refusal(
+            return Some(Err(refusal(
                 false,
                 413,
                 "too_large",
                 "This file exceeds the 100 MB limit.",
                 headers,
-            ));
+            )));
         }
         deliverable_type?
     };
@@ -418,7 +455,7 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
         Range::Part(a, b) => (a, b - a + 1, 206),
         Range::Unsatisfiable => {
             header(&mut headers, "content-range", format!("bytes */{size}"));
-            return Some(if media {
+            return Some(Err(if media {
                 refusal(
                     true,
                     416,
@@ -434,12 +471,9 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
                     "The requested range is outside this file.",
                     headers,
                 )
-            });
+            }));
         }
     };
-    if !input.head && length > 1024 * 1024 {
-        return None;
-    }
     if media {
         header(&mut headers, "cache-control", "private, max-age=300");
     }
@@ -458,15 +492,13 @@ pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
         );
     }
     header(&mut headers, "content-length", length.to_string());
-    let mut body = Vec::new();
-    if !input.head && length > 0 {
+    let body = if input.head {
+        None
+    } else {
         file.seek(SeekFrom::Start(start)).ok()?;
-        file.take(length).read_to_end(&mut body).ok()?;
-        if body.len() as u64 != length {
-            return None;
-        }
-    }
-    Some(json!({"status":status,"headers":headers,"json":null,"bytes":STANDARD.encode(body)}))
+        Some((file, length))
+    };
+    Some(Ok((headers, status, body)))
 }
 
 fn confined_media(root: &Path, writer: &str, path: &str) -> Option<(File, u64)> {

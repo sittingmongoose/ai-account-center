@@ -581,6 +581,41 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     let view = view(&i)?;
     i.ctx.valid().then_some(view)
 }
+/// G16c: the Status view's `spendByStream` panel, composed from the same data object the view is
+/// built from (the panel's own member absent, as the service's producer builds it) and the facts
+/// over it. `utc_offset_minutes` is the display zone's offset at `now`, which the panel's one
+/// clock word ("Read 3:05 PM") is written with; the panel's other words come from `data` and the
+/// facts, exactly as the view's own spend does. A fact the panel reads and the presentation lacks
+/// is `None` (the caller declines and the TypeScript handler answers).
+#[must_use]
+pub fn spend_by_stream(
+    data: &V,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+    utc_offset_minutes: i64,
+    account_order: Vec<String>,
+) -> Option<V> {
+    let at = now.0;
+    let i = Inputs {
+        data: Data::Whole(data.clone()),
+        ctx: Context::shared(facts, Some(now)),
+        now: at,
+        owner_cards: std::cell::OnceCell::new(),
+        trace: RefCell::new(trace::Recorder::default()),
+    };
+    let spend = spend::compose(&i)?;
+    if !i.ctx.valid() {
+        return None;
+    }
+    let input = crate::spend::SpendInput {
+        now_ms: at,
+        utc_offset_minutes,
+        account_order,
+        spend: serde_json::from_value(spend).ok()?,
+    };
+    serde_json::to_value(crate::spend::compose(&input)).ok()
+}
+
 /// Why a fed composition did not build: a fact it read is missing (a time's words, an epoch, a rank), or an input
 /// it cannot prove (a shape, a number outside the proved domain).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,0 +1,442 @@
+{
+  "version": 1,
+  "privatePem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIBERERERERERERERERERERERERERERERERERERERERER\n-----END PRIVATE KEY-----\n",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\n-----END PUBLIC KEY-----\n",
+  "keyId": "503d8ee46d581c64",
+  "canonical": [
+    {
+      "value": null,
+      "text": "null"
+    },
+    {
+      "value": true,
+      "text": "true"
+    },
+    {
+      "value": false,
+      "text": "false"
+    },
+    {
+      "value": 0,
+      "text": "0"
+    },
+    {
+      "value": 0,
+      "text": "0"
+    },
+    {
+      "value": 1,
+      "text": "1"
+    },
+    {
+      "value": 1,
+      "text": "1"
+    },
+    {
+      "value": 0.1,
+      "text": "0.1"
+    },
+    {
+      "value": 1e+21,
+      "text": "1e+21"
+    },
+    {
+      "value": 1e-7,
+      "text": "1e-7"
+    },
+    {
+      "value": 9007199254740991,
+      "text": "9007199254740991"
+    },
+    {
+      "value": 9007199254740992,
+      "text": "9007199254740992"
+    },
+    {
+      "value": -1.5,
+      "text": "-1.5"
+    },
+    {
+      "value": "",
+      "text": "\"\""
+    },
+    {
+      "value": "plain",
+      "text": "\"plain\""
+    },
+    {
+      "value": "quote \" back \\ slash",
+      "text": "\"quote \\\" back \\\\ slash\""
+    },
+    {
+      "value": "controls \b \f \n \r \t \u0001 \u001f end",
+      "text": "\"controls \\b \\f \\n \\r \\t \\u0001 \\u001f end\""
+    },
+    {
+      "value": "line sep par",
+      "text": "\"line sep par\""
+    },
+    {
+      "value": "日本語 emoji 🙂",
+      "text": "\"日本語 emoji 🙂\""
+    },
+    {
+      "value": [],
+      "text": "[]"
+    },
+    {
+      "value": [
+        1,
+        "two",
+        null,
+        [
+          3
+        ]
+      ],
+      "text": "[1,\"two\",null,[3]]"
+    },
+    {
+      "value": {},
+      "text": "{}"
+    },
+    {
+      "value": {
+        "b": 1,
+        "a": 2
+      },
+      "text": "{\"a\":2,\"b\":1}"
+    },
+    {
+      "value": {
+        "1": 5,
+        "Z": 1,
+        "a": 2,
+        "A": 3,
+        "z": 4,
+        "01": 6,
+        "ä": 7,
+        "ä": 8
+      },
+      "text": "{\"01\":6,\"1\":5,\"A\":3,\"Z\":1,\"a\":2,\"ä\":8,\"z\":4,\"ä\":7}"
+    },
+    {
+      "value": {
+        "nested": {
+          "z": [
+            1,
+            {
+              "y": 2,
+              "x": 3
+            }
+          ],
+          "a": null
+        },
+        "top": "ok"
+      },
+      "text": "{\"nested\":{\"a\":null,\"z\":[1,{\"x\":3,\"y\":2}]},\"top\":\"ok\"}"
+    },
+    {
+      "value": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "choice": [
+          "A"
+        ],
+        "note": ""
+      },
+      "text": "{\"cardId\":\"vm.lead--q1\",\"choice\":[\"A\"],\"note\":\"\",\"schema\":\"agent-reports/answer@1\"}"
+    }
+  ],
+  "signed": [
+    {
+      "unsigned": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "answer",
+        "choice": [
+          "A"
+        ],
+        "note": "Go with A.\nSecond line.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device"
+      },
+      "signed": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "answer",
+        "choice": [
+          "A"
+        ],
+        "note": "Go with A.\nSecond line.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device",
+        "signature": {
+          "alg": "ed25519",
+          "keyId": "503d8ee46d581c64",
+          "value": "8/nxdwKlFdxXD7kmPhB5UUfvTvxMhblXuLwP4+h1k8Fxm8ogbLOT7W415lTYRv/ZLGkHPMa6wJ9cSji9U8m8BQ=="
+        }
+      }
+    },
+    {
+      "unsigned": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "note",
+        "choice": [],
+        "note": "A written response.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device"
+      },
+      "signed": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "note",
+        "choice": [],
+        "note": "A written response.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device",
+        "signature": {
+          "alg": "ed25519",
+          "keyId": "503d8ee46d581c64",
+          "value": "SKNIMIwJlTyjVNUUt5CaQEaWAm5kBG4wuJlE2+bChB/5nP9OwmF5A9VJ1HSoZDuujE5swU/76d/iLfH0Oiv8BQ=="
+        }
+      }
+    },
+    {
+      "unsigned": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "object",
+        "choice": [],
+        "note": "Go with A.\nSecond line.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device"
+      },
+      "signed": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "object",
+        "choice": [],
+        "note": "Go with A.\nSecond line.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device",
+        "signature": {
+          "alg": "ed25519",
+          "keyId": "503d8ee46d581c64",
+          "value": "bokxzjzILPfSK1+ExP5tuWK8hvgh5/8f2QImKluLAppCDEUrsdK1TPDeqj4VJtXW5vdSv4cJVUW06OeME044Bg=="
+        }
+      }
+    },
+    {
+      "unsigned": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "done",
+        "choice": [],
+        "note": "Go with A.\nSecond line.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device"
+      },
+      "signed": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "done",
+        "choice": [],
+        "note": "Go with A.\nSecond line.",
+        "via": "deck",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device",
+        "signature": {
+          "alg": "ed25519",
+          "keyId": "503d8ee46d581c64",
+          "value": "UORJDPhCjWLj7L488luw2MjBK8c1bks1WyEuuTagCShPCHlD+428MzIZsHECwr2aBgmVmSJMxJJZENIEmtSRCA=="
+        }
+      }
+    },
+    {
+      "unsigned": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "answer",
+        "choice": [
+          "A"
+        ],
+        "note": "",
+        "via": "recommended",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device"
+      },
+      "signed": {
+        "schema": "agent-reports/answer@1",
+        "cardId": "vm.lead--q1",
+        "cardSeq": 3,
+        "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "answer",
+        "choice": [
+          "A"
+        ],
+        "note": "",
+        "via": "recommended",
+        "answeredAt": "2026-11-18T12:00:00.000Z",
+        "answeredBy": "owner",
+        "device": "fixture-device",
+        "signature": {
+          "alg": "ed25519",
+          "keyId": "503d8ee46d581c64",
+          "value": "sKyPpyb2W8Fjq+hUEZy0+Ckt8Bp4ycVueqTS20lIVQAfdAuiczktGoTBg+Kc4B36NUuWDgHTPy9YjfE57NSVCw=="
+        }
+      }
+    }
+  ],
+  "summary": {
+    "unsigned": {
+      "schema": "agent-reports/send@1",
+      "sendId": "send-1",
+      "at": "2026-11-18T12:00:01.000Z",
+      "answeredBy": "owner",
+      "device": "fixture-device",
+      "entries": [
+        {
+          "cardId": "vm.lead--q1",
+          "seq": 3,
+          "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "answer",
+          "choice": [
+            "A"
+          ],
+          "note": "Go with A."
+        }
+      ]
+    },
+    "signed": {
+      "schema": "agent-reports/send@1",
+      "sendId": "send-1",
+      "at": "2026-11-18T12:00:01.000Z",
+      "answeredBy": "owner",
+      "device": "fixture-device",
+      "entries": [
+        {
+          "cardId": "vm.lead--q1",
+          "seq": 3,
+          "cardSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "answer",
+          "choice": [
+            "A"
+          ],
+          "note": "Go with A."
+        }
+      ],
+      "signature": {
+        "alg": "ed25519",
+        "keyId": "503d8ee46d581c64",
+        "value": "kDvRbIr/Yrqk0NhM6YXaRDzDYI95qM3BtVjzGMrtF+GbaOheSq2Y8rAv9Co37fV/sj/TrE96vfNw4j8mqWFcAA=="
+      }
+    }
+  },
+  "refusals": [
+    {
+      "name": "not valid JSON",
+      "text": "{bad",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "not valid JSON"
+    },
+    {
+      "name": "array root",
+      "text": "[1]",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "not an answer"
+    },
+    {
+      "name": "wrong schema",
+      "text": "{\n  \"schema\": \"agent-reports/send@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Go with A.\\nSecond line.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"503d8ee46d581c64\",\n    \"value\": \"8/nxdwKlFdxXD7kmPhB5UUfvTvxMhblXuLwP4+h1k8Fxm8ogbLOT7W415lTYRv/ZLGkHPMa6wJ9cSji9U8m8BQ==\"\n  }\n}\n",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "not an answer"
+    },
+    {
+      "name": "unsigned",
+      "text": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Go with A.\\nSecond line.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\"\n}\n",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "unsigned"
+    },
+    {
+      "name": "tampered",
+      "text": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"tampered\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"503d8ee46d581c64\",\n    \"value\": \"8/nxdwKlFdxXD7kmPhB5UUfvTvxMhblXuLwP4+h1k8Fxm8ogbLOT7W415lTYRv/ZLGkHPMa6wJ9cSji9U8m8BQ==\"\n  }\n}\n",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "bad signature"
+    },
+    {
+      "name": "bad base64",
+      "text": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Go with A.\\nSecond line.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"503d8ee46d581c64\",\n    \"value\": \"!!!!\"\n  }\n}\n",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "bad signature"
+    },
+    {
+      "name": "short signature",
+      "text": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Go with A.\\nSecond line.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"503d8ee46d581c64\",\n    \"value\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"\n  }\n}\n",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "bad signature"
+    },
+    {
+      "name": "non-canonical base64",
+      "text": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Go with A.\\nSecond line.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"503d8ee46d581c64\",\n    \"value\": \"8/nxdwKlFdxXD7kmPhB5UUfvTvxMhblXuLwP4+h1 k8Fxm8ogbLOT7W415lTYRv/ZLGkHPMa6wJ9cSji9U8m8BQ==\"\n  }\n}\n",
+      "publicKeyPem": null,
+      "schema": "agent-reports/answer@1",
+      "reason": "bad signature"
+    },
+    {
+      "name": "another key",
+      "text": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Go with A.\\nSecond line.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"503d8ee46d581c64\",\n    \"value\": \"8/nxdwKlFdxXD7kmPhB5UUfvTvxMhblXuLwP4+h1k8Fxm8ogbLOT7W415lTYRv/ZLGkHPMa6wJ9cSji9U8m8BQ==\"\n  }\n}\n",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAoJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=\n-----END PUBLIC KEY-----\n",
+      "schema": "agent-reports/answer@1",
+      "reason": "signed by another key"
+    },
+    {
+      "name": "unreadable key",
+      "text": "{\n  \"schema\": \"agent-reports/answer@1\",\n  \"cardId\": \"vm.lead--q1\",\n  \"cardSeq\": 3,\n  \"cardSha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"kind\": \"answer\",\n  \"choice\": [\n    \"A\"\n  ],\n  \"note\": \"Go with A.\\nSecond line.\",\n  \"via\": \"deck\",\n  \"answeredAt\": \"2026-11-18T12:00:00.000Z\",\n  \"answeredBy\": \"owner\",\n  \"device\": \"fixture-device\",\n  \"signature\": {\n    \"alg\": \"ed25519\",\n    \"keyId\": \"503d8ee46d581c64\",\n    \"value\": \"8/nxdwKlFdxXD7kmPhB5UUfvTvxMhblXuLwP4+h1k8Fxm8ogbLOT7W415lTYRv/ZLGkHPMa6wJ9cSji9U8m8BQ==\"\n  }\n}\n",
+      "publicKeyPem": "not a pem",
+      "schema": "agent-reports/answer@1",
+      "reason": "the public key is not readable"
+    }
+  ]
+}

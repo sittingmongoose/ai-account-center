@@ -2189,6 +2189,27 @@ pub fn oldest(engine: &Engine) -> Result<Json> {
     })
 }
 
+/// The distinct model and route names the activity dictionary holds: the superset the front
+/// door resolves its pricing facts over before the owned Analytics read (R5/A2). Names only;
+/// no cell is read.
+pub fn models(engine: &Engine) -> Result<Json> {
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let dict = read.open_table(ACT_DICT)?;
+        let names = |kind: u8| -> Result<Vec<String>> {
+            let lo = Key::new().u8(kind).u32(0);
+            let hi = Key::new().u8(kind).u32(u32::MAX);
+            let mut out = Vec::new();
+            for item in dict.range(lo.as_slice()..=hi.as_slice())? {
+                let (_, v) = item?;
+                out.push(String::from_utf8_lossy(v.value()).into_owned());
+            }
+            Ok(out)
+        };
+        Ok(json!({ "models": names(K_MODEL)?, "routes": names(K_ROUTE)? }))
+    })
+}
+
 /// Row counts of the activity tables (tests and status).
 pub fn counts(engine: &Engine) -> Result<Json> {
     engine.with_db(|db| {

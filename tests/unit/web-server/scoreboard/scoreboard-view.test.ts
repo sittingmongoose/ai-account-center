@@ -14,7 +14,6 @@ import {
   type MeasureValue,
   type ScoreboardView,
 } from '../../../../src/web-server/scoreboard/scoreboard-view';
-import { ScoreboardService } from '../../../../src/web-server/scoreboard/scoreboard-service';
 import { seedCatalog } from '../../../../src/web-server/scoreboard/catalog';
 import { nodeReaderFs } from '../../../../src/web-server/status/agent-reports-reader';
 import { run as projectRun } from '../../../../src/web-server/status/run-schema';
@@ -476,7 +475,7 @@ describe('what is not scored', () => {
     await reader.scan();
     const state = reader.snapshot();
     const read = state.runs.length;
-    const scanLimit = (buildScoreboardView({
+    const scanLimit = buildScoreboardView({
       now,
       timeZone: 'UTC',
       root: '/reports',
@@ -495,7 +494,7 @@ describe('what is not scored', () => {
         benchmarks: [],
       },
       runs: state,
-    }).unscored.scanLimit);
+    }).unscored.scanLimit;
     expect(read + scanLimit).toBe(4);
   });
 
@@ -506,11 +505,22 @@ describe('what is not scored', () => {
       state: 'ok' as const,
       scannedAt: NOW,
       writers: 1,
-      runs: [{ file: 'writers/vm.a/runs/2026-11-06/a.json', doc: kept, firstSeenAt: NOW, sha256: 'x' }],
+      runs: [
+        { file: 'writers/vm.a/runs/2026-11-06/a.json', doc: kept, firstSeenAt: NOW, sha256: 'x' },
+      ],
       skipped: { runFiles: 2, writerFolders: 0 },
       problems: [
-        { file: 'writers/vm.a/runs/2026-11-06/b.json', reason: 'task.id is missing or not valid', since: NOW },
-        { file: 'limits/runs', reason: '2 run files past the limit of 2 run files or 1024 MB were not read (the newest days are kept)', since: NOW },
+        {
+          file: 'writers/vm.a/runs/2026-11-06/b.json',
+          reason: 'task.id is missing or not valid',
+          since: NOW,
+        },
+        {
+          file: 'limits/runs',
+          reason:
+            '2 run files past the limit of 2 run files or 1024 MB were not read (the newest days are kept)',
+          since: NOW,
+        },
       ],
     };
     const view = buildScoreboardView({ ...base, runs: runsState });
@@ -937,129 +947,6 @@ describe('verdict rules', () => {
 });
 
 describe('service', () => {
-  it('serves a minute cache, then stale-serves while rescanning', async () => {
-    const root = dirs.make('ccs-scoreboard-');
-    writeScoreboardFixture(root, { now: NOW });
-    let now = NOW;
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => now,
-      timeZone: () => 'UTC',
-    });
-    const first = await service.view();
-    expect((await service.view()).generatedAt).toBe(first.generatedAt);
-    now += 11_000;
-    expect((await service.view()).generatedAt).toBe(first.generatedAt);
-    now += 50_000;
-    const second = await service.view();
-    expect(second.generatedAt).toBe(first.generatedAt);
-    expect(second.sources.some((source) => source.detail.includes('Cached view'))).toBe(true);
-    // A stale-served age is whole seconds, as the page reads it (a fraction made the page refuse the view).
-    now += 1_234;
-    const third = await service.view();
-    expect(third.sources.every((source) => source.ageSeconds === null || Number.isInteger(source.ageSeconds))).toBe(true);
-    // One build in flight per filter set (Scoreboard v2); wait for this one.
-    await Promise.all(
-      (service as unknown as { building: Map<string, Promise<unknown>> }).building.values()
-    );
-    expect((await service.view()).generatedAt).toBe(new Date(now).toISOString());
-  });
-
-  it('answers on a hung share with what it has, and the source says so', async () => {
-    const root = dirs.make('ccs-scoreboard-');
-    const hung = {
-      readdir: () => new Promise<never>(() => undefined),
-      stat: () => new Promise<never>(() => undefined),
-      readFile: () => new Promise<never>(() => undefined),
-    };
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => NOW,
-      timeZone: () => 'UTC',
-      fs: hung,
-      scanWaitMs: 5,
-    });
-    const view = await service.view();
-    expect(view.sources.map((source) => [source.state, source.detail])).toEqual([
-      ['missing', 'Waiting for the first scan. The scan is still running; this view is partial.'],
-      ['missing', 'Waiting for the first scan. The scan is still running; this view is partial.'],
-    ]);
-    expect(view.uses).toEqual([]);
-  });
-
-  it('a view built while the scan still runs is marked partial and never cached', async () => {
-    const root = dirs.make('ccs-scoreboard-');
-    writeScoreboardFixture(root, { now: NOW });
-    let now = NOW;
-    let gate: (() => void) | null = null;
-    const waiting = new Promise<void>((open) => {
-      gate = open;
-    });
-    // A cold share whose first listing outlasts the wait: the scan runs on, the read must answer.
-    const slow: typeof nodeReaderFs = {
-      ...nodeReaderFs,
-      readdir: async (dir) => {
-        if (path.basename(dir) === 'runs') await waiting;
-        return nodeReaderFs.readdir(dir);
-      },
-    };
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => now,
-      timeZone: () => 'UTC',
-      fs: slow,
-      scanWaitMs: 500,
-    });
-    const first = await service.view();
-    expect(first.sources[0].detail).toContain('The scan is still running; this view is partial.');
-    expect(first.recent).toEqual([]);
-    // The scan finishes; the next read gets the complete view, not the partial one from cache.
-    gate?.();
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    now += 30_000; // inside the cache time: a wrongly cached partial view would be served here
-    const second = await service.view();
-    expect(second.sources[0].detail).not.toContain('this view is partial');
-    expect(second.cacheAgeSeconds).toBe(0);
-    expect(second.recent.length).toBeGreaterThan(0);
-  });
-
-  it('a catalog scan that outlasts the wait marks the view partial and never caches it (M2)', async () => {
-    const root = dirs.make('ccs-scoreboard-');
-    writeScoreboardFixture(root, { now: NOW });
-    let now = NOW;
-    let gate: (() => void) | null = null;
-    const waiting = new Promise<void>((open) => {
-      gate = open;
-    });
-    // Only the catalog listing hangs; the runs scan finishes, so the first view has rows but no
-    // catalog. The bounded wait covers both readers, and the cache decision must too.
-    const slow: typeof nodeReaderFs = {
-      ...nodeReaderFs,
-      readdir: async (dir) => {
-        if (path.basename(dir) === 'catalog') await waiting;
-        return nodeReaderFs.readdir(dir);
-      },
-    };
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => now,
-      timeZone: () => 'UTC',
-      fs: slow,
-      scanWaitMs: 250,
-    });
-    const first = await service.view();
-    expect(first.recent.length).toBeGreaterThan(0);
-    expect(first.sources[1].detail).toContain('The scan is still running; this view is partial.');
-    // The catalog scan finishes; the next read rebuilds complete, not the cached partial view.
-    gate?.();
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    now += 30_000; // inside the cache time: a wrongly cached partial view would be served here
-    const second = await service.view();
-    expect(second.sources[1].detail).not.toContain('this view is partial');
-    expect(second.cacheAgeSeconds).toBe(0);
-    expect(second.catalog.models.length).toBeGreaterThan(0);
-  });
-
   it('the runs Source qualifies a provisional last-known count from a failed listing (M1)', async () => {
     const root = dirs.make('ccs-scoreboard-');
     writeRun(root, runDoc('vm.a', 'A'), '2026-11-06');
@@ -1075,7 +962,12 @@ describe('service', () => {
       },
     };
     const catalog = new CatalogReader({ root: () => root, now: () => now, fs: flaky });
-    const reader = new RunsReader({ root: () => root, now: () => now, fs: flaky, limits: { runs: 1 } });
+    const reader = new RunsReader({
+      root: () => root,
+      now: () => now,
+      fs: flaky,
+      limits: { runs: 1 },
+    });
     await Promise.all([catalog.scan(), reader.scan()]);
     fail = true;
     now += 60_000;
@@ -1090,55 +982,6 @@ describe('service', () => {
     expect(view.unscored.scanLimit).toBe(1);
     expect(view.sources[0].detail).toContain('provisional last-known count');
     expect(view.sources[0].detail).toContain('not a current count or a guaranteed lower bound');
-  });
-
-  it('shows a missing share as sources, never a crash', async () => {
-    const service = new ScoreboardService({
-      root: () => path.join(dirs.make(), 'none'),
-      now: () => NOW,
-      timeZone: () => 'UTC',
-    });
-    const view = await service.view();
-    expect(view.sources.map((source) => source.state)).toEqual(['missing', 'missing']);
-    expect(view.catalog.minRuns).toBe(5);
-    expect(view.recent).toEqual([]);
-  });
-
-  it('shows a damaged catalog as a problem and keeps going', async () => {
-    const root = dirs.make('ccs-scoreboard-');
-    writeScoreboardFixture(root, { now: NOW });
-    fs.writeFileSync(path.join(root, 'v1', 'catalog', 'uses.json'), '{ damaged');
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => NOW,
-      timeZone: () => 'UTC',
-    });
-    const view = await service.view();
-    expect(view.sources[1]).toMatchObject({ state: 'unreadable' });
-    expect(view.sources[1].detail).toContain('catalog/uses.json (not valid JSON)');
-    expect(view.uses).toEqual([]);
-    expect(view.recent.length).toBeGreaterThan(0);
-  });
-
-  it('seeds the catalog and creates the folders only under an existing root', async () => {
-    const root = dirs.make('ccs-scoreboard-');
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => NOW,
-      timeZone: () => 'UTC',
-    });
-    await service.seed();
-    expect(fs.readdirSync(path.join(root, 'v1', 'catalog')).sort()).toEqual([
-      'benchmarks.json',
-      'measures.json',
-      'model-aliases.json',
-      'models.json',
-      'task-types.json',
-      'uses.json',
-    ]);
-    const gone = path.join(root, 'not-mounted');
-    await new ScoreboardService({ root: () => gone }).seed();
-    expect(fs.existsSync(gone)).toBe(false);
   });
 });
 
@@ -1225,28 +1068,5 @@ describe('what the Sources name', () => {
     });
     expect(view.sources[0].detail).toContain('negative quota move');
     expect(view.sources[0].detail).toContain('vm.lead--A');
-  });
-
-  it('names a catalog seed the server could not write, by file and code', async () => {
-    const root = dirs.make('ccs-scoreboard-');
-    fs.mkdirSync(path.join(root, 'v1', 'catalog'), { recursive: true });
-    const link = spyOn(fs.promises, 'link').mockImplementation((async () => {
-      throw Object.assign(new Error('words from the system'), { code: 'EPERM' });
-    }) as typeof fs.promises.link);
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => NOW,
-      timeZone: () => 'UTC',
-    });
-    try {
-      await service.seed();
-    } finally {
-      link.mockRestore();
-    }
-    const { detail, state } = (await service.view()).sources[1];
-    expect(state).toBe('missing');
-    expect(detail).toContain('Could not seed models.json: EPERM.');
-    expect(detail).not.toContain('words from the system');
-    expect(fs.readdirSync(path.join(root, 'v1', 'catalog'))).toEqual([]);
   });
 });

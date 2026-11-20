@@ -25,6 +25,7 @@ export const RUST_SERVICE_ENV_NAMES: readonly string[] = [
   'CCS_HOME',
   'CCS_DIR',
   'CODEX_HOME',
+  'CCS_CODEX_RENEWAL',
   'CLAUDE_CONFIG_DIR',
   'CLAUDE_SECURESTORAGE_CONFIG_DIR',
   'USE_LOCAL_OAUTH',
@@ -48,6 +49,8 @@ export const RUST_SERVICE_ENV_NAMES: readonly string[] = [
   'WINDIR',
   'COMSPEC',
   'PATHEXT',
+  // G16b: the answer store's doorbell switch (`off` in tests and fixtures: no pm-mail ring).
+  'AAC_STATUS_DOORBELL',
 ];
 
 /**

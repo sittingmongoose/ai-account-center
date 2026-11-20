@@ -1,0 +1,1017 @@
+{
+  "now": 1790000000000,
+  "pinned": {
+    "now": 1790000000000,
+    "input": {
+      "nowMs": 1790000000000,
+      "pins": [
+        {
+          "id": "t1",
+          "title": "Pinned",
+          "pinnedAt": "2026-09-20T00:00:00.000Z",
+          "pinOrderKey": "a",
+          "machine": "vm"
+        }
+      ],
+      "machineProblems": [],
+      "threads": [
+        {
+          "progress": null,
+          "writer": "vm.lead",
+          "writtenAt": "2026-09-21T14:12:20.000Z",
+          "writtenAtMs": 1789999940000,
+          "seq": 3,
+          "t3Thread": null,
+          "name": "lead",
+          "harness": null,
+          "model": "claude-opus-5-5",
+          "modelLabel": "Opus 5.5",
+          "effort": "high",
+          "account": null,
+          "project": "aac",
+          "stream": "status",
+          "state": "working",
+          "doing": "Porting the producers",
+          "goal": "Keep pinned deadlines visible.",
+          "nextBy": "2026-09-22T04:00:00.000Z",
+          "nextByDay": "2026-09-21",
+          "blockedOn": null,
+          "ttlSeconds": 900,
+          "problem": null,
+          "problemSinceMs": null
+        }
+      ],
+      "tasks": [
+        {
+          "writer": "vm.lead",
+          "writtenAtMs": 1789999940000,
+          "seq": 2,
+          "project": "aac",
+          "projectLabel": "AAC",
+          "stream": "status",
+          "streamLabel": "Status",
+          "problem": null,
+          "items": [
+            {
+              "id": "T1",
+              "title": "Item T1",
+              "note": null,
+              "why": "The composer needs the date and the card link.",
+              "due": "2026-09-22T04:00:00.000Z",
+              "dueDay": "2026-09-21",
+              "dueNote": "Check the pinned view.",
+              "dueWas": "2026-09-21T04:00:00.000Z",
+              "doneAt": "2026-09-21T14:00:00.000Z",
+              "outcome": "The fixture is ready.",
+              "needsYou": "vm.lead--Q1",
+              "state": "landed",
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "updatedAtMs": 1793982480000
+            }
+          ]
+        }
+      ],
+      "openCards": [
+        {
+          "writer": "vm.lead",
+          "id": "vm.lead--Q1",
+          "seq": 1,
+          "title": "Question Q1",
+          "kind": "question",
+          "askedAtMs": 1793982000000
+        }
+      ],
+      "statuses": [],
+      "statusProblems": []
+    },
+    "pins": [
+      {
+        "id": "t1",
+        "title": "Pinned",
+        "pinnedAt": "2026-09-20T00:00:00.000Z",
+        "pinOrderKey": "a",
+        "machine": "vm"
+      }
+    ]
+  },
+  "timeZone": "America/New_York",
+  "zone": {
+    "from": 1779580800000,
+    "to": 1824508800000,
+    "offsets": [
+      [
+        1779580800000,
+        -240
+      ],
+      [
+        1793512800000,
+        -300
+      ],
+      [
+        1805007600000,
+        -240
+      ]
+    ]
+  },
+  "input": {
+    "now": 1790000000000,
+    "timeZone": "America/New_York",
+    "reports": {
+      "root": "/fixture/reports",
+      "state": "ok",
+      "scannedAt": 1790000000000,
+      "complete": true,
+      "threads": [
+        {
+          "file": "writers/vm.lead/thread.json",
+          "writer": "vm.lead",
+          "doc": {
+            "writer": "vm.lead",
+            "seq": 3,
+            "writtenAt": "2026-09-21T14:12:20.000Z",
+            "progress": null,
+            "goal": "Keep pinned deadlines visible.",
+            "nextBy": "2026-09-22T04:00:00.000Z",
+            "nextByDay": "2026-09-21",
+            "ttlSeconds": 900,
+            "agent": {
+              "name": "lead",
+              "harness": null,
+              "model": "claude-opus-5-5",
+              "effort": "high",
+              "account": null,
+              "machine": null,
+              "t3Thread": null,
+              "parent": null
+            },
+            "project": "aac",
+            "stream": "status",
+            "state": "working",
+            "doing": "Porting the producers",
+            "blockedOn": null,
+            "links": []
+          },
+          "sha256": "a046767d089d5ee9dd5fc563aa07e8b9d698210c6ef37133d58f37328495c689",
+          "firstSeenAt": 1790000000000,
+          "writtenAtMs": 1789999940000,
+          "problem": null
+        }
+      ],
+      "tasks": [
+        {
+          "file": "writers/vm.lead/tasks.json",
+          "writer": "vm.lead",
+          "doc": {
+            "writer": "vm.lead",
+            "seq": 2,
+            "writtenAt": "2026-09-21T14:12:20.000Z",
+            "project": "aac",
+            "projectLabel": "AAC",
+            "stream": "status",
+            "streamLabel": "Status",
+            "owner": "lead",
+            "goal": "Ship it",
+            "board": null,
+            "items": [
+              {
+                "id": "T1",
+                "title": "Item T1",
+                "state": "landed",
+                "owner": null,
+                "branch": null,
+                "head": null,
+                "reviews": [],
+                "landed": null,
+                "needsYou": "vm.lead--Q1",
+                "due": "2026-09-22T04:00:00.000Z",
+                "dueDay": "2026-09-21",
+                "dueNote": "Check the pinned view.",
+                "dueWas": "2026-09-21T04:00:00.000Z",
+                "doneAt": "2026-09-21T14:00:00.000Z",
+                "outcome": "The fixture is ready.",
+                "blockedOn": null,
+                "note": null,
+                "why": "The composer needs the date and the card link.",
+                "updatedAt": "2026-11-06T16:28:00.000Z"
+              }
+            ]
+          },
+          "sha256": "596c232cf62ec147973689249771a2371c779063fae4369bb90e17efa815e1fe",
+          "firstSeenAt": 1790000000000,
+          "writtenAtMs": 1789999940000,
+          "problem": null
+        }
+      ],
+      "cards": [
+        {
+          "file": "writers/vm.lead/cards/vm.lead--Q1.json",
+          "writer": "vm.lead",
+          "doc": {
+            "writer": "vm.lead",
+            "seq": 1,
+            "writtenAt": "2026-09-21T14:12:20.000Z",
+            "id": "vm.lead--Q1",
+            "label": "S-Q1",
+            "project": "aac",
+            "stream": "status",
+            "askedBy": "lead",
+            "replyTo": {
+              "pmMail": "lead",
+              "t3Thread": null
+            },
+            "state": "open",
+            "supersededBy": null,
+            "reason": null,
+            "title": "Question Q1",
+            "now": "Plain words.",
+            "nowAsOf": null,
+            "oldAnswer": null,
+            "whatChanged": null,
+            "options": [
+              {
+                "key": "A",
+                "label": "First",
+                "gets": "Simple",
+                "costs": null,
+                "media": [],
+                "sections": [],
+                "stance": null
+              },
+              {
+                "key": "B",
+                "label": "Second",
+                "gets": null,
+                "costs": "More work",
+                "media": [],
+                "sections": [],
+                "stance": null
+              }
+            ],
+            "recommendation": {
+              "key": "A",
+              "why": "Simpler.",
+              "confidence": null,
+              "flip": null
+            },
+            "multiple": false,
+            "urgency": "today",
+            "blocks": null,
+            "sections": [],
+            "batch": null,
+            "evidence": [],
+            "kind": "question",
+            "neededBy": null,
+            "exception": null,
+            "reversible": null,
+            "verdict": null,
+            "group": null,
+            "agreement": null,
+            "doubt": null,
+            "appliesTo": null,
+            "changesCanon": [],
+            "related": [],
+            "replies": [],
+            "askedAt": "2026-11-06T16:20:00.000Z"
+          },
+          "sha256": "f113e7d87dbfceb6ecd859becdc5f09f3d778f7ede8e6c22e827726537d5172e",
+          "firstSeenAt": 1790000000000,
+          "writtenAtMs": 1789999940000,
+          "problem": null
+        }
+      ],
+      "problems": [],
+      "boards": {}
+    },
+    "registry": {
+      "data": [
+        {
+          "name": "mail-worker",
+          "kind": "codex",
+          "machine": "vm",
+          "about": "Fixture task",
+          "lastSeen": "2026-09-21T14:12:20.000Z",
+          "readAt": 1789999970000,
+          "problem": null
+        }
+      ],
+      "asOf": 1790000000000,
+      "error": null
+    },
+    "machines": {
+      "vm": {
+        "data": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": 12,
+          "memAvailableBytes": 6442450944,
+          "memTotalBytes": 17179869184,
+          "disk": {
+            "mount": "/",
+            "freeBytes": 107374182400,
+            "totalBytes": 536870912000
+          },
+          "cpuTimes": null,
+          "cpuReadAt": 1790000000000,
+          "diskReadAt": 1790000000000,
+          "memoryReadAt": 1790000000000
+        },
+        "asOf": 1790000000000,
+        "error": null
+      },
+      "mac": {
+        "data": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": null,
+          "memAvailableBytes": 6442450944,
+          "memTotalBytes": 17179869184,
+          "disk": {
+            "mount": "/",
+            "freeBytes": 107374182400,
+            "totalBytes": 536870912000
+          },
+          "cpuTimes": null,
+          "cpuReadAt": null,
+          "diskReadAt": 1790000000000,
+          "memoryReadAt": 1790000000000
+        },
+        "asOf": 1790000000000,
+        "error": null
+      },
+      "windows": {
+        "data": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": null,
+          "memAvailableBytes": 6442450944,
+          "memTotalBytes": 17179869184,
+          "disk": {
+            "mount": "/",
+            "freeBytes": 107374182400,
+            "totalBytes": 536870912000
+          },
+          "cpuTimes": null,
+          "cpuReadAt": null,
+          "diskReadAt": 1790000000000,
+          "memoryReadAt": 1790000000000
+        },
+        "asOf": 1790000000000,
+        "error": null
+      },
+      "nas1": {
+        "data": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": null,
+          "memAvailableBytes": 6442450944,
+          "memTotalBytes": 17179869184,
+          "disk": {
+            "mount": "/",
+            "freeBytes": 107374182400,
+            "totalBytes": 536870912000
+          },
+          "cpuTimes": null,
+          "cpuReadAt": null,
+          "diskReadAt": 1790000000000,
+          "memoryReadAt": 1790000000000
+        },
+        "asOf": 1790000000000,
+        "error": null
+      },
+      "alexis": {
+        "data": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": null,
+          "memAvailableBytes": 6442450944,
+          "memTotalBytes": 17179869184,
+          "disk": {
+            "mount": "/",
+            "freeBytes": 107374182400,
+            "totalBytes": 536870912000
+          },
+          "cpuTimes": null,
+          "cpuReadAt": null,
+          "diskReadAt": 1790000000000,
+          "memoryReadAt": 1790000000000
+        },
+        "asOf": 1790000000000,
+        "error": null
+      }
+    },
+    "browsers": {
+      "data": [
+        {
+          "machine": "vm",
+          "label": "Ubuntu VM",
+          "browsers": {
+            "running": 1,
+            "max": 4
+          },
+          "recordings": {
+            "running": 0,
+            "max": 2
+          },
+          "gpuPct": 12,
+          "memGb": 15.4,
+          "sessions": [
+            {
+              "id": "abc123",
+              "url": "10.0.0.5:8963/head.html",
+              "owner": "pid 5",
+              "recording": true,
+              "ageSeconds": 466
+            }
+          ],
+          "phones": null,
+          "notes": [
+            "reported no phone count (phones: null), so phones here are unknown"
+          ],
+          "error": null,
+          "readAt": 1790000000000,
+          "problem": {
+            "item": "Ubuntu VM",
+            "reason": "reported no phone count (phones: null), so phones here are unknown",
+            "since": 1790000000000
+          }
+        }
+      ],
+      "asOf": 1790000000000,
+      "error": null,
+      "problems": []
+    },
+    "simlock": {
+      "data": {
+        "capacity": [
+          {
+            "platform": "ios",
+            "running": 1,
+            "max": 1,
+            "reserved": 0,
+            "overLimit": false
+          }
+        ],
+        "leases": [
+          {
+            "device": "dev_1",
+            "deviceLabel": "iPhone Duo",
+            "platform": "ios",
+            "holder": "agent-7",
+            "since": "2026-09-21T14:12:20.000Z",
+            "expiresAt": "2026-09-21T14:14:20.000Z",
+            "lastKnown": false
+          }
+        ],
+        "problems": []
+      },
+      "asOf": 1790000000000,
+      "error": null,
+      "problems": []
+    },
+    "usage": {
+      "accounts": [
+        {
+          "id": "claude-max",
+          "provider": "claude",
+          "label": "Max",
+          "host": "ubuntu",
+          "active": true,
+          "hidden": false,
+          "status": "ok",
+          "sampledAt": "2026-09-21T14:10:00.000Z",
+          "windows": []
+        }
+      ],
+      "sampledAt": 1790000000000,
+      "staleAfterSeconds": 180
+    },
+    "answers": [],
+    "sends": [],
+    "answerHistoryProblem": null,
+    "hiddenThreadNames": [
+      "aac-answers"
+    ],
+    "quota": null,
+    "pinned": {
+      "unavailable": "the pinned threads have not been read yet"
+    },
+    "spendByStream": {
+      "state": "unavailable",
+      "unavailable": "Spend by stream is unavailable: quota-watch has not written a report this server can read.",
+      "defaultPeriod": null,
+      "asOf": null,
+      "asOfText": null,
+      "periods": []
+    }
+  },
+  "sources": {
+    "status-reports": {
+      "data": "{\"reports\":{\"root\":\"/fixture/reports\",\"state\":\"ok\",\"scannedAt\":1790000000000,\"complete\":true,\"threads\":[{\"file\":\"writers/vm.lead/thread.json\",\"writer\":\"vm.lead\",\"doc\":{\"writer\":\"vm.lead\",\"seq\":3,\"writtenAt\":\"2026-09-21T14:12:20.000Z\",\"progress\":null,\"goal\":\"Keep pinned deadlines visible.\",\"nextBy\":\"2026-09-22T04:00:00.000Z\",\"nextByDay\":\"2026-09-21\",\"ttlSeconds\":900,\"agent\":{\"name\":\"lead\",\"harness\":null,\"model\":\"claude-opus-5-5\",\"effort\":\"high\",\"account\":null,\"machine\":null,\"t3Thread\":null,\"parent\":null},\"project\":\"aac\",\"stream\":\"status\",\"state\":\"working\",\"doing\":\"Porting the producers\",\"blockedOn\":null,\"links\":[]},\"sha256\":\"a046767d089d5ee9dd5fc563aa07e8b9d698210c6ef37133d58f37328495c689\",\"firstSeenAt\":1790000000000,\"writtenAtMs\":1789999940000,\"problem\":null}],\"tasks\":[{\"file\":\"writers/vm.lead/tasks.json\",\"writer\":\"vm.lead\",\"doc\":{\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-09-21T14:12:20.000Z\",\"project\":\"aac\",\"projectLabel\":\"AAC\",\"stream\":\"status\",\"streamLabel\":\"Status\",\"owner\":\"lead\",\"goal\":\"Ship it\",\"board\":null,\"items\":[{\"id\":\"T1\",\"title\":\"Item T1\",\"state\":\"landed\",\"owner\":null,\"branch\":null,\"head\":null,\"reviews\":[],\"landed\":null,\"needsYou\":\"vm.lead--Q1\",\"due\":\"2026-09-22T04:00:00.000Z\",\"dueDay\":\"2026-09-21\",\"dueNote\":\"Check the pinned view.\",\"dueWas\":\"2026-09-21T04:00:00.000Z\",\"doneAt\":\"2026-09-21T14:00:00.000Z\",\"outcome\":\"The fixture is ready.\",\"blockedOn\":null,\"note\":null,\"why\":\"The composer needs the date and the card link.\",\"updatedAt\":\"2026-11-06T16:28:00.000Z\"}]},\"sha256\":\"596c232cf62ec147973689249771a2371c779063fae4369bb90e17efa815e1fe\",\"firstSeenAt\":1790000000000,\"writtenAtMs\":1789999940000,\"problem\":null}],\"cards\":[{\"file\":\"writers/vm.lead/cards/vm.lead--Q1.json\",\"writer\":\"vm.lead\",\"doc\":{\"writer\":\"vm.lead\",\"seq\":1,\"writtenAt\":\"2026-09-21T14:12:20.000Z\",\"id\":\"vm.lead--Q1\",\"label\":\"S-Q1\",\"project\":\"aac\",\"stream\":\"status\",\"askedBy\":\"lead\",\"replyTo\":{\"pmMail\":\"lead\",\"t3Thread\":null},\"state\":\"open\",\"supersededBy\":null,\"reason\":null,\"title\":\"Question Q1\",\"now\":\"Plain words.\",\"nowAsOf\":null,\"oldAnswer\":null,\"whatChanged\":null,\"options\":[{\"key\":\"A\",\"label\":\"First\",\"gets\":\"Simple\",\"costs\":null,\"media\":[],\"sections\":[],\"stance\":null},{\"key\":\"B\",\"label\":\"Second\",\"gets\":null,\"costs\":\"More work\",\"media\":[],\"sections\":[],\"stance\":null}],\"recommendation\":{\"key\":\"A\",\"why\":\"Simpler.\",\"confidence\":null,\"flip\":null},\"multiple\":false,\"urgency\":\"today\",\"blocks\":null,\"sections\":[],\"batch\":null,\"evidence\":[],\"kind\":\"question\",\"neededBy\":null,\"exception\":null,\"reversible\":null,\"verdict\":null,\"group\":null,\"agreement\":null,\"doubt\":null,\"appliesTo\":null,\"changesCanon\":[],\"related\":[],\"replies\":[],\"askedAt\":\"2026-11-06T16:20:00.000Z\"},\"sha256\":\"f113e7d87dbfceb6ecd859becdc5f09f3d778f7ede8e6c22e827726537d5172e\",\"firstSeenAt\":1790000000000,\"writtenAtMs\":1789999940000,\"problem\":null}],\"problems\":[],\"boards\":{}}}",
+      "facts": "{}"
+    },
+    "status-quota": {
+      "data": "{\"quota\":null,\"spendByStream\":{\"state\":\"unavailable\",\"unavailable\":\"Spend by stream is unavailable: quota-watch has not written a report this server can read.\",\"defaultPeriod\":null,\"asOf\":null,\"asOfText\":null,\"periods\":[]}}",
+      "facts": "{}"
+    },
+    "status-pinned": {
+      "data": "{\"pinned\":{\"unavailable\":\"the pinned threads have not been read yet\"}}",
+      "facts": "{}"
+    },
+    "status-collected": {
+      "data": "{\"registry\":{\"data\":[{\"name\":\"mail-worker\",\"kind\":\"codex\",\"machine\":\"vm\",\"about\":\"Fixture task\",\"lastSeen\":\"2026-09-21T14:12:20.000Z\",\"readAt\":1789999970000,\"problem\":null}],\"asOf\":1790000000000,\"error\":null},\"machines\":{\"vm\":{\"data\":{\"cores\":8,\"load1\":1.2,\"busyPct\":12,\"memAvailableBytes\":6442450944,\"memTotalBytes\":17179869184,\"disk\":{\"mount\":\"/\",\"freeBytes\":107374182400,\"totalBytes\":536870912000},\"cpuTimes\":null,\"cpuReadAt\":1790000000000,\"diskReadAt\":1790000000000,\"memoryReadAt\":1790000000000},\"asOf\":1790000000000,\"error\":null},\"mac\":{\"data\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null,\"memAvailableBytes\":6442450944,\"memTotalBytes\":17179869184,\"disk\":{\"mount\":\"/\",\"freeBytes\":107374182400,\"totalBytes\":536870912000},\"cpuTimes\":null,\"cpuReadAt\":null,\"diskReadAt\":1790000000000,\"memoryReadAt\":1790000000000},\"asOf\":1790000000000,\"error\":null},\"windows\":{\"data\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null,\"memAvailableBytes\":6442450944,\"memTotalBytes\":17179869184,\"disk\":{\"mount\":\"/\",\"freeBytes\":107374182400,\"totalBytes\":536870912000},\"cpuTimes\":null,\"cpuReadAt\":null,\"diskReadAt\":1790000000000,\"memoryReadAt\":1790000000000},\"asOf\":1790000000000,\"error\":null},\"nas1\":{\"data\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null,\"memAvailableBytes\":6442450944,\"memTotalBytes\":17179869184,\"disk\":{\"mount\":\"/\",\"freeBytes\":107374182400,\"totalBytes\":536870912000},\"cpuTimes\":null,\"cpuReadAt\":null,\"diskReadAt\":1790000000000,\"memoryReadAt\":1790000000000},\"asOf\":1790000000000,\"error\":null},\"alexis\":{\"data\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null,\"memAvailableBytes\":6442450944,\"memTotalBytes\":17179869184,\"disk\":{\"mount\":\"/\",\"freeBytes\":107374182400,\"totalBytes\":536870912000},\"cpuTimes\":null,\"cpuReadAt\":null,\"diskReadAt\":1790000000000,\"memoryReadAt\":1790000000000},\"asOf\":1790000000000,\"error\":null}},\"browsers\":{\"data\":[{\"machine\":\"vm\",\"label\":\"Ubuntu VM\",\"browsers\":{\"running\":1,\"max\":4},\"recordings\":{\"running\":0,\"max\":2},\"gpuPct\":12,\"memGb\":15.4,\"sessions\":[{\"id\":\"abc123\",\"url\":\"10.0.0.5:8963/head.html\",\"owner\":\"pid 5\",\"recording\":true,\"ageSeconds\":466}],\"phones\":null,\"notes\":[\"reported no phone count (phones: null), so phones here are unknown\"],\"error\":null,\"readAt\":1790000000000,\"problem\":{\"item\":\"Ubuntu VM\",\"reason\":\"reported no phone count (phones: null), so phones here are unknown\",\"since\":1790000000000}}],\"asOf\":1790000000000,\"error\":null,\"problems\":[]},\"simlock\":{\"data\":{\"capacity\":[{\"platform\":\"ios\",\"running\":1,\"max\":1,\"reserved\":0,\"overLimit\":false}],\"leases\":[{\"device\":\"dev_1\",\"deviceLabel\":\"iPhone Duo\",\"platform\":\"ios\",\"holder\":\"agent-7\",\"since\":\"2026-09-21T14:12:20.000Z\",\"expiresAt\":\"2026-09-21T14:14:20.000Z\",\"lastKnown\":false}],\"problems\":[]},\"asOf\":1790000000000,\"error\":null,\"problems\":[]},\"usage\":{\"accounts\":[{\"id\":\"claude-max\",\"provider\":\"claude\",\"label\":\"Max\",\"host\":\"ubuntu\",\"active\":true,\"hidden\":false,\"status\":\"ok\",\"sampledAt\":\"2026-09-21T14:10:00.000Z\",\"windows\":[]}],\"sampledAt\":1790000000000,\"staleAfterSeconds\":180}}",
+      "facts": "{}"
+    },
+    "status-answers": {
+      "data": "{\"answers\":[],\"sends\":[],\"answerHistoryProblem\":null}",
+      "facts": "{}"
+    },
+    "status-facts": {
+      "data": "{\"timeZone\":\"America/New_York\",\"hiddenThreadNames\":[\"aac-answers\"],\"machineIds\":[\"vm\",\"mac\",\"windows\",\"nas1\",\"alexis\",\"odroid\",\"1070ti\"],\"machineLabels\":{\"vm\":\"Ubuntu VM\",\"mac\":\"Mac\",\"windows\":\"Windows PC\",\"nas1\":\"Nas1\",\"alexis\":\"Alexis PC\",\"odroid\":\"Odroid\",\"1070ti\":\"1070ti\"}}",
+      "facts": "{\"dates\":{\"1790000000000\":{\"iso\":\"2026-09-21T14:13:20.000Z\",\"clock\":\"10:13 AM\",\"day\":\"Sep 21\"},\"1789999940000\":{\"iso\":\"2026-09-21T14:12:20.000Z\",\"clock\":\"10:12 AM\",\"day\":\"Sep 21\"},\"1790049600000\":{\"iso\":\"2026-09-22T04:00:00.000Z\",\"clock\":\"12:00 AM\",\"day\":\"Sep 22\"},\"1789963200000\":{\"iso\":\"2026-09-21T04:00:00.000Z\",\"clock\":\"12:00 AM\",\"day\":\"Sep 21\"},\"1789999200000\":{\"iso\":\"2026-09-21T14:00:00.000Z\",\"clock\":\"10:00 AM\",\"day\":\"Sep 21\"},\"1793982480000\":{\"iso\":\"2026-11-06T16:28:00.000Z\",\"clock\":\"11:28 AM\",\"day\":\"Nov 6\"},\"1793982000000\":{\"iso\":\"2026-11-06T16:20:00.000Z\",\"clock\":\"11:20 AM\",\"day\":\"Nov 6\"},\"1789999970000\":{\"iso\":\"2026-09-21T14:12:50.000Z\",\"clock\":\"10:12 AM\",\"day\":\"Sep 21\"},\"107374182400\":{\"iso\":\"1973-05-27T18:09:42.400Z\",\"clock\":\"2:09 PM\",\"day\":\"May 27\"},\"536870912000\":{\"iso\":\"1987-01-05T18:48:32.000Z\",\"clock\":\"1:48 PM\",\"day\":\"Jan 5\"},\"1790000060000\":{\"iso\":\"2026-09-21T14:14:20.000Z\",\"clock\":\"10:14 AM\",\"day\":\"Sep 21\"},\"1789999800000\":{\"iso\":\"2026-09-21T14:10:00.000Z\",\"clock\":\"10:10 AM\",\"day\":\"Sep 21\"}},\"epochs\":{\"2026-09-21T14:12:20.000Z\":1789999940000,\"2026-09-22T04:00:00.000Z\":1790049600000,\"2026-09-21T04:00:00.000Z\":1789963200000,\"2026-09-21T14:00:00.000Z\":1789999200000,\"2026-11-06T16:28:00.000Z\":1793982480000,\"2026-11-06T16:20:00.000Z\":1793982000000,\"2026-09-21T14:14:20.000Z\":1790000060000,\"2026-09-21T14:10:00.000Z\":1789999800000},\"order\":{\"\":0,\"/\":1,\"/fixture/reports\":2,\"0.0.5:8963/head.html\":3,\"000Z\":4,\"10.0.0.5:8963/head.html\":5,\"1070ti\":6,\"2026-09-21\":7,\"2026-09-21T04:00:00.000Z\":8,\"2026-09-21T14:00:00.000Z\":9,\"2026-09-21T14:10:00.000Z\":10,\"2026-09-21T14:12:20.000Z\":11,\"2026-09-21T14:14:20.000Z\":12,\"2026-09-22T04:00:00.000Z\":13,\"2026-11-06T16:20:00.000Z\":14,\"2026-11-06T16:28:00.000Z\":15,\"596c232cf62ec147973689249771a2371c779063fae4369bb90e17efa815e1fe\":16,\"A\":17,\"a046767d089d5ee9dd5fc563aa07e8b9d698210c6ef37133d58f37328495c689\":18,\"aac\":19,\"AAC\":20,\"aac-answers\":21,\"abc123\":22,\"agent-7\":23,\"alexis\":24,\"Alexis PC\":25,\"America/New_York\":26,\"B\":27,\"Check the pinned view.\":28,\"claude\":29,\"claude-max\":30,\"claude-opus-5-5\":31,\"codex\":32,\"dev_1\":33,\"f113e7d87dbfceb6ecd859becdc5f09f3d778f7ede8e6c22e827726537d5172e\":34,\"First\":35,\"Fixture task\":36,\"high\":37,\"ios\":38,\"iPhone Duo\":39,\"Item T1\":40,\"Keep pinned deadlines visible.\":41,\"landed\":42,\"lead\":43,\"lead--Q1\":44,\"lead/cards/vm.lead--Q1.json\":45,\"lead/tasks.json\":46,\"lead/thread.json\":47,\"mac\":48,\"Mac\":49,\"mail-worker\":50,\"Max\":51,\"More work\":52,\"nas1\":53,\"Nas1\":54,\"odroid\":55,\"Odroid\":56,\"ok\":57,\"open\":58,\"pid 5\":59,\"Plain words.\":60,\"Porting the producers\":61,\"question\":62,\"Question Q1\":63,\"reported no phone count (phones: null), so phones here are unknown\":64,\"S-Q1\":65,\"Second\":66,\"Ship it\":67,\"Simple\":68,\"Simpler.\":69,\"Spend by stream is unavailable: quota-watch has not written a report this server can read.\":70,\"status\":71,\"Status\":72,\"T1\":73,\"The composer needs the date and the card link.\":74,\"The fixture is ready.\":75,\"the pinned threads have not been read yet\":76,\"today\":77,\"ubuntu\":78,\"Ubuntu VM\":79,\"unavailable\":80,\"vm\":81,\"vm.lead\":82,\"vm.lead--Q1\":83,\"windows\":84,\"Windows PC\":85,\"working\":86,\"writers/vm.lead/cards/vm.lead--Q1.json\":87,\"writers/vm.lead/tasks.json\":88,\"writers/vm.lead/thread.json\":89}}"
+    }
+  },
+  "view": "{\"version\":1,\"generatedAt\":\"2026-09-21T14:13:20.000Z\",\"refresh\":{\"pollSeconds\":30},\"headline\":{\"tone\":\"warn\",\"runs\":[{\"text\":\"1 question\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\" for you\"},{\"text\":\" · 1 of 1 items landed\"}],\"counts\":{\"openCards\":1,\"questions\":1,\"decisions\":0,\"blockedItems\":0,\"workingThreads\":1,\"staleSources\":0,\"loopingPinned\":0,\"waitingPinned\":0},\"strip\":{\"items\":[{\"key\":\"questions\",\"section\":\"questions\",\"value\":\"1\",\"label\":\"question for you\",\"short\":\"question\",\"tone\":\"warn\",\"detail\":\"1 question for you.\"},{\"key\":\"pinned\",\"value\":\"–\",\"label\":\"pinned threads\",\"short\":\"pinned\",\"tone\":\"quiet\",\"section\":\"pinned\",\"detail\":\"Pinned threads are unavailable: the pinned threads have not been read yet.\"},{\"key\":\"done\",\"value\":\"1/1\",\"label\":\"items done\",\"short\":\"done\",\"tone\":null,\"section\":null,\"detail\":\"1 of 1 items landed or done (dropped items are not counted).\"}],\"worst\":null}},\"sources\":[{\"id\":\"agent-reports\",\"label\":\"Agent reports\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"staleAfterSeconds\":60,\"state\":\"ok\",\"detail\":\"1 thread and 1 card read 10:13 AM.\"},{\"id\":\"pm-mail\",\"label\":\"pm-mail registry\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"staleAfterSeconds\":120,\"state\":\"ok\",\"detail\":\"Read 10:13 AM.\"},{\"id\":\"machines\",\"label\":\"Machines\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"staleAfterSeconds\":180,\"state\":\"ok\",\"detail\":\"All 5 machines read by 10:13 AM.\"},{\"id\":\"browsers\",\"label\":\"Browsers and recordings\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"staleAfterSeconds\":180,\"state\":\"ok\",\"detail\":\"Read 10:13 AM.\"},{\"id\":\"simlock\",\"label\":\"Simlock\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"staleAfterSeconds\":180,\"state\":\"ok\",\"detail\":\"Read 10:13 AM.\"},{\"id\":\"usage\",\"label\":\"Account usage\",\"state\":\"ok\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"staleAfterSeconds\":180,\"detail\":\"Sampled 10:13 AM.\"},{\"id\":\"quota-watch\",\"label\":\"Quota watch (estimates)\",\"state\":\"unconfigured\",\"asOf\":null,\"ageSeconds\":null,\"staleAfterSeconds\":null,\"detail\":\"Per-stream quota attribution is not connected on this server.\"}],\"cards\":{\"source\":\"agent-reports\",\"open\":[{\"id\":\"vm.lead--Q1\",\"media\":[],\"label\":\"S-Q1\",\"writer\":\"vm.lead\",\"seq\":1,\"project\":\"aac\",\"stream\":\"status\",\"askedBy\":\"lead\",\"title\":\"Question Q1\",\"now\":\"Plain words.\",\"nowAsOf\":null,\"oldAnswer\":null,\"whatChanged\":null,\"options\":[{\"key\":\"A\",\"label\":\"First\",\"gets\":\"Simple\",\"costs\":null,\"media\":[],\"sections\":[],\"stance\":null},{\"key\":\"B\",\"label\":\"Second\",\"gets\":null,\"costs\":\"More work\",\"media\":[],\"sections\":[],\"stance\":null}],\"recommendation\":{\"key\":\"A\",\"why\":\"Simpler.\",\"confidence\":null,\"flip\":null},\"multiple\":false,\"urgency\":\"today\",\"blocks\":null,\"sections\":[],\"batch\":null,\"evidence\":[],\"replies\":[],\"kind\":\"question\",\"neededBy\":null,\"exception\":null,\"reversible\":null,\"verdict\":null,\"group\":null,\"agreement\":null,\"doubt\":null,\"appliesTo\":null,\"changesCanon\":[],\"related\":[],\"askedAt\":\"2026-11-06T16:20:00.000Z\",\"ageSeconds\":0,\"askerState\":\"working\",\"cardSha256\":\"f113e7d87dbfceb6ecd859becdc5f09f3d778f7ede8e6c22e827726537d5172e\",\"notes\":[],\"problem\":null,\"answerable\":true}],\"answerHistoryProblem\":null,\"answered\":[],\"batches\":[],\"complete\":true},\"pinned\":{\"unavailable\":\"the pinned threads have not been read yet\"},\"spendByStream\":{\"state\":\"unavailable\",\"unavailable\":\"Spend by stream is unavailable: quota-watch has not written a report this server can read.\",\"defaultPeriod\":null,\"asOf\":null,\"asOfText\":null,\"periods\":[]},\"projects\":[{\"id\":\"aac\",\"label\":\"AAC\",\"streams\":[{\"id\":\"status\",\"label\":\"Status\",\"owner\":\"lead\",\"goal\":\"Ship it\",\"writer\":\"vm.lead\",\"board\":null,\"source\":\"tasks\",\"asOf\":\"2026-09-21T14:12:20.000Z\",\"ageSeconds\":60,\"stale\":false,\"problem\":null,\"counts\":{\"total\":1,\"todo\":0,\"working\":0,\"review\":0,\"fixing\":0,\"blocked\":0,\"ready\":0,\"landed\":1,\"done\":0,\"dropped\":0},\"completion\":{\"done\":1,\"of\":1},\"items\":[{\"id\":\"T1\",\"title\":\"Item T1\",\"state\":\"landed\",\"owner\":null,\"branch\":null,\"head\":null,\"reviews\":[],\"landed\":null,\"needsYou\":\"vm.lead--Q1\",\"due\":\"2026-09-22T04:00:00.000Z\",\"dueDay\":\"2026-09-21\",\"dueNote\":\"Check the pinned view.\",\"dueWas\":\"2026-09-21T04:00:00.000Z\",\"doneAt\":\"2026-09-21T14:00:00.000Z\",\"outcome\":\"The fixture is ready.\",\"blockedOn\":null,\"note\":null,\"why\":\"The composer needs the date and the card link.\",\"updatedAt\":\"2026-11-06T16:28:00.000Z\",\"ageSeconds\":0}]}],\"counts\":{\"total\":1,\"todo\":0,\"working\":0,\"review\":0,\"fixing\":0,\"blocked\":0,\"ready\":0,\"landed\":1,\"done\":0,\"dropped\":0},\"completion\":{\"done\":1,\"of\":1}}],\"threads\":{\"source\":\"agent-reports\",\"also\":[\"pm-mail\"],\"rows\":[{\"name\":\"lead\",\"writer\":\"vm.lead\",\"machine\":\"vm\",\"project\":\"aac\",\"stream\":\"status\",\"state\":\"working\",\"doing\":\"Porting the producers\",\"blockedOn\":null,\"progress\":null,\"model\":\"claude-opus-5-5\",\"effort\":\"high\",\"account\":null,\"source\":\"report\",\"lastSeen\":\"2026-09-21T14:12:20.000Z\",\"ageSeconds\":60,\"stale\":false,\"clockAheadSeconds\":null,\"problem\":null,\"registrySource\":null},{\"name\":\"mail-worker\",\"writer\":null,\"machine\":\"vm\",\"project\":null,\"stream\":null,\"state\":null,\"doing\":\"Fixture task\",\"blockedOn\":null,\"progress\":null,\"model\":null,\"effort\":null,\"account\":null,\"source\":\"pm-mail\",\"lastSeen\":\"2026-09-21T14:12:20.000Z\",\"ageSeconds\":60,\"stale\":false,\"clockAheadSeconds\":null,\"problem\":null,\"registrySource\":{\"id\":\"pm-mail\",\"label\":\"pm-mail registry\",\"state\":\"ok\",\"asOf\":\"2026-09-21T14:12:50.000Z\",\"ageSeconds\":30,\"detail\":\"Read 10:12 AM.\"}}]},\"machines\":{\"source\":\"machines\",\"also\":[\"browsers\"],\"rows\":[{\"id\":\"vm\",\"label\":\"Ubuntu VM\",\"state\":\"ok\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"detail\":null,\"cpu\":{\"cores\":8,\"load1\":1.2,\"busyPct\":12},\"memory\":{\"availableGb\":6,\"totalGb\":16},\"disk\":[{\"mount\":\"/\",\"freeGb\":100,\"totalGb\":500}],\"browsers\":{\"running\":1,\"max\":4},\"recordings\":{\"running\":0,\"max\":2},\"gpuPct\":12,\"sessions\":[{\"id\":\"abc123\",\"url\":\"10.0.0.5:8963/head.html\",\"owner\":\"pid 5\",\"recording\":true,\"ageSeconds\":466}],\"slotsSource\":{\"id\":\"browsers\",\"label\":\"Browsers and recordings\",\"state\":\"error\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"detail\":\"Ubuntu VM: reported no phone count (phones: null), so phones here are unknown (since 10:13 AM). Showing its reading from 10:13 AM.\"},\"warnings\":[]},{\"id\":\"mac\",\"label\":\"Mac\",\"state\":\"ok\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"detail\":null,\"cpu\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null},\"memory\":{\"availableGb\":6,\"totalGb\":16},\"disk\":[{\"mount\":\"/\",\"freeGb\":100,\"totalGb\":500}],\"browsers\":null,\"recordings\":null,\"gpuPct\":null,\"sessions\":[],\"slotsSource\":{\"id\":\"browsers\",\"label\":\"Browsers and recordings\",\"state\":\"missing\",\"asOf\":null,\"ageSeconds\":null,\"detail\":\"browser-check has no row for this machine.\"},\"warnings\":[]},{\"id\":\"windows\",\"label\":\"Windows PC\",\"state\":\"ok\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"detail\":null,\"cpu\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null},\"memory\":{\"availableGb\":6,\"totalGb\":16},\"disk\":[{\"mount\":\"/\",\"freeGb\":100,\"totalGb\":500}],\"browsers\":null,\"recordings\":null,\"gpuPct\":null,\"sessions\":[],\"slotsSource\":{\"id\":\"browsers\",\"label\":\"Browsers and recordings\",\"state\":\"missing\",\"asOf\":null,\"ageSeconds\":null,\"detail\":\"browser-check has no row for this machine.\"},\"warnings\":[]},{\"id\":\"nas1\",\"label\":\"Nas1\",\"state\":\"ok\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"detail\":null,\"cpu\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null},\"memory\":{\"availableGb\":6,\"totalGb\":16},\"disk\":[{\"mount\":\"/\",\"freeGb\":100,\"totalGb\":500}],\"browsers\":null,\"recordings\":null,\"gpuPct\":null,\"sessions\":[],\"slotsSource\":{\"id\":\"browsers\",\"label\":\"Browsers and recordings\",\"state\":\"missing\",\"asOf\":null,\"ageSeconds\":null,\"detail\":\"browser-check has no row for this machine.\"},\"warnings\":[]},{\"id\":\"alexis\",\"label\":\"Alexis PC\",\"state\":\"ok\",\"asOf\":\"2026-09-21T14:13:20.000Z\",\"ageSeconds\":0,\"detail\":null,\"cpu\":{\"cores\":8,\"load1\":1.2,\"busyPct\":null},\"memory\":{\"availableGb\":6,\"totalGb\":16},\"disk\":[{\"mount\":\"/\",\"freeGb\":100,\"totalGb\":500}],\"browsers\":null,\"recordings\":null,\"gpuPct\":null,\"sessions\":[],\"slotsSource\":{\"id\":\"browsers\",\"label\":\"Browsers and recordings\",\"state\":\"missing\",\"asOf\":null,\"ageSeconds\":null,\"detail\":\"browser-check has no row for this machine.\"},\"warnings\":[]}]},\"simlock\":{\"source\":\"simlock\",\"capacity\":[{\"platform\":\"ios\",\"running\":1,\"max\":1,\"reserved\":0,\"overLimit\":false}],\"leases\":[{\"device\":\"dev_1\",\"deviceLabel\":\"iPhone Duo\",\"platform\":\"ios\",\"holder\":\"agent-7\",\"since\":\"2026-09-21T14:12:20.000Z\",\"expiresAt\":\"2026-09-21T14:14:20.000Z\",\"lastKnown\":false}]},\"usage\":{\"source\":\"usage\",\"warnings\":[],\"accounts\":[]},\"spend\":{\"source\":\"quota-watch\",\"estimate\":true,\"asOf\":null,\"generatedAt\":null,\"writer\":null,\"methodId\":null,\"method\":null,\"periods\":[],\"budgets\":[],\"unattributed\":[],\"machinesNotScanned\":[],\"overLimitBudgets\":0}}",
+  "browsers": {
+    "slots": {
+      "rows": [
+        {
+          "machine": {
+            "name": "vm",
+            "label": "Ubuntu VM"
+          },
+          "state": {
+            "caps": {
+              "max_browsers": 4,
+              "max_recordings": 2
+            },
+            "browsers": 1,
+            "recordings": 0,
+            "gpu_util": 12,
+            "mem_gb": 15.44,
+            "phones": null,
+            "sessions": [
+              {
+                "id": "abc123",
+                "url": "http://10.0.0.5:8963/head.html?cb=1#x",
+                "owner": "pid 5",
+                "recording": true,
+                "age_s": 466
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "now": 1790000000000,
+    "rows": [
+      {
+        "machine": "vm",
+        "label": "Ubuntu VM",
+        "browsers": {
+          "running": 1,
+          "max": 4
+        },
+        "recordings": {
+          "running": 0,
+          "max": 2
+        },
+        "gpuPct": 12,
+        "memGb": 15.4,
+        "sessions": [
+          {
+            "id": "abc123",
+            "url": "10.0.0.5:8963/head.html",
+            "owner": "pid 5",
+            "recording": true,
+            "ageSeconds": 466
+          }
+        ],
+        "phones": null,
+        "notes": [
+          "reported no phone count (phones: null), so phones here are unknown"
+        ],
+        "error": null
+      }
+    ],
+    "before": [
+      {
+        "machine": "vm",
+        "label": "Ubuntu VM",
+        "browsers": {
+          "running": 1,
+          "max": 4
+        },
+        "recordings": {
+          "running": 0,
+          "max": 2
+        },
+        "gpuPct": 12,
+        "memGb": 15.4,
+        "sessions": [
+          {
+            "id": "abc123",
+            "url": "10.0.0.5:8963/head.html",
+            "owner": "pid 5",
+            "recording": true,
+            "ageSeconds": 466
+          }
+        ],
+        "phones": null,
+        "notes": [
+          "reported no phone count (phones: null), so phones here are unknown"
+        ],
+        "error": null,
+        "readAt": 1790000000000,
+        "problem": {
+          "item": "Ubuntu VM",
+          "reason": "reported no phone count (phones: null), so phones here are unknown",
+          "since": 1790000000000
+        }
+      }
+    ],
+    "failed": {
+      "rows": [
+        {
+          "machine": {
+            "name": "vm",
+            "label": "Ubuntu VM"
+          },
+          "state": {
+            "error": "gone",
+            "caps": {
+              "max_browsers": 4
+            },
+            "browsers": 1,
+            "recordings": 0,
+            "sessions": []
+          }
+        }
+      ]
+    },
+    "merged": [
+      {
+        "machine": "vm",
+        "label": "Ubuntu VM",
+        "browsers": {
+          "running": 1,
+          "max": 4
+        },
+        "recordings": {
+          "running": 0,
+          "max": 2
+        },
+        "gpuPct": 12,
+        "memGb": 15.4,
+        "sessions": [
+          {
+            "id": "abc123",
+            "url": "10.0.0.5:8963/head.html",
+            "owner": "pid 5",
+            "recording": true,
+            "ageSeconds": 466
+          }
+        ],
+        "phones": null,
+        "notes": [
+          "reported no phone count (phones: null), so phones here are unknown"
+        ],
+        "error": "gone",
+        "readAt": 1790000000000,
+        "problem": {
+          "item": "Ubuntu VM",
+          "reason": "gone",
+          "since": 1790000001000
+        }
+      }
+    ],
+    "noted": {
+      "rows": [
+        {
+          "machine": {
+            "name": "vm",
+            "label": "Ubuntu VM"
+          },
+          "state": {
+            "caps": {
+              "max_browsers": 4
+            },
+            "browsers": 1,
+            "recordings": 0,
+            "sessions": [],
+            "snapshot": "backend busy"
+          }
+        }
+      ]
+    },
+    "problems": [
+      {
+        "machine": "vm",
+        "label": "Ubuntu VM",
+        "browsers": {
+          "running": 1,
+          "max": 4
+        },
+        "recordings": {
+          "running": 0,
+          "max": null
+        },
+        "gpuPct": null,
+        "memGb": null,
+        "sessions": [],
+        "notes": [
+          "backend busy"
+        ],
+        "error": null,
+        "readAt": 1790000002000,
+        "problem": {
+          "item": "Ubuntu VM",
+          "reason": "backend busy",
+          "since": 1790000002000
+        }
+      }
+    ]
+  },
+  "simlock": {
+    "input": {
+      "daemon": {
+        "health": "running",
+        "mode": "gateway"
+      },
+      "capacity": {
+        "ios": {
+          "running": 1,
+          "maxRunning": 1,
+          "reserved": 0,
+          "overLimit": false
+        }
+      },
+      "devices": [
+        {
+          "id": "dev_1",
+          "spec": {
+            "platform": "ios",
+            "model": "iPhone Duo"
+          }
+        }
+      ],
+      "leases": [
+        {
+          "deviceId": "dev_1",
+          "requesterId": "agent-7",
+          "grantedAt": 1789999940000,
+          "ttlDeadline": 1790000060000
+        }
+      ]
+    },
+    "expected": {
+      "capacity": [
+        {
+          "platform": "ios",
+          "running": 1,
+          "max": 1,
+          "reserved": 0,
+          "overLimit": false
+        }
+      ],
+      "leases": [
+        {
+          "device": "dev_1",
+          "deviceLabel": "iPhone Duo",
+          "platform": "ios",
+          "holder": "agent-7",
+          "since": "2026-09-21T14:12:20.000Z",
+          "expiresAt": "2026-09-21T14:14:20.000Z",
+          "lastKnown": false
+        }
+      ],
+      "problems": []
+    }
+  },
+  "machines": {
+    "probes": [
+      {
+        "host": "linux",
+        "stdout": "cores=6\nload=7.48\nmemTotalKb=20210000\nmemAvailKb=13245000\ncpu=100 0 50 800 50 0 0 0\ndiskTotalKb=812506724\ndiskFreeKb=528836920\nmount=/\n",
+        "expected": {
+          "cores": 6,
+          "load1": 7.48,
+          "busyPct": null,
+          "memAvailableBytes": 13562880000,
+          "memTotalBytes": 20695040000,
+          "disk": {
+            "mount": "/",
+            "freeBytes": 541529006080,
+            "totalBytes": 832006885376
+          },
+          "cpuTimes": {
+            "busy": 150,
+            "total": 1000
+          }
+        }
+      },
+      {
+        "host": "mac",
+        "stdout": "cores=8\nload=2.84\nmemTotalB=17179869184\nmemAvailPct=67\ncpuPct=32\ndiskTotalKb=482766932\ndiskFreeKb=18378524\nmount=/System/Volumes/Data\n",
+        "expected": {
+          "cores": 8,
+          "load1": 2.84,
+          "busyPct": 4,
+          "memAvailableBytes": 11510512353.28,
+          "memTotalBytes": 17179869184,
+          "disk": {
+            "mount": "/System/Volumes/Data",
+            "freeBytes": 18819608576,
+            "totalBytes": 494353338368
+          },
+          "cpuTimes": null
+        }
+      },
+      {
+        "host": "windows",
+        "stdout": "cores=32\r\ncpuPct=40\r\nmemTotalKb=33463884\r\nmemAvailKb=10291080\r\ndiskTotalB=1999342923776\r\ndiskFreeB=218592583680\r\nmount=C:\r\n",
+        "expected": {
+          "cores": 32,
+          "load1": null,
+          "busyPct": 40,
+          "memAvailableBytes": 10538065920,
+          "memTotalBytes": 34267017216,
+          "disk": {
+            "mount": "C:",
+            "freeBytes": 218592583680,
+            "totalBytes": 1999342923776
+          },
+          "cpuTimes": null
+        }
+      }
+    ],
+    "busy": [
+      {
+        "before": {
+          "busy": 150,
+          "total": 1000
+        },
+        "after": {
+          "busy": 250,
+          "total": 1200
+        },
+        "expected": 50
+      },
+      {
+        "before": null,
+        "after": {
+          "busy": 250,
+          "total": 1200
+        },
+        "expected": null
+      }
+    ]
+  },
+  "answersMerge": {
+    "local": [
+      {
+        "id": "a",
+        "sendId": null,
+        "answer": {
+          "kind": "answer",
+          "cardId": "vm.lead--Q1",
+          "cardSeq": 1,
+          "cardSha256": "s1",
+          "answeredAt": "2026-09-21T14:00:00.000Z"
+        },
+        "card": {
+          "id": "vm.lead--Q1",
+          "seq": 1
+        },
+        "share": {
+          "state": "done",
+          "at": null,
+          "detail": null,
+          "attempts": 1
+        },
+        "doorbell": {
+          "state": "skipped",
+          "at": null,
+          "detail": null,
+          "attempts": 0
+        }
+      }
+    ],
+    "shared": [
+      {
+        "id": "b",
+        "sendId": null,
+        "sharedOnly": true,
+        "answer": {
+          "kind": "answer",
+          "cardId": "vm.lead--Q1",
+          "cardSeq": 1,
+          "cardSha256": "s1",
+          "answeredAt": "2026-09-21T14:00:00.000Z"
+        },
+        "card": {
+          "id": "vm.lead--Q1",
+          "seq": 1
+        },
+        "share": {
+          "state": "done",
+          "at": null,
+          "detail": null,
+          "attempts": 1
+        },
+        "doorbell": {
+          "state": "skipped",
+          "at": null,
+          "detail": null,
+          "attempts": 0
+        }
+      },
+      {
+        "id": "c",
+        "sendId": null,
+        "sharedOnly": true,
+        "answer": {
+          "kind": "answer",
+          "cardId": "vm.lead--Q2",
+          "cardSeq": 1,
+          "cardSha256": "s2",
+          "answeredAt": "2026-09-21T13:00:00.000Z"
+        },
+        "card": {
+          "id": "vm.lead--Q2",
+          "seq": 1
+        },
+        "share": {
+          "state": "done",
+          "at": null,
+          "detail": null,
+          "attempts": 1
+        },
+        "doorbell": {
+          "state": "skipped",
+          "at": null,
+          "detail": null,
+          "attempts": 0
+        }
+      }
+    ],
+    "merged": [
+      {
+        "id": "c",
+        "sendId": null,
+        "sharedOnly": true,
+        "answer": {
+          "kind": "answer",
+          "cardId": "vm.lead--Q2",
+          "cardSeq": 1,
+          "cardSha256": "s2",
+          "answeredAt": "2026-09-21T13:00:00.000Z"
+        },
+        "card": {
+          "id": "vm.lead--Q2",
+          "seq": 1
+        },
+        "share": {
+          "state": "done",
+          "at": null,
+          "detail": null,
+          "attempts": 1
+        },
+        "doorbell": {
+          "state": "skipped",
+          "at": null,
+          "detail": null,
+          "attempts": 0
+        }
+      },
+      {
+        "id": "a",
+        "sendId": null,
+        "answer": {
+          "kind": "answer",
+          "cardId": "vm.lead--Q1",
+          "cardSeq": 1,
+          "cardSha256": "s1",
+          "answeredAt": "2026-09-21T14:00:00.000Z"
+        },
+        "card": {
+          "id": "vm.lead--Q1",
+          "seq": 1
+        },
+        "share": {
+          "state": "done",
+          "at": null,
+          "detail": null,
+          "attempts": 1
+        },
+        "doorbell": {
+          "state": "skipped",
+          "at": null,
+          "detail": null,
+          "attempts": 0
+        }
+      }
+    ]
+  }
+}

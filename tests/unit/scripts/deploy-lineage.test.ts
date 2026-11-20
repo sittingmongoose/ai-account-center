@@ -207,8 +207,23 @@ describe('deployment lineage guard', () => {
     expect(refused.status).toBe(1);
     expect(refused.stderr).toContain('would remove deployed fixes');
     packaged({ commit: C, dirty: false, lineage: [C, B, A] });
+    const native = ['ai-account-center', 'ccs', 'ccs-droid', 'ccsd', 'ccs-codex', 'ccsx', 'ccsxp'];
+    const suffix = process.platform === 'win32' ? '.exe' : '';
+    const bin = Object.fromEntries(native.map((name) => [name, `dist/native/${name}${suffix}`]));
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ bin }));
+    for (const relative of [
+      ...Object.values(bin),
+      'dist/native/aac-http' + suffix,
+      'dist/web-server/sidecar.js',
+      'dist/antigravity/terminal-signin-entry.js',
+      'dist/ui/app/index.html',
+    ]) {
+      const file = path.join(packageRoot, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'packaged fixture');
+    }
     const accepted = run();
-    expect(accepted.status).toBe(0);
+    expect(accepted.status, accepted.stderr).toBe(0);
     expect(accepted.stdout).toContain('storage is ready');
   });
 

@@ -4,23 +4,20 @@
  * through stdin only, and the reader binary used only when its digest matches. Fixtures only: no
  * key exists, and the reader binary is replaced by a fake.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach,beforeEach,describe,expect,it } from 'bun:test';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { handleCursorKeyCommand } from '../../../src/commands/cursor-key-command';
-import { AccountAnalyticsActivityService } from '../../../src/web-server/services/account-analytics-activity';
 import { analyticsRowsResult } from '../../../src/web-server/services/analytics-remote-sources';
-import type { AccountAnalyticsQuery } from '../../../src/web-server/services/account-analytics-types';
 import {
-  CURSOR_ACCOUNT_TTL_MS,
-  cursorAccountBinary,
-  cursorAccountOutside,
-  readCursorAccount,
-  type CursorAccountRead,
+CURSOR_ACCOUNT_TTL_MS,
+cursorAccountBinary,
+cursorAccountOutside,
+readCursorAccount,
+type CursorAccountRead,
 } from '../../../src/web-server/services/cursor-account-reader';
-import type { UsageWorkerResult } from '../../../src/web-server/usage/worker-client';
 
 const NOW = Date.parse('2026-11-13T16:30:00Z');
 const SINCE = NOW - 31 * 86_400_000;
@@ -281,113 +278,6 @@ describe('only the usage outside the scanned computers is added', () => {
       rows: [],
       outsideTokens: 0,
     });
-  });
-
-  it('the activity totals hold the local runs only; the account is shown beside them, never added (review M1)', async () => {
-    const hourly = (model: string, input: number): UsageWorkerResult =>
-      ({
-        daily: [],
-        monthly: [],
-        eventCount: 1,
-        hourly: [
-          {
-            hour: '2026-11-13 14:00',
-            source: 'native',
-            inputTokens: input,
-            outputTokens: 0,
-            cacheCreationTokens: 0,
-            cacheReadTokens: 0,
-            cost: 0,
-            totalCost: 0,
-            modelsUsed: [model],
-            requestCount: 1,
-            modelBreakdowns: [
-              {
-                modelName: model,
-                inputTokens: input,
-                outputTokens: 0,
-                cacheCreationTokens: 0,
-                cacheReadTokens: 0,
-                cost: 0,
-              },
-            ],
-          },
-        ],
-        session: [],
-      }) as unknown as UsageWorkerResult;
-    let local: unknown;
-    const service = new AccountAnalyticsActivityService({
-      scope: () => dir,
-      now: () => NOW,
-      requests: () => [],
-      loadWorker: async () => hourly('unused', 0),
-      remote: async () => ({
-        fetchedAt: new Date(NOW).toISOString(),
-        results: [{ tool: 'cursor', data: hourly('grok-4.7', 1000) }],
-        states: [],
-      }),
-      cursorAccount: {
-        read: async () => read,
-        outside: async (_read, rows) => {
-          local = rows;
-          return {
-            state: 'read',
-            checkedAt: read.checkedAt,
-            readAt: read.readAt,
-            last4: 'WXYZ',
-            accountTokens: 1700,
-            matchedTokens: 1000,
-            outsideTokens: 700,
-            localUnmatchedTokens: 0,
-            unmeasured: 2,
-            rows: [
-              {
-                k: 'cursor',
-                f: 'cursor-account',
-                m: 'claude-5-sonnet',
-                h: '2026-11-13 14:00',
-                i: 700,
-                o: 0,
-                cr: 0,
-                cw: 0,
-                c: 0.25,
-                n: 3,
-              },
-            ],
-          };
-        },
-      },
-    });
-    const query: AccountAnalyticsQuery = {
-      platform: 'mac',
-      range: '7d',
-      provider: 'all',
-      account: 'all',
-    };
-    try {
-      let answer = await service.get(query, NOW - 86_400_000, NOW);
-      for (let attempt = 0; attempt < 500 && answer.refreshing !== false; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        answer = await service.get(query, NOW - 86_400_000, NOW);
-      }
-      // The dedupe got the scanned Cursor rows; the totals are the 1,000 local tokens only. The
-      // account's 1,700 (authoritative) and its 700 estimated outside part are shown beside the
-      // totals, never added: the account's events overlap the local runs and cannot be split.
-      expect(local).toEqual([
-        { h: '2026-11-13 14:00', m: 'grok-4.7', i: 1000, o: 0, cr: 0, cw: 0 },
-      ]);
-      expect(answer.totals?.inputTokens).toBe(1000);
-      expect(answer.cursorAccount).toMatchObject({
-        state: 'read',
-        accountTokens: 1700,
-        outsideTokens: 700,
-        last4: 'WXYZ',
-        unmeasured: 2,
-      });
-      expect(JSON.stringify(answer.cursorAccount)).not.toContain('rows');
-    } finally {
-      await service.shutdown();
-    }
   });
 });
 

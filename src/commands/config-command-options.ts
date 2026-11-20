@@ -101,15 +101,6 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine('Open the account and usage dashboard.');
   writeLine('');
   writeLine('Commands:');
-  writeLine('  auth setup         Configure dashboard username and password');
-  writeLine('  auth show          Display dashboard authentication status');
-  writeLine('  auth disable       Disable dashboard authentication');
-  writeLine('  usage-hub status   Show the T3 usage hub state and the URL for T3');
-  writeLine('  usage-hub generate --stdout   Create the T3 usage hub key (shown once)');
-  writeLine('  usage-hub rotate --stdout     Replace the T3 usage hub key');
-  writeLine('  usage-hub off      Turn the T3 usage hub off');
-  writeLine('  usage-snapshot set <folder>   Publish account usage for agents into <folder>');
-  writeLine('  usage-snapshot status|off     Show or stop the agent usage snapshot');
   writeLine('  proxy status       Show whether the LAN HTTPS reverse proxy is trusted');
   writeLine('  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy');
   writeLine('  proxy off          Stop trusting the LAN HTTPS proxy');
@@ -117,9 +108,12 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine(
     '  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)'
   );
-  writeLine(
-    "  cursor-key set|status|remove   AAC's Cursor API key (the key on stdin, never printed)"
-  );
+  writeLine("  usage-hub status|generate|rotate|off   The T3 usage hub's management key");
+  writeLine('  usage-snapshot status|set|off      Publish agent usage into a shared folder');
+  writeLine("  cursor-key set|status|remove       Keep AAC's Cursor account key");
+  writeLine('');
+  writeLine("Managed in the dashboard's Settings page (the CLI points there):");
+  writeLine('  dashboard sign-in (auth)');
   writeLine('');
   writeLine('Options:');
   writeLine('  --port, -p PORT    Server port (default: auto-detect)');
@@ -131,7 +125,7 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine('');
   writeLine('Examples:');
   writeLine('  ai-account-center dashboard --host localhost --port 3000 --no-open');
-  writeLine('  ai-account-center dashboard auth setup');
+  writeLine('  ai-account-center dashboard store status');
   writeLine('');
 }
 

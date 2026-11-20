@@ -68,12 +68,16 @@ async function executableIdentity(candidate: string): Promise<{ file: string; id
     identity: [file, info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join('\0'),
   };
 }
-function probe(executable: string, env: Record<string, string>): Promise<string[]> {
+function probe(
+  executable: string,
+  env: Record<string, string>,
+  execute: typeof execFile
+): Promise<string[]> {
   return (async () => {
     const args: string[] = [];
     for (const option of CAPABILITY_OPTIONS) {
       const supported = await new Promise<boolean>((resolve, reject) => {
-        execFile(
+        execute(
           executable,
           ['-G', '-F', 'none', '-o', option, '--', 'localhost'],
           {
@@ -104,7 +108,10 @@ function probe(executable: string, env: Record<string, string>): Promise<string[
  * Bounded, coalesced probe. -F none keeps Match exec and live hosts out of capability checks.
  * Returns the PATH-resolved file whose identity was probed, checked again just before return.
  */
-async function capabilities(): Promise<{ file: string; args: string[] }> {
+async function capabilities(
+  execute: typeof execFile = execFile
+): Promise<{ file: string; args: string[] }> {
+  const cache = execute === execFile ? probes : undefined;
   const env = sshEnvironment();
   const searchPath = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
   let executable: string | undefined;
@@ -124,7 +131,7 @@ async function capabilities(): Promise<{ file: string; args: string[] }> {
     const current = await executableIdentity(executable).catch(() => {
       throw new ConfigError('SSH executable unavailable');
     });
-    let entry = probes.get(current.file);
+    let entry = cache?.get(current.file);
     if (
       entry?.identity !== current.identity ||
       (entry.failedAt !== undefined && Date.now() - entry.failedAt >= PROBE_FAILURE_TTL_MS)
@@ -132,13 +139,13 @@ async function capabilities(): Promise<{ file: string; args: string[] }> {
       // Success is cached per identity; a failure only for PROBE_FAILURE_TTL_MS.
       const fresh: { identity: string; pending: Promise<string[]>; failedAt?: number } = {
         identity: current.identity,
-        pending: probe(current.file, env),
+        pending: probe(current.file, env, execute),
       };
       fresh.pending.catch(() => {
         fresh.failedAt = Date.now();
       });
       entry = fresh;
-      probes.set(current.file, entry);
+      cache?.set(current.file, entry);
     }
     const result = await entry.pending;
     const after = await executableIdentity(executable).catch(() => undefined);
@@ -154,9 +161,13 @@ async function capabilities(): Promise<{ file: string; args: string[] }> {
  * programs pass through. Residual: a swap between this check and exec, by someone who can
  * already replace the user's ssh, is not detected.
  */
-export async function sshLaunch(file: string, args: readonly string[]): Promise<string> {
+export async function sshLaunch(
+  file: string,
+  args: readonly string[],
+  execute?: typeof execFile
+): Promise<string> {
   if (file !== 'ssh' && file !== 'scp') return file;
-  const current = await capabilities();
+  const current = await capabilities(execute);
   const flag = args.indexOf('-S');
   if (
     (file === 'scp' && (flag < 0 || args[flag + 1] !== current.file)) ||
@@ -211,9 +222,9 @@ export function sshConnectionOptions(alias: string): string[] {
 }
 
 /** Keep both user and system connection config; only the capability probe uses -F none. */
-export async function sshOptions(host: string): Promise<string[]> {
+export async function sshOptions(host: string, execute?: typeof execFile): Promise<string[]> {
   const connection = sshConnectionOptions(host);
-  return [...SSH_ISOLATION, ...(await capabilities()).args, ...connection];
+  return [...SSH_ISOLATION, ...(await capabilities(execute)).args, ...connection];
 }
 
 /**
@@ -234,11 +245,12 @@ export async function scpArgv(
 export async function sshArgv(
   host: string,
   command: string,
-  keepalive?: SshKeepalive
+  keepalive?: SshKeepalive,
+  execute?: typeof execFile
 ): Promise<string[]> {
   return [
     '-T',
-    ...(await sshOptions(host)),
+    ...(await sshOptions(host, execute)),
     ...(keepalive
       ? [
           '-o',

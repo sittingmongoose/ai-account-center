@@ -166,10 +166,11 @@ fn count_of(usage: &serde_json::Map<String, Value>, key: &str) -> Result<Option<
 /// One raw event's verdict. `Unmeasured`: the event carries a `tokenUsage` without every
 /// measured count (the wire format documents no guarantee they are present, and an empty or
 /// incomplete object must never become measured zeros); it is counted separately and reads as
-/// not logged. `Outside`: no `tokenUsage` at all, or outside the window.
+/// not logged. The two discarded verdicts keep their distinct reasons.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Parsed {
     Outside,
+    NoTokenUsage,
     Unmeasured,
     Measured(Event),
 }
@@ -201,7 +202,7 @@ fn event(raw: &Value, since_ms: i64, until_ms: i64) -> Result<Parsed, Failure> {
         .filter(|c| !c.is_empty())
         .map(|c| util::sha256_hex(format!("aac-session-v1:cursor:{c}").as_bytes())[..16].to_string());
     let usage = match item.get("tokenUsage") {
-        None | Some(Value::Null) => return Ok(Parsed::Outside),
+        None | Some(Value::Null) => return Ok(Parsed::NoTokenUsage),
         Some(Value::Object(map)) => map,
         _ => return Err(Failure::BadResponse),
     };
@@ -248,8 +249,30 @@ fn boundary_overlap(previous: &[String], current: &[String]) -> usize {
         .min(previous.len())
 }
 
-/// Every billed event in [since, until], pages read in order, as `(measured events, pages read,
-/// unmeasured events)`. An event the account gained while paging can repeat at a page boundary:
+/// Raw counts for one successful page run. Measured and unmeasured events
+/// remain separate, and overlap rows are counted once as duplicates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EventCounts {
+    pub pages: usize,
+    pub fetched: usize,
+    pub kept: usize,
+    pub dropped_out_of_window: usize,
+    pub dropped_no_token_usage: usize,
+    pub dropped_duplicate: usize,
+}
+
+impl EventCounts {
+    pub fn value(self) -> Value {
+        json!({
+            "pages":self.pages,"fetched":self.fetched,"kept":self.kept,
+            "droppedOutOfWindow":self.dropped_out_of_window,
+            "droppedNoTokenUsage":self.dropped_no_token_usage,
+            "droppedDuplicate":self.dropped_duplicate,
+        })
+    }
+}
+
+/// Every billed event in [since, until], with raw counts and the unmeasured count. An event the account gained while paging can repeat at a page boundary:
 /// the final count proves how many copies to drop (T3's rule). A count that does not reconcile
 /// is a bad answer, never a partial total. An unmeasured event (no usable `tokenUsage`) counts
 /// separately and never becomes a row.
@@ -258,7 +281,7 @@ pub fn events(
     token: &str,
     since_ms: i64,
     until_ms: i64,
-) -> Result<(Vec<Event>, usize, usize), Failure> {
+) -> Result<(Vec<Event>, EventCounts, usize), Failure> {
     if since_ms < 0 || until_ms < since_ms {
         return Err(Failure::BadResponse);
     }
@@ -323,23 +346,30 @@ pub fn events(
         Some(total) => raw_count - total,
         None => 0,
     };
-    let pages = raw_pages.len();
+    let mut counts = EventCounts {
+        pages: raw_pages.len(),
+        fetched: raw_count,
+        ..EventCounts::default()
+    };
     let (mut kept, mut unmeasured) = (Vec::new(), 0usize);
     for (page, overlap) in raw_pages {
         let drop = removals.min(overlap);
         removals -= drop;
+        counts.dropped_duplicate += drop;
         for verdict in page.into_iter().skip(drop) {
             match verdict {
                 Parsed::Measured(event) => kept.push(event),
                 Parsed::Unmeasured => unmeasured += 1,
-                Parsed::Outside => {}
+                Parsed::Outside => counts.dropped_out_of_window += 1,
+                Parsed::NoTokenUsage => counts.dropped_no_token_usage += 1,
             }
         }
     }
     if removals != 0 {
         return Err(Failure::BadResponse);
     }
-    Ok((kept, pages, unmeasured))
+    counts.kept = kept.len();
+    Ok((kept, counts, unmeasured))
 }
 
 /// One hour and model of the account's usage.

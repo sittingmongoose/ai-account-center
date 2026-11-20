@@ -164,6 +164,20 @@ const freshness = () => {
 };
 
 export const tests = {
+	async 'analytics: the signed-in browser can read the native endpoint in a cut boot'(t) {
+		if (String(t.args.cut) !== '1') return;
+		await t.app.open({ page: 'analytics' });
+		const reply = await t.page.evaluate(async () => {
+			const response = await fetch('/api/accounts/analytics?platform=mac&range=7d&tz=UTC');
+			const body = await response.json();
+			return { status: response.status, cache: response.headers.get('cache-control'), body };
+		});
+		await t.check('the native endpoint answers from a signed-in page', reply.status === 200, JSON.stringify(reply.body));
+		await t.check('the reply carries the requested range and zone', reply.body.range?.preset === '7d' && reply.body.range?.tz === 'UTC');
+		await t.check('the reply is private', reply.cache === 'no-store');
+		await t.check('the empty isolated activity fixture has unknown attribution', reply.body.activity?.accountAttribution === 'unavailable');
+	},
+
 	async 'analytics model donut: the ring fills the space above its legend'(t) {
 		const layouts = [
 			{ name: 'desktop', width: 1760, height: 1080 },

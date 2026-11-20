@@ -35,6 +35,7 @@ pub type Meta = fs::Metadata;
 trait Facts {
     fn link(&self) -> bool;
     fn regular(&self) -> bool;
+    fn directory(&self) -> bool;
     fn size(&self) -> u64;
     #[cfg(unix)]
     fn owner(&self) -> u32;
@@ -52,6 +53,9 @@ impl Facts for fs::Metadata {
     }
     fn regular(&self) -> bool {
         self.is_file()
+    }
+    fn directory(&self) -> bool {
+        self.is_dir()
     }
     fn size(&self) -> u64 {
         self.len()
@@ -101,6 +105,9 @@ impl Facts for RawStat {
     }
     fn regular(&self) -> bool {
         self.0.st_mode & libc::S_IFMT == libc::S_IFREG
+    }
+    fn directory(&self) -> bool {
+        self.0.st_mode & libc::S_IFMT == libc::S_IFDIR
     }
     fn size(&self) -> u64 {
         u64::try_from(self.0.st_size).unwrap_or(0)
@@ -222,7 +229,9 @@ pub enum Read {
     Foreign,
     /// A group or other permission bit ([`Mode::Private`]).
     BadMode,
-    /// A folder, FIFO, socket or device, by its `lstat` or by the opened descriptor.
+    /// A directory, by its `lstat` or by the opened descriptor.
+    Directory,
+    /// A FIFO, socket or device, by its `lstat` or by the opened descriptor.
     NotRegular,
     /// Over the cap, by its metadata or by the bytes read.
     TooLarge,
@@ -247,6 +256,7 @@ impl fmt::Debug for Read {
             Read::Link => f.write_str("Link"),
             Read::Foreign => f.write_str("Foreign"),
             Read::BadMode => f.write_str("BadMode"),
+            Read::Directory => f.write_str("Directory"),
             Read::NotRegular => f.write_str("NotRegular"),
             Read::TooLarge => f.write_str("TooLarge"),
             Read::Unreadable(kind) => write!(f, "Unreadable({kind:?})"),
@@ -261,6 +271,34 @@ pub fn read(path: &Path, policy: &ReadPolicy) -> Read {
     read_with(path, policy, &mut |_| {})
 }
 
+/// The lifecycle private-JSON policy. A registered store may live in a symlinked
+/// directory, but its target must be a directory and must not be world-writable.
+pub fn private_store(path: &Path, cap: u64) -> Read {
+    #[cfg(unix)]
+    {
+        let Some(parent) = path.parent() else {
+            return Read::Unproved;
+        };
+        match fs::metadata(parent) {
+            Ok(meta) if meta.is_dir() && meta.bits() & 0o002 == 0 => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Read::Absent,
+            _ => return Read::Unproved,
+        }
+    }
+    read(path, &ReadPolicy::capped(cap).mode(Mode::Private))
+}
+
+/// Check the key store's private, non-link directory before reading key metadata.
+pub fn private_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| {
+        #[cfg(unix)]
+        if meta.bits() & 0o077 != 0 {
+            return false;
+        }
+        meta.is_dir() && !meta.file_type().is_symlink()
+    })
+}
+
 /// Open one file under `policy` for a reader that needs only part of it (an archive header, a
 /// byte range). The cap applies to the metadata; the caller bounds what it reads.
 pub fn open(path: &Path, policy: &ReadPolicy) -> Result<(File, Meta), Read> {
@@ -269,13 +307,46 @@ pub fn open(path: &Path, policy: &ReadPolicy) -> Result<(File, Meta), Read> {
 
 /// The path the kernel holds for an open descriptor (`/proc/self/fd/N`), for readers whose
 /// reference confines the resolved path; `None` where the platform cannot say.
+#[allow(unsafe_code)]
 pub fn opened_path(file: &File) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
         fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+        };
+        let handle = file.as_raw_handle();
+        let mut buffer = vec![0u16; 512];
+        let length = loop {
+            // SAFETY: the buffer is a live, zeroed u16 slice and the handle is owned by `file`.
+            let written = unsafe {
+                GetFinalPathNameByHandleW(
+                    handle,
+                    buffer.as_mut_ptr(),
+                    buffer.len() as u32,
+                    FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+                )
+            };
+            if written == 0 {
+                return None;
+            }
+            let length = written as usize;
+            if length < buffer.len() {
+                break length;
+            }
+            buffer.resize(length + 1, 0);
+        };
+        Some(PathBuf::from(std::ffi::OsString::from_wide(
+            &buffer[..length],
+        )))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = file;
         None
@@ -339,7 +410,15 @@ fn open_named(
 ) -> Result<(File, Meta), Read> {
     let before = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Read::Absent),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            #[cfg(windows)]
+            if error.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_PATH_NOT_FOUND as i32)
+            {
+                return Err(missing_windows_path(path));
+            }
+            return Err(Read::Absent);
+        }
         Err(error) => return Err(Read::Unreadable(error.kind())),
     };
     if before.link() {
@@ -359,6 +438,25 @@ fn open_named(
         }
     })?;
     opened_checks(file, &before, policy)
+}
+
+/// Windows reports a child of a regular file as a missing path. Distinguish that
+/// from a genuinely absent name without opening an entry for data.
+#[cfg(windows)]
+fn missing_windows_path(path: &Path) -> Read {
+    for ancestor in path
+        .ancestors()
+        .skip(1)
+        .take_while(|p| !p.as_os_str().is_empty())
+    {
+        match fs::metadata(ancestor) {
+            Ok(meta) if meta.is_dir() => break,
+            Ok(_) => return Read::Unreadable(io::ErrorKind::NotADirectory),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Read::Unreadable(error.kind()),
+        }
+    }
+    Read::Absent
 }
 
 /// The leaf relative to a pinned chain of the folders below `base` (Wonder L12). Each folder is
@@ -486,7 +584,7 @@ fn opened_checks<B: Facts>(
         .metadata()
         .map_err(|error| Read::Unreadable(error.kind()))?;
     if !opened.is_file() {
-        return Err(Read::NotRegular);
+        return Err(non_regular(&opened));
     }
     if !same_file(before, &opened) {
         return Err(Read::Unproved);
@@ -555,7 +653,7 @@ fn open_at(dir: Option<&File>, name: &std::ffi::OsStr, flags: libc::c_int) -> io
 
 fn admit<S: Facts>(meta: &S, policy: &ReadPolicy) -> Result<(), Read> {
     if !meta.regular() {
-        return Err(Read::NotRegular);
+        return Err(non_regular(meta));
     }
     if meta.size() > policy.cap {
         return Err(Read::TooLarge);
@@ -567,6 +665,14 @@ fn admit<S: Facts>(meta: &S, policy: &ReadPolicy) -> Result<(), Read> {
         return Err(Read::BadMode);
     }
     Ok(())
+}
+
+fn non_regular(meta: &impl Facts) -> Read {
+    if meta.directory() {
+        Read::Directory
+    } else {
+        Read::NotRegular
+    }
 }
 
 /// Not this process's user; Windows has no such check.
@@ -637,6 +743,15 @@ pub enum Listed {
     Entry(io::Error),
 }
 
+/// Whether the named entry exists, including a dangling link.
+pub fn entry_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// A folder listing that yields at most `cap` entries, then [`Listed::TooMany`] once if there
 /// are more. Entry errors are passed through in place, so each caller keeps its reference's
 /// order of checks (a count bound on the raw listing, before any filtering).
@@ -674,6 +789,68 @@ impl Iterator for Entries {
     }
 }
 
+/// The facts a share scanner's stat-then-read rule needs (R4): what Node's `fs.stat` reports,
+/// without opening the file. A final link is followed here, as `fs.stat` follows it; the
+/// reader's own hardened open ([`read`]) still refuses it. Times are epoch milliseconds with
+/// the platform's sub-millisecond precision, as Node's `mtimeMs` and `ctimeMs` (on Windows
+/// `ctime` is the creation time, which is what Node reports there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stat {
+    /// The file's size in bytes.
+    pub size: u64,
+    /// Last modification, epoch milliseconds.
+    pub mtime_ms: f64,
+    /// Last status change (Windows: creation), epoch milliseconds.
+    pub ctime_ms: f64,
+    /// Device id (0 where the platform does not report one).
+    pub device: u64,
+    /// Inode (0 where the platform does not report one).
+    pub inode: u64,
+    /// A regular file.
+    pub file: bool,
+    /// A folder.
+    pub dir: bool,
+}
+
+/// One `fs.stat`: the path's facts after following links, or the OS error (the scanner tells
+/// `ENOENT` and `ESTALE` apart by its raw code, as the TS readers do).
+pub fn stat(path: &Path) -> io::Result<Stat> {
+    let meta = fs::metadata(path)?;
+    #[cfg(unix)]
+    let (mtime_ms, ctime_ms, device, inode) = {
+        use std::os::unix::fs::MetadataExt;
+        (
+            meta.mtime() as f64 * 1000.0 + meta.mtime_nsec() as f64 / 1e6,
+            meta.ctime() as f64 * 1000.0 + meta.ctime_nsec() as f64 / 1e6,
+            meta.dev(),
+            meta.ino(),
+        )
+    };
+    #[cfg(not(unix))]
+    let (mtime_ms, ctime_ms, device, inode) = {
+        let ms = |time: std::time::SystemTime| {
+            time.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0)
+        };
+        (
+            meta.modified().map(ms).unwrap_or(0.0),
+            meta.created().map(ms).unwrap_or(0.0),
+            0,
+            0,
+        )
+    };
+    Ok(Stat {
+        size: meta.len(),
+        mtime_ms,
+        ctime_ms,
+        device,
+        inode,
+        file: meta.is_file(),
+        dir: meta.is_dir(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     //! One test per rule. Each was also run against a copy of this module with that rule
@@ -708,6 +885,18 @@ mod tests {
             read(&file.join("below"), &plain(9)),
             Read::Unreadable(io::ErrorKind::NotADirectory)
         ));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_open_windows_file_proves_its_canonical_path() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("rapport-é.json");
+        fs::write(&path, b"{}")?;
+        let file = File::open(&path)?;
+
+        assert_eq!(opened_path(&file), Some(path.canonicalize()?));
         Ok(())
     }
 
@@ -862,10 +1051,7 @@ mod tests {
         assert!(made.success(), "mkfifo");
         // A blocking open of a FIFO with no writer would hang this test.
         assert!(matches!(read(&fifo, &plain(1 << 20)), Read::NotRegular));
-        assert!(matches!(
-            read(dir.path(), &plain(1 << 20)),
-            Read::NotRegular
-        ));
+        assert!(matches!(read(dir.path(), &plain(1 << 20)), Read::Directory));
         assert!(matches!(
             read(Path::new("/dev/null"), &plain(9)),
             Read::NotRegular

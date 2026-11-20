@@ -17,7 +17,7 @@ import {
   composeRegistryListing,
   registryListingFacts,
 } from '../services/account-lifecycle-listing';
-import { composeWithRust } from '../rust-service';
+import { composeWithRust, RustService } from '../rust-service';
 import { isRustRegistryListing, rustRegistryInput } from '../rust-account-input';
 import {
   defaultLifecycleEnv,
@@ -64,10 +64,16 @@ function pathParam(value: string | string[] | undefined): string {
  */
 export interface AccountLifecycleRouterDeps {
   env?: () => LifecycleEnv;
+  recheckOnly?: boolean;
 }
 
 function context(req: Request): LifecycleContext {
-  return { secure: isSecureTransport(req), sessionKey: sessionKey(req.sessionID) };
+  const service: unknown = req.res?.locals.rustService;
+  return {
+    secure: isSecureTransport(req),
+    sessionKey: sessionKey(req.sessionID),
+    approvals: service instanceof RustService ? service.accountConfirmations() : undefined,
+  };
 }
 
 function answer(res: Response, result: LifecycleResult): void {
@@ -135,6 +141,26 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
         fail(res, error);
       }
     };
+  router.post(
+    '/:id/recheck',
+    guard,
+    write((req, body) => {
+      const service: unknown = req.res?.locals.rustService;
+      return recheck(
+        env(),
+        pathParam(req.params.id),
+        body,
+        !deps.env &&
+          !deps.recheckOnly &&
+          process.env.AAC_RUST_CUT_WORKER === '1' &&
+          service instanceof RustService
+          ? (id) => service.nativeRecheck(id)
+          : undefined
+      );
+    })
+  );
+  if (deps.recheckOnly) return router;
+
   const jobId = (req: Request): string => {
     const id = pathParam(req.params.jobId);
     if (!JOB_ID_PATTERN.test(id)) throw new LifecycleHttpError(404, 'unknown_job');
@@ -231,11 +257,6 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
     '/:id/open',
     guard,
     write((req, body) => openApp(env(), pathParam(req.params.id), body))
-  );
-  router.post(
-    '/:id/recheck',
-    guard,
-    write((req, body) => recheck(env(), pathParam(req.params.id), body))
   );
   router.patch(
     '/:id',

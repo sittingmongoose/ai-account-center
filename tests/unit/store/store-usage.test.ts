@@ -9,34 +9,19 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import express from 'express';
-import type { Server } from 'http';
+import { haveNativeStoreServer, startNativeStoreServer } from '../../support/native-store-server';
 import { nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import { buildRollupExports } from '../../../src/store/usage-exports';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
 import { storeObservationFromAccount } from '../../../src/store/usage-observations';
 import {
-  AccountAnalyticsService,
-  type AccountAnalyticsSampleEvent,
-  onAccountAnalyticsSample,
-} from '../../../src/web-server/services/account-analytics-service';
-import {
   appendAccountAnalyticsSnapshot,
   FileAccountAnalyticsHistoryStore,
   type AccountAnalyticsHistoryData,
-  type AccountAnalyticsHistoryStore,
 } from '../../../src/web-server/services/account-analytics-history';
-import { usageHistory } from '../../../src/web-server/agent-usage/agent-usage-history';
-import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
-import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
-import { createUsageRouter } from '../../../src/web-server/routes/store-routes';
 import { handleStoreCommand } from '../../../src/commands/store-command';
-import type {
-  AccountDashboard,
-  DashboardAccount,
-} from '../../../src/web-server/services/account-dashboard-types';
-import type { AccountAnalyticsActivity } from '../../../src/web-server/services/account-analytics-types';
+import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 
 const MODULE = path.resolve(__dirname, '../../../dist/native', nativeModuleName());
 const loaded = loadStoreTestModule({ env: {}, file: MODULE });
@@ -135,185 +120,7 @@ function accountsAt(now: number): DashboardAccount[] {
   ];
 }
 
-const noActivity = {
-  status: 'unavailable',
-  scope: 'multi-host-cli',
-  timezone: 'UTC',
-  accountAttribution: 'unavailable',
-  costBasis: 'estimated-api-equivalent',
-  fetchedAt: null,
-  message: 'none',
-  totals: null,
-  providers: [],
-  byDay: [],
-  byHour: [],
-  models: [],
-} as unknown as AccountAnalyticsActivity;
-
-function dashboardAt(now: number): AccountDashboard {
-  return {
-    schemaVersion: 1,
-    updatedAt: new Date(now).toISOString(),
-    accounts: accountsAt(now),
-    settings: { refreshIntervalSeconds: 60 },
-  } as unknown as AccountDashboard;
-}
-
-function memory(): AccountAnalyticsHistoryStore & { data: AccountAnalyticsHistoryData | null } {
-  return {
-    data: null,
-    async read() {
-      return this.data;
-    },
-    async write(data) {
-      this.data = structuredClone(data);
-    },
-  };
-}
-
-/**
- * A day and more of three accounts across every case the analytics route draws: five-hour resets,
- * an error hour without windows, a cached window, a stretch with no samples at all, and a credit
- * balance. Long enough to cross the JSON history's thinning steps (every record in the last hour,
- * five-minute buckets to a day, hourly beyond) and the 24-hour range's start.
- */
-const RICH_MINUTES = 28 * 60;
-const richSkipped = (minute: number) => minute >= 15 * 60 && minute < 15 * 60 + 40;
-function richAccountsAt(now: number): DashboardAccount[] {
-  const minute = Math.round((now - START) / MIN);
-  const period = Math.floor(minute / 300);
-  const used = Math.min(100, 3 + Math.floor((minute % 300) / 6));
-  const [first, second] = accountsAt(START);
-  const at = new Date(now).toISOString();
-  const five = {
-    ...first.windows[0],
-    usedPercent: used,
-    remainingPercent: 100 - used,
-    resetAt: new Date(START + (period + 1) * 300 * MIN).toISOString(),
-  };
-  const cachedHour = minute >= 10 * 60 && minute < 11 * 60;
-  const week = {
-    ...first.windows[1],
-    usedPercent: 40 + Math.floor(minute / 240),
-    remainingPercent: 60 - Math.floor(minute / 240),
-    ...(cachedHour
-      ? { status: 'cached', sampledAt: new Date(START + 10 * 60 * MIN - 5 * MIN).toISOString() }
-      : {}),
-  };
-  const failing = minute >= 5 * 60 && minute < 6 * 60;
-  const credits = { ...second.windows[0], remaining: 500 - Math.floor(minute / 30) * 2 };
-  const third = {
-    ...first,
-    id: 'codex:third',
-    label: 'third',
-    isActive: false,
-    windows: [{ ...five, usedPercent: 10 + (period % 3), remainingPercent: 90 - (period % 3) }],
-  };
-  return [
-    { ...first, fetchedAt: at, sampledAt: at, windows: [five, week] },
-    failing
-      ? {
-          ...second,
-          status: 'error',
-          message: 'refresh failed',
-          fetchedAt: at,
-          sampledAt: at,
-          windows: [],
-        }
-      : { ...second, fetchedAt: at, sampledAt: at, windows: [credits] },
-    { ...third, fetchedAt: at, sampledAt: at },
-  ] as unknown as DashboardAccount[];
-}
-
 describe.skipIf(!haveModule)('history store with the native module', () => {
-  it('serves the analytics route and burn rates as the JSON history did', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'equal-'));
-    const store = await openStore(path.join(dir, 'store'));
-    try {
-      let clock = START;
-      const jsonService = new AccountAnalyticsService({
-        getDashboard: async () => dashboardAt(clock),
-        getActivity: async () => ({ ...noActivity, coverage: null }) as never,
-        createHistoryStore: () => memory(),
-        now: () => clock,
-        scope: () => path.join(dir, 'json'),
-      });
-      const storeService = new AccountAnalyticsService({
-        getDashboard: async () => dashboardAt(clock),
-        getActivity: async () => ({ ...noActivity, coverage: null }) as never,
-        usageStore: async () => store,
-        now: () => clock,
-        scope: () => path.join(dir, 'store-scope'),
-      });
-      const events: AccountAnalyticsSampleEvent[] = [];
-      const stop = onAccountAnalyticsSample((event) => {
-        events.push(event);
-      });
-      for (let minute = 0; minute <= 180; minute++) {
-        clock = START + minute * MIN;
-        await jsonService.sample();
-        await storeService.sample();
-      }
-      stop();
-      const query = { platform: 'mac', range: '24h', provider: 'all', account: 'all' } as const;
-      const fromJson = await jsonService.get({ ...query, tz: 'UTC' });
-      const fromStore = await storeService.get({ ...query, tz: 'UTC' });
-      expect(fromStore.history.status).toBe('ok');
-      expect(fromStore.history.retentionDays).toBe(90);
-      for (const account of fromJson.accounts) {
-        const other = fromStore.accounts.find((candidate) => candidate.id === account.id);
-        expect(other).toBeDefined();
-        for (const window of account.windows) {
-          const twin = other?.windows.find((candidate) => candidate.key === window.key);
-          const value = (p: { usedPercent: number | null; remaining: number | null }) =>
-            p.usedPercent ?? p.remaining;
-          // The same measured value in every bucket both show, and the same latest reading.
-          const bucket = fromJson.range.bucketMinutes * MIN;
-          const byBucket = new Map(
-            window.points.map((p) => [Math.floor(Date.parse(p.sampledAt) / bucket), value(p)])
-          );
-          for (const point of twin?.points ?? []) {
-            const key = Math.floor(Date.parse(point.sampledAt) / bucket);
-            if (byBucket.has(key)) expect(value(point)).toBe(byBucket.get(key) as number);
-          }
-          expect(value(twin?.points.at(-1) as never)).toBe(value(window.points.at(-1) as never));
-          expect((twin?.points.length ?? 0) > 0).toBe(true);
-        }
-      }
-      // Burn rates from the store-backed history equal the JSON history's for every span.
-      const jsonEvent = events[events.length - 2];
-      const storeEvent = events[events.length - 1];
-      const rows = storeEvent.accounts;
-      const projected = projectAgentUsage(rows, { now: clock, includeHidden: true }).accounts;
-      const a = usageHistory(rows, projected, jsonEvent.history, clock);
-      const b = usageHistory(rows, projected, storeEvent.history, clock);
-      for (const [id, rates] of a.rates) {
-        for (const [key, rate] of rates) {
-          const other = b.rates.get(id)?.get(key);
-          expect({ key, ...other }).toEqual({ key, ...rate });
-        }
-      }
-      // The snapshot carries the 7- and 30-day burn only with the store.
-      expect(storeEvent.longBurn?.size).toBeGreaterThan(0);
-      const files = buildSnapshotFiles(storeEvent, 60);
-      const burn = files.snapshot.accounts
-        .flatMap((acc) => acc.windows)
-        .find((w) => w.key === 'five_hour')?.burn;
-      expect(burn && 'coverage7Days' in burn).toBe(true);
-      expect(burn?.last7Days).toBeNull(); // three hours of readings cover under half of 7 days
-      const jsonFiles = buildSnapshotFiles(jsonEvent, 60);
-      const jsonBurn = jsonFiles.snapshot.accounts
-        .flatMap((acc) => acc.windows)
-        .find((w) => w.key === 'five_hour')?.burn;
-      expect(jsonBurn && 'last7Days' in jsonBurn).toBe(false);
-      // Reset periods and consumption across the reset.
-      const status = await store.status();
-      expect(status.state).toBe('ready');
-    } finally {
-      await store.close();
-    }
-  });
-
   it('answers ranges across UTC days from the packed day values, and after a rebuild', async () => {
     const dir = path.join(fs.mkdtempSync(path.join(sandbox, 'days-')), 'store');
     let store = await openStore(dir);
@@ -372,145 +179,76 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     }
   });
 
-  it('draws every analytics point the JSON history draws, across thinning, gaps and failures', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'parity-'));
-    const store = await openStore(path.join(dir, 'store'));
-    try {
-      let clock = START;
-      const dashboard = async () =>
-        ({
-          schemaVersion: 1,
-          updatedAt: new Date(clock).toISOString(),
-          accounts: richAccountsAt(clock),
-          settings: { refreshIntervalSeconds: 60 },
-        }) as unknown as AccountDashboard;
-      const activity = async () => ({ ...noActivity, coverage: null }) as never;
-      const jsonService = new AccountAnalyticsService({
-        getDashboard: dashboard,
-        getActivity: activity,
-        createHistoryStore: () => memory(),
-        now: () => clock,
-        scope: () => path.join(dir, 'json'),
-      });
-      const storeService = new AccountAnalyticsService({
-        getDashboard: dashboard,
-        getActivity: activity,
-        usageStore: async () => store,
-        now: () => clock,
-        scope: () => path.join(dir, 'store-scope'),
-      });
-      for (let minute = 0; minute <= RICH_MINUTES; minute += 2) {
-        if (richSkipped(minute)) continue;
-        clock = START + minute * MIN;
-        await jsonService.sample();
-        await storeService.sample();
-      }
-      // The store rebuilds records on the JSON history's grid inside each observed span, not at
-      // each sample's own minute, so points are compared by analytics bucket: the same buckets in
-      // the same order (gaps included), with every field equal and both times inside the bucket.
-      const shape = (result: Awaited<ReturnType<typeof jsonService.get>>) => {
-        const bucket = result.range.bucketMinutes * MIN;
-        const slot = (iso: string) => Math.floor(Date.parse(iso) / bucket);
-        return result.accounts.map((account) => ({
-          id: account.id,
-          windows: account.windows.map((window) => ({
-            key: window.key,
-            points: window.points.map(({ sampledAt, observedAt, ...fields }) => ({
-              bucket: slot(sampledAt),
-              observedBucket: slot(observedAt),
-              ...fields,
-            })),
-          })),
-        }));
-      };
-      for (const range of ['24h', '7d'] as const) {
-        const query = {
-          platform: 'mac',
-          range,
-          provider: 'all',
-          account: 'all',
-          tz: 'UTC',
-        } as const;
-        const fromJson = await jsonService.get(query);
-        const fromStore = await storeService.get(query);
-        // The store keeps every reading, so its history may start before the thinned file's.
-        const { availableFrom, ...jsonRange } = fromJson.range;
-        const { availableFrom: storeFrom, ...storeRange } = fromStore.range;
-        expect(storeRange).toEqual(jsonRange);
-        expect(Date.parse(storeFrom as string)).toBeLessThanOrEqual(
-          Date.parse(availableFrom as string)
-        );
-        const expected = shape(fromJson);
-        // The fixture really has what it claims: many points, and the cached window among them.
-        const points = expected.flatMap((a) => a.windows.flatMap((w) => w.points));
-        expect(points.length).toBeGreaterThan(range === '24h' ? 300 : 100);
-        if (range === '7d') expect(points.some((p) => p.status === 'cached')).toBe(true);
-        // Every account, window and point: membership, order, values and gaps.
-        expect(shape(fromStore)).toEqual(expected);
-      }
-    } finally {
-      await store.close();
-    }
-  }, LARGE_FIXTURE_TIMEOUT_MS);
-
-  it('the burn route finds every series, however many hourly points they hold', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
-    const store = await openStore(path.join(dir, 'store'));
-    const end = START + 90 * 24 * HOUR;
-    let server: Server | null = null;
-    try {
-      // 11 series with a reading every hour for 90 days: 23,760 hourly points, over 20,000.
-      const [first] = accountsAt(START);
-      for (let account = 0; account < 11; account++) {
-        const observations = [];
-        for (let t = START; t < end; t += HOUR) {
-          const used = Math.floor((t - START) / HOUR) % 90;
-          const observation = storeObservationFromAccount(
-            {
-              ...first,
-              id: `codex:burn${account}`,
-              label: `burn${account}`,
-              fetchedAt: new Date(t).toISOString(),
-              sampledAt: new Date(t).toISOString(),
-              windows: [{ ...first.windows[0], usedPercent: used, remainingPercent: 100 - used }],
-            } as DashboardAccount,
-            t,
-            90 * 24 * HOUR
-          );
-          if (observation) observations.push(observation);
+  it(
+    'the burn route finds every series, however many hourly points they hold',
+    async () => {
+      const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
+      const store = await openStore(path.join(dir, 'store'));
+      const end = (Math.floor(Date.now() / HOUR) + 1) * HOUR;
+      const start = end - 90 * 24 * HOUR;
+      let server: Awaited<ReturnType<typeof startNativeStoreServer>> | undefined;
+      try {
+        // Keep 23,760 hourly points across 11 series to cross the 20,000-point cap.
+        // Usage changes daily. Hourly sightings between changes still produce rollups
+        // without projecting a changed quota reading every hour.
+        const [first] = accountsAt(START);
+        for (let account = 0; account < 11; account++) {
+          const observations = [];
+          for (let t = start; t < end; t += HOUR) {
+            const used = Math.floor((t - start) / (24 * HOUR));
+            const observation = storeObservationFromAccount(
+              {
+                ...first,
+                id: `codex:burn${account}`,
+                label: `burn${account}`,
+                fetchedAt: new Date(t).toISOString(),
+                sampledAt: new Date(t).toISOString(),
+                windows: [{ ...first.windows[0], usedPercent: used, remainingPercent: 100 - used }],
+              } as DashboardAccount,
+              t,
+              90 * 24 * HOUR
+            );
+            if (observation) observations.push(observation);
+          }
+          await store.record(observations as never);
         }
-        await store.record(observations as never);
+        const capped = await store.seriesPoints({
+          fromMs: start,
+          toMs: end - 1,
+          resolution: 'hour',
+        });
+        expect(capped.truncated).toBe(true);
+        expect(capped.series.length).toBeLessThan(11);
+        const exports = await buildRollupExports(store, [], [], end - 1);
+        expect(exports.hourly.series).toHaveLength(11);
+        expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(23_760);
+        expect(exports.hourly.series.every((s) => s.points.length === 2160)).toBe(true);
+        if (!haveNativeStoreServer) {
+          console.warn('[SKIP] burn HTTP replay requires a built native dashboard launcher');
+          return;
+        }
+        await store.close();
+        server = await startNativeStoreServer(dir);
+        const response = await server.send('/api/usage/burn?span=90d', {
+          headers: { cookie: server.cookie },
+        });
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          series: Array<{ accountId: string; spans: Array<{ span: string; consumed: number }> }>;
+        };
+        expect(body.series.map((s) => s.accountId).sort()).toEqual(
+          Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
+        );
+        for (const series of body.series) {
+          expect(series.spans).toEqual([expect.objectContaining({ span: '90d', consumed: 89 })]);
+        }
+      } finally {
+        await server?.stop();
+        await store.close();
       }
-      const capped = await store.seriesPoints({ fromMs: START, toMs: end - 1, resolution: 'hour' });
-      expect(capped.truncated).toBe(true);
-      const exports = await buildRollupExports(store, [], [], end - 1);
-      expect(exports.hourly.series).toHaveLength(11);
-      expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(23_760);
-      expect(exports.hourly.series.every((s) => s.points.length === 2160)).toBe(true);
-      const app = express();
-      app.use((req, _res, next) => {
-        Object.assign(req, { auth: { kind: 'device' } });
-        next();
-      });
-      app.use('/api/usage', createUsageRouter({ store: () => store, now: () => end }));
-      const listening = await new Promise<Server>((resolve) => {
-        const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
-      });
-      server = listening;
-      const address = listening.address();
-      if (!address || typeof address === 'string') throw new Error('No test listener');
-      const response = await fetch(`http://127.0.0.1:${address.port}/api/usage/burn?span=90d`);
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as { series: Array<{ accountId: string }> };
-      expect(body.series.map((s) => s.accountId).sort()).toEqual(
-        Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
-      );
-    } finally {
-      const open = server as Server | null;
-      if (open) await new Promise<void>((resolve) => open.close(() => resolve()));
-      await store.close();
-    }
-  }, LARGE_FIXTURE_TIMEOUT_MS);
+    },
+    LARGE_FIXTURE_TIMEOUT_MS
+  );
 
   it('later CLI checks continue to report known segment corruption', async () => {
     const home = fs.mkdtempSync(path.join(sandbox, 'check-corruption-'));
@@ -644,28 +382,5 @@ describe.skipIf(!haveModule)('a store from an unreleased test build', () => {
       if (previous === undefined) delete process.env.CCS_HOME;
       else process.env.CCS_HOME = previous;
     }
-  });
-});
-
-describe('the dashboard without the native module', () => {
-  it('keeps the JSON history path when no store is available', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'nostore-'));
-    const service = new AccountAnalyticsService({
-      getDashboard: async () => dashboardAt(START),
-      getActivity: async () => ({ ...noActivity, coverage: null }) as never,
-      usageStore: async () => null,
-      createHistoryStore: () => memory(),
-      now: () => START,
-      scope: () => dir,
-    });
-    const result = await service.get({
-      platform: 'mac',
-      range: '24h',
-      provider: 'all',
-      account: 'all',
-      tz: 'UTC',
-    });
-    expect(result.history.retentionDays).toBe(30);
-    expect(result.accounts.length).toBe(2);
   });
 });

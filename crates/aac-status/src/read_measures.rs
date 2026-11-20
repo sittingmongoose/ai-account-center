@@ -11,42 +11,55 @@ pub struct Index {
 }
 /// A run's canonical model id: the id alone when it already names its provider or has none.
 pub fn model(run: &V) -> V {
+    let id = model_id(run);
+    if id.is_empty() { V::Null } else { json!(id) }
+}
+
+/// The canonical model id without allocating a JSON value.
+pub(super) fn model_id(run: &V) -> std::borrow::Cow<'_, str> {
     let id = s(&run["model"]["id"]);
     let p = s(&run["model"]["provider"]);
     if id.is_empty() {
-        V::Null
+        std::borrow::Cow::Borrowed("")
+    } else if p.is_empty() || id.strip_prefix(p).is_some_and(|suffix| suffix.starts_with('/')) {
+        std::borrow::Cow::Borrowed(id)
     } else {
-        json!(if p.is_empty() || id.starts_with(&format!("{p}/")) {
-            id.to_owned()
-        } else {
-            format!("{p}/{id}")
-        })
+        std::borrow::Cow::Owned(format!("{p}/{id}"))
     }
 }
 impl Index {
+    /// The index of runs none of which carries a review.
+    pub fn empty() -> Self {
+        Self {
+            by_target: HashMap::new(),
+            ignored: 0,
+        }
+    }
+
     /// Reviews by the run they review. `join` are review runs outside a filtered view that still
     /// review its runs: they join, but are never rows and never counted as ignored. A review
     /// counts only when its own run is scored (sb-R3) — a catalog model and task type, the same
     /// row rules — so an unscored run's verdict moves no blind-review measure.
     pub fn new(
-        docs: &[V],
+        docs: &[&V],
         join: &[V],
         known_models: &HashSet<&str>,
         known_types: &HashSet<&str>,
         ctx: &Context,
     ) -> Option<Self> {
-        let known: HashMap<_, _> = docs.iter().map(|d| (s(&d["id"]), d)).collect();
+        let known: HashMap<_, _> = docs.iter().map(|d| (s(&d["id"]), *d)).collect();
         let scored = |run: &V| {
             let kind = s(&run["task"]["type"]);
             !run["model"]["id"].is_null()
                 && !kind.is_empty()
                 && known_types.contains(kind)
-                && known_models.contains(&s(&model(run)))
+                && known_models.contains(model_id(run).as_ref())
         };
         let mut by_target: HashMap<String, Vec<V>> = HashMap::new();
         let mut ignored = 0;
         for run in docs
             .iter()
+            .copied()
             .chain(join.iter().filter(|r| !known.contains_key(s(&r["id"]))))
         {
             if run["review"].is_null() {

@@ -21,3 +21,6 @@ serde.workspace = true
 # preserve_order: objects keep JavaScript insertion order; float_roundtrip: every number parses
 # to the double JSON.parse reads (both are the M3 read-route settings of aac-http/aac-status).
 serde_json = { workspace = true, features = ["preserve_order", "float_roundtrip"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "aac-snapshot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The aac-usage share snapshot writer (cut gap G18): projection, burn history, markdown and the publish loop, byte-equal to the TypeScript writer"
+
+[lints]
+workspace = true
+
+[dependencies]
+aac-core.workspace = true
+aac-files.workspace = true
+aac-num.workspace = true
+aac-store.workspace = true
+aac-views.workspace = true
+indexmap.workspace = true
+serde.workspace = true
+# preserve_order: objects keep JavaScript insertion order; float_roundtrip: every number parses
+# to the double JSON.parse reads (the aac-http/aac-status read-route settings).
+serde_json = { workspace = true, features = ["preserve_order", "float_roundtrip"] }
+tempfile.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

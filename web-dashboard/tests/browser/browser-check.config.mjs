@@ -11,24 +11,19 @@ import { startRustBuilder } from './rust-home-builder.mjs';
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
-	const cli = path.join(root, 'dist', 'ccs.js');
+	const rustOwned = !!ctx.args.rustOwned && ctx.args.rustOwned !== '0';
+	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
+	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
+	const cut = rustHome || rustOwned || (!!ctx.args.cut && ctx.args.cut !== '0');
+	const cli = cut
+		? path.join(root, 'dist', 'native', process.platform === 'win32' ? 'ai-account-center.exe' : 'ai-account-center')
+		: path.join(root, 'dist', 'ccs.js');
 	if (!fs.existsSync(cli) || !fs.existsSync(path.join(root, 'dist', 'ui', 'app', 'index.html'))) {
 		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
 	}
 	if (ctx.fleet) throw new Error('--host: the dashboard listens on 127.0.0.1 and setup is loopback-only, so a browser on another machine can\'t use it. Run from a checkout on that machine.');
-	// D7 switch: `--set rustHome=1` runs the server with the Rust service and its Home view on (AAC_RUST_SERVICE=on,
-	// AAC_RUST_HOME_VIEW=on) and the binary in dist/native/aac-http, or `--set rustBinary=<path>`. Off by default, and
-	// then explicitly off, so a shell variable cannot turn it on unseen.
-	// R1: `--set rustHomeFed=1` (with rustHome) also turns the Home group on (AAC_RUST_GROUP_HOME=on): the server's own
-	// GET /api/views/home is answered from fed generations. Off by default, and then explicitly off.
-	// R2: `--set rustStatusFed=1` runs the server with the Rust service on and the Status group on
-	// (AAC_RUST_GROUP_STATUS=on): the server's own GET /api/status is answered from fed generations. Off by default, and
-	// then explicitly off.
-	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
-	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
-	const rustStatusFed = !!ctx.args.rustStatusFed && ctx.args.rustStatusFed !== '0';
 	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
-	if ((rustHome || rustStatusFed) && !fs.existsSync(rustBinary)) throw new Error(`rustHome/rustStatusFed: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
+	if (rustHome && !fs.existsSync(rustBinary)) throw new Error(`rustHome: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
 	let builder = null;
 	/** Per page: the Home inputs a check stubbed (path -> JSON). */
 	const homeStubs = new WeakMap();
@@ -88,15 +83,22 @@ export default (ctx) => {
 		// CCS_HOME alone is not enough: some provider collectors read the real home (CLI logins, usage files, ssh keys
 		// for other machines). Every home-like variable points at the temporary folder, so no real account shows up.
 		server: (_, s) => ({
-			command: [process.execPath, cli, 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
+			command: [...(cut ? [cli] : [process.execPath, cli]), 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
 			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'), AAC_AGENT_REPORTS_DIR: s.reports, AAC_PM_MAIL_REGISTRY_DIR: path.join(s.reports, 'pm-mail-registry'), AAC_STATUS_DOORBELL: 'off',
 				// `--set realPins=1`: this machine's real T3 pins, opened read-only by the status module (the other machines'
 				// pins come over ssh, set up above).
 				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),
-				...(rustHome
+				...(cut ? {
+					CCS_DIR: path.join(s.home, '.ccs'), AAC_AGENT_VERBS: 'off', AAC_AGENT_TRANSPORT: 'off',
+					AAC_STORE_SHARE_BACKUP_DIR: 'off', SSH_AUTH_SOCK: '',
+					...(rustOwned ? {
+						AAC_TS_SIDECAR: 'off', AAC_RUST_CUT_NATIVE_ROUTES: 'off',
+						AAC_RUST_GROUP_COLLECTION: 'off', AAC_RUST_GROUP_RENEWAL: 'off'
+					} : rustHome ? { AAC_TS_SIDECAR: 'off' } : {})
+				} : { ...(rustHome
 					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
-					: { AAC_RUST_SERVICE: rustStatusFed ? 'on' : 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off', ...(rustStatusFed ? { AAC_RUST_SERVICE_BINARY: rustBinary } : {}) }),
-				AAC_RUST_GROUP_STATUS: rustStatusFed ? 'on' : 'off' }
+					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off' }),
+				AAC_RUST_STORE: cut ? 'on' : 'off' }) }
 		}),
 		async teardown(_, s) {
 			if (builder) {

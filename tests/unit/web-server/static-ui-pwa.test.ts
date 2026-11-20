@@ -15,7 +15,6 @@ import os from 'os';
 import path from 'path';
 
 import { startServer } from '../../../src/web-server';
-import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 
 import { fakeRun, writeLeptosFixture } from '../../shared/fixtures/leptos-ui-fixture';
 
@@ -125,7 +124,6 @@ beforeEach(async () => {
   process.env.CCS_DASHBOARD_USERNAME = 'aac-test-admin';
   process.env.CCS_DASHBOARD_PASSWORD_HASH = await bcrypt.hash('pwa-fixture-password', 4);
   delete process.env.CCS_SESSION_SECRET;
-  spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
   manifest = buildFixtureUi(tempRoot);
   staticDir = path.join(tempRoot, 'dist', 'ui');
   await start();

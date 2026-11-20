@@ -42,6 +42,10 @@ const ALLOWED = {
   'crates/aac-agent/src/history.rs': {
     '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 3,
   },
+  // The Rust Claude Open port admits the same pinned profile as the agent and helper.
+  'crates/aac-http/src/claude_open/sync.rs': {
+    '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 2,
+  },
   'scripts/claude-history/history-index-sync.cjs': {
     '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 3,
   },

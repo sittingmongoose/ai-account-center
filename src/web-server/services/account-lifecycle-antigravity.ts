@@ -1,4 +1,5 @@
 import os from 'os';
+import { signInCallback } from '../../shared/private-file-lease';
 import {
   ANTIGRAVITY_MAX_PROFILES,
   AntigravityLifecycleError,
@@ -7,6 +8,7 @@ import {
 } from '../../antigravity/account-lifecycle';
 import {
   BWRAP,
+  PASSED_ENV,
   antigravitySignInPreflight,
   prepareSignInStaging,
   removeSignInStaging,
@@ -133,10 +135,10 @@ export function antigravityJobFlow(
         );
       }
       // A terminal sign-in for this profile holds the marker; never run twice.
-      marker = claimAntigravitySignInMarker(ccsDir, profileName);
+      marker = claimAntigravitySignInMarker(ccsDir, profileName, true);
       if (!marker) throw new SignInJobError('write_failed');
       try {
-        staging = prepareSignInStaging(ccsDir);
+        staging = prepareSignInStaging(ccsDir, true);
       } catch (error) {
         marker.release();
         marker = null;
@@ -144,6 +146,32 @@ export function antigravityJobFlow(
           ? jobErrorCode(error.code)
           : new SignInJobError('write_failed');
       }
+      const source: Record<string, unknown> = {};
+      for (const key of PASSED_ENV) source[key] = process.env[key];
+      const native = signInCallback(ccsDir, {
+        action: 'antigravity-sandbox',
+        busConfig: staging.busConfig,
+        mask: staging.mask,
+        stubs: staging.stubs,
+        realHome: home,
+        nativeBinary: preflight.nativeBinary,
+        apparmorLeaf: preflight.apparmorLeaf,
+        runtimeDir: preflight.runtimeDir ?? null,
+        env: source,
+      });
+      const sandbox =
+        native?.status === 'ok' && Array.isArray(native.sandboxArgs)
+          ? (native.sandboxArgs as string[])
+          : sandboxArgs(staging, {
+              realHome: home,
+              nativeBinary: preflight.nativeBinary,
+              apparmorLeaf: preflight.apparmorLeaf,
+              runtimeDir: preflight.runtimeDir ?? null,
+            });
+      const env =
+        native?.status === 'ok' && native.env && typeof native.env === 'object'
+          ? (native.env as Record<string, string>)
+          : sandboxEnvironment(staging, { realHome: home, source: process.env });
       return {
         file: AGY_DRIVER_PYTHON,
         args: [
@@ -153,14 +181,9 @@ export function antigravityJobFlow(
           ANTIGRAVITY_OAUTH_ORIGIN,
           '--',
           BWRAP,
-          ...sandboxArgs(staging, {
-            realHome: home,
-            nativeBinary: preflight.nativeBinary,
-            apparmorLeaf: preflight.apparmorLeaf,
-            runtimeDir: preflight.runtimeDir ?? null,
-          }),
+          ...sandbox,
         ],
-        env: sandboxEnvironment(staging, { realHome: home, source: process.env }),
+        env,
         // The driver allocates the CLI's PTY itself and needs plain pipes to
         // read the CLI's raw screen bytes and inject the menu Enter and code.
         pty: false,
@@ -203,7 +226,7 @@ export function antigravityJobFlow(
     cleanup: async () => {
       if (staging) {
         try {
-          removeSignInStaging(staging);
+          removeSignInStaging(staging, ccsDir);
         } catch {
           /* Swept within a day. */
         }

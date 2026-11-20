@@ -1,7 +1,10 @@
 import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { getCcsDir } from '../../utils/config-manager';
+import { signInCallback } from '../../shared/private-file-lease';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { RegistryAccount } from './account-registry-v2';
 import { runClaudeHostOverSsh } from './claude-host-transport';
+import { MUSE_DEVICE_AUTH_ORIGINS } from './signin-job-types';
 import {
   SignInJobError,
   SignInJobStopped,
@@ -37,11 +40,7 @@ import {
  * - Single account in v1: any verified email is accepted (no
  *   `identity_mismatch`; a new login replaces the one slot).
  */
-export const MUSE_DEVICE_AUTH_ORIGINS: readonly string[] = Object.freeze([
-  'https://dev.meta.ai',
-  'https://auth.meta.com',
-  'https://www.meta.ai',
-]);
+export { MUSE_DEVICE_AUTH_ORIGINS } from './signin-job-types';
 export const MUSE_DEVICE_CODE_TIMEOUT_MS = 15 * 60_000;
 const MUSE_HOMES_DIR = '.ccs/muse-homes';
 const HOME_ID = /^[a-f0-9]{8}$/;
@@ -67,6 +66,7 @@ export type MuseSshRunner = (sshHost: string, command: string, input: string) =>
 export interface MuseLifecycleDeps {
   enabled: boolean;
   ssh?: MuseSshRunner;
+  identity?: (host: string, homeId: string | null) => Promise<string | null | undefined>;
 }
 
 const PASSED_ENV = [
@@ -138,8 +138,15 @@ export class MuseAccountLifecycle {
     const sshHost = entry.sshHost;
     const homeId = this.homeId(entry);
     const accountId = entry.id;
-    const remoteLogin = remoteLoginCommand(homeId);
-    const remoteEmail = remoteEmailCommand(homeId);
+    const commands = signInCallback(getCcsDir(), { action: 'muse-commands', homeId });
+    const remoteLogin =
+      commands?.status === 'ok' && typeof commands.remoteLogin === 'string'
+        ? commands.remoteLogin
+        : remoteLoginCommand(homeId);
+    const remoteEmail =
+      commands?.status === 'ok' && typeof commands.remoteEmail === 'string'
+        ? commands.remoteEmail
+        : remoteEmailCommand(homeId);
     const ssh = this.ssh();
     return {
       provider: 'muse',
@@ -166,12 +173,23 @@ export class MuseAccountLifecycle {
       },
       complete: async (_jobId, control: SignInCompleteControl) => {
         if (control.stopped()) throw new SignInJobStopped();
-        let email = '';
+        let raw = '';
         try {
-          email = (await ssh(sshHost, remoteEmail, '')).trim();
+          const identity = await this.deps.identity?.(sshHost, homeId);
+          raw = identity === undefined ? await ssh(sshHost, remoteEmail, '') : (identity ?? '');
         } catch {
           throw new SignInJobError('write_failed');
         }
+        const answer = signInCallback(getCcsDir(), {
+          action: 'muse-validate-email',
+          accountId,
+          email: raw,
+        });
+        if (answer?.status === 'ok') {
+          return answer.result as { accountId: string; email: string; plan: null };
+        }
+        if (answer?.status === 'refused') throw new SignInJobError('write_failed');
+        const email = raw.trim();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
           throw new SignInJobError('write_failed');
         }
