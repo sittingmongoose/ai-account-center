@@ -52,6 +52,28 @@ pub fn normalize_provider(provider: Option<&str>) -> Option<String> {
     )
 }
 
+/// True when a usage row is Kimi Code (OMP logs only). Keep in sync with
+/// `aac_usage::read::kimi::is_kimi_code_usage` and Analytics attribution.
+pub fn is_kimi_code_usage(model: Option<&str>, route: Option<&str>) -> bool {
+    let route = route.unwrap_or("").trim().to_ascii_lowercase();
+    let route = route.strip_prefix("builtin:").unwrap_or(&route);
+    if matches!(route, "kimi-code" | "kimi") {
+        return true;
+    }
+    let model = model.unwrap_or("").trim().to_ascii_lowercase();
+    let name = model.rsplit('/').next().unwrap_or(&model);
+    name == "k3" || name == "kimi-k3" || name == "kimi-for-coding" || name == "kimi-code" || name.starts_with("kimi-")
+}
+
+/// The compact/session provider id: Kimi Code rows keep the dashboard route.
+fn scan_provider(kind: &str, model: Option<&str>, logged: Option<&str>) -> Option<String> {
+    if is_kimi_code_usage(model, logged) {
+        Some("kimi-code".to_string())
+    } else {
+        remote_row_provider(kind, logged)
+    }
+}
+
 fn sha256_hex(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
@@ -150,7 +172,7 @@ pub fn to_compact(rows: &[Value]) -> Vec<Value> {
     rows.iter()
         .map(|row| {
             let kind = row["k"].as_str().unwrap_or("");
-            let provider = remote_row_provider(kind, row["p"].as_str());
+            let provider = scan_provider(kind, row["m"].as_str(), row["p"].as_str());
             let hour = row["h"].as_str().unwrap_or("").replace(' ', "T");
             let mut entry = Map::new();
             entry.insert("inputTokens".into(), json!(floor_count(&row["i"])));
@@ -191,7 +213,7 @@ pub fn to_session_aggregates(srows: &[Value]) -> Vec<Value> {
         .iter()
         .map(|row| {
             let kind = row["k"].as_str().unwrap_or("");
-            let provider = remote_row_provider(kind, row["p"].as_str());
+            let provider = scan_provider(kind, row["m"].as_str(), row["p"].as_str());
             let mut out = Map::new();
             out.insert("sessionId".into(), json!(row["s"].as_str().unwrap_or("")));
             out.insert("model".into(), json!(row["m"].as_str().unwrap_or("")));
@@ -246,10 +268,14 @@ pub fn cells_from_compact(
         }
         let hour = iso(at.div_euclid(HOUR) * HOUR);
         let provider = entry["provider"].as_str().or_else(|| entry["target"].as_str());
-        let route = label(&normalize_provider(provider).unwrap_or_default(), MAX_ROUTE).to_lowercase();
         let model_raw = {
             let raw = label(entry["model"].as_str().unwrap_or(""), MAX_MODEL);
             if raw.is_empty() { "unknown".to_string() } else { raw }
+        };
+        let route = if is_kimi_code_usage(Some(&model_raw), provider) {
+            "kimi-code".to_string()
+        } else {
+            label(&normalize_provider(provider).unwrap_or_default(), MAX_ROUTE).to_lowercase()
         };
         let raw = entry["sessionId"].as_str().unwrap_or("");
         let session_key = if raw.is_empty() {

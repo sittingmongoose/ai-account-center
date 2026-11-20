@@ -576,4 +576,86 @@ mod tests {
             .expect("repeat completed historical pass");
         assert_eq!(read(&store)["rows"], once["rows"]);
     }
+
+    #[test]
+    fn analytics_historical_omp_attributes_kimi_through_the_shared_cursor() {
+        let home = tempfile::tempdir().expect("temporary OMP home");
+        let root = home.path();
+        let engine = aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None)
+            .expect("open fixture Store");
+        let now = aac_store::engine::now_ms() as i64;
+        let at = now - 60 * super::super::DAY;
+        let stamp = aac_num::ecma::to_iso_string(at).expect("historical time");
+        let directory = root.join(".omp/agent/sessions");
+        std::fs::create_dir_all(&directory).expect("session directory");
+        let assistant = |model, provider, input, output| {
+            json!({
+                "type":"message", "timestamp":stamp,
+                "message":{"role":"assistant","model":model,"provider":provider,
+                    "usage":{"input":input,"output":output,"cacheRead":0,"cacheWrite":0}}
+            })
+        };
+        let rows = [
+            assistant("kimi-k3", "moonshotai", 40, 10),
+            assistant("qwen3-max", "alibaba", 80, 20),
+        ];
+        let body = rows
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(
+            directory.join("2026-09-21T13-00-00_kimi-composed.jsonl"),
+            body,
+        )
+        .expect("write OMP usage");
+        let request = json!({"kinds":["omp"],"minDateMs":LOOKBACK,"cwd":false});
+        let request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
+            .expect("historical scan request");
+        let answer =
+            aac_usage::protocol::scan(&request, root, &aac_usage::discover::Env::default());
+        assert_eq!(
+            answer["rows"].as_array().expect("OMP rows").len(),
+            2,
+            "{answer}"
+        );
+        let source = Source {
+            computer: "ubuntu",
+            tool: "omp",
+            epoch: 0,
+        };
+        let pricing = ResolverPricing::new(root);
+        for _ in 0..2 {
+            assert!(
+                source
+                    .accept(
+                        &engine,
+                        source.load(&engine).expect("checkpoint"),
+                        &answer,
+                        true,
+                        now,
+                        &pricing
+                    )
+                    .expect("commit historical OMP")
+            );
+        }
+        assert!(source.done(&engine).expect("historical scanner receipt"));
+        let cells = activity::dump_cells(&engine).expect("stored OMP activity");
+        assert_eq!(cells.len(), 2);
+        let find = |model: &str| {
+            &cells
+                .iter()
+                .find(|(computer, tool, row)| {
+                    computer == "ubuntu" && tool == "omp" && row.m == model
+                })
+                .expect("OMP model")
+                .2
+        };
+        let kimi = find("kimi-k3");
+        assert_eq!((kimi.r.as_str(), kimi.i, kimi.o), ("kimi-code", 40, 10));
+        let qwen = find("qwen3-max");
+        assert_ne!(qwen.r, "kimi-code");
+        assert_eq!((qwen.i, qwen.o), (80, 20));
+    }
 }

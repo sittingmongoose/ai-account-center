@@ -5,6 +5,7 @@ pub mod claude;
 pub mod codex;
 pub mod cursor;
 pub mod devin;
+pub mod kimi;
 pub mod muse;
 pub mod omp;
 pub mod sqlite;

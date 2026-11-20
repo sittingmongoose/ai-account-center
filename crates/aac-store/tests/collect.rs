@@ -132,6 +132,36 @@ fn provider_normalization_matches_the_alias_map() {
 }
 
 #[test]
+fn kimi_code_scan_rows_are_routed_to_kimi_code_not_moonshotai() {
+    assert!(collect::is_kimi_code_usage(Some("kimi-k3"), Some("moonshotai")));
+    assert!(collect::is_kimi_code_usage(Some("k3"), Some("kimi")));
+    assert!(!collect::is_kimi_code_usage(Some("qwen3-max"), Some("alibaba")));
+    assert!(!collect::is_kimi_code_usage(Some("moonshot-v1-8k"), Some("moonshotai")));
+    let rows = vec![json!({
+        "k": "omp", "f": "file-kimi", "m": "kimi-k3", "p": "moonshotai",
+        "h": "2026-10-01 15:00", "i": 40, "o": 10, "cr": 0, "cw": 0, "c": 0, "n": 1
+    })];
+    let srows = vec![json!({
+        "k": "omp", "f": "file-kimi", "s": collect::session_key("omp", "kimi-sess"),
+        "m": "kimi-k3", "p": "moonshotai", "a": 1_790_866_800_000i64, "z": 1_790_866_800_000i64,
+        "i": 40, "o": 10, "cr": 0, "cw": 0, "c": 0, "n": 1
+    })];
+    let worker = collect::worker_from_scan(
+        &rows,
+        &srows,
+        "omp",
+        "ubuntu",
+        1_795_132_800_000,
+        &aac_store::kimi_history::Unpriced,
+    );
+    let cells = worker["cells"].as_array().expect("cells");
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0]["route"], "kimi-code");
+    assert_eq!(cells[0]["modelRaw"], "kimi-k3");
+    assert_eq!(cells[0]["inputTokens"], 40);
+}
+
+#[test]
 fn session_keys_match_the_published_digest() {
     // sha256("aac-session-v1:claude:raw-session") first 16 hex; the full hash is 64 hex.
     let key = collect::session_key("claude", "raw-session");

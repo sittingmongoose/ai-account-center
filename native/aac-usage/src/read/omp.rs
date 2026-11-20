@@ -484,7 +484,11 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
     let Some(hour) = util::hour_label(epoch_ms, collector.now_ms) else {
         return;
     };
-    let provider = util::clean_provider(message.get("provider"));
+    let mut provider = util::clean_provider(message.get("provider"));
+    // Kimi Code was only used through OMP: attribute those rows to kimi-code, not OMP.
+    if super::kimi::is_kimi_code_usage(Some(&model), provider.as_deref()) {
+        provider = Some(super::kimi::KIMI_CODE_ROUTE.to_string());
+    }
     collector.add(kind, filekey, &model, provider.as_deref(), &hour, tokens, cost);
     let session = line_box.session.clone();
     let session_key = util::session_key(kind, session.as_deref());
