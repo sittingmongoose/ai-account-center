@@ -8,12 +8,19 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
-use serde_json::json;
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use serde_json::{Value, json};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::{net::TcpStream, sync::Semaphore};
 
 const PROOF: &str = "x-aac-compose-proof";
 const ACCESS: &str = "x-aac-compose-access";
+/// The public owner's live Claude Open progress, for the retained Home handler in the worker.
+const OPEN_PROGRESS: &str = "x-aac-open-progress";
 
 /// The literal second segments `/api/accounts` mounts. A request for one is never matched by
 /// the `:id` pattern: Express reaches the literal router first, and the settings family is
@@ -142,6 +149,9 @@ pub(super) struct Backend {
     proof: HeaderValue,
     slots: Arc<Semaphore>,
     pub(super) collection_fallback: bool,
+    /// Set once the boot's profile owner exists: the live Open pairs this front door forwards to
+    /// the worker's retained Home handler (the worker has no service lease in this composition).
+    open_pairs: Arc<Mutex<Option<Arc<dyn Fn() -> Value + Send + Sync>>>>,
 }
 
 impl Backend {
@@ -181,7 +191,15 @@ impl Backend {
             proof,
             slots: Arc::new(Semaphore::new(32)),
             collection_fallback,
+            open_pairs: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Attach the public Open owner so `/api/views/home` carries its live progress to the worker.
+    pub(super) fn attach_open(&self, pairs: Arc<dyn Fn() -> Value + Send + Sync>) {
+        if let Ok(mut slot) = self.open_pairs.lock() {
+            *slot = Some(pairs);
+        }
     }
 
     pub(super) async fn forward(self, mut request: Request) -> Reply {
@@ -230,6 +248,21 @@ impl Backend {
         request.headers_mut().remove("authorization");
         request.headers_mut().insert(PROOF, self.proof);
         request.headers_mut().insert(ACCESS, context);
+        // The retained Home handler runs in the worker, which owns no Open tracker in this
+        // composition: the front door's owner sends its pairs (null when this boot has none).
+        if request.uri().path() == "/api/views/home" {
+            let pairs = self
+                .open_pairs
+                .lock()
+                .ok()
+                .and_then(|slot| slot.as_ref().map(|read| read()))
+                .unwrap_or(Value::Null);
+            if let Ok(text) = serde_json::to_vec(&pairs)
+                && let Ok(value) = HeaderValue::from_str(&URL_SAFE_NO_PAD.encode(text))
+            {
+                request.headers_mut().insert(OPEN_PROGRESS, value);
+            }
+        }
         let Ok(permit) = self.slots.try_acquire_owned() else {
             return unavailable();
         };
@@ -282,6 +315,7 @@ fn clean(headers: &mut HeaderMap) {
         "upgrade",
         PROOF,
         ACCESS,
+        OPEN_PROGRESS,
     ] {
         headers.remove(name);
     }

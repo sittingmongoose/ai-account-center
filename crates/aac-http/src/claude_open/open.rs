@@ -354,6 +354,17 @@ impl ClaudeOpen {
         &self.ccs_dir
     }
 
+    /// `[profileId, operation]` pairs for this boot, the Home fed input's `opens` shape.
+    pub fn open_pairs(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.operations()
+                .for_scope(&self.ccs_dir.to_string_lossy())
+                .into_iter()
+                .map(|(id, operation)| serde_json::json!([id, operation.to_json()]))
+                .collect(),
+        )
+    }
+
     /// `resolveOpenTarget`: safe-ID shape, membership (manifest then pending), the platform
     /// launcher and the durable hold. Default-ness plays no part here.
     fn resolve_target(&self, id: &str, platform: &str) -> Result<Target, OpenErrorKind> {

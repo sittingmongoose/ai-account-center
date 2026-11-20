@@ -122,6 +122,35 @@ export async function readClaudeDesktopProfiles(req: Request, res: Response): Pr
   return profiles;
 }
 
+/** The public front door's live Open pairs for this request; undefined when it sent none. */
+type OwnerOpens = unknown[] | null | undefined;
+
+function ownerOpenProgress(req: Request): OwnerOpens {
+  const header = req.get('x-aac-open-progress');
+  if (typeof header !== 'string' || !header) return undefined;
+  try {
+    const value: unknown = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
+    if (value === null) return null;
+    return Array.isArray(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The profiles read with the front door owner's progress: each id row's operation, none when absent. */
+function applyOwnerOpens(profiles: unknown[], pairs: unknown[]): unknown[] {
+  const byId = new Map<string, unknown>();
+  for (const pair of pairs) {
+    if (Array.isArray(pair) && typeof pair[0] === 'string' && pair[0]) byId.set(pair[0], pair[1]);
+  }
+  return profiles.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const { id } = row as { id?: unknown };
+    if (typeof id !== 'string' || !id) return row;
+    return { ...row, openOperation: byId.get(id) ?? null };
+  });
+}
+
 /** Whether this request's service bound the Rust Open owner (mode on + the group on, a Linux host). */
 function opensBound(res: Response): boolean {
   const service: unknown = res.locals.rustService;
@@ -193,6 +222,9 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
           (profiles) => profiles,
           () => null
         ));
+    // The front door (which owns the Open tracker in the sidecar composition) sends its pairs on
+    // this request; the worker has no service lease there. Undefined: no header (another boot).
+    const ownerOpens = ownerOpenProgress(req);
     const fed = homeFedService(res);
     if (fed) {
       const [homeRead, inventory, profiles] = await Promise.all([
@@ -207,9 +239,16 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
       ]);
       read = homeRead;
       fedInventory = inventory ?? undefined;
-      // With the Rust Open owner bound, its live progress rides the profiles read; without it no
-      // Open operation can exist in this boot (the TS store is gone), so the list is known empty.
-      const opens = profiles ? (service.claudeOpenEnabled ? openPairs(profiles) : []) : null;
+      // The front door's owner is authoritative; otherwise, with the Rust Open owner bound its
+      // progress rides the profiles read, and without it no operation can exist in this boot.
+      const opens =
+        ownerOpens !== undefined
+          ? ownerOpens
+          : profiles
+            ? service.claudeOpenEnabled
+              ? openPairs(profiles)
+              : []
+            : null;
       if (homeRead && inventory && opens) {
         const answered = await answerHomeFed(req, res, fed, {
           platform,
@@ -232,7 +271,9 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
         : (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
             secureTransport,
           }).catch(() => null),
-      readProfiles(),
+      readProfiles().then((rows) =>
+        rows && ownerOpens ? applyOwnerOpens(rows, ownerOpens) : rows
+      ),
       (deps.readInventory ?? readAntigravityInventory)(req, res, fedInventory).catch(() => null),
     ]);
     if (!dashboard) {
