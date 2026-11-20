@@ -423,12 +423,50 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
             line_box.cwd = Some(cwd.to_string());
         }
     }
-    if !line.contains("\"type\"") || !line.contains("\"message\"") || !line.contains("\"usage\"") {
+    if !line.contains("\"type\"") || !line.contains("\"message\"") {
         return;
     }
-    let Ok(record) = serde_json::from_str::<Value>(line) else {
-        return;
+    // OMP writes role and content before usage, so a torn record usually breaks inside content and
+    // holds no `"usage"` text. Classify on the envelope that comes first, and count a whole record
+    // the writer joined onto the torn line.
+    let record = match serde_json::from_str::<Value>(line) {
+        Ok(record) => record,
+        Err(_) => {
+            if is_assistant_envelope(line) {
+                collector.note_unread_usage(kind, filekey);
+            }
+            let Some(joined) = joined_record(line) else {
+                return;
+            };
+            joined
+        }
     };
+    parse_record(&record, collector, kind, filekey, line_box);
+}
+
+/// The envelope OMP writes first: `"type":"message"` and `"role":"assistant"`, whatever the
+/// whitespace. It precedes `content`, so it survives a tear inside the text.
+fn is_assistant_envelope(line: &str) -> bool {
+    let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("\"type\":\"message\"") && compact.contains("\"role\":\"assistant\"")
+}
+
+/// A complete JSON record after a torn prefix on the same line, if the writer left one.
+fn joined_record(line: &str) -> Option<Value> {
+    for (index, _) in line.match_indices("{\"type\"") {
+        if index == 0 {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<Value>(&line[index..])
+            && record.is_object()
+        {
+            return Some(record);
+        }
+    }
+    None
+}
+
+fn parse_record(record: &Value, collector: &mut Collector, kind: &str, filekey: &str, line_box: &mut LineBox) {
     if record.get("type").and_then(Value::as_str) != Some("message") {
         return;
     }
@@ -438,9 +476,7 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return;
     }
-    let Some(model) = util::clean_model(message.get("model")) else {
-        return;
-    };
+    let model = util::clean_model(message.get("model"));
     let Some(usage) = message.get("usage").filter(|u| u.is_object()) else {
         return;
     };
@@ -450,25 +486,33 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
         util::non_negative(usage.get("cacheRead")),
         util::non_negative(usage.get("cacheWrite")),
     ];
-    if values.iter().any(Option::is_none) {
-        return;
-    }
-    let tokens = values.map(|v| util::int_of(v.unwrap_or(0.0)));
     let cost = usage
         .get("cost")
         .and_then(|c| util::non_negative(c.get("total")))
         .unwrap_or(0.0);
     // Zero-usage pings carry nothing; only usage.* is read (never cumulative counters).
-    if tokens.iter().sum::<u64>() == 0 && cost == 0.0 {
-        return;
+    if values.iter().all(Option::is_some) {
+        let counted = values.iter().flatten().copied().sum::<f64>();
+        if counted == 0.0 && cost == 0.0 {
+            return;
+        }
     }
+    let (Some(model), false) = (model, values.iter().any(Option::is_none)) else {
+        collector.note_unread_usage(kind, filekey);
+        return;
+    };
+    let tokens = values.map(|v| util::int_of(v.unwrap_or(0.0)));
     let epoch_ms = match record.get("timestamp") {
         Some(Value::String(text)) => match util::iso_ms(text) {
             Some(ms) => ms,
-            None => return,
+            None => {
+                collector.note_unread_usage(kind, filekey);
+                return;
+            }
         },
         Some(Value::Number(number)) => {
             let Some(mut seconds) = number.as_f64().map(|f| f as i64) else {
+                collector.note_unread_usage(kind, filekey);
                 return;
             };
             while seconds > 4_102_444_800 {
@@ -476,7 +520,10 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
             }
             seconds * 1000
         }
-        _ => return,
+        _ => {
+            collector.note_unread_usage(kind, filekey);
+            return;
+        }
     };
     if epoch_ms < collector.min_date_ms {
         return;
@@ -578,7 +625,13 @@ pub fn collect(
             session: session_id(&path),
             ..LineBox::default()
         };
-        match read_file_with(collector, "omp", &path, &filekey, parse_line, None, line_box) {
+        let outcome = read_file_with(collector, "omp", &path, &filekey, parse_line, None, line_box);
+        if collector.unread_usage.remove(&("omp".to_string(), filekey.clone())) {
+            // The measured date stands; this print says the file holds usage the reader could not
+            // decode, so the source's coverage is unverified until a scan reads it.
+            collector.set_pending("omp", &filekey, |print| print.unread_usage = Some(true));
+        }
+        match outcome {
             Outcome::Cut => return "ok",
             Outcome::Unreadable => {
                 // Named as failed (FIX-ROUND-BIG 3); a prefix it may have emitted is not kept.

@@ -23,12 +23,34 @@ computer as well as remote computers. Each local collector remains active until
 the scanner completes that tool's first read; binary failure or excess roots
 returns ownership to the collector. This preserves totals during takeover.
 
-A completed read is distinct from current usage coverage. The scanner retains
-per-file measured event clocks and compares them with independent log/WAL,
-installation and T3 projection activity. Activity more than one five-minute scan
-cycle newer than measured data produces a `stale` source with both dates.
-Activity is not converted into tokens or cost. An incomplete activity check is
-unverified. Old fingerprints are read once to establish their measured clocks.
+A completed read is distinct from current usage coverage. Activity is dated only
+by entries that carry usage: the newest measured event clock across the kind's
+files. A log file, SQLite database or Cursor chat store written or touched
+without a usage entry, a tool install or update, a login/token rewrite and a T3
+provider-thread record are installation or metadata signals, never activity
+dates, so they never make a source look stale. A source with no measured usage
+reports no activity date honestly (no usage, not stale). Activity more than one
+five-minute scan cycle newer than measured data still produces a `stale` source
+with both dates when a caller supplies such evidence; the native scanner itself
+keeps both clocks at the newest usage event. Activity is not converted into
+tokens or cost. Coverage completeness comes from the usage read itself:
+
+- A partial read, unreadable logs or folders, or a bounded Cursor chat listing
+  leaves current coverage unverified.
+- A usage-shaped OMP record the reader cannot decode (a torn append, a usage
+  envelope with unusable numbers) flags that file's print; the measured date
+  stands, the source reports unverified coverage, and the flag is carried
+  through unchanged rescans and cleared by a verified read. Header-only probes
+  and ordinary metadata records stay clean.
+- A write-ahead log the SQLite open could not see (`walUnread`) makes every
+  reader that emits the flag unverified on that scan, not merely annotated. A
+  database whose last print said `walUnread` is read again even when its bytes
+  are unchanged, so a log that became readable is counted.
+- Antigravity's untimed step falls back to the database's file time for its
+  numeric aggregation only. That estimate never enters the measured freshness
+  clock; the numbers are counted and the missing event date is disclosed.
+
+Old fingerprints are read once to establish their measured clocks.
 
 Cursor SDK run stores remain under `.cursor/projects/*/sdk-agent-store/*/index.db`
 on all operating systems. Current CLI chat roots include `.cursor/chats`,

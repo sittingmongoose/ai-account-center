@@ -585,8 +585,8 @@ pub fn cursor_chat_roots(home: &Path, env: &Env) -> Vec<PathBuf> {
     roots
 }
 
-/// One normal Analytics scan cycle. Filesystem/T3 activity is evidence of a possible coverage
-/// gap, never proof of token use. Nevertheless it must not be advertised as current usage.
+/// One normal Analytics scan cycle. A source is dated only by entries or files that actually carry
+/// usage: installation, login, thread and chat-store touches are never usage dates.
 pub const FRESHNESS_CYCLE_MS: i64 = 5 * 60 * 1000;
 
 pub fn freshness(
@@ -602,41 +602,6 @@ pub fn freshness(
         _ => "unknown",
     };
     json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity, "activityComplete": activity_complete})
-}
-
-/// Read only T3's provider projection metadata. The tool's own instance configuration resolves
-/// generic ACP drivers (OMP/zcode); titles, requests, responses and auth tables are never read.
-fn t3_activity(home: &Path, kind: &str, instances: &[T3Instance], deadline: Instant) -> Option<i64> {
-    let db = home.join(".t3/userdata/statev2.sqlite");
-    if !fsx::exists(&db) || Instant::now() >= deadline {
-        return None;
-    }
-    let (connection, _) = crate::read::sqlite::open(&db, deadline)?;
-    let mut statement = connection.prepare(
-        "SELECT driver, provider_instance_id, MAX(updated_at) FROM orchestration_v2_projection_provider_threads GROUP BY driver, provider_instance_id"
-    ).ok()?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .ok()?;
-    rows.filter_map(Result::ok)
-        .filter_map(|(driver, instance, at)| {
-            let matches = match kind {
-                "claude" => driver == "claudeAgent",
-                "codex" | "cursor" | "muse" | "antigravity" => driver == kind,
-                "omp" | "zcode" => instances
-                    .iter()
-                    .any(|i| i.id == instance && names_tool(&i.config, kind)),
-                _ => false,
-            };
-            matches.then(|| util::iso_ms(&at)).flatten()
-        })
-        .max()
 }
 
 fn app_dir(home: &Path, env: &Env, name: &str) -> PathBuf {
@@ -958,60 +923,36 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
     }) + failed.map_or(0, |s| s.len());
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
-    // Tool homes and binaries show installation. Only the logs and thread records date activity.
-    let mut activity = newest;
-    let activity_deadline = collector.deadline().min(Instant::now() + Duration::from_millis(750));
-    let mut activity_limited = false;
-    // Independent metadata also catches log formats the usage reader did not recognize.
-    for (root, _) in collector.root_origins.get(kind).into_iter().flatten() {
-        if collector.absent_roots.contains(&(kind.to_string(), root.clone()))
-            || collector.root_failures.contains_key(&(kind.to_string(), root.clone()))
-        {
-            continue;
-        }
-        let (_, last, cut) = count_files(
-            root,
-            &|n| {
-                [
-                    ".jsonl",
-                    ".jsonl.zst",
-                    ".db",
-                    ".sqlite",
-                    ".db-wal",
-                    ".sqlite-wal",
-                    ".pb",
-                ]
-                .iter()
-                .any(|suffix| n.ends_with(suffix))
-            },
-            activity_deadline,
-        );
-        activity = activity.into_iter().chain((last > 0).then_some(last)).max();
-        activity_limited |= cut;
-        if cut {
-            break;
-        }
-    }
-    let mut unmeasured_files = 0usize;
-    if kind == "cursor" {
-        for root in cursor_chat_roots(home, env) {
-            let (files, last, cut) = count_files(&root, &|n| n == "store.db" || n == "store.db-wal", activity_deadline);
-            activity_limited |= cut;
-            unmeasured_files += files;
-            activity = activity.into_iter().chain((last > 0).then_some(last)).max();
-        }
-    }
-    activity = activity
-        .into_iter()
-        .chain(t3_activity(home, kind, instances, collector.deadline()))
-        .max();
+    // Activity is dated only by entries that carry usage: the newest measured usage event. Tool
+    // homes, binaries, login rewrites, T3 thread records, token-less Cursor chat stores and logs
+    // touched without a usage entry are installation or metadata signals, never usage dates, so
+    // they never make a source look stale. A source with no measured usage has no activity date.
     let newest_data = collector
         .fresh
         .get(kind)
         .and_then(|prints| prints.values().filter_map(|p| p.newest_usage_ms).max());
+    let activity = newest_data;
+    // Coverage is the usage read's own completeness, not a file listing: a chat store the bounded
+    // Cursor listing cannot reach, a usage-shaped record the reader could not decode and a
+    // write-ahead log it could not see all leave current coverage unverified.
+    let unread_usage = collector
+        .fresh
+        .get(kind)
+        .is_some_and(|prints| prints.values().any(|p| p.unread_usage == Some(true)));
+    let wal_unread = collector.kind_wal_unread.contains(kind) || (kind == "zcode" && collector.wal_unread);
+    let mut activity_limited = collector.usage_partial.contains(kind) || unread_usage || wal_unread;
+    let mut unmeasured_files = 0usize;
+    if kind == "cursor" {
+        let deadline = collector.deadline().min(Instant::now() + Duration::from_millis(750));
+        for root in cursor_chat_roots(home, env) {
+            let (files, _, cut) = count_files(&root, &|n| n == "store.db" || n == "store.db-wal", deadline);
+            activity_limited |= cut;
+            unmeasured_files += files;
+        }
+    }
     let signals = installed_signals(home, env, kind, instances);
     let coverage = freshness(newest_data, activity, collector.min_date_ms, !activity_limited);
-    json!({
+    let mut discovered = json!({
         "installed": !roots.is_empty() || !signals.is_empty(),
         "signals": signals,
         "freshness": coverage,
@@ -1024,7 +965,21 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
             "filesFailed": collector.read_failures.get(kind).map_or(0, |s| s.len()),
             "newestMtime": newest.map(Value::from).unwrap_or(Value::Null),
         },
-    })
+    });
+    if unread_usage {
+        discovered["unreadUsage"] = Value::Bool(true);
+    }
+    if collector.estimated_clocks.contains(kind)
+        || collector
+            .fresh
+            .get(kind)
+            .is_some_and(|prints| prints.values().any(|p| p.estimated_clock == Some(true)))
+    {
+        // Disclosed: the numbers are counted, their date is a file-time estimate and never a
+        // measured usage event. The flag on the file's print keeps it across unchanged rescans.
+        discovered["estimatedClock"] = Value::Bool(true);
+    }
+    discovered
 }
 
 pub const EXPERIMENT_MAX_DEPTH: usize = 4;

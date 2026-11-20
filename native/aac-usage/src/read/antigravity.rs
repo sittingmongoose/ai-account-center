@@ -983,16 +983,32 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
         let tokens = [uncached, output, cached, written];
         collector.add("antigravity", &storekey, &model, None, &hour, tokens, 0.0);
         let session_key = util::session_key("antigravity", Some(&group.session));
-        collector.sadd(
-            "antigravity",
-            &storekey,
-            session_key.as_deref(),
-            &model,
-            None,
-            epoch_ms,
-            tokens,
-            0.0,
-        );
+        // A step with no timestamp and no trajectory date is stamped with the database's file
+        // time. The number is still counted, but a file time never becomes a usage date: the
+        // session row keeps it for parity and the measured freshness clock stays without it.
+        if group.quality == 0 {
+            collector.sadd_estimated(
+                "antigravity",
+                &storekey,
+                session_key.as_deref(),
+                &model,
+                None,
+                epoch_ms,
+                tokens,
+                0.0,
+            );
+        } else {
+            collector.sadd(
+                "antigravity",
+                &storekey,
+                session_key.as_deref(),
+                &model,
+                None,
+                epoch_ms,
+                tokens,
+                0.0,
+            );
+        }
         collector.note_session("antigravity", &group.session, None);
     }
     collector.agy_unreadable = state.unreadable;

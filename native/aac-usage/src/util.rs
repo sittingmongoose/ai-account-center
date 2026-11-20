@@ -186,6 +186,13 @@ pub struct Print {
     pub unreadable_records: Option<u64>,
     /// The last read was immutable while the write-ahead log held rows: said again while unchanged.
     pub wal_unread: Option<bool>,
+    /// A usage-shaped record this file holds could not be decoded: the file's earlier measurement
+    /// stands, but coverage is unverified. Retained through unchanged scans, cleared on a verified
+    /// read.
+    pub unread_usage: Option<bool>,
+    /// The file's numbers include a date the reader had to estimate from the file's time: counted,
+    /// but the measured clock never uses it.
+    pub estimated_clock: Option<bool>,
     /// The newest measured usage event in this file, retained through unchanged scans. None
     /// means no event was measured, not a zero-token event. `usage_clock` versions this evidence.
     pub newest_usage_ms: Option<i64>,
@@ -258,6 +265,8 @@ impl Print {
             progress: None,
             unreadable_records: None,
             wal_unread: None,
+            unread_usage: None,
+            estimated_clock: None,
             newest_usage_ms: None,
             usage_clock: false,
         }
@@ -306,6 +315,12 @@ impl Print {
         }
         if let Some(wal) = self.wal_unread {
             map.insert("walUnread".into(), Value::from(wal));
+        }
+        if let Some(unread) = self.unread_usage {
+            map.insert("unreadUsage".into(), Value::from(unread));
+        }
+        if let Some(estimated) = self.estimated_clock {
+            map.insert("estimatedClock".into(), Value::from(estimated));
         }
         if let Some(progress) = &self.progress {
             if let Some(through) = progress.through {
