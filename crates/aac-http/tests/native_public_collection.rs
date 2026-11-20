@@ -201,7 +201,7 @@ else:
             "agent-catalog.json",
             json!({"artifacts":[{
                 "file":ssh,"target":"aarch64-apple-darwin","version":"0.1.0",
-                "sha256":aac_core::sha256_hex(&fs::read(&ssh).unwrap())
+                "sha256":aac_core::sha256_hex(fs::read(&ssh).unwrap())
             }]}),
         );
     }
