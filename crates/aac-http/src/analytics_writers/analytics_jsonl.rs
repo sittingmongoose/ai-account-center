@@ -275,13 +275,16 @@ fn file_rows(
     let mut rows: Vec<Value> = Vec::new();
     let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut fault = None;
-    let Ok(bytes) = std::fs::read(file) else {
-        return (rows, Some("read_failed"));
+    use aac_files::read::{Read, ReadPolicy};
+
+    let bytes = match aac_files::read::read(file, &ReadPolicy::capped(budget.bytes)) {
+        Read::Bytes(bytes, _) => bytes,
+        Read::TooLarge => {
+            budget.bytes = 0;
+            return (rows, Some("source_limit"));
+        }
+        _ => return (rows, Some("read_failed")),
     };
-    if bytes.len() as u64 > budget.bytes {
-        budget.bytes = 0;
-        return (rows, Some("source_limit"));
-    }
     budget.bytes -= bytes.len() as u64;
     let name = file.to_string_lossy();
     for line in bytes.split(|byte| *byte == b'\n') {
