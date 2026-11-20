@@ -5,7 +5,6 @@
 //! coordinator cannot know that host state, so the producer asks it here and applies the same
 //! post-projection the TS dashboard applied after the failover service returned.
 use super::Producer;
-use crate::agent_transport::Selector;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -83,16 +82,14 @@ impl Producer {
         if let Some(probe) = self.mac_session_fixture {
             return Some(probe(alias, &launcher));
         }
-        self.agents
-            .call_value(
-                "claude-host",
-                Selector::usage("mac", Some(alias)),
-                json!({"host": "mac", "op": "session", "launcher": launcher}),
-                25_000,
-                30_000,
-                65_536,
-            )
-            .await
+        crate::claude_host::call(
+            &self.agents,
+            "mac",
+            alias,
+            json!({"host": "mac", "op": "session", "launcher": launcher}),
+            25_000,
+        )
+        .await
     }
 }
 

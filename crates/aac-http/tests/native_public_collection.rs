@@ -56,12 +56,50 @@ async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker
              "credential":{"kind":"discover"}}
         ]}),
     );
+    file(
+        &root,
+        "claude-desktop-profiles.json",
+        json!({"version":1,"profiles":[{
+            "id":"fixture-mac","email":"fixture@example.invalid",
+            "mac":{"launcherName":"Claude Fixture","launcherPath":"/Applications/Claude Fixture.app",
+                "profilePath":"/Users/fixture/Library/Application Support/Claude-fixture",
+                "sshHost":"fixture-mac"}
+        }]}),
+    );
+    let ssh = root.join("ssh");
+    fs::write(
+        &ssh,
+        r#"#!/usr/bin/python3
+import json
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if args[0] == "-G":
+    sys.exit(0)
+assert args[-3:-1] == ["--", "fixture-mac"]
+assert "StrictHostKeyChecking=yes" in args
+assert args[-1].startswith('/usr/bin/python3 -c ')
+envelope = json.load(sys.stdin)
+assert envelope["request"] == {
+    "op": "session",
+    "profilePath": "/Users/fixture/Library/Application Support/Claude-fixture",
+    "launcherName": "Claude Fixture",
+}
+Path(__file__).with_name("host-session").write_text("session fixture-mac")
+print('{"signedIn":false}')
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths([root.clone(), "/usr/bin".into(), "/bin".into()]).unwrap();
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
     drop(socket);
     let mut child = Command::new(env!("CARGO_BIN_EXE_ai-account-center"))
         .args(["dashboard", "--no-open", "--host", "127.0.0.1", "--port"])
         .arg(address.port().to_string())
+        .env("PATH", path)
         .env("CCS_HOME", &root)
         .env("CCS_DIR", &root)
         .env("AAC_TS_SIDECAR", "off")
@@ -123,9 +161,37 @@ async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker
     .unwrap();
     let tag = current.headers()[header::ETAG].clone();
     let accounts = json_reply(current, StatusCode::OK, true).await;
-    let row = accounts["accounts"][0].clone();
-    assert_eq!(row["id"], "cursor:usage");
+    let row = accounts["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "cursor:usage")
+        .unwrap()
+        .clone();
     assert_eq!(row["status"], "unavailable");
+    let mac = client
+        .get(format!("{base}/api/accounts/dashboard?platform=mac"))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap();
+    let mac = json_reply(mac, StatusCode::OK, true).await;
+    let profile = mac["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "claude:fixture-mac")
+        .unwrap();
+    assert_eq!(
+        profile["signInNeeded"],
+        json!(["mac"]),
+        "agent-off Mac sign-in probe"
+    );
+    assert_eq!(profile["status"], "needs_sign_in");
+    assert_eq!(
+        fs::read_to_string(root.join("host-session")).unwrap(),
+        "session fixture-mac"
+    );
     let current = get()
         .header(header::IF_NONE_MATCH, tag.clone())
         .send()
