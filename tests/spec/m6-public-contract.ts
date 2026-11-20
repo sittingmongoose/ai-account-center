@@ -173,7 +173,8 @@ if (mode !== 'fixture') {
 }
 if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')) {
   Object.assign(environment, {
-    AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+    AAC_RUST_CUT_NATIVE_ROUTES:
+      mode === 'cut-rust-only' ? 'on' : (environment.AAC_RUST_CUT_NATIVE_ROUTES ?? 'off'),
     AAC_RUST_GROUP_APP_UPDATES: 'on',
     AAC_RUST_GROUP_COLLECTION: 'on',
     AAC_AGENT_VERBS: 'off',
