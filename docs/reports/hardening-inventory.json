@@ -766,12 +766,12 @@
           "loc": 1337
         },
         {
-          "file": "src/antigravity/registry.ts",
-          "loc": 1154
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 1158
         },
         {
-          "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1114
+          "file": "src/antigravity/registry.ts",
+          "loc": 1154
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
@@ -795,7 +795,7 @@
         },
         {
           "file": "src/web-server/status/status-service.ts",
-          "loc": 821
+          "loc": 828
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",

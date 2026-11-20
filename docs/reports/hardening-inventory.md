@@ -88,13 +88,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/status/answers.ts` | 1985 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1719 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
+| `src/web-server/status/status-collectors.ts` | 1158 |
 | `src/antigravity/registry.ts` | 1154 |
-| `src/web-server/status/status-collectors.ts` | 1114 |
 | `src/web-server/services/usage-failover-service.ts` | 1084 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/account-dashboard-service.ts` | 993 |
 | `src/web-server/status/status-view.ts` | 903 |
 | `src/web-server/services/account-analytics-service.ts` | 887 |
-| `src/web-server/status/status-service.ts` | 821 |
+| `src/web-server/status/status-service.ts` | 828 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
 
