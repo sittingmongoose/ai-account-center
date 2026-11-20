@@ -7,16 +7,19 @@
 //! composed view per (filters, generation) for 60 s, as the TypeScript service does; a hit
 //! fills only `cacheAgeSeconds`. The front door forwards the filters, the clock and the
 //! facts generation; anything unproven declines and today's handler answers.
+//!
+//! When the store is off or a store read is declined (the lock held), the owner still answers
+//! from a bounded, validated share scan: history filters stay off, and the runs state names
+//! that share read.
 
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
 use aac_files::registry::{Owners, Role};
 use aac_status::model_identity::{AliasTable, Model, normalize_model};
 use aac_status::read_context::{Date, Presentation};
-use aac_status::share::NodeFs;
-use aac_status::share::Problem;
 use aac_status::share::catalog::{self, CatalogReader};
 use aac_status::share::check::{ReadersCheckWriter, RunRow};
+use aac_status::share::{NodeFs, Problem, ReadError, ShareFs, is_missing, showable};
 use aac_status::validate;
 use aac_views::decline::Decline;
 use aac_views::js_json::Writer;
@@ -25,7 +28,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -44,6 +47,10 @@ const READ_CACHE_ENTRIES: usize = 8;
 const RUN_CAP: usize = 32 * 1024;
 const THREAD_CAP: usize = 16 * 1024;
 const CATALOG_CAP: usize = 256 * 1024;
+/// Share-only reads use the TypeScript `RunsReader` caps (newest days kept).
+const SHARE_WRITER_CAP: usize = 20_000;
+const SHARE_RUN_CAP: usize = 50_000;
+const SHARE_BYTE_CAP: u64 = 256 * 1024 * 1024;
 
 /// The fixed reason for a file whose name looks like a credential (the store's words too).
 const SECRET_NAME_REASON: &str = "refused: its file name looks like a credential";
@@ -147,6 +154,13 @@ struct StoreFacts {
     status_runs: Json,
 }
 
+/// What a share-only read reports instead of store history (`RunsReader.snapshot`).
+struct ShareRead {
+    state: String,
+    scanned_at: Option<u64>,
+    skipped: Json,
+}
+
 struct HeldRuns {
     key: (u64, String),
     /// Each row as `runsQuery` returns it (no `_cursor`), with its cursor's time.
@@ -159,6 +173,8 @@ struct HeldRuns {
     docs: Mutex<Option<(String, Arc<PreparedDocs>)>>,
     /// The readers-check rows of the snapshot's receipts (made on first use).
     accepted_rows: std::sync::OnceLock<Vec<RunRow>>,
+    /// Present when this snapshot came from the share, not `runsQuery`.
+    share: Option<ShareRead>,
 }
 
 impl HeldRuns {
@@ -187,7 +203,13 @@ impl HeldRuns {
             accepted,
             docs: Mutex::new(None),
             accepted_rows: std::sync::OnceLock::new(),
+            share: None,
         }
+    }
+
+    fn with_share(mut self, share: ShareRead) -> Self {
+        self.share = Some(share);
+        self
     }
 
     /// The rows `runsQuery` answers this query with, in its order (indices into `rows`).
@@ -281,6 +303,10 @@ pub(crate) struct ScoreboardOwned {
     /// The view-cache keys being composed now: one compose per key at a time.
     composing: Mutex<std::collections::HashSet<String>>,
     last_full_at: AtomicU64,
+    /// Set when the last completed snapshot was the share fallback, not a store page.
+    share_fallback: AtomicBool,
+    /// When the share snapshot in `held_runs` was taken (the 60 s reuse window).
+    share_held_at: AtomicU64,
     /// The readers-check rows this owner shares with the Status owner (one file per writer).
     check: Arc<Mutex<ReadersCheckWriter>>,
     owners: Owners,
@@ -314,6 +340,8 @@ impl ScoreboardOwned {
             parsed_facts: Mutex::new(None),
             composing: Mutex::new(std::collections::HashSet::new()),
             last_full_at: AtomicU64::new(0),
+            share_fallback: AtomicBool::new(false),
+            share_held_at: AtomicU64::new(0),
             check,
             owners,
             flushing,
@@ -488,9 +516,24 @@ impl ScoreboardOwned {
     /// the request's clock: TS reads the store inside the request, at the instant its view
     /// builder formats, and the forwarded presentation facts hold exactly that instant; a
     /// service-clock stamp a few ms later has no date fact and the compose declines.
+    /// Scan the catalog when this owner has none yet, so a store-off answer is not `stale`.
+    fn ensure_catalog(&self, now: u64) {
+        if self
+            .catalog_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_null()
+        {
+            self.catalog_pass(now);
+        }
+    }
+
     /// The held unfiltered snapshot for the owner's current (generation, catalog hash), read
-    /// once from the store when the generation moved (see [`HeldRuns`]).
+    /// once from the store when the generation moved (see [`HeldRuns`]). A disabled or declined
+    /// store falls back to a bounded share scan instead of empty runs or an Internal decline.
     async fn held(&self, clock: Option<u64>) -> Result<Arc<HeldRuns>, Decline> {
+        let now = clock.unwrap_or_else(now_ms);
+        self.ensure_catalog(now);
         let key = self.generation();
         let held = self
             .held_runs
@@ -499,41 +542,66 @@ impl ScoreboardOwned {
             .clone()
             .filter(|held| held.key == key);
         if let Some(held) = held {
-            return Ok(held);
+            let share_fresh = held.share.is_none()
+                || now.saturating_sub(self.share_held_at.load(Ordering::SeqCst)) < CACHE_MS;
+            if share_fresh {
+                return Ok(held);
+            }
         }
         if self.store.is_none() {
-            let held = Arc::new(HeldRuns::new(key, Vec::new(), Vec::new(), None));
-            *self.held_runs.lock().unwrap_or_else(|p| p.into_inner()) = Some(held.clone());
-            return Ok(held);
+            return self.share_held(clock).await;
         }
         // One unfiltered read of the snapshot, with the rows' cursors and the receipts.
-        let full = self
+        match self
             .read_store(
                 &json!({"includeReceipts": true, "includeCursors": true}),
                 clock,
             )
-            .await?;
-        let rows = full
-            .runs
-            .into_iter()
-            .map(|mut row| {
-                let at = row["_cursor"][0].as_u64().unwrap_or(0);
-                if let Some(object) = row.as_object_mut() {
-                    object.remove("_cursor");
+            .await
+        {
+            Ok(full) => {
+                self.share_fallback.store(false, Ordering::SeqCst);
+                let rows = full
+                    .runs
+                    .into_iter()
+                    .map(|mut row| {
+                        let at = row["_cursor"][0].as_u64().unwrap_or(0);
+                        if let Some(object) = row.as_object_mut() {
+                            object.remove("_cursor");
+                        }
+                        (at, row)
+                    })
+                    .collect();
+                let held = Arc::new(HeldRuns::new(
+                    (full.generation, key.1.clone()),
+                    rows,
+                    full.problems,
+                    full.accepted,
+                ));
+                // Held only when the read is the snapshot the owner names (an ingest may have landed).
+                if held.key == key {
+                    *self.held_runs.lock().unwrap_or_else(|p| p.into_inner()) = Some(held.clone());
                 }
-                (at, row)
-            })
-            .collect();
-        let held = Arc::new(HeldRuns::new(
-            (full.generation, key.1.clone()),
-            rows,
-            full.problems,
-            full.accepted,
-        ));
-        // Held only when the read is the snapshot the owner names (an ingest may have landed).
-        if held.key == key {
-            *self.held_runs.lock().unwrap_or_else(|p| p.into_inner()) = Some(held.clone());
+                Ok(held)
+            }
+            Err(_) => self.share_held(clock).await,
         }
+    }
+
+    /// Bounded, validated share runs when history is off or the store will not answer.
+    async fn share_held(&self, clock: Option<u64>) -> Result<Arc<HeldRuns>, Decline> {
+        let now = clock.unwrap_or_else(now_ms);
+        self.ensure_catalog(now);
+        let root = self.root.clone();
+        let scan = tokio::task::spawn_blocking(move || scan_share_runs(&root, now))
+            .await
+            .map_err(|_| Decline::Internal)?;
+        self.share_fallback.store(true, Ordering::SeqCst);
+        self.share_held_at.store(now, Ordering::SeqCst);
+        let held = Arc::new(
+            HeldRuns::new(self.generation(), scan.rows, scan.problems, None).with_share(scan.read),
+        );
+        *self.held_runs.lock().unwrap_or_else(|p| p.into_inner()) = Some(held.clone());
         Ok(held)
     }
 
@@ -627,9 +695,14 @@ impl ScoreboardOwned {
     }
 
     /// The runs as the view builder reads them (`RunsStore.state`), from the store.
+    /// Share-only snapshots ignore history filters (they are advertised unavailable).
     async fn runs_state(&self, query: &Json, clock: Option<u64>) -> Result<Json, Decline> {
         let held = self.held(clock).await?;
-        let picked = held.pick(query);
+        let picked = if held.share.is_some() {
+            (0..held.rows.len()).collect()
+        } else {
+            held.pick(query)
+        };
         self.state_of(&held, &picked, clock.unwrap_or_else(now_ms))
             .await
     }
@@ -713,20 +786,26 @@ impl ScoreboardOwned {
         let refused = &store_facts.refused;
         let safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
         let pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
-        let mut problems: Vec<Json> = refused
-            .iter()
-            .map(|row| {
-                let hash = row["pathHash"].as_str().unwrap_or_default();
-                json!({
-                    "file": safe_paths.get(hash).cloned().unwrap_or_else(|| {
-                        format!("refused/{NAME_WITHHELD} {}", &hash[..hash.len().min(12)])
-                    }),
-                    "reason": row["reason"].as_str().unwrap_or("refused"),
-                    "since": row["atMs"],
+        let mut problems: Vec<Json> = if held.share.is_some() {
+            Vec::new()
+        } else {
+            refused
+                .iter()
+                .map(|row| {
+                    let hash = row["pathHash"].as_str().unwrap_or_default();
+                    json!({
+                        "file": safe_paths.get(hash).cloned().unwrap_or_else(|| {
+                            format!("refused/{NAME_WITHHELD} {}", &hash[..hash.len().min(12)])
+                        }),
+                        "reason": row["reason"].as_str().unwrap_or("refused"),
+                        "since": row["atMs"],
+                    })
                 })
-            })
-            .collect();
-        problems.extend(pass.problems.iter().cloned());
+                .collect()
+        };
+        if held.share.is_none() {
+            problems.extend(pass.problems.iter().cloned());
+        }
         problems.extend(held.problems.iter().cloned());
         drop(safe_paths);
         let mut writers = std::collections::HashSet::new();
@@ -747,13 +826,25 @@ impl ScoreboardOwned {
             .collect();
         // Built by moving the rows in (`json!` would serialize, a deep copy of every row).
         let writers = writers.len();
-        let state = if self.store.is_none() {
+        let state = if let Some(share) = &held.share {
+            share.state.as_str()
+        } else if self.store.is_none() {
             "disabled"
         } else if pass.state.is_empty() {
             "ok"
         } else {
             pass.state.as_str()
         };
+        let scanned_at = if let Some(share) = &held.share {
+            share.scanned_at
+        } else {
+            self.store.as_ref().map(|_| clock)
+        };
+        let skipped = held
+            .share
+            .as_ref()
+            .map(|share| share.skipped.clone())
+            .unwrap_or_else(|| json!({"runFiles": 0, "writerFolders": 0}));
         let mut out = Map::new();
         out.insert("correctionsResolved".to_string(), Json::Bool(true));
         out.insert(
@@ -764,16 +855,10 @@ impl ScoreboardOwned {
             },
         );
         out.insert("state".to_string(), json!(state));
-        out.insert(
-            "scannedAt".to_string(),
-            json!(self.store.as_ref().map(|_| clock)),
-        );
+        out.insert("scannedAt".to_string(), json!(scanned_at));
         out.insert("runs".to_string(), Json::Array(runs));
         out.insert("writers".to_string(), json!(writers));
-        out.insert(
-            "skipped".to_string(),
-            json!({"runFiles": 0, "writerFolders": 0}),
-        );
+        out.insert("skipped".to_string(), skipped);
         out.insert("problems".to_string(), Json::Array(problems));
         Ok(Json::Object(out))
     }
@@ -945,10 +1030,6 @@ impl ScoreboardOwned {
             .feeds
             .current("scoreboard-facts", &feed.facts)
             .map_err(|_| Decline::Stale)?;
-        let filtered = feed.from.is_some()
-            || feed.to.is_some()
-            || feed.source != "all"
-            || feed.task_type.is_some();
         let mut query = Map::new();
         if let Some(from_ms) = feed.from_ms {
             query.insert("fromMs".to_string(), json!(from_ms));
@@ -965,15 +1046,20 @@ impl ScoreboardOwned {
             query.insert("taskType".to_string(), json!(task_type));
         }
         let query = Json::Object(query);
-        let cache_key = json!([
-            feed.from,
-            feed.to,
-            feed.source,
-            feed.task_type,
-            generation,
-            catalog_hash
-        ])
-        .to_string();
+        let share_hint = self.store.is_none() || self.share_fallback.load(Ordering::SeqCst);
+        let cache_key = if share_hint {
+            format!("share:{generation}:{catalog_hash}")
+        } else {
+            json!([
+                feed.from,
+                feed.to,
+                feed.source,
+                feed.task_type,
+                generation,
+                catalog_hash
+            ])
+            .to_string()
+        };
         let now = feed.now.max(0) as u64;
         // The 60 s view cache: a hit fills only cacheAgeSeconds, as the TS service does.
         {
@@ -1019,8 +1105,19 @@ impl ScoreboardOwned {
         let now_date =
             Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Shape)?;
         // The held snapshot answers every filter: the store is read once per generation.
+        // Share-only snapshots ignore history filters (they are advertised unavailable).
         let held = self.held(Some(now)).await?;
-        let picked = held.pick(&query);
+        let share_only = held.share.is_some();
+        let picked = if share_only {
+            (0..held.rows.len()).collect::<Vec<_>>()
+        } else {
+            held.pick(&query)
+        };
+        let filtered = !share_only
+            && (feed.from.is_some()
+                || feed.to.is_some()
+                || feed.source != "all"
+                || feed.task_type.is_some());
         let runs = self.state_rows(&held, &picked, now, false, false).await?;
         self.record_check_held(&held, &picked, &runs);
         let join_reviews = if filtered {
@@ -1059,8 +1156,16 @@ impl ScoreboardOwned {
         let order: Option<Vec<usize>> =
             positions.map(|positions| picked.iter().map(|&index| positions[index]).collect());
         let store_facts = self.store_facts().await;
-        let identity = store_facts.identity.clone();
-        let status_runs = store_facts.status_runs.clone();
+        let identity = if share_only {
+            Json::Null
+        } else {
+            store_facts.identity.clone()
+        };
+        let status_runs = if share_only {
+            Json::Null
+        } else {
+            store_facts.status_runs.clone()
+        };
         let task_types: Vec<Json> = catalog["taskTypes"]
             .as_array()
             .map(|rows| {
@@ -1088,18 +1193,18 @@ impl ScoreboardOwned {
             "finish".to_string(),
             json!({
                 "filters": {
-                    "from": feed.from,
-                    "to": feed.to,
-                    "source": feed.source,
-                    "taskType": feed.task_type,
-                    "available": true,
+                    "from": if share_only { Json::Null } else { json!(feed.from) },
+                    "to": if share_only { Json::Null } else { json!(feed.to) },
+                    "source": if share_only { Json::from("all") } else { json!(feed.source) },
+                    "taskType": if share_only { Json::Null } else { json!(feed.task_type) },
+                    "available": !share_only,
                     "taskTypes": task_types,
                 },
                 "identity": identity,
                 "history": {
-                    "store": if self.store.is_some() { "on" } else { "off" },
+                    "store": if share_only || self.store.is_none() { "off" } else { "on" },
                     "runs": status_runs,
-                    "importing": importing,
+                    "importing": !share_only && importing,
                 },
                 "native": true,
             }),
@@ -1148,13 +1253,18 @@ impl ScoreboardOwned {
     pub(crate) async fn inputs(&self) -> Result<Json, Decline> {
         let (generation, catalog_hash) = self.generation();
         let runs = self.runs_state(&json!({}), None).await?;
+        let held = self.held(None).await?;
         let catalog = self
             .catalog_state
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
         let docs = self.normalized_docs(&runs, &catalog);
-        let identity = self.store_facts().await.identity.clone();
+        let identity = if held.share.is_some() {
+            Json::Null
+        } else {
+            self.store_facts().await.identity.clone()
+        };
         let seed_failures = self
             .seed_failures
             .lock()
@@ -1168,7 +1278,338 @@ impl ScoreboardOwned {
             "docs": docs,
             "identity": identity,
             "seedFailures": seed_failures,
+            "shareOnly": held.share.is_some(),
         }))
+    }
+}
+
+struct ShareScan {
+    rows: Vec<(u64, Json)>,
+    problems: Vec<Json>,
+    read: ShareRead,
+}
+
+fn date_folder(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+}
+
+fn newest_date(dates: &[String]) -> String {
+    dates.iter().max().cloned().unwrap_or_default()
+}
+
+fn share_problem(file: impl Into<String>, reason: impl Into<String>, since: u64) -> Json {
+    json!({ "file": file.into(), "reason": reason.into(), "since": since })
+}
+
+fn ended_at_ms(value: &Json) -> u64 {
+    u64::try_from(
+        value
+            .as_str()
+            .and_then(aac_store::run_schema::iso_ms)
+            .unwrap_or(0)
+            .max(0),
+    )
+    .unwrap_or_default()
+}
+
+fn list_or_problem(
+    fs: &NodeFs,
+    dir: &Path,
+    rel: &str,
+    problems: &mut Vec<Json>,
+    now: u64,
+) -> Option<Vec<aac_status::share::Dirent>> {
+    match fs.list(dir) {
+        Ok(entries) => Some(entries),
+        Err(_) => {
+            problems.push(share_problem(rel, "folder could not be listed", now));
+            None
+        }
+    }
+}
+
+/// Bounded, validated share run reads (`RunsReader`): writer/run/byte caps, the run@1
+/// projection, the secret filter, and the newest copy of each run id.
+#[allow(clippy::too_many_lines)]
+fn scan_share_runs(root: &Path, now: u64) -> ShareScan {
+    let fs = NodeFs;
+    let writers_dir = root.join("v1").join("writers");
+    let listed = match fs.list(&writers_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            let state = if is_missing(&error) {
+                "missing"
+            } else {
+                "error"
+            };
+            return ShareScan {
+                rows: Vec::new(),
+                problems: Vec::new(),
+                read: ShareRead {
+                    state: state.to_string(),
+                    scanned_at: Some(now),
+                    skipped: json!({ "runFiles": 0, "writerFolders": 0 }),
+                },
+            };
+        }
+    };
+    let mut problems = Vec::new();
+    let mut names: Vec<String> = listed
+        .into_iter()
+        .filter(|entry| {
+            !entry.name.starts_with('.') && entry.is_dir && validate::is_writer_name(&entry.name)
+        })
+        .map(|entry| entry.name)
+        .collect();
+    names.sort();
+    let mut ranked: Vec<(String, Vec<String>)> = Vec::new();
+    for name in &names {
+        let writer_rel = format!("writers/{name}");
+        let Some(in_writer) = list_or_problem(
+            &fs,
+            &writers_dir.join(name),
+            &writer_rel,
+            &mut problems,
+            now,
+        ) else {
+            ranked.push((name.clone(), Vec::new()));
+            continue;
+        };
+        if !in_writer
+            .iter()
+            .any(|entry| entry.name == "runs" && entry.is_dir)
+        {
+            ranked.push((name.clone(), Vec::new()));
+            continue;
+        }
+        let runs_rel = format!("{writer_rel}/runs");
+        let Some(entries) = list_or_problem(
+            &fs,
+            &writers_dir.join(name).join("runs"),
+            &runs_rel,
+            &mut problems,
+            now,
+        ) else {
+            ranked.push((name.clone(), Vec::new()));
+            continue;
+        };
+        let mut dates = Vec::new();
+        for entry in entries {
+            if entry.name.starts_with('.') {
+                continue;
+            }
+            if !entry.is_dir {
+                if showable(&entry.name) {
+                    problems.push(share_problem(
+                        format!("{runs_rel}/{}", entry.name),
+                        "is not a folder",
+                        now,
+                    ));
+                }
+                continue;
+            }
+            if !date_folder(&entry.name) {
+                if showable(&entry.name) {
+                    problems.push(share_problem(
+                        format!("{runs_rel}/{}", entry.name),
+                        "folder name is not a date",
+                        now,
+                    ));
+                }
+                continue;
+            }
+            dates.push(entry.name);
+        }
+        ranked.push((name.clone(), dates));
+    }
+    ranked.sort_by(|left, right| {
+        newest_date(&right.1)
+            .cmp(&newest_date(&left.1))
+            .then(left.0.cmp(&right.0))
+    });
+    let writer_skipped = ranked.len().saturating_sub(SHARE_WRITER_CAP);
+    if writer_skipped > 0 {
+        problems.push(share_problem(
+            "limits/run-writers",
+            format!(
+                "{writer_skipped} writer folders past the limit of {SHARE_WRITER_CAP} were not listed (writers rank by their newest run-date folder, which may be empty, so a newer empty date folder can outrank a writer with newer runs), so their run files are not read and not counted: the not-read run file count is a lower bound"
+            ),
+            now,
+        ));
+    }
+    let mut candidates: Vec<(String, String, PathBuf)> = Vec::new();
+    for (name, dates) in ranked.into_iter().take(SHARE_WRITER_CAP) {
+        for date in dates {
+            let date_rel = format!("writers/{name}/runs/{date}");
+            let date_dir = writers_dir.join(&name).join("runs").join(&date);
+            let Some(entries) = list_or_problem(&fs, &date_dir, &date_rel, &mut problems, now)
+            else {
+                continue;
+            };
+            for file in entries {
+                if file.name.starts_with('.') || !file.name.ends_with(".json") {
+                    continue;
+                }
+                if !aac_store::run_schema::run_file_name_readable(&file.name) {
+                    continue;
+                }
+                if !file.is_file {
+                    problems.push(share_problem(
+                        format!("{date_rel}/{}", file.name),
+                        "is not a regular file",
+                        now,
+                    ));
+                    continue;
+                }
+                candidates.push((
+                    date.clone(),
+                    format!("{date_rel}/{}", file.name),
+                    date_dir.join(&file.name),
+                ));
+            }
+        }
+    }
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+    let mut visited = 0usize;
+    let mut bytes = 0u64;
+    let mut files = Vec::new();
+    for (_date, rel, abs) in &candidates {
+        if visited >= SHARE_RUN_CAP || bytes >= SHARE_BYTE_CAP {
+            break;
+        }
+        let size = fs.stat(abs).ok().map(|stat| stat.size).unwrap_or(0);
+        bytes = bytes.saturating_add(size);
+        visited += 1;
+        files.push((rel.clone(), abs.clone()));
+    }
+    let skipped_runs = candidates.len().saturating_sub(visited);
+    if skipped_runs > 0 {
+        problems.push(share_problem(
+            "limits/runs",
+            format!(
+                "{skipped_runs} run files past the limit of {SHARE_RUN_CAP} run files or {} MB were not read (the newest days are kept)",
+                SHARE_BYTE_CAP / (1024 * 1024)
+            ),
+            now,
+        ));
+    }
+    let mut parsed: Vec<(u64, Json)> = Vec::new();
+    for (rel, abs) in files {
+        if aac_status::secret_policy::find_secret(&rel).is_some() {
+            problems.push(share_problem(shown(&rel), SECRET_NAME_REASON, now));
+            continue;
+        }
+        let bytes = match fs.read(&abs, RUN_CAP) {
+            Ok(bytes) => bytes,
+            Err(ReadError::OverCap) => {
+                problems.push(share_problem(
+                    rel,
+                    format!("larger than the {} KB cap", RUN_CAP / 1024),
+                    now,
+                ));
+                continue;
+            }
+            Err(_) => {
+                problems.push(share_problem(rel, "could not be read", now));
+                continue;
+            }
+        };
+        let Some(writer) = rel.split('/').nth(1) else {
+            problems.push(share_problem(rel, "could not be read", now));
+            continue;
+        };
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(text) => text,
+            Err(_) => {
+                problems.push(share_problem(rel, "not UTF-8 text", now));
+                continue;
+            }
+        };
+        if let Err(reason) = validate::share_json_from_bytes(text.as_bytes(), RUN_CAP) {
+            problems.push(share_problem(rel, reason, now));
+            continue;
+        }
+        match aac_store::run_schema::parse_run_text(text, writer) {
+            Err(invalid) => problems.push(share_problem(rel, invalid.0, now)),
+            Ok(doc) => {
+                parsed.push((
+                    ended_at_ms(&doc["endedAt"]),
+                    json!({
+                        "file": rel,
+                        "doc": doc,
+                        "firstSeenAt": now,
+                        "sha256": sha256_text(text),
+                    }),
+                ));
+            }
+        }
+    }
+    let mut best: HashMap<String, (u64, Json)> = HashMap::new();
+    for (at, row) in parsed {
+        let id = row["doc"]["id"].as_str().unwrap_or_default().to_string();
+        let newer = match best.get(&id) {
+            None => true,
+            Some((_, held)) => {
+                let a_seq = row["doc"]["seq"].as_u64().unwrap_or(0);
+                let b_seq = held["doc"]["seq"].as_u64().unwrap_or(0);
+                let a_written = row["doc"]["writtenAt"].as_str().unwrap_or_default();
+                let b_written = held["doc"]["writtenAt"].as_str().unwrap_or_default();
+                let a_file = row["file"].as_str().unwrap_or_default();
+                let b_file = held["file"].as_str().unwrap_or_default();
+                a_seq > b_seq
+                    || (a_seq == b_seq && a_written > b_written)
+                    || (a_seq == b_seq && a_written == b_written && a_file > b_file)
+            }
+        };
+        if newer {
+            best.insert(id, (at, row));
+        }
+    }
+    let mut records: Vec<(u64, Json)> = best.into_values().collect();
+    records.sort_by(|left, right| {
+        left.1["doc"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right.1["doc"]["id"].as_str().unwrap_or_default())
+    });
+    let docs: Vec<Json> = records.iter().map(|(_, row)| row.clone()).collect();
+    let resolved = aac_store::run_corrections::resolve(&docs, |value| {
+        value.as_str().and_then(aac_store::run_schema::iso_ms)
+    });
+    for row in &docs {
+        if let Some(id) = row["doc"]["id"].as_str()
+            && let Some(reason) = resolved.refused.get(id)
+        {
+            problems.push(share_problem(
+                row["file"].as_str().unwrap_or_default(),
+                reason.clone(),
+                row["firstSeenAt"].as_u64().unwrap_or(now),
+            ));
+        }
+    }
+    let rows = resolved
+        .rows
+        .into_iter()
+        .map(|row| (ended_at_ms(&row["doc"]["endedAt"]), row))
+        .collect();
+    ShareScan {
+        rows,
+        problems,
+        read: ShareRead {
+            state: "ok".to_string(),
+            scanned_at: Some(now),
+            skipped: json!({
+                "runFiles": skipped_runs,
+                "writerFolders": writer_skipped,
+            }),
+        },
     }
 }
 
@@ -1368,4 +1809,128 @@ fn check_problems(runs: &Json) -> Vec<Problem> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HeldRuns, ScoreboardOwned, scan_share_runs};
+    use crate::store_host::{StoreBoot, StoreHost};
+    use aac_files::registry::Owners;
+    use aac_status::share::check::ReadersCheckWriter;
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    const BENCH: &str = r#"{"schema":"agent-reports/run@1","id":"vm.lead--bench","writer":"vm.lead","seq":1,"writtenAt":"2026-11-04T16:30:00Z","source":"benchmark","project":"proj","stream":null,"task":{"id":"bench","type":"build","title":"Task bench","size":{"tasks":1}},"model":{"provider":"anthropic","id":"claude-opus-5-5","harness":"claude-code","effort":"high"},"startedAt":null,"endedAt":"2026-11-04T16:30:00Z","wallSeconds":100,"outcome":"done","benchmark":"pilot"}"#;
+
+    fn write_bench(root: &Path) {
+        let dir = root.join("v1/writers/vm.lead/runs/2026-11-04");
+        std::fs::create_dir_all(&dir).expect("run folder");
+        std::fs::write(dir.join("vm.lead--bench.json"), BENCH).expect("run file");
+    }
+
+    fn boot(dir: PathBuf) -> StoreBoot {
+        StoreBoot {
+            binding_identity: aac_store::build_identity(),
+            dir,
+            retention_days: 0,
+            cache_bytes: None,
+            activity_retention_days: None,
+            snapshot_directory: None,
+            share_backup_dir: None,
+            share_backup_off: true,
+        }
+    }
+
+    fn owner(root: PathBuf, store: Option<Arc<StoreHost>>) -> Arc<ScoreboardOwned> {
+        let rows = aac_files::registry::rows().expect("registry");
+        ScoreboardOwned::new(
+            root.clone(),
+            store,
+            crate::feed::Feeds::new(),
+            Arc::new(Mutex::new(ReadersCheckWriter::new(root))),
+            Owners::defaults(rows),
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    fn has_bench(held: &HeldRuns) -> bool {
+        held.rows
+            .iter()
+            .any(|(_, row)| row["doc"]["id"].as_str() == Some("vm.lead--bench"))
+    }
+
+    #[test]
+    fn the_share_scan_reads_the_reviewers_valid_run() {
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        let scan = scan_share_runs(root.path(), 1_790_000_000_000);
+        assert_eq!(scan.read.state, "ok");
+        assert_eq!(scan.read.scanned_at, Some(1_790_000_000_000));
+        assert!(
+            scan.rows
+                .iter()
+                .any(|(_, row)| { row["doc"]["id"].as_str() == Some("vm.lead--bench") }),
+            "{:?}",
+            scan.rows
+        );
+    }
+
+    #[tokio::test]
+    async fn store_off_still_returns_the_share_run() {
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        let owner = owner(root.path().to_path_buf(), None);
+        owner.catalog_pass(1_790_000_000_000);
+        let held = owner.held(Some(1_790_000_000_000)).await.expect("held");
+        assert!(held.share.is_some(), "share fallback");
+        assert!(has_bench(&held), "missing vm.lead--bench: {:?}", held.rows);
+        let picked: Vec<usize> = (0..held.rows.len()).collect();
+        let state = owner
+            .state_of(&held, &picked, 1_790_000_000_000)
+            .await
+            .expect("state");
+        assert_eq!(state["state"], "ok");
+        assert_eq!(state["scannedAt"], json!(1_790_000_000_000u64));
+        assert_eq!(state["skipped"]["runFiles"], json!(0));
+        assert!(owner.share_fallback.load(Ordering::SeqCst));
+        let inputs = owner.inputs().await.expect("inputs");
+        assert_eq!(inputs["shareOnly"], json!(true));
+        assert!(
+            inputs["runs"]["runs"]
+                .as_array()
+                .expect("runs")
+                .iter()
+                .any(|row| row["doc"]["id"].as_str() == Some("vm.lead--bench")),
+            "{}",
+            inputs["runs"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_held_store_lock_still_returns_the_share_run() {
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let holder = StoreHost::new(boot(store_dir.clone()));
+        holder.open_at_boot();
+        let locked = StoreHost::new(boot(store_dir));
+        locked.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(locked));
+        owner.catalog_pass(1_790_000_000_000);
+        let held = owner.held(Some(1_790_000_000_000)).await.expect("held");
+        assert!(held.share.is_some(), "share fallback after lock_held");
+        assert!(has_bench(&held), "missing vm.lead--bench: {:?}", held.rows);
+        let picked: Vec<usize> = (0..held.rows.len()).collect();
+        let state = owner
+            .state_of(&held, &picked, 1_790_000_000_000)
+            .await
+            .expect("state");
+        assert_eq!(state["state"], "ok");
+        assert!(state["scannedAt"].as_u64().is_some());
+        assert!(owner.share_fallback.load(Ordering::SeqCst));
+    }
 }

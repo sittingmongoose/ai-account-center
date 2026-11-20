@@ -1,6 +1,21 @@
 export default async function (t) {
   await t.goto('/');
-  await t.page.evaluate(() => { document.cookie = 'fixture=yes; SameSite=Strict; Path=/'; });
+  const signedIn = await t.page.evaluate(async () => {
+    const cred = { username: 'labadmin', password: 'Lab-Correct-Horse-Battery-9' };
+    const check = await (await fetch('/api/auth/check', { credentials: 'same-origin' })).json();
+    if (check.authenticated) return { ok: true, status: 200, body: 'already signed in' };
+    const setup = await (await fetch('/api/auth/setup', { credentials: 'same-origin' })).json();
+    const res = await fetch(setup.configured ? '/api/auth/login' : '/api/auth/setup', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(cred),
+    });
+    return { ok: res.ok, status: res.status, body: (await res.text()).slice(0, 200) };
+  });
+  await t.check('signed in', signedIn.ok, `setup/login answered ${signedIn.status}: ${signedIn.body}`, {
+    hard: true,
+  });
   await t.goto('/api/status/deliverable?path=share%2Fconcept.html');
   const result = await t.page.evaluate(async () => {
     let cookieDenied = false, fetchDenied = false;
