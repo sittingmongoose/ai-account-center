@@ -433,12 +433,14 @@ fn current_period(readings: &[Reading], extra_boundaries: &[i64]) -> Vec<Reading
         {
             break;
         }
-        let same_upcoming = upcoming(earlier) && upcoming(later);
-        if same_upcoming
-            && (earlier.reset_at.unwrap_or(0) - later.reset_at.unwrap_or(0)).abs() > RESET_SHIFT_MS
+        // A reset time that differs names another period, even when the earlier one already
+        // passed: a reading that still names the old period after a restart is never burn.
+        if let (Some(earlier_reset), Some(later_reset)) = (earlier.reset_at, later.reset_at)
+            && (earlier_reset - later_reset).abs() > RESET_SHIFT_MS
         {
             break;
         }
+        let same_upcoming = upcoming(earlier) && upcoming(later);
         let fall = earlier.used.unwrap_or(0.0) - later.used.unwrap_or(0.0);
         if fall
             > if same_upcoming {
@@ -704,6 +706,48 @@ mod tests {
         assert_eq!(burn.period_started_at, js::iso_of(NOW - 10 * MINUTE));
         assert_eq!(burn.last_hour, None);
         assert_eq!(burn.last15_minutes, Some(12.0));
+    }
+
+    #[test]
+    fn a_period_restart_is_not_burn() {
+        // OpenCode Go weekly, 2026-11-19: 21:32 still named the weekly reset that had just
+        // passed and read 0%; 21:35 named the next week's reset and read 39%. Not 300%/h.
+        let restart = burn_rate(
+            &[
+                reading(3, 0.0, Some(NOW - 5 * MINUTE)),
+                reading(0, 39.0, Some(NOW + 7 * 24 * 60 * MINUTE)),
+            ],
+            None,
+            &[],
+        );
+        assert_eq!(restart.period_started_at, js::iso_of(NOW));
+        assert_eq!(restart.last5_minutes, None);
+        assert_eq!(restart.pace, None);
+        assert_eq!(restart.projected_full_at, None);
+        assert_eq!(restart.runs_out_before_reset, None);
+        // A reset drop still splits, and the 24-hour rate is not measured across it.
+        let reset = burn_rate(
+            &[
+                reading(10, 90.0, None),
+                reading(4, 2.0, None),
+                reading(0, 4.0, None),
+            ],
+            None,
+            &[],
+        );
+        assert_eq!(reset.period_started_at, js::iso_of(NOW - 4 * MINUTE));
+        assert_eq!(reset.last24_hours, None);
+        // Within one reported period an ordinary series keeps its rate.
+        let period = NOW + 60 * MINUTE;
+        let steady = [
+            reading(10, 20.0, Some(period)),
+            reading(5, 25.0, Some(period)),
+            reading(0, 30.0, Some(period)),
+        ];
+        let burn = burn_rate(&steady, None, &[]);
+        assert_eq!(burn.last5_minutes, Some(60.0));
+        assert_eq!(burn.pace, Some(60.0));
+        assert_eq!(burn.pace_minutes, Some(5));
     }
 
     #[test]
