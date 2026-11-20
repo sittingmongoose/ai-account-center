@@ -53,6 +53,7 @@ impl FailoverDeps for Effects {
                 .usage_hosts()
                 .await
                 .into_iter()
+                .filter(|host| host.agent_available)
                 .map(|host| UsageHost {
                     host: host.id,
                     platform: host.platform.to_owned(),

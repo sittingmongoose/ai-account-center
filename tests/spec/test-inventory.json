@@ -441,6 +441,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers/experiment_roots.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/analytics_writers/fixed_scanner.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/antigravity_host.rs",
       "kind": "helper",
       "evidence": [

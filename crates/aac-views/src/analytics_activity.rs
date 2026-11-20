@@ -1056,6 +1056,8 @@ fn session_counts(range: &Value) -> R<HashMap<String, f64>> {
 /// `scanFailureText`: the fixed sentences the grid shows for a read's cause.
 fn scan_failure_text(cause: &str) -> &'static str {
     match cause {
+        "agent_missing" => "agent missing",
+        "source_limit" => "some usage log sources exceeded the scan limit",
         "ssh_unreachable" => "the computer did not answer over ssh",
         "ssh_auth" => "the computer refused this account's ssh key",
         "ssh_host_key" => {
@@ -1090,7 +1092,9 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
             continue;
         }
         let state_word = text(source.get("state")).unwrap_or("");
+        let cause = source.get("cause").filter(|v| !v.is_null());
         let state = match state_word {
+            _ if cause.and_then(Value::as_str) == Some("agent_missing") => "unavailable",
             "ok" => "ok",
             "no_usage" => "no_usage",
             "partial" | "cached" => "cached",
@@ -1100,7 +1104,6 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
             }
             _ => "unavailable",
         };
-        let cause = source.get("cause").filter(|v| !v.is_null());
         let last_scan = match source.get("lastFullReadAt").filter(|v| !v.is_null()) {
             Some(value) => value.clone(),
             None => {

@@ -5,7 +5,8 @@
 //! `scan-usage` verb per configured computer (local and remote), shapes the rows into reports and
 //! ingests them on the converge cadence, keeping each source's state for the owned read.
 //!
-//! Registered agents discover their own standard, T3 and experiment roots. Only the saved
+//! Registered agents discover their own standard and T3 roots. The dashboard computer's
+//! PM-Experiments roots are supplied by the discovery job below. Only the saved
 //! dashboard's additional roots need to travel with the scan request.
 use crate::store_host::StoreHost;
 use aac_store::activity;
@@ -19,6 +20,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+mod experiment_roots;
+mod experiment_signatures;
+mod fixed_scanner;
 
 /// The job's tick: the activity background's every-15s cadence; each writer checks its own deadline.
 const TICK_MS: u64 = 15_000;
@@ -44,6 +49,7 @@ struct WriterState {
     fetched_at: i64,
     scanning_since: Option<i64>,
     generation: u64,
+    experiments: Option<Arc<experiment_roots::Snapshot>>,
 }
 
 #[derive(Default)]
@@ -224,6 +230,9 @@ fn quota_pass(
         })
         .collect();
     let merged = sampler::merge_accounts(&dashboards);
+    if merged.is_empty() {
+        return;
+    }
     if !state.backfilled {
         let (sources, unreadable) = backfill_sources(ccs_dir);
         let providers = sampler::providers_of(&merged);
@@ -231,7 +240,7 @@ fn quota_pass(
             state.backfilled = true;
         }
     }
-    if merged.is_empty() || sampler::record_sample(engine, &merged, now).is_ok() {
+    if sampler::record_sample(engine, &merged, now).is_ok() {
         state.last_quota_ms = now;
     }
 }
@@ -334,6 +343,42 @@ fn scan_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>
     }
 }
 
+fn scan_request(
+    kinds: &[String],
+    cutoff: i64,
+    extra: Value,
+    cwd: bool,
+    experiment_roots: Option<&Map<String, Value>>,
+) -> Value {
+    let mut request = json!({
+        "kinds": kinds,
+        "minDateMs": cutoff,
+        "immutableSqlite": false,
+        "extraRoots": extra,
+        "cwd": cwd,
+        "deadlineMs": SCAN_DEADLINE_MS,
+    });
+    if let Some(roots) = experiment_roots.filter(|roots| !roots.is_empty()) {
+        request["experimentRoots"] = json!(roots);
+    }
+    request
+}
+
+fn failed_scan_states(host: &str, kinds: &[String], agent_missing: bool) -> Vec<Value> {
+    kinds
+        .iter()
+        .map(|kind| {
+            json!({
+                "tool": kind,
+                "host": host,
+                "state": if host == "ubuntu" && !agent_missing { "scan_failed" } else { "unreadable" },
+                "cause": agent_missing.then_some("agent_missing"),
+                "detail": "scan-usage unavailable",
+            })
+        })
+        .collect()
+}
+
 /// The activity scheduler's pass: scan each configured computer, shape and ingest the reports.
 async fn activity_pass(
     engine: &aac_store::engine::Engine,
@@ -346,13 +391,13 @@ async fn activity_pass(
 ) {
     // Claim a generation under the lock, then release it for the scans: a std mutex guard must
     // not cross an await (the job's future stays Send). A newer pass supersedes this one.
-    let generation = {
+    let (generation, experiments) = {
         let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
         if !activity_due(&guard, now, quota_interval_ms(refresh_seconds(ccs_dir))) {
             return;
         }
         guard.generation += 1;
-        guard.generation
+        (guard.generation, guard.experiments.clone())
     };
     let computers = agents.usage_hosts().await;
     if computers.is_empty() {
@@ -364,6 +409,9 @@ async fn activity_pass(
     let _pass = live.pass();
     // Refresh the models.dev registry where the TS collection calls startModelsDevRegistryRefresh:
     // coalesced, fresh-cache short-circuit, stale fallback. The blocking fetch runs off-thread.
+    if computers
+        .iter()
+        .any(|host| host.agent_available || fixed_scanner::eligible(host))
     {
         let refresh = Arc::clone(models_dev);
         let now_ms = now as f64;
@@ -380,29 +428,46 @@ async fn activity_pass(
         .collect::<Vec<_>>();
     for computer in &computers {
         let host = computer.id.as_str();
-        let (extra_roots, overflow, generic) = extra_roots(preferences.as_ref(), host);
+        let (mut extra_roots, mut overflow, generic) = extra_roots(preferences.as_ref(), host);
+        let local = computer.alias.is_none();
+        let experiments = experiments.as_deref().filter(|_| local);
+        if let Some(experiments) = experiments {
+            experiments.add_zcode_paths(&mut extra_roots, &mut overflow);
+        }
         if generic {
             states.push(json!({ "tool": "jsonl", "host": host, "state": "no_reader" }));
         }
-        let args = json!({
-            "kinds": kinds,
-            "minDateMs": cutoff,
-            "immutableSqlite": false,
-            "extraRoots": extra_roots,
-            "cwd": crate::analytics_route::capture_cwd(ccs_dir),
-            "deadlineMs": SCAN_DEADLINE_MS,
-        });
+        let args = scan_request(
+            &kinds,
+            cutoff,
+            extra_roots,
+            crate::analytics_route::capture_cwd(ccs_dir),
+            experiments
+                .map(experiment_roots::Snapshot::scanner_roots)
+                .as_ref(),
+        );
         let call_id = format!("g14-activity-{generation}-{host}");
-        let answer = agents
-            .scan_usage(
-                computer.platform,
-                computer.alias.as_deref(),
-                &args,
-                SCAN_DEADLINE_MS,
-                SCAN_MAX_BYTES,
-                &call_id,
-            )
-            .await;
+        let mut answer = if computer.agent_available {
+            agents
+                .scan_usage(
+                    computer.platform,
+                    computer.alias.as_deref(),
+                    &args,
+                    SCAN_DEADLINE_MS,
+                    SCAN_MAX_BYTES,
+                    &call_id,
+                )
+                .await
+        } else {
+            Err(aac_core::Cause::AgentMissing)
+        };
+        if matches!(
+            answer,
+            Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
+        ) {
+            answer = fixed_scanner::scan(agents, computer, &args, SCAN_DEADLINE_MS, SCAN_MAX_BYTES)
+                .await;
+        }
         match answer {
             Ok(answer) if valid_scan_answer(&answer, &kinds) => {
                 let rows = answer["rows"].as_array().cloned().unwrap_or_default();
@@ -427,11 +492,20 @@ async fn activity_pass(
                         &pricing,
                     );
                     remote.push(json!({ "tool": kind, "host": host, "data": worker }));
-                    let (state, cause) = if overflow.contains(kind.as_str()) {
-                        ("unreadable", Some("source_limit"))
-                    } else {
-                        scan_state(&answer, kind)
-                    };
+                    let (mut state, mut cause) = scan_state(&answer, kind);
+                    if overflow.contains(kind.as_str())
+                        || experiments.is_some_and(|snapshot| snapshot.limited(kind))
+                    {
+                        (state, cause) = ("unreadable", Some("source_limit"));
+                    } else if matches!(state, "ok" | "not_installed" | "no_usage")
+                        && local
+                        && experiments.map_or_else(
+                            || experiment_roots::tracks(kind),
+                            |snapshot| snapshot.discovering(kind),
+                        )
+                    {
+                        (state, cause) = ("scanning", None);
+                    }
                     states.push(json!({
                         "tool": kind,
                         "host": host,
@@ -441,16 +515,10 @@ async fn activity_pass(
                     }));
                 }
             }
-            _ => {
-                for kind in &kinds {
-                    states.push(json!({
-                        "tool": kind,
-                        "host": host,
-                        "state": if host == "ubuntu" { "scan_failed" } else { "unreadable" },
-                        "detail": "scan-usage unavailable",
-                    }));
-                }
+            Err(aac_core::Cause::AgentMissing) => {
+                states.extend(failed_scan_states(host, &kinds, true))
             }
+            _ => states.extend(failed_scan_states(host, &kinds, false)),
         }
     }
     // Shape and ingest under the lock; a superseding generation drops this pass's writes.
@@ -545,8 +613,8 @@ pub(crate) async fn analytics_jobs(
             tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
         }
     };
+    let state = Mutex::new(WriterState::default());
     let activity = async {
-        let state = Mutex::new(WriterState::default());
         let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&ccs_dir));
         while !stop.load(Ordering::Acquire) {
             if let Some(engine) = store.analytics_engine() {
@@ -559,12 +627,127 @@ pub(crate) async fn analytics_jobs(
             tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
         }
     };
-    tokio::join!(quota, activity);
+    let discovery = async {
+        let Some(home) = std::env::home_dir() else {
+            return;
+        };
+        let mut next = 0;
+        while !stop.load(Ordering::Acquire) {
+            let now = aac_store::engine::now_ms() as i64;
+            if now >= next && store.analytics_engine().is_some() {
+                let root = ccs_dir.clone();
+                let home = home.clone();
+                if let Ok(snapshot) = tokio::task::spawn_blocking(move || {
+                    experiment_roots::run_slice(&root, &home, now)
+                })
+                .await
+                {
+                    next = snapshot.next_slice(now);
+                    let done = next > now;
+                    state.lock().unwrap_or_else(|p| p.into_inner()).experiments =
+                        Some(Arc::new(snapshot));
+                    if done {
+                        live.request_refresh();
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+        }
+    };
+    tokio::join!(quota, discovery, activity);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analytics_local_scan_request_carries_experiment_folders() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let ccs = tempfile::tempdir().expect("fixture CCS_HOME");
+        let root = home
+            .path()
+            .join("PM-Experiments/exp-1/retained-usage/run-1/codex");
+        std::fs::create_dir_all(&root).expect("experiment folder");
+        std::fs::write(
+            root.join("rollout-fixture.jsonl"),
+            concat!(
+                r#"{"type":"session_meta","payload":{"id":"pm-fixture","originator":"codex_cli_rs","cli_version":"1"}}"#, "\n",
+                r#"{"timestamp":"2026-11-15T13:00:00Z","type":"turn_context","payload":{"model":"gpt-6.1-sol"}}"#, "\n",
+                r#"{"timestamp":"2026-11-15T13:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":123,"output_tokens":4}}}}"#, "\n",
+            ),
+        )
+        .expect("fixture rollout");
+        let snapshot = experiment_roots::run_slice(ccs.path(), home.path(), 1);
+        let roots = snapshot.scanner_roots();
+        let kinds = aac_providers::scanner_kinds()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let request = scan_request(&kinds, 0, json!({}), false, Some(&roots));
+        assert_eq!(request["experimentRoots"], json!({"codex": [root]}));
+        assert_eq!(request["cwd"], false);
+        let native_scan = |request: &Value| {
+            let args = aac_usage::protocol::parse_request(request.to_string().as_bytes())
+                .expect("native scanner request");
+            aac_usage::protocol::scan(&args, home.path(), &aac_usage::discover::Env::default())
+        };
+        let local = native_scan(&request);
+        assert_eq!(local["rows"].as_array().expect("usage rows").len(), 1);
+        let remote = scan_request(&kinds, 0, json!({}), false, None);
+        assert_eq!(remote["experimentRoots"], Value::Null);
+        assert_eq!(native_scan(&remote)["rows"], json!([]));
+    }
+
+    #[test]
+    fn analytics_missing_agent_replaces_a_previous_ok_report() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let engine = aac_store::ops::open_engine(dir.path().to_str().expect("path"), None, None)
+            .expect("open engine");
+        let before = json!({
+            "schema": report::USAGE_REPORT_SCHEMA, "computer": "mac", "tool": "codex",
+            "state": "ok", "readAt": "2026-11-15T12:00:00.000Z", "complete": true,
+            "coverFrom": "2026-11-14T00:00:00.000Z", "sessions": [],
+            "cells": [{
+                "hour": "2026-11-15T11:00:00.000Z", "route": "openai", "modelRaw": "gpt-6.1-sol",
+                "inputTokens": 123, "outputTokens": 4, "cacheCreationTokens": 0, "cacheReadTokens": 0,
+                "costUsd": 0.01, "events": 1,
+            }],
+        });
+        assert_eq!(
+            ingest_reports(&engine, &[before]).expect("seed")["refused"],
+            json!([])
+        );
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-15T13:00:00Z")
+            .expect("clock")
+            .timestamp_millis();
+        let source = || {
+            let body = aac_store::ops::call(
+                &engine,
+                "activitySources",
+                &json!({ "fromMs": now - DAY, "toMs": now }).to_string(),
+            )
+            .expect("activitySources");
+            body["sources"][0].clone()
+        };
+        assert_eq!(source()["state"], "ok");
+        let states = failed_scan_states("mac", &["codex".to_owned()], true);
+        let reports = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &[],
+            states: &states,
+            window_from_ms: now - DAY,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &HashSet::new(),
+        });
+        assert_eq!(
+            ingest_reports(&engine, &reports).expect("ingest")["refused"],
+            json!([])
+        );
+        let source = source();
+        assert_eq!(source["state"], "unreadable");
+        assert_eq!(source["cause"], "agent_missing");
+    }
     /// The activity source states the last pass produced (the owned read's live grid).
     fn source_states(state: &Mutex<WriterState>) -> Vec<Value> {
         state.lock().map(|s| s.states.clone()).unwrap_or_default()
@@ -591,6 +774,17 @@ mod tests {
         assert_eq!(interval_for(10), 30_000);
         assert_eq!(interval_for(7200), 3_600_000);
         assert_eq!(interval_for(3600), 3_600_000);
+    }
+
+    #[test]
+    fn analytics_backfill_waits_for_the_account_dashboard() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let engine = aac_store::ops::open_engine(dir.path().to_str().expect("path"), None, None)
+            .expect("open engine");
+        let mut state = QuotaState::default();
+        quota_pass(&engine, None, dir.path(), &mut state, 1_794_700_800_000);
+        assert!(!state.backfilled);
+        assert_eq!(state.last_quota_ms, 0);
     }
 
     #[test]

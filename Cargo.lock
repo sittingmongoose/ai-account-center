@@ -105,6 +105,7 @@ dependencies = [
  "aac-status",
  "aac-store",
  "aac-transport",
+ "aac-usage",
  "aac-views",
  "axum",
  "axum-server",
@@ -125,6 +126,7 @@ dependencies = [
  "libc",
  "regex",
  "reqwest",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",
@@ -138,6 +140,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zstd",
 ]
 
 [[package]]
