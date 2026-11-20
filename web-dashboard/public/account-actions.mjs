@@ -252,6 +252,14 @@ export function errorText(error, ctx = {}) {
     case 'trash_cross_volume': return t('Trash is on another disk', `${host} keeps the trash on another disk, so nothing was moved.`);
     case 'remove_failed': return t('Not removed', 'The account could not be removed safely. Nothing was changed.');
     case 'restore_failed': return t('Not restored', 'The profile could not be put back safely. It stays in the trash.');
+    case 'purge_incomplete': {
+      const receipts = [['mac', 'Mac'], ['windows', 'Windows']].flatMap(([key, label]) => {
+        if (payload?.hosts?.[key] === 'deleted') return [`Deleted on ${label}.`];
+        if (payload?.hosts?.[key] === 'unresolved') return [`Deletion on ${label} could not be confirmed.`];
+        return [];
+      });
+      return t('Permanent deletion incomplete', [...receipts, 'The trash entry is kept for retry.'].join(' '));
+    }
     case 'purge_failed': return t('Not deleted', 'The profile could not be deleted safely. It stays in the trash.');
     case 'unknown_trash': return t('No longer in the trash', 'It was restored or deleted already. The list is refreshed.');
     case 'confirmation_stale': return t('It changed', 'The account changed since you reviewed it. Review it again.');

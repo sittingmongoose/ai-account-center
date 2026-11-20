@@ -183,6 +183,19 @@ fn public_trash_entry(entry: &Value) -> Option<Value> {
             return None;
         }
     }
+    if let Some(done) = entry.get("purgedHosts") {
+        let done = done.as_array()?;
+        if state != "deleting"
+            || done.len() > 2
+            || done.iter().enumerate().any(|(index, host)| {
+                host.as_str().is_none_or(|host| {
+                    !matches!(host, "mac" | "windows") || entry["hosts"][host].is_null()
+                }) || done[..index].contains(host)
+            })
+        {
+            return None;
+        }
+    }
     Some(
         json!({"trashId":id,"provider":"claude","label":label,"trashedAt":trashed,"purgeAfter":purge,"state":state}),
     )

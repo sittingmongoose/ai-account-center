@@ -62,6 +62,7 @@ struct Refusal {
     code: &'static str,
     message: &'static str,
     host: Option<&'static str>,
+    purge_outcomes: Option<[Option<bool>; 2]>,
 }
 
 impl Refusal {
@@ -94,6 +95,7 @@ impl Refusal {
             code,
             message,
             host: None,
+            purge_outcomes: None,
         }
     }
 
@@ -102,7 +104,38 @@ impl Refusal {
         self
     }
 
+    fn purge_incomplete(status: u16, outcomes: [Option<bool>; 2]) -> Self {
+        Self {
+            purge_outcomes: Some(outcomes),
+            ..Self::new(
+                status,
+                "purge_incomplete",
+                "Permanent deletion could not be confirmed for every computer. The trash entry is kept for retry.",
+            )
+        }
+    }
+
     fn reply(self) -> Reply {
+        if let Some(outcomes) = self.purge_outcomes {
+            let hosts: Map<String, Value> = ["mac", "windows"]
+                .into_iter()
+                .zip(outcomes)
+                .filter_map(|(host, outcome)| {
+                    outcome.map(|deleted| {
+                        (
+                            host.to_owned(),
+                            json!(if deleted { "deleted" } else { "unresolved" }),
+                        )
+                    })
+                })
+                .collect();
+            return super::no_store(response(
+                self.status,
+                json!({
+                    "error": self.message, "code": self.code, "hosts": hosts
+                }),
+            ));
+        }
         match self.host {
             Some(host) => super::no_store(response(
                 self.status,
@@ -239,10 +272,18 @@ impl Trash {
         let outcome = tokio::spawn(async move {
             let reply = match action {
                 Action::Purge => {
-                    self.queues
+                    let purge = self
+                        .queues
                         .run("claude-purge", self.purge(&id, &fingerprint, None))
                         .await
-                        .map_err(|_| Refusal::PURGE)??;
+                        .map_err(|_| Refusal::PURGE)?;
+                    if purge
+                        .as_ref()
+                        .is_err_and(|error| error.purge_outcomes.is_some())
+                    {
+                        events.publish(DashboardEvent::AccountsChanged {});
+                    }
+                    purge?;
                     json!({"purged":true,"trashId":id})
                 }
                 Action::Restore => {
@@ -310,65 +351,64 @@ impl Trash {
     }
 
     async fn purge(&self, id: &str, reviewed: &str, due_by: Option<i64>) -> Result<(), Refusal> {
-        let entry = {
-            let writer = self.claim("claude-trash").map_err(|_| Refusal::PURGE)?;
-            let mut entries = read_trash(&self.root).ok_or(Refusal::PURGE)?;
-            let entry = current(&mut entries, Action::Purge, id, reviewed)?;
-            if protected(entry) {
-                return Err(Refusal::new(
-                    409,
-                    "account_protected",
-                    "This is this computer's default Claude profile. It can't be removed here.",
-                ));
+        let writer = self.claim("claude-trash").map_err(|_| Refusal::PURGE)?;
+        let mut entries = read_trash(&self.root).ok_or(Refusal::PURGE)?;
+        let entry = current(&mut entries, Action::Purge, id, reviewed)?;
+        if protected(entry) {
+            return Err(Refusal::new(
+                409,
+                "account_protected",
+                "This is this computer's default Claude profile. It can't be removed here.",
+            ));
+        }
+        if due_by.is_some_and(|cutoff| !due(entry, cutoff)) {
+            return Err(Refusal::UNKNOWN);
+        }
+        entry["state"] = json!("deleting");
+        let mut entry = entry.clone();
+        let position = entries
+            .iter()
+            .position(|entry| entry["trashId"] == id)
+            .ok_or(Refusal::UNKNOWN)?;
+        save(&writer, &json!({"version":1,"entries":entries})).map_err(|_| Refusal::PURGE)?;
+        let mut confirmed = entry["purgedHosts"].as_array().cloned().unwrap_or_default();
+        let hosts = ["mac", "windows"];
+        let mut outcomes = hosts.map(|host| {
+            (!entry["hosts"][host].is_null()).then(|| confirmed.contains(&json!(host)))
+        });
+        for (index, host) in hosts.into_iter().enumerate() {
+            if outcomes[index] != Some(false) {
+                continue;
             }
-            if due_by.is_some_and(|cutoff| !due(entry, cutoff)) {
-                return Err(Refusal::UNKNOWN);
+            let detail = &entry["hosts"][host];
+            let Some(trash_name) = detail["trashName"].as_str() else {
+                continue;
+            };
+            let Some(token) = u64::try_from(now()).ok().and_then(|now| {
+                aac_core::claude_purge::issue(host, trash_name, now.saturating_add(120_000))
+            }) else {
+                continue;
+            };
+            let args = json!({"host":host,"op":"purge","trashName":trash_name,"token":token});
+            if self
+                .host_call(host, detail, args)
+                .await
+                .is_some_and(|result| result["ok"] == true)
+            {
+                outcomes[index] = Some(true);
+                confirmed.push(json!(host));
+                entry["purgedHosts"] = json!(confirmed);
+                entries[position] = entry.clone();
+                save(&writer, &json!({"version":1,"entries":entries}))
+                    .map_err(|_| Refusal::purge_incomplete(500, outcomes))?;
             }
-            entry["state"] = json!("deleting");
-            let saved = entry.clone();
-            save(&writer, &json!({"version":1,"entries":entries})).map_err(|_| Refusal::PURGE)?;
-            saved
-        };
-        claude_lifecycle::run(Workflow::Purge, |effect| {
-            let entry = &entry;
-            async move {
-                if matches!(effect, Effect::Commit) {
-                    let writer = self.claim("claude-trash").map_err(|_| Refusal::PURGE)?;
-                    let mut entries = read_trash(&self.root).ok_or(Refusal::PURGE)?;
-                    if let Some(position) = entries
-                        .iter()
-                        .position(|row| row["trashId"] == id && row == entry)
-                    {
-                        entries.remove(position);
-                        save(&writer, &json!({"version":1,"entries":entries}))
-                            .map_err(|_| Refusal::PURGE)?;
-                    }
-                    return Ok(true);
-                }
-                let host = host(effect);
-                let detail = &entry["hosts"][host];
-                if detail.is_null() {
-                    return Ok(false);
-                }
-                let trash_name = detail["trashName"].as_str().ok_or(Refusal::PURGE)?;
-                let expires = u64::try_from(now()).map_err(|_| Refusal::PURGE)? + 120_000;
-                let token = aac_core::claude_purge::issue(host, trash_name, expires)
-                    .ok_or(Refusal::PURGE)?;
-                let args = json!({"host":host,"op":"purge","trashName":trash_name,"token":token});
-                let result = self.host_call(host, detail, args).await;
-                if result.is_some_and(|result| result["ok"] == true) {
-                    Ok(true)
-                } else {
-                    Err(Refusal::new(
-                        502,
-                        "host_unreachable",
-                        "A computer could not be reached. Nothing was changed.",
-                    )
-                    .on(host))
-                }
-            }
-        })
-        .await
+        }
+        if outcomes.contains(&Some(false)) {
+            return Err(Refusal::purge_incomplete(502, outcomes));
+        }
+        entries.retain(|entry| entry["trashId"] != id);
+        save(&writer, &json!({"version":1,"entries":entries}))
+            .map_err(|_| Refusal::purge_incomplete(500, outcomes))
     }
 
     pub(super) async fn sweep_due(&self) {
@@ -483,7 +523,8 @@ fn current<'a>(
 
 fn fingerprint(entry: &Value) -> String {
     aac_core::sha256_hex(aac_views::js_json::write(&json!({
-        "trashId":entry["trashId"],"state":entry["state"],"entry":entry["entry"]
+        "trashId":entry["trashId"],"state":entry["state"],"entry":entry["entry"],
+        "hosts":entry["hosts"],"purgedHosts":entry["purgedHosts"]
     })))
 }
 

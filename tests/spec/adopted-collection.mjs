@@ -96,7 +96,8 @@ async function reservePort() {
 const exec = promisify(execFile);
 const h2 = process.argv.includes('--http2');
 const dead = process.argv.includes('--dead-owner');
-const claudeHosts = process.argv.includes('--claude-hosts');
+const purgeHosts = process.argv.includes('--purge-hosts');
+const claudeHosts = purgeHosts || process.argv.includes('--claude-hosts');
 const wallet = process.argv.includes('--wallet-binding');
 const lease = process.argv.includes('--collection-lease');
 const incompatible = process.argv.includes('--incompatible-owner');
@@ -110,6 +111,7 @@ async function prepareClaudeHosts() {
   env.CCS_CLAUDE_HOST_LIFECYCLE = 'on';
   const receipts = path.join(root, 'host-receipts');
   const failWindows = path.join(root, 'fail-windows');
+  const failMac = path.join(root, 'fail-mac');
   await writeFile(
     path.join(bin, 'ssh'),
     `#!/usr/bin/python3
@@ -126,19 +128,21 @@ else:
     assert command.startswith('powershell.exe -NoProfile -NonInteractive -EncodedCommand ')
     request = json.loads(base64.b64decode(data.splitlines()[0]))
 op = request['op']
-assert request['profileId'] == 'work'
+assert request.get('trashName') == 'work-20261119T000000Z' if op == 'purge' else request['profileId'] == 'work'
 with open(${JSON.stringify(receipts)}, 'a') as log:
     log.write(host + ':' + op + '\\n')
+if host == 'fixture-mac' and os.path.exists(${JSON.stringify(failMac)}):
+    sys.exit(1)
 if host == 'fixture-windows' and os.path.exists(${JSON.stringify(failWindows)}):
     sys.exit(1)
 print(json.dumps({'result': 'moved'} if op == 'trash' else {'ok': True}))
 `,
     { mode: 0o700 }
   );
-  return { receipts, failWindows };
+  return { receipts, failWindows, failMac };
 }
 
-async function exerciseClaudeHosts(post, cookie, origin, { receipts, failWindows }) {
+async function exerciseClaudeHosts(post, cookie, origin, { receipts, failWindows, failMac }) {
   const dir = path.join(root, 'accounts');
   await mkdir(dir, { mode: 0o700, recursive: true });
   const trash = path.join(dir, 'trash.json');
@@ -172,6 +176,42 @@ async function exerciseClaudeHosts(post, cookie, origin, { receipts, failWindows
     state: 'trashed',
   };
   await writeFile(trash, JSON.stringify({ version: 1, entries: [entry] }), { mode: 0o600 });
+  if (purgeHosts) {
+    const purge = (body) => post('/api/accounts/trash/' + id + '/purge', body, { cookie, origin });
+    async function confirm() {
+      const review = await purge({});
+      assert.equal(review.status, 200);
+      const { token } = (await review.json()).confirmation;
+      return purge({ confirmationToken: token, confirm: 'DELETE' });
+    }
+    await writeFile(failMac, '');
+    await writeFile(failWindows, '');
+    const unresolved = await confirm();
+    assert.equal(unresolved.status, 502);
+    const none = await unresolved.json();
+    assert.equal(none.code, 'purge_incomplete', 'a refusal names both unresolved hosts');
+    assert.deepEqual(none.hosts, { mac: 'unresolved', windows: 'unresolved' });
+    assert.doesNotMatch(none.error, /nothing was changed/i);
+    const held = () => readFile(trash, 'utf8').then((data) => JSON.parse(data).entries[0]);
+    assert.equal((await held()).state, 'deleting');
+    assert.equal((await held()).purgedHosts, undefined);
+    await rm(failMac);
+    await writeFile(receipts, '');
+    const partial = await confirm();
+    assert.equal(partial.status, 502);
+    const result = await partial.json();
+    assert.deepEqual(result.hosts, { mac: 'deleted', windows: 'unresolved' });
+    assert.doesNotMatch(result.error, /nothing was changed/i);
+    assert.deepEqual((await held()).purgedHosts, ['mac']);
+    assert.equal(await readFile(receipts, 'utf8'), 'fixture-mac:purge\nfixture-windows:purge\n');
+    await rm(failWindows);
+    await writeFile(receipts, '');
+    assert.equal((await confirm()).status, 200);
+    assert.equal(await readFile(receipts, 'utf8'), 'fixture-windows:purge\n');
+    assert.equal(await held(), undefined);
+    console.log('Permanent purge receipts and retry: 2 scenarios passed.');
+    return;
+  }
   const restore = (body) =>
     post('/api/accounts/trash/' + id + '/restore', body, { cookie, origin });
   async function confirm() {

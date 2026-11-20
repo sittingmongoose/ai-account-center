@@ -174,3 +174,10 @@ test('profile name checks match each provider including reserved names and bound
   assert.notEqual(profileNameProblem('a'.repeat(49), [], 'antigravity'), '');
   assert.equal(profileNameProblem('default', [], 'antigravity'), '');
 });
+
+test('purge failure shows each host receipt without promising no change', () => {
+  const partial = errorText(err(502, 'purge_incomplete', { hosts: { mac: 'deleted', windows: 'unresolved' } }));
+  assert.equal(partial.body, 'Deleted on Mac. Deletion on Windows could not be confirmed. The trash entry is kept for retry.');
+  const unresolved = errorText(err(502, 'purge_incomplete', { hosts: { mac: 'unresolved', windows: 'unresolved' } }));
+  assert.equal(unresolved.body, 'Deletion on Mac could not be confirmed. Deletion on Windows could not be confirmed. The trash entry is kept for retry.');
+});
