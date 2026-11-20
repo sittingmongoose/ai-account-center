@@ -1612,6 +1612,13 @@
       ]
     },
     {
+      "file": "tests/unit/app-updates/app_update_t3_self_update_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/app-updates/app_update_t3_test.py",
       "kind": "helper",
       "evidence": [

@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
 
 from app_update_common import CREATE_NO_WINDOW, UpdateFailure, command, environment, _stop_group
@@ -449,10 +450,10 @@ def session_signals():
 
 
 @contextlib.contextmanager
-def bearer(cli, base, deadline):
+def bearer(cli, base, deadline, scopes=("providers:manage", "orchestration:read"), prefix="aac-acp-"):
     """Retry only a proven spawn failure; never issue again after ambiguity."""
     session_id = None
-    label = "aac-acp-" + uuid.uuid4().hex
+    label = prefix + uuid.uuid4().hex
     attempted = False
     lost = "reply_unparsed"
     try:
@@ -463,7 +464,7 @@ def bearer(cli, base, deadline):
                 try:
                     attempted = True
                     reply = auth_command(cli, base, [
-                        "issue", "--scope", "providers:manage", "--scope", "orchestration:read",
+                        "issue", *(word for scope in scopes for word in ("--scope", scope)),
                         "--ttl", ttl, "--label", label, "--json",
                     ], remaining(deadline, float("inf")))
                     lost = "reply_empty" if not reply.strip() else "reply_invalid"
@@ -734,3 +735,118 @@ class Rpc:
 
     def call(self, method, payload):
         return next(self.receive(self.request(method, payload)))
+
+
+# ---------------------------------------------------------------------------
+# T3's own desktop updater. A running T3 desktop owns its server and its files;
+# replacing the app underneath it is refused (restart_context) or fails to
+# relaunch. T3 already updates itself on request: its client sends
+# server.updateServer to a desktop-managed server (the desktop's own updater
+# downloads and verifies the release), then server.commitDesktopUpdate (the
+# desktop quits, installs and relaunches itself). Wire contract: T3 d2c25950,
+# apps/server/src/cloud/selfUpdate.ts, desktopUpdate/DesktopAppUpdate.ts and
+# packages/client-runtime/src/connection/outdatedHostUpdate.ts.
+# ---------------------------------------------------------------------------
+
+DESCRIPTOR_PATH = "/.well-known/t3/environment"
+DESCRIPTOR_LIMIT = 256 * 1024
+MAINTAIN_SCOPE = "environment:maintain"
+
+
+def environment_descriptor(timeout=5):
+    """The local T3 server's public environment descriptor, or None. One bounded read-only GET."""
+    state = server_state()
+    try:
+        origin = urllib.parse.urlsplit(state["origin"])
+        if origin.scheme != "http" or origin.hostname not in ("127.0.0.1", "localhost", "::1") or not origin.port:
+            return None
+        host = "[::1]" if origin.hostname == "::1" else origin.hostname
+        with urllib.request.urlopen("http://%s:%d%s" % (host, origin.port, DESCRIPTOR_PATH), timeout=timeout) as response:
+            raw = response.read(DESCRIPTOR_LIMIT + 1)
+        if len(raw) > DESCRIPTOR_LIMIT:
+            return None
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def desktop_updater_offered(installed_version, descriptor=None):
+    """Whether this computer's running T3 desktop offers its own updater for the installed build.
+
+    The server answering locally must be managed by the desktop app, say the desktop can drive
+    an update, and run the installed desktop's version (desktop and server ship together). A
+    standalone runtime's server is never asked: its update request restarts that service at once.
+    """
+    value = environment_descriptor() if descriptor is None else descriptor
+    if not isinstance(value, dict):
+        return False
+    capabilities = value.get("capabilities")
+    return (isinstance(capabilities, dict) and capabilities.get("serverSelfUpdate") == "desktop-managed"
+            and capabilities.get("desktopAppUpdate") is True
+            and isinstance(installed_version, str) and value.get("serverVersion") == installed_version)
+
+
+def desktop_self_update(host, target, deadline, accept, phase=None, ready_seconds=600):
+    """Update the running T3 desktop the way T3's own client does; returns the version it relaunched on.
+
+    target is the release this run looked up; T3's updater may install the newest build on its
+    channel instead, which accept(version) must allow. Failures before the hand-off raise with
+    nothing changed. After T3 accepted the install the desktop quits and relaunches itself, so a
+    dropped socket is the hand-off, and every later failure raises restart_failed. This helper
+    is never a T3 child (ssh or the logged-in user's task starts it), so it outlives the restart
+    and writes the row only after the relaunched server answers on the new version.
+    """
+    phase = phase or (lambda name: None)
+    cli, base, origin = discover(host)
+    handed_off, ready, version = False, False, None
+    try:
+        with bearer(cli, base, deadline, scopes=(MAINTAIN_SCOPE,), prefix="aac-t3-update-") as token:
+            client = Rpc(origin, token, deadline)
+            try:
+                phase("downloading")
+                prepared = client.call("server.updateServer", {"targetVersion": target})
+                if not isinstance(prepared, dict):
+                    raise UpdateFailure("update_failed", cause="unknown", reason="t3_self_update_reply")
+                version, request = prepared.get("targetVersion"), prepared.get("desktopUpdateToken")
+                if (prepared.get("method") != "desktop-app" or not isinstance(request, str) or not request
+                        or len(request) > 256 or not accept(version)):
+                    raise UpdateFailure("update_failed", cause="unknown", reason="t3_self_update_reply")
+                phase("updating")
+                try:
+                    client.call("server.commitDesktopUpdate", {"requestId": request})
+                except OSError:
+                    handed_off = True
+                except UpdateFailure as error:
+                    # An Exit failure is T3 refusing the install: it keeps running the old build.
+                    if error.code != "t3_unreachable":
+                        raise
+                    handed_off = True
+                if not handed_off:
+                    # The commit succeeds only by stopping the server; an answer means it did not.
+                    raise UpdateFailure("update_failed", cause="unknown", reason="t3_self_update_commit")
+            finally:
+                client.close()
+            try:
+                wait_ready(host, deadline, version, seconds=ready_seconds)
+                ready = True
+            except UpdateFailure as error:
+                raise UpdateFailure("restart_failed", cause="t3_not_ready", reason=error.reason or "t3_not_ready") from None
+    except UpdateFailure as error:
+        if handed_off and ready and version and error.code == "t3_session_revoke_failed":
+            # Confirmed on the new build; the short-lived session ends at its own TTL.
+            return version
+        if handed_off and not ready and error.code == "t3_session_revoke_failed":
+            # The revoke failed while restart_failed was in flight (bearer's finally replaces it):
+            # the relaunched T3 never answered on the new build, whatever its installer wrote.
+            raise UpdateFailure("restart_failed", cause="t3_not_ready", reason="t3_not_ready") from None
+        if handed_off and error.code != "restart_failed":
+            raise UpdateFailure("restart_failed", cause=error.cause or "unknown", reason=error.reason or "after_handoff") from None
+        if not handed_off and error.code not in ("update_failed", "t3_absent"):
+            raise UpdateFailure("update_failed", cause=error.cause or "unknown",
+                                reason="t3_self_update:" + error.code[:40]) from None
+        raise
+    except OSError:
+        raise UpdateFailure("restart_failed" if handed_off else "update_failed", cause="unknown",
+                            reason="t3_self_update_transport") from None
+    return version
