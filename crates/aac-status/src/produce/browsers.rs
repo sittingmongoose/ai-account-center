@@ -9,7 +9,7 @@
 use super::{ReadProblem, next_problem};
 use serde::Serialize;
 use serde_json::Value as Json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The fixed refusal when the answer is not `{rows: [...]}`.
 pub const UNKNOWN_SHAPE: &str = "browser-check answered in an unknown shape.";
@@ -193,12 +193,28 @@ fn phones(value: Option<&Json>) -> Option<Option<Phones>> {
 /// # Errors
 /// The answer is not an object with a `rows` array (`UNKNOWN_SHAPE`).
 pub fn parse_slots(raw: &Json) -> Result<Vec<BrowserMachine>, &'static str> {
+    parse_slots_with_workers(raw, None)
+}
+
+/// Read browser slots using the gateway's exact worker inventory when available.
+///
+/// # Errors
+/// The answer is not an object with a `rows` array.
+pub fn parse_slots_with_workers(raw: &Json, workers: Option<&[&str]>) -> Result<Vec<BrowserMachine>, &'static str> {
     let rows = raw.get("rows").and_then(Json::as_array).ok_or(UNKNOWN_SHAPE)?;
     let mut result = Vec::new();
+    let mut seen = HashSet::new();
     for row in rows {
         let machine = row.get("machine").cloned().unwrap_or(Json::Null);
-        let name = machine.get("name").and_then(Json::as_str).unwrap_or("");
-        if !crate::computers::known_machine(name, false) {
+        let names = machine["hostnames"].as_array().into_iter().flatten();
+        let Some(name) = std::iter::once(&machine["name"])
+            .chain(names)
+            .filter_map(Json::as_str)
+            .find_map(crate::computers::exact_computer)
+        else {
+            continue;
+        };
+        if !seen.insert(name) {
             continue;
         }
         let state = row.get("state").cloned().unwrap_or(Json::Null);
@@ -243,7 +259,10 @@ pub fn parse_slots(raw: &Json) -> Result<Vec<BrowserMachine>, &'static str> {
             notes.push(snapshot);
         }
         if phone_rows.as_ref().is_some_and(|phones| phones.is_none())
-            && crate::computers::computer(name).is_some_and(|row| row["os"] != "windows")
+            && workers.map_or_else(
+                || crate::computers::computer(name).is_some_and(|row| row["os"] != "windows"),
+                |workers| workers.contains(&name),
+            )
         {
             notes.push("reported no phone count (phones: null), so phones here are unknown".to_owned());
         }
@@ -534,5 +553,24 @@ mod tests {
         let merged = merge_rows(None, first, 3000);
         assert_eq!(merged[0].read_at, Some(None));
         assert_eq!(merged[0].browsers.running, None);
+    }
+
+    #[test]
+    fn fleet_rows_use_exact_registry_names_and_the_gateway_workers() -> Result<(), &'static str> {
+        let raw = serde_json::json!({"rows":[
+            {"machine":{"name":"gtx1070ti","hostnames":["1070ti"]}, "state":{"phones":null}},
+            {"machine":{"name":"1070ti","label":"duplicate"}, "state":{"error":"second"}},
+            {"machine":{"name":"odroid"}, "state":{"phones":null}},
+            {"machine":{"name":"not-odroid"}, "state":{"phones":null}}
+        ]});
+        let rows = parse_slots_with_workers(&raw, Some(&["1070ti"]))?;
+        assert_eq!(
+            rows.iter().map(|row| row.machine.as_str()).collect::<Vec<_>>(),
+            ["1070ti", "odroid"]
+        );
+        assert!(rows[0].error.is_none());
+        assert!(rows[0].notes.is_some());
+        assert!(rows[1].notes.is_none());
+        Ok(())
     }
 }

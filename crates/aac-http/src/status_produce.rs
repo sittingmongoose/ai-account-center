@@ -145,6 +145,7 @@ struct Inner {
     machines: BTreeMap<String, Collected<Sample>>,
     browsers: Collected<Vec<BrowserMachine>>,
     simlock: Collected<SimlockStatus>,
+    simlock_workers: Option<Vec<&'static str>>,
     usage: Option<UsageInput>,
     answers: AnswersFeed,
     pins: Pins,
@@ -184,6 +185,7 @@ impl Inner {
                 .collect(),
             browsers: Collected::empty(),
             simlock: Collected::empty(),
+            simlock_workers: None,
             usage: None,
             answers: AnswersFeed {
                 answers: Vec::new(),
@@ -366,8 +368,15 @@ impl Produce {
         let results: Vec<(String, Result<Sample, String>)> =
             futures_util::future::join_all(pending).await;
         let simlock = find_executable("simlock");
-        let (browsers_result, simlock_result) =
-            tokio::join!(read_browsers(), read_simlock(&simlock));
+        let simlock_result = read_simlock(&simlock).await;
+        let fresh_workers = simlock_result
+            .as_ref()
+            .ok()
+            .and_then(|(_, _, workers)| workers.clone());
+        let workers = fresh_workers
+            .clone()
+            .or_else(|| self.lock().simlock_workers.clone());
+        let browsers_result = read_browsers(workers.as_deref()).await;
         let previous_pins = self.lock().pins.machines.clone();
         let pins = read_pins(&rows, local, previous_pins).await;
         let now_i64 = clamp_i64(now);
@@ -396,7 +405,10 @@ impl Produce {
                 }
             }
             match simlock_result {
-                Ok((status, worker_only)) => {
+                Ok((status, worker_only, workers)) => {
+                    if let Some(workers) = workers {
+                        inner.simlock_workers = Some(workers);
+                    }
                     let problems = simlock_problems(
                         &status,
                         worker_only,
@@ -1033,7 +1045,7 @@ fn apply_machine(
     }
 }
 
-async fn read_browsers() -> Result<Vec<BrowserMachine>, (String, bool)> {
+async fn read_browsers(workers: Option<&[&str]>) -> Result<Vec<BrowserMachine>, (String, bool)> {
     let program = find_executable("browser-check");
     let result = run(
         &program,
@@ -1051,10 +1063,12 @@ async fn read_browsers() -> Result<Vec<BrowserMachine>, (String, bool)> {
             false,
         )
     })?;
-    browsers::parse_slots(&raw).map_err(|reason| (reason.to_owned(), false))
+    browsers::parse_slots_with_workers(&raw, workers).map_err(|reason| (reason.to_owned(), false))
 }
 
-async fn read_simlock(program: &Path) -> Result<(SimlockStatus, bool), (String, bool)> {
+type SimlockReading = (SimlockStatus, bool, Option<Vec<&'static str>>);
+
+async fn read_simlock(program: &Path) -> Result<SimlockReading, (String, bool)> {
     let mut args = vec![
         "status".to_owned(),
         "--json".to_owned(),
@@ -1073,7 +1087,18 @@ async fn read_simlock(program: &Path) -> Result<(SimlockStatus, bool), (String, 
         .map_err(|_| ("simlock answered in an unknown shape.".to_owned(), false))?;
     let status =
         simlock::parse_status(&raw).map_err(|error| (error.message().to_owned(), false))?;
-    Ok((status, worker_only))
+    let workers = raw["workers"]
+        .as_array()
+        .filter(|_| !worker_only)
+        .map(|workers| {
+            workers
+                .iter()
+                .filter_map(|worker| {
+                    aac_status::computers::exact_computer(worker["label"].as_str()?)
+                })
+                .collect()
+        });
+    Ok((status, worker_only, workers))
 }
 
 fn simlock_problems(
@@ -1140,7 +1165,7 @@ mod simlock_tests {
             .expect("fixture script");
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
                 .expect("fixture executable");
-            let (status, local) = read_simlock(&program)
+            let (status, local, _) = read_simlock(&program)
                 .await
                 .expect("Simlock fixture answer");
             assert_eq!(local, worker_only);

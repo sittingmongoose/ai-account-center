@@ -65,17 +65,14 @@ pub fn machine_labels() -> Vec<(&'static str, &'static str)> {
         .unwrap_or_default()
 }
 
-/// `namedComputer`: an exact id, alias or name (case-insensitive), else the first non-legacy
-/// computer whose name the host contains.
+/// Match an exact registry id, machine id, alias or hostname, ignoring case.
 #[must_use]
-pub fn named_computer(name: &str) -> Option<&'static str> {
+pub fn exact_computer(name: &str) -> Option<&'static str> {
     let lower = name.to_lowercase();
-    let rows: Vec<(&str, &Value)> = COMPUTERS
-        .as_object()
-        .map(|rows| rows.iter().map(|(id, row)| (id.as_str(), row)).collect())
-        .unwrap_or_default();
-    for (id, row) in &rows {
+    COMPUTERS.as_object()?.iter().find_map(|(id, row)| {
+        let machine = row["machineId"].as_str()?;
         let exact = id.to_lowercase() == lower
+            || machine.to_lowercase() == lower
             || row["sshAlias"]
                 .as_str()
                 .is_some_and(|alias| alias.to_lowercase() == lower)
@@ -85,11 +82,19 @@ pub fn named_computer(name: &str) -> Option<&'static str> {
                     .filter_map(Value::as_str)
                     .any(|value| value.to_lowercase() == lower)
             });
-        if exact {
-            return row["machineId"].as_str();
-        }
+        exact.then_some(machine)
+    })
+}
+
+/// `namedComputer`: an exact id, alias or name, else the first non-legacy computer
+/// whose name the host contains.
+#[must_use]
+pub fn named_computer(name: &str) -> Option<&'static str> {
+    if let Some(machine) = exact_computer(name) {
+        return Some(machine);
     }
-    let mut fallback = rows;
+    let lower = name.to_lowercase();
+    let mut fallback: Vec<_> = COMPUTERS.as_object()?.iter().collect();
     fallback.sort_by_key(|(_, row)| row["legacy"] == Value::Bool(true));
     fallback
         .into_iter()

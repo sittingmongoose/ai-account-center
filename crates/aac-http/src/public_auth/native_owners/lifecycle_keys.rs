@@ -724,7 +724,6 @@ mod tests {
             },
             HubCache::default(),
             DashboardEvents(tokio::sync::broadcast::channel(4).0),
-            None,
             Default::default(),
         )
         .unwrap();

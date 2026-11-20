@@ -1,5 +1,5 @@
 //! G16c parity: the Status feed's producers against the TypeScript vectors
-//! (`tests/spec/status-produce-vectors.ts`, regenerated from the real TS code).
+//! (recorded in `tests/spec/status-produce-vectors.json` before the Status cut).
 //!
 //! The parsers (browser-check, Simlock, host probes, the busy percent), the answered-cards
 //! merge and the six sources' content are compared with the recorded answers. The sources are

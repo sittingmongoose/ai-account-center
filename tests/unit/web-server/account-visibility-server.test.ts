@@ -15,7 +15,6 @@ import { WebSocket } from 'ws';
 import { startServer } from '../../../src/web-server';
 import { waitUntil } from '../../shared/fixtures/process-state';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
-import * as accountAnalytics from '../../../src/web-server/agent-usage/usage-sample-events';
 
 const ENVIRONMENT = [
   'CCS_HOME',
@@ -57,7 +56,6 @@ beforeEach(async () => {
   process.env.CCS_DASHBOARD_PASSWORD_HASH = passwordHash;
   process.env.CCS_SESSION_SECRET = 'isolated-visibility-server-session-secret';
   for (const key of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) loginRateLimiter.resetKey(key);
-  spyOn(accountAnalytics, 'startNativeUsageSamples').mockImplementation(() => () => {});
   instance = await startServer({ port: 0, host: '127.0.0.1', staticDir });
   base = `http://127.0.0.1:${(instance.server.address() as AddressInfo).port}`;
 });

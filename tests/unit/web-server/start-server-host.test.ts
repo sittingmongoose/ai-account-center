@@ -7,7 +7,6 @@ import { spawn, execFileSync } from 'child_process';
 
 import { startServer } from '../../../src/web-server';
 import { CodexProfileRenewalService } from '../../../src/web-server/services/codex-profile-renewal-service';
-import * as analyticsSampling from '../../../src/web-server/agent-usage/usage-sample-events';
 
 const instances: Array<Awaited<ReturnType<typeof startServer>>> = [];
 const staticDirs: string[] = [];
@@ -16,9 +15,6 @@ let fixtureHome = '';
 let originalEnv: Partial<Record<(typeof fixtureEnvKeys)[number], string | undefined>> = {};
 let renewalStart: ReturnType<typeof spyOn<CodexProfileRenewalService, 'start'>>;
 let renewalStop: ReturnType<typeof spyOn<CodexProfileRenewalService, 'stop'>>;
-let analyticsStart: ReturnType<
-  typeof spyOn<typeof analyticsSampling, 'startNativeUsageSamples'>
->;
 
 beforeEach(() => {
   fixtureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-server-fixture-'));
@@ -32,9 +28,6 @@ beforeEach(() => {
   // account activation and usage helpers unrelated to these server fixtures.
   renewalStart = spyOn(CodexProfileRenewalService.prototype, 'start').mockImplementation(() => {});
   renewalStop = spyOn(CodexProfileRenewalService.prototype, 'stop');
-  analyticsStart = spyOn(analyticsSampling, 'startNativeUsageSamples').mockImplementation(
-    () => () => {}
-  );
   const realFetch = globalThis.fetch;
   spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const target = new URL(
@@ -88,7 +81,6 @@ function dispatchUpgrade(instance: Awaited<ReturnType<typeof startServer>>, url:
 afterEach(async () => {
   // Saved-login renewal now belongs to the native service, including its stop path.
   expect(renewalStart).not.toHaveBeenCalled();
-  expect(analyticsStart).toHaveBeenCalledTimes(1);
   while (instances.length > 0) {
     const instance = instances.pop();
     if (!instance) {

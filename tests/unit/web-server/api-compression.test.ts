@@ -41,7 +41,6 @@ import {
 } from '../../../src/web-server/services/dashboard-auth-files';
 import { resetDeviceStoreForTests } from '../../../src/web-server/services/dashboard-device-store';
 import { resetSetupCodeForTests } from '../../../src/web-server/services/dashboard-setup-code';
-import * as accountAnalytics from '../../../src/web-server/agent-usage/usage-sample-events';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
 
 interface RawResponse {
@@ -278,7 +277,6 @@ beforeEach(async () => {
   );
   fs.writeFileSync(path.join(staticDir, 'view-model.mjs'), 'export default 1;\n'.repeat(200));
 
-  spyOn(accountAnalytics, 'startNativeUsageSamples').mockImplementation(() => () => {});
   // Compression needs stable synthetic bytes. The real dashboard collector can
   // read shared quota snapshots even with CCS_HOME isolated, and cache aging
   // between these two requests changes the payload independently of compression.

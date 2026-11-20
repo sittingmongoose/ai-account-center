@@ -35,7 +35,6 @@ import { invalidateDashboardNetworkSettings } from '../../src/web-server/service
 import { loginRateLimiter } from '../../src/web-server/middleware/auth-middleware';
 import { setTrustedProxyResolver } from '../../src/web-server/middleware/secure-transport';
 import { resetAuthRateLimitsForTests } from '../../src/web-server/routes/auth-rate-limits';
-import * as accountAnalytics from '../../src/web-server/agent-usage/usage-sample-events';
 import { resetDashboardAuthStateForTests } from '../../src/web-server/services/dashboard-auth-state';
 import {
   setAuthClockForTests,
@@ -281,7 +280,6 @@ async function startE2E(host: string = '127.0.0.1'): Promise<E2E> {
   await resetAuthRateLimitsForTests();
 
   const stubs: Array<{ mockRestore: () => void }> = [
-    spyOn(accountAnalytics, 'startNativeUsageSamples').mockImplementation(() => () => {}),
     spyOn(usageTransport, 'runAdditionalUsageSource').mockImplementation(fakeCollector),
   ];
 

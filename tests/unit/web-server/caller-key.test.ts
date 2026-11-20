@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { Request } from 'express';
 
-import { callerKey } from '../../../src/web-server/routes/caller-key';
+import { callerKey } from '../../fixtures/reset-adapter/caller-key';
 
 describe('callerKey', () => {
   const request = (fields: Record<string, unknown>) => fields as unknown as Request;

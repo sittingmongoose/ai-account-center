@@ -23,7 +23,6 @@ import { invalidateConfigCache } from '../../../src/config/config-loader-facade'
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
 import { resetAuthRateLimitsForTests } from '../../../src/web-server/routes/auth-rate-limits';
 import { setTrustedProxyResolver } from '../../../src/web-server/middleware/secure-transport';
-import * as accountAnalytics from '../../../src/web-server/agent-usage/usage-sample-events';
 import { resetDashboardAuthStateForTests } from '../../../src/web-server/services/dashboard-auth-state';
 import { resetDeviceStoreForTests } from '../../../src/web-server/services/dashboard-device-store';
 import { resetSetupCodeForTests } from '../../../src/web-server/services/dashboard-setup-code';
@@ -63,7 +62,7 @@ beforeEach(() => {
   resetDeviceStoreForTests();
   resetSetupCodeForTests();
   invalidateConfigCache();
-  stubs = [spyOn(accountAnalytics, 'startNativeUsageSamples').mockImplementation(() => () => {})];
+  stubs = [];
 });
 
 afterEach(async () => {

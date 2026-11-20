@@ -95,7 +95,7 @@
   "src/store/activity-coverage.ts": "fc7924b9d670121ae3040b79496a68e76fd54046c1b79b7e0e1d7c0e98eb6c03",
   "src/store/activity-reports.ts": "a99f9982c1c295ba68cffda29d3c82db636efc6fcfa743285fc21dc87bbca37f",
   "src/store/native-loader.ts": "1f4fc9356c9f468078170330c03e76ae84c5a4c3df9648e28f7c3bf2a14c7f2b",
-  "src/store/store-host-client.ts": "3c90a15eb484f9a0e8f620062bdfe98d5848ba0ba0775da80fdb6d4ecadd47f1",
+  "src/store/store-host-client.ts": "9b5d45dbcca210aec21ed003fd488587824e6fd341b9daa345936debf4e4100a",
   "src/store/store-service.ts": "c4ea53c8b998bc7bcd8ac9346de85cbafa150a16d645b21f16d775967c312339",
   "src/store/usage-observations.ts": "63604e15052d6210edd56a43228143004b780170ef206b008646641ff047277f",
   "src/store/usage-report.ts": "f60b812909733e183dd577bb30c23d5e13be22253d73cfcfeb9ba9b6eb6ef271",

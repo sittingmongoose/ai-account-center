@@ -181,6 +181,8 @@ struct PublicSampling {
     server: Value,
     status: std::sync::Weak<super::owner_host::OwnerHost>,
     #[cfg(unix)]
+    store: bool,
+    #[cfg(unix)]
     share_without_store: Option<crate::usage_snapshot::UsageSnapshot>,
     #[cfg(windows)]
     share: crate::usage_snapshot::UsageSnapshot,
@@ -236,7 +238,6 @@ impl NativeOwners {
         groups: Groups,
         hub: HubCache,
         events: DashboardEvents,
-        worker_directory: Option<PathBuf>,
         status: std::sync::Weak<super::owner_host::OwnerHost>,
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
@@ -330,6 +331,8 @@ impl NativeOwners {
                 signins: ClaudeSignInRenewalReader::new(root.clone(), Default::default()),
                 server,
                 status,
+                #[cfg(unix)]
+                store: groups.store,
                 #[cfg(unix)]
                 share_without_store: (!groups.store)
                     .then(|| crate::usage_snapshot::UsageSnapshot::new(root, None)),
@@ -712,6 +715,15 @@ impl Usage {
                         owner.publish();
                         if let Some(host) = sampling.status.upgrade() {
                             host.record_status_sample(&cache).await;
+                        }
+                        #[cfg(unix)]
+                        if sampling.store {
+                            super::native_reads::publish_usage(
+                                owner.root.clone(),
+                                &cache,
+                                super::now(),
+                            )
+                            .await;
                         }
                         if let Some(payload) = owner.share_sample(&cache, &sampling.signins).await {
                             sampling.publish_share(&owner.root, payload).await;

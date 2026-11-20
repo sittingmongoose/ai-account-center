@@ -520,12 +520,7 @@ pub(crate) async fn run_public_at(
         groups
     });
     let mut worker = if cut {
-        sidecar::Sidecar::start(
-            &root,
-            address,
-            native_collection,
-        )
-        .await?
+        sidecar::Sidecar::start(&root, address, native_collection).await?
     } else {
         None
     };
@@ -546,11 +541,7 @@ pub(crate) async fn run_public_at(
         (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
-        let worker_directory = snapshot
-            .as_deref()
-            .and_then(std::path::Path::parent)
-            .map(std::path::Path::to_owned);
-        host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
+        host.start_public(groups, hub.clone(), auth.events())?;
         host.public_owners()
     } else {
         None

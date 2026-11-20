@@ -21,17 +21,6 @@ use std::sync::{
 };
 use std::time::Duration;
 
-pub(crate) async fn jobs(host: Arc<StoreHost>, stop: Arc<std::sync::atomic::AtomicBool>) {
-    use std::{sync::atomic::Ordering, time::Duration};
-    tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
-    while !stop.load(Ordering::Acquire) {
-        let pass = Arc::clone(&host);
-        let _ =
-            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
-        tokio::time::sleep(Duration::from_millis(MAINTAIN_EVERY_MS)).await;
-    }
-}
-
 /// Store calls in flight at most (L1's store pool size). Unlike the read pools, a full pool
 /// queues: the NAPI binding queues on libuv's pool too, and a producer must not lose a
 /// write to a `busy` decline the in-process store never gave.

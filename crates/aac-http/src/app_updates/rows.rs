@@ -71,27 +71,6 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
     let code = row["messageCode"].as_str()?;
     let label = CONTRACT["labels"][app].as_str()?;
     let base_message = CONTRACT["messages"][code].as_str()?;
-    let wrapper = row.get("wrapperVersion");
-    let reason = row.get("qualifyReason");
-    if (wrapper.is_some() || reason.is_some()) && code != "antigravity_acp_isolation_unverified" {
-        return None;
-    }
-    if wrapper.is_some_and(|value| {
-        !value.is_null()
-            && !value
-                .as_str()
-                .is_some_and(|text| WRAPPER_VERSION.is_match(text))
-    }) {
-        return None;
-    }
-    let reason = match reason {
-        None | Some(Value::Null) => None,
-        Some(value) => Some(value.as_str().filter(|text| {
-            !text.is_empty()
-                && text.encode_utf16().count() <= 160
-                && !text.chars().any(|character| character.is_ascii_control())
-        })?),
-    };
     let quota_reset = match row.get("quotaReset") {
         None => None,
         Some(value)
@@ -291,28 +270,6 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
                 quota_reset?
             )
         }
-        "antigravity_acp_qualified" => format!(
-            "Updated Antigravity ACP to {}; account isolation verified",
-            current?
-        ),
-        "antigravity_acp_isolation_unverified" => {
-            let runs = match wrapper {
-                None => "T3 keeps using the release it ran before".to_owned(),
-                Some(Value::Null) => {
-                    "no qualified Antigravity ACP runtime is available to T3".to_owned()
-                }
-                Some(value) => format!("T3 keeps using {}", value.as_str()?),
-            };
-            let mut message = format!(
-                "Updated Antigravity ACP to {}; account isolation is not verified yet, so {runs}",
-                current?
-            );
-            if let Some(reason) = reason {
-                message.push_str(". The check could not test it: ");
-                message.push_str(reason);
-            }
-            message
-        }
         _ => base_message.to_owned(),
     };
     if let Some(note) = older_copy(label, &strays, current.or(previous)) {
@@ -334,12 +291,6 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
     }
     if let Some(reset) = quota_reset {
         public["quotaReset"] = json!(reset);
-    }
-    if let Some(wrapper) = wrapper {
-        public["wrapperVersion"] = wrapper.clone();
-    }
-    if let Some(reason) = reason {
-        public["qualifyReason"] = json!(reason);
     }
     if let Some(parts) = parts {
         public["parts"] = json!(parts);
@@ -559,6 +510,49 @@ fn owner(value: &Value) -> Option<Value> {
     (!owner.is_empty()).then_some(Value::Object(owner))
 }
 
+fn legacy_isolation_message(code: &str, value: &Value) -> Option<String> {
+    let current = version(&value["version"]);
+    let wrapper = value.get("wrapperVersion");
+    let reason = value["qualifyReason"].as_str();
+    if wrapper.is_some_and(|value| {
+        !value.is_null()
+            && !value
+                .as_str()
+                .is_some_and(|text| WRAPPER_VERSION.is_match(text))
+    }) || reason.is_some_and(|text| {
+        text.is_empty()
+            || text.encode_utf16().count() > 160
+            || text.chars().any(|c| c.is_ascii_control())
+    }) {
+        return None;
+    }
+    Some(match code {
+        "antigravity_acp_qualified" => format!(
+            "Updated Antigravity ACP to {}; account isolation verified",
+            current?
+        ),
+        "antigravity_acp_isolation_unverified" => {
+            let runs = match wrapper {
+                None => "T3 keeps using the release it ran before".to_owned(),
+                Some(Value::Null) => {
+                    "no qualified Antigravity ACP runtime is available to T3".to_owned()
+                }
+                Some(value) => format!("T3 keeps using {}", value.as_str()?),
+            };
+            let mut message = format!(
+                "Updated Antigravity ACP to {}; account isolation is not verified yet, so {runs}",
+                current?
+            );
+            if let Some(reason) = reason {
+                message.push_str(". The check could not test it: ");
+                message.push_str(reason);
+            }
+            message
+        }
+        _ => return None,
+    })
+}
+
 pub(super) fn restore(host: Host, app: &str, value: &Value) -> Value {
     let mut input = value.clone();
     input["platform"] = json!(host.os);
@@ -570,6 +564,8 @@ pub(super) fn restore(host: Host, app: &str, value: &Value) -> Value {
         input["messageCode"] = json!(code);
         if let Some(row) = normalize(host, app, &input)
             && (row["message"] == value["message"]
+                || legacy_isolation_message(code, value)
+                    .is_some_and(|word| value["message"] == word)
                 || array(&CONTRACT["legacyMessages"][code]).contains(&value["message"])
                 || (app == "antigravity-cli"
                     && code == "updated"

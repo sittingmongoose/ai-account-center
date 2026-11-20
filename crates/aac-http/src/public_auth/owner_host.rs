@@ -229,14 +229,12 @@ impl OwnerHost {
         groups: native_owners::Groups,
         hub: HubCache,
         events: DashboardEvents,
-        worker_directory: Option<PathBuf>,
     ) -> std::io::Result<()> {
         let (native, jobs) = native_owners::NativeOwners::start(
             self.root.clone(),
             groups,
             hub,
             events,
-            worker_directory,
             std::sync::Arc::downgrade(self),
         )?;
         *self.public.lock().unwrap_or_else(|p| p.into_inner()) =
@@ -979,7 +977,7 @@ mod windows_tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_windows_owner_preserves_store_cache_retention_and_share_backup() {
         const FIXTURE: &str = "AAC_TEST_WINDOWS_STORE_ROOT";
         if let Some(root) = std::env::var_os(FIXTURE).map(PathBuf::from) {
@@ -994,8 +992,63 @@ mod windows_tests {
                 Some(root.join("snapshot").as_path())
             );
             assert!(!boot.share_backup_off);
-            store.job_pass(aac_store::engine::now_ms());
+            let hour = 3_600_000;
+            let sampled = (aac_store::engine::now_ms() as i64 / hour - 48) * hour;
+            let at = aac_num::ecma::to_iso_string(sampled).expect("sample timestamp");
+            let event = serde_json::json!({
+                "now": sampled,
+                "accounts": [{
+                    "id": "codex:fixture", "provider": "codex", "email": null,
+                    "status": "ok", "platform": "windows", "source": "Fixture",
+                    "isActive": true, "sampledAt": at, "windows": [{
+                        "key": "five_hour", "label": "Five hours", "usedPercent": 27,
+                        "windowMinutes": 300
+                    }]
+                }]
+            });
+            store
+                .call("recordDashboard".into(), event.to_string())
+                .await
+                .expect("seed Store reading");
             let backup = root.join("share/ai-account-center/store-backups");
+            tokio::time::advance(std::time::Duration::from_secs(181)).await;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                let answer = store
+                    .call("hostJobs".into(), "{}".into())
+                    .await
+                    .expect("job state");
+                let state: serde_json::Value = serde_json::from_str(&answer).expect("job JSON");
+                if state["jobs"]["passes"]
+                    .as_u64()
+                    .is_some_and(|passes| passes > 0)
+                {
+                    assert!(state["jobs"]["lastError"].is_null(), "{state}");
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the owner never ran Store jobs"
+                );
+                tokio::task::spawn_blocking(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                })
+                .await
+                .expect("wait for job");
+            }
+            let query = serde_json::json!({"windowKey": "five_hour", "resolution": "hour",
+                "fromMs": sampled, "toMs": sampled + hour - 1});
+            let answer = store
+                .call("seriesPoints".into(), query.to_string())
+                .await
+                .expect("hourly rollup");
+            let rollup: serde_json::Value = serde_json::from_str(&answer).expect("rollup JSON");
+            assert!(
+                rollup["series"][0]["points"]
+                    .as_array()
+                    .is_some_and(|points| !points.is_empty()),
+                "{rollup}"
+            );
             assert!(
                 backup.read_dir().unwrap().next().is_some(),
                 "a backup reached the fixture share"

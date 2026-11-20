@@ -102,69 +102,31 @@ fn muse_quota_notes_decline_outside_their_app_status_and_reset_shapes() {
 }
 
 #[test]
-fn antigravity_isolation_rows_preserve_the_verdict_and_restore() {
+fn retired_antigravity_isolation_rows_remain_updated() {
     let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
     let app = "antigravity-acp";
-    let mut input = json!({
-        "appId": app, "platform": host.os, "status": "updated", "version": "1.4.6",
-        "manager": "official-download", "messageCode": "antigravity_acp_qualified",
-    });
-    let verified = rows::normalize(host, app, &input).expect("verified row");
-    assert_eq!(
-        verified["message"],
-        "Updated Antigravity ACP to 1.4.6; account isolation verified"
-    );
-    assert!(verified.get("wrapperVersion").is_none());
-    assert_eq!(rows::restore(host, app, &verified), verified);
-    input["qualifyReason"] = json!("no private bus");
-    assert!(rows::normalize(host, app, &input).is_none());
-
-    input["messageCode"] = json!("antigravity_acp_isolation_unverified");
-    input["wrapperVersion"] = json!("1.4.5");
-    let unavailable = rows::normalize(host, app, &input).expect("unverified row");
-    assert_eq!(unavailable["wrapperVersion"], "1.4.5");
-    assert_eq!(unavailable["qualifyReason"], "no private bus");
-    assert_eq!(
-        unavailable["message"],
-        "Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so T3 keeps using 1.4.5. The check could not test it: no private bus"
-    );
-    assert_eq!(rows::restore(host, app, &unavailable), unavailable);
-
-    input["qualifyReason"] = Value::Null;
-    input["wrapperVersion"] = Value::Null;
-    let none = rows::normalize(host, app, &input).expect("null wrapper row");
-    assert!(none.get("wrapperVersion").is_some_and(Value::is_null));
-    assert!(none.get("qualifyReason").is_none());
-    assert!(
-        none["message"]
-            .as_str()
-            .unwrap_or_default()
-            .ends_with("no qualified Antigravity ACP runtime is available to T3")
-    );
-    input.as_object_mut().expect("row").remove("wrapperVersion");
-    let unread = rows::normalize(host, app, &input).expect("unread wrapper row");
-    assert!(
-        unread["message"]
-            .as_str()
-            .unwrap_or_default()
-            .ends_with("T3 keeps using the release it ran before")
-    );
-
-    for bad in [json!("has space"), json!("x".repeat(65)), json!(true)] {
-        input["wrapperVersion"] = bad;
+    for code in [
+        "antigravity_acp_qualified",
+        "antigravity_acp_isolation_unverified",
+    ] {
+        let mut input = json!({
+            "appId": app, "platform": host.os, "status": "updated", "version": "1.4.6",
+            "manager": "official-download", "messageCode": code,
+        });
+        let row = rows::normalize(host, app, &input).expect("legacy reply");
+        assert_eq!(row["status"], "updated");
+        assert!(row.get("wrapperVersion").is_none());
+        assert!(row.get("qualifyReason").is_none());
+        let mut archived = row;
+        archived["message"] = json!(if code == "antigravity_acp_qualified" {
+            "Updated Antigravity ACP to 1.4.6; account isolation verified"
+        } else {
+            "Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so T3 keeps using the release it ran before"
+        });
+        assert_eq!(rows::restore(host, app, &archived)["status"], "updated");
+        input["status"] = json!("current");
         assert!(rows::normalize(host, app, &input).is_none());
     }
-    input["wrapperVersion"] = json!("1.4.5");
-    for bad in [json!(""), json!("line\nbreak"), json!("x".repeat(161))] {
-        input["qualifyReason"] = bad;
-        assert!(rows::normalize(host, app, &input).is_none());
-    }
-    input["qualifyReason"] = Value::Null;
-    input["status"] = json!("current");
-    assert!(rows::normalize(host, app, &input).is_none());
-    input["status"] = json!("updated");
-    input["appId"] = json!("muse-code");
-    assert!(rows::normalize(host, "muse-code", &input).is_none());
 }
 
 #[test]

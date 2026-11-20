@@ -16,19 +16,12 @@ import { buildRollupExports } from '../../../src/store/usage-exports';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
 import { storeObservationFromAccount } from '../../../src/store/usage-observations';
 import {
-  AccountAnalyticsService,
-  type AccountAnalyticsSampleEvent,
-  onAccountAnalyticsSample,
-} from '../../../src/web-server/services/account-analytics-service';
-import {
   appendAccountAnalyticsSnapshot,
   FileAccountAnalyticsHistoryStore,
   type AccountAnalyticsHistoryData,
 } from '../../../src/web-server/services/account-analytics-history';
 import { handleStoreCommand } from '../../../src/commands/store-command';
-import type {
-  DashboardAccount,
-} from '../../../src/web-server/services/account-dashboard-types';
+import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 
 const MODULE = path.resolve(__dirname, '../../../dist/native', nativeModuleName());
 const loaded = loadStoreTestModule({ env: {}, file: MODULE });
@@ -389,28 +382,5 @@ describe.skipIf(!haveModule)('a store from an unreleased test build', () => {
       if (previous === undefined) delete process.env.CCS_HOME;
       else process.env.CCS_HOME = previous;
     }
-  });
-});
-
-describe('the dashboard without the native module', () => {
-  it('keeps the JSON history path when no store is available', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'nostore-'));
-    const service = new AccountAnalyticsService({
-      getDashboard: async () => dashboardAt(START),
-      getActivity: async () => ({ ...noActivity, coverage: null }) as never,
-      usageStore: async () => null,
-      createHistoryStore: () => memory(),
-      now: () => START,
-      scope: () => dir,
-    });
-    const result = await service.get({
-      platform: 'mac',
-      range: '24h',
-      provider: 'all',
-      account: 'all',
-      tz: 'UTC',
-    });
-    expect(result.history.retentionDays).toBe(30);
-    expect(result.accounts.length).toBe(2);
   });
 });

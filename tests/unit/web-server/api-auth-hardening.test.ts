@@ -29,7 +29,6 @@ import type { AddressInfo } from 'net';
 import { startServer } from '../../../src/web-server';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
 import { apiRoutes } from '../../../src/web-server/routes';
-import * as accountAnalytics from '../../../src/web-server/agent-usage/usage-sample-events';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
 
 const FIXTURE_ENVIRONMENT = [
@@ -178,7 +177,6 @@ beforeEach(async () => {
   process.on('uncaughtException', recordProcessFailure);
 
   // Background work started by startServer is unrelated to these checks.
-  spyOn(accountAnalytics, 'startNativeUsageSamples').mockImplementation(() => () => {});
   // Data behind every route is stubbed, so a guard failure shows as a stub call.
   serviceStubs = [
     spyOn(accountDashboard, 'getAccountDashboard').mockResolvedValue({ stub: true } as never),

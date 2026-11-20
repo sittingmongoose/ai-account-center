@@ -15,7 +15,7 @@ import {
   RustStoreError,
 } from '../web-server/rust-service-transport';
 import { loadNativeStore, type NativeLoadResult, type NativeStoreHandle } from './native-loader';
-import { requestNativeFeed } from '../web-server/native-collection-feed';
+import { requestNativeStore } from '../web-server/native-collection-feed';
 
 /** Shutdown must reach the supervisor even when a store call never settles. */
 export const STORE_CLOSE_DEADLINE_MS = 3000;
@@ -37,7 +37,7 @@ export class DashboardStoreHandle implements NativeStoreHandle {
     if (!/^[A-Za-z0-9]{1,32}$/.test(method))
       throw new RustStoreError('invalid: unknown store method');
     const route = method === 'open' ? 'status' : method;
-    const response = await requestNativeFeed(`/store/${route}`, {
+    const response = await requestNativeStore(`/store/${route}`, {
       method: 'POST',
       body: method === 'open' ? '{}' : args,
     }).catch(() => {
