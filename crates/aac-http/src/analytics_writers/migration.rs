@@ -593,39 +593,47 @@ mod tests {
 
     #[test]
     fn analytics_migration_backs_off_heavy_failures_and_continues_other_files() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().expect("fixture home");
         let root = home.path();
         let dir = root.join("store");
-        let open = || aac_store::ops::open_engine(&dir.to_string_lossy(), None, None).unwrap();
+        let open = || {
+            aac_store::ops::open_engine(&dir.to_string_lossy(), None, None)
+                .expect("open fixture store")
+        };
         let codex = root.join("cache/codex-native-usage-v1.json");
         let quota = root.join("account-analytics/quota-history-v1.json");
         let cursor = root.join("cache/cursor-quota-v1.json");
-        fs::create_dir_all(codex.parent().unwrap()).unwrap();
-        fs::create_dir_all(quota.parent().unwrap()).unwrap();
-        fs::write(&codex, b"{\"version\":2,\"files\":{}}").unwrap();
-        fs::write(&cursor, b"{}").unwrap();
+        fs::create_dir_all(root.join("cache")).expect("cache directory");
+        fs::create_dir_all(root.join("account-analytics")).expect("quota directory");
+        fs::write(&codex, b"{\"version\":2,\"files\":{}}").expect("write unsupported cache");
+        fs::write(&cursor, b"{}").expect("write later migration candidate");
         fs::File::create(&quota)
-            .unwrap()
+            .expect("create quota fixture")
             .set_len(MAX_FILE + 1)
-            .unwrap();
+            .expect("size fixture above import cap");
         let store = open();
         let start = fixture(&store, root).now;
-        assert!(!fixture(&store, root).run().unwrap());
+        assert!(!fixture(&store, root).run().expect("first migration pass"));
         assert!(codex.is_file() && quota.is_file() && !cursor.exists());
-        store.close().unwrap();
+        store.close().expect("close before retry");
         drop(store);
         let store = open();
         let health = || {
-            aac_store::ops::call(&store, "status", "{}").unwrap()
+            aac_store::ops::call(&store, "status", "{}").expect("read migration health")
             ["storageHealth"]["analyticsMigrationFailures"].clone()
         };
         let codex_key = "legacy/cache/codex-native-usage-v1.json";
         let first = health();
-        assert!(first[QUOTA]["reason"].as_str().unwrap().contains("256 MiB"));
+        assert!(
+            first[QUOTA]["reason"]
+                .as_str()
+                .expect("quota failure reason")
+                .contains("256 MiB")
+        );
         assert!(
             first[codex_key]["reason"]
                 .as_str()
-                .unwrap()
+                .expect("Codex failure reason")
                 .contains("unsupported")
         );
         assert!(
@@ -634,21 +642,25 @@ mod tests {
                 ..fixture(&store, root)
             }
             .run()
-            .unwrap()
+            .expect("skip during backoff")
         );
         assert_eq!(health(), first);
         for attempts in 2..=7 {
             let at = health()[codex_key]["retryAtMs"]
                 .as_i64()
-                .unwrap()
-                .max(health()[QUOTA]["retryAtMs"].as_i64().unwrap());
+                .expect("Codex retry time")
+                .max(
+                    health()[QUOTA]["retryAtMs"]
+                        .as_i64()
+                        .expect("quota retry time"),
+                );
             assert!(
                 !Migration {
                     now: at,
                     ..fixture(&store, root)
                 }
                 .run()
-                .unwrap()
+                .expect("retry after backoff")
             );
             let state = health();
             assert_eq!(state[codex_key]["attempts"], attempts);
@@ -662,10 +674,10 @@ mod tests {
 
     #[test]
     fn analytics_migration_retires_quota_after_recording_valid_rows_and_named_rejects() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().expect("fixture home");
         let root = home.path();
-        let store =
-            aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None).unwrap();
+        let store = aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None)
+            .expect("open fixture store");
         let mut record = json!({
             "identity":"a".repeat(64), "accountId":"claude:fixture",
             "sampledAt":"2026-11-15T08:40:00.000Z","observedAt":"2026-11-15T08:40:00.000Z",
@@ -677,10 +689,10 @@ mod tests {
         let records = vec![valid, record];
         let body = json!({"records":records}).to_string();
         let quota = root.join("account-analytics/quota-history-v1.json");
-        fs::create_dir_all(quota.parent().unwrap()).unwrap();
-        fs::write(&quota, &body).unwrap();
+        fs::create_dir_all(root.join("account-analytics")).expect("quota directory");
+        fs::write(&quota, &body).expect("write quota history with one invalid reading");
         let migration = fixture(&store, root);
-        assert!(!migration.run().unwrap());
+        assert!(!migration.run().expect("stage quota history"));
         let digest = aac_core::sha256_hex(body.as_bytes());
         let source = sampler::BackfillSource {
             label: "quota-history-v1.json".into(),
@@ -695,23 +707,27 @@ mod tests {
             migration.now,
             0,
         )
-        .unwrap();
+        .expect("import valid quotas and record the rejection");
         assert_eq!((report.sampled, report.rejected), (1, 1));
-        assert!(migration.run().unwrap());
+        assert!(migration.run().expect("retire the verified quota file"));
         assert!(!quota.exists());
         assert_eq!(
-            analytics_cache::archived(&store, QUOTA).unwrap().unwrap(),
+            analytics_cache::archived(&store, QUOTA)
+                .expect("read quota archive")
+                .expect("quota bytes preserved"),
             body.as_bytes()
         );
-        let replay = sampler::backfill(&store, &[source], &providers, migration.now, 0).unwrap();
+        let replay = sampler::backfill(&store, &[source], &providers, migration.now, 0)
+            .expect("rerun quota import");
         assert_eq!((replay.files_already_imported, replay.records), (1, 0));
         let receipt = store
             .get_meta(&format!("ts:backfill:{digest}"))
-            .unwrap()
-            .unwrap();
-        let receipt: Value = serde_json::from_str(&receipt).unwrap();
+            .expect("read quota import receipt")
+            .expect("quota import receipt exists");
+        let receipt: Value = serde_json::from_str(&receipt).expect("parse quota receipt");
         assert_eq!(receipt["rejects"][0]["index"], 1);
-        let status = aac_store::ops::call(&store, "status", "{}").unwrap();
+        let status =
+            aac_store::ops::call(&store, "status", "{}").expect("read quota rejection health");
         assert_eq!(
             status["storageHealth"]["quotaBackfillRejections"][digest]["count"],
             1
