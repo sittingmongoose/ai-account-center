@@ -39,6 +39,7 @@ pub(super) type QuotaRows = Arc<
         + Sync,
 >;
 
+const HISTORY_FILE: &str = "plan-usage-history.json";
 const MISSING_HISTORY: &str = "CCS_DESKTOP_USAGE_MISSING";
 const MAX_HISTORY_BYTES: u64 = 1024 * 1024;
 const SSH_TIMEOUT_MS: u64 = 8_000;
@@ -344,19 +345,28 @@ impl Profiles {
         let Some(computer) = self.agents.computer(&selector, options.deadline).await else {
             return HistoryRead::Failed;
         };
+        let mut input = Vec::new();
         let argv: Vec<OsString> = if platform == "mac" {
+            let history = format!("{}/{HISTORY_FILE}", profile_path.trim_end_matches('/'));
             [
                 "/bin/sh",
                 "-c",
                 MAC_HISTORY,
                 "aac-desktop-history",
-                profile_path,
+                &history,
             ]
             .into_iter()
             .map(OsString::from)
             .collect()
         } else {
-            let script = windows_history_script(profile_path);
+            let directory = profile_path
+                .trim_end_matches(['\\', '/'])
+                .replace('/', "\\");
+            // Keep the supported path length out of the encoded SSH command line.
+            input = BASE64
+                .encode(format!("{directory}\\{HISTORY_FILE}"))
+                .into_bytes();
+            let script = windows_history_script();
             let encoded = BASE64.encode(utf16le(&script));
             vec![
                 OsString::from("powershell.exe"),
@@ -366,7 +376,7 @@ impl Profiles {
                 OsString::from(encoded),
             ]
         };
-        let Ok(output) = computer.execute(&argv, &[], &options).await else {
+        let Ok(output) = computer.execute(&argv, &input, &options).await else {
             return HistoryRead::Failed;
         };
         if output.code != Some(0) {
@@ -703,10 +713,9 @@ fn safe_path<'a>(value: &'a str, platform: &str) -> Option<&'a str> {
     absolute.then_some(value)
 }
 
-fn windows_history_script(profile_path: &str) -> String {
-    let history = profile_path.replace('\'', "''");
+fn windows_history_script() -> String {
     format!(
-        "$ErrorActionPreference = 'Stop'; $history = '{history}'; if (-not [IO.File]::Exists($history)) {{ [Console]::Write('{MISSING_HISTORY}'); exit 0 }}; if ((Get-Item -LiteralPath $history).Length -gt {MAX_HISTORY_BYTES}) {{ exit 1 }}; [Console]::Write([IO.File]::ReadAllText($history))"
+        "$ErrorActionPreference = 'Stop'; $history = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd())); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); if (-not [IO.File]::Exists($history)) {{ [Console]::Write('{MISSING_HISTORY}'); exit 0 }}; if ((Get-Item -LiteralPath $history).Length -gt {MAX_HISTORY_BYTES}) {{ exit 1 }}; [Console]::Write([IO.File]::ReadAllText($history))"
     )
 }
 
@@ -1000,9 +1009,10 @@ mod tests {
     }
 
     #[test]
-    fn the_history_script_is_the_reference_text() {
-        assert!(windows_history_script(r"C:\P").contains("$history = 'C:\\P'"));
-        assert!(windows_history_script("C:'P").contains("C:''P"));
+    fn windows_history_uses_a_literal_path_read_from_stdin() {
+        let script = windows_history_script();
+        assert!(script.contains("[Console]::In.ReadToEnd()"));
+        assert!(script.contains("Get-Item -LiteralPath $history"));
         assert_eq!(utf16le("a"), vec![97, 0]);
     }
 

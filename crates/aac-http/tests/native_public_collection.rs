@@ -37,18 +37,28 @@ async fn json_reply(response: Response, status: StatusCode, no_store: bool) -> V
 
 #[tokio::test]
 async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker() {
-    public_transport_fixture(false).await;
+    public_transport_fixture(false, false).await;
 }
 
 #[tokio::test]
 async fn the_lifecycle_session_probe_reaches_the_pinned_agent() {
-    public_transport_fixture(true).await;
+    public_transport_fixture(true, false).await;
 }
 
-async fn public_transport_fixture(agent_on: bool) {
+#[tokio::test]
+async fn public_usage_reads_populated_history_on_both_hosts() {
+    public_transport_fixture(false, true).await;
+}
+
+async fn public_transport_fixture(agent_on: bool, history_only: bool) {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let password = "fixture-public-password";
+    let windows_profile = if history_only {
+        "C:/Users/fixture/AppData/Roaming/Claude-fixture/"
+    } else {
+        r"C:\Users\fixture\AppData\Roaming\Claude-fixture"
+    };
     file(
         &root,
         "config.yaml",
@@ -77,7 +87,7 @@ async fn public_transport_fixture(agent_on: bool) {
                 "sshHost":"jared-mac"}
         },{
             "id":"fixture-win","email":"windows@example.invalid",
-            "windows":{"launcherName":"Claude Fixture","profilePath":"C:\\Users\\fixture\\AppData\\Roaming\\Claude-fixture",
+            "windows":{"launcherName":"Claude Fixture","profilePath":windows_profile,
                 "sshHost":"jared-windows","isDefault":false}
         }]}),
     );
@@ -142,8 +152,21 @@ elif command.startswith('/usr/bin/python3 -c '):
     (root / "host-session").write_text(host)
     print('{"signedIn":false}')
 elif "aac-desktop-history" in command or "[IO.File]::ReadAllText($history)" in command:
-    (root / (host + "-history")).write_text(host)
-    print("CCS_DESKTOP_USAGE_MISSING")
+    if host == "jared-mac":
+        path = shlex.split(command)[-1]
+        expected = "/Users/fixture/Library/Application Support/Claude-fixture/plan-usage-history.json"
+    else:
+        if "$history = '" in command:
+            path = command.split("$history = '", 1)[1].split("'", 1)[0]
+        else:
+            path = base64.b64decode(sys.stdin.buffer.read(), validate=True).decode()
+        expected = r"C:\Users\fixture\AppData\Roaming\Claude-fixture\plan-usage-history.json"
+    (root / (host + "-history")).write_text(path)
+    # The fake models a populated file at the exact path, and no file at the directory.
+    if path == expected:
+        print(json.dumps({"version":2,"samples":[{"t":1795123200000,"u":{"fh":25 if host == "jared-mac" else 42}}]}))
+    else:
+        print("CCS_DESKTOP_USAGE_MISSING")
 else:
     if host == "jared-mac":
         argv = shlex.split(command)
@@ -339,6 +362,48 @@ else:
         fs::read_to_string(root.join("host-session")).unwrap(),
         "jared-mac"
     );
+    if history_only {
+        for (platform, id, percent, host, expected_path) in [
+            (
+                "mac",
+                "fixture-mac",
+                25,
+                "jared-mac",
+                "/Users/fixture/Library/Application Support/Claude-fixture/plan-usage-history.json",
+            ),
+            (
+                "windows",
+                "fixture-win",
+                42,
+                "jared-windows",
+                r"C:\Users\fixture\AppData\Roaming\Claude-fixture\plan-usage-history.json",
+            ),
+        ] {
+            let response = client
+                .get(format!(
+                    "{base}/api/claude/desktop-profiles/usage?platform={platform}"
+                ))
+                .header(header::COOKIE, cookie)
+                .send()
+                .await
+                .unwrap();
+            let usage = json_reply(response, StatusCode::OK, false).await;
+            let profile = usage["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|profile| profile["id"] == id)
+                .unwrap();
+            assert_eq!(profile["status"], "cached", "populated {platform} history");
+            assert_eq!(profile["utilization"]["fiveHour"], percent);
+            assert_eq!(
+                fs::read_to_string(root.join(format!("{host}-history"))).unwrap(),
+                expected_path
+            );
+        }
+        child.kill().await.unwrap();
+        return;
+    }
     for (platform, profile_id, host) in [
         ("mac", "fixture-mac", "jared-mac"),
         ("windows", "fixture-win", "jared-windows"),
@@ -372,10 +437,7 @@ else:
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            fs::read_to_string(root.join(format!("{host}-history"))).unwrap(),
-            host
-        );
+        assert!(root.join(format!("{host}-history")).is_file());
     }
     let current = get()
         .header(header::IF_NONE_MATCH, tag.clone())
