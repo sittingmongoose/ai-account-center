@@ -237,6 +237,7 @@ async fn sample(State(source): State<Source>, headers: HeaderMap) -> Response {
 
 #[cfg(all(test, windows))]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[tokio::test]

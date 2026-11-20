@@ -1,5 +1,6 @@
 //! Bounded read-only Status files. The source handle is confined before any bytes are read.
 use aac_files::read::{ReadPolicy, opened_path};
+#[cfg(unix)]
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -9,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Input {
@@ -100,6 +102,7 @@ fn media_path(path: &str) -> bool {
         })
 }
 
+#[cfg(unix)]
 fn legacy(route: &str, bytes: &[u8]) -> Option<Value> {
     let input: Input = crate::json_object::from_slice(
         bytes,
@@ -268,6 +271,7 @@ fn range(raw: Option<&str>, size: u64) -> Range {
     }
     Range::Part(start as u64, end as u64)
 }
+#[cfg(unix)]
 pub fn answer(route: &str, bytes: &[u8]) -> Option<Value> {
     if serde_json::from_slice::<Value>(bytes)
         .ok()?

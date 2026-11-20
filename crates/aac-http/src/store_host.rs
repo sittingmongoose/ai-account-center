@@ -323,6 +323,7 @@ impl StoreHost {
             .map_err(|_| "service_down: the store host is stopping".to_string())?
     }
 
+    #[cfg(unix)]
     pub(crate) fn record_native_account_usage(
         &self,
         cache: &crate::account_usage::AccountUsageCache,

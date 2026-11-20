@@ -312,6 +312,7 @@ impl Feeds {
     }
 
     /// The generation held for a source, or `stale` when none is.
+    #[cfg(any(unix, test))]
     pub(crate) fn status(&self, source: &str) -> Result<serde_json::Value, Decline> {
         let held = self.held.lock().map_err(|_| Decline::Internal)?;
         let feed = held.get(source).ok_or(Decline::Stale)?;

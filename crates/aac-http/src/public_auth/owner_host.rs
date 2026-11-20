@@ -441,9 +441,6 @@ impl OwnerHost {
     /// never decide whether a private local root has a store; each reader takes its default.
     #[cfg(unix)]
     fn boot_config_from(&self, reports: Option<&str>, registry: Option<&str>) -> Option<Json> {
-        if std::env::var("AAC_RUST_STORE").as_deref() == Ok("off") {
-            return None;
-        }
         let (reports_root, registry_dir) = share_roots(reports, registry);
         let ccs = self.root.canonicalize().ok()?;
         let store = crate::store_host::StoreBoot::for_public(&ccs);
@@ -887,7 +884,7 @@ mod tests {
 /// M2: the local owner honours the explicit store switch, as the Unix boot does.
 #[cfg(all(test, not(unix)))]
 mod windows_tests {
-    #![allow(unsafe_code)]
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[tokio::test]
@@ -950,18 +947,12 @@ mod windows_tests {
         let scratch = tempfile::tempdir().unwrap();
         let root = scratch.path().join("ccs");
         std::fs::create_dir_all(&root).unwrap();
-        let previous = std::env::var_os("AAC_RUST_STORE");
-        // SAFETY: the Windows tests are the only readers of this variable in this process.
-        unsafe { std::env::set_var("AAC_RUST_STORE", "off") };
+        std::fs::write(root.join("config.yaml"), "rustService:\n  store: 'off'\n").unwrap();
         let host = OwnerHost::new(root.clone(), true);
-        let owners = host.local().await;
-        match previous {
-            // SAFETY: as above.
-            Some(value) => unsafe { std::env::set_var("AAC_RUST_STORE", value) },
-            // SAFETY: as above.
-            None => unsafe { std::env::remove_var("AAC_RUST_STORE") },
-        }
-        let owners = owners.expect("the owners still start with the store off");
+        let owners = host
+            .local()
+            .await
+            .expect("the owners still start with the store off");
         assert!(
             owners.store.is_none(),
             "the store is not opened with the switch off"
