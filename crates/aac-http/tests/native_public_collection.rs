@@ -289,6 +289,23 @@ else:
         .unwrap()
         .clone();
     assert_eq!(row["status"], "unavailable");
+    if !agent_on && !history_only {
+        // Revalidate the same generation before exercising the remote hosts.
+        let current = get()
+            .header(header::IF_NONE_MATCH, tag.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(current.status(), StatusCode::NOT_MODIFIED);
+        assert!(current.bytes().await.unwrap().is_empty());
+        let reload = get()
+            .header(header::IF_NONE_MATCH, tag)
+            .header(header::CACHE_CONTROL, "no-cache")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reload.status(), StatusCode::OK);
+    }
     let mac = client
         .get(format!("{base}/api/accounts/dashboard?platform=mac"))
         .header(header::COOKIE, cookie)
@@ -439,21 +456,6 @@ else:
         assert_eq!(response.status(), StatusCode::OK);
         assert!(root.join(format!("{host}-history")).is_file());
     }
-    let current = get()
-        .header(header::IF_NONE_MATCH, tag.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(current.status(), StatusCode::NOT_MODIFIED);
-    assert!(current.bytes().await.unwrap().is_empty());
-    let reload = get()
-        .header(header::IF_NONE_MATCH, tag)
-        .header(header::CACHE_CONTROL, "no-cache")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(reload.status(), StatusCode::OK);
-
     let invalid = client
         .get(format!("{base}/api/accounts/dashboard?fixture=invalid"))
         .header(header::COOKIE, cookie)
