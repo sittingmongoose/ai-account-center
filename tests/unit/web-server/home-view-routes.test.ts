@@ -524,8 +524,8 @@ describe('compose() for /api/views/home over a private socket', () => {
       }),
     };
     expect(await readClaudeDesktopProfiles(req, res)).toEqual([
-      // The reply carries no Open field: unknown here, which is not the same as "no Open running".
-      { id: 'a', email: 'a@example.test' },
+      // No Rust Open owner is bound here, so no operation can exist and each id-bearing row says so.
+      { id: 'a', email: 'a@example.test', openOperation: null },
       { email: 'b@example.test' },
     ]);
     // A row without the field makes the Open state unknown; a row carrying null means "none running".

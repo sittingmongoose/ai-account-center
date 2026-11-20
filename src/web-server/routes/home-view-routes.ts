@@ -26,7 +26,7 @@ import {
 import { getCcsDir } from '../../utils/config-manager';
 import { ProfileError } from '../../errors/error-types';
 import { listClaudeDesktopProfileMetadata } from '../services/claude-desktop-profile-service';
-import { composeWithRust, readOwnedValueWithRust } from '../rust-service';
+import { composeWithRust, readOwnedValueWithRust, RustService } from '../rust-service';
 import {
   acceptRustDesktopProfiles,
   acceptRustDesktopProfilesWithOperations,
@@ -95,21 +95,37 @@ export async function readAntigravityInventory(
  */
 export async function readClaudeDesktopProfiles(req: Request, res: Response): Promise<unknown[]> {
   const scope = getCcsDir();
+  const bound = opensBound(res);
+  // This process keeps no Open store: without the Rust owner bound, no operation can exist here,
+  // and each id-bearing row says so; with it bound, the owner's field is kept — a missing field
+  // is an answer this process does not have, not "no Open running".
+  const withNone = <T extends { id?: unknown; openOperation?: unknown }>(profiles: T[]) =>
+    profiles.map((profile) =>
+      typeof profile.id === 'string' && profile.id && !('openOperation' in profile)
+        ? { ...profile, openOperation: null }
+        : profile
+    );
   const body = await readOwnedValueWithRust(
     req,
     res,
     '/api/claude/desktop-profiles',
     scope,
-    // Rows already carrying the field (the owner's answer) are served as they are; others are
-    // left without it rather than stamped with a null this process cannot vouch for.
-    (value) =>
-      acceptRustDesktopProfilesWithOperations(value) ??
-      acceptRustDesktopProfiles((rows) => rows)(value),
-    async () => ({ profiles: await listClaudeDesktopProfileMetadata() })
+    bound
+      ? (value) =>
+          acceptRustDesktopProfilesWithOperations(value) ??
+          acceptRustDesktopProfiles((rows) => rows)(value)
+      : acceptRustDesktopProfiles(withNone),
+    async () => ({ profiles: withNone(await listClaudeDesktopProfileMetadata()) })
   );
   const profiles = (body as { profiles?: unknown } | undefined)?.profiles;
   if (!Array.isArray(profiles)) throw new ProfileError('Claude desktop profiles were not read.');
   return profiles;
+}
+
+/** Whether this request's service bound the Rust Open owner (mode on + the group on, a Linux host). */
+function opensBound(res: Response): boolean {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService && service.claudeOpenEnabled;
 }
 
 /** The Open progress the profiles read carries, as the fed input's `[profileId, operation]` pairs. Null: unknown. */
