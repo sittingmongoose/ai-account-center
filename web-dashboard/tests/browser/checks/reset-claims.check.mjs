@@ -45,7 +45,7 @@ const inventory = (spent = false, pending = null) => ({
 	grants: [
 		grant(KEY('a'), 'full', 'Full reset', spent ? 0 : 1, 29, !spent),
 		grant(KEY('b'), 'weekly', 'Weekly reset', 1, 34, true),
-		grant(KEY('c'), 'fable', 'Fable reset', 1, 118, false, 'refill-windows-unconfirmed'),
+		grant(KEY('c'), 'fable', 'Fable reset', 1, 118, true),
 		grant(KEY('d'), 'unknown', 'Other reset', 1, 40, false, 'unknown-grant-kind', 'seven_day_opus'),
 	],
 	history: spent ? [
@@ -55,9 +55,17 @@ const inventory = (spent = false, pending = null) => ({
 });
 
 /** The reset routes, answered in the page. `claim` picks the claim's answer; every request is recorded. */
-function resetServer({ claim = 'claimed' } = {}) {
+function resetServer({ claim = 'claimed', emptyWeekly = false } = {}) {
 	const server = fakeServer();
 	const r = { spent: false, pending: null, claim };
+	const dashboard = emptyWeekly ? {
+		...DASHBOARD,
+		accounts: DASHBOARD.accounts.map((account) => account === CLAUDE ? {
+			...account,
+			windows: account.windows.map((window) => window.key === 'seven_day'
+				? { ...window, usedPercent: 0, remainingPercent: 100 } : window),
+		} : account),
+	} : DASHBOARD;
 	const canonicalAccountKey = KEY('7');
 	const confirmationKey = KEY('2');
 	let expiresAtMs = null;
@@ -84,14 +92,19 @@ function resetServer({ claim = 'claimed' } = {}) {
 	};
 	const json = (status, payload) => ({ status, contentType: 'application/json', body: JSON.stringify(payload) });
 	server.routes.unshift(
-		['GET', /^\/api\/accounts\/dashboard$/, () => json(200, DASHBOARD)],
+		['GET', /^\/api\/accounts\/dashboard$/, () => json(200, dashboard)],
 		['GET', /^\/api\/accounts\/registry$/, () => json(200, {
 			providers: [], jobs: [], trash: [],
 			accounts: DASHBOARD.accounts.map((a) => ({ id: a.id, provider: a.provider, actions: { remove: true, signInAgain: true, replaceKey: true, recheck: true }, removeRefusal: null })),
 		})],
-		['GET', /^\/api\/accounts\/claude%3Aone\/reset-claims$/, () => json(200, {
-			...inventory(r.spent, r.pending), canonicalAccountKey, bindingRevision: '1', evidence: evidence(),
-		})],
+		['GET', /^\/api\/accounts\/claude%3Aone\/reset-claims$/, () => {
+			const current = inventory(r.spent, r.pending);
+			if (emptyWeekly) {
+				current.grants = current.grants.map((g) => g.claimable
+					? { ...g, claimable: false, claimBlockedReason: 'no-weekly-usage' } : g);
+			}
+			return json(200, { ...current, canonicalAccountKey, bindingRevision: '1', evidence: evidence() });
+		}],
 		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/prepare$/, (body) => {
 			expiresAtMs = Date.now() + 120_000;
 			revision++;
@@ -158,26 +171,36 @@ const tableRows = (t) => t.page.evaluate(() => [...document.querySelectorAll('.d
 const PARTIAL = 'Reset confirmed from the limits AAC could check. No comparable reading for Fable included usage.';
 
 export const tests = {
-	async 'resets: the fact group, a Pro full reset is usable, with reasons for blocked grants'(t) {
+	async 'resets: Pro full and Fable resets are offered without a Fable reading'(t) {
 		const { server } = resetServer();
 		await open(t, server);
 		await openDetails(t, 'claude:one');
 		await t.until('the inventory replaced the reading rows', () => !!document.querySelector('.details [data-probe="reset-use"]'), null, { timeout: 10000 });
 		await t.text('.details [data-probe="resets"] .fg-sum b', '3 rate-limit resets ready.');
 		const rows = await tableRows(t);
-		await t.check('four rows: two usable, the unknown one, the blocked Fable grant', rows.length === 4
-			&& rows[0].button && rows[1].button && !rows[2].button && !rows[3].button, JSON.stringify(rows));
+		await t.check('four rows: three usable and the blocked unknown grant', rows.length === 4
+			&& rows[0].button && rows[1].button && rows[2].button && !rows[3].button, JSON.stringify(rows));
 		await t.check('the full reset is available on Pro', rows[0].text.includes('5-hour and weekly limits'), rows[0].text);
 		const fable = rows.find((row) => row.text.includes('Fable weekly usage'));
-		await t.check('the blocked grant explains the missing evidence',
-			fable?.text.includes('Use reset becomes available when Claude reports the usage AAC needs to verify this reset.'),
-			fable?.text);
+		await t.check('a missing Fable reading still allows the Fable reset', fable?.button === true, fable?.text);
 		const unknown = rows.find((row) => row.text.includes('seven_day_opus'));
 		await t.check('the unknown grant shows the provider\'s words and why it cannot be used',
 			unknown?.text.includes("AAC doesn't know what this refills yet; it can't be used from here"), unknown?.text);
 		await t.check('opening Details read the inventory only', resetRequests(server).every((q) => q.method === 'GET'), JSON.stringify(resetRequests(server)));
 		await t.visible('.details [data-probe="details-reading"]', 'Reading is its own fact group');
-		await t.shot('resets-desktop', 'Resets and balances: two usable rows and the explanations for the blocked rows; Extra usage as a pair; Reading as Read from / Profile');
+		await t.shot('resets-desktop', 'Resets and balances: three usable rows and the explanation for the unknown grant; Extra usage as a pair; Reading as Read from / Profile');
+	},
+
+	async 'resets: a zero weekly reading explains why there is no Use reset button'(t) {
+		const { server } = resetServer({ emptyWeekly: true });
+		await open(t, server);
+		await openDetails(t, 'claude:one');
+		const why = 'Overall weekly usage is at 0%. AAC needs weekly usage to verify this reset.';
+		await t.until('the reset row explains the zero reading',
+			(words) => document.querySelector('.details .resets-table')?.innerText.includes(words), why, { timeout: 10000 });
+		const rows = await tableRows(t);
+		await t.check('there is no Use reset button at zero weekly usage', rows.length === 4 && rows.every((row) => !row.button), JSON.stringify(rows));
+		await t.check('the explanation needs no reset POST', resetRequests(server).every((q) => q.method === 'GET'));
 	},
 
 	async 'resets: the dialog asks prepare only; Escape and Cancel close it and send nothing'(t) {

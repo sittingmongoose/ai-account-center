@@ -135,10 +135,17 @@ fn blocked(s: &Snapshot, g: &Grant, now: i64) -> Option<&'static str> {
             "grant-unavailable"
         });
     }
-    let missing_required_window = if s.identity.provider == "claude" && g.kind == "full" {
+    let permits_unobserved = s.identity.provider == "claude" && matches!(g.kind.as_str(), "full" | "fable");
+    if s.identity.provider == "claude"
+        && (permits_unobserved || g.kind == "weekly")
+        && s.windows.get("seven_day") == Some(&0.0)
+    {
+        return Some("no-weekly-usage");
+    }
+    let missing_required_window = if permits_unobserved {
         !s.windows.contains_key("seven_day")
     } else {
-        verification_keys(g).any(|k| !s.windows.contains_key(k))
+        g.clears.iter().any(|k| !s.windows.contains_key(k))
     };
     if g.clears.is_empty() || missing_required_window {
         return Some("refill-windows-unconfirmed");
@@ -167,8 +174,8 @@ fn usage(s: &Snapshot, g: &Grant) -> Vec<Value> {
 }
 fn fingerprint(s: &Snapshot, g: &Grant) -> Result<String> {
     // Binds what decides spend safety: the identity, the exact grant (id, kind, the window keys it refills, count,
-    // expiry, availability), the executor and the saved-source binding. Sample timestamp and live usage percentages
-    // are deliberately excluded: they are display-only, so ordinary use while the dialog is open cannot refuse.
+    // expiry, availability), the executor and the saved-source binding. The fresh eligibility check handles
+    // usage requirements separately, so ordinary usage changes do not invalidate an eligible confirmation.
     Ok(hash(&encode(&(
         s.identity.clone(),
         g.clone(),
@@ -878,7 +885,9 @@ impl Store {
                         (Some(before), Some(after)) if !fell_only || after < before => {
                             Some(json!({"id":k,"usedPercent":after}))
                         }
-                        (None, _) | (_, None) if details["provider"] == "claude" && grant.kind == "full" => {
+                        (None, _) | (_, None)
+                            if details["provider"] == "claude" && matches!(grant.kind.as_str(), "full" | "fable") =>
+                        {
                             unobserved.push(k);
                             None
                         }
@@ -1185,7 +1194,7 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64, provider_sai
         }
         if g.kind == "fable" {
             // Scoped Fable and overall weekly percentages describe different allowances.
-            return readings("seven_day_overage_included").is_some_and(|(b, a)| a < b);
+            return readings("seven_day_overage_included").is_none_or(|(b, a)| a < b);
         }
         // A limit absent from either read cannot supply refill evidence. Already-empty limits can stay empty.
         return g

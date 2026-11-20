@@ -295,7 +295,7 @@ fn assert_refill_scope(name: &str) {
         .iter()
         .find(|case| case["name"] == name)
         .unwrap();
-    let expected = case["claimable"].as_bool().unwrap();
+    let has_scope = case["hasFableReading"].as_bool().unwrap();
     let (dir, command) = setup();
     std::fs::write(dir.path().join("web-usage"), "").unwrap();
     let usage = json!({"five_hour":{"utilization":100}, "seven_day":{"utilization":80}, "limits":[case["limit"].clone()],
@@ -304,6 +304,11 @@ fn assert_refill_scope(name: &str) {
     std::fs::write(dir.path().join("refill-usage.json"), usage.to_string()).unwrap();
     let db = dir.path().join("claims.sqlite");
     let snapshot = read(&db, &command);
+    assert_eq!(
+        snapshot.windows.contains_key("seven_day_overage_included"),
+        has_scope,
+        "{name}"
+    );
     let mut store = Store::open(&db).unwrap();
     let inventory = store.inventory("claude:reused", &snapshot, now(), &nonce(51)).unwrap();
     let grant = &inventory["grants"][0];
@@ -315,12 +320,15 @@ fn assert_refill_scope(name: &str) {
         now(),
         &nonce(52),
     );
-    assert_eq!(grant["claimable"], expected, "{name}");
-    assert_eq!(prepared.is_ok(), expected, "{name}");
-    if !expected {
-        assert_eq!(grant["claimBlockedReason"], "refill-windows-unconfirmed");
-        assert_eq!(prepared.unwrap_err(), "refill-windows-unconfirmed");
-    }
+    assert_eq!(grant["claimable"], true, "{name}");
+    let prepared = prepared.unwrap();
+    let usage = prepared["usage"].as_array().unwrap();
+    assert!(usage.iter().any(|row| row["id"] == "seven_day"), "{name}");
+    assert_eq!(
+        usage.iter().any(|row| row["id"] == "seven_day_overage_included"),
+        has_scope,
+        "{name}"
+    );
 }
 #[test]
 fn astra_exact_model_control() {

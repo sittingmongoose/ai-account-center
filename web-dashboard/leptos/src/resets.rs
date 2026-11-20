@@ -304,6 +304,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         }
         "grant-unavailable" => "The provider says this reset can't be used yet.".into(),
         "redeeming" => "OpenAI is using this reset now.".into(),
+        "no-weekly-usage" => "Overall weekly usage is at 0%. AAC needs weekly usage to verify this reset.".into(),
         "refill-windows-unconfirmed" if provider == "codex" => {
             "AAC can't read this account's Codex limits right now, so it won't use this reset.".into()
         }
@@ -2329,6 +2330,20 @@ mod tests {
             why_not("refill-windows-unconfirmed", "claude"),
             "Use reset becomes available when Claude reports the usage AAC needs to verify this reset."
         );
+    }
+
+    #[test]
+    fn empty_weekly_usage_explains_the_missing_button_and_the_no_send_refusal() {
+        let why = "Overall weekly usage is at 0%. AAC needs weekly usage to verify this reset.";
+        assert_eq!(why_not("no-weekly-usage", "claude"), why);
+        let refusal = Refusal {
+            reason: Some("no-weekly-usage".into()),
+            sent: Some(false),
+            ..Default::default()
+        };
+        let result = refusal_said(&refusal, "claude");
+        assert_eq!(result.text, format!("Not used: {why} Nothing was sent."));
+        assert!(!result.check);
     }
 
     #[test]
