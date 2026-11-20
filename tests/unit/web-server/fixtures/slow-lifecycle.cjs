@@ -160,9 +160,10 @@ control.unref();
     );
     // What the main loop did inside the injected delay: a tick means it ran there. A delay paid
     // on this thread leaves the loop silent for its whole length; one paid elsewhere does not.
-    // Each loop's silence is its longest stretch without progress inside the window, edges
-    // included. A loaded machine silences the control worker as much as the main loop; a block
-    // on the main thread silences only the main loop, so main minus control is the block.
+    // Each clock's silence is its longest gap between progress marks that overlaps the window,
+    // measured whole: a stall that began just before the shim opened the window counts in full.
+    // A loaded machine silences the control worker as much as the main loop; a block on the
+    // main thread silences only the main loop.
     let windowTicks = 0;
     let controlWindowTicks = 0;
     let silentMs = 0;
@@ -170,31 +171,38 @@ control.unref();
     let windowHttp = 0;
     let httpSilentMs = 0;
     if (injection) {
-      const inside = (at) => at > injection.start && at < injection.end;
-      const silence = (times) => {
-        const marks = [
-          injection.start,
-          ...times.filter(inside).sort((a, b) => a - b),
-          injection.end,
-        ];
-        return {
-          count: marks.length - 2,
-          ms: marks.reduce(
-            (worst, at, index) => (index ? Math.max(worst, at - marks[index - 1]) : 0),
-            0
-          ),
-        };
+      // The main loop is running now, so now is its latest progress mark; the control's latest
+      // mark is its own last tick, so a stalled control reads as silent up to now.
+      const now = Date.now();
+      const silence = (times, until) => {
+        let previous = injection.start,
+          count = 0,
+          worst = 0;
+        for (const at of [...times, until].sort((a, b) => a - b)) {
+          if (at <= injection.start) {
+            previous = at;
+            continue;
+          }
+          worst = Math.max(worst, at - previous);
+          if (at >= injection.end) break;
+          count++;
+          previous = at;
+        }
+        return { count, ms: worst };
       };
-      const main = silence(gaps.map(([, end]) => end));
+      const main = silence(
+        gaps.map(([, end]) => end),
+        now
+      );
       windowTicks = main.count;
       silentMs = main.ms;
-      const answers = silence(httpDone);
+      const answers = silence(httpDone, now);
       windowHttp = answers.count;
       httpSilentMs = answers.ms;
       const controlTimes = [];
       for (let index = 0; index < Math.min(controlMetrics[1], RING); index++)
         controlTimes.push(controlMetrics[2 + index]);
-      const controlLoop = silence(controlTimes);
+      const controlLoop = silence(controlTimes, now);
       controlWindowTicks = controlLoop.count;
       controlSilentMs = controlLoop.ms;
     }

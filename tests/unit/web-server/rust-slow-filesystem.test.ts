@@ -9,12 +9,13 @@ import { execFile, execFileSync } from 'node:child_process';
 interface Injection {
   ms: number;
   onMainThread: boolean;
+  complete: boolean;
 }
 
 interface FixtureResult {
   windowTicks: number;
   windowHttp: number;
-  /** Longest stretch inside the delay's window without a main-loop tick (edges included). */
+  /** Longest gap between main-loop ticks that overlaps the delay's window, measured whole. */
   silentMs: number;
   /** The same for the worker-thread control loop in this process, over the same window. */
   controlSilentMs: number;
@@ -47,39 +48,45 @@ function runFixture(
 }
 
 /**
- * How much longer than the control loop the main loop, or HTTP, may go silent inside the
- * delay's window. Load starves both loops alike; a block on the main thread starves only the
- * main loop. HTTP needs a few loop turns per answer, so it gets a little more.
+ * Fixed bounds, not budgets relative to the control: a main-loop gap of 1,000 ms or more inside
+ * the delay's window fails, and so does an HTTP gap of 1,500 ms or more (an answer needs a few
+ * loop turns). They are read only while the control loop stayed responsive, its own longest gap
+ * under 250 ms; a starved control makes the sample inconclusive, never a pass.
  */
-const LOOP_MARGIN_MS = 1000;
-const HTTP_MARGIN_MS = 1500;
+const LOOP_STALL_MS = 1000;
+const HTTP_STALL_MS = 1500;
+const CONTROL_RESPONSIVE_MS = 250;
+
+/** A sample says something only if the delay ran its course and the control kept ticking. */
+function conclusive(result: FixtureResult): boolean {
+  return (
+    !!result.injection?.complete &&
+    result.injection.ms > 1000 &&
+    result.controlSilentMs < CONTROL_RESPONSIVE_MS
+  );
+}
 
 function verdict(result: FixtureResult) {
   return {
-    delayRecorded: (result.injection?.ms ?? 0) > 1000,
+    delayRecorded: !!result.injection?.complete && result.injection.ms > 1000,
+    controlResponsive: result.controlSilentMs < CONTROL_RESPONSIVE_MS,
     ranOnEventLoop: result.injection?.onMainThread ?? null,
     loopTickedInsideDelay: result.windowTicks > 0,
     httpAnsweredInsideDelay: result.windowHttp > 0,
-    loopSilenceWithinControl: result.silentMs < result.controlSilentMs + LOOP_MARGIN_MS,
-    httpSilenceWithinControl: result.httpSilentMs < result.controlSilentMs + HTTP_MARGIN_MS,
+    loopStallUnderBound: result.silentMs < LOOP_STALL_MS,
+    httpStallUnderBound: result.httpSilentMs < HTTP_STALL_MS,
   };
 }
 
 const LIVE = {
   delayRecorded: true,
+  controlResponsive: true,
   ranOnEventLoop: false,
   loopTickedInsideDelay: true,
   httpAnsweredInsideDelay: true,
-  loopSilenceWithinControl: true,
-  httpSilenceWithinControl: true,
+  loopStallUnderBound: true,
+  httpStallUnderBound: true,
 };
-
-/** The loop and HTTP kept pace with the control loop while the delay ran, off the loop. */
-function live(result: FixtureResult): boolean {
-  return Object.entries(LIVE).every(
-    ([key, value]) => verdict(result)[key as keyof typeof LIVE] === value
-  );
-}
 
 for (const kind of ['metadata', 'descriptor'])
   it.skipIf(process.platform !== 'linux')(
@@ -108,28 +115,30 @@ for (const kind of ['metadata', 'descriptor'])
         });
 
         // Shadow mode pays the delay somewhere else than the event loop. The assertions are
-        // read from the delay's own window and against a control loop in the same process, not
-        // from a wall-clock budget: a loaded machine may starve the whole process for seconds
-        // without any block, and then it starves the control too. Uneven starvation can still
-        // hide the loop for one window, so a miss earns one retry with a named reason; a delay
-        // paid on the loop itself is deterministic (the marker names the payer) and never
-        // retries, and a real main-thread block fails the retry as well.
+        // read from the delay's own window under fixed bounds, and only while a control loop in
+        // the same process kept ticking: a loaded machine may starve the whole process for
+        // seconds without any block, and then it starves the control too. Only such an
+        // inconclusive sample (starved control, or no complete delay) earns one retry, with a
+        // named reason. A conclusive sample stands, pass or fail: a main-loop stall seen while
+        // the control ticked is never retried away.
         let shadow = await runFixture(root, kind, 'shadow', shim);
-        if (!live(shadow) && !shadow.injection?.onMainThread)
+        if (!conclusive(shadow)) {
           console.warn(
-            `slow lifecycle ${kind}: main loop silent ${shadow.silentMs} ms, HTTP ${shadow.httpSilentMs} ms, control ${shadow.controlSilentMs} ms inside the ${shadow.injection?.ms ?? 0} ms delay (uneven load or a block?), retrying once`
+            `slow lifecycle ${kind}: inconclusive sample (control silent ${shadow.controlSilentMs} ms, delay ${shadow.injection?.ms ?? 'missing'} ms${shadow.injection?.complete ? '' : ', incomplete'}), retrying once`
           );
-        if (!live(shadow) && !shadow.injection?.onMainThread)
           shadow = await runFixture(root, kind, 'shadow', shim);
+        }
 
         expect(shadow.delayed).toBe(true);
         expect(shadow.responses).toBeGreaterThan(5);
-        if (!live(shadow)) console.error(`slow lifecycle ${kind}: ${JSON.stringify(shadow)}`);
+        const result = verdict(shadow);
+        if (JSON.stringify(result) !== JSON.stringify(LIVE))
+          console.error(`slow lifecycle ${kind}: ${JSON.stringify(shadow)}`);
         // A slow lifecycle read on the event loop cannot leave a tick, or an HTTP answer, in
         // its own window, and the shim records that it ran there. A shorter main-thread block
-        // inside the window (a sync hash, parse or exec) leaves the main loop silent far longer
-        // than the control loop.
-        expect(verdict(shadow)).toEqual(LIVE);
+        // inside the window (a sync hash, parse or exec) of 1,000 ms or more leaves a main-loop
+        // gap at or over the bound while the control keeps ticking.
+        expect(result).toEqual(LIVE);
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
