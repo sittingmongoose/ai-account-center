@@ -588,6 +588,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/codex_quotas.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/feed.rs",
       "kind": "internal",
       "evidence": [],
