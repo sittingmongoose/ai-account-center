@@ -33,6 +33,9 @@ MANIFEST_LIMIT = 16 * 1024
 QUIET_READY_SECONDS = 15
 # T3 bounds one instance's model refresh at 90 seconds.
 REFRESH_SECONDS = 120
+# T3 reports success once its operation ends; the active pointer it publishes is re-read a few times.
+VERIFY_ATTEMPTS = 3
+VERIFY_PAUSE_SECONDS = 0.5
 SIGNIN_WORDS = re.compile(r"(?i)sign[- ]?in|log[- ]?in|logged in|not authenticated|unauthenticated|re-?authenticate")
 
 
@@ -107,7 +110,10 @@ def completed(root, release_id, host):
     """A finished T3 install record, in either shape T3 writes (completedRelease):
 
     - the 1.3/1.4 runtime pair: executable agy_acp_server(.par|.exe) plus harness localharness_external(.exe);
-    - the native 1.5+ CLI: executable antigravity (agy.exe on Windows) and "harness": null.
+    - the native 1.5+ CLI: executable antigravity (agy.exe on Windows) with "harness": null (T3 up to
+      0.1.11) or no harness key at all (T3 0.1.12, PR 39363: its InstalledRelease is releaseId, version
+      and executable only, in a read-only release folder with a 0400 record).
+    A record with no harness must name the native CLI; only a harness object makes it the old pair.
     """
     if not isinstance(release_id, str) or not RELEASE_ID.fullmatch(release_id):
         raise UpdateFailure("readiness_unknown")
@@ -119,7 +125,7 @@ def completed(root, release_id, host):
     if (record.get("releaseId") != release_id or not isinstance(version, str) or
             not STATE_VERSION.fullmatch(version)):
         raise UpdateFailure("readiness_unknown")
-    if "harness" in record and record["harness"] is None:
+    if record.get("harness") is None:
         _artifact(directory, record.get("executable"), "agy.exe" if host == "windows" else "antigravity", host)
         return {**record, "kind": "native"}
     _artifact(directory, record.get("executable"), "agy_acp_server" + (".exe" if host == "windows" else ".par"), host)
@@ -258,7 +264,21 @@ def newer(left, right):
     return version_tuple(left) > version_tuple(right)
 
 
-def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
+def verified_release(host, target, floor):
+    """The runtime T3 activated, read from its own pointer and record on disk (never T3's provider
+    snapshot): at least `target` and never below `floor`. Re-read a bounded few times; None if not."""
+    for attempt in range(VERIFY_ATTEMPTS):
+        final = detect_antigravity_acp(host)
+        if final is not None and not final.probe and not newer(target, final.version) and not newer(floor, final.version):
+            return final
+        if attempt + 1 < VERIFY_ATTEMPTS:
+            time.sleep(VERIFY_PAUSE_SECONDS)
+    return None
+
+
+def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None, expected_t3=None):
+    """One guarded install through T3. expected_t3 names the server version that must answer (the
+    follow-up after a Linux computer's deferred T3 restart); otherwise t3_row decides."""
     before, attempted = install.version, False
     record = diagnostics()
     record.owner = install.owner or {"manager": "t3"}
@@ -272,7 +292,7 @@ def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
     try:
         record.phase("t3_ready")
         # A server replaced in this run gets time to come up; one left alone either answers or does not.
-        replaced = replaced_version(t3_row)
+        replaced = expected_t3 or replaced_version(t3_row)
         t3_rpc.wait_ready(install.platform, deadline, replaced, seconds=t3_rpc.READY_SECONDS if replaced else QUIET_READY_SECONDS)
         record.phase("discover")
         cli, base, origin = t3_rpc.discover(install.platform)
@@ -345,9 +365,12 @@ def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
                 # Emit only a fixed reason, never arbitrary diagnostic text.
                 raise UpdateFailure("t3_install_failed:" + ("cancelled" if state["phase"] == "cancelled" else "installer"))
             record.phase("verify")
-            final = detect_antigravity_acp(install.platform)
             # T3 must have activated at least what its operation named, and never gone backwards.
-            if final is None or final.probe or newer(target, final.version) or newer(current.version, final.version):
+            final = verified_release(install.platform, target, current.version)
+            if final is None:
+                # T3 said it finished: have it re-read its runtime anyway, so its own provider status
+                # shows what is on disk instead of the version before the install.
+                refresh_models(client, enabled)
                 raise UpdateFailure("t3_install_failed:verification")
             record.owner = {**(final.owner or {}), "target": record.owner.get("target")}
             if not newer(final.version, current.version):
