@@ -154,6 +154,7 @@ enum Publication {
 struct PublicSampling {
     signins: ClaudeSignInRenewalReader,
     server: Value,
+    status: std::sync::Weak<super::owner_host::OwnerHost>,
     #[cfg(unix)]
     store: bool,
     #[cfg(unix)]
@@ -193,6 +194,7 @@ impl NativeOwners {
         hub: HubCache,
         events: DashboardEvents,
         worker_directory: Option<PathBuf>,
+        status: std::sync::Weak<super::owner_host::OwnerHost>,
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
         let agents = Arc::new(Agents::with_default(root.clone(), true));
@@ -285,6 +287,7 @@ impl NativeOwners {
             let sampling = PublicSampling {
                 signins: ClaudeSignInRenewalReader::new(root, Default::default()),
                 server,
+                status,
                 #[cfg(unix)]
                 store: groups.store && worker_directory.is_some(),
                 #[cfg(unix)]
@@ -660,6 +663,9 @@ impl Usage {
                     let sampling = sampling.clone();
                     async move {
                         owner.publish();
+                        if let Some(host) = sampling.status.upgrade() {
+                            host.record_status_sample(&cache).await;
+                        }
                         #[cfg(unix)]
                         if sampling.store {
                             super::native_reads::publish_usage(

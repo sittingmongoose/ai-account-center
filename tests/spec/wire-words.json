@@ -129,13 +129,6 @@
     ]
   },
   {
-    "word": "answers",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
     "word": "antigravity",
     "cause": null,
     "sources": [
@@ -304,13 +297,6 @@
     "cause": null,
     "sources": [
       "src/web-server/rust-service.ts:reason"
-    ]
-  },
-  {
-    "word": "browsers",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
     ]
   },
   {
@@ -1726,7 +1712,6 @@
       "src/web-server/services/account-visibility.ts:read.state",
       "src/web-server/services/dashboard-auth-files.ts:state",
       "src/web-server/services/private-json-store.ts:state",
-      "src/web-server/status/status-service.ts:storeErrorCode(error)",
       "src/web-server/usage-hub/usage-hub-key-store.ts:UsageHubKeyState",
       "src/web-server/usage-hub/usage-hub-key-store.ts:read.state",
       "src/web-server/usage-hub/usage-hub-key-store.ts:state",
@@ -2112,13 +2097,6 @@
     "cause": "busy",
     "sources": [
       "scripts/app-updates/app_update_macos.py:UpdateFailure"
-    ]
-  },
-  {
-    "word": "machines",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
     ]
   },
   {
@@ -2843,8 +2821,6 @@
       "src/web-server/scoreboard/runs-store.ts:state",
       "src/web-server/scoreboard/runs-store.ts:this.last?.state",
       "src/web-server/scoreboard/runs-types.ts:state",
-      "src/web-server/scoreboard/scoreboard-service.ts:source.state",
-      "src/web-server/scoreboard/scoreboard-service.ts:state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/account-analytics-activity.ts:status",
@@ -2972,7 +2948,6 @@
       "src/web-server/status/card-schema.ts:reason",
       "src/web-server/status/card-schema.ts:state",
       "src/web-server/status/pinned-threads.ts:row.doc.state",
-      "src/web-server/status/status-service.ts:row.doc.state",
       "src/web-server/status/status-view.ts:card.doc.state",
       "src/web-server/status/status-view.ts:row.doc.state"
     ]
@@ -3184,8 +3159,7 @@
     "word": "pinned",
     "cause": null,
     "sources": [
-      "src/antigravity/release-status.ts:status.nativeCli",
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
+      "src/antigravity/release-status.ts:status.nativeCli"
     ]
   },
   {
@@ -3364,8 +3338,7 @@
     "word": "quota",
     "cause": null,
     "sources": [
-      "scripts/account-usage/muse_console.py:state",
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
+      "scripts/account-usage/muse_console.py:state"
     ]
   },
   {
@@ -3682,8 +3655,7 @@
     "word": "registry",
     "cause": null,
     "sources": [
-      "scripts/claude-history/history_index_remote_v2.py:state",
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
+      "scripts/claude-history/history_index_remote_v2.py:state"
     ]
   },
   {
@@ -3749,13 +3721,6 @@
     "cause": null,
     "sources": [
       "scripts/app-updates/app_update_t3_rpc.py:reason"
-    ]
-  },
-  {
-    "word": "reports",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
     ]
   },
   {
@@ -4485,13 +4450,6 @@
     ]
   },
   {
-    "word": "sends",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
     "word": "separate_row",
     "cause": null,
     "sources": [
@@ -4616,13 +4574,6 @@
     ]
   },
   {
-    "word": "simlock",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
     "word": "skipped",
     "cause": null,
     "sources": [
@@ -4712,7 +4663,6 @@
     "sources": [
       "scripts/antigravity/rebuild_bundle.py:result['status']",
       "scripts/antigravity/rebuild_bundle.py:status",
-      "src/web-server/scoreboard/scoreboard-service.ts:state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
@@ -4809,48 +4759,6 @@
       "src/antigravity/managed-update-command.ts:status",
       "src/web-server/rust-service.ts:statusCodes",
       "src/web-server/services/usage-failover-contract.ts:status"
-    ]
-  },
-  {
-    "word": "status-answers",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
-    "word": "status-collected",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
-    "word": "status-facts",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
-    "word": "status-pinned",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
-    "word": "status-quota",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
-    ]
-  },
-  {
-    "word": "status-reports",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
     ]
   },
   {
@@ -5740,13 +5648,6 @@
       "src/web-server/services/app-update-contract.ts:row.status",
       "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
       "src/web-server/services/app-update-diagnostics.ts:status"
-    ]
-  },
-  {
-    "word": "usage",
-    "cause": null,
-    "sources": [
-      "src/web-server/status/status-feed.ts:STATUS_PARTS"
     ]
   },
   {

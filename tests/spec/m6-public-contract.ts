@@ -373,10 +373,17 @@ try {
       AAC_RUST_CUT_NATIVE_ROUTES: 'on',
       AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
       AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+      AAC_T3_STATE_DB: path.join(root, 'fixture-pins.sqlite'),
       AAC_AGENT_VERBS: 'off',
       AAC_AGENT_TRANSPORT: 'off',
+      ...(group === 'status'
+        ? { AAC_RUST_GROUP_COLLECTION: 'off', AAC_STATUS_DOORBELL: 'off' }
+        : {}),
     });
-    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    // This corpus represents an unmounted reports share. A mounted, empty share gets
+    // initialized by the Status owner and has different (available) sources.
+    if (group === 'store-usage-home')
+      await fs.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
   }
   if (group === 'store-usage-home') {

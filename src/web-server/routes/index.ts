@@ -33,9 +33,6 @@ import authRoutes from './auth-routes';
 import homeViewRoutes from './home-view-routes';
 import barRoutes from './bar-routes';
 import { storeRoutes, usageRoutes } from './store-routes';
-import scoreboardRoutes from './scoreboard-routes';
-import statusRoutes from './status-routes';
-import { createShareRouter } from './share-route';
 
 // Create the main API router (case-sensitive; handler errors stay in the request)
 export const apiRoutes = createApiRouter();
@@ -92,7 +89,7 @@ apiRoutes.use((req, res, next) => {
   }
 });
 
-// The account dashboard, native account controls and the Status tab are mounted.
+// The account dashboard and native account controls.
 apiRoutes.use('/accounts', accountDashboardRoutes);
 apiRoutes.use('/accounts', accountPreferencesRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
@@ -109,9 +106,6 @@ apiRoutes.use('/bar', barRoutes);
 // The history store (docs/store.md 8.1): read-only, sessions and paired devices.
 apiRoutes.use('/store', storeRoutes);
 apiRoutes.use('/usage', usageRoutes);
-apiRoutes.use('/status', statusRoutes);
-apiRoutes.use('/status/deliverable', createShareRouter());
-apiRoutes.use('/scoreboard', scoreboardRoutes);
 
 // Public process liveness compatibility; no configuration details or repair actions.
 apiRoutes.get('/health', (req, res) =>

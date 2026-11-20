@@ -131,7 +131,16 @@ const BODY_TOO_LARGE: &str = "The request body is too large.";
 fn owns_route(method: &Method, path: &str) -> bool {
     let path = path.strip_suffix('/').unwrap_or(path);
     if path == "/api/status/deliverable" {
-        return true;
+        return matches!(
+            *method,
+            Method::GET
+                | Method::HEAD
+                | Method::POST
+                | Method::PUT
+                | Method::PATCH
+                | Method::DELETE
+                | Method::OPTIONS
+        );
     }
     if path == "/api/status/answers" && method == Method::POST {
         return true;
@@ -420,9 +429,8 @@ async fn answers_read(routes: &Routes, access: &DashboardAccess, raw: Option<&st
     }
     let Some(limit) = crate::status_answers_route::read_limit(raw) else {
         let only_limit = raw.is_some_and(|query| {
-            query
-                .split('&')
-                .all(|part| part == "limit" || part.starts_with("limit="))
+            let mut pairs = url::form_urlencoded::parse(query.as_bytes());
+            pairs.next().is_some_and(|(name, _)| name == "limit") && pairs.next().is_none()
         });
         return no_store(if only_limit {
             super::error(
@@ -1019,8 +1027,7 @@ fn reports_root() -> String {
         .into_owned()
 }
 
-/// `GET|HEAD /api/status/files/<writer>/<path>`: the file envelope from the service, checked and
-/// written with the route's own headers (`rust-file-response.ts`).
+/// `GET|HEAD /api/status/files/<writer>/<path>`: the admitted card media and its range headers.
 async fn card_media(
     access: &DashboardAccess,
     facts: &Facts,
@@ -1104,7 +1111,7 @@ async fn deliverable(
     };
     let input = json!({
         "kind": "deliverable",
-        "root": machine_share_root(),
+        "root": aac_status::share::machine_share_root(),
         "writer": null,
         "path": relative,
         "range": facts.range.as_deref(),
@@ -1167,16 +1174,6 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-fn machine_share_root() -> &'static str {
-    if cfg!(target_os = "windows") {
-        r"\\TRUENAS\Cursor"
-    } else if cfg!(target_os = "macos") {
-        "/Volumes/Cursor"
-    } else {
-        "/mnt/Cursor"
-    }
-}
-
 /// Serve the checked descriptor directly, including ranges larger than the private JSON cap.
 async fn read_file(route: &'static str, input: Json) -> Reply {
     let body = input.to_string();
@@ -1222,6 +1219,58 @@ async fn read_file(route: &'static str, input: Json) -> Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[tokio::test]
+    async fn media_and_deliverables_stream_beyond_the_private_envelope_cap() -> std::io::Result<()>
+    {
+        for (route, kind, writer, relative, on_disk) in [
+            (
+                "/api/status/files/{*path}",
+                "media",
+                Some("vm.fixture"),
+                "image.png",
+                "v1/writers/vm.fixture/image.png",
+            ),
+            (
+                "/api/status/deliverable",
+                "deliverable",
+                None,
+                "share/folder/video.mp4",
+                "share/folder/video.mp4",
+            ),
+        ] {
+            let root = tempfile::tempdir()?;
+            let file = root.path().join(on_disk);
+            std::fs::create_dir_all(file.parent().expect("fixture parent"))?;
+            let mut bytes = vec![42u8; 1_500_000];
+            bytes[..8].copy_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+            std::fs::write(file, &bytes)?;
+            let mut input = json!({"root": root.path(), "kind": kind, "writer": writer,
+                "path": relative, "head": false, "range": "bytes=1-1200000"});
+            let response = read_file(route, input.clone()).await;
+            assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+            assert_eq!(response.headers()["content-length"], "1200000");
+            assert_eq!(
+                response.headers()["content-range"],
+                "bytes 1-1200000/1500000"
+            );
+            let streamed = to_bytes(response.into_body(), 1_200_000)
+                .await
+                .expect("range");
+            assert_eq!(&streamed[..], &bytes[1..1_200_001]);
+            input["head"] = Json::Bool(true);
+            let head = read_file(route, input).await;
+            assert_eq!(head.headers()["content-length"], "1200000");
+            assert!(
+                to_bytes(head.into_body(), 0)
+                    .await
+                    .expect("empty HEAD")
+                    .is_empty()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn the_group_owns_exactly_its_routes() {

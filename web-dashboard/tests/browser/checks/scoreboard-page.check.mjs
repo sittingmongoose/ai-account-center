@@ -106,8 +106,7 @@ export const tests = {
 	async 'scoreboard without the by-model view'(t) {
 		await t.viewport(1440, 900);
 		await t.app.signIn();
-		// The server's own answer without `byModel`: a server whose aac-status native module is built sends it
-		// (scoreboard-service.ts), one without the module does not, and this is the page's word for the second.
+		// Remove the projection in the fixture to exercise the page's unavailable state.
 		await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', async (r) => {
 			const response = await r.fetch();
 			const json = await response.json();
@@ -121,8 +120,7 @@ export const tests = {
 		await t.audit('scoreboard unavailable');
 	},
 
-	// No stubs: the real server's Scoreboard over the kit's fixture runs and catalog. R4 (`--set rustOwned=1`): the Rust
-	// service ingested the runs into the hosted store and answered the page's reads itself; off, it served none.
+	// No stubs: the Rust service ingests the kit's fixture runs and catalog and serves the page.
 	async 'scoreboard end to end on the server'(t) {
 		await t.viewport(1440, 900);
 		await t.app.signIn();
@@ -133,27 +131,15 @@ export const tests = {
 			const view = await r.json();
 			return Array.isArray(view.uses) && view.uses.length > 0 && (view.history?.runs ?? 0) > 0;
 		}, null, { timeout: 60000 });
-		// The bridge's counters around the page's own reads: the wait above may meet the owner before its first
-		// catalog scan and ingest (declined `feed`, today's handler answers), which is start-up, not a finding.
-		const counters = () => t.page.evaluate(async () => {
-			const r = await fetch('/api/diag?bridge=1', { credentials: 'same-origin' });
-			const route = r.ok ? (await r.json()).bridge?.routes?.['/api/scoreboard'] ?? null : null;
-			const all = { ...(route?.declined ?? {}), ...(route?.fedDeclined ?? {}), ...(route?.unavailable ?? {}) };
-			return { served: route?.served ?? 0, fedServed: route?.fedServed ?? 0, declines: all };
-		});
-		const before = await counters();
 		await t.goto('/app/scoreboard', { settleMs: 300 });
 		await t.page.waitForSelector('.picks');
 		await t.count('.sb-unavail', 0);
 		await t.audit('scoreboard end to end 1440');
-		const after = await counters();
-		const served = Math.max(after.served - before.served, after.fedServed - before.fedServed);
-		const reasons = Object.keys(after.declines).filter((r) => (after.declines[r] ?? 0) > (before.declines[r] ?? 0));
-		if (t.args.rustOwned) {
-			await t.check('the owned path served the page Scoreboard reads', served > 0, JSON.stringify({ before, after }));
-			// A read racing a new generation answers through today's handler (`stale`); any other reason is a finding.
-			await t.check('no Scoreboard read fell back but for a race', reasons.every((r) => r === 'stale'), reasons.join(', '));
-		} else await t.check('switch off: no Rust Scoreboard read', after.served === 0 && after.fedServed === 0, JSON.stringify(after));
+		const result = await t.page.evaluate(async () => {
+			const response = await fetch('/api/scoreboard', { cache: 'reload' });
+			return { status: response.status, view: response.headers.get('x-aac-view') };
+		});
+		await t.equal('Rust served the Scoreboard view', result, { status: 200, view: 'scoreboard@1' });
 	},
 
 	async 'scoreboard desktop'(t) {

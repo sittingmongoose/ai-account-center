@@ -49,6 +49,7 @@ pub(super) struct OwnerHost {
     /// The in-process public owners this boot started (Accounts collection, Re-check,
     /// App Updates, settings/writes). One set, whichever platform; the groups ask it directly.
     public: Mutex<Option<PublicOwners>>,
+    usage_samples: Mutex<crate::status_produce::UsageSamples>,
     /// Route groups registered on this host, mounted on the public API router before the guard.
     routes: Mutex<Vec<(&'static str, axum::Router)>>,
     /// The in-process owners for a platform without the private service (Windows).
@@ -92,6 +93,7 @@ impl OwnerHost {
             #[cfg(unix)]
             embedded: tokio::sync::Mutex::new(None),
             public: Mutex::new(None),
+            usage_samples: Mutex::default(),
             routes: Mutex::new(Vec::new()),
             #[cfg(not(unix))]
             local: tokio::sync::Mutex::new(None),
@@ -141,7 +143,9 @@ impl OwnerHost {
             }
             let ccs = self.root.canonicalize().ok()?;
             // The explicit switch is the user's: with it off, no store is opened here either.
-            let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off");
+            let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off")
+                || std::env::var("AAC_STORE")
+                    .is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"));
             let (reports, registry_dir) = share_roots(
                 std::env::var("AAC_AGENT_REPORTS_DIR").ok().as_deref(),
                 std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok().as_deref(),
@@ -159,7 +163,7 @@ impl OwnerHost {
                     share_backup_off: true,
                 }),
                 owned: Some(crate::owners::OwnedBoot {
-                    reports_root: reports,
+                    reports_root: reports.clone(),
                     registry_dir,
                     status: true,
                     scoreboard: true,
@@ -172,10 +176,15 @@ impl OwnerHost {
             // The hosted store opens once, before any route reads it (the service does this in
             // its boot); a request must never wait behind an unopened Engine.
             if let Some(store) = owners.store.clone() {
-                let _ = tokio::task::spawn_blocking(move || store.open_at_boot()).await;
+                let opener = store.clone();
+                let _ = tokio::task::spawn_blocking(move || opener.open_at_boot()).await;
+                let stop = self.local_stop.clone();
+                tokio::spawn(crate::store_host::jobs(store, stop));
+                crate::status_owned::initialize_reports(reports).await;
             }
             if let Some(owner) = &owners.scoreboard_owned {
                 // The first request sees a catalog and runs from the same prepared generation.
+                owner.seed().await;
                 owner.prepare_local().await;
             }
             if let Some(owner) = &owners.status_owned {
@@ -213,7 +222,7 @@ impl OwnerHost {
     /// Start the platform's public owners (the same `NativeOwners` the direct call site used).
     /// The host is then the one place that owns them and their jobs.
     pub(super) fn start_public(
-        &self,
+        self: &std::sync::Arc<Self>,
         groups: native_owners::Groups,
         hub: HubCache,
         events: DashboardEvents,
@@ -225,10 +234,45 @@ impl OwnerHost {
             hub,
             events,
             worker_directory,
+            std::sync::Arc::downgrade(self),
         )?;
         *self.public.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(PublicOwners { native, jobs });
         Ok(())
+    }
+
+    pub(super) async fn record_status_sample(
+        &self,
+        cache: &crate::account_usage::AccountUsageCache,
+    ) {
+        let usage = self
+            .usage_samples
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .project(&self.root, cache);
+        let Some(usage) = usage else {
+            return;
+        };
+        #[cfg(not(unix))]
+        if let Some(produce) = self
+            .local()
+            .await
+            .and_then(|owner| owner.status_produce.clone())
+        {
+            produce.set_usage(Some(usage));
+        }
+        #[cfg(unix)]
+        if let Ok(bytes) = serde_json::to_vec(&usage) {
+            let principal = r#"{"kind":"session","id":"front-door","role":"service"}"#;
+            self.request(
+                "PUT",
+                "/internal/status/usage",
+                principal,
+                &[("content-type", "application/json")],
+                Some(&bytes),
+            )
+            .await;
+        }
     }
 
     /// The public owners this boot started, for the routes that answer from them.
@@ -381,15 +425,11 @@ impl OwnerHost {
         if std::env::var("AAC_RUST_STORE").as_deref() == Ok("off") {
             return None;
         }
-        let on = |env: &str| std::env::var(env).as_deref() != Ok("off");
         let (reports_root, registry_dir) = share_roots(reports, registry);
         let ccs = self.root.canonicalize().ok()?;
         let boot_id = random_hex::<12>()?;
         let secret = random_hex::<32>()?;
-        let socket = ccs
-            .join("run")
-            .join(format!("aac-http-{boot_id}"))
-            .join("http.sock");
+        let socket = socket_layout(&ccs, &boot_id)?;
         Some(json!({
             "ccsDir": ccs,
             "socketPath": socket,
@@ -406,8 +446,8 @@ impl OwnerHost {
             "owned": {
                 "reportsRoot": reports_root.to_string_lossy(),
                 "registryDir": registry_dir.to_string_lossy(),
-                "status": on("AAC_RUST_GROUP_STATUS"),
-                "scoreboard": on("AAC_RUST_GROUP_SCOREBOARD"),
+                "status": true,
+                "scoreboard": true,
             },
         }))
     }
@@ -457,10 +497,43 @@ impl OwnerHost {
     }
 }
 
-/// The run folder and this boot's socket leaf, prepared without following a link or adopting
-/// a directory this boot did not make: a symlink, a non-directory, a foreign owner or a mode
-/// other than 0700 refuses the boot before anything is touched. A missing folder is created
-/// 0700 at creation time; an existing leaf is never reused.
+/// The supervisor's socket layout, including a private short path on deeply nested homes.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn socket_layout(ccs: &Path, boot_id: &str) -> Option<PathBuf> {
+    let boot = format!("aac-http-{boot_id}");
+    let fits = |path: &Path| path.as_os_str().as_encoded_bytes().len() <= 100;
+    let classic = ccs.join("run").join(&boot).join("http.sock");
+    if fits(&classic) {
+        return Some(classic);
+    }
+    let hash = crate::unix::short_name(ccs);
+    for name in ["AAC_RUST_RUN_DIR", "XDG_RUNTIME_DIR"] {
+        if let Some(root) = std::env::var_os(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+        {
+            let path = root
+                .join(format!("aac-{hash}"))
+                .join(&boot)
+                .join("http.sock");
+            if fits(&path) {
+                return Some(path);
+            }
+        }
+    }
+    // SAFETY: geteuid has no preconditions and touches no memory.
+    let uid = unsafe { libc::geteuid() };
+    Some(
+        Path::new("/tmp")
+            .join(format!("aac-{uid}"))
+            .join(hash)
+            .join(boot)
+            .join("http.sock"),
+    )
+}
+
+/// Check every directory controlled by the service and create its boot leaf exclusively.
 #[cfg(unix)]
 #[allow(unsafe_code)]
 fn prepare_run_dir(ccs: &Path, socket: &Path) -> bool {
@@ -468,35 +541,32 @@ fn prepare_run_dir(ccs: &Path, socket: &Path) -> bool {
     // SAFETY: geteuid has no preconditions and touches no memory.
     let euid = unsafe { libc::geteuid() };
     let run = ccs.join("run");
-    match std::fs::symlink_metadata(&run) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() || !meta.is_dir() || !owned_0700(&meta, euid) {
-                return false;
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = std::fs::DirBuilder::new();
-            builder.mode(0o700);
-            if builder.create(&run).is_err() {
-                return false;
-            }
-        }
-        Err(_) => return false,
-    }
     let Some(leaf) = socket.parent() else {
         return false;
     };
-    if leaf.parent() != Some(run.as_path()) {
+    let Some(parent) = leaf.parent() else {
         return false;
+    };
+    let mut folders = vec![run.as_path()];
+    if parent != run {
+        if parent
+            .file_name()
+            .is_some_and(|name| name == crate::unix::short_name(ccs).as_str())
+            && let Some(owner) = parent.parent()
+        {
+            folders.push(owner);
+        }
+        folders.push(parent);
     }
-    match std::fs::symlink_metadata(leaf) {
-        Ok(_) => return false,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return false,
+    for folder in folders {
+        let created = std::fs::DirBuilder::new().mode(0o700).create(folder);
+        if created.is_err_and(|error| error.kind() != std::io::ErrorKind::AlreadyExists)
+            || !std::fs::symlink_metadata(folder).is_ok_and(|meta| owned_0700(&meta, euid))
+        {
+            return false;
+        }
     }
-    let mut builder = std::fs::DirBuilder::new();
-    builder.mode(0o700);
-    builder.create(leaf).is_ok()
+    std::fs::DirBuilder::new().mode(0o700).create(leaf).is_ok()
 }
 
 /// A directory this user owns at exactly `0700`. Other modes are refused, never changed.

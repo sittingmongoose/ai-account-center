@@ -33,9 +33,6 @@ async function server() {
   );
   const { AccountAnalyticsService } = load('web-server/services/account-analytics-service');
   const { accountAnalyticsIdentity } = load('web-server/services/account-analytics-history');
-  const { ScoreboardService } = load('web-server/scoreboard/scoreboard-service');
-  const { StatusService } = load('web-server/status/status-service');
-  const { AgentReportsReader } = load('web-server/status/agent-reports-reader');
   const { runCommand } = load('web-server/status/status-collectors');
   const express = require(path.join(checkout, 'node_modules/express'));
   memory('imports');
@@ -137,31 +134,6 @@ async function server() {
     fs.writeFileSync(file, JSON.stringify(data));
     sourceFiles.set(tool, file);
   }
-  const reportRoot = path.join(root, 'reports');
-  for (let i = 0; i < 1702; i++) {
-    const writer = `vm.fixture-${i % 38}`;
-    const dir = path.join(reportRoot, 'v1', 'writers', writer, 'runs', stamp.slice(0, 10));
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, `${i}.json`),
-      JSON.stringify({
-        schema: 'agent-reports/run@1',
-        id: `${writer}--run-${i}`,
-        writer,
-        seq: 1,
-        writtenAt: stamp,
-        source: 'observed',
-        project: 'fixture',
-        stream: null,
-        task: { id: `run-${i}`, type: 'build', title: 'Fixture run', size: { tasks: 1 } },
-        model: { provider: 'openai', id: 'gpt-6.1-sol', harness: 'codex', effort: 'high' },
-        startedAt: null,
-        endedAt: stamp,
-        wallSeconds: 100,
-        outcome: 'done',
-      })
-    );
-  }
   const activity = new AccountAnalyticsActivityService({
     scope: () => root,
     now: () => Date.now(),
@@ -184,43 +156,6 @@ async function server() {
     getDashboard: async () => dashboard,
     getActivity: (...args) => activity.get(...args),
   });
-  const scoreboard = new ScoreboardService({
-    root: () => reportRoot,
-    native: null,
-    timeZone: () => 'UTC',
-  });
-  const status = new StatusService({
-    reader: new AgentReportsReader({ root: () => reportRoot }),
-    spendNative: null,
-    pinned: {
-      view: () => ({ unavailable: 'fixture' }),
-      collect: async () => {},
-      compose: async () => {},
-      docs: { scan: async () => {}, snapshot: () => ({ docs: [] }) },
-    },
-    run: async () => ({ code: 1, stdout: '', timedOut: false, missing: true }),
-    readLocalMachine: async () => ({
-      cores: 4,
-      load1: 0,
-      busyPct: 0,
-      memAvailableBytes: 1073741824,
-      memTotalBytes: 2147483648,
-      disk: null,
-      cpuTimes: null,
-    }),
-    readRemoteMachine: async () => ({
-      cores: 4,
-      load1: 0,
-      busyPct: 0,
-      memAvailableBytes: 1073741824,
-      memTotalBytes: 2147483648,
-      disk: null,
-      cpuTimes: null,
-    }),
-    subscribeUsage: () => () => {},
-    notify: () => {},
-    timeZone: () => 'UTC',
-  });
   const baseQuery = { platform: 'mac', range: '30d', provider: 'all', account: 'all', tz: 'UTC' };
   memory('fixture-loaded');
   // Repeated minute/range heads exercise the wave 3 answer and projection retention bounds.
@@ -242,26 +177,16 @@ async function server() {
     answerBytes: analytics.answers?.bytes ?? null,
     projectionBytes: activity.latestProjections?.bytes ?? null,
   };
-  await scoreboard.view();
-  await status.scanReports();
   const app = express();
   app.use((req, _res, next) => {
     req.session = { authenticated: true };
     next();
   });
   app.use(
-    '/api/scoreboard',
-    load('web-server/routes/scoreboard-routes').createScoreboardRouter(() => scoreboard)
-  );
-  app.use(
     '/api/accounts',
     load('web-server/routes/account-analytics-routes').createAccountAnalyticsRouter({
       getAnalytics: (query) => analytics.get(query),
     })
-  );
-  app.use(
-    '/api/status',
-    load('web-server/routes/status-routes').createStatusRouter(() => status)
   );
   // Same trivial JSON response as the unauthenticated auth check, without a real session store.
   app.get('/api/auth/check', (_req, res) => res.status(401).json({ authenticated: false }));
@@ -391,9 +316,7 @@ async function main() {
       child.once('exit', () => reject(new Error('Fixture failed before ready')));
     });
     const paths = [
-      '/api/scoreboard',
       '/api/accounts/analytics?range=30d&tz=UTC',
-      '/api/status',
       '/api/auth/check',
     ];
     const latencies = Object.fromEntries(paths.map((value) => [value, []]));
@@ -414,7 +337,7 @@ async function main() {
           latencies[endpoint].push(performance.now() - start);
           statuses[endpoint] = status;
           await sleep(
-            endpoint.startsWith('/api/accounts/') || endpoint === '/api/scoreboard'
+            endpoint.startsWith('/api/accounts/')
               ? Number(process.env.AAC_PERF_DATA_POLL_MS ?? 5000)
               : 250
           );

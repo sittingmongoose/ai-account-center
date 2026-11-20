@@ -38,6 +38,39 @@ use aac_status::produce::machines::{self as machines_produce, HostOs, Platform, 
 use aac_status::produce::pinned_input;
 use aac_status::produce::simlock::{self, Status as SimlockStatus};
 pub(crate) use aac_status::produce::usage::UsageInput;
+
+/// The Status usage input uses the same snapshot projection as the share publisher.
+#[derive(Default)]
+pub(crate) struct UsageSamples(aac_snapshot::history::RecentReadings);
+
+impl UsageSamples {
+    pub(crate) fn project(
+        &mut self,
+        root: &Path,
+        cache: &crate::account_usage::AccountUsageCache,
+    ) -> Option<UsageInput> {
+        let now = i64::try_from(now_ms()).ok()?;
+        let timestamp = chrono::DateTime::from_timestamp_millis(now)?
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let accounts = cache.merged_accounts(&timestamp, now).ok()?;
+        self.0.add(&accounts, now);
+        let event = aac_snapshot::SampleEvent {
+            accounts,
+            sampled_at: now,
+            history: None,
+            long_burn: None,
+        };
+        let refresh = crate::account_usage::coordinator::read_refresh_seconds(root);
+        let (mut snapshot, _) =
+            aac_snapshot::build_snapshot_files(&event, refresh, Some(&self.0), &[], None);
+        let accounts = std::mem::take(snapshot["accounts"].as_array_mut()?);
+        (!accounts.is_empty()).then_some(UsageInput {
+            accounts,
+            sampled_at: now,
+            stale_after_seconds: aac_snapshot::snapshot::stale_after_seconds(refresh) as i64,
+        })
+    }
+}
 use aac_status::produce::{Collected, ReadProblem, next_problem};
 use aac_status::share::reports::AgentReportsState;
 use aac_status::share::status_docs::StatusDocsState;

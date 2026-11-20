@@ -88,7 +88,11 @@ export function rustComposeSelected(env: NodeJS.ProcessEnv = process.env): boole
  * stays fed: report captures need the hosted writer.
  */
 export function rustOwnedStatusOn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return process.platform !== 'win32' && rustGroupOn('status', env) && rustStoreSwitchOn(env);
+  return (
+    process.platform !== 'win32' &&
+    (env.AAC_RUST_CUT_WORKER === '1' || rustGroupOn('status', env)) &&
+    rustStoreSwitchOn(env)
+  );
 }
 
 /**
@@ -97,7 +101,11 @@ export function rustOwnedStatusOn(env: NodeJS.ProcessEnv = process.env): boolean
  * TypeScript keeps the filter parse and auth, and forwards. Without the store host nothing moves.
  */
 export function rustOwnedScoreboardOn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return process.platform !== 'win32' && rustGroupOn('scoreboard', env) && rustStoreSwitchOn(env);
+  return (
+    process.platform !== 'win32' &&
+    (env.AAC_RUST_CUT_WORKER === '1' || rustGroupOn('scoreboard', env)) &&
+    rustStoreSwitchOn(env)
+  );
 }
 
 /** G14: move the writers only to a supported host with the analytics group and store on. */

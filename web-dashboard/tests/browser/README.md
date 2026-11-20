@@ -92,19 +92,10 @@ DOM and pixels). The device fixture proxy takes `AAC_FIXTURE_RUST_HOME=<aac-http
 `AAC_RUST_GROUP_HOME=on`, so the server's own `GET /api/views/home` (the real-wiring check) is answered from fed
 generations; stubbed Home data still goes through the kit's own builder. Without it the group is explicitly off.
 
-**Status fed (R2, opt-in).** `--set rustStatusFed=1` starts the server with `AAC_RUST_SERVICE=on` and
-`AAC_RUST_GROUP_STATUS=on` and the binary in `dist/native/aac-http` (`--set rustBinary=<path>` for another), so the
-server's own `GET /api/status` is answered from fed generations. `status end to end on the server` (the only Status
-check without stubs) then requires the bridge's `/api/status` counters to show fed answers and no decline; with the
-switch off it requires none. Without it the group is explicitly off.
-
-**Status and Scoreboard owned (R4, opt-in).** `--set rustOwned=1` implies `rustStatusFed=1` and also starts the
-server with `AAC_RUST_STORE=on` and `AAC_RUST_GROUP_SCOREBOARD=on`: the Rust service reads the kit's fixture reports
-folder itself (owned Status readers, the runs ingest into the hosted store, readers-check rows written into that
-temporary folder) and answers `/api/status` and `/api/scoreboard`. `scoreboard end to end on the server` (no stubs)
-then requires the bridge's `/api/scoreboard` counters to show owned answers and no decline but a race; with the switch
-off it requires none. Build `dist/native/aac-http` and both native modules from the same commit (the boot's schema
-guard refuses a mix).
+**Native Status and Scoreboard.** Run `browser-check run web-dashboard/tests/browser/checks --grep status --set rustOwned=1`
+and then the same command with `--grep scoreboard`. The kit starts `dist/native/ai-account-center` with a temporary
+reports share and the worker off. The end-to-end checks use the public Rust routes, verify the view headers, and
+exercise card media, answers, and the Scoreboard's run ingest.
 
 ## Recording, machines and parallel runs
 

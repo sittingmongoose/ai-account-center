@@ -4375,12 +4375,6 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/scoreboard/by-model.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/web-server/scoreboard/model-identity.test.ts",
       "kind": "safety",
       "evidence": [
@@ -4435,19 +4429,6 @@
       "evidence": [
         "helper"
       ]
-    },
-    {
-      "file": "tests/unit/web-server/scoreboard/scoreboard-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/scoreboard/scoreboard-store.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/scoreboard/scoreboard-view.test.ts",
@@ -4580,20 +4561,7 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/status-feed.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
       "file": "tests/unit/web-server/status/agent-reports-reader.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/status/answered-cards.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -4636,34 +4604,7 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/web-server/status/share-route.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/status/spend-by-stream.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/status/status-capture.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/web-server/status/status-collectors.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/status/status-end-to-end.test.ts",
       "kind": "HTTP",
       "evidence": [
         "HTTP",
@@ -4683,23 +4624,10 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/web-server/status/status-machine-snapshot.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/web-server/status/status-quota.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/status/status-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
     },
     {
       "file": "tests/unit/web-server/status/status-server-review.test.ts",
@@ -4707,19 +4635,6 @@
       "evidence": [
         "HTTP",
         "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/status/status-simlock-gateway.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/status/status-source-honesty.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
       ]
     },
     {

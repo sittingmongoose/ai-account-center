@@ -243,7 +243,7 @@ pub fn js_text(value: &Json) -> String {
 pub fn agent_reports_root(env_root: Option<&str>) -> PathBuf {
     match env_root.map(str::trim).filter(|root| !root.is_empty()) {
         Some(root) => PathBuf::from(root),
-        None => PathBuf::from("/mnt/Cursor/agent-reports"),
+        None => machine_share_root().join("agent-reports"),
     }
 }
 
@@ -251,7 +251,7 @@ pub fn agent_reports_root(env_root: Option<&str>) -> PathBuf {
 pub fn pm_mail_registry_dir(env_dir: Option<&str>) -> PathBuf {
     match env_dir.map(str::trim).filter(|dir| !dir.is_empty()) {
         Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from("/mnt/Cursor/Inbox/registry"),
+        None => machine_share_root().join("Inbox/registry"),
     }
 }
 
@@ -383,4 +383,15 @@ mod tests {
         assert_eq!(share_local_path("/mnt/Cursor/../etc/passwd", root), None);
         assert_eq!(share_local_path("relative.md", root), None);
     }
+}
+/// The mounted Cursor share on this platform.
+#[must_use]
+pub fn machine_share_root() -> &'static Path {
+    Path::new(if cfg!(windows) {
+        r"\\TRUENAS\Cursor"
+    } else if cfg!(target_os = "macos") {
+        "/Volumes/Cursor"
+    } else {
+        "/mnt/Cursor"
+    })
 }

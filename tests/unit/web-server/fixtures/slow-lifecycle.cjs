@@ -29,10 +29,6 @@ require(
   path.join(repo, 'dist/web-server/services/account-analytics-service')
 ).startAccountAnalyticsSampling = () => {};
 // Public startup stays real. Unrelated background readers/producers have no work here.
-require(path.join(repo, 'dist/web-server/status/status-service')).startStatusService =
-  () => () => {};
-require(path.join(repo, 'dist/web-server/scoreboard/scoreboard-service')).startScoreboardService =
-  () => {};
 require(
   path.join(repo, 'dist/web-server/agent-usage/agent-usage-snapshot')
 ).startAgentUsageSnapshot = () => () => {};

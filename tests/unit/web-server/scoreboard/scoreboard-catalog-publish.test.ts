@@ -16,7 +16,6 @@ import {
   seedCatalog,
   type SeedFailure,
 } from '../../../../src/web-server/scoreboard/catalog';
-import { ScoreboardService } from '../../../../src/web-server/scoreboard/scoreboard-service';
 import { NOW, tempDirs } from '../status/status-test-helpers';
 
 const dirs = tempDirs();
@@ -171,38 +170,6 @@ describe('seedCatalog publishing', () => {
     ).toBe(true);
     expect(next.endsWith('\r\n    }\r\n  ]\r\n}\r\n')).toBe(true);
     expect(next.replace(/\r\n/g, '\n')).toBe(pretty(packagedModels));
-  });
-
-  it('leaves a share file that is not valid alone and names it in the catalog Source', async () => {
-    const { root, dir } = catalogDir();
-    const models = path.join(dir, 'models.json');
-    const aliases = path.join(dir, 'model-aliases.json');
-    fs.writeFileSync(models, '{ damaged');
-    fs.writeFileSync(aliases, '{"schema":"agent-reports/model-aliases@1","aliases":[]}');
-    const { written, failures } = await seed(root);
-    expect(written).not.toContain('models.json');
-    expect(written).not.toContain('model-aliases.json');
-    expect(failures).toEqual([
-      { file: 'models.json', code: 'invalid' },
-      { file: 'model-aliases.json', code: 'invalid' },
-    ]);
-    expect(fs.readFileSync(models, 'utf8')).toBe('{ damaged');
-    expect(fs.readFileSync(aliases, 'utf8')).toBe(
-      '{"schema":"agent-reports/model-aliases@1","aliases":[]}'
-    );
-    expect(dotFiles(dir)).toEqual([]);
-
-    const service = new ScoreboardService({
-      root: () => root,
-      now: () => NOW,
-      timeZone: () => 'UTC',
-    });
-    await service.seed();
-    const { detail } = (await service.view()).sources[1];
-    expect(detail).toContain('catalog/models.json (not valid JSON)');
-    expect(detail).toContain('Could not add new packaged entries to models.json: invalid.');
-    expect(detail).toContain('Could not add new packaged entries to model-aliases.json: invalid.');
-    expect(detail).not.toContain('damaged');
   });
 
   it('leaves alone a file that names its list twice', async () => {

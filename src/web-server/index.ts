@@ -66,8 +66,6 @@ import {
   startAacStoreHostJobsWatch,
   startAacStoreMaintenance,
 } from '../store/store-service';
-import { startScoreboardService } from './scoreboard/scoreboard-service';
-import { setStatusRustService, startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
@@ -237,7 +235,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // REST API routes (modularized); big JSON answers are encoded on the way out.
   app.use('/api', apiCompression());
   const rustService = new RustService(options.rustService);
-  setStatusRustService(rustService);
   const rustServiceReady = rustService.start(options.rustServiceBinary);
   app.use('/api', (_req, res, next) => {
     res.locals.rustService = rustService;
@@ -336,7 +333,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let stopStoreMaintenance: (() => void) | null = null;
   let stopStoreHostJobsWatch: (() => void) | null = null;
   let stopStoreFallbackWatch: (() => void) | null = null;
-  let stopStatusService: (() => void) | null = null;
   // Start the small command parent before analytics/collectors populate the server heap.
   await startProcessBroker().catch(() => {
     logger.warn('server.command_transport_unavailable', 'Private command transport unavailable');
@@ -375,8 +371,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopStoreMaintenance = null;
     stopStoreHostJobsWatch?.();
     stopStoreHostJobsWatch = null;
-    stopStatusService?.();
-    stopStatusService = null;
     // R3: producers stop above. Drain admitted calls, close the sole writer, then stop
     // the service. The socket handle refuses new work once closing starts.
     void closeAacStore().finally(() => rustService.stop());
@@ -478,10 +472,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
             reason: opened.reason,
           });
       });
-      // Status tab readers and collectors (read-only; process collectors run only while viewed).
-      stopStatusService = startStatusService();
-      // Scoreboard catalog seeds (runs are read on demand).
-      startScoreboardService();
       startAccountAnalyticsSampling(
         rustService,
         options.sidecar === true && process.env.AAC_CUT_PUBLIC_COLLECTION === '1'

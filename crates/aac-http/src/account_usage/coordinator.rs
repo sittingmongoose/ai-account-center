@@ -611,7 +611,7 @@ pub fn identity_cooldown_key(ccs_dir: &Path, provider: &str, identity: &UsageIde
     ])))
 }
 
-fn read_refresh_seconds(ccs_dir: &Path) -> f64 {
+pub(crate) fn read_refresh_seconds(ccs_dir: &Path) -> f64 {
     let file = ccs_dir.join("account-refresh-settings.json");
     let value = contract::read_private_cache(&file);
     value

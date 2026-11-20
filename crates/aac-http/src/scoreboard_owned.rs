@@ -320,8 +320,25 @@ impl ScoreboardOwned {
         })
     }
 
-    pub(crate) fn set_seed_failures(&self, failures: Vec<Json>) {
-        *self.seed_failures.lock().unwrap_or_else(|p| p.into_inner()) = failures;
+    pub(crate) async fn seed(self: &Arc<Self>) {
+        let owner = self.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            use aac_status::share::seed::{embedded_seed, seed_catalog};
+            let mut failures = Vec::new();
+            seed_catalog(
+                &owner.root,
+                &|name| embedded_seed(name).map(<[u8]>::to_vec),
+                &mut failures,
+            );
+            *owner
+                .seed_failures
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = failures
+                .into_iter()
+                .map(|failure| json!({"file": failure.file, "code": failure.code}))
+                .collect();
+        })
+        .await;
     }
 
     /// The check file's runs rows (`ScoreboardService.recordCheck`): the accepted revisions

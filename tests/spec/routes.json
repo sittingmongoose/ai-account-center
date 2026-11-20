@@ -863,7 +863,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/scoreboard-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -877,7 +877,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -891,7 +891,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -905,7 +905,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": true,
     "milestone": "M5"
   },
@@ -919,7 +919,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/share-route.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -933,7 +933,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },

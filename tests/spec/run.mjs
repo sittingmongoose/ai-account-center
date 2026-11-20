@@ -104,13 +104,6 @@ for (const [program, args] of [
     ],
   ],
   [
-    'node',
-    [
-      'tests/spec/status-answer-writes.mjs',
-      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
-    ],
-  ],
-  [
     'bun',
     [
       'tests/spec/local-key-write-parity.ts',
@@ -147,7 +140,6 @@ for (const [program, args] of [
   ],
   ...[
     'read-view-parity',
-    'read-file-parity',
     'read-http-parity',
     'account-read-parity',
     'home-number-admission',
@@ -178,18 +170,6 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
-  // R2: Status fed against today's handler, end to end on the real binary and the real owner, under Node; and
-  // the Status fuzz (TS, the envelope read and the fed path) on a short run (the full run: 4 seeds x 400).
-  [
-    'node',
-    [
-      'tests/spec/status-read-parity.mjs',
-      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
-    ],
-  ],
-  ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE)
-    ? [['bun', ['tests/spec/status-fuzz.ts', '--cases', '100']]]
-    : []),
   // R3: the store host's exit gate (both handles, kill drills, fallback, restore), under Node.
   [
     'node',

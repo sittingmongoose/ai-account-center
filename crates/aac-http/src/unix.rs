@@ -1975,7 +1975,7 @@ async fn serve_inner(
         tokio::task::spawn_blocking(move || opener.open_at_boot());
         let jobs = Arc::clone(host);
         let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(async move { store_jobs(jobs, stop).await });
+        tokio::spawn(crate::store_host::jobs(jobs, stop));
         // G14: the quota sampler and activity scheduler run when the front door feeds them on.
         let writers_host = Arc::clone(host);
         let writers_stop = Arc::clone(&jobs_stop);
@@ -1993,6 +1993,9 @@ async fn serve_inner(
         });
     }
     // R4: the owned readers' jobs, and the catalog seed before the first ingest pass.
+    if let Some(root) = owned_reports_root {
+        crate::status_owned::initialize_reports(root).await;
+    }
     if let Some(owner) = &status_owned {
         let jobs = Arc::clone(owner);
         let stop = Arc::clone(&jobs_stop);
@@ -2010,23 +2013,7 @@ async fn serve_inner(
         tokio::spawn(async move { crate::answers_owned::jobs(jobs, stop).await });
     }
     if let Some(owner) = &scoreboard_owned {
-        let seeder = Arc::clone(owner);
-        let root = owned_reports_root.clone().expect("scoreboard owner");
-        let _ = tokio::task::spawn_blocking(move || {
-            let mut failures = Vec::new();
-            aac_status::share::seed::seed_catalog(
-                &root,
-                &|name| aac_status::share::seed::embedded_seed(name).map(|bytes| bytes.to_vec()),
-                &mut failures,
-            );
-            seeder.set_seed_failures(
-                failures
-                    .iter()
-                    .map(|failure| json!({"file": failure.file, "code": failure.code}))
-                    .collect(),
-            );
-        })
-        .await;
+        owner.seed().await;
         let jobs = Arc::clone(owner);
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { crate::scoreboard_owned::ingest_jobs(jobs, stop, true).await });
@@ -2048,6 +2035,8 @@ async fn serve_inner(
     let task = producer.zip(native).map(|(producer, native)| {
         let stop = cancel.clone();
         let store = store.clone();
+        let root = state.0.boot.ccs_dir.clone();
+        let samples = std::sync::Mutex::new(crate::status_produce::UsageSamples::default());
         tokio::spawn(async move {
             producer
                 .run(
@@ -2065,6 +2054,14 @@ async fn serve_inner(
                     },
                     |cache| {
                         (native.published)(&cache);
+                        if let Some(produce) = &status_produce
+                            && let Some(usage) = samples
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .project(&root, &cache)
+                        {
+                            produce.set_usage(Some(usage));
+                        }
                         let store = store.clone();
                         let owner = lifecycle_owner.as_ref();
                         let share = share.as_ref();
@@ -2122,19 +2119,6 @@ async fn serve_inner(
 /// R3: the store jobs loop â€” the first pass minutes after start, then every 15 minutes,
 /// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
 /// when the service ends.
-async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBool>) {
-    tokio::time::sleep(Duration::from_millis(crate::store_host::FIRST_PASS_MS)).await;
-    loop {
-        if stop.load(Ordering::Acquire) {
-            return;
-        }
-        let pass = Arc::clone(&host);
-        let _ =
-            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
-        tokio::time::sleep(Duration::from_millis(crate::store_host::MAINTAIN_EVERY_MS)).await;
-    }
-}
-
 #[cfg(test)]
 mod dto_tests {
     use super::*;

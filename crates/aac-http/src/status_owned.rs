@@ -516,3 +516,78 @@ pub(crate) async fn jobs(
         tokio::time::sleep(std::time::Duration::from_millis(SCAN_EVERY_MS)).await;
     }
 }
+
+/// Prepare the existing share's report folders and publish the package's JSON schemas.
+pub(crate) async fn initialize_reports(root: std::path::PathBuf) {
+    let _ = tokio::task::spawn_blocking(move || {
+        use std::fs;
+        if !root.is_dir() {
+            return;
+        }
+        let v1 = root.join("v1");
+        let _ = fs::create_dir(&v1);
+        if !fs::symlink_metadata(&v1).is_ok_and(|meta| meta.is_dir()) {
+            return;
+        }
+        for leaf in ["writers", "answers", "keys", "schemas", "catalog", "readers"] {
+            let directory = v1.join(leaf);
+            #[cfg(unix)]
+            if leaf == "writers" {
+                use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+                if fs::DirBuilder::new().mode(0o777).create(&directory).is_ok() {
+                    let _ = fs::set_permissions(directory, fs::Permissions::from_mode(0o777));
+                }
+                continue;
+            }
+            let _ = fs::create_dir(directory);
+        }
+        let target = v1.join("schemas");
+        if !fs::symlink_metadata(&target).is_ok_and(|meta| meta.is_dir()) {
+            return;
+        }
+        let Some(package) = crate::agent_transport::package_root() else {
+            return;
+        };
+        let Ok(files) = fs::read_dir(package.join("docs/agent-reports/schemas")) else {
+            return;
+        };
+        for file in files.flatten() {
+            let name = file.file_name();
+            let Some((name, stem)) = name.to_str().and_then(|name| name.strip_suffix(".json").map(|stem| (name, stem))) else {
+                continue;
+            };
+            if !stem.starts_with(|c: char| c.is_ascii_lowercase())
+                || !stem.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                continue;
+            }
+            let Ok(mut bytes) = fs::read_to_string(file.path()) else {
+                continue;
+            };
+            let Ok(mut schema) = serde_json::from_str::<Json>(&bytes) else {
+                continue;
+            };
+            let ids = aac_status::computers::machine_ids();
+            let mut changed = false;
+            if let Some(writer) = schema.pointer_mut("/properties/writer") {
+                writer["pattern"] = json!(format!(
+                    r"^(?!.*--)({})\.[a-z0-9][a-z0-9.-]{{0,62}}$",
+                    ids.join("|")
+                ));
+                changed = true;
+            }
+            if let Some(machine) = schema.pointer_mut("/properties/agent/properties/machine") {
+                machine["enum"] = Json::Array(ids.iter().map(|id| json!(id)).chain([Json::Null]).collect());
+                changed = true;
+            }
+            if changed && let Ok(body) = serde_json::to_string_pretty(&schema) {
+                bytes = body + "\n";
+            }
+            let policy = aac_files::read::ReadPolicy::capped(bytes.len() as u64);
+            if matches!(aac_files::read::read(&target.join(name), &policy), aac_files::read::Read::Bytes(current, _) if current == bytes.as_bytes()) {
+                continue;
+            }
+            let _ = aac_files::share::write_atomically(&target, name, &bytes, 0o644);
+        }
+    }).await;
+}

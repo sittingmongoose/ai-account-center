@@ -11,7 +11,8 @@ import { startRustBuilder } from './rust-home-builder.mjs';
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
-	const cut = !!ctx.args.cut && ctx.args.cut !== '0';
+	const rustOwned = !!ctx.args.rustOwned && ctx.args.rustOwned !== '0';
+	const cut = rustOwned || (!!ctx.args.cut && ctx.args.cut !== '0');
 	const cli = cut
 		? path.join(root, 'dist', 'native', process.platform === 'win32' ? 'ai-account-center.exe' : 'ai-account-center')
 		: path.join(root, 'dist', 'ccs.js');
@@ -24,19 +25,10 @@ export default (ctx) => {
 	// then explicitly off, so a shell variable cannot turn it on unseen.
 	// R1: `--set rustHomeFed=1` (with rustHome) also turns the Home group on (AAC_RUST_GROUP_HOME=on): the server's own
 	// GET /api/views/home is answered from fed generations. Off by default, and then explicitly off.
-	// R2: `--set rustStatusFed=1` runs the server with the Rust service on and the Status group on
-	// (AAC_RUST_GROUP_STATUS=on): the server's own GET /api/status is answered from fed generations. Off by default, and
-	// then explicitly off.
 	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
 	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
-	// R4: `--set rustOwned=1` implies rustStatusFed and also turns the store host and the Scoreboard group on
-	// (AAC_RUST_STORE=on, AAC_RUST_GROUP_SCOREBOARD=on): the Rust service reads the kit's fixture reports folder itself
-	// (owned Status readers, runs ingest, readers-check rows in that temporary folder) and answers both routes. Off by
-	// default, and then explicitly off.
-	const rustOwned = !!ctx.args.rustOwned && ctx.args.rustOwned !== '0';
-	const rustStatusFed = (!!ctx.args.rustStatusFed && ctx.args.rustStatusFed !== '0') || rustOwned;
 	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
-	if ((rustHome || rustStatusFed) && !fs.existsSync(rustBinary)) throw new Error(`rustHome/rustStatusFed: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
+	if (rustHome && !fs.existsSync(rustBinary)) throw new Error(`rustHome: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
 	let builder = null;
 	/** Per page: the Home inputs a check stubbed (path -> JSON). */
 	const homeStubs = new WeakMap();
@@ -96,13 +88,15 @@ export default (ctx) => {
 				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),
 				...(cut ? {
 					CCS_DIR: path.join(s.home, '.ccs'), AAC_AGENT_VERBS: 'off', AAC_AGENT_TRANSPORT: 'off',
-					AAC_STORE_SHARE_BACKUP_DIR: 'off', SSH_AUTH_SOCK: ''
+					AAC_STORE_SHARE_BACKUP_DIR: 'off', SSH_AUTH_SOCK: '',
+					...(rustOwned ? {
+						AAC_TS_SIDECAR: 'off', AAC_RUST_CUT_NATIVE_ROUTES: 'off',
+						AAC_RUST_GROUP_COLLECTION: 'off', AAC_RUST_GROUP_RENEWAL: 'off'
+					} : {})
 				} : { ...(rustHome
 					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
-					: { AAC_RUST_SERVICE: rustStatusFed ? 'on' : 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off', ...(rustStatusFed ? { AAC_RUST_SERVICE_BINARY: rustBinary } : {}) }),
-				AAC_RUST_GROUP_STATUS: rustStatusFed ? 'on' : 'off',
-				AAC_RUST_STORE: rustOwned ? 'on' : 'off',
-				AAC_RUST_GROUP_SCOREBOARD: rustOwned ? 'on' : 'off' }) }
+					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off' }),
+				AAC_RUST_STORE: cut ? 'on' : 'off' }) }
 		}),
 		async teardown(_, s) {
 			if (builder) {

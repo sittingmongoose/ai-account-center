@@ -264,17 +264,6 @@ await stub('src/web-server/services/account-lifecycle-runtime.ts', {
   startAccountLifecycleMaintenance: noop,
   stopAccountLifecycleMaintenance: noop,
 });
-await stub('src/web-server/status/status-service.ts', {
-  startStatusService: stop,
-  getStatusService: () => ({
-    view: () => fixture.statusView,
-    answers: { sendList: () => [], history: () => [] },
-  }),
-});
-await stub('src/web-server/scoreboard/scoreboard-service.ts', {
-  startScoreboardService: noop,
-  getScoreboardService: () => ({ view: async () => fixture.scoreboardView }),
-});
 await stub('src/web-server/agent-usage/agent-usage-snapshot.ts', { startAgentUsageSnapshot: stop });
 await stub('src/antigravity/production-runtime.ts', {
   getInstalledAntigravityRuntimeFactory: () => null,
@@ -442,23 +431,21 @@ inventory.push({
   handlerFile: 'src/web-server/index.ts',
   writes: false,
 });
-// Middleware-only deliverable handler has no Router.get registration.
-inventory.push({
-  method: 'GET',
-  path: '/api/status/deliverable',
-  roles,
-  handlerFile: 'src/web-server/routes/share-route.ts',
-  writes: false,
-});
 for (const r of inventory) {
   r.milestone = milestone(r);
   if (r.path.startsWith('/v0/management')) r.writes = false;
 }
 inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
-// G13/G6/G10 and H/J moved their public admission to the Rust listener. Their M0 rows and
+// Profiles, app updates and Status moved their public admission to the Rust listener. Their M0 rows and
 // contracts stay the replay corpus (`routes.json`); the TypeScript router no longer registers
 // them, so this recorder keeps the committed rows instead of re-recording a 404.
 const MOVED_TO_RUST = new Set([
+  'GET /api/scoreboard',
+  'GET /api/status/@regex:^\\/files\\/([^/]+)\\/(.+)$',
+  'GET /api/status/answers',
+  'POST /api/status/answers',
+  'GET /api/status/deliverable',
+  'GET /api/status',
   'GET /api/antigravity/profiles',
   'GET /api/antigravity/profiles/quotas',
   'POST /api/app-updates/cancel',
@@ -750,6 +737,7 @@ try {
     path.join(root, 'src/web-server/rust-service-health.ts'),
     path.join(root, 'config/rust-service-routes.json'),
     path.join(root, 'crates/aac-http/src/public_auth/reset_routes.rs'),
+    path.join(root, 'crates/aac-http/src/public_auth/native_group.rs'),
     path.join(root, 'tests/fixtures/reset-adapter/reset-claim-routes.ts'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))
@@ -944,8 +932,7 @@ try {
       'must serve health/settings/diag, visibility, preferences and registry through the private service'
     );
   if (!composed && rustMode === 'shadow') {
-    // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
-    // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
+    // The three M0 store-status stubs explicitly fall back. The six session/bar account reads (visibility, preferences, registry) are
     // compared; the Analytics stub stops at its query check before any Rust composition.
     // Profiles now replay at the native public listener. The legacy recorder never sends
     // private requests for those routes.

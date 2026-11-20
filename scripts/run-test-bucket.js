@@ -27,7 +27,6 @@ const slowTests = [
   'tests/unit/web-server/cursor-quota.test.ts',
   'tests/unit/web-server/reset-source-adapter.test.ts',
   'tests/integration/computer-registry.test.ts',
-  'tests/unit/web-server/status/share-route.test.ts',
   'tests/integration/logging-request-context.test.ts',
   'tests/unit/docker/dockerfile-lifecycle-scripts.test.ts',
   'tests/unit/docker/docker-hygiene.test.ts',
@@ -45,7 +44,6 @@ const slowTests = [
   'tests/unit/web-server/antigravity-usage-helper.test.ts',
   'tests/unit/web-server/app-update-helper-sync.test.ts',
   'tests/unit/app-updates/codex-update-runtime-bundle.test.ts',
-  'tests/unit/web-server/status/status-routes.test.ts',
   'tests/unit/web-server/status/status-server-review.test.ts',
   // Spawns a stand-in Rust service on Unix sockets and waits on restart backoff timers.
   'tests/unit/web-server/rust-service-lifecycle.test.ts',
@@ -62,7 +60,6 @@ const slowTests = [
 const fastJsTests = new Set(['tests/unit/flag-parsing-simple.test.js']);
 
 const isolatedTests = new Set([
-  'tests/unit/web-server/status/status-machine-snapshot.test.ts',
   'tests/unit/web-server/agent-default-runner.test.ts',
   'tests/unit/web-server/rust-slow-filesystem.test.ts',
   'tests/unit/store/store-host-deadline.test.ts',

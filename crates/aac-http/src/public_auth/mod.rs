@@ -537,8 +537,17 @@ pub(crate) async fn run_public_at(
         }
         groups
     });
+    #[cfg(windows)]
+    let windows_host = (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), false));
     let mut worker = if cut {
-        sidecar::Sidecar::start(&root, address, native_collection).await?
+        sidecar::Sidecar::start(
+            &root,
+            address,
+            native_collection,
+            #[cfg(windows)]
+            windows_host.clone(),
+        )
+        .await?
     } else {
         None
     };
@@ -555,8 +564,11 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
+    #[cfg(not(windows))]
     let owner_host =
         (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    #[cfg(windows)]
+    let owner_host = windows_host;
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
         let worker_directory = snapshot

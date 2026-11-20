@@ -11,6 +11,9 @@
     }
   },
   "notApplicableAfterCut": {
+    "tests/unit/web-server/scoreboard/scoreboard-routes.test.ts": "The Scoreboard Express adapter was retired. Strict Status M0 and the native Scoreboard browser fixture use the public route.",
+    "tests/unit/web-server/status/share-route.test.ts": "The deliverable Express adapter was retired. The Rust file owner covers bounded streams and HEAD, and Status M0 covers public admission.",
+    "tests/unit/web-server/status/status-routes.test.ts": "The Status Express adapter was retired. Strict Status M0, Rust answer journal tests and the workerless browser fixture cover its public path.",
     "tests/integration/web-server/claude-desktop-profiles-endpoint.test.ts": "The TypeScript profiles endpoint was retired. The native profiles group covers its public contract.",
     "tests/integration/web-server/codex-profiles-endpoint.test.ts": "The TypeScript Codex endpoint was retired. The native profiles group and Codex profile view tests cover it.",
     "tests/unit/antigravity/routes.test.ts": "The TypeScript Antigravity router was retired. Native profiles M0 and Antigravity owner tests cover its responses.",

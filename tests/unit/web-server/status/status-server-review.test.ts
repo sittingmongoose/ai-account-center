@@ -4,14 +4,11 @@ import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { execFileSync, spawn, spawnSync } from 'child_process';
 import assert from 'node:assert/strict';
 import { createInterface } from 'node:readline';
-import express from 'express';
 import fs from 'fs';
-import http, { type Server } from 'http';
+import http from 'http';
 import os from 'os';
-import type { AddressInfo } from 'net';
 import path from 'path';
 import { Writable } from 'stream';
-import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
 import {
   agentReportsRoot,
   AgentReportsReader,
@@ -61,17 +58,13 @@ import {
   verifySignedDocument,
   type UnsignedAnswer,
 } from '../../../../src/web-server/status/answer-signing';
-import { StatusService } from '../../../../src/web-server/status/status-service';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
 import { cardDoc, NOW, tempDirs, threadDoc, writeCard, writeReport } from './status-test-helpers';
 import { waitForProcessState, waitUntil } from '../../../shared/fixtures/process-state';
 import { DeadlineExceededError, withDeadline } from '../../../../src/utils/settle-deadline';
 
 const dirs = tempDirs();
-let server: Server | undefined;
 afterEach(async () => {
-  if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
-  server = undefined;
   dirs.cleanup();
 });
 
@@ -718,7 +711,10 @@ describe('an unavailable share', () => {
     // Card reads answer at once, so only the hung share writes spend the send's budget.
     const answers = make({
       readCard: async (id) =>
-        ({ doc: cardDoc('vm.lead', id.slice('vm.lead--'.length)), sha256: shas.get(id) ?? '' }) as never,
+        ({
+          doc: cardDoc('vm.lead', id.slice('vm.lead--'.length)),
+          sha256: shas.get(id) ?? '',
+        }) as never,
     });
     let results;
     share.hang();
@@ -1303,7 +1299,15 @@ describe('cards.complete', () => {
       timeZone: 'UTC',
       reports: reader.snapshot(),
       registry: { data: [], asOf: NOW, error: null },
-      machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty, odroid: empty, '1070ti': empty },
+      machines: {
+        vm: empty,
+        mac: empty,
+        windows: empty,
+        nas1: empty,
+        alexis: empty,
+        odroid: empty,
+        '1070ti': empty,
+      },
       browsers: empty,
       simlock: empty,
       usage: null,
@@ -1447,145 +1451,6 @@ describe('cards.complete', () => {
   });
 });
 
-describe('the routes', () => {
-  async function start(answersOverride?: { submitSet: () => Promise<never> }) {
-    const { root, answers, reader } = setup();
-    const service = new StatusService({
-      reader,
-      answers: (answersOverride ?? answers) as StatusAnswers,
-      registryReader: new PmMailRegistryReader(() => path.join(root, 'none')),
-      run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
-      readLocalMachine: async () => {
-        throw new Error('not in tests');
-      },
-      readRemoteMachine: async () => {
-        throw new Error('not in tests');
-      },
-      timeZone: () => 'UTC',
-      notify: () => undefined,
-    });
-    const app = express();
-    app.use(express.json());
-    app.use((req, _res, next) => {
-      Object.assign(req, { session: { authenticated: true } });
-      next();
-    });
-    app.use(
-      '/api/status',
-      createStatusRouter(() => service)
-    );
-    server = await new Promise<Server>((resolve) => {
-      const s = app.listen(0, '127.0.0.1', () => resolve(s));
-    });
-    return {
-      root,
-      answers,
-      base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    };
-  }
-
-  /** `fetch` normalises some paths and refuses others; this sends the bytes as written. */
-  function raw(base: string, url: string, headers: Record<string, string> = {}) {
-    return new Promise<{ status: number; type: string; cache: string; body: string }>(
-      (resolve, reject) => {
-        const { hostname, port } = new URL(base);
-        http
-          .get({ hostname, port, path: url, headers }, (res) => {
-            let body = '';
-            res.on('data', (chunk) => {
-              body += chunk;
-            });
-            res.on('end', () =>
-              resolve({
-                status: res.statusCode ?? 0,
-                type: String(res.headers['content-type']),
-                cache: String(res.headers['cache-control']),
-                body,
-              })
-            );
-          })
-          .on('error', reject);
-      }
-    );
-  }
-
-  it('answers a bad range as JSON, typed as JSON and not cached as media', async () => {
-    const { base, root } = await start();
-    const dir = path.join(root, 'v1', 'writers', 'vm.lead', 'c');
-    fs.mkdirSync(dir, { recursive: true });
-    const mp4 = Buffer.concat([
-      Buffer.from([0, 0, 0, 0x18]),
-      Buffer.from('ftypisom'),
-      Buffer.alloc(100),
-    ]);
-    fs.writeFileSync(path.join(dir, 'v.mp4'), mp4);
-    const res = await raw(base, '/api/status/files/vm.lead/c/v.mp4', { range: 'bytes=9999-' });
-    expect(res.status).toBe(416);
-    expect(res.type).toContain('application/json');
-    expect(res.cache).toBe('no-store');
-    expect(JSON.parse(res.body).code).toBe('range_not_satisfiable');
-    const ok = await raw(base, '/api/status/files/vm.lead/c/v.mp4', { range: 'bytes=0-11' });
-    expect(ok.status).toBe(206);
-    expect(ok.type).toBe('video/mp4');
-    expect(ok.cache).toBe('private, max-age=300');
-  });
-
-  it('answers an undecodable path 404, as the contract says', async () => {
-    const { base } = await start();
-    for (const url of ['/api/status/files/vm.lead/%zz', '/api/status/files/%zz/a.png']) {
-      const res = await raw(base, url);
-      expect([url, res.status]).toEqual([url, 404]);
-      expect(JSON.parse(res.body).code).toBe('not_found');
-    }
-  });
-
-  it('takes a valid sendId and refuses a bad one, without echoing it', async () => {
-    const { base, root, answers } = await start();
-    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    const post = (body: unknown) =>
-      fetch(`${base}/api/status/answers`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', origin: base },
-        body: JSON.stringify(body),
-      });
-    const one = entry(CARD, sha, { choice: [], note: 'once' });
-    for (const bad of [
-      'short',
-      'x'.repeat(65),
-      'has space in it here',
-      'dots.not.allowed.here',
-      7,
-      null,
-    ]) {
-      const res = await post({ sendId: bad, answers: [one] });
-      expect([bad, res.status]).toEqual([bad, 400]);
-      expect((await res.json()).code).toBe('invalid_body');
-    }
-    const id = 'a'.repeat(32);
-    const first = await (await post({ sendId: id, answers: [one] })).json();
-    const again = await (await post({ sendId: id, answers: [one] })).json();
-    expect(first.results[0].outcome).toBe('recorded');
-    expect(again).toEqual(first);
-    expect(answers.list()).toHaveLength(1);
-  });
-
-  it('answers a stable 500 if the send itself throws', async () => {
-    const { base } = await start({
-      submitSet: () => Promise.reject(new Error('secret words')),
-    });
-    const res = await fetch(`${base}/api/status/answers`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin: base },
-      body: JSON.stringify({ answers: [{}] }),
-    });
-    expect(res.status).toBe(500);
-    const body = await res.json();
-    expect(body.code).toBe('answers_failed');
-    expect(body.error).toContain('may have been recorded');
-    expect(JSON.stringify(body)).not.toContain('secret words');
-  });
-});
-
 describe('the machine rows', () => {
   it('maps this computer by its real name', () => {
     expect(localMachineId('ubuntuserver', 'linux')).toBe('vm');
@@ -1593,41 +1458,6 @@ describe('the machine rows', () => {
     expect(localMachineId('DESKTOP-1', 'win32')).toBe('windows');
     expect(localMachineId('nas1', 'linux')).toBe('nas1');
     expect(localMachineId('anything', 'linux')).toBe('vm');
-  });
-
-  it('labels the local reading with this computer, and never rings ssh for it', async () => {
-    const sample = {
-      cores: 4,
-      load1: 1,
-      busyPct: null,
-      memAvailableBytes: 1024 ** 3,
-      memTotalBytes: 2 * 1024 ** 3,
-      disk: null,
-      cpuTimes: null,
-    };
-    const remote: string[] = [];
-    const service = new StatusService({
-      reader: new AgentReportsReader({ root: () => dirs.make(), now: () => NOW }),
-      registryReader: new PmMailRegistryReader(() => dirs.make()),
-      run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
-      localMachine: () => 'mac',
-      readLocalMachine: async () => sample,
-      readRemoteMachine: async (machine) => {
-        remote.push(machine);
-        throw new Error('no answer');
-      },
-      timeZone: () => 'UTC',
-      notify: () => undefined,
-      now: () => NOW,
-    });
-    await service.collectMachines();
-    const rows = service.view().machines.rows;
-    const row = (id: string) => rows.find((machine) => machine.id === id);
-    expect(row('mac')?.cpu.cores).toBe(4);
-    expect(row('vm')?.cpu?.cores ?? null).toBeNull();
-    expect([...new Set(remote)].sort()).toEqual(
-      MACHINE_IDS.filter((id) => id !== 'mac' && id !== 'vm').sort()
-    );
   });
 });
 
@@ -2087,7 +1917,9 @@ process.exit(0);
       const answers = make({
         // The read that timed out, without racing a wall-clock budget: the pending refusals are the subject here.
         readCard: (id) =>
-          hung ? Promise.reject(new DeadlineExceededError('Status card read')) : reader.readCardNow(id),
+          hung
+            ? Promise.reject(new DeadlineExceededError('Status card read'))
+            : reader.readCardNow(id),
       });
       const draft = [entry(CARD, sha, { choice: [], note: 'x', entryId: NOTE_ID })];
       expect((await answers.submitSet(draft, 'Mac'))[0].code).toBe('share_unavailable');
@@ -2131,49 +1963,6 @@ process.exit(0);
       for (let i = 0; i < 1500; i += 1) remember(`new${i}`, NOW);
       expect(drafts.has('new0')).toBe(true);
       expect(drafts.size).toBe(1500);
-    });
-
-    it('the route refuses a bad or repeated entryId with invalid_body', async () => {
-      const root = dirs.make();
-      const service = new StatusService({
-        reader: new AgentReportsReader({ root: () => root, now: () => NOW }),
-        registryReader: new PmMailRegistryReader(() => path.join(root, 'none')),
-        run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
-        timeZone: () => 'UTC',
-        notify: () => undefined,
-      });
-      const app = express();
-      app.use(express.json());
-      app.use((req, _res, next) => {
-        Object.assign(req, { session: { authenticated: true } });
-        next();
-      });
-      app.use(
-        '/api/status',
-        createStatusRouter(() => service)
-      );
-      server = await new Promise<Server>((resolve) => {
-        const s = app.listen(0, '127.0.0.1', () => resolve(s));
-      });
-      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-      const one = (entryId: unknown) => entry(CARD, 'a'.repeat(64), { entryId });
-      for (const answers of [
-        [one('short')],
-        [one('A'.repeat(32))],
-        [one('g'.repeat(32))],
-        [one('a'.repeat(33))],
-        [one(null)],
-        [one(7)],
-        [one('a'.repeat(32)), one('a'.repeat(32))],
-      ]) {
-        const res = await fetch(`${base}/api/status/answers`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', origin: base },
-          body: JSON.stringify({ answers }),
-        });
-        expect(res.status).toBe(400);
-        expect((await res.json()).code).toBe('invalid_body');
-      }
     });
   });
 });
@@ -3352,7 +3141,15 @@ describe('round four', () => {
         timeZone: 'UTC',
         reports: reader.snapshot(),
         registry: { data: [], asOf: NOW, error: null },
-        machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty, odroid: empty, '1070ti': empty },
+        machines: {
+          vm: empty,
+          mac: empty,
+          windows: empty,
+          nas1: empty,
+          alexis: empty,
+          odroid: empty,
+          '1070ti': empty,
+        },
         browsers: empty,
         simlock: empty,
         usage: null,
@@ -3882,43 +3679,6 @@ describe('real-process journal and publication fences', () => {
         }
       });
     }
-    it('warm history routes refuse a failed authoritative reload: ' + code, async () => {
-      const { root, entry } = fixture('warm-' + code);
-      const a = new Worker(root),
-        b = new Worker(root);
-      try {
-        await Promise.all([a.next('ready'), b.next('ready')]);
-        a.send({ cmd: 'submit', entries: [entry] });
-        assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
-        fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
-        b.send({ cmd: 'submit', entries: [{ ...entry, choice: ['B'], entryId: 'b'.repeat(32) }] });
-        assert.equal((await b.next('submitted')).result[0].code, 'card_changed');
-        await b.exit();
-        a.send({ cmd: 'arm', n: 100, code });
-        await a.next('armed');
-        a.send({ cmd: 'retry' });
-        await a.next('retried');
-        a.send({ cmd: 'routes' });
-        const bad = await a.next('routes');
-        assert.equal(bad.historyStatus, 503);
-        assert.equal(bad.history.code, 'answers_unavailable');
-        assert.equal(bad.viewStatus, 200);
-        assert.equal(bad.view.cards.answered, null);
-        assert.equal(bad.view.cards.complete, false);
-        assert.ok(bad.view.cards.answerHistoryProblem);
-        assert.ok(bad.view.threads);
-        assert.ok(bad.view.machines);
-        a.send({ cmd: 'arm', n: 0 });
-        await a.next('armed');
-        a.send({ cmd: 'routes' });
-        const good = await a.next('routes');
-        assert.equal(good.historyStatus, 200);
-        assert.equal(good.history.answers.length, 1);
-        assert.equal(good.view.cards.answerHistoryProblem, null);
-      } finally {
-        await Promise.all([a.kill(), b.kill()]);
-      }
-    });
     it('three reload errors persist a completed ring before restart: ' + code, async () => {
       const { root, entry } = fixture('restart-' + code);
       const a = new Worker(root);
@@ -4116,8 +3876,8 @@ describe('real-process journal and publication fences', () => {
           const first = await a.next('submitted');
           assert.equal(first.result[0].outcome, 'recorded');
           assert.equal(answerRecords(root).length, 1);
-          a.send({ cmd: 'routes' });
-          assert.equal((await a.next('routes')).history.answers.length, 1);
+          a.send({ cmd: 'history' });
+          assert.equal((await a.next('history')).entries.length, 1);
           // The same draft again, under the same retry key and under a new one.
           a.send({ cmd: 'submit', entries: [note], clientSendId: 'close-error-retry-1234' });
           assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
@@ -4224,31 +3984,30 @@ describe('real-process journal and publication fences', () => {
           a.send({ cmd: 'retry' });
           await a.next('retried');
           if (firstRead === 'empty') {
-            c.send({ cmd: 'routes' });
-            assert.equal((await c.next('routes')).history.answers.length, 0);
+            c.send({ cmd: 'history' });
+            assert.equal((await c.next('history')).entries.length, 0);
           }
           a.send({ cmd: 'fsync-fault' });
           await a.next('armed');
           a.send({ cmd: 'submit', entries: [note], clientSendId: 'viewer-void-1234' });
           await a.next('fsync-paused');
           // The answer line is on disk and not yet voided: the viewer reads it.
-          c.send({ cmd: 'routes' });
-          assert.equal((await c.next('routes')).history.answers.length, 1);
+          c.send({ cmd: 'history' });
+          assert.equal((await c.next('history')).entries.length, 1);
           fs.writeFileSync(path.join(root, 'fsync-go'), '1');
           const refused = (await a.next('submitted')).result[0];
           assert.equal(refused.code, 'answer_not_saved');
           assert.match(refused.error, /Nothing was sent/);
-          c.send({ cmd: 'routes' });
-          assert.equal((await c.next('routes')).history.answers.length, 0);
+          c.send({ cmd: 'history' });
+          assert.equal((await c.next('history')).entries.length, 0);
           await a.exit();
           for (let i = 0; i < 2; i++) {
             c.send({ cmd: 'retry' });
             await c.next('retried');
           }
-          c.send({ cmd: 'routes' });
-          const gained = await c.next('routes');
-          assert.equal(gained.historyStatus, 200);
-          assert.equal(gained.history.answers.length, 0);
+          c.send({ cmd: 'history' });
+          const gained = await c.next('history');
+          assert.equal(gained.entries.length, 0);
           assert.equal(answerRecords(root).length, 1);
           assert.equal(records(root).filter((x) => x.type === 'void').length, 1);
           const shared = path.join(root, 'reports', 'v1', 'answers');
@@ -4299,8 +4058,8 @@ describe('real-process journal and publication fences', () => {
               a.send({ cmd: 'retry' });
               await a.next('retried');
             }
-            a.send({ cmd: 'routes' });
-            assert.equal((await a.next('routes')).history.answers.length, 0);
+            a.send({ cmd: 'history' });
+            assert.equal((await a.next('history')).entries.length, 0);
             assert.equal(voids().length, 0);
             a.send({ cmd: 'void-fault', on: false });
             await a.next('armed');
@@ -4308,8 +4067,8 @@ describe('real-process journal and publication fences', () => {
               a.send({ cmd: 'retry' });
               await a.next('retried');
             }
-            a.send({ cmd: 'routes' });
-            assert.equal((await a.next('routes')).history.answers.length, 0);
+            a.send({ cmd: 'history' });
+            assert.equal((await a.next('history')).entries.length, 0);
           } else {
             a.send({ cmd: 'void-fault', on: false });
             await a.next('armed');
@@ -4320,10 +4079,9 @@ describe('real-process journal and publication fences', () => {
               b.send({ cmd: 'retry' });
               await b.next('retried');
             }
-            b.send({ cmd: 'routes' });
-            const view = await b.next('routes');
-            assert.equal(view.historyStatus, 200);
-            assert.equal(view.history.answers.length, 0);
+            b.send({ cmd: 'history' });
+            const view = await b.next('history');
+            assert.equal(view.entries.length, 0);
           }
           await new Promise((resolve) => setTimeout(resolve, 200));
           const answerLine = answerRecords(root)[0].line;
@@ -4345,21 +4103,17 @@ describe('real-process journal and publication fences', () => {
       await Promise.all([a.next('ready'), c.next('ready')]);
       a.send({ cmd: 'retry' });
       await a.next('retried');
-      c.send({ cmd: 'routes' });
-      const before = await c.next('routes');
-      assert.equal(before.history.answers.length, 0);
-      assert.equal(before.view.cards.open.length, 1);
+      c.send({ cmd: 'history' });
+      const before = await c.next('history');
+      assert.equal(before.entries.length, 0);
       a.send({ cmd: 'submit', entries: [entry] });
       assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
       for (let i = 0; i < 2; i++) {
         c.send({ cmd: 'retry' });
         await c.next('retried');
-        c.send({ cmd: 'routes' });
-        const poll = await c.next('routes');
-        assert.equal(poll.historyStatus, 200);
-        assert.equal(poll.history.answers.length, 1);
-        assert.equal(poll.view.cards.open.length, 0);
-        assert.equal(poll.view.cards.answerHistoryProblem, null);
+        c.send({ cmd: 'history' });
+        const poll = await c.next('history');
+        assert.equal(poll.entries.length, 1);
       }
       c.send({ cmd: 'submit', entries: [{ ...entry, entryId: 'b'.repeat(32) }] });
       assert.equal((await c.next('submitted')).result[0].code, 'store_busy');
@@ -4416,143 +4170,166 @@ describe('a send summary keeps its signed identity across restart', () => {
     fs.readFileSync(path.join(root, 'reports', 'v1', 'keys', keyId + '.pub'), 'utf8');
 
   for (const fault of ['send-write', 'send-fsync', 'ring-loss']) {
-    it('republishes byte-identical batch bytes after ' + fault + ' and a crash', async () => {
-      const root = fixture(fault);
-      const a = await run(root, 'a', fault);
-      assert.equal(a.signal, 'SIGKILL');
-      assert.equal(liveSends(root), 0);
+    it(
+      'republishes byte-identical batch bytes after ' + fault + ' and a crash',
+      async () => {
+        const root = fixture(fault);
+        const a = await run(root, 'a', fault);
+        assert.equal(a.signal, 'SIGKILL');
+        assert.equal(liveSends(root), 0);
+        const file = batchFile(root);
+        const before = fs.readFileSync(file, 'utf8');
+        const b = await run(root, 'b');
+        assert.equal(b.code, 0);
+        const after = fs.readFileSync(file, 'utf8');
+        const signed = JSON.parse(after);
+        assert.ok(
+          verifySignedDocument(
+            after,
+            publicKey(root, signed.signature.keyId),
+            'agent-reports/send@1'
+          ).ok
+        );
+        // the time it carries is the durable record's own, whatever was lost
+        const note = journal(root).find((x) => x.type === 'answer');
+        assert.equal(signed.at, note.answer.answeredAt);
+        assert.equal(after, before);
+        const rings = fs
+          .readFileSync(path.join(root, 'rings.jsonl'), 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line));
+        assert.equal(rings.length, fault === 'ring-loss' ? 2 : 1);
+        const identities = new Set(rings.map((r) => r.file + '/' + r.keyId + '/' + r.signature));
+        assert.equal(identities.size, 1);
+        assert.equal(
+          [...identities][0],
+          path.basename(file) + '/' + signed.signature.keyId + '/' + signed.signature.value
+        );
+        assert.equal(
+          journal(root).filter(
+            (x) => x.type === 'delivery' && x.step === 'summary' && x.state === 'done'
+          ).length,
+          1
+        );
+      },
+      SPAWN_TIMEOUT
+    );
+  }
+
+  it(
+    'keeps a valid published summary an earlier version signed at another time',
+    async () => {
+      const root = fixture('legacy');
+      assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
       const file = batchFile(root);
-      const before = fs.readFileSync(file, 'utf8');
-      const b = await run(root, 'b');
-      assert.equal(b.code, 0);
-      const after = fs.readFileSync(file, 'utf8');
-      const signed = JSON.parse(after);
-      assert.ok(
-        verifySignedDocument(after, publicKey(root, signed.signature.keyId), 'agent-reports/send@1')
-          .ok
-      );
-      // the time it carries is the durable record's own, whatever was lost
-      const note = journal(root).find((x) => x.type === 'answer');
-      assert.equal(signed.at, note.answer.answeredAt);
-      assert.equal(after, before);
-      const rings = fs
-        .readFileSync(path.join(root, 'rings.jsonl'), 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line));
-      assert.equal(rings.length, fault === 'ring-loss' ? 2 : 1);
-      const identities = new Set(rings.map((r) => r.file + '/' + r.keyId + '/' + r.signature));
-      assert.equal(identities.size, 1);
-      assert.equal(
-        [...identities][0],
-        path.basename(file) + '/' + signed.signature.keyId + '/' + signed.signature.value
-      );
+      // An earlier version stamped the batch when the send ended: re-sign it so, with the same key.
+      const key = loadOrCreateAnswerKey(path.join(root, 'store'));
+      const { signature: _drop, ...doc } = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const later = new Date(Date.parse(doc.at) + 1500).toISOString();
+      const legacy = JSON.stringify(signDocument({ ...doc, at: later }, key), null, 2) + '\n';
+      fs.writeFileSync(file, legacy);
+      assert.equal((await run(root, 'b')).code, 0);
+      assert.equal(fs.readFileSync(file, 'utf8'), legacy);
       assert.equal(
         journal(root).filter(
           (x) => x.type === 'delivery' && x.step === 'summary' && x.state === 'done'
         ).length,
         1
       );
-    }, SPAWN_TIMEOUT);
-  }
-
-  it('keeps a valid published summary an earlier version signed at another time', async () => {
-    const root = fixture('legacy');
-    assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
-    const file = batchFile(root);
-    // An earlier version stamped the batch when the send ended: re-sign it so, with the same key.
-    const key = loadOrCreateAnswerKey(path.join(root, 'store'));
-    const { signature: _drop, ...doc } = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const later = new Date(Date.parse(doc.at) + 1500).toISOString();
-    const legacy = JSON.stringify(signDocument({ ...doc, at: later }, key), null, 2) + '\n';
-    fs.writeFileSync(file, legacy);
-    assert.equal((await run(root, 'b')).code, 0);
-    assert.equal(fs.readFileSync(file, 'utf8'), legacy);
-    assert.equal(
-      journal(root).filter(
-        (x) => x.type === 'delivery' && x.step === 'summary' && x.state === 'done'
-      ).length,
-      1
-    );
-  }, SPAWN_TIMEOUT);
+    },
+    SPAWN_TIMEOUT
+  );
 
   for (const code of ['EIO', 'ESTALE', 'EACCES', 'ENOENT']) {
-    it('keeps a rung legacy summary through a ' + code + ' read and its recovery', async () => {
-      // A rings with an earlier version's summary and dies before its ring is stored; B's first read of that
-      // summary fails (ENOENT here is the share's stale view: the folder still lists the file).
-      const root = fixture('legacy-read-' + code);
-      assert.equal((await run(root, 'a', 'legacy-ring')).signal, 'SIGKILL');
-      assert.equal(liveSends(root), 0);
-      const file = batchFile(root);
-      const before = fs.readFileSync(file, 'utf8');
-      const summaryLines = (state: string) =>
-        journal(root).filter(
-          (x) => x.type === 'delivery' && x.step === 'summary' && x.state === state
-        ).length;
-      assert.equal((await run(root, 'b', code)).code, 0);
-      assert.equal(fs.readFileSync(file, 'utf8'), before);
-      assert.equal(summaryLines('done'), 0);
-      // The next pass reads it and keeps it.
-      assert.equal((await run(root, 'b')).code, 0);
-      assert.equal(fs.readFileSync(file, 'utf8'), before);
-      assert.equal(summaryLines('done'), 1);
-      const rings = fs
-        .readFileSync(path.join(root, 'rings.jsonl'), 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line));
-      assert.equal(rings.length, 2);
-      const signed = JSON.parse(before);
-      assert.ok(
-        verifySignedDocument(
-          before,
-          publicKey(root, signed.signature.keyId),
-          'agent-reports/send@1'
-        ).ok
-      );
-      assert.deepEqual(
-        [...new Set(rings.map((r) => r.file + '/' + r.keyId + '/' + r.signature))],
-        [path.basename(file) + '/' + signed.signature.keyId + '/' + signed.signature.value]
-      );
-    }, SPAWN_TIMEOUT);
+    it(
+      'keeps a rung legacy summary through a ' + code + ' read and its recovery',
+      async () => {
+        // A rings with an earlier version's summary and dies before its ring is stored; B's first read of that
+        // summary fails (ENOENT here is the share's stale view: the folder still lists the file).
+        const root = fixture('legacy-read-' + code);
+        assert.equal((await run(root, 'a', 'legacy-ring')).signal, 'SIGKILL');
+        assert.equal(liveSends(root), 0);
+        const file = batchFile(root);
+        const before = fs.readFileSync(file, 'utf8');
+        const summaryLines = (state: string) =>
+          journal(root).filter(
+            (x) => x.type === 'delivery' && x.step === 'summary' && x.state === state
+          ).length;
+        assert.equal((await run(root, 'b', code)).code, 0);
+        assert.equal(fs.readFileSync(file, 'utf8'), before);
+        assert.equal(summaryLines('done'), 0);
+        // The next pass reads it and keeps it.
+        assert.equal((await run(root, 'b')).code, 0);
+        assert.equal(fs.readFileSync(file, 'utf8'), before);
+        assert.equal(summaryLines('done'), 1);
+        const rings = fs
+          .readFileSync(path.join(root, 'rings.jsonl'), 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line));
+        assert.equal(rings.length, 2);
+        const signed = JSON.parse(before);
+        assert.ok(
+          verifySignedDocument(
+            before,
+            publicKey(root, signed.signature.keyId),
+            'agent-reports/send@1'
+          ).ok
+        );
+        assert.deepEqual(
+          [...new Set(rings.map((r) => r.file + '/' + r.keyId + '/' + r.signature))],
+          [path.basename(file) + '/' + signed.signature.keyId + '/' + signed.signature.value]
+        );
+      },
+      SPAWN_TIMEOUT
+    );
   }
 
-  it('replaces a summary only once a fresh listing shows it absent', async () => {
-    // Nothing published yet: the first read is ENOENT and the folder does not list it, so it is written.
-    const root = fixture('absent');
-    assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
-    const file = batchFile(root);
-    const good = fs.readFileSync(file, 'utf8');
-    fs.rmSync(file);
-    assert.equal((await run(root, 'b', 'ENOENT')).code, 0);
-    assert.equal(fs.readFileSync(file, 'utf8'), good);
-  }, SPAWN_TIMEOUT);
-
-  for (const change of ['entries', 'signature', 'key']) {
-    it('replaces a published summary that does not match by its ' + change, async () => {
-      const root = fixture('legacy-' + change);
+  it(
+    'replaces a summary only once a fresh listing shows it absent',
+    async () => {
+      // Nothing published yet: the first read is ENOENT and the folder does not list it, so it is written.
+      const root = fixture('absent');
       assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
       const file = batchFile(root);
       const good = fs.readFileSync(file, 'utf8');
-      const key = loadOrCreateAnswerKey(path.join(root, 'store'));
-      const { signature, ...doc } = JSON.parse(good);
-      const other =
-        change === 'key' ? loadOrCreateAnswerKey(dirs.make('ccs-status-other-key-')) : key;
-      const body =
-        change === 'entries'
-          ? { ...doc, entries: [{ ...doc.entries[0], note: 'Changed.' }] }
-          : { ...doc, at: new Date(Date.parse(doc.at) + 1500).toISOString() };
-      const signed = signDocument(body, other);
-      const text =
-        JSON.stringify(
-          change === 'signature' ? { ...signed, signature: { ...signature } } : signed,
-          null,
-          2
-        ) + '\n';
-      fs.writeFileSync(file, text);
-      assert.equal((await run(root, 'b')).code, 0);
+      fs.rmSync(file);
+      assert.equal((await run(root, 'b', 'ENOENT')).code, 0);
       assert.equal(fs.readFileSync(file, 'utf8'), good);
-    }, SPAWN_TIMEOUT);
+    },
+    SPAWN_TIMEOUT
+  );
+
+  for (const change of ['entries', 'signature', 'key']) {
+    it(
+      'replaces a published summary that does not match by its ' + change,
+      async () => {
+        const root = fixture('legacy-' + change);
+        assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
+        const file = batchFile(root);
+        const good = fs.readFileSync(file, 'utf8');
+        const key = loadOrCreateAnswerKey(path.join(root, 'store'));
+        const { signature, ...doc } = JSON.parse(good);
+        const other =
+          change === 'key' ? loadOrCreateAnswerKey(dirs.make('ccs-status-other-key-')) : key;
+        const body =
+          change === 'entries'
+            ? { ...doc, entries: [{ ...doc.entries[0], note: 'Changed.' }] }
+            : { ...doc, at: new Date(Date.parse(doc.at) + 1500).toISOString() };
+        const signed = signDocument(body, other);
+        const text =
+          JSON.stringify(
+            change === 'signature' ? { ...signed, signature: { ...signature } } : signed,
+            null,
+            2
+          ) + '\n';
+        fs.writeFileSync(file, text);
+        assert.equal((await run(root, 'b')).code, 0);
+        assert.equal(fs.readFileSync(file, 'utf8'), good);
+      },
+      SPAWN_TIMEOUT
+    );
   }
 
   it('republishes a stored answer from before kinds exactly as it was signed', async () => {
