@@ -357,7 +357,7 @@ class AcpTests(Fixtures):
             self.assertEqual(acp.detect_antigravity_acp("ubuntu").probe, "failed")
 
     # --- T3 0.1.12's record (Update all 2026-11-20, Mac and both Windows PCs) -----------------
-    # Captured read-only from jared-mac on 2026-11-20 after T3 0.1.12-nightly.20261120.4994 installed 1.5.13:
+    # Captured read-only from the Mac on 2026-11-20 after T3 0.1.12-nightly.20261120.4994 installed 1.5.13:
     T3_0112_RECORD = {"releaseId": "d9825ebce6954df6b7841970fd7ef3d37acdfe628993f14c396ec73b20ed06bb",
                       "version": "1.5.13", "executable": {"name": "antigravity", "bytes": 3}}
 

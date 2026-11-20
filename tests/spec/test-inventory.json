@@ -1546,6 +1546,13 @@
       ]
     },
     {
+      "file": "tests/unit/app-updates/app_update_acp_followup_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/app-updates/app_update_antigravity_native_test.py",
       "kind": "helper",
       "evidence": [
@@ -2910,6 +2917,12 @@
         "safety",
         "HTTP"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-acp-followup.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/app-update-cancel.test.ts",

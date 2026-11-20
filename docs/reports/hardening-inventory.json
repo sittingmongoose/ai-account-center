@@ -540,16 +540,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 688,
-      "typedThrows": 227,
+      "totalThrows": 689,
+      "typedThrows": 228,
       "plainThrows": 47,
       "otherThrows": 414,
-      "adoptionRatio": 0.3299,
+      "adoptionRatio": 0.3309,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 405,
-          "typed": 174,
+          "count": 406,
+          "typed": 175,
           "plain": 7
         },
         {
@@ -767,7 +767,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1200
+          "loc": 1203
         },
         {
           "file": "src/antigravity/registry.ts",
@@ -790,16 +790,16 @@
           "loc": 903
         },
         {
+          "file": "src/web-server/services/app-update-service.ts",
+          "loc": 889
+        },
+        {
           "file": "src/web-server/services/account-analytics-service.ts",
           "loc": 887
         },
         {
           "file": "src/web-server/status/status-service.ts",
           "loc": 828
-        },
-        {
-          "file": "src/web-server/usage/native-quota-collector.ts",
-          "loc": 815
         }
       ]
     }
