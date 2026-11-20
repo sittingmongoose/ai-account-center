@@ -68,7 +68,7 @@ struct PublicOwners {
 struct Embedded {
     stop: tokio::sync::oneshot::Sender<()>,
     task: tokio_util::task::AbortOnDropHandle<()>,
-    descriptor: PathBuf,
+    descriptor: aac_files::OwnedStore,
     boot_id: String,
     link: ServiceLink,
 }
@@ -527,9 +527,7 @@ impl OwnerHost {
         if let Some(embedded) = embedded {
             let _ = embedded.stop.send(());
             let _ = embedded.task.await;
-            if let Some(root) = embedded.descriptor.parent().and_then(Path::parent) {
-                remove_descriptor(&embedded.descriptor, root, &embedded.boot_id);
-            }
+            remove_descriptor(&embedded.descriptor, &embedded.boot_id);
         }
         #[cfg(not(unix))]
         {
@@ -593,7 +591,14 @@ impl OwnerHost {
         if !prepare_run_dir(&ccs, &socket) {
             return None;
         }
-        let descriptor = ccs.join("run").join("aac-http.json");
+        let descriptor = match aac_files::OwnedStore::claim_dashboard_service(&ccs) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                tracing::warn!(%error, "could not claim the private owner descriptor");
+                let _ = std::fs::remove_dir(socket.parent()?);
+                return None;
+            }
+        };
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             if let Err(error) = crate::unix::serve(boot, async {
@@ -631,6 +636,7 @@ impl OwnerHost {
         if write_descriptor(&descriptor, &ccs, &socket, &secret, &boot_id).is_err() {
             let _ = stop.send(());
             let _ = task.await;
+            remove_descriptor(&descriptor, &boot_id);
             return None;
         }
         Some(Embedded {
@@ -747,14 +753,13 @@ fn share_roots(reports: Option<&str>, registry: Option<&str>) -> (PathBuf, PathB
 /// The supervisor's descriptor (`run/aac-http.json`), written the way the front door reads it:
 /// private 0600, replaced atomically, holding the boot's own id and secret.
 #[cfg(unix)]
-pub(super) fn write_descriptor(
-    path: &Path,
+fn write_descriptor(
+    descriptor: &aac_files::OwnedStore,
     ccs: &Path,
     socket: &Path,
     secret: &str,
     boot_id: &str,
-) -> std::io::Result<()> {
-    use std::io::Write;
+) -> Result<(), aac_files::Failure> {
     let body = json!({
         "ccsDir": ccs,
         "socketPath": socket,
@@ -762,26 +767,15 @@ pub(super) fn write_descriptor(
         "bootId": boot_id,
     })
     .to_string();
-    let mut file = tempfile::NamedTempFile::new_in(
-        path.parent()
-            .ok_or_else(|| std::io::Error::other("the private descriptor has no parent"))?,
-    )?;
-    file.write_all(body.as_bytes())?;
-    file.as_file().sync_all()?;
-    file.persist(path).map(|_| ()).map_err(|error| error.error)
+    descriptor.write(body.as_bytes())
 }
 
 #[cfg(unix)]
-fn remove_descriptor(path: &Path, root: &Path, boot_id: &str) {
-    use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
-    let policy = ReadPolicy::capped(8192)
-        .ancestors(Ancestors::NoLinkBelow(root))
-        .mode(Mode::Private)
-        .owner(Owner::Mine);
-    if let Read::Bytes(bytes, _) = aac_files::read::read(path, &policy)
+fn remove_descriptor(descriptor: &aac_files::OwnedStore, boot_id: &str) {
+    if let Ok(bytes) = descriptor.read()
         && serde_json::from_slice::<Json>(&bytes).is_ok_and(|row| row["bootId"] == boot_id)
     {
-        let _ = std::fs::remove_file(path);
+        let _ = descriptor.remove();
     }
 }
 
@@ -847,26 +841,30 @@ mod tests {
         )
         .unwrap();
         let ccs = root.canonicalize().unwrap();
-        let descriptor = run.join("aac-http.json");
+        let lease = aac_files::OwnedStore::claim_dashboard_service(&ccs).unwrap();
+        assert!(aac_files::OwnedStore::claim_dashboard_service(&ccs).is_err());
+        let descriptor = lease.path();
         let target = ccs.join("untouched");
         std::fs::write(&target, b"original").unwrap();
         std::os::unix::fs::symlink(&target, descriptor.with_extension("json.tmp")).unwrap();
-        write_descriptor(&descriptor, &ccs, &socket, &"b".repeat(64), &"c".repeat(24)).unwrap();
+        write_descriptor(&lease, &ccs, &socket, &"b".repeat(64), &"c".repeat(24)).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"original");
-        let written: Value = serde_json::from_slice(&std::fs::read(&descriptor).unwrap()).unwrap();
+        let written: Value = serde_json::from_slice(&std::fs::read(descriptor).unwrap()).unwrap();
         assert_eq!(written["ccsDir"], ccs.to_str().unwrap());
         assert_eq!(written["socketPath"], socket.to_str().unwrap());
         let mode = std::os::unix::fs::PermissionsExt::mode(
-            &std::fs::metadata(&descriptor).unwrap().permissions(),
+            &std::fs::metadata(descriptor).unwrap().permissions(),
         );
         assert_eq!(mode & 0o777, 0o600);
         // The socket here is a regular file, so the link's socket check refuses it: the test
         // proves the descriptor, not a live link.
         assert!(ServiceLink::load(&ccs).is_none());
-        remove_descriptor(&descriptor, &ccs, &"d".repeat(24));
+        remove_descriptor(&lease, &"d".repeat(24));
         assert!(descriptor.exists());
-        remove_descriptor(&descriptor, &ccs, &"c".repeat(24));
+        remove_descriptor(&lease, &"c".repeat(24));
         assert!(!descriptor.exists());
+        drop(lease);
+        assert!(aac_files::OwnedStore::claim_dashboard_service(&ccs).is_ok());
     }
 
     /// M7: an empty private local root with neither share override opens the store. The share
