@@ -309,17 +309,20 @@ const names = list => list.length <= 1 ? (list[0] || '') : `${list.slice(0, -1).
 const DEVICE_WORD = { mac: 'Mac tray', windows: 'Windows tray' };
 /** "Password changed. Mac tray and Windows tray stay signed in." from the paired devices the server lists. */
 export function passwordChangedToast(result, devices = []) {
-  const list = (Array.isArray(devices) ? devices : []).map(device => text(device?.name) || DEVICE_WORD[device?.platform] || 'A tray');
+  const unavailable = result?.pairedDevices === null;
+  const list = (!unavailable && Array.isArray(devices) ? devices : []).map(device => text(device?.name) || DEVICE_WORD[device?.platform] || 'A tray');
   const count = finite(result?.pairedDevices) ? result.pairedDevices : list.length;
   let title = 'Password changed.';
   if (list.length === 1) title = `Password changed. ${list[0]} stays signed in.`;
   else if (list.length > 1) title = `Password changed. ${names(list)} stay signed in.`;
   else if (count > 0) title = `Password changed. ${plural(count, 'paired tray stays', 'paired trays stay')} signed in.`;
   const others = finite(result?.signedOutBrowsers) ? result.signedOutBrowsers : 0;
-  const body = others > 0
+  let body = others > 0
     ? `${plural(others, 'other browser was', 'other browsers were')} signed out; this one stays signed in.`
     : 'This browser stays signed in.';
-  return { title, body: result?.code === 'session_rotation_failed' ? `${body} If the page asks, sign in again with the new password.` : body };
+  if (unavailable) body += ' Paired device count is unavailable.';
+  if (result?.code === 'session_rotation_failed') body += ' If the page asks, sign in again with the new password.';
+  return { title, body };
 }
 export function revokeAllToast(result) {
   const trays = finite(result?.revokedDevices) ? result.revokedDevices : 0;

@@ -1969,6 +1969,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unavailable_paired_device_count_survives_a_successful_password_change() {
+        let (home, _auth, addr, handle) = server().await;
+        let cookie = login(addr).await;
+        let headers = format!("Cookie: {cookie}\r\n");
+        let json_headers =
+            format!("{headers}Origin: http://{addr}\r\nContent-Type: application/json\r\n");
+        let json_reply = |reply: &str| -> Value {
+            serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap()
+        };
+        let summary = request(addr, "/api/auth/session", "GET", &headers, "").await;
+        assert_eq!(json_reply(&summary)["pairedDevices"], 0);
+
+        let paired = request(
+            addr,
+            "/api/auth/devices/pair",
+            "POST",
+            &json_headers,
+            r#"{"username":"fixture-admin","password":"fixture-password","deviceName":"Fixture tray","platform":"windows"}"#,
+        ).await;
+        assert_eq!(paired.lines().next(), Some("HTTP/1.1 201 Created"));
+        let summary = request(addr, "/api/auth/session", "GET", &headers, "").await;
+        assert_eq!(json_reply(&summary)["pairedDevices"], 1);
+
+        let store = home.path().join("auth/devices.json");
+        std::fs::rename(&store, store.with_extension("saved")).unwrap();
+        std::fs::create_dir(&store).unwrap();
+        let devices = request(addr, "/api/auth/devices", "GET", &headers, "").await;
+        assert_eq!(
+            devices.lines().next(),
+            Some("HTTP/1.1 503 Service Unavailable")
+        );
+        assert_eq!(json_reply(&devices)["code"], "auth_store_unavailable");
+
+        let summary = request(addr, "/api/auth/session", "GET", &headers, "").await;
+        let changed = request(
+            addr,
+            "/api/auth/password",
+            "POST",
+            &json_headers,
+            r#"{"currentPassword":"fixture-password","newPassword":"fixture-new-password-71"}"#,
+        )
+        .await;
+        assert_eq!(changed.lines().next(), Some("HTTP/1.1 200 OK"));
+        let receipt = json_reply(&changed);
+        assert_eq!(receipt["ok"], true);
+        let new_login = request(
+            addr,
+            "/api/auth/login",
+            "POST",
+            &format!("Origin: http://{addr}\r\nContent-Type: application/json\r\n"),
+            r#"{"username":"fixture-admin","password":"fixture-new-password-71"}"#,
+        )
+        .await;
+        assert_eq!(new_login.lines().next(), Some("HTTP/1.1 200 OK"));
+        assert_eq!(
+            [
+                json_reply(&summary).get("pairedDevices"),
+                receipt.get("pairedDevices")
+            ],
+            [Some(&Value::Null), Some(&Value::Null)],
+        );
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
     async fn reset_inventory_head_and_options_do_not_require_a_write_body() {
         let (_home, _auth, addr, handle) = server_with_analytics(true, None).await;
         let cookie = login(addr).await;

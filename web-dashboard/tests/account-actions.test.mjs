@@ -131,6 +131,10 @@ test('the password-change toast names the paired trays; sign out all devices say
   assert.equal(passwordChangedToast({ signedOutBrowsers: 0, pairedDevices: 1 }, [{ name: '', platform: 'windows' }]).title, 'Password changed. Windows tray stays signed in.');
   assert.equal(passwordChangedToast({ signedOutBrowsers: 0, pairedDevices: 0 }, []).title, 'Password changed.');
   assert.equal(passwordChangedToast({ pairedDevices: 3 }, []).title, 'Password changed. 3 paired trays stay signed in.');
+  assert.deepEqual(
+    passwordChangedToast({ ok: true, pairedDevices: null }, [{ name: 'Cached tray', platform: 'mac' }]),
+    { title: 'Password changed.', body: 'This browser stays signed in. Paired device count is unavailable.' }
+  );
   assert.deepEqual(revokeAllToast({ revokedDevices: 0, signedOutBrowsers: 0 }).body, 'No trays were paired. This browser stays signed in.');
 });
 

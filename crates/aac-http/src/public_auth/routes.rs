@@ -647,8 +647,10 @@ fn session_view(session: &Browser) -> Value {
     json!({"expiresAt":session.as_ref().and_then(|(_, session)| session.expires_at())})
 }
 
-fn device_count(state: &AuthRuntime, at: i64) -> usize {
-    Devices::load(&state.files).map_or(0, |devices| devices.count(at))
+fn device_count(state: &AuthRuntime, at: i64) -> Option<usize> {
+    Devices::load(&state.files)
+        .ok()
+        .map(|devices| devices.count(at))
 }
 
 fn username<'a>(config: &'a Config, session: &'a Browser) -> &'a str {
