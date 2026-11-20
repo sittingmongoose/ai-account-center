@@ -141,8 +141,10 @@ impl OwnerHost {
                 return Some(owners.clone());
             }
             let ccs = self.root.canonicalize().ok()?;
-            let reports = std::env::var_os("AAC_AGENT_REPORTS_DIR").map(PathBuf::from)?;
-            let registry_dir = std::env::var_os("AAC_PM_MAIL_REGISTRY_DIR").map(PathBuf::from)?;
+            let (reports, registry_dir) = share_roots(
+                std::env::var("AAC_AGENT_REPORTS_DIR").ok().as_deref(),
+                std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok().as_deref(),
+            );
             let config = crate::owners::Config {
                 ccs_dir: ccs.clone(),
                 store: Some(crate::store_host::StoreBoot {
@@ -351,16 +353,24 @@ impl OwnerHost {
     }
 
     /// The boot the supervisor resolves for a plain cut: the store under `<ccs>/store` and the
-    /// owned readers on the configured share roots. Only an explicitly configured boot starts
-    /// here: without named share roots this would read the real share.
+    /// owned readers on the share roots. The readers resolve their own defaults when no root is
+    /// named (the worker's rule); only an explicit `AAC_RUST_STORE=off` skips this boot.
     #[cfg(unix)]
     fn boot_config(&self) -> Option<Json> {
+        let reports = std::env::var("AAC_AGENT_REPORTS_DIR").ok();
+        let registry = std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok();
+        self.boot_config_from(reports.as_deref(), registry.as_deref())
+    }
+
+    /// M7: the store opens from its own configuration. Two optional share-directory overrides
+    /// never decide whether a private local root has a store; each reader takes its default.
+    #[cfg(unix)]
+    fn boot_config_from(&self, reports: Option<&str>, registry: Option<&str>) -> Option<Json> {
         if std::env::var("AAC_RUST_STORE").as_deref() == Ok("off") {
             return None;
         }
         let on = |env: &str| std::env::var(env).as_deref() != Ok("off");
-        let reports = std::env::var("AAC_AGENT_REPORTS_DIR").ok()?;
-        let registry = std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok()?;
+        let (reports_root, registry_dir) = share_roots(reports, registry);
         let ccs = self.root.canonicalize().ok()?;
         let boot_id = random_hex::<12>()?;
         let secret = random_hex::<32>()?;
@@ -382,8 +392,8 @@ impl OwnerHost {
                 "shareBackupOff": true,
             },
             "owned": {
-                "reportsRoot": aac_status::share::agent_reports_root(Some(&reports)),
-                "registryDir": aac_status::share::pm_mail_registry_dir(Some(&registry)),
+                "reportsRoot": reports_root.to_string_lossy(),
+                "registryDir": registry_dir.to_string_lossy(),
                 "status": on("AAC_RUST_GROUP_STATUS"),
                 "scoreboard": on("AAC_RUST_GROUP_SCOREBOARD"),
             },
@@ -440,6 +450,15 @@ impl OwnerHost {
             descriptor,
         })
     }
+}
+
+/// The readers' roots for a boot that names none: each resolves the worker's default (the
+/// shared folders) rather than keeping the store from opening (M7).
+fn share_roots(reports: Option<&str>, registry: Option<&str>) -> (PathBuf, PathBuf) {
+    (
+        aac_status::share::agent_reports_root(reports),
+        aac_status::share::pm_mail_registry_dir(registry),
+    )
 }
 
 /// The supervisor's descriptor (`run/aac-http.json`), written the way the front door reads it:
@@ -514,5 +533,69 @@ mod tests {
         // The socket here is a regular file, so the link's socket check refuses it: the test
         // proves the descriptor, not a live link.
         assert!(ServiceLink::load(&ccs).is_none());
+    }
+
+    /// M7: an empty private local root with neither share override opens the store. The share
+    /// directories are optional readers' roots; each resolves the worker's default.
+    #[tokio::test]
+    async fn an_empty_private_root_opens_its_store_without_share_overrides() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("ccs");
+        std::fs::create_dir_all(root.join("run")).unwrap();
+        for path in [&root, &root.join("run")] {
+            std::fs::set_permissions(
+                path,
+                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+            )
+            .unwrap();
+        }
+        let host = OwnerHost::new(root.clone(), false);
+        let boot = host
+            .boot_config_from(None, None)
+            .expect("a boot without share overrides");
+        assert_eq!(boot["owned"]["reportsRoot"], "/mnt/Cursor/agent-reports");
+        assert_eq!(boot["owned"]["registryDir"], "/mnt/Cursor/Inbox/registry");
+        let (reports, registry) = share_roots(None, None);
+        assert_eq!(reports, PathBuf::from("/mnt/Cursor/agent-reports"));
+        assert_eq!(registry, PathBuf::from("/mnt/Cursor/Inbox/registry"));
+        let ccs = root.canonicalize().unwrap();
+        let owners = crate::owners::Owners::start(
+            crate::owners::Config {
+                ccs_dir: ccs.clone(),
+                store: Some(crate::store_host::StoreBoot {
+                    binding_identity: aac_store::build_identity(),
+                    dir: ccs.join("store"),
+                    retention_days: 0,
+                    cache_bytes: None,
+                    activity_retention_days: None,
+                    snapshot_directory: None,
+                    share_backup_dir: None,
+                    share_backup_off: true,
+                }),
+                owned: Some(crate::owners::OwnedBoot {
+                    reports_root: reports,
+                    registry_dir: registry,
+                    status: true,
+                    scoreboard: true,
+                }),
+                files: None,
+            },
+            crate::feed::Feeds::new(),
+        )
+        .unwrap();
+        let store = owners
+            .store
+            .clone()
+            .expect("the local store is constructed");
+        tokio::task::spawn_blocking(move || store.open_at_boot())
+            .await
+            .unwrap();
+        let status = owners
+            .store
+            .as_ref()
+            .unwrap()
+            .status_value()
+            .expect("the opened store answers its status");
+        assert!(status.get("openedAt").is_some(), "{status}");
     }
 }

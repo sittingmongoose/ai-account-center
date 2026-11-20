@@ -39,6 +39,7 @@ const groups = {
   'status-home': /^\w+ \/api\/(status(?:\/|$)|store\/status$|usage\/[^/]+$)/,
   resets: /^\w+ \/api\/accounts\/[^/]+\/reset-claims(?:\/|$)/,
   'store-usage-home': /^\w+ \/api\/(store\/status|usage\/[^/]+|views\/home)$/,
+  store: /^\w+ \/api\/store\/status$/,
   status: /^\w+ \/api\/(status(?:\/|$)|scoreboard$)/,
   profiles:
     /^\w+ \/api\/(antigravity\/profiles|codex\/profiles|claude\/desktop-profiles|claude\/history-snapshots\/cleanup)(?:\/|$)/,
@@ -389,6 +390,26 @@ try {
     environment.AAC_RUST_GROUP_HOME = 'on';
     await fs.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
+  if (group === 'store') {
+    for (const key of Object.keys(environment))
+      if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
+    Object.assign(environment, {
+      AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+      AAC_RUST_STORE: 'on',
+      AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+      AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+      AAC_AGENT_VERBS: 'off',
+      AAC_AGENT_TRANSPORT: 'off',
+    });
+    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
+  // M7: an empty private root with neither share override must still open its store. Records
+  // with the overrides above, replays without them, and compares the two store statuses.
+  if (process.env.AAC_M6_NO_SHARE_OVERRIDES === '1') {
+    delete environment.AAC_AGENT_REPORTS_DIR;
+    delete environment.AAC_PM_MAIL_REGISTRY_DIR;
   }
   if (group === 'resets') {
     Object.assign(environment, {
