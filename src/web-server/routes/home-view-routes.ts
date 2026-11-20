@@ -26,9 +26,10 @@ import {
 import { getCcsDir } from '../../utils/config-manager';
 import { ProfileError } from '../../errors/error-types';
 import { listClaudeDesktopProfileMetadata } from '../services/claude-desktop-profile-service';
-import { composeWithRust, readOwnedValueWithRust } from '../rust-service';
+import { composeWithRust, readOwnedValueWithRust, RustService } from '../rust-service';
 import {
   acceptRustDesktopProfiles,
+  acceptRustDesktopProfilesWithOperations,
   isRustAntigravityInventory,
   rustAntigravityInventoryInput,
 } from '../rust-profile-input';
@@ -86,16 +87,35 @@ export async function readAntigravityInventory(
   );
 }
 
-/** GET /desktop-profiles' list through the native manifest read; the TS reader is the fallback. */
+/** G13: whether this request's service bound the Rust Open owner (mode on + group on). */
+function claudeOpenDelegates(res: Response): boolean {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService && service.claudeOpenEnabled;
+}
+
+/**
+ * GET /desktop-profiles' list through the native manifest read; the TS reader is the fallback.
+ * `openOperation` is the progress of a 202 Open (null when none is known): this process's Open
+ * store, added to the manifest rows whoever read them — or, with the Rust Open owner bound, the
+ * rows already carry it and the composition validates that shape instead.
+ */
 export async function readClaudeDesktopProfiles(req: Request, res: Response): Promise<unknown[]> {
   const scope = getCcsDir();
+  // This process keeps no Open store any more (the Open group is Rust-owned): without the Rust
+  // owner bound, the progress of a 202 Open is unknown here, and each id-bearing row says so.
+  const withOperations = <T extends { id?: unknown }>(profiles: T[]) =>
+    profiles.map((profile) =>
+      typeof profile.id === 'string' && profile.id ? { ...profile, openOperation: null } : profile
+    );
   const body = await readOwnedValueWithRust(
     req,
     res,
     '/api/claude/desktop-profiles',
     scope,
-    acceptRustDesktopProfiles((profiles) => profiles),
-    async () => ({ profiles: await listClaudeDesktopProfileMetadata() })
+    claudeOpenDelegates(res)
+      ? acceptRustDesktopProfilesWithOperations
+      : acceptRustDesktopProfiles(withOperations),
+    async () => ({ profiles: withOperations(await listClaudeDesktopProfileMetadata()) })
   );
   const profiles = (body as { profiles?: unknown } | undefined)?.profiles;
   if (!Array.isArray(profiles)) throw new ProfileError('Claude desktop profiles were not read.');

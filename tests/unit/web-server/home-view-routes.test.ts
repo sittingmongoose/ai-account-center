@@ -523,7 +523,8 @@ describe('compose() for /api/views/home over a private socket', () => {
       }),
     };
     expect(await readClaudeDesktopProfiles(req, res)).toEqual([
-      { id: 'a', email: 'a@example.test' },
+      // A row that can be opened carries this process's Open progress (none: null); one without an id cannot.
+      { id: 'a', email: 'a@example.test', openOperation: null },
       { email: 'b@example.test' },
     ]);
     expect(seen.map((r) => [r.url, r.body])).toEqual([['/api/claude/desktop-profiles', '']]);
