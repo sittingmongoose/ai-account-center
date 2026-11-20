@@ -264,7 +264,7 @@ export const tests = {
 		await t.until('the close button closes it', () => !document.querySelector('.details'), null, { timeout: 5000 });
 	},
 
-	async 'accounts: an Update apps row names its cause and shows what ran, the step times and the output'(t) {
+	async 'accounts: an Update apps row shows the diagnostic summary and hides raw installer output'(t) {
 		const server = fakeServer({ update: updateJob() });
 		await open(t, server);
 		await t.until('the Update apps table is open', () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 15000, hard: true });
@@ -275,10 +275,15 @@ export const tests = {
 			return failed ? { title: failed.getAttribute('title') || '', crit: failed.classList.contains('w-crit') } : null;
 		});
 		await t.check('the failed cell says "installer failed" in red, not just "failed"', !!cell && cell.crit);
-		await t.check('its tip names the cause, the command, the exit code and the steps',
-			!!cell && /Cause: its installer failed · ran agy update \(exit 1\) · checking 900ms, updating 4\.2s · output: Error: connection reset by peer/.test(cell.title));
+		const summary = "Installer output isn't saved; cause: its installer failed, exit code 1";
+		await t.check('its tip names the cause, tool, exit code and step times',
+			!!cell && cell.title.includes('Cause: its installer failed · ran agy · checking 900ms, updating 4.2s · ' + summary));
+		await t.check('its tip hides saved command text and raw output',
+			!!cell && !cell.title.includes('agy update') && !cell.title.includes('Error: connection reset by peer'));
 		await t.page.evaluate(() => [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Antigravity CLI')?.querySelector('button.ut-row')?.click());
-		await t.until('its details list the output for Nas1', () => [...document.querySelectorAll('.ut-details li')].some((li) => li.textContent.includes('Nas1') && li.textContent.includes('output: Error: connection reset by peer')), null, { timeout: 5000 });
+		await t.until('its details show the diagnostic summary for Nas1', (text) => [...document.querySelectorAll('.ut-details li')].some((li) => li.textContent.includes('Nas1') && li.textContent.includes(text)), summary, { timeout: 5000 });
+		await t.check('its details hide saved command text and raw output', await t.page.$eval('.ut-details', (el) =>
+			!el.textContent.includes('agy update') && !el.textContent.includes('Error: connection reset by peer')));
 		await t.check('rows without diagnostics keep their old words', await t.page.evaluate(() => [...document.querySelectorAll('.ut-cell')].some((c) => c.textContent.trim() === 'quit to finish')));
 	},
 
