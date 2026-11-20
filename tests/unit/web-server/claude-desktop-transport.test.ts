@@ -8,9 +8,6 @@ import {
   syncClaudeWindowsAccountList,
   windowsAccountListScript,
 } from '../../../src/web-server/services/claude-desktop-transport';
-import { claudeWindowsLauncherAccountList } from '../../../src/web-server/services/claude-desktop-open-service';
-import type { ClaudeDesktopProfile } from '../../../src/web-server/services/claude-desktop-profile-service';
-import type { PendingClaudeProfile } from '../../../src/web-server/services/claude-account-stores';
 
 function decodedScript(exec: { mock: { calls: unknown[][] } }, call = 0): string {
   const command = (exec.mock.calls[call]![1] as string[]).at(-1)!;
@@ -186,59 +183,6 @@ describe('Claude desktop transport', () => {
     const writeScript = decodedScript(write);
     expect(writeScript).toContain('WriteAllText');
     expect(writeScript).not.toContain('Start-ScheduledTask');
-  });
-
-  it('builds the launcher list from current profiles with the Windows default first', () => {
-    const named = (id: string): ClaudeDesktopProfile => ({
-      id,
-      email: `${id}@example.com`,
-      windows: {
-        launcherName: id,
-        sshHost: 'example-windows',
-        profilePath: `C:\\Users\\example\\AppData\\Roaming\\Claude-${id}`,
-      },
-    });
-    const fallbackDefault: ClaudeDesktopProfile = {
-      id: 'fake-default',
-      email: 'fake-default@example.com',
-      windows: {
-        launcherName: 'Default',
-        sshHost: 'example-windows',
-        profilePath:
-          'C:\\Users\\example\\AppData\\Local\\Packages\\Claude_x\\LocalCache\\Roaming\\Claude',
-      },
-    };
-    const macOnly: ClaudeDesktopProfile = { id: 'fake-mac', email: 'm@example.com' };
-    const pending: PendingClaudeProfile = {
-      id: 'fake-new',
-      label: null,
-      createdAt: '2026-10-06T00:00:00Z',
-      expectedEmail: null,
-      mac: { launcherName: 'm', profilePath: '/x/Claude-fake-new', sshHost: 'example-mac' },
-      windows: {
-        launcherName: 'w',
-        profilePath: 'C:\\Users\\example\\AppData\\Roaming\\Claude-fake-new',
-        sshHost: 'example-windows',
-      },
-    };
-    expect(
-      claudeWindowsLauncherAccountList([named('fake-a'), fallbackDefault, macOnly], [pending])
-    ).toEqual(['fake-default', 'fake-a', 'fake-new']);
-    const flagged = {
-      ...named('fake-b'),
-      windows: { ...named('fake-b').windows!, isDefault: true },
-    };
-    expect(claudeWindowsLauncherAccountList([named('fake-a'), flagged])).toEqual([
-      'fake-b',
-      'fake-a',
-    ]);
-    // No default, or two: the first line would be wrong, so nothing is written.
-    expect(claudeWindowsLauncherAccountList([named('fake-a')])).toBeNull();
-    expect(claudeWindowsLauncherAccountList([flagged, fallbackDefault])).toBeNull();
-    // A removed profile (the stale claude-5 case) is simply not in the rebuilt list.
-    expect(claudeWindowsLauncherAccountList([fallbackDefault, named('fake-a')])).not.toContain(
-      'claude-5'
-    );
   });
 
   it('uses a safely encoded PowerShell literal path for Windows history', async () => {

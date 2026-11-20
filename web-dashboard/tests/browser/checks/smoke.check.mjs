@@ -26,6 +26,8 @@ async function eachPage(t, label, { phone = false } = {}) {
 
 export const tests = {
 	async 'signed out'(t) {
+		// Configure the disposable server, then use a fresh cookie jar to test sign-in.
+		await t.app.open();
 		await t.newContext();
 		await t.app.open({ signIn: false });
 		for (const field of ['input[name="username"]', 'input[name="password"]', '.signin-card button[type="submit"]']) await t.visible(field, `signed out: ${field}`);

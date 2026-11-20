@@ -31,8 +31,8 @@ computer (most of it one Rust compile), with four toolchains.
    about 4,500 tests: a few minutes). They pass on a clean Linux or macOS account with no AI tools installed. If one
    fails anyway, don't change AAC to get past it: report the failing test names to the person (and as an issue on the
    repository), and use the next item meanwhile.
-4. **Without installing:** the build already runs from the checkout. Use `node dist/ccs.js` wherever this guide says
-   `ai-account-center` (for example `node dist/ccs.js dashboard auth setup`). Install later, once the checks pass.
+4. **Without installing:** start the dashboard from the checkout with
+   `node scripts/run-dashboard-native.js --host localhost --port 3000 --no-open`.
 
 Docker is the alternative (`docker/README.md`). It builds the same source.
 
@@ -40,12 +40,11 @@ Docker is the alternative (`docker/README.md`). It builds the same source.
 
 These need the person at the keyboard. Say what each is for, then wait:
 
-1. **Dashboard login:** `ai-account-center dashboard auth setup`. They choose the username and password; never ask
-   for it in chat and never write it down.
+1. **Dashboard login:** open the dashboard at localhost and enter the setup code printed in the terminal.
+   They choose the username and password. Never ask for it in chat or write it down.
 2. **Accounts:** start the dashboard (`ai-account-center dashboard --host localhost --port 3000 --no-open`), open
    `http://localhost:3000`, and have them add each account under **Accounts & Settings → Add account**, signing in to
-   each provider in the browser. A Codex login already on the computer can be saved with
-   `ai-account-center codex-auth import-default <name>`.
+   each provider in the browser. Save an existing Codex login through the Codex account action.
 3. **Trays** (optional): the Mac menu-bar app and the Windows tray (README step 4). They give the tray the dashboard
    address and password once.
 
@@ -57,11 +56,10 @@ back which providers and accounts showed up, and which sign-ins are still missin
 
 ## 5. Usage for agents (you)
 
-Pick a folder every computer the agents use can read (a network share, or a local folder on one computer):
+If AAC already publishes to a shared snapshot folder, use that folder on each agent computer.
+The cut retains the saved folder and the per-computer mount locations.
 
 ```bash
-ai-account-center dashboard usage-snapshot set /path/to/shared/aac-usage \
-  --location "<computer or group>=<path there>"   # one per place the folder is mounted differently
 python3 /path/to/shared/aac-usage/aac-usage install-rules   # on each computer the agents use
 ```
 
@@ -70,26 +68,22 @@ before long or parallel runs. Re-running is safe.
 
 ## 6. T3 Code usage hub (you, then the person pastes one key)
 
-Only if they use T3 Code. On the dashboard computer:
-
-```bash
-ai-account-center dashboard usage-hub generate --stdout
-```
-
-The key is printed once. Don't paste it into chat: with T3's agent tools, ask for it with `request_secret` and have
-the person enter it there; otherwise have them copy it straight from the terminal. In T3, on each T3 environment:
+If they already have a usage hub key, have them paste it directly into T3. Keep the key out of chat.
+Key creation, rotation and disabling the hub in Settings are open migration work.
+On each T3 environment:
 **Settings → Providers → Usage providers → Add hub**, hub URL `http://127.0.0.1:3000` on the dashboard computer (or
 `http://<dashboard LAN address>:3000` from another computer, with "trusted local network" on in AAC's Settings), the
 key, label `AI Account Center`. The bars appear under **Usage → Limits** after T3's next poll.
 
 ## 7. Check
 
-- `ai-account-center dashboard usage-hub status` says on, and the dashboard's request log shows
+- For an existing hub, the dashboard's request log shows
   `GET /v0/management/auth-files` 200 from each T3 computer.
 - `aac-usage` on each agent computer lists the accounts, none marked stale.
 - In a new agent thread, the instructions contain the AAC usage block.
 
 ## Remove
 
-`ai-account-center dashboard usage-hub off`, `ai-account-center dashboard usage-snapshot off`, remove the hub in T3's
-settings, and delete the `aac-usage rules` block from the agents' instruction files (it sits between its own markers).
+Remove the hub from T3's settings and remove the `aac-usage rules` block from the agents'
+instruction files. Dashboard controls to disable the hub and stop publishing the snapshot
+remain open migration work.

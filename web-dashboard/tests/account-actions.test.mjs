@@ -131,6 +131,10 @@ test('the password-change toast names the paired trays; sign out all devices say
   assert.equal(passwordChangedToast({ signedOutBrowsers: 0, pairedDevices: 1 }, [{ name: '', platform: 'windows' }]).title, 'Password changed. Windows tray stays signed in.');
   assert.equal(passwordChangedToast({ signedOutBrowsers: 0, pairedDevices: 0 }, []).title, 'Password changed.');
   assert.equal(passwordChangedToast({ pairedDevices: 3 }, []).title, 'Password changed. 3 paired trays stay signed in.');
+  assert.deepEqual(
+    passwordChangedToast({ ok: true, pairedDevices: null }, [{ name: 'Cached tray', platform: 'mac' }]),
+    { title: 'Password changed.', body: 'This browser stays signed in. Paired device count is unavailable.' }
+  );
   assert.deepEqual(revokeAllToast({ revokedDevices: 0, signedOutBrowsers: 0 }).body, 'No trays were paired. This browser stays signed in.');
 });
 
@@ -169,4 +173,11 @@ test('profile name checks match each provider including reserved names and bound
   assert.equal(profileNameProblem('a'.repeat(48), [], 'antigravity'), '');
   assert.notEqual(profileNameProblem('a'.repeat(49), [], 'antigravity'), '');
   assert.equal(profileNameProblem('default', [], 'antigravity'), '');
+});
+
+test('purge failure shows each host receipt without promising no change', () => {
+  const partial = errorText(err(502, 'purge_incomplete', { hosts: { mac: 'deleted', windows: 'unresolved' } }));
+  assert.equal(partial.body, 'Deleted on Mac. Deletion on Windows could not be confirmed. The trash entry is kept for retry.');
+  const unresolved = errorText(err(502, 'purge_incomplete', { hosts: { mac: 'unresolved', windows: 'unresolved' } }));
+  assert.equal(unresolved.body, 'Deletion on Mac could not be confirmed. Deletion on Windows could not be confirmed. The trash entry is kept for retry.');
 });

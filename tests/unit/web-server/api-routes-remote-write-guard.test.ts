@@ -124,13 +124,10 @@ describe('api-routes remote write guard', () => {
     }
   });
 
-  it('protects remote saved Codex profile identity when dashboard auth is disabled', async () => {
+  it('leaves the retired Codex profiles adapter out of the TypeScript router', async () => {
+    // The native public owner tests the localhost guard and its exact response.
     const response = await fetch(`${baseUrl}/api/codex/profiles`);
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error:
-        'Codex auth profiles endpoint requires localhost access when dashboard auth is disabled.',
-    });
+    expect(response.status).toBe(404);
   });
 
   it('blocks remote Codex activation before its handler when dashboard auth is disabled', async () => {

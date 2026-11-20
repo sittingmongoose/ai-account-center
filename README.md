@@ -9,7 +9,7 @@
 See every quota at a glance · claim resets before you hit a limit · let your agents check their own burn rate
 
 <p>
-<img alt="TypeScript backend" src="https://img.shields.io/badge/backend-TypeScript-3178C6?logo=typescript&logoColor=white">
+<img alt="Rust backend" src="https://img.shields.io/badge/backend-Rust-000000?logo=rust&logoColor=white">
 <img alt="Leptos UI compiled to WebAssembly" src="https://img.shields.io/badge/UI-Leptos%20%E2%86%92%20WebAssembly-2379F4?logo=webassembly&logoColor=white">
 <img alt="Installable PWA" src="https://img.shields.io/badge/phone-PWA-5A0FC8?logo=pwa&logoColor=white">
 <img alt="Mac menu bar app in SwiftUI" src="https://img.shields.io/badge/Mac-SwiftUI-F05138?logo=swift&logoColor=white">
@@ -137,7 +137,7 @@ See every quota at a glance · claim resets before you hit a limit · let your a
 
 Long agent runs die when an account hits its limit. So the dashboard publishes its readings where every agent can see them.
 
-- **Turn it on:** `ai-account-center dashboard usage-snapshot set /path/to/shared/folder`
+- **Existing setup:** the dashboard keeps writing to the saved usage snapshot folder after the Rust cut.
 - **Every refresh** (one minute by default) it writes `usage.json`, `usage.md` and 7 days of `history.json`.
 - **Burn rate** over the last 5 and 15 minutes, 1, 6 and 24 hours, with a projected run-out time.
 - **The key flag:** `BEFORE the reset` means the account runs dry at the current pace.
@@ -216,7 +216,7 @@ flowchart LR
     mac["Mac menu bar<br/>SwiftUI"]
     win["Windows tray<br/>WPF .NET 10"]
   end
-  subgraph server["Dashboard server · TypeScript on Node.js 22 or 26"]
+  subgraph server["Dashboard · Rust public listener"]
     api["Authenticated API + WebSocket"]
     usage["Account usage"]
     analytics["Analytics"]
@@ -233,7 +233,7 @@ flowchart LR
 
 | Layer | Built with |
 | --- | --- |
-| Backend | TypeScript on Node.js 22 or 26: Express, WebSocket, structured logging |
+| Backend | Rust public HTTP and WebSocket listener, with a private Node compatibility worker for remaining routes and jobs |
 | Web UI | [Leptos](https://leptos.dev) 0.9 (client-side rendered), compiled from Rust to WebAssembly; installable PWA |
 | Mac app | Swift and SwiftUI menu-bar app |
 | Windows app | C# and WPF on .NET 10 |
@@ -273,11 +273,11 @@ bun run build:all
 
 ```bash
 ./scripts/dev-install.sh --npm                 # build, validate and install the `ai-account-center` command
-ai-account-center dashboard auth setup         # the dashboard's own username and password
 ai-account-center dashboard --host localhost --port 3000 --no-open
 ```
 
-Open `http://localhost:3000`. Prefer not to install? `node dist/ccs.js dashboard` runs straight from the checkout.
+Open `http://localhost:3000` and use the first-run setup code to set the dashboard username and password.
+To run from the checkout, use `node scripts/run-dashboard-native.js --no-open`.
 
 ### 3️⃣ Add accounts
 
@@ -305,8 +305,9 @@ On first run, give the tray the dashboard address and password once. Guides: [Ma
 
 Setting this up for someone with an agent? Give it [docs/agent-setup.md](docs/agent-setup.md): the whole install, the sign-ins only the person can do, the agents' usage snapshot and T3 Code's usage hub, in order.
 
+For an already configured snapshot folder, install the reader instructions on each agent computer:
+
 ```bash
-ai-account-center dashboard usage-snapshot set /path/to/shared/folder
 python3 /path/to/shared/folder/aac-usage install-rules   # on each computer your agents use
 ```
 
@@ -334,16 +335,19 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | Command | What it does |
 | --- | --- |
 | `ai-account-center dashboard` | Run the dashboard (`--host`, `--port`, `--no-open`) |
-| `ai-account-center dashboard auth setup` | Set the dashboard's own login (`show`, `disable`) |
-| `ai-account-center dashboard usage-snapshot set <folder>` | Publish usage for agents (`status`, `off`) |
-| `ai-account-center dashboard usage-hub status` | T3 Code usage hub (`generate`, `rotate`, `off`) |
 | `ai-account-center dashboard proxy set --address <ip> --origin <url>` | Trust your HTTPS reverse proxy (`status`, `off`) |
+| `ai-account-center dashboard usage-hub` | Manage the T3 hub key |
+| `ai-account-center dashboard usage-snapshot` | Manage the shared usage snapshot |
+| `ai-account-center dashboard cursor-key` | Manage the Cursor account key |
 | `ai-account-center codex-auth show` | List saved Codex logins (`create`, `login`, `import-default`, `remove`) |
 | `ai-account-center antigravity signin <profile>` | Add or re-sign an Antigravity profile on Ubuntu |
 | `ai-account-center antigravity status` | Read-only check of what the Antigravity runtime needs |
 | `ai-account-center bar` | Mac: open the paired menu-bar app |
 
 `ai-account-center help <command>` has every option. The older `ccs` command runs the same commands, and **`ccs config` still opens the dashboard**.
+
+Use the dashboard's setup page and Settings for its login. The native commands
+above manage usage hub keys, snapshot destinations and Cursor keys.
 
 ---
 

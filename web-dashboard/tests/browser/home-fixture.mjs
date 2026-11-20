@@ -3,7 +3,7 @@
 //   Claude: Pro, Max with a Fable window, one past 100% (overage), one with no Fable reading, one that failed to refresh.
 //   Codex: the live login, one at 97% used, one with no 5-hour window, credits and banked resets. codexAutoSwitch is
 //   the retired always-off field the server still sends for older trays.
-//   Antigravity: one login (no native inventory here, so no live login is named).
+//   Antigravity: one login with different T3 and app readings.
 //   Cards: Cursor (a meter and spend), Kimi Code, Z.ai (resets pack), Qwen, Muse Code, OpenCode Go (spend only).
 
 export function homeAccounts(now = Date.now()) {
@@ -56,7 +56,10 @@ export function homeAccounts(now = Date.now()) {
 			]),
 			codex('third', 'codex.third@example.invalid', 'plus', [quota('seven_day', 'week', 31, 10080, 7000)]),
 			account('antigravity:one', 'antigravity', 'antigravity.login@example.invalid', 'pro', [
-				quota('gemini-weekly', 'Gemini Models · Weekly', 30, 10080, 5000), quota('3p-weekly', 'Claude and GPT Models · Weekly', 70, 10080, 5000),
+				quota('cli-gemini-weekly', 'Gemini Models · Weekly', 30, 10080, 5000),
+				quota('cli-3p-weekly', 'Claude and GPT Models · Weekly', 70, 10080, 5000),
+				quota('gemini-weekly', 'Gemini Models · Weekly', 12, 10080, 5000),
+				quota('3p-weekly', 'Claude and GPT Models · Weekly', 45, 10080, 5000),
 			]),
 			account('cursor:one', 'cursor', 'cursor.team.seat@example.invalid', 'pro', [
 				quota('monthly', 'Monthly usage', 18, 43200, 20000),

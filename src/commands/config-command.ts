@@ -1,3 +1,4 @@
+import { rustComposeSelected } from '../web-server/rust-service-groups';
 /**
  * Config Command Handler
  *
@@ -169,12 +170,26 @@ export async function handleConfigCommand(
       serverOptions.host = normalizeDashboardHost(options.host);
     }
 
-    const { server, wss, cleanup } = await deps.startServer(serverOptions);
+    const composed = rustComposeSelected();
+    const composeBinary = composed ? process.env.AAC_RUST_PUBLIC_BINARY : undefined;
+    if (composed && !composeBinary) {
+      console.error(deps.fail('Set AAC_RUST_PUBLIC_BINARY for the composed dashboard.'));
+      process.exitCode = 1;
+      return;
+    }
+    const { server, wss, cleanup, publicAddress } = composeBinary
+      ? await (
+          await import('../web-server/compose-server')
+        ).startComposedServer(serverOptions, composeBinary)
+      : await deps.startServer(serverOptions);
 
     // Setup graceful shutdown
     deps.setupGracefulShutdown(server, wss, cleanup);
 
-    const urls = resolveDashboardUrls(resolveServerBindHost(server) ?? options.host, port);
+    const urls = resolveDashboardUrls(
+      publicAddress?.address ?? resolveServerBindHost(server) ?? options.host,
+      publicAddress?.port ?? port
+    );
     const shouldWarnAboutExposure = urls.bindHost ? !isLoopbackHost(urls.bindHost) : false;
 
     console.log(deps.ok(`Dashboard: ${urls.browserUrl}`));
@@ -197,7 +212,9 @@ export async function handleConfigCommand(
         deps.warn('Dashboard may be reachable from other devices that can connect to this machine.')
       );
       if (!authConfig.enabled) {
-        console.log(deps.info('Protect it before sharing: ai-account-center dashboard auth setup'));
+        console.log(
+          deps.info("Protect it before sharing: set a sign-in in the dashboard's Settings page")
+        );
       }
       if (isWildcardHost(urls.bindHost) && !urls.networkUrls?.length) {
         console.log(deps.info('Use your machine IP or hostname from the other device.'));

@@ -10,13 +10,44 @@ const root = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const spec = path.join(root, 'tests/spec');
 const fixture = JSON.parse(fs.readFileSync(path.join(spec, 'fixture.json'), 'utf8'));
 const regenerate = process.argv.includes('--regenerate');
+const composed = process.argv.includes('--composed');
+const legacyHome = process.argv.includes('--plain-home');
+const recordComposed = process.argv.includes('--regenerate-composed');
+const outputFlag = '--composed-golden-output=';
+const composedOutput = process.argv
+  .find((arg) => arg.startsWith(outputFlag))
+  ?.slice(outputFlag.length);
+assert.ok(!composed || !regenerate, 'record the contract from TypeScript');
+assert.ok(!recordComposed || (composed && !legacyHome), 'record the all-on composed listener');
+assert.notEqual(composedOutput, '', '--composed-golden-output needs a path');
+assert.ok(!composedOutput || recordComposed, 'a composed output requires --regenerate-composed');
+const differences: string[] = [];
+let matched = 0;
+let declines = 0;
+let retained = 0;
 const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
-const rustBinary = path.join(root, 'dist/native/aac-http');
-if (rustMode !== 'off')
-  assert.ok(fs.existsSync(rustBinary), 'on/shadow contract checks require the Nas1-built binary');
+const nativePrivate = composed && process.platform !== 'win32';
+const nativeReset = composed;
+const composedGolden = path.join(
+  spec,
+  'contract',
+  `m0-composed-${nativePrivate ? 'unix' : 'windows'}.json`
+);
+type ComposedRecord = {
+  request: { method: string; path: string; role: string };
+  response: unknown;
+};
+const recorded: Record<string, ComposedRecord> = {};
+const savedComposed: Record<string, ComposedRecord> =
+  composed && (!recordComposed || fs.existsSync(composedGolden))
+    ? JSON.parse(fs.readFileSync(composedGolden, 'utf8'))
+    : {};
+const rustBinary = process.env.AAC_RUST_PUBLIC_BINARY ?? path.join(root, 'dist/native/aac-http');
+if (composed || rustMode !== 'off')
+  assert.ok(fs.existsSync(rustBinary), 'contract replay requires an existing Rust binary');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-contract-'));
 const ccs = path.join(home, '.ccs');
-fs.mkdirSync(ccs, { recursive: true });
+fs.mkdirSync(ccs, { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(ccs, 'fixture.json'), JSON.stringify(fixture));
 for (const key of Object.keys(process.env)) if (key.startsWith('CCS_')) delete process.env[key];
 Object.assign(process.env, {
@@ -24,8 +55,32 @@ Object.assign(process.env, {
   CCS_DIR: ccs,
   CODEX_HOME: path.join(home, '.codex'),
   CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+  AAC_AGENT_REPORTS_DIR: path.join(home, 'reports'),
+  AAC_PM_MAIL_REGISTRY_DIR: path.join(home, 'registry'),
+  AAC_STORE_SHARE_BACKUP_DIR: 'off',
+  AAC_STATUS_DOORBELL: 'off',
   CCS_SESSION_SECRET: 'fixture-session-secret-for-contract-only',
   AAC_NO_LOCAL_RUST_BUILD: '1',
+  AAC_RUST_SERVICE_BINARY: rustBinary,
+  // The M0 contract captures the routes without the optional Home view. The Home group is default-ready
+  // (on when unset under mode on), so pin it and the D7 switch off here to keep the goldens the plain answers.
+  AAC_RUST_HOME_VIEW: 'off',
+  AAC_RUST_GROUP_HOME: composed && !legacyHome ? 'on' : 'off',
+  AAC_RUST_HOME_PRODUCER: composed && !legacyHome ? 'on' : 'off',
+  ...(composed
+    ? {
+        // The M0 contract uses scripted app-update outcomes. The lane H native owner
+        // is qualified separately with fixture installers rather than live hosts.
+        AAC_RUST_GROUP_APP_UPDATES: 'off',
+        AAC_RUST_GROUP_RENEWAL: 'on',
+        AAC_RUST_GROUP_USAGESNAPSHOT: 'on',
+        AAC_RUST_GROUP_CLAUDE_OPEN: 'on',
+        AAC_AGENT_TRANSPORT: 'off',
+        AAC_AGENT_VERBS: 'off',
+        // W-status-home: the native front door answers the worker-removal routes itself; the
+        // composed recording is their source of truth.
+      }
+    : {}),
 });
 spyOn(os, 'homedir').mockReturnValue(home);
 // A few legacy readers use process.env.HOME directly. Reject private paths
@@ -92,16 +147,54 @@ assert.throws(() => awaitFsRead('/home/fixture-forbidden/.codex/auth.json'), /Ou
 // Fail closed at process boundaries: helpers, SSH and provider programs cannot run.
 const cp = await import('node:child_process');
 const realSpawn = cp.spawn.bind(cp);
+const realSpawnSync = cp.spawnSync.bind(cp);
 const fixtureSpawn = (...args: any[]) => {
   if (
-    rustMode !== 'off' &&
     args[0] === rustBinary &&
     Array.isArray(args[1]) &&
-    args[1].length === 0
+    ((rustMode !== 'off' && args[1].length === 0) ||
+      (composed &&
+        args[1].length === 1 &&
+        args[1][0] === '--public' &&
+        args[2]?.env?.CCS_DIR === ccs))
   )
     return realSpawn(...(args as Parameters<typeof realSpawn>));
   throw new Error('Fixture process boundary');
 };
+const rejectSpawn = () => {
+  throw new Error('Fixture process boundary');
+};
+const fixtureSpawnSync = (
+  command: string,
+  args: string[],
+  options: Parameters<typeof cp.spawnSync>[2]
+) => {
+  // These commands can only flock the inherited descriptor. They cannot open new paths.
+  const stdio = options?.stdio;
+  if (
+    Array.isArray(stdio) &&
+    stdio.length === 3 &&
+    typeof stdio[0] === 'number' &&
+    stdio[1] === 'ignore' &&
+    stdio[2] === 'ignore' &&
+    Array.isArray(args) &&
+    ((command === rustBinary && args.length === 1 && args[0] === '--file-lease') ||
+      (process.platform === 'linux' &&
+        ['/usr/bin/flock', '/bin/flock'].includes(command) &&
+        args.length === 2 &&
+        args[0] === '-n' &&
+        args[1] === '0'))
+  ) {
+    if (process.platform === 'linux') {
+      const fdPath = fs.readlinkSync('/proc/self/fd/' + stdio[0]);
+      assert.ok(fdPath.startsWith(ccs + '/'), 'lease belongs to the fixture');
+    }
+    return realSpawnSync(command, args, options);
+  }
+  return rejectSpawn();
+};
+const allowed = { spawn: fixtureSpawn, spawnSync: fixtureSpawnSync };
+const blockedProcesses = { ...cp };
 for (const name of [
   'spawn',
   'spawnSync',
@@ -110,22 +203,11 @@ for (const name of [
   'execFile',
   'execFileSync',
   'fork',
-] as const)
-  spyOn(cp, name).mockImplementation(
-    (name === 'spawn'
-      ? fixtureSpawn
-      : () => {
-          throw new Error('Fixture process boundary');
-        }) as never
-  );
-const blockedProcesses = { ...cp };
-for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'])
-  (blockedProcesses as any)[name] =
-    name === 'spawn'
-      ? fixtureSpawn
-      : () => {
-          throw new Error('Fixture process boundary');
-        };
+] as const) {
+  const handler = name === 'spawn' || name === 'spawnSync' ? allowed[name] : rejectSpawn;
+  spyOn(cp, name).mockImplementation(handler as never);
+  (blockedProcesses as any)[name] = handler;
+}
 for (const module of ['child_process', 'node:child_process'])
   mock.module(module, () => ({ ...blockedProcesses, default: blockedProcesses }));
 const tls = await import('node:https');
@@ -174,43 +256,16 @@ await stub('src/utils/managed-process.ts', {
   stopProcessBroker: async () => {},
   runManagedCommand: async () => ({ stdout: '', stderr: '', exitCode: 1, timedOut: false }),
 });
-await stub('src/web-server/services/account-analytics-service.ts', {
-  startAccountAnalyticsSampling: noop,
-  stopAccountAnalyticsSampling: noop,
-});
 await stub('src/web-server/services/account-lifecycle-runtime.ts', {
   startAccountLifecycleMaintenance: noop,
   stopAccountLifecycleMaintenance: noop,
 });
-await stub('src/web-server/status/status-service.ts', {
-  startStatusService: stop,
-  getStatusService: () => ({
-    view: () => fixture.statusView,
-    answers: { sendList: () => [], history: () => [] },
-  }),
-});
-await stub('src/web-server/scoreboard/scoreboard-service.ts', {
-  startScoreboardService: noop,
-  getScoreboardService: () => ({ view: async () => fixture.scoreboardView }),
-});
-await stub('src/web-server/services/cgroup-foreign-check.ts', { startCgroupForeignCheck: stop });
-await stub('src/web-server/agent-usage/agent-usage-snapshot.ts', { startAgentUsageSnapshot: stop });
 await stub('src/antigravity/production-runtime.ts', {
   getInstalledAntigravityRuntimeFactory: () => null,
 });
-const renewal = await import('../../src/web-server/services/codex-profile-renewal-service');
-spyOn(renewal.CodexProfileRenewalService.prototype, 'start').mockImplementation(noop);
 await stub('src/store/store-service.ts', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),
-  getAacStore: () => ({
-    status: async () => fixture.storeStatus,
-    seriesPoints: async () => fixture.seriesPoints,
-    seriesList: async () => [],
-    usageAt: async () => fixture.usageAt,
-    burnLong: async () => [],
-    periods: async () => [],
-  }),
-  aacStoreState: () => ({ state: 'unavailable', reason: 'disabled' }),
+  getAacStore: () => null,
 });
 // Capture actual router registrations, including computed paths and regexes.
 const routerModule = await import('../../src/web-server/routes/api-router');
@@ -221,7 +276,12 @@ const portableRoot = root.split(path.sep).join('/');
 function routeHandlerFile(): string {
   const frame = (new Error().stack ?? '')
     .split('\n')
-    .map((line) => line.split('\\').join('/').replace(/file:\/\/\//g, ''))
+    .map((line) =>
+      line
+        .split('\\')
+        .join('/')
+        .replace(/file:\/\/\//g, '')
+    )
     .find((line) => line.includes(`${portableRoot}/src/`) && !line.includes('api-router.ts'));
   if (!frame) return 'unknown';
   const fromRoot = frame.slice(frame.indexOf(`${portableRoot}/src/`) + portableRoot.length + 1);
@@ -243,13 +303,6 @@ spyOn(routerModule, 'createApiRouter').mockImplementation(() => {
 await stub('src/codex-auth/codex-activation-lock.ts', {
   getActivationCodexHome: () => path.join(home, '.codex'),
 });
-await stub('src/web-server/services/app-update-service.ts', {
-  getAppUpdateService: () => ({
-    getStatus: () => ({ job: null }),
-    start: () => ({ job: { id: 'fixture-update', state: 'running', hosts: {}, results: [] } }),
-    cancel: () => ({ job: null }),
-  }),
-});
 const { createEmptyUnifiedConfig } = await import('../../src/config/unified-config-types');
 const { saveUnifiedConfig } = await import('../../src/config/unified-config-loader');
 const bcrypt = await import('bcrypt');
@@ -260,6 +313,22 @@ config.dashboard_auth = {
   password_hash: bcrypt.hashSync('fixture-password-only', 4),
   session_timeout_hours: 24,
 };
+if (composed) {
+  config.rustService = {
+    mode: 'on',
+    frontDoor: 'rust',
+    store: 'on',
+    groups: {
+      home: 'on',
+      status: 'on',
+      scoreboard: 'on',
+      analytics: 'on',
+      collection: 'on',
+      writes: 'on',
+      'app-updates': 'on',
+    },
+  };
+}
 saveUnifiedConfig(config);
 // Use the owner's writer shape so the Rust subset is exercised, not its TS fallback.
 (
@@ -270,16 +339,20 @@ fs.mkdirSync(ui);
 // The Leptos app frame is the dashboard page (static-ui.ts APP_ENTRY); every page route answers with it.
 fs.mkdirSync(path.join(ui, 'app'));
 fs.writeFileSync(path.join(ui, 'app', 'index.html'), '<div id="aac-app-fixture"></div>');
-const { startServer } = await import('../../src/web-server');
-const instance = await startServer({
-  port: 0,
-  host: '127.0.0.1',
-  staticDir: ui,
-  rustServiceBinary: rustBinary,
-});
-const base = `http://127.0.0.1:${(instance.server.address() as any).port}`;
 const { apiRoutes } = await import('../../src/web-server/routes');
-const codexSummary = await import('../../src/codex-auth/codex-auth-dashboard-service');
+const { default: referenceResetRoutes } =
+  await import('../fixtures/reset-adapter/reset-claim-routes');
+apiRoutes.use('/accounts', referenceResetRoutes);
+const { startServer } = await import('../../src/web-server');
+const serverOptions = { port: 0, host: '127.0.0.1', staticDir: ui, rustServiceBinary: rustBinary };
+const instance = composed
+  ? await (
+      await import('../../src/web-server/compose-server')
+    ).startComposedServer(serverOptions, rustBinary)
+  : await startServer(serverOptions);
+const base =
+  'http://127.0.0.1:' +
+  (instance.publicAddress ?? (instance.server.address() as import('net').AddressInfo)).port;
 const { pairDevice } = await import('../../src/web-server/services/dashboard-device-store');
 
 const hubModule = await import('../../src/web-server/usage-hub/usage-hub-key-store');
@@ -320,7 +393,9 @@ function walk(router: any, prefix: string) {
       method: record.method.toUpperCase(),
       path: routePath,
       roles,
-      handlerFile: record.handlerFile,
+      handlerFile: routePath.includes('/reset-claims')
+        ? 'crates/aac-http/src/public_auth/reset_routes.rs'
+        : record.handlerFile,
       writes: !['get', 'head', 'options'].includes(record.method),
     });
   }
@@ -343,24 +418,243 @@ inventory.push({
   handlerFile: 'src/web-server/index.ts',
   writes: false,
 });
-// Middleware-only deliverable handler has no Router.get registration.
-inventory.push({
-  method: 'GET',
-  path: '/api/status/deliverable',
-  roles,
-  handlerFile: 'src/web-server/routes/share-route.ts',
-  writes: false,
-});
 for (const r of inventory) {
   r.milestone = milestone(r);
   if (r.path.startsWith('/v0/management')) r.writes = false;
 }
 inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
-function emit(relative: string, data: any) {
+// The migrated groups run public admission in the Rust listener. Their M0 rows and
+// contracts stay the replay corpus (`routes.json`); the TypeScript router no longer registers
+// them, so this recorder keeps the committed rows instead of re-recording a 404.
+const MOVED_TO_RUST = new Set([
+  'GET /api/scoreboard',
+  'GET /api/status/@regex:^\\/files\\/([^/]+)\\/(.+)$',
+  'GET /api/status/answers',
+  'POST /api/status/answers',
+  'GET /api/status/deliverable',
+  'GET /api/status',
+  'GET /api/accounts/analytics',
+  'GET /api/accounts/analytics/capture',
+  'PUT /api/accounts/analytics/capture',
+  'GET /api/antigravity/profiles',
+  'GET /api/antigravity/profiles/quotas',
+  'POST /api/app-updates/cancel',
+  'POST /api/app-updates/start',
+  'GET /api/app-updates/status',
+  'POST /api/claude/desktop-profiles/:id/open',
+  'GET /api/claude/desktop-profiles/usage',
+  'GET /api/claude/desktop-profiles',
+  'POST /api/claude/history-snapshots/cleanup',
+  'GET /api/codex/profiles',
+  'GET /api/codex/profiles/quotas',
+  'GET /api/store/status',
+  'GET /api/usage/at',
+  'GET /api/usage/burn',
+  'GET /api/usage/history',
+  'GET /api/views/home',
+]);
+{
+  const key = (row: any) => `${row.method} ${row.path}`;
+  const known = new Set(inventory.map(key));
+  const previous = JSON.parse(fs.readFileSync(path.join(spec, 'routes.json'), 'utf8')) as any[];
+  for (const row of previous) {
+    if (MOVED_TO_RUST.has(key(row)) && !known.has(key(row))) inventory.push(row);
+  }
+  inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
+}
+// These rows differ from the historical TS fixture by contract. Select by request and boot
+// mode so an unexpected response, including a fallback or decline, still fails comparison.
+function composedOwner({ method, path, role }: ComposedRecord['request']) {
+  const browser = role === 'session' || role === 'bar';
+  // W-status-home: the native front door answers these; a device token is in the store and
+  // usage scopes, a signed-out caller is its guard's refusal.
+  const group = browser || role === 'device' || role === 'signed-out';
+  const statusHome =
+    group &&
+    ((method === 'GET' &&
+      (path === '/api/status' ||
+        path === '/api/status/answers' ||
+        path === '/api/status/deliverable' ||
+        path.startsWith('/api/status/files/') ||
+        path === '/api/store/status' ||
+        path.startsWith('/api/usage/'))) ||
+      (method === 'POST' && path === '/api/status/answers'));
+  if (statusHome) return 'status-home';
+  if (!browser || method !== 'GET') return undefined;
+  if (path === '/api/accounts/fixture-missing/reset-claims' && nativeReset) return 'reset';
+  if (path === '/api/scoreboard' && nativePrivate) return 'scoreboard';
+  if (path === '/api/views/home' && !legacyHome) return 'home';
+  return undefined;
+}
+
+/** Every cache age in a view is the recorder's own clock, a second or a minute apart per run. */
+function stableAges(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) stableAges(item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const map = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(map)) {
+    if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof child === 'number')
+      map[key] = '<elapsed-seconds>';
+    else stableAges(child);
+  }
+}
+
+/** The page's own clock and day words (`dateWordsIn`: "3:04 PM", "Nov 19") follow the recording
+ * instant; the view's data and states are the contract. */
+function stableWords(value: unknown): void {
+  const CLOCK = /\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g;
+  const DAY = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g;
+  if (Array.isArray(value)) {
+    for (const item of value) stableWords(item);
+    return;
+  }
+  if (value && typeof value === 'object') {
+    const map = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(map)) {
+      if (typeof child === 'string')
+        map[key] = child.replace(CLOCK, '<clock>').replace(DAY, '<day>');
+      else stableWords(child);
+    }
+  }
+}
+
+/** A host's live readings (load, free memory and disk) differ every run; the panel's state and
+ * words are the contract. The collectors' numbers have their own tests. */
+function stableMachines(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) stableMachines(item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const map = value as Record<string, unknown>;
+  if ('cpu' in map && 'memory' in map && 'browsers' in map) {
+    map.cpu = null;
+    map.memory = null;
+    map.disk = [];
+    map.gpuPct = null;
+    map.warnings = [];
+  }
+  for (const child of Object.values(map)) stableMachines(child);
+}
+
+function emit(relative: string, data: any, view: string | null = null) {
   const file = path.join(spec, relative);
+  const composedRow = composed && /^contract\/[0-9]/.test(relative);
+  const owner = composedRow ? composedOwner(data.request) : undefined;
+  if (owner === 'scoreboard') {
+    if (view !== 'scoreboard@1')
+      console.error('SCOREBOARD ROW', JSON.stringify(data).slice(0, 900));
+    assert.equal(
+      view,
+      'scoreboard@1',
+      `the composed Scoreboard row must come from its owner: ${data.response.status} ${JSON.stringify(data.response.body).slice(0, 240)}`
+    );
+    const body = data.response.body;
+    // The two cache reads happen at different instants. Preserve clock-field presence and
+    // nulls, while comparing the displayed data and all response headers exactly.
+    assert.ok(Array.isArray(body.sources), 'the owned Scoreboard has sources');
+    const clocks: Array<[Record<string, unknown>, string]> = [
+      [body, 'cacheAgeSeconds'],
+      ...body.sources.map((source: Record<string, unknown>): [Record<string, unknown>, string] => [
+        source,
+        'ageSeconds',
+      ]),
+    ];
+    for (const [source, key] of clocks) {
+      const value = source[key];
+      if (value === undefined || value === null) continue;
+      assert.ok(
+        typeof value === 'number' && Number.isFinite(value) && value >= 0,
+        `invalid Scoreboard ${key}`
+      );
+      source[key] = '<elapsed-seconds>';
+    }
+  }
+  if (owner === 'status-home') {
+    stableAges(data.response.body);
+    stableMachines(data.response.body);
+    stableWords(data.response.body);
+  }
+  // The store's boot identity (its open instant, segment log and meta clocks) differs per run;
+  // the status row's contract is the writer's shape and state, not one boot's ids.
+  if (
+    owner === 'status-home' &&
+    data.request.method === 'GET' &&
+    data.request.path === '/api/store/status'
+  ) {
+    const body = data.response.body;
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      body.openedAt = null;
+      body.logs = null;
+      body.meta = null;
+      body.redbBytes = null;
+      body.redbStats = null;
+      body.instanceId = null;
+      body.integrity = null;
+      body.capture = null;
+      body.storageHealth = null;
+    }
+  }
   const bytes = JSON.stringify(data, null, 2) + '\n';
   if (regenerate) fs.writeFileSync(file, bytes);
-  else
+  else if (composedRow) {
+    if (owner === 'status-home' && recordComposed) {
+      // The group's own refusals are part of its contract (a missing file, an empty query).
+      recorded[relative] = data;
+      matched++;
+      return;
+    }
+    if (owner && recordComposed) {
+      assert.equal(data.response.status, 200, `cannot record an unsuccessful ${owner} response`);
+      if (owner === 'reset') {
+        assert.equal(data.response.body?.status, 'unavailable');
+        assert.equal(data.response.body?.reason, 'provider-read-only');
+        assert.deepEqual(data.response.body?.grants, []);
+      }
+      if (owner === 'scoreboard') {
+        // The native front door answers from the service without the TS compression layer.
+        assert.equal(
+          data.response.headers.vary,
+          process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on' ? 'Cookie' : 'Cookie, Accept-Encoding'
+        );
+      }
+      if (owner === 'home') assert.equal(data.response.body?.schemaVersion, 1);
+      recorded[relative] = data;
+      matched++;
+      return;
+    }
+    const expected = owner ? savedComposed[relative] : JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(expected, `missing composed golden for ${relative}`);
+    if (bytes === JSON.stringify(expected, null, 2) + '\n') {
+      matched++;
+      return;
+    }
+    const { request, response } = data;
+    if (response.status === 503 && response.body?.code === 'route_unavailable') declines++;
+    const fields = Object.keys(response).filter(
+      (key) => JSON.stringify(response[key]) !== JSON.stringify(expected.response[key])
+    );
+    differences.push(
+      [
+        relative,
+        request.method,
+        request.path,
+        request.role,
+        response.status + '/' + expected.response.status,
+        fields.join('+'),
+        response.body?.code ?? '',
+      ].join(' ')
+    );
+  } else if (composed && relative === 'routes.json') {
+    // Stack-frame locations vary by Bun platform and build. Compare the actual
+    // method, path, roles, write admission and milestone on every platform.
+    const shape = (rows: typeof inventory) =>
+      rows.map(({ handlerFile: _stackLocation, ...route }) => route);
+    assert.deepEqual(shape(data), shape(JSON.parse(fs.readFileSync(file, 'utf8'))));
+  } else if (!composed || relative !== 'route-source-hashes.json')
     assert.equal(
       fs.readFileSync(file, 'utf8'),
       bytes,
@@ -383,6 +677,9 @@ function normalize(value: any, key = ''): any {
     );
     return '<retry-after-seconds>';
   }
+  // The usage routes' own clock fields are numbers; the reference and the native answer
+  // are taken at different instants.
+  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
   if (typeof value === 'string' && key === 'set-cookie')
     return value
       .replace(/^[^=]+=[^;]+/, 'connect.sid=<session-cookie>')
@@ -413,16 +710,32 @@ function normalize(value: any, key = ''): any {
   return value;
 }
 try {
+  // The HTTP listener starts before its private service. Dispatch parity needs a running service.
+  if ((composed || rustMode !== 'off') && process.platform !== 'win32') {
+    const serviceState = () =>
+      (instance.rustService.diagnostics().service as { state: string }).state;
+    const deadline = Date.now() + 15000;
+    while (serviceState() === 'down' && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(serviceState(), 'ready', 'the fixture Rust service must be ready before replay');
+  }
   emit('routes.json', inventory);
   // Guards also cover middleware-only routes and top-level static/upgrade registration changes.
   const routeSources = [
     path.join(root, 'src/web-server/index.ts'),
+    path.join(root, 'src/web-server/compose-request.ts'),
+    path.join(root, 'src/web-server/compose-server.ts'),
     path.join(root, 'src/web-server/rust-service.ts'),
     path.join(root, 'src/web-server/rust-service-lifecycle.ts'),
     path.join(root, 'src/web-server/rust-service-transport.ts'),
     path.join(root, 'src/web-server/rust-service-supervisor.ts'),
     path.join(root, 'src/web-server/rust-service-health.ts'),
     path.join(root, 'config/rust-service-routes.json'),
+    path.join(root, 'crates/aac-http/src/public_auth/reset_routes.rs'),
+    path.join(root, 'crates/aac-http/src/public_auth/native_group.rs'),
+    path.join(root, 'crates/aac-http/src/public_auth/home_group.rs'),
+    path.join(root, 'crates/aac-http/src/public_auth/analytics_routes.rs'),
+    path.join(root, 'tests/fixtures/reset-adapter/reset-claim-routes.ts'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))
       .filter((f) => f.endsWith('.ts'))
@@ -438,7 +751,17 @@ try {
       ])
     )
   );
-  for (const [index, route] of inventory.entries())
+  if (composed) {
+    const direct = await fetch(
+      'http://127.0.0.1:' +
+        (instance.server.address() as import('net').AddressInfo).port +
+        '/api/health'
+    );
+    assert.equal(direct.status, 404, 'private fallback refuses requests without the boot proof');
+    await direct.arrayBuffer();
+  }
+  for (const [index, route] of inventory.entries()) {
+    const moved = MOVED_TO_RUST.has(`${route.method} ${route.path}`);
     for (const role of roles) {
       const auth = await import('../../src/web-server/middleware/auth-middleware');
       for (const ip of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) auth.loginRateLimiter.resetKey(ip);
@@ -457,14 +780,31 @@ try {
         if (role === 'bar') headers['x-ccs-bar-nonce'] = 'f'.repeat(32);
       }
       if (role === 'device') {
-        const paired = await pairDevice({
-          name: 'Fixture device',
-          platform: 'mac',
-          installId: 'fixture-install',
-          appVersion: '0.0.0',
-          address: '127.0.0.1',
-          transport: 'loopback',
-        });
+        const paired = composed
+          ? await (async () => {
+              const result = await fetch(base + '/api/auth/devices/pair', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  username: 'fixture-admin',
+                  password: 'fixture-password-only',
+                  deviceName: 'Fixture device',
+                  platform: 'mac',
+                  installId: '00000000-0000-4000-8000-000000000001',
+                  appVersion: '0.0.0',
+                }),
+              });
+              assert.equal(result.status, 201);
+              return (await result.json()) as { token: string };
+            })()
+          : await pairDevice({
+              name: 'Fixture device',
+              platform: 'mac',
+              installId: 'fixture-install',
+              appVersion: '0.0.0',
+              address: '127.0.0.1',
+              transport: 'loopback',
+            });
         headers.authorization = `Bearer ${paired.token}`;
       }
       if (role === 'hub') headers.authorization = `Bearer ${hubKey}`;
@@ -513,10 +853,13 @@ try {
         );
         continue;
       }
+      if (moved) {
+        // Keep the fixture sign-ins and device setup that the recorded revocation count includes.
+        // The Rust-only public replay verifies the preserved route's reply.
+        retained++;
+        continue;
+      }
       const method = route.method === 'ALL' ? 'POST' : route.method;
-      // The Codex summary's 5-second memo would otherwise answer /api/codex/profiles from the
-      // quota route's read, making the Rust reply count depend on timing.
-      codexSummary.invalidateCodexAuthProfilesCache();
       const response = await fetch(base + url, {
         method,
         headers,
@@ -550,16 +893,28 @@ try {
           .filter((k) => response.headers.has(k))
           .map((k) => [k, response.headers.get(k)])
       );
-      emit(`contract/${String(index).padStart(3, '0')}-${role}.json`, {
-        request: {
-          method: route.method,
-          path: url,
-          role,
-          ...(!['GET', 'HEAD', 'OPTIONS', 'UPGRADE'].includes(route.method) ? { body: {} } : {}),
+      emit(
+        `contract/${String(index).padStart(3, '0')}-${role}.json`,
+        {
+          request: {
+            method: route.method,
+            path: url,
+            role,
+            ...(!['GET', 'HEAD', 'OPTIONS', 'UPGRADE'].includes(route.method) ? { body: {} } : {}),
+          },
+          response: normalize({ status: response.status, headers: selected, body }),
         },
-        response: normalize({ status: response.status, headers: selected, body }),
-      });
+        response.headers.get('x-aac-view')
+      );
     }
+    if (
+      'restartPublic' in instance &&
+      route.path === '/api/auth/login' &&
+      route.method === 'POST'
+    ) {
+      await (instance.restartPublic as () => Promise<void>)();
+    }
+  }
   assert.equal(
     // Route/role documents only; named m3-*.json corpora belong to their own parity checks.
     fs.readdirSync(path.join(spec, 'contract')).filter((file) => /^\d{3}-[a-z-]+\.json$/.test(file))
@@ -567,45 +922,32 @@ try {
     inventory.length * roles.length,
     'Stale or missing golden files'
   );
-  if (rustMode === 'on')
+  if (!composed && rustMode === 'on')
     assert.equal(
       instance.rustService.stats.served,
-      27,
-      'must actually serve health/settings/diag, the session/bar visibility, preferences and registry reads, and the session/bar (and device-scoped) profile reads from Rust after TS role guards'
+      15,
+      'must serve health/settings/diag, visibility, preferences and registry through the private service'
     );
-  if (rustMode === 'shadow') {
-    // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
-    // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
-    // compared; the Analytics stub stops at its query check before any Rust composition.
-    // Pair-2 M1 keeps standalone profiles in TS until a minimal shadow DTO exists. These twelve
-    // authenticated profile calls must decline before building or sending a private input.
+  if (!composed && rustMode === 'shadow') {
+    // The six account session/bar reads are compared. Analytics stops at its query check.
+    // Profiles now replay at the native public listener. The legacy recorder never sends
+    // private requests for those routes.
     for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)
       await new Promise((r) => setTimeout(r, 10));
     assert.equal(instance.rustService.stats.shadowed, 18);
     assert.equal(instance.rustService.stats.served, 0);
     assert.equal(instance.rustService.stats.differences, 0);
-    const counters = instance.rustService.diagnostics().routes as Record<
-      string,
-      { unavailable?: Record<string, number>; equal?: number; different?: number; served?: number }
-    >;
-    for (const [route, declined] of [
-      ['/api/claude/desktop-profiles', 3],
-      ['/api/codex/profiles', 2],
-      ['/api/codex/profiles/quotas', 2],
-      ['/api/antigravity/profiles', 3],
-      ['/api/antigravity/profiles/quotas', 2],
-    ] as const) {
-      assert.deepEqual(counters[route]?.unavailable, { private_input: declined }, route);
-      assert.equal(counters[route]?.equal ?? 0, 0, route);
-      assert.equal(counters[route]?.different ?? 0, 0, route);
-      assert.equal(counters[route]?.served ?? 0, 0, route);
-    }
+    const counters = instance.rustService.diagnostics().routes as Record<string, unknown>;
+    for (const route of MOVED_TO_RUST)
+      assert.equal(counters[route.slice(route.indexOf(' ') + 1)], undefined, route);
   }
-  if (rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
+  if (!composed && rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
   // Caller headers cannot create a principal or bypass the TS session/query/origin guards.
   const forged = {
     'x-aac-principal': JSON.stringify({ kind: 'session', id: 'forged', role: 'admin' }),
     'x-aac-boot-secret': 'f'.repeat(64),
+    'x-aac-compose-proof': 'f'.repeat(64),
+    'x-aac-compose-access': 'e30',
   };
   for (const route of ['/api/accounts/settings', '/api/diag'])
     assert.equal((await fetch(base + route, { headers: forged })).status, 401);
@@ -652,7 +994,7 @@ try {
     (await fetch(base + '/api/accounts/settings', { headers, method: 'HEAD' })).status,
     200
   );
-  if (rustMode !== 'off') {
+  if (!composed && rustMode !== 'off') {
     const { RustService } = await import('../../src/web-server/rust-service');
     const attached = new RustService('on');
     const descriptor = path.join(ccs, 'run/aac-http.json');
@@ -692,9 +1034,39 @@ try {
       'unhealthy service logs and serves TS'
     );
   }
-  await (await import('./rust-proxy')).checkRustProxyBoundary(home);
+  if (!composed) await (await import('./rust-proxy')).checkRustProxyBoundary(home);
+  else {
+    console.log(
+      'Composed M0: ' +
+        matched +
+        ' matched, ' +
+        declines +
+        ' awaiting-composition declines, ' +
+        differences.length +
+        ' differing, ' +
+        retained +
+        ' retained for native replay. Rust private counters: ' +
+        JSON.stringify(instance.rustService.stats)
+    );
+    console.log(
+      'Composed private service: ' + JSON.stringify(instance.rustService.diagnostics().service)
+    );
+    for (const failure of differences) console.log('M0 DIFFER ' + failure);
+    assert.equal(differences.length, 0, 'composed M0 differences');
+    if (recordComposed) {
+      assert.ok(nativeReset, 'record with the reset owner available');
+      assert.ok(Object.keys(recorded).length >= (nativePrivate ? 6 : 4), 'composed fixture rows');
+      const native = Object.fromEntries(
+        Object.entries(savedComposed).filter(([name]) => name.startsWith('native/contract/'))
+      );
+      fs.writeFileSync(
+        composedOutput ?? composedGolden,
+        JSON.stringify({ ...recorded, ...native }, null, 2) + '\n'
+      );
+    }
+  }
   console.log(
-    `${inventory.length} routes x ${roles.length} roles captured; rustService=${rustMode}, routing and boundary checks passed`
+    `${inventory.length} routes x ${roles.length} roles in the inventory, ${retained} retained for native replay; rustService=${rustMode}, routing and boundary checks passed`
   );
 } finally {
   instance.cleanup();

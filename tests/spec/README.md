@@ -315,32 +315,59 @@ the same rounds, with the design's server-time and RSS bars evaluated in the rep
 node tests/spec/agent/lifecycle.mjs <aac-agent> <aac-http>
 ```
 
-## R1: Home, fed
+## M4a/M4b: launch and claude-host (lane F)
 
-`home-read-parity.mjs` (run by `run.mjs` after the lifecycle) answers `GET /api/views/home` through the
-built front door and the Nas1-built service twice for every Home case: today's handler (D7, the Home
-group off) and the fed path (the group on), on the same reads. Every fed answer must be today's bytes
-(or, where only the fed path built a view, equal up to the view); every fed decline is answered by
-today's handler. Then the 304, a push during a request (`stale`), a service killed mid-feed and an Open
-in progress, on the real binary. With `--ts-only` (off mode) it checks that nothing is fed by default.
-The view itself is gated by `crates/aac-views/tests/home_spec.rs`, which runs every case and fuzz seed
-through the fed path too (equal or declined).
+`launch-table.ts` and `claude-host-table.ts` generate the checked-in parity tables from the
+real reference builders (`app-launcher.ts`'s `buildSystemdRunArgs`/`systemdRunEnvironment`,
+`windowsHostScript`, `macOpenCommand`, `windowsOpenCommand`, `windowsAccountListScript`, the
+fixed bootstrap and `claudeHostPurgePermit`). `--check` fails on drift; the Rust ports compare
+every row byte for byte (`crates/aac-agent/src/launch.rs` and `src/claude_host.rs` table tests).
+The launch table covers every app shape on linux/darwin/win32 with no launch; the claude-host
+table covers every operation, the wide/José/no-start-menu launcher shapes and the spec's
+refusal cases. `crates/aac-agent/src/claude_host/categories.rs` (the SAFE_PATH L/M/N ranges)
+is generated from Node by the same claude-host table script.
+
+`cargo test -p aac-agent --test launch_exec --features parity-fixtures` proves the execution
+contract with a compiled recorder standing in for systemd-run (argv, environment, exit-code
+fail-closed) and a detached marker child (full environment replacement, cwd, pid). No real
+app starts.
+
+```sh
+python tests/spec/agent/claude_host_parity.py <aac-agent-with-parity-fixtures>
+```
+
+runs the reference Mac program and the verb on identical temporary homes (create, double
+create, trash/restore byte-identical trees, permitted purge, undo, session markers, path
+refusals, the ps needle rule) and the fixture-safe Windows steps (session, state, purge)
+against the real `windowsHostScript` run locally behind the reference bootstrap. Purge
+without the TS-issued permit, with a forged one and with an expired one is refused; the
+shell-folder/task steps are refused in fixture mode and stay covered by the text table.
+On POSIX the Mac section also compares modes; on Windows the reference's text writes are
+emulated with POSIX newline semantics (its production platform). `tests/unit/web-server/
+claude-host-agent.test.ts` checks the permit binding, the adapter reply validation through
+the real TS fallback transport with a fake runner, and the labelled fallback with no
+artifact. The Mac host-program spec tests (`claude-host-transport.test.ts`) and the loader
+trampoline case in `app-launcher.test.ts` need `/bin/sh` and run on POSIX only.
+
+## Native Store, Usage and Home
+
+Run `node tests/spec/run.mjs --cut-rust-only --route-group=store-usage-home` with
+`AAC_M6_TARGET_CLI` naming the native dashboard launcher. The group replays five routes across
+the five caller roles. `tests/unit/store/store-native-routes.test.ts` exercises HEAD, browser
+origin and device scope, validation, disabled-store replies and conditional requests on the
+public listener. The historical store-usage test also reads its populated burn series over
+that listener. Home browser checks cover the live route and compare the Rust view, DOM and
+pixels with the browser's own rendering. `crates/aac-views/tests/home_spec.rs` covers the view
+corpus and fuzz seeds.
 
 ## R2: Status, fed
 
-Every Status corpus also runs through the fed path (`status-fed-check.ts`: the production `answerStatusFed`, the
-real service, today's bytes and ETag required): `read-view-parity.ts` sends the 21 raw cases, the 4 board ages and
-the prototype name (declined), with a negative control (the fed facts with AM and PM swapped must fail the check);
-`read-rounding-parity.ts` the 37 numeric admissions (the unproven one declines). `status-fuzz.ts` (in `run.mjs` with
-100 cases a seed; `--seeds 301,302,303,304 --cases 400` is the full run) compares TS, the envelope read and the fed
-path on generated inputs over a real reader's share. `status-read-parity.mjs` (Node, built `dist/`, Nas1-built
-service) runs the real StatusService owner against today's handler over HTTP: changes on the share, the
-collectors, the registry, the quota report and the time zone, then the 304, a push during a request, a restart
-and the negative control. With `--ts-only` it checks nothing is fed by default.
+Status and Scoreboard now replay through the native cut. Run
+`node tests/spec/run.mjs --cut-rust-only --route-group=status` with `AAC_M6_TARGET_CLI`
+pointed at the native dashboard binary. The historical view corpus remains in
+`read-view-parity.ts`. The workerless browser fixtures cover real report and run
+ingest, media ranges and answer submission.
 
-`status-measure.mjs` (with `status-measure-server.cjs`) times `GET /api/status` under Node on the large home: off,
-the M3 envelope path and the fed path, each its own process over the real owner with its scan timers, in ABAB
-rounds, plus a 16-client row; `read-http-parity.ts --measure` runs it and writes it as `status`.
 
 ## L3: one numeric layer (`aac-num`)
 
@@ -403,5 +430,18 @@ AAC_M6_TARGET_CLI=/path/to/other-cli bun tests/spec/m6-edge-parity.ts       # CL
 
 The target run discovers the build id from the frame page (`/pkg/<12 hex>/`), sends the same requests, compares the
 recorded rows and, for a built asset, the served bytes with the packaged file under `AAC_M6_STATIC_DIR`. It refuses
-to combine with `--regenerate`. The legacy bin case is TS-only because the compat bin names are package entry
-points.
+to combine with `--regenerate`. The Rust CLI gate also invokes a temporary retired bin name.
+
+For an isolated Rust run, let the fixture build the same UI and seed the same
+management key and account rows:
+
+```sh
+cargo build -p aac-http --locked
+AAC_RUST_PUBLIC_BINARY="$PWD/target/debug/aac-http" \
+  AAC_M6_TARGET_CLI="$PWD/target/debug/ai-account-center" \
+  bun tests/spec/m6-edge-parity.ts --rust-fixture
+```
+
+On Windows use the corresponding .exe paths. The full spec runner selects the
+isolated Rust HTTP fixture when AAC_RUST_PUBLIC_BINARY is set. The
+--regenerate option only records from the TS target.

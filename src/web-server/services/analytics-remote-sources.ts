@@ -403,6 +403,7 @@ const TAKEOVER_KINDS: readonly AnalyticsRemoteKind[] = ANALYTICS_TOOLS;
  * which replaces the collector's rows in one step.
  */
 export const LOCAL_SCANNER_KINDS: readonly AnalyticsRemoteKind[] = REMOTE_TARGETS.ubuntu;
+
 const LOCAL_ALIAS = '@local';
 const EXTRA_ROOTS_MAX = 16;
 
@@ -977,7 +978,7 @@ export function analyticsRowsResult(
   return toWorkerResult(rows, [], kind, host);
 }
 
-function toWorkerResult(
+export function toWorkerResult(
   rows: AnalyticsRemoteRow[],
   srows: AnalyticsRemoteSessionRow[],
   kind: AnalyticsRemoteKind,

@@ -1,5 +1,59 @@
 # Agent verb parity
 
+## App inventory and update fixtures (M4d)
+
+The host agent accepts `apps` with `{"action":"inventory","platform":"ubuntu"}`.
+Use `mac` and `windows` on the matching hosts. The verb returns the 12 ordered
+rows from the Python helper's `--inventory` contract. Its CLI probes only request
+versions and set the Python helper's auto-update suppression variables. Desktop
+readers inspect package metadata, and the ACP readers inspect existing records.
+The L5 private transport accepts the verb. The existing dashboard update service
+continues to call its Python helper.
+
+Run the Windows host's fixture gate from this workspace:
+
+```powershell
+cargo test --locked --offline -p aac-agent --lib apps::tests -j 2
+cargo test --locked --offline -p aac-agent --features parity-fixtures --test apps_update -j 2
+```
+
+The inventory suite constructs empty, populated and degraded installations for
+each platform under temporary roots, uses fake process outputs, and compares
+with the actual Python inventory payload byte for byte. The update suite runs a
+fixture-enabled agent subprocess. Its fixed installers write version receipts
+under a temporary root. The full app matrix checks four-worker scheduling,
+shared installer exclusion and app dependency gates. The suite compares terminal result bytes
+with Python and compares per-app progress for the desktop-only cases, dropping
+elapsed phase milliseconds.
+It also cancels during a held download, kills an agent during a held download,
+checks the journal's single writer and recovery, and verifies that an explicit
+retry can run after recovery. Recovery preserves saved rows, closes missing rows
+as unknown and clears the fixture installer's partial file.
+
+In production the Rust agent holds the host update lease and passes each selected
+app to a bounded Python `--apply --app` subprocess. The D3 adapter is labeled
+`aac-agent apps installer fallback: python` on stderr. App updates have a 31-minute
+agent deadline and a 33-minute service deadline. Cancel sends a job-bound request
+through L5 and reaps the selected worker, marking that app and queued work skipped.
+Ubuntu and Mac admit up to four workers. Windows serializes requests to its one
+registered interactive updater task. The agent never falls back to the full Python
+job after work starts.
+
+The Rust service API uses the same rollback and expanded job files as the guarded
+TS routes. Its unit cases cover TS row bytes and the abandoned-job display.
+The L5 integration gate checks the five host selectors, job conflict, counts,
+persistence and per-host cancel through an SSH recorder that opens no sockets.
+
+```sh
+cargo test --locked --offline -p aac-http --lib app_updates -j 2
+cargo test --locked --offline -p aac-http --test app_updates -j 2
+python3 -B tests/unit/app-updates/app_update_agent_worker_test.py
+```
+
+The separate `time-app-update-ssh.py` harness measures a fixed fixture workload
+over real pinned OpenSSH, alternating separate connections and a new control
+master. It validates the control master and the returned bytes on every round.
+
 ## Scan usage
 
 The workspace dev/test profiles disable debug symbols, so default Cargo test
@@ -9,6 +63,16 @@ overrides. Release settings and the artifact guard are unchanged.
 `quota-read`, `signin-expiry` and `scan-usage` share the same verified transport
 and `agentVerbs` switch. Each verb retains its own reply validation and fallback
 boundary; quota results still bind provider, platform and account before use.
+
+## Sign-in projection (gap G5)
+
+`transport.py <aac-agent> <aac-http> --signin` starts the real private service
+with the fixture SSH recorder and runs `signin-projection.ts`. The recorder
+answers `signin-expiry` from `signin-fixture.json`; the script compares the
+Rust poll to TS `parseRows`, then compares the service's settle (crossed
+deadlines, TTL, missing Ubuntu route) and Claude renewal merge to
+`downgradeCrossedRows`/`cacheTtlFor`/`mergeRenewal` on the same inputs. Fixture
+rows only; no host or credential is read.
 
 `aac-agent` uses the existing `native/aac-usage` library through a path dependency.
 The verb's `args` are the standalone scanner request. Its terminal `value` is the
@@ -390,3 +454,82 @@ too; killed at the data fsync the committed key is whole, killed at the folder f
 is whole; a held folder lease refuses the write; answers, bytes and modes equal
 `key_store.put`, and no lock file joins the folder. `--baseline` expects the base's
 behaviour (no folder fsync, no lease).
+
+## M4c sign-in sessions
+
+`bun tests/spec/agent/signin-session.mjs /path/to/aac-agent` (build host, Linux or Mac: the
+PTY relay is Unix) drives fake-CLI scripts per provider — Claude, Codex, Antigravity, Muse —
+through the real TypeScript `SignInJobRunner` with the real `spawnSignInProcess` relay, and
+through the Rust `signin-session` verb on the same fixtures. The full job event sequences
+must match: states, verification facts, fixed error messages, results, ISO timestamp shape
+and the `expiresAt - startedAt` window. The install commit stays in TypeScript until M5, so
+the harness appends the unchanged `complete` tail to the Rust `installPending` terminal
+exactly as `AgentSignInJobRunner` does.
+
+The drills: cancel through the control frame and from a second verb call (the journal flag
+plus the group kill), each verified by a second call's `get` and by the fake CLI's recorded
+pid being gone; a SIGKILLed agent (the TS-restart shape) whose journaled job recovers as
+`failed/server_restarted` with the stray CLI killed; the install `settle`; the per-provider
+limit conflict; the restarted placeholder for an unknown id; and the scrub — fake tokens,
+emails and the submitted authorization code must appear in no event or log line.
+
+`cargo test -p aac-agent signin_session` runs the parser, state-machine and journal unit
+tests on every platform (the process-layer and dead-owner recovery tests are Unix-only).
+Synthetic credentials and temporary roots only; no provider is contacted. Not covered:
+a supervised live sign-in per provider (the turn-on gate, decision 7), native Mac execution
+of the harness, and the real provider CLIs' screen variants beyond the fixture shapes.
+
+## Lane E: packaging and per-family turn-on
+
+M3D4 (ship in stages, VM first) and M3D5 (the VM's current key, AAC-pinned known_hosts)
+are answered. The trusted catalog `src/web-server/services/agent-artifacts.json` carries
+one reviewed pin per built target; `scripts/build-agent.js` (`bun run agent:build`) builds
+`aac-agent` on each build computer (Nas1, the Mac, aac-winbuild; never the VM) into
+`crates/aac-agent/prebuilt/<target>/` with a source-hash note, `--copy-only` carries the
+matching targets into `dist/agent/` during `build`, and `--catalog-entry` prints the entry
+the lead reviews and commits. `scripts/verify-bundle.js` checks every shipped agent against
+its manifest and every catalog pin present in the build. Linux builds are glibc until the
+musl target is authorized (F11); the adapter and the service admit both on Linux.
+
+The service still admits only an already installed agent (`AgentClient::existing`); it never
+uploads one. The lead places the binary on each remote computer with `scripts/agent-install.sh`
+(Nas1, Mac) or `scripts/agent-install.ps1` (Windows): source digest check, staged `.part`,
+re-check, atomic rename into `~/.cache/ai-account-center/bin/aac-agent`
+(`%LOCALAPPDATA%\ai-account-center\bin\aac-agent.exe`), then the `--version` handshake for
+that OS. The VM is Local: the packaged `dist/agent` binary runs in place, nothing to install.
+
+`agentVerbs: off|shadow|on` is the ceiling; `agentVerbFamilies` (or `AAC_AGENT_VERB_FAMILIES`,
+JSON) sets one mode per verb under it. An absent map keeps the scalar behavior; a present map
+enables only its listed families; a present but invalid map keeps every family off. The
+read-only families turn on one at a time as their parity suites pass: `signin-expiry`,
+`quota-read`, `failover-inventory`, `t3-pins`, `scan-usage`. `key-store` and `claude-history`
+write on the computer, so their shadow is off (shadow never duplicates a write).
+
+In `shadow`, the reference answer is served as soon as it settles; the agent runs alongside
+and the comparison is logged as `agent.verbs.shadow` (verb, outcome, agentMs, referenceMs;
+never bodies). Outcomes: `equal`, `different`, `fallback` (agent declined), `error` (agent
+attempt failed), `reference-failed`, and `reference-fallback` (a scan whose reference is the
+Python helper, not the scanner). Object key order is the only normalization. Owner decision
+2026-11-19: the 72 h shadow soaks are dropped — a family turns on once its parity suite passes;
+`shadow` stays available as an optional live comparison, not a required gate.
+
+Per-family fixture gates (fixture-enabled Nas1/Mac debug build, unchanged harnesses):
+
+```sh
+cargo build -p aac-agent --features parity-fixtures
+python3 tests/spec/agent/run.py target/debug/aac-agent                 # signin-expiry + inventory
+python3 tests/spec/agent/run.py target/debug/aac-agent --part3         # + t3-pins, keys, history
+python3 tests/spec/agent/run.py target/debug/aac-agent --part3 --part4 # + failover-inventory
+python3 tests/spec/agent/quota.py target/debug/aac-agent               # quota-read
+python3 tests/spec/agent/quota-review.py target/debug/aac-agent
+# scan-usage: build native/aac-usage's scanner, then
+python3 tests/spec/agent/run.py target/debug/aac-agent --scan-bin native/aac-usage/target/debug/aac-usage-scan
+```
+
+`tests/unit/web-server/agent-verb-families.test.ts` covers the family map, the ceiling cap,
+invalid-map safety, the write-verb shadow refusal, glibc admission, and the shadow
+comparison outcomes at the collector and scan boundaries with fake closures only.
+
+Limits unchanged: no native Mac/Windows execution is proven by the Linux fixture runs; the
+Mac and Windows catalog entries land only after their own builds and native checks; the
+install scripts are lead-run, and no live computer is touched by this lane.

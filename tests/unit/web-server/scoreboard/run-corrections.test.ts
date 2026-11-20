@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import fixture from '../../../fixtures/run-corrections.json';
 import { ReadersCheckWriter } from '../../../../src/web-server/status/readers-check';
-import { ScoreboardService } from '../../../../src/web-server/scoreboard/scoreboard-service';
 import { RunsReader } from '../../../../src/web-server/scoreboard/runs-reader';
 import { CatalogReader, seedCatalog } from '../../../../src/web-server/scoreboard/catalog';
 import { buildScoreboardView } from '../../../../src/web-server/scoreboard/scoreboard-view';
@@ -119,38 +118,6 @@ it('uses real timestamp instants for conflicts and a stable id tie-break', async
   await reader.scan();
   expect(reader.snapshot().runs.map((r) => r.doc.id)).toEqual(['vm.corrections--newer-z']);
   expect(reader.snapshot().problems.filter((p) => p.reason.includes('conflict'))).toHaveLength(2);
-});
-
-it('acknowledges voids and superseded records while refusing invalid corrections', async () => {
-  const { root } = await read();
-  const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
-  const service = new ScoreboardService({
-    root: () => root,
-    now: () => NOW,
-    timeZone: () => 'UTC',
-    native: null,
-    store: () => null,
-    readersCheck: check,
-  });
-  // Publish once after composition; do not race the service's courtesy flush.
-  const queued = spyOn(check, 'flushSoon').mockImplementation(() => undefined);
-  try {
-    await service.view();
-  } finally {
-    queued.mockRestore();
-  }
-  await check.flush();
-  const receipt = JSON.parse(
-    fs.readFileSync(path.join(root, 'v1/readers/aac/vm.corrections.json'), 'utf8')
-  );
-  for (const id of ['review', 'duplicate', 'void'])
-    expect(
-      receipt.files.find((f: { file: string }) => f.file.endsWith(`--${id}.json`))?.result
-    ).toBe('accepted');
-  for (const id of ['missing', 'foreign', 'cycle-a', 'cycle-b', 'fork-early'])
-    expect(
-      receipt.files.find((f: { file: string }) => f.file.endsWith(`--${id}.json`))?.result
-    ).toBe('refused');
 });
 
 it("keeps the reviewer's nanosecond-newer correction and credits Sol, never Opus", async () => {

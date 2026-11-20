@@ -1,4 +1,10 @@
 import os from 'os';
+import { RENEWAL_EFFECTS, type DispatchLiveRenewal } from '../../antigravity/live-login-renewal';
+import { runLifecycleEffects } from './lifecycle-effect-pipe';
+import { agentTransport, agentVerbs } from './agent-verbs';
+import { nativeSignInSession, readMuseLoginThroughAgent } from './lifecycle-signin-session';
+import { activeFileWriterBinary } from '../../shared/private-file-lease';
+import { startLifecycleMaintenance, type MaintenanceStep } from './account-maintenance';
 import { getCcsDir } from '../../utils/config-manager';
 import { AntigravityAccountLifecycle } from '../../antigravity/account-lifecycle';
 import {
@@ -8,7 +14,8 @@ import {
 } from '../../antigravity/signin-sandbox';
 import { sweepAntigravitySignInMarkers } from '../../antigravity/signin-marker';
 import { createLogger } from '../../services/logging';
-import { broadcastDashboardEvent, type DashboardEventClient } from '../dashboard-events';
+import { broadcastDashboardEvent } from '../dashboard-events';
+export { redactSignInJob, signInJobEvent } from '../dashboard-events';
 import { sweepOrphanKeys } from './account-key-sweep';
 import { ClaudeAccountLifecycle } from './claude-account-lifecycle';
 import { SshClaudeHostTransport } from './claude-host-transport';
@@ -17,6 +24,7 @@ import { MuseAccountLifecycle, museSignInEnabled } from './muse-account-lifecycl
 import type { ProviderRegistryFacts } from './dashboard-provider-registry';
 import type { DashboardSignInUnavailableReason } from './account-dashboard-types';
 import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './signin-jobs';
+import { AgentSignInJobRunner } from './signin-session-agent';
 
 /**
  * The lifecycle runtime: one sign-in job runner, the Codex and Claude flows,
@@ -48,29 +56,8 @@ export function claudeHostLifecycleEnabled(
 ): boolean {
   return CLAUDE_HOST_LIFECYCLE_ENABLED || environment.CCS_CLAUDE_HOST_LIFECYCLE === 'on';
 }
-const DAY_MS = 24 * 60 * 60_000;
 
 const logger = createLogger('account-lifecycle');
-
-/** A job as a client on a plain transport sees it: no verification URL or code, no email. */
-export function redactSignInJob<
-  T extends { verification: unknown; result: null | { email: string | null } },
->(job: T): T {
-  return { ...job, verification: null, result: job.result ? { ...job.result, email: null } : null };
-}
-
-/**
- * The /ws copy of a job for one client (contract 6.6): browser sessions only,
- * never a device token or an unknown client; redacted unless the socket
- * connected over a secure transport.
- */
-export function signInJobEvent(
-  job: SignInJob,
-  client: DashboardEventClient
-): { type: 'signin-job'; job: SignInJob } | null {
-  if (client.authKind !== 'session') return null;
-  return { type: 'signin-job', job: client.secure ? job : redactSignInJob(job) };
-}
 
 export function auditLifecycle(event: string, data: Record<string, unknown>): void {
   try {
@@ -106,14 +93,35 @@ let claude: ClaudeAccountLifecycle | null = null;
 let antigravity: AntigravityAccountLifecycle | null = null;
 let muse: MuseAccountLifecycle | null = null;
 
+function nativeLifecycleAgentEnabled(root: string): boolean {
+  return (
+    activeFileWriterBinary(root) !== undefined && agentTransport() === 'on' && agentVerbs() === 'on'
+  );
+}
+
 /** A runner wired like the server's: the /ws push, the audit line and the accounts-changed hint. */
 export function createSignInJobRunner(
   deps: Omit<SignInJobRunnerDeps, 'onChange' | 'onFinish'> = {}
 ): SignInJobRunner {
-  return new SignInJobRunner({
+  return new AgentSignInJobRunner({
+    nativeSession: (flow) => {
+      const root = getCcsDir();
+      return nativeSignInSession(
+        root,
+        ((flow.provider === 'codex' && flow.kind === 'device-code' && flow.platform === 'ubuntu') ||
+          (flow.provider === 'antigravity' &&
+            flow.kind === 'supervised-cli' &&
+            flow.platform === 'ubuntu') ||
+          (flow.provider === 'muse' &&
+            flow.kind === 'device-code' &&
+            flow.platform === 'mac' &&
+            flow.mode === 'signin-again')) &&
+          nativeLifecycleAgentEnabled(root)
+      );
+    },
     ...deps,
     onChange: (job: SignInJob) => {
-      broadcastDashboardEvent((client) => signInJobEvent(job, client));
+      broadcastDashboardEvent({ type: 'signin-job', job });
     },
     onFinish: (job) => {
       // Values never; the account is named by provider and mode only.
@@ -147,13 +155,28 @@ export function getClaudeLifecycle(): ClaudeAccountLifecycle {
   return claude;
 }
 
+export function antigravityRenewalDispatch(ccs: () => string): DispatchLiveRenewal {
+  return (perform, fallback) =>
+    runLifecycleEffects(ccs(), ['--antigravity-renew-login'], RENEWAL_EFFECTS, perform, fallback);
+}
+
 export function getAntigravityLifecycle(): AntigravityAccountLifecycle {
-  antigravity ??= new AntigravityAccountLifecycle({ ccsDir: getCcsDir, home: os.homedir });
+  antigravity ??= new AntigravityAccountLifecycle({
+    ccsDir: getCcsDir,
+    home: os.homedir,
+    dispatchLiveRenewal: antigravityRenewalDispatch(getCcsDir),
+  });
   return antigravity;
 }
 
 export function getMuseLifecycle(): MuseAccountLifecycle {
-  muse ??= new MuseAccountLifecycle({ enabled: museSignInEnabled() });
+  muse ??= new MuseAccountLifecycle({
+    enabled: museSignInEnabled(),
+    identity: (host, homeId) => {
+      const root = getCcsDir();
+      return readMuseLoginThroughAgent(root, host, homeId, nativeLifecycleAgentEnabled(root));
+    },
+  });
   return muse;
 }
 
@@ -235,51 +258,58 @@ export function lifecycleProviderFacts(
   };
 }
 
-let maintenance: ReturnType<typeof setInterval> | null = null;
+let maintenance: ReturnType<typeof startLifecycleMaintenance> | null = null;
 
-async function runMaintenance(): Promise<void> {
-  try {
-    await getCodexLifecycle().sweepStaging();
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    const count = await sweepOrphanKeys(getCcsDir());
-    if (count > 0) auditLifecycle('accounts.keys.swept', { count });
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    sweepSignInStaging(getCcsDir());
-    sweepAntigravitySignInMarkers(getCcsDir());
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    const swept = await getAntigravityLifecycle().sweepOrphans();
-    if (swept.removed > 0 || swept.leftInPlace > 0)
-      auditLifecycle('accounts.antigravity.orphans.swept', swept);
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    const count = await getClaudeLifecycle().purgeDue();
-    if (count > 0) auditLifecycle('accounts.trash.purge', { count });
-  } catch {
-    /* Retried at the next sweep. */
+async function runMaintenanceStep(step: MaintenanceStep): Promise<void> {
+  const root = getCcsDir();
+  switch (step) {
+    case 'codex-staging':
+      await getCodexLifecycle().sweepStaging();
+      return;
+    case 'orphan-keys': {
+      const count = await sweepOrphanKeys(root);
+      if (count > 0) auditLifecycle('accounts.keys.swept', { count });
+      return;
+    }
+    case 'antigravity-staging':
+      sweepSignInStaging(root);
+      sweepAntigravitySignInMarkers(root);
+      return;
+    case 'antigravity-orphans': {
+      const swept = await getAntigravityLifecycle().sweepOrphans();
+      if (swept.removed > 0 || swept.leftInPlace > 0)
+        auditLifecycle('accounts.antigravity.orphans.swept', swept);
+      return;
+    }
+    case 'claude-trash': {
+      const count = await getClaudeLifecycle().purgeDue();
+      if (count > 0) auditLifecycle('accounts.trash.purge', { count });
+    }
   }
 }
 
-/** At startup and once a day. */
-export function startAccountLifecycleMaintenance(): void {
+/** At startup and once a day. On waits for the guarded writer handoff. */
+export function startAccountLifecycleMaintenance(writerReady?: Promise<void>): void {
   if (maintenance) return;
-  void runMaintenance();
-  maintenance = setInterval(() => void runMaintenance(), DAY_MS);
-  maintenance.unref?.();
+  let stopped = false;
+  let active: ReturnType<typeof startLifecycleMaintenance> | null = null;
+  const start = () => {
+    if (!stopped)
+      active = startLifecycleMaintenance(runMaintenanceStep, activeFileWriterBinary(getCcsDir()));
+  };
+  maintenance = {
+    stop: () => {
+      stopped = true;
+      active?.stop();
+    },
+    native: () => active?.native() ?? false,
+  };
+  if (writerReady) void writerReady.then(start, start);
+  else start();
 }
 
 export function stopAccountLifecycleMaintenance(): void {
-  if (maintenance) clearInterval(maintenance);
+  maintenance?.stop();
   maintenance = null;
   runner?.shutdown();
 }

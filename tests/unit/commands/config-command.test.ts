@@ -210,10 +210,12 @@ describe('account dashboard startup', () => {
     expect(rendered).toContain(
       'Dashboard may be reachable from other devices that can connect to this machine.'
     );
-    expect(rendered).toContain('Protect it before sharing: ai-account-center dashboard auth setup');
+    expect(rendered).toContain(
+      "Protect it before sharing: set a sign-in in the dashboard's Settings page"
+    );
   });
 
-  it('does not suggest auth setup when exposed dashboard authentication is enabled', async () => {
+  it('does not suggest a sign-in when exposed dashboard authentication is enabled', async () => {
     mockServerBindHost = '0.0.0.0';
     dashboardAuthEnabled = true;
     await handleConfigCommand(['--host', '0.0.0.0'], createTestDeps());

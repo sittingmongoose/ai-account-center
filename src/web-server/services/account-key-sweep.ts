@@ -19,7 +19,7 @@ export async function sweepOrphanKeys(
 ): Promise<number> {
   let removed = 0;
   for (const provider of KEY_PROVIDERS) {
-    removed += await serialized(keyQueue(provider), async () => {
+    removed += await serialized(ccsDir, keyQueue(provider), async () => {
       let named: Set<string>;
       try {
         const { mode, entries } = await readAdditionalEntries(ccsDir);
@@ -34,9 +34,13 @@ export async function sweepOrphanKeys(
       } catch {
         return 0;
       }
+      const native = await store.sweepOrphans(provider, named, now).catch(() => 0);
+      if (native !== undefined) return native;
+      const files = await store.keyFiles(provider);
+      const checkedAt = now();
       let count = 0;
-      for (const file of await store.keyFiles(provider)) {
-        if (named.has(file.keyId) || now() - file.modifiedAt < ORPHAN_KEY_AGE_MS) continue;
+      for (const file of files) {
+        if (named.has(file.keyId) || checkedAt - file.modifiedAt < ORPHAN_KEY_AGE_MS) continue;
         try {
           await store.delete(provider, file.keyId);
           count += 1;

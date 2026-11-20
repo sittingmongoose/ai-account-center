@@ -3,14 +3,14 @@ use aac_config::{Config, LoadOptions, OperatingSystem, TransportConfig};
 use aac_core::{Cause, Failure};
 use aac_protocol::{Control, Event, Handshake, PROTOCOL_VERSION, Request, frame_cap};
 use aac_transport::{
-    AgentArtifact, AgentClient, CallOptions, CancellationToken, Computer, SshPolicy,
+    AgentArtifact, AgentClient, CallOptions, CancellationToken, Computer, ProcessOutput, SshPolicy,
 };
 use axum::{
     Json,
     body::{Body, Bytes},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use std::{
     collections::BTreeMap,
@@ -36,29 +36,49 @@ struct Artifact {
     sha256: String,
     file: PathBuf,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Selector {
-    platform: String,
-    ssh_host: Option<String>,
+pub(crate) struct Selector {
+    pub(crate) platform: String,
+    pub(crate) ssh_host: Option<String>,
+}
+impl Selector {
+    pub(crate) fn usage(platform: &str, alias: Option<&str>) -> Self {
+        Self {
+            platform: platform.into(),
+            ssh_host: alias.map(str::to_owned),
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Call {
-    computer: Selector,
-    args: Box<RawValue>,
-    deadline_ms: u64,
-    timeout_ms: u64,
-    max_bytes: usize,
-    call_id: String,
+pub(crate) struct Call {
+    pub(crate) computer: Selector,
+    pub(crate) args: Box<RawValue>,
+    pub(crate) deadline_ms: u64,
+    pub(crate) timeout_ms: u64,
+    pub(crate) max_bytes: usize,
+    pub(crate) call_id: String,
 }
 struct Entry {
     config: aac_config::ComputerConfig,
-    client: Option<AgentClient>,
+    computer: Option<Computer>,
 }
+pub(crate) struct UsageHost {
+    pub(crate) id: String,
+    pub(crate) platform: &'static str,
+    pub(crate) alias: Option<String>,
+    pub(crate) agent_available: bool,
+    pub(crate) fixed_ssh_available: bool,
+}
+
 struct Registry {
     entries: Vec<Entry>,
+    package: PathBuf,
+    agent_enabled: bool,
 }
+
+type AgentClients = Vec<Option<AgentClient>>;
 struct Active {
     input: mpsc::Sender<Vec<u8>>,
     done: watch::Receiver<Option<bool>>,
@@ -67,14 +87,16 @@ struct Active {
 
 pub(crate) struct Agents {
     root: PathBuf,
+    enabled_by_default: bool,
     registry: watch::Sender<Option<Arc<Result<Registry, Failure>>>>,
+    clients: watch::Sender<Option<Arc<Result<AgentClients, Failure>>>>,
     loading: AtomicBool,
     slots: Arc<Semaphore>,
     active: Mutex<BTreeMap<String, Active>>,
 }
 
 /// The service's deadline is this much earlier than the caller's `timeoutMs`.
-const FRONT_DOOR_MARGIN_MS: u64 = 250;
+pub(crate) const FRONT_DOOR_MARGIN_MS: u64 = 250;
 
 fn refused() -> Failure {
     Failure::new(Cause::Refused, "agent transport unavailable")
@@ -96,15 +118,22 @@ fn word(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
 }
-fn line(value: &Value) -> Bytes {
+
+/// A random correlation id for an in-process orchestrator call (hex, as the front door's).
+fn random_call_id() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+pub(crate) fn line(value: &Value) -> Bytes {
     let mut bytes = value.to_string().into_bytes();
     bytes.push(b'\n');
     bytes.into()
 }
-fn fallback(id: &str, reason: &str) -> Bytes {
+pub(crate) fn fallback(id: &str, reason: &str) -> Bytes {
     line(&json!({"type":"fallback","protocol":1,"id":id,"fallback":"python","reason":reason}))
 }
-fn response(body: Body) -> Response {
+pub(crate) fn response(body: Body) -> Response {
     (
         [
             ("content-type", "application/x-ndjson"),
@@ -118,38 +147,39 @@ fn unavailable(id: &str, reason: &str) -> Response {
     response(Body::from(fallback(id, reason)))
 }
 
+/// Resolve the installed package from the trusted boot override or the packaged binary.
+pub(crate) fn package_root() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("AAC_AGENT_PACKAGE_ROOT") {
+        let root = PathBuf::from(root);
+        return root.is_absolute().then_some(root);
+    }
+    let exe = std::env::current_exe().ok()?;
+    let native = exe.parent()?;
+    let dist = native.parent()?;
+    if native.file_name()? != "native" || dist.file_name()? != "dist" {
+        return None;
+    }
+    Some(dist.parent()?.to_owned())
+}
+
 impl Registry {
-    fn load(root: &Path) -> Result<Self, Failure> {
-        // No real-home discovery. The package paths are supplied by the trusted front door.
-        if std::env::var("AAC_AGENT_TRANSPORT").is_ok_and(|v| v != "on") {
-            return Err(refused());
-        }
-        let package =
-            PathBuf::from(std::env::var_os("AAC_AGENT_PACKAGE_ROOT").ok_or_else(refused)?);
-        if !package.is_absolute() {
-            return Err(refused());
-        }
+    fn load(root: &Path, enabled_by_default: bool) -> Result<Self, Failure> {
+        // Fixed commands and agent calls share the same admitted computer and SSH pool.
+        let package = package_root().ok_or_else(refused)?;
         let mut options = LoadOptions::new(
             root.into(),
             package.join("web-dashboard/public/computers.json"),
         );
         options.cli = json!({"config_dir":root});
         let config = Config::load(&options)?;
-        let enabled = std::env::var("AAC_AGENT_TRANSPORT")
-            .ok()
-            .map_or_else(|| config.values()["agentTransport"] == "on", |v| v == "on");
-        if !enabled {
-            return Err(refused());
-        }
-        let catalog_path = std::env::var_os("AAC_AGENT_CATALOG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| package.join("config/agent-artifacts.json"));
-        let catalog: Catalog =
-            serde_json::from_slice(&aac_files::read_bounded(&catalog_path, 65536)?)
-                .map_err(|_| refused())?;
-        if catalog.artifacts.len() > 16 {
-            return Err(refused());
-        }
+        let enabled = std::env::var("AAC_AGENT_TRANSPORT").ok().map_or_else(
+            || match config.values()["agentTransport"].as_str() {
+                Some("on") => true,
+                Some("off") => false,
+                _ => enabled_by_default,
+            },
+            |v| v == "on",
+        );
         let settings = &config.values()["agentTransportSsh"];
         let identity = std::env::var_os("AAC_AGENT_IDENTITY_FILE")
             .map(PathBuf::from)
@@ -170,89 +200,140 @@ impl Registry {
                 }
                 admitted = key.is_absolute() && hosts.as_ref().is_some_and(|p| p.is_absolute());
             }
-            let client = if admitted {
+            let computer = if admitted {
                 let policy = SshPolicy::new(
                     hosts.clone().unwrap_or_default(),
                     root.join("run/agent-ssh"),
                 );
-                let artifact = catalog
-                    .artifacts
-                    .iter()
-                    .find(|a| compatible_target(definition.os, &a.target));
-                artifact
-                    .and_then(|a| {
-                        let path = package.join(&a.file);
-                        AgentArtifact::load(
-                            path,
-                            a.sha256.clone(),
-                            Handshake {
-                                name: "aac-agent".into(),
-                                version: a.version.clone(),
-                                protocol: PROTOCOL_VERSION,
-                                target: a.target.clone(),
-                            },
-                        )
-                        .ok()
-                    })
-                    .and_then(|artifact| {
-                        Computer::new(definition.clone(), policy)
-                            .ok()
-                            .map(|c| AgentClient::existing(c, artifact))
-                    })
+                Computer::new(definition.clone(), policy).ok()
             } else {
                 None
             };
-            // Missing trust configuration disables this computer, never another computer.
             entries.push(Entry {
                 config: definition,
-                client,
+                computer,
             });
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            package,
+            agent_enabled: enabled,
+        })
     }
-    fn client(&self, selector: &Selector) -> Option<AgentClient> {
+
+    fn load_clients(&self) -> Result<AgentClients, Failure> {
+        if !self.agent_enabled {
+            return Err(refused());
+        }
+        let catalog_path = std::env::var_os("AAC_AGENT_CATALOG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.package.join("config/agent-artifacts.json"));
+        let catalog: Catalog =
+            serde_json::from_slice(&aac_files::read_bounded(&catalog_path, 65536)?)
+                .map_err(|_| refused())?;
+        if catalog.artifacts.len() > 16 {
+            return Err(refused());
+        }
+        Ok(self
+            .entries
+            .iter()
+            .map(|entry| {
+                let computer = entry.computer.clone()?;
+                let artifact = catalog
+                    .artifacts
+                    .iter()
+                    .find(|artifact| compatible_target(entry.config.os, &artifact.target))?;
+                let artifact = AgentArtifact::load(
+                    self.package.join(&artifact.file),
+                    artifact.sha256.clone(),
+                    Handshake {
+                        name: "aac-agent".into(),
+                        version: artifact.version.clone(),
+                        protocol: PROTOCOL_VERSION,
+                        target: artifact.target.clone(),
+                    },
+                )
+                .ok()?;
+                Some(AgentClient::existing(computer, artifact))
+            })
+            .collect())
+    }
+
+    fn selected(&self, selector: &Selector) -> Option<usize> {
         let os = match selector.platform.as_str() {
             "linux" | "ubuntu" => OperatingSystem::Linux,
             "mac" => OperatingSystem::Mac,
             "windows" => OperatingSystem::Windows,
             _ => return None,
         };
-        let found = self
-            .entries
-            .iter()
-            .filter(|e| {
-                e.config.os == os
-                    && match &selector.ssh_host {
-                        Some(alias) => {
-                            matches!(e.config.transport, TransportConfig::Ssh { .. })
-                                && (e.config.id.as_str() == alias
-                                    || e.config.metadata.get("sshAlias").and_then(Value::as_str)
-                                        == Some(alias))
-                        }
-                        None => matches!(e.config.transport, TransportConfig::Local),
+        let mut matches = self.entries.iter().enumerate().filter(|(_, entry)| {
+            entry.config.os == os
+                && match &selector.ssh_host {
+                    Some(alias) => {
+                        matches!(entry.config.transport, TransportConfig::Ssh { .. })
+                            && (entry.config.id.as_str() == alias
+                                || entry
+                                    .config
+                                    .metadata
+                                    .get("sshAlias")
+                                    .and_then(Value::as_str)
+                                    == Some(alias))
                     }
+                    None => matches!(entry.config.transport, TransportConfig::Local),
+                }
+        });
+        let (index, _) = matches.next()?;
+        matches.next().is_none().then_some(index)
+    }
+
+    fn usage_hosts(&self, clients: Option<&AgentClients>) -> Vec<UsageHost> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let platform = match entry.config.os {
+                    OperatingSystem::Linux => "ubuntu",
+                    OperatingSystem::Mac => "mac",
+                    OperatingSystem::Windows => "windows",
+                };
+                let remote = matches!(entry.config.transport, TransportConfig::Ssh { .. });
+                UsageHost {
+                    id: entry.config.id.as_str().to_owned(),
+                    platform,
+                    alias: remote.then(|| entry.config.id.as_str().to_owned()),
+                    agent_available: clients
+                        .and_then(|clients| clients.get(index))
+                        .is_some_and(Option::is_some),
+                    fixed_ssh_available: remote && entry.computer.is_some(),
+                }
             })
-            .collect::<Vec<_>>();
-        if found.len() != 1 {
-            return None;
-        }
-        found[0].client.clone()
+            .collect()
     }
 }
 
-impl Agents {
-    pub(crate) fn new(root: PathBuf) -> Self {
-        Self {
-            root,
-            registry: watch::channel(None).0,
-            loading: AtomicBool::new(false),
-            slots: Arc::new(Semaphore::new(16)),
-            active: Mutex::new(BTreeMap::new()),
+/// Wait for one boot initialization result without extending the caller's deadline.
+async fn loaded<T>(
+    mut receiver: watch::Receiver<Option<Arc<T>>>,
+    deadline: tokio::time::Instant,
+) -> Option<Arc<T>> {
+    tokio::time::timeout_at(deadline, async {
+        loop {
+            if let Some(value) = receiver.borrow_and_update().clone() {
+                return Some(value);
+            }
+            if receiver.changed().await.is_err() {
+                return None;
+            }
         }
-    }
-    pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
-        let started = tokio::time::Instant::now();
-        let Ok(call) = crate::json_object::from_slice::<Call>(
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+impl Call {
+    pub(crate) fn parse(bytes: &[u8]) -> Option<Self> {
+        crate::json_object::from_slice::<Call>(
             bytes,
             &[
                 "computer",
@@ -262,13 +343,37 @@ impl Agents {
                 "maxBytes",
                 "callId",
             ],
-        ) else {
-            return unavailable("", "shape");
-        };
-        if !word(&call.call_id)
-            || ![
+        )
+        .ok()
+    }
+
+    pub(crate) fn valid(&self, verb: &str) -> bool {
+        [
+            "health",
+            "cursor-open",
+            "muse-login-identity",
+            "inventory",
+            "signin-expiry",
+            "quota-read",
+            "scan-usage",
+            "t3-pins",
+            "key-store",
+            "claude-history",
+            "failover-inventory",
+            "signin-session",
+        ]
+        .contains(&verb)
+            && self.bounded(verb)
+    }
+
+    pub(crate) fn bounded(&self, verb: &str) -> bool {
+        word(&self.call_id)
+            && [
                 "health",
+                "cursor-open",
+                "muse-login-identity",
                 "inventory",
+                "apps",
                 "signin-expiry",
                 "quota-read",
                 "scan-usage",
@@ -276,16 +381,237 @@ impl Agents {
                 "key-store",
                 "claude-history",
                 "failover-inventory",
+                "failover-collect",
+                "launch",
+                "claude-host",
+                "signin-session",
             ]
             .contains(&verb)
-            || call.deadline_ms == 0
-            || call.deadline_ms > aac_protocol::MAX_DEADLINE_MS
-            || call.timeout_ms == 0
-            || call.timeout_ms > call.deadline_ms + 5000
-            || call.max_bytes == 0
-            || call.max_bytes > frame_cap(verb) * 2
-            || !call.args.get().trim_start().starts_with('{')
-        {
+            && self.deadline_ms != 0
+            && self.deadline_ms
+                <= if verb == "apps" {
+                    aac_protocol::APP_UPDATE_DEADLINE_MS
+                } else {
+                    aac_protocol::max_deadline_ms(verb)
+                }
+            && self.timeout_ms != 0
+            && self.timeout_ms <= self.deadline_ms + 5000
+            && self.max_bytes != 0
+            && self.max_bytes <= frame_cap(verb) * 2
+            && self.args.get().trim_start().starts_with('{')
+    }
+
+    pub(crate) fn wire(&self, verb: &str) -> String {
+        format!(
+            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{}\",\"deadlineMs\":{},\"args\":{}}}",
+            self.call_id,
+            self.deadline_ms,
+            self.args.get()
+        )
+    }
+}
+
+impl Agents {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.slots.clone().try_acquire_owned().ok()
+    }
+
+    pub(crate) fn new(root: PathBuf) -> Self {
+        Self::with_default(root, false)
+    }
+
+    pub(crate) fn with_default(root: PathBuf, enabled_by_default: bool) -> Self {
+        Self {
+            root,
+            enabled_by_default,
+            registry: watch::channel(None).0,
+            clients: watch::channel(None).0,
+            loading: AtomicBool::new(false),
+            slots: Arc::new(Semaphore::new(16)),
+            active: Mutex::new(BTreeMap::new()),
+        }
+    }
+    async fn registered(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Option<Arc<Result<Registry, Failure>>> {
+        if !self.loading.swap(true, Ordering::AcqRel) {
+            let root = self.root.clone();
+            let enabled_by_default = self.enabled_by_default;
+            let ready = self.registry.clone();
+            let client_ready = self.clients.clone();
+            tokio::spawn(async move {
+                let registry =
+                    tokio::task::spawn_blocking(move || Registry::load(&root, enabled_by_default))
+                        .await
+                        .unwrap_or_else(|_| Err(refused()));
+                let registry = Arc::new(registry);
+                // Publish fixed command access before any artifact checks. Both phases settle
+                // once per boot even if the first request expires.
+                ready.send_replace(Some(registry.clone()));
+                let clients = tokio::task::spawn_blocking(move || match registry.as_ref() {
+                    Ok(registry) => registry.load_clients(),
+                    Err(_) => Err(refused()),
+                })
+                .await
+                .unwrap_or_else(|_| Err(refused()));
+                client_ready.send_replace(Some(Arc::new(clients)));
+            });
+        }
+        loaded(self.registry.subscribe(), deadline).await
+    }
+
+    pub(crate) async fn computer(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Option<Computer> {
+        let registered = self.registered(deadline).await?;
+        let registry = registered.as_ref().as_ref().ok()?;
+        registry
+            .entries
+            .get(registry.selected(selector)?)?
+            .computer
+            .clone()
+    }
+
+    async fn checked_client(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Result<AgentClient, Failure> {
+        let timeout = || Failure::new(Cause::Timeout, "agent discovery deadline exceeded");
+        let missing = || {
+            Failure::new(
+                Cause::AgentMissing,
+                "no usable pinned agent for this computer",
+            )
+        };
+        let registered = self.registered(deadline).await.ok_or_else(timeout)?;
+        let registry = registered.as_ref().as_ref().map_err(|_| missing())?;
+        let index = registry.selected(selector).ok_or_else(missing)?;
+        let clients = loaded(self.clients.subscribe(), deadline)
+            .await
+            .ok_or_else(timeout)?;
+        clients
+            .as_ref()
+            .as_ref()
+            .ok()
+            .and_then(|clients| clients.get(index))
+            .and_then(Clone::clone)
+            .ok_or_else(missing)
+    }
+
+    pub(crate) async fn client(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Option<AgentClient> {
+        self.checked_client(selector, deadline).await.ok()
+    }
+
+    pub(crate) async fn usage_hosts(&self) -> Vec<UsageHost> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let Some(registered) = self.registered(deadline).await else {
+            return Vec::new();
+        };
+        let Ok(registry) = registered.as_ref() else {
+            return Vec::new();
+        };
+        let clients = loaded(self.clients.subscribe(), deadline).await;
+        registry.usage_hosts(clients.as_deref().and_then(|clients| clients.as_ref().ok()))
+    }
+
+    pub(crate) async fn app_call(
+        &self,
+        selector: Selector,
+        id: String,
+        args: Value,
+        mut options: CallOptions,
+        controls: mpsc::Receiver<Vec<u8>>,
+        progress: mpsc::Sender<Event>,
+    ) -> Result<Vec<Event>, Failure> {
+        let deadline = options.deadline;
+        let _permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Failure::new(Cause::Busy, "agent transport saturated"))?;
+        let client = tokio::select! {
+            biased;
+            _ = options.cancel.cancelled() => return Err(Failure::new(Cause::Cancelled, "app call cancelled before dispatch")),
+            ready = self.checked_client(&selector, deadline) => ready?,
+        };
+        let deadline_ms = aac_protocol::deadline_cap("apps", &args).min(
+            u64::try_from(
+                deadline
+                    .saturating_duration_since(tokio::time::Instant::now())
+                    .as_millis(),
+            )
+            .unwrap_or(0),
+        );
+        let request = Request {
+            protocol: PROTOCOL_VERSION,
+            verb: "apps".into(),
+            id,
+            deadline_ms,
+            args,
+        };
+        if selector.ssh_host.is_none() {
+            options.local_app_update_state_dir = Some(self.root.join("app-updates"));
+        }
+        let wire = serde_json::to_vec(&request).map_err(|_| refused())?;
+        client
+            .call_controlled_encoded(&request, &wire, &options, controls, progress)
+            .await
+    }
+
+    pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
+        self.call_inner(verb, bytes, false).await
+    }
+
+    async fn call_inner(
+        self: &Arc<Self>,
+        verb: &str,
+        bytes: &[u8],
+        internal_host: bool,
+    ) -> Response {
+        let started = tokio::time::Instant::now();
+        #[allow(unused_mut)]
+        let Some(mut call) = Call::parse(bytes) else {
+            return unavailable("", "shape");
+        };
+        #[cfg(unix)]
+        let verb = if verb == "lifecycle-signin" {
+            let Some((deadline, args)) =
+                crate::lifecycle_signin::agent_start(&self.root, call.args.get())
+            else {
+                return unavailable(&call.call_id, "shape");
+            };
+            if args["jobId"].as_str() != Some(&call.call_id) {
+                return unavailable(&call.call_id, "shape");
+            }
+            let Ok(args) = serde_json::value::to_raw_value(&args) else {
+                return unavailable(&call.call_id, "shape");
+            };
+            call.computer = Selector {
+                platform: "ubuntu".into(),
+                ssh_host: None,
+            };
+            call.args = args;
+            call.deadline_ms = deadline;
+            "signin-session"
+        } else {
+            verb
+        };
+        #[cfg(not(unix))]
+        let verb = verb;
+        // Only the in-process host orchestration may use the mutation verb directly.
+        if !(call.valid(verb) || internal_host && verb == "claude-host" && call.bounded(verb)) {
             return unavailable(&call.call_id, "shape");
         }
         // End before the front door's own `timeoutMs` timer, leaving time to reap the owned child
@@ -298,57 +624,27 @@ impl Agents {
         else {
             return unavailable(&call.call_id, "deadline");
         };
-        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+        let Some(permit) = self.permit() else {
             return unavailable(&call.call_id, "busy");
         };
         let deadline = started + Duration::from_millis(budget);
-        let mut loaded = self.registry.subscribe();
-        if !self.loading.swap(true, Ordering::AcqRel) {
-            let root = self.root.clone();
-            let ready = self.registry.clone();
-            tokio::spawn(async move {
-                // Exactly one initialization job per boot, even if its waiting HTTP request
-                // expires. A missing catalog, a known_hosts file added later, and computer or
-                // identity edits stay unavailable until the service restarts (L5 review L5).
-                // A slow mount cannot accumulate abandoned config/hash workers.
-                let result = tokio::task::spawn_blocking(move || Registry::load(&root))
-                    .await
-                    .unwrap_or_else(|_| Err(refused()));
-                ready.send_replace(Some(Arc::new(result)));
-            });
-        }
-        let registry = tokio::time::timeout_at(deadline, async {
-            loop {
-                if let Some(registry) = loaded.borrow_and_update().clone() {
-                    break Some(registry);
-                }
-                if loaded.changed().await.is_err() {
-                    break None;
-                }
-            }
-        })
-        .await
-        .ok()
-        .flatten();
-        let client = registry
-            .as_deref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.client(&call.computer));
+        let client = self.client(&call.computer, deadline).await;
         let Some(client) = client else {
             return unavailable(&call.call_id, "unavailable");
         };
-        let wire = format!(
-            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{}\",\"deadlineMs\":{},\"args\":{}}}",
-            call.call_id,
-            call.deadline_ms,
-            call.args.get()
-        );
+        let wire = call.wire(verb);
         let Ok(request) = serde_json::from_str::<Request>(&wire) else {
             return unavailable(&call.call_id, "shape");
         };
         let mut options = CallOptions::new(Duration::ZERO, call.max_bytes);
         options.deadline = deadline;
         options.scan = verb == "scan-usage";
+        if verb == "apps"
+            && call.computer.ssh_host.is_none()
+            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+        {
+            options.local_app_update_state_dir = Some(self.root.join("app-updates"));
+        }
         let (input, controls) = mpsc::channel(8);
         let (done, finished) = watch::channel(None);
         let (output, receiver) = mpsc::channel(8);
@@ -414,6 +710,19 @@ impl Agents {
                     Some(Event::Result { value, .. }) if value == &json!({"fallback":"python"}) => {
                         fallback(&request.id, "unsupported")
                     }
+                    Some(Event::Failure { failure, .. })
+                        if matches!(
+                            request.verb.as_str(),
+                            "cursor-open"
+                                | "key-store"
+                                | "muse-login-identity"
+                                | "signin-session"
+                                | "claude-host"
+                        ) && failure.cause == Cause::Refused
+                            && failure.detail.as_str() == "unsupported agent verb" =>
+                    {
+                        fallback(&request.id, "unsupported")
+                    }
                     Some(event) => {
                         cancelled = matches!(event,Event::Failure{failure,..} if failure.cause==Cause::Cancelled);
                         line(&serde_json::to_value(event).unwrap_or(Value::Null))
@@ -443,6 +752,152 @@ impl Agents {
             },
         );
         response(Body::from_stream(stream))
+    }
+
+    /// In-process verb call for the Open orchestrator: the terminal result value, or None
+    /// when the agent falls back, fails or cannot be reached. The same admission as `call`,
+    /// without the streaming control channel these verbs do not use.
+    pub(crate) async fn call_value(
+        &self,
+        verb: &str,
+        computer: Selector,
+        args: Value,
+        deadline_ms: u64,
+        timeout_ms: u64,
+        max_bytes: usize,
+    ) -> Option<Value> {
+        if !matches!(
+            verb,
+            "claude-host" | "claude-history" | "signin-session" | "muse-login-identity"
+        ) || deadline_ms == 0
+            || deadline_ms > aac_protocol::MAX_DEADLINE_MS
+            || timeout_ms == 0
+            || timeout_ms > deadline_ms + 5000
+            || max_bytes == 0
+            || max_bytes > frame_cap(verb) * 2
+        {
+            return None;
+        }
+        let budget = timeout_ms
+            .checked_sub(FRONT_DOOR_MARGIN_MS)
+            .filter(|ms| *ms > 0)?;
+        let permit = self.slots.clone().try_acquire_owned().ok()?;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(budget);
+        let client = self.client(&computer, deadline).await?;
+        let call_id = random_call_id()?;
+        let args_text = serde_json::to_string(&args).ok()?;
+        let wire = format!(
+            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":{args_text}}}"
+        );
+        let request = serde_json::from_str::<Request>(&wire).ok()?;
+        let mut options = CallOptions::new(Duration::ZERO, max_bytes);
+        options.deadline = deadline;
+        let events = client.call(&request, &options).await.ok()?;
+        drop(permit);
+        match events.last() {
+            Some(Event::Result { value, .. }) if *value != json!({"fallback":"python"}) => {
+                Some(value.clone())
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) async fn interactive_command(
+        &self,
+        selector: &Selector,
+        argv: &[std::ffi::OsString],
+    ) -> Option<aac_transport::InteractiveCommand> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let computer = self.computer(selector, deadline).await?;
+        tokio::time::timeout_at(deadline, computer.interactive_command(argv, deadline))
+            .await
+            .ok()?
+            .ok()
+    }
+
+    /// One fixed reference command over the identical SSH policy, without the agent: the
+    /// Open orchestrator's fallback when no verb proves a step. The cause distinguishes a
+    /// deadline kill from any other transport failure.
+    pub(crate) async fn reference(
+        &self,
+        computer: Selector,
+        argv: Vec<std::ffi::OsString>,
+        stdin: Vec<u8>,
+        timeout_ms: u64,
+        max_bytes: usize,
+    ) -> Result<ProcessOutput, Cause> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let handle = self
+            .computer(&computer, deadline)
+            .await
+            .ok_or(Cause::Refused)?;
+        let permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Cause::Refused)?;
+        let mut options = CallOptions::new(
+            Duration::from_millis(timeout_ms),
+            max_bytes.saturating_add(65536),
+        );
+        options.deadline = deadline;
+        let result = handle.execute(&argv, &stdin, &options).await;
+        drop(permit);
+        result.map_err(|failure| failure.cause)
+    }
+
+    /// G14: an in-process `scan-usage` call for the activity scheduler. Returns the scanner's
+    /// answer value (the v2 response) or a named error. Unlike [`Self::call`], it collects the
+    /// terminal frame instead of streaming NDJSON to the front door: the scheduler owns the
+    /// cadence and reads the rows itself, so no front-door control channel is registered.
+    pub(crate) async fn scan_usage(
+        self: &Arc<Self>,
+        platform: &str,
+        ssh_host: Option<&str>,
+        args: &Value,
+        deadline_ms: u64,
+        max_bytes: usize,
+        call_id: &str,
+    ) -> Result<Value, Cause> {
+        let selector = Selector::usage(platform, ssh_host);
+        let started = tokio::time::Instant::now();
+        let budget = deadline_ms
+            .checked_sub(FRONT_DOOR_MARGIN_MS)
+            .filter(|ms| *ms > 0)
+            .ok_or(Cause::Timeout)?;
+        let permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Cause::Busy)?;
+        let deadline = started + Duration::from_millis(budget);
+        let client = self
+            .checked_client(&selector, deadline)
+            .await
+            .map_err(|failure| failure.cause)?;
+        let args_text = serde_json::to_string(args).map_err(|_| Cause::Refused)?;
+        let wire = format!(
+            "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":{args_text}}}"
+        );
+        let request = serde_json::from_str::<Request>(&wire).map_err(|_| Cause::Refused)?;
+        let mut options = CallOptions::new(Duration::ZERO, max_bytes);
+        options.deadline = deadline;
+        options.scan = true;
+        let (_input, controls) = mpsc::channel(8);
+        let (progress, _events) = mpsc::channel(4);
+        let _permit = permit;
+        let events = client
+            .call_controlled_encoded(&request, wire.as_bytes(), &options, controls, progress)
+            .await
+            .map_err(|failure| failure.cause)?;
+        match events.last() {
+            Some(Event::Result { value, .. }) if value != &json!({"fallback":"python"}) => {
+                Ok(value.clone())
+            }
+            Some(Event::Result { .. }) => Err(Cause::AgentMissing),
+            Some(Event::Failure { failure, .. }) => Err(failure.cause),
+            _ => Err(Cause::Damaged),
+        }
     }
 
     pub(crate) async fn control(&self, id: &str, bytes: &[u8]) -> Response {
@@ -482,6 +937,55 @@ impl Agents {
         }
     }
 }
+
+pub(crate) enum MutationReply {
+    Result(Value),
+    NotDispatched,
+    Uncertain,
+}
+
+impl Agents {
+    /// Decide whether the caller can run a reference mutation without repeating an uncertain write.
+    pub(crate) async fn call_mutation(
+        self: &Arc<Self>,
+        verb: &str,
+        computer: &Selector,
+        args: Value,
+        deadline_ms: u64,
+    ) -> MutationReply {
+        let Some(id) = random_call_id() else {
+            return MutationReply::Uncertain;
+        };
+        let call = json!({
+            "computer":computer,"args":args,"deadlineMs":deadline_ms,"timeoutMs":deadline_ms+2000,
+            "maxBytes":4096,"callId":id
+        });
+        let response = self
+            .call_inner(verb, call.to_string().as_bytes(), true)
+            .await;
+        let Ok(bytes) = axum::body::to_bytes(response.into_body(), 4096).await else {
+            return MutationReply::Uncertain;
+        };
+        let Ok(mut frame) = serde_json::from_slice::<Value>(&bytes) else {
+            return MutationReply::Uncertain;
+        };
+        if frame["protocol"] != 1 || frame["id"] != id {
+            return MutationReply::Uncertain;
+        }
+        match frame["type"].as_str() {
+            Some("result") => MutationReply::Result(frame["value"].take()),
+            Some("fallback")
+                if matches!(
+                    frame["reason"].as_str(),
+                    Some("shape" | "unavailable" | "busy" | "unsupported")
+                ) =>
+            {
+                MutationReply::NotDispatched
+            }
+            _ => MutationReply::Uncertain,
+        }
+    }
+}
 /// The agent's control line: the parsed [`Control`], written compactly with one trailing newline.
 /// A body such as `{"cancel":\ntrue}` is valid here and must not be forwarded raw, or the agent
 /// reads `{"cancel":` and ends the call as `invalid agent control` (L5 review L3).
@@ -506,8 +1010,51 @@ impl Drop for AbortOnDrop {
 
 #[cfg(test)]
 mod tests {
-    use super::control_line;
+    use super::{Entry, Registry, control_line};
     use aac_protocol::Control;
+    use serde_json::json;
+
+    #[test]
+    fn analytics_registry_names_computers_even_without_clients() {
+        let entries = [
+            ("ubuntu", "linux"),
+            ("mac", "mac"),
+            ("windows", "windows"),
+            ("alexis", "windows"),
+        ]
+        .into_iter()
+        .map(|(id, os)| Entry {
+            config: serde_json::from_value(json!({
+                "id": id, "label": id, "os": os,
+                "transport": if id == "ubuntu" {
+                    json!({"kind": "local"})
+                } else {
+                    json!({"kind": "ssh", "host": id, "user": null, "port": null, "key": ""})
+                },
+            }))
+            .expect("computer config"),
+            computer: None,
+        })
+        .collect();
+        let registry = Registry {
+            entries,
+            package: Default::default(),
+            agent_enabled: false,
+        };
+        let hosts = registry.usage_hosts(None);
+        assert_eq!(
+            hosts
+                .iter()
+                .map(|host| host.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ubuntu", "mac", "windows", "alexis"]
+        );
+        assert!(
+            hosts
+                .iter()
+                .all(|host| !host.agent_available && !host.fixed_ssh_available)
+        );
+    }
 
     #[test]
     fn a_cancel_with_a_newline_is_one_compact_line() {

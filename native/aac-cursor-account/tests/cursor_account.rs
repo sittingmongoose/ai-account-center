@@ -148,8 +148,11 @@ fn reads_every_page_and_drops_the_copies_a_boundary_repeats() {
     });
     let client = api::Client::new(Some(&base));
     let access = client.exchange(KEY).unwrap();
-    let (events, pages, unmeasured) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
-    assert_eq!(pages, 2);
+    let (events, counts, unmeasured) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
+    assert_eq!(counts.pages, 2);
+    assert_eq!(counts.fetched, 1005);
+    assert_eq!(counts.kept, 1003);
+    assert_eq!(counts.dropped_duplicate, 2);
     assert_eq!(unmeasured, 0);
     assert_eq!(events.len(), 1003);
     assert_eq!(
@@ -211,9 +214,14 @@ fn an_event_without_measured_counts_is_unmeasured_never_measured_zeros() {
     });
     let client = api::Client::new(Some(&base));
     let access = client.exchange(KEY).unwrap();
-    let (events, _, unmeasured) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
+    let (events, counts, unmeasured) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(unmeasured, 2);
+    assert_eq!(
+        counts.value(),
+        json!({"pages":1,"fetched":5,"kept":1,
+        "droppedOutOfWindow":1,"droppedNoTokenUsage":1,"droppedDuplicate":0})
+    );
     let rows = api::hourly(&events);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["m"], "kimi-k3");
@@ -501,6 +509,11 @@ fn the_binary_prints_no_key_token_or_account_id() {
     assert_eq!(read["state"], "read");
     assert_eq!(read["events"], 1);
     assert_eq!(read["unmeasured"], 0);
+    assert_eq!(
+        read["eventCounts"],
+        json!({"pages":1,"fetched":1,"kept":1,
+        "droppedOutOfWindow":0,"droppedNoTokenUsage":0,"droppedDuplicate":0})
+    );
     let text = format!("{put}{read}");
     for secret in [KEY, SUB, token().as_str(), "conv-0"] {
         assert!(!text.contains(secret), "{secret} was printed");

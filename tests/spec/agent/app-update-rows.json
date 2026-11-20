@@ -1,0 +1,635 @@
+[
+  {
+    "host": "ubuntu",
+    "app": "antigravity-cli",
+    "row": {
+      "appId": "antigravity-cli",
+      "platform": "ubuntu",
+      "status": "held",
+      "messageCode": "held_for_review",
+      "heldVersion": "1.5.9",
+      "version": "1.5.8",
+      "manager": "native"
+    },
+    "expected": {
+      "appId": "antigravity-cli",
+      "appLabel": "Antigravity CLI",
+      "platform": "ubuntu",
+      "status": "held",
+      "previousVersion": null,
+      "version": "1.5.8",
+      "manager": "native",
+      "message": "Update held: the newest Antigravity version is waiting for a review; the reviewed version stays installed.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "heldVersion": "1.5.9",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "windows",
+    "app": "t3-acp-adapters",
+    "row": {
+      "appId": "t3-acp-adapters",
+      "platform": "windows",
+      "status": "action_required",
+      "messageCode": "in_use",
+      "manager": "npm",
+      "parts": [
+        {
+          "name": "muse-acp",
+          "previousVersion": "0.21.0",
+          "version": "0.21.0",
+          "inUse": true
+        },
+        {
+          "name": "zcode-acp-server",
+          "previousVersion": "0.84.2",
+          "version": "0.84.3"
+        }
+      ]
+    },
+    "expected": {
+      "appId": "t3-acp-adapters",
+      "appLabel": "T3 ACP adapters",
+      "platform": "windows",
+      "status": "action_required",
+      "previousVersion": null,
+      "version": null,
+      "manager": "npm",
+      "message": "muse-acp is in use (open, or running in a T3 session), so it stayed at its installed version; zcode-acp-server updated; run Update apps again once it is closed.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "parts": [
+        {
+          "name": "muse-acp",
+          "previousVersion": "0.21.0",
+          "version": "0.21.0",
+          "inUse": true
+        },
+        {
+          "name": "zcode-acp-server",
+          "previousVersion": "0.84.2",
+          "version": "0.84.3"
+        }
+      ],
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "mac",
+    "app": "claude-code",
+    "row": {
+      "appId": "claude-code",
+      "platform": "mac",
+      "status": "action_required",
+      "messageCode": "older_copy_first",
+      "version": "2.4.1",
+      "manager": "native",
+      "strays": [
+        {
+          "location": "homebrew",
+          "version": "2.3.9",
+          "shadows": true
+        },
+        {
+          "location": "bun",
+          "version": "2.1.0",
+          "shadows": false
+        }
+      ]
+    },
+    "expected": {
+      "appId": "claude-code",
+      "appLabel": "Claude Code",
+      "platform": "mac",
+      "status": "action_required",
+      "previousVersion": null,
+      "version": "2.4.1",
+      "manager": "native",
+      "message": "Not current: an older copy is first on the system PATH (apps and scripts run it). An older Claude Code copy (2.3.9) in the Homebrew bin folder comes first on some PATHs; remove it so it never runs instead.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "strays": [
+        {
+          "location": "homebrew",
+          "version": "2.3.9",
+          "shadows": true
+        },
+        {
+          "location": "bun",
+          "version": "2.1.0",
+          "shadows": false
+        }
+      ],
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "nas1",
+    "app": "t3-code",
+    "row": {
+      "appId": "t3-code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "t3_restart_scheduled",
+      "version": "0.1.10-nightly.20261113.4616",
+      "manager": "native",
+      "restartTargets": [
+        {
+          "kind": "systemd",
+          "service": "t3code.service",
+          "delaySeconds": 30
+        }
+      ]
+    },
+    "expected": {
+      "appId": "t3-code",
+      "appLabel": "T3 Code",
+      "platform": "nas1",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "0.1.10-nightly.20261113.4616",
+      "manager": "native",
+      "message": "Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect. A release that upgrades a large T3 database can keep T3 offline for several minutes before it reconnects.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": [
+        {
+          "kind": "systemd",
+          "service": "t3code.service",
+          "delaySeconds": 30
+        }
+      ]
+    }
+  },
+  {
+    "host": "alexis",
+    "app": "cursor-cli",
+    "row": {
+      "appId": "cursor-cli",
+      "platform": "windows",
+      "status": "action_required",
+      "messageCode": "policy_blocked",
+      "manager": "unsupported",
+      "diagnostics": {
+        "cause": "policy_blocked",
+        "reason": "execution_policy",
+        "tool": "powershell",
+        "exitCode": -1,
+        "phases": {
+          "checking": 123
+        },
+        "owner": {
+          "manager": "native",
+          "executable": "~/.local/bin/cursor-agent",
+          "copies": 2,
+          "onPath": true
+        },
+        "notes": [
+          "policy_version_from_folder"
+        ],
+        "tail": "fixture-scrub",
+        "command": "fixture-scrub"
+      }
+    },
+    "expected": {
+      "appId": "cursor-cli",
+      "appLabel": "Cursor CLI",
+      "platform": "alexis",
+      "status": "action_required",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "A Windows execution policy refused the app's launcher, so nothing changed. AAC runs it the way the app's own .cmd does (a Bypass for that one process); a Group Policy setting overrides that. Ask this computer's administrator to allow it, then run Update apps again.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "diagnostics": {
+        "cause": "policy_blocked",
+        "reason": "execution_policy",
+        "tool": "powershell",
+        "exitCode": -1,
+        "phases": {
+          "checking": 123
+        },
+        "owner": {
+          "manager": "native",
+          "executable": "~/.local/bin/cursor-agent",
+          "onPath": true,
+          "copies": 2
+        },
+        "notes": [
+          "policy_version_from_folder"
+        ]
+      },
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "windows",
+    "app": "codex-desktop",
+    "row": {
+      "appId": "codex-desktop",
+      "platform": "windows",
+      "status": "updated",
+      "messageCode": "desktop_reopened",
+      "manager": "msix",
+      "previousVersion": "26.1101.9.0",
+      "version": "26.1113.36452.0",
+      "updateAttempted": true,
+      "restartedProcesses": 1,
+      "forcedStops": 1,
+      "restartTargets": [
+        {
+          "kind": "desktop"
+        }
+      ]
+    },
+    "expected": {
+      "appId": "codex-desktop",
+      "appLabel": "Codex Desktop",
+      "platform": "windows",
+      "status": "updated",
+      "previousVersion": "26.1101.9.0",
+      "version": "26.1113.36452.0",
+      "manager": "msix",
+      "message": "Updated: it closed, installed the update and reopened.",
+      "updateAttempted": true,
+      "restartedProcesses": 1,
+      "forcedStops": 1,
+      "restartTargets": [
+        {
+          "kind": "desktop"
+        }
+      ]
+    }
+  },
+  {
+    "host": "mac",
+    "app": "claude-desktop",
+    "row": {
+      "appId": "claude-desktop",
+      "platform": "mac",
+      "status": "skipped",
+      "messageCode": "skipped_cancelled"
+    },
+    "expected": {
+      "appId": "claude-desktop",
+      "appLabel": "Claude Desktop",
+      "platform": "mac",
+      "status": "skipped",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "Skipped: cancelled",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "nas1",
+    "app": "omp",
+    "row": {
+      "appId": "omp",
+      "platform": "ubuntu",
+      "status": "unknown",
+      "messageCode": "host_timeout"
+    },
+    "expected": {
+      "appId": "omp",
+      "appLabel": "OMP",
+      "platform": "nas1",
+      "status": "unknown",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "Timed out: this computer did not finish in time.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "ubuntu",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "ubuntu",
+      "status": "action_required",
+      "messageCode": "antigravity_acp_signin_hold",
+      "heldVersion": "1.5.3"
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "ubuntu",
+      "status": "action_required",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "Sign-in needed: the newer Antigravity runtime cannot read the sign-in saved on this computer, so Update apps did not install it. Install it from T3's Antigravity settings when you can sign in again there.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "heldVersion": "1.5.3",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "alexis",
+    "app": "claude-code",
+    "row": {
+      "appId": "claude-code",
+      "platform": "windows",
+      "status": "updated",
+      "messageCode": "unlisted",
+      "version": "2.4.1",
+      "manager": "native"
+    },
+    "expected": {
+      "appId": "claude-code",
+      "appLabel": "Claude Code",
+      "platform": "alexis",
+      "status": "failed",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "The update helper returned an unsupported result.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "ubuntu",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "muse_quota_exhausted",
+      "previousVersion": "1.4.2",
+      "version": "1.5.0",
+      "manager": "native",
+      "updateAttempted": true,
+      "quotaReset": "2026-11-20 05:00 UTC"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "previousVersion": "1.4.2",
+      "version": "1.5.0",
+      "manager": "native",
+      "message": "Updated Muse. Its quota is used up until 2026-11-20 05:00 UTC, so the new models appear after its next session.",
+      "updateAttempted": true,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "quotaReset": "2026-11-20 05:00 UTC",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "mac",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "mac",
+      "status": "current",
+      "messageCode": "muse_quota_current",
+      "previousVersion": "1.4.2",
+      "version": "1.4.2",
+      "manager": "native",
+      "updateAttempted": true,
+      "quotaReset": "2026-11-20 05:00 UTC"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "mac",
+      "status": "current",
+      "previousVersion": "1.4.2",
+      "version": "1.4.2",
+      "manager": "native",
+      "message": "Muse is current. Its quota is used up until 2026-11-20 05:00 UTC, so the new models appear after its next session.",
+      "updateAttempted": true,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "quotaReset": "2026-11-20 05:00 UTC",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "windows",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "windows",
+      "status": "updated",
+      "messageCode": "muse_quota_exhausted",
+      "version": "1.5.0",
+      "manager": "native"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "windows",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.5.0",
+      "manager": "native",
+      "message": "Updated Muse. Its quota is used up, so the new models appear after its next session.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "nas1",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "muse_quota_exhausted",
+      "version": "1.5.0",
+      "manager": "native",
+      "quotaReset": "5 pm\nquota"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "nas1",
+      "status": "failed",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "The update helper returned an unsupported result.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "odroid",
+    "app": "t3-code",
+    "row": {
+      "appId": "t3-code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "t3_restart_scheduled",
+      "version": "0.1.10-nightly.20261113.4616",
+      "manager": "native",
+      "restartTargets": [
+        {
+          "kind": "systemd",
+          "service": "t3code.service",
+          "delaySeconds": 30
+        }
+      ]
+    },
+    "expected": {
+      "appId": "t3-code",
+      "appLabel": "T3 Code",
+      "platform": "odroid",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "0.1.10-nightly.20261113.4616",
+      "manager": "native",
+      "message": "Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect. A release that upgrades a large T3 database can keep T3 offline for several minutes before it reconnects.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": [
+        {
+          "kind": "systemd",
+          "service": "t3code.service",
+          "delaySeconds": 30
+        }
+      ]
+    }
+  },
+  {
+    "host": "ubuntu",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "antigravity_acp_qualified",
+      "version": "1.4.6",
+      "manager": "official-download"
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "ubuntu",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.4.6",
+      "manager": "official-download",
+      "message": "Updated Antigravity ACP to 1.4.6; account isolation verified",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "mac",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "mac",
+      "status": "updated",
+      "messageCode": "antigravity_acp_isolation_unverified",
+      "version": "1.4.6",
+      "manager": "official-download",
+      "wrapperVersion": "1.4.5",
+      "qualifyReason": "bwrap is missing"
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "mac",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.4.6",
+      "manager": "official-download",
+      "message": "Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so T3 keeps using 1.4.5. The check could not test it: bwrap is missing",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "wrapperVersion": "1.4.5",
+      "qualifyReason": "bwrap is missing",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "windows",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "windows",
+      "status": "updated",
+      "messageCode": "antigravity_acp_isolation_unverified",
+      "version": "1.4.6",
+      "manager": "official-download",
+      "wrapperVersion": null
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "windows",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.4.6",
+      "manager": "official-download",
+      "message": "Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so no qualified Antigravity ACP runtime is available to T3",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "wrapperVersion": null,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "nas1",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "antigravity_acp_isolation_unverified",
+      "version": "1.4.6",
+      "manager": "official-download",
+      "wrapperVersion": "invalid version"
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "nas1",
+      "status": "failed",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "The update helper returned an unsupported result.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  }
+]

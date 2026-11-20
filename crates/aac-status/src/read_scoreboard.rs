@@ -2,7 +2,7 @@
 //! the existing accepted reader state; no share scan, store write or provider refresh occurs.
 use crate::{
     read_context::{Context, Envelope, age, array, js_whitespace, number, plural, s},
-    read_measures::{Index, decisive, measures, model, outcome},
+    read_measures::{Index, decisive, measures, model, model_id, outcome},
 };
 use aac_num::view;
 use serde_json::{Value as V, json};
@@ -15,6 +15,27 @@ fn label(verdict: &str) -> &str {
         "avoid" => "Avoid for this",
         _ => "Not enough data yet",
     }
+}
+/// The order `sort_by(newest)` gives `items` (indices; the same stable sort and comparator), with
+/// each item's epoch read once instead of at every comparison. The ids are compared only on a
+/// tie of epochs, exactly as `newest` compares them, so the facts it reads are the same.
+fn newest_order(items: &[&V], ctx: &Context) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    if items.len() < 2 {
+        return order;
+    }
+    let epochs: Vec<Option<i64>> = items.iter().map(|item| ctx.epoch(&item["endedAt"])).collect();
+    // Each id's collation rank, read once: `ctx.compare` on two ranked, different ids is the
+    // order of their ranks; anything else goes to `ctx.compare` itself (equal ids, a missing rank).
+    let ids: Vec<&str> = items.iter().map(|item| s(&item["id"])).collect();
+    let ranks: Vec<Option<usize>> = ids.iter().map(|id| ctx.rank(id)).collect();
+    order.sort_by(|&a, &b| {
+        epochs[b].cmp(&epochs[a]).then_with(|| match (ranks[a], ranks[b]) {
+            (Some(x), Some(y)) if ids[a] != ids[b] => x.cmp(&y),
+            _ => ctx.compare(ids[a], ids[b]),
+        })
+    });
+    order
 }
 fn newest(a: &V, b: &V, ctx: &Context) -> std::cmp::Ordering {
     ctx.epoch(&b["endedAt"])
@@ -488,7 +509,7 @@ fn counted(counts: &[(String, usize)], ctx: &Context) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-fn runs_source(input: &V, docs: &[V], unscored: usize, index: &Index, now: i64, ctx: &Context) -> Option<V> {
+fn runs_source(input: &V, docs: &[&V], unscored: usize, index: &Index, now: i64, ctx: &Context) -> Option<V> {
     let mut source = runs_source_of(input, docs, unscored, index, now, ctx)?;
     // A snapshot taken while the scan was still running is partial, whatever its state says.
     if input["runs"]["partial"] == true {
@@ -499,10 +520,17 @@ fn runs_source(input: &V, docs: &[V], unscored: usize, index: &Index, now: i64, 
     }
     Some(source)
 }
-fn runs_source_of(input: &V, docs: &[V], unscored: usize, index: &Index, now: i64, ctx: &Context) -> Option<V> {
+fn runs_source_of(input: &V, docs: &[&V], unscored: usize, index: &Index, now: i64, ctx: &Context) -> Option<V> {
     let runs = &input["runs"];
     let at = ctx.epoch(&runs["scannedAt"]);
     let base = source_base("scoreboard-runs", "Agent runs", at, now, ctx);
+    if runs["state"] == "disabled" {
+        return Some(source_finish(
+            base,
+            "missing",
+            "The run history store is disabled.".into(),
+        ));
+    }
     let Some(at) = at else {
         return Some(source_finish(base, "missing", "Waiting for the first scan.".into()));
     };
@@ -722,6 +750,23 @@ fn catalog_source_of(
     }
     Some(source_finish(base, "ok", format!("{}{not_added}", parts.join(" "))))
 }
+/// [`bump`]'s counts in first-seen order, with the key's position held so a run's count is
+/// one lookup (the list is searched per run, with up to one entry per distinct model).
+#[derive(Default)]
+struct Tally {
+    order: Vec<(String, usize)>,
+    at: HashMap<String, usize>,
+}
+impl Tally {
+    fn bump(&mut self, key: &str) {
+        if let Some(&at) = self.at.get(key) {
+            self.order[at].1 += 1;
+        } else {
+            self.at.insert(key.to_owned(), self.order.len());
+            self.order.push((key.to_owned(), 1));
+        }
+    }
+}
 fn bump(counts: &mut Vec<(String, usize)>, key: &str) {
     if let Some((_, n)) = counts.iter_mut().find(|(s, _)| s == key) {
         *n += 1;
@@ -730,38 +775,162 @@ fn bump(counts: &mut Vec<(String, usize)>, key: &str) {
     }
 }
 
+/// What compose reads of one row, besides the docs it shows: from the run as stored (`raw`,
+/// the row's `doc`) and its display-normalized doc. The R4 owner holds these per snapshot and
+/// catalog; the envelope path makes them per call. Same values either way.
+pub struct RowFacts {
+    /// `model(doc)` as text (`""` when null).
+    model_id: String,
+    /// `raw.task.type`.
+    kind: String,
+    /// `raw.model.id` is null.
+    raw_model_null: bool,
+    /// `raw.model.id` as text.
+    raw_model_id: String,
+    /// The row's `file`.
+    file: String,
+    /// The doc carries a review (`Index` joins only those).
+    has_review: bool,
+}
+
+pub fn row_facts(row: &V, doc: &V) -> RowFacts {
+    let raw = &row["doc"];
+    RowFacts {
+        model_id: model_id(doc).into_owned(),
+        kind: s(&raw["task"]["type"]).to_owned(),
+        raw_model_null: raw["model"]["id"].is_null(),
+        raw_model_id: s(&raw["model"]["id"]).to_owned(),
+        file: s(&row["file"]).to_owned(),
+        has_review: !doc["review"].is_null(),
+    }
+}
+
+/// Each doc's position in `sort_by(newest)` over all `docs` (stable), under `facts`; None when
+/// that sort could not be proved (an unreadable time or a missing rank), so the caller sorts
+/// per request as before. Restricted to a subset, this order is that subset's stable sort.
+pub fn newest_positions(docs: &[&V], facts: std::sync::Arc<crate::read_context::Presentation>) -> Option<Vec<usize>> {
+    let ctx = Context::shared(facts, None);
+    let order = newest_order(docs, &ctx);
+    if !ctx.valid() {
+        return None;
+    }
+    let mut positions = vec![0; docs.len()];
+    for (at, &index) in order.iter().enumerate() {
+        positions[index] = at;
+    }
+    Some(positions)
+}
+
 pub fn compose(envelope: Envelope) -> Option<V> {
     if crate::read_context::proto_named(&envelope.data) {
         return None;
     }
-    let ctx = Context::new(envelope.presentation);
-    let mut input = envelope.data;
+    compose_in(Context::new(envelope.presentation), envelope.data).map(|(view, _)| view)
+}
+
+/// R4 owned: the same view over facts held once per pushed facts generation (shared by every
+/// request that names it) plus the request's own `now` and its date words, which a generation's
+/// facts cannot hold. Byte-equal to [`compose`] of an envelope whose facts also hold `now`.
+pub fn compose_fed(
+    data: V,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+) -> Option<V> {
+    compose_fed_keep(data, facts, now).map(|(view, _)| view)
+}
+
+/// [`compose_fed`], also handing back the (large) input so the caller can release it off its
+/// request path.
+pub fn compose_fed_keep(
+    data: V,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+) -> Option<(V, V)> {
+    if crate::read_context::proto_named(&data) {
+        return None;
+    }
+    compose_in(Context::shared(facts, Some(now)).with_iso_any(), data)
+}
+
+fn compose_in(ctx: Context, data: V) -> Option<(V, V)> {
+    let mut input = data;
     // Epoch facts normalize UTC seconds; the resolver separately retains all nine fractional digits.
     crate::run_corrections::resolve_state(&mut input["runs"], |v| ctx.epoch(v))?;
-    let effective: HashMap<String, V> = input["runs"]["runs"]
-        .as_array()?
-        .iter()
-        .map(|r| (s(&r["doc"]["id"]).to_owned(), r["doc"].clone()))
-        .collect();
-    let mut normalized = Vec::new();
-    for doc in input["docs"].as_array()? {
-        if let Some(raw) = effective.get(s(&doc["id"])) {
-            let mut doc = doc.clone();
+    // Borrowed, not cloned: the docs move into their normalized list; only a review is copied.
+    let docs_in = std::mem::take(&mut input["docs"]);
+    let V::Array(docs_in) = docs_in else {
+        return None;
+    };
+    let normalized = {
+        let effective: HashMap<&str, &V> = input["runs"]["runs"]
+            .as_array()?
+            .iter()
+            .map(|r| (s(&r["doc"]["id"]), &r["doc"]))
+            .collect();
+        let mut normalized = Vec::new();
+        for mut doc in docs_in {
+            let Some(raw) = effective.get(s(&doc["id"])).copied() else {
+                continue;
+            };
             if raw["review"].is_object() {
                 doc["review"] = raw["review"].clone();
             }
             normalized.push(doc);
         }
+        normalized
+    };
+    input["docs"] = V::Array(normalized);
+    let view = {
+        let rows: Vec<&V> = input["runs"]["runs"].as_array()?.iter().collect();
+        let docs: Vec<&V> = input["docs"].as_array()?.iter().collect();
+        if rows.len() != docs.len() {
+            return None;
+        }
+        let facts: Vec<RowFacts> = rows.iter().zip(&docs).map(|(row, doc)| row_facts(row, doc)).collect();
+        let facts: Vec<&RowFacts> = facts.iter().collect();
+        compose_core(&ctx, &input, &rows, &docs, &facts, None)?
+    };
+    Some((view, input))
+}
+
+/// R4 owned: [`compose_fed`] over rows and docs the caller holds, by reference. The caller
+/// guarantees what the envelope path establishes itself: `rows` are the runs state's rows
+/// (corrections resolved, unique run ids), `docs` the display-normalized doc of each row in
+/// the same order with its run's review merged in, and neither holds a prototype name (checked
+/// once per held snapshot). `data` is the envelope without `runs.runs` and `docs`.
+#[allow(clippy::too_many_arguments)]
+pub fn compose_fed_parts(
+    data: &V,
+    rows: &[&V],
+    docs: &[&V],
+    row_facts: &[&RowFacts],
+    order: Option<&[usize]>,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+) -> Option<V> {
+    if data["runs"]["correctionsResolved"] != true || crate::read_context::proto_named(data) {
+        return None;
     }
-    input["docs"] = json!(normalized);
+    if rows.len() != docs.len() || row_facts.len() != rows.len() || order.is_some_and(|o| o.len() != rows.len()) {
+        return None;
+    }
+    let ctx = Context::shared(facts, Some(now)).with_iso_any();
+    compose_core(&ctx, data, rows, docs, row_facts, order)
+}
+
+/// `order`: each row's position in the stable newest order (see [`newest_positions`]), when
+/// the caller holds it; otherwise the two sorts run here.
+fn compose_core(
+    ctx: &Context,
+    input: &V,
+    rows: &[&V],
+    docs: &[&V],
+    facts: &[&RowFacts],
+    order: Option<&[usize]>,
+) -> Option<V> {
     let now = input["now"].as_i64()?;
     let catalog = &input["catalog"];
-    let docs = input["docs"].as_array()?;
-    let raw: Vec<_> = input["runs"]["runs"]
-        .as_array()?
-        .iter()
-        .map(|r| r["doc"].clone())
-        .collect();
+    let raw: Vec<&V> = rows.iter().map(|r| &r["doc"]).collect();
     if raw.len() != docs.len() {
         return None;
     }
@@ -770,19 +939,21 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     let known_models: HashSet<_> = models.iter().map(|m| s(&m["model"])).collect();
     let known_types: HashSet<_> = types.iter().map(|t| s(&t["id"])).collect();
     let (mut no_model, mut no_type, mut unknown_model, mut unknown_type) = (0, 0, 0, 0);
-    let (mut missing_types, mut missing_models, mut unknown_counts) = (Vec::new(), Vec::new(), Vec::new());
-    let mut examples = Vec::new();
+    let (mut missing_types, mut missing_models, mut unknown_tally) =
+        (Tally::default(), Tally::default(), Tally::default());
+    // The unscored runs, as (index into `raw`, reason): only the ten shown are built.
+    let mut examples: Vec<(usize, &'static str)> = Vec::new();
     let mut by_type: HashMap<String, Vec<V>> = HashMap::new();
-    for (raw, run) in raw.iter().zip(docs) {
-        let id = model(run);
-        let id = s(&id);
-        let kind = s(&raw["task"]["type"]);
+    for (at, run) in docs.iter().enumerate() {
+        let fact = facts[at];
+        let id = fact.model_id.as_str();
+        let kind = fact.kind.as_str();
         if !id.is_empty() && !kind.is_empty() && !known_types.contains(kind) {
-            bump(&mut missing_types, kind);
+            missing_types.bump(kind);
         } else if !id.is_empty() && !kind.is_empty() && !known_models.contains(id) {
-            bump(&mut missing_models, id);
+            missing_models.bump(id);
         }
-        let reason = if raw["model"]["id"].is_null() {
+        let reason = if fact.raw_model_null {
             no_model += 1;
             "no-model"
         } else if kind.is_empty() {
@@ -790,22 +961,18 @@ pub fn compose(envelope: Envelope) -> Option<V> {
             "no-task-type"
         } else if id.is_empty() || !known_models.contains(id) {
             unknown_model += 1;
-            bump(&mut unknown_counts, s(&raw["model"]["id"]));
+            unknown_tally.bump(&fact.raw_model_id);
             "unknown-model"
         } else if !known_types.contains(kind) {
             unknown_type += 1;
             "unknown-task-type"
         } else {
-            by_type.entry(kind.to_owned()).or_default().push(run.clone());
+            by_type.entry(kind.to_owned()).or_default().push((*run).clone());
             continue;
         };
-        examples.push(json!({"id":raw["id"],"model":raw["model"]["id"],"taskType":raw["task"]["type"],"reason":reason,"endedAt":raw["endedAt"]}));
+        examples.push((at, reason));
     }
-    let run_files: HashSet<_> = input["runs"]["runs"]
-        .as_array()?
-        .iter()
-        .map(|r| s(&r["file"]))
-        .collect();
+    let run_files: HashSet<&str> = facts.iter().map(|f| f.file.as_str()).collect();
     let unreadable = array(&input["runs"]["problems"])
         .iter()
         .filter(|p| {
@@ -817,10 +984,29 @@ pub fn compose(envelope: Envelope) -> Option<V> {
         })
         .count();
     let scan_limit = input["runs"]["skipped"]["runFiles"].as_u64().unwrap_or(0) as usize;
+    let (missing_types, missing_models, mut unknown_counts) =
+        (missing_types.order, missing_models.order, unknown_tally.order);
     unknown_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| ctx.compare(&a.0, &b.0)));
-    examples.sort_by(|a, b| newest(a, b, &ctx));
-    let unscored = json!({"total":scan_limit+unreadable+no_model+no_type+unknown_model+unknown_type,"scanLimit":scan_limit,"unreadable":unreadable,"noModel":no_model,"noTaskType":no_type,"unknownModel":unknown_model,"unknownTaskType":unknown_type,"unknownModels":unknown_counts.iter().take(20).map(|(id,n)|json!({"id":id,"runs":n})).collect::<Vec<_>>(),"examples":examples.into_iter().take(10).collect::<Vec<_>>()});
-    let index = Index::new(docs, &array(&input["joinReviews"]), &known_models, &known_types, &ctx)?;
+    // `newest` reads `endedAt` and `id`, which each example copies from its run.
+    let example_order = match order {
+        Some(order) => {
+            let mut picked: Vec<usize> = (0..examples.len()).collect();
+            picked.sort_by_key(|&i| order[examples[i].0]);
+            picked
+        }
+        None => {
+            let example_runs: Vec<&V> = examples.iter().map(|&(at, _)| raw[at]).collect();
+            newest_order(&example_runs, ctx)
+        }
+    };
+    let unscored = json!({"total":scan_limit+unreadable+no_model+no_type+unknown_model+unknown_type,"scanLimit":scan_limit,"unreadable":unreadable,"noModel":no_model,"noTaskType":no_type,"unknownModel":unknown_model,"unknownTaskType":unknown_type,"unknownModels":unknown_counts.iter().take(20).map(|(id,n)|json!({"id":id,"runs":n})).collect::<Vec<_>>(),"examples":example_order.iter().take(10).map(|&i|{let (at,reason)=examples[i];let raw=raw[at];json!({"id":raw["id"],"model":raw["model"]["id"],"taskType":raw["task"]["type"],"reason":reason,"endedAt":raw["endedAt"]})}).collect::<Vec<_>>()});
+    let join = array(&input["joinReviews"]);
+    // No run with a review: the index is empty (Index::new would skip every run).
+    let index = if facts.iter().all(|f| !f.has_review) && join.iter().all(|r| r["review"].is_null()) {
+        Index::empty()
+    } else {
+        Index::new(docs, &join, &known_models, &known_types, ctx)?
+    };
     let mut bases = HashMap::new();
     for task in types {
         bases.insert(
@@ -830,7 +1016,7 @@ pub fn compose(envelope: Envelope) -> Option<V> {
                 by_type.get(s(&task["id"])).map(Vec::as_slice).unwrap_or(&[]),
                 catalog,
                 &index,
-                &ctx,
+                ctx,
             )?,
         );
     }
@@ -847,15 +1033,22 @@ pub fn compose(envelope: Envelope) -> Option<V> {
         };
         let mut task_types = Vec::new();
         for task in wanted {
-            task_types.push(json!({"id":task["id"],"label":task["label"],"description":task["description"],"unit":task["unit"],"measures":task["measures"],"byProcess":task["byProcess"],"rows":judged_rows(bases.get(s(&task["id"]))?,task,usage,catalog,&ctx)?}));
+            task_types.push(json!({"id":task["id"],"label":task["label"],"description":task["description"],"unit":task["unit"],"measures":task["measures"],"byProcess":task["byProcess"],"rows":judged_rows(bases.get(s(&task["id"]))?,task,usage,catalog,ctx)?}));
         }
         uses.push(
             json!({"id":usage["id"],"label":usage["label"],"description":usage["description"],"taskTypes":task_types}),
         );
     }
-    let mut recent = docs.clone();
-    recent.sort_by(|a, b| newest(a, b, &ctx));
-    let mut view = json!({"version":1,"generatedAt":ctx.iso(Some(now)),"refresh":{"pollSeconds":60},"sources":[runs_source(&input,docs,no_model+no_type,&index,now,&ctx)?,catalog_source(&input,&missing_types,&missing_models,now,&ctx)?],"catalog":{"minRuns":catalog["minRuns"],"models":catalog["models"],"taskTypes":catalog["taskTypes"],"measures":catalog["measures"],"uses":catalog["uses"],"benchmarks":catalog["benchmarks"]},"uses":uses,"recent":recent.iter().take(20).map(|r|summary(r,models)).collect::<Vec<_>>(),"unscored":unscored});
+    let newest = match order {
+        Some(order) => {
+            let mut picked: Vec<usize> = (0..docs.len()).collect();
+            picked.sort_by_key(|&i| order[i]);
+            picked
+        }
+        None => newest_order(docs, ctx),
+    };
+    let recent: Vec<&V> = newest.into_iter().take(20).map(|i| docs[i]).collect();
+    let mut view = json!({"version":1,"generatedAt":ctx.iso(Some(now)),"refresh":{"pollSeconds":60},"sources":[runs_source(input,docs,no_model+no_type,&index,now,ctx)?,catalog_source(input,&missing_types,&missing_models,now,ctx)?],"catalog":{"minRuns":catalog["minRuns"],"models":catalog["models"],"taskTypes":catalog["taskTypes"],"measures":catalog["measures"],"uses":catalog["uses"],"benchmarks":catalog["benchmarks"]},"uses":uses,"recent":recent.iter().map(|r|summary(r,models)).collect::<Vec<_>>(),"unscored":unscored});
     if let Some(finish) = input.get("finish") {
         for key in ["filters", "identity", "history"] {
             view[key] = finish.get(key)?.clone();
@@ -864,9 +1057,9 @@ pub fn compose(envelope: Envelope) -> Option<V> {
             let typed = serde_json::from_value::<crate::scoreboard::ViewIn>(native_input(view.clone())).ok()?;
             {
                 if let Ok(by_model) = crate::scoreboard::by_model(&typed) {
-                    view["byModel"] = native_order(serde_json::to_value(by_model).ok()?);
+                    view["byModel"] = serde_json::to_value(by_model).ok()?;
                     if let Ok(groups) = crate::scoreboard::group_keys(&typed) {
-                        view["groups"] = native_order(serde_json::to_value(groups).ok()?);
+                        view["groups"] = serde_json::to_value(groups).ok()?;
                     }
                 }
             }
@@ -878,21 +1071,10 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     ctx.valid().then_some(view)
 }
 
-fn native_order(value: V) -> V {
-    match value {
-        V::Array(items) => json!(items.into_iter().map(native_order).collect::<Vec<_>>()),
-        V::Object(object) => {
-            let mut items = object.into_iter().collect::<Vec<_>>();
-            items.sort_by(|a, b| a.0.cmp(&b.0));
-            let mut out = json!({});
-            for (k, v) in items {
-                out[k] = native_order(v);
-            }
-            out
-        }
-        value => value,
-    }
-}
+// byModel and groups keep their struct field order: the NAPI module TS calls
+// (`composeByModel`, `composeGroups`) serializes the same structs with `preserve_order`
+// (this crate's serde_json feature), so both paths emit the same member order. The
+// earlier key sort here mirrored a sorted-map build that no longer exists.
 
 // JSON.stringify emits integral JS Numbers as integer tokens. Match the input the
 // existing Node adapter parses, including numeric fields its DTO declares as i64.

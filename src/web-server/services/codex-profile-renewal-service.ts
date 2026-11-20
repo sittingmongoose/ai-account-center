@@ -10,6 +10,7 @@ import {
 import { CODEX_RENEWAL_MESSAGES } from '../../codex-auth/codex-renewal-types';
 import { getCcsDir, runWithScopedConfigDir } from '../../utils/config-manager';
 import { createLogger } from '../../services/logging';
+import { onRustRenewalHostedChange, rustRenewalHosted } from '../rust-service-transport';
 
 const logger = createLogger('codex-renewal');
 
@@ -58,6 +59,7 @@ export class CodexProfileRenewalService {
   private nextCycleAt: string | null = null;
   private lastError: string | null = null;
   private statusCache: { value: CodexProfileRenewalServiceStatus; at: number } | null = null;
+  private unwatchRust?: () => void;
 
   constructor(private readonly deps: CodexProfileRenewalServiceDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
@@ -85,16 +87,39 @@ export class CodexProfileRenewalService {
       }
       return;
     }
+    // G10: while the Rust service owns this root's renewal timer, this one defers;
+    // it takes the timer back if the service gives up (one writer per refresh family).
+    this.watchRustHost();
+    if (rustRenewalHosted(this.ccsDir)) return;
     this.running = true;
     this.schedule(FIRST_DELAY_MS + Math.round(FIRST_JITTER_MS * this.random()));
   }
 
   stop(): void {
+    this.pause();
+    this.unwatchRust?.();
+    this.unwatchRust = undefined;
+  }
+
+  /** Stop the timer without losing the Rust-ownership watch (a hosted handoff). */
+  private pause(): void {
     this.running = false;
     this.generation++;
     clearTimeout(this.timer);
     this.timer = undefined;
     this.nextCycleAt = null;
+  }
+
+  private watchRustHost(): void {
+    if (this.unwatchRust) return;
+    this.unwatchRust = onRustRenewalHostedChange(this.ccsDir, (hosted) => {
+      if (hosted) {
+        if (this.running) this.pause();
+      } else if (!this.running && this.enabled()) {
+        this.running = true;
+        this.schedule(FIRST_DELAY_MS + Math.round(FIRST_JITTER_MS * this.random()));
+      }
+    });
   }
 
   private schedule(delay: number): void {

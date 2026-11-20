@@ -11,6 +11,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { readPrivateJsonFile, writePrivateJsonFile } from '../services/private-json-store';
 
 export const SNAPSHOT_SETTINGS_FILE = 'agent-usage-snapshot.json';
+export const SNAPSHOT_JSON = 'usage.json';
 export const SNAPSHOT_LOCATIONS = 'locations.json';
 const MAX_DIRECTORY_LENGTH = 1024;
 const MAX_LOCATIONS = 8;

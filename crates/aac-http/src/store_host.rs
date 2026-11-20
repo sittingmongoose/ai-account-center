@@ -11,11 +11,26 @@
 use aac_store::engine::Engine;
 use aac_store::ops::{self, Slot};
 use aac_views::decline::Decline;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
-use tokio::sync::Semaphore;
+use std::sync::{
+    Arc, Condvar, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
+use std::time::Duration;
+
+pub(crate) async fn jobs(host: Arc<StoreHost>, stop: Arc<std::sync::atomic::AtomicBool>) {
+    use std::{sync::atomic::Ordering, time::Duration};
+    tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
+    while !stop.load(Ordering::Acquire) {
+        let pass = Arc::clone(&host);
+        let _ =
+            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
+        tokio::time::sleep(Duration::from_millis(MAINTAIN_EVERY_MS)).await;
+    }
+}
 
 /// Store calls in flight at most (L1's store pool size). Unlike the read pools, a full pool
 /// queues: the NAPI binding queues on libuv's pool too, and a producer must not lose a
@@ -28,8 +43,8 @@ const MINUTE_MS: u64 = 60_000;
 const DAY_MS: u64 = 86_400_000;
 /// TS's maintenance cadence (`store-service.ts`): first pass minutes after start, then
 /// every 15 minutes; backup daily; verify, compaction and the redb snapshot weekly.
-pub(crate) const FIRST_PASS_MS: u64 = 3 * MINUTE_MS;
-pub(crate) const MAINTAIN_EVERY_MS: u64 = 15 * MINUTE_MS;
+const FIRST_PASS_MS: u64 = 3 * MINUTE_MS;
+const MAINTAIN_EVERY_MS: u64 = 15 * MINUTE_MS;
 const BACKUP_EVERY_MS: u64 = DAY_MS;
 const REDB_BACKUP_EVERY_MS: u64 = 7 * DAY_MS;
 const VERIFY_EVERY_MS: u64 = 7 * DAY_MS;
@@ -37,7 +52,7 @@ const VERIFY_EVERY_MS: u64 = 7 * DAY_MS;
 /// The boot's store config, resolved once by TS at start: the open arguments it would have
 /// given the NAPI module, plus the backup job's share inputs. Absent in the boot JSON, the
 /// store stays in the TS process exactly as before.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreBoot {
     /// The Node module's compiled identity: checked before opening or migrating any files.
@@ -65,6 +80,34 @@ pub struct StoreBoot {
 }
 
 impl StoreBoot {
+    /// Use the existing store settings when the public listener hosts the engine itself.
+    pub(crate) fn for_public(root: &std::path::Path) -> Option<Self> {
+        if disabled_for_public(root) {
+            return None;
+        }
+        let positive = |name| {
+            let value = std::env::var(name).ok()?.trim().parse::<f64>().ok()?;
+            (value.is_finite() && value > 0.0).then_some(value.round() as u64)
+        };
+        let share = std::env::var("AAC_STORE_SHARE_BACKUP_DIR").unwrap_or_default();
+        let share = share.trim();
+        let share_backup_off = share.eq_ignore_ascii_case("off");
+        Some(Self {
+            binding_identity: aac_store::build_identity(),
+            dir: root.join("store"),
+            retention_days: 0,
+            cache_bytes: positive("AAC_STORE_CACHE_MB")
+                .and_then(|mb| usize::try_from(mb).ok()?.checked_mul(1024 * 1024)),
+            activity_retention_days: positive("AAC_ANALYTICS_RETENTION_DAYS"),
+            snapshot_directory: crate::registered::snapshot_settings(root)
+                .map(|settings| settings.directory.into()),
+            share_backup_dir: (!share.is_empty() && !share_backup_off)
+                .then(|| std::path::absolute(share).ok())
+                .flatten(),
+            share_backup_off,
+        })
+    }
+
     fn open_args(&self) -> String {
         let mut args = json!({
             "dir": self.dir.to_string_lossy(),
@@ -105,6 +148,33 @@ impl StoreBoot {
     }
 }
 
+/// The explicit store feature switch, independently of its host.
+pub(crate) fn disabled() -> bool {
+    std::env::var("AAC_STORE").is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"))
+}
+
+pub(crate) fn disabled_for_public(root: &std::path::Path) -> bool {
+    if disabled() {
+        return true;
+    }
+    if let Ok(value) = std::env::var("AAC_RUST_STORE") {
+        return value != "on";
+    }
+    use aac_files::read::{Ancestors, Read, ReadPolicy, read};
+    let policy = ReadPolicy::capped(4 * 1024 * 1024).ancestors(Ancestors::NoLinkBelow(root));
+    let Read::Bytes(bytes, _) = read(&root.join("config.yaml"), &policy) else {
+        return false;
+    };
+    std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|text| aac_config::split_active(text).ok())
+        .is_some_and(|(config, _)| {
+            config["rustService"]
+                .get("store")
+                .is_some_and(|value| value != "on")
+        })
+}
+
 /// The job loop's record, readable through the `hostJobs` method (never in `status`, whose
 /// shape the goldens pin).
 #[derive(Default)]
@@ -121,11 +191,24 @@ struct State {
     jobs: Jobs,
 }
 
-/// The hosted store: one Engine slot behind the NAPI method contract, plus its jobs.
+/// One queued store call: the method contract plus the channel that carries its answer back
+/// to the async handler. The reply is dropped (the caller hung up) without disturbing the run.
+struct StoreCall {
+    method: String,
+    args: String,
+    reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+}
+
+/// The hosted store: one Engine slot behind the NAPI method contract, plus its jobs. Calls run
+/// on a dedicated pool of [`STORE_PERMITS`] threads fed by one queue, not the shared blocking
+/// pool: a store call costs one handoff to a store thread and one wake back, and never contends
+/// with the read routes' blocking tasks. The queue is work-conserving — whichever store thread
+/// is free takes the next call, so a long backup on one thread does not queue reads behind it.
 pub(crate) struct StoreHost {
     boot: StoreBoot,
     slot: Slot,
-    permits: Arc<Semaphore>,
+    sender: mpsc::Sender<StoreCall>,
+    queue: Arc<Mutex<mpsc::Receiver<StoreCall>>>,
     state: Mutex<State>,
     ready_changed: Condvar,
 }
@@ -138,18 +221,52 @@ fn meta_ms(status: &Value, key: &str) -> i64 {
 }
 
 impl StoreHost {
+    #[cfg(all(test, windows))]
+    pub(crate) fn boot_for_test(&self) -> &StoreBoot {
+        &self.boot
+    }
+
     pub(crate) fn new(boot: StoreBoot) -> Arc<Self> {
-        Arc::new(Self {
+        let (sender, receiver) = mpsc::channel();
+        let host = Arc::new(Self {
             boot,
             slot: Slot::new(None),
-            permits: Arc::new(Semaphore::new(STORE_PERMITS)),
+            sender,
+            queue: Arc::new(Mutex::new(receiver)),
             state: Mutex::new(State {
                 ready: false,
                 boot_error: None,
                 jobs: Jobs::default(),
             }),
             ready_changed: Condvar::new(),
-        })
+        });
+        // One queue, STORE_PERMITS takers: a thread parks in recv holding the queue lock, and
+        // releases it before running the call, so the next free thread takes the next call.
+        // Workers hold a Weak: when the last Arc drops, the sender goes, recv ends, they exit.
+        for _ in 0..STORE_PERMITS {
+            let queue = Arc::clone(&host.queue);
+            let weak = Arc::downgrade(&host);
+            let spawned = std::thread::Builder::new()
+                .name("aac-store".to_string())
+                .spawn(move || {
+                    loop {
+                        let call = {
+                            let guard = queue.lock().unwrap_or_else(|p| p.into_inner());
+                            match guard.recv() {
+                                Ok(call) => call,
+                                Err(_) => return,
+                            }
+                        };
+                        let Some(host) = weak.upgrade() else { return };
+                        let result = host.call_blocking(&call.method, &call.args);
+                        let _ = call.reply.send(result);
+                    }
+                });
+            if spawned.is_err() {
+                tracing::warn!(target: "aac_http", "store host could not start a worker thread");
+            }
+        }
+        host
     }
 
     /// The boot open, on a blocking thread at service start: the same `open` TS would have
@@ -175,7 +292,7 @@ impl StoreHost {
         }
     }
 
-    fn wait_ready(&self) {
+    pub(crate) fn wait_ready(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         while !state.ready {
             state = self
@@ -183,6 +300,11 @@ impl StoreHost {
                 .wait(state)
                 .unwrap_or_else(|p| p.into_inner());
         }
+    }
+
+    /// R5/A2: the owned Analytics read composes from this Engine in process.
+    pub(crate) fn analytics_engine(&self) -> Option<Arc<Engine>> {
+        self.engine()
     }
 
     fn engine(&self) -> Option<Arc<Engine>> {
@@ -193,28 +315,42 @@ impl StoreHost {
             .map(Arc::clone)
     }
 
-    /// One store call from the front door. Queued on the store permits, run on the blocking
-    /// pool, with no deadline: `backup` and `maintain` take as long as they take, as they
-    /// did in process. The answer is the dispatch's JSON text; an error is its
-    /// `<code>: <message>`, exactly what the NAPI binding rejects with.
-    pub(crate) async fn call(
-        self: &Arc<Self>,
-        method: String,
-        args: String,
-    ) -> Result<String, String> {
-        let permit = self
-            .permits
-            .clone()
-            .acquire_owned()
-            .await
+    /// One store call from the front door. Queued on the store pool, run on a store thread,
+    /// with no deadline: `backup` and `maintain` take as long as they take, as they did in
+    /// process. The answer is the dispatch's JSON text; an error is its `<code>: <message>`,
+    /// exactly what the NAPI binding rejects with. A dropped caller (a hung-up request) does
+    /// not cancel the run: an admitted write may still commit, as it did on the blocking pool.
+    pub(crate) async fn call(&self, method: String, args: String) -> Result<String, String> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(StoreCall {
+                method,
+                args,
+                reply,
+            })
             .map_err(|_| "service_down: the store host is stopping".to_string())?;
-        let host = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            host.call_blocking(&method, &args)
-        })
-        .await
-        .unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
+        answer
+            .await
+            .map_err(|_| "service_down: the store host is stopping".to_string())?
+    }
+
+    fn record_dashboard(&self, args: &str) -> Result<String, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Tick {
+            now: i64,
+            accounts: Vec<Value>,
+        }
+        let tick: Tick = crate::json_object::from_slice(args.as_bytes(), &["now", "accounts"])
+            .map_err(|_| "invalid: invalid dashboard sample".to_string())?;
+        let observations =
+            crate::dashboard_observations::observations(&tick.accounts, tick.now, i64::MIN)
+                .map_err(|_| "invalid: unproved dashboard observation".to_string())?;
+        let engine = self
+            .engine()
+            .ok_or_else(|| "service_down: the store host is closed".to_string())?;
+        let result = aac_store::usage::record(&engine, observations).map_err(|e| e.to_string())?;
+        serde_json::to_string(&result).map_err(|_| "invalid: dashboard sample reply".to_string())
     }
 
     fn call_blocking(&self, method: &str, args: &str) -> Result<String, String> {
@@ -222,12 +358,45 @@ impl StoreHost {
             self.wait_ready();
             match method {
                 "open" => self.open_idempotent(args),
+                "recordDashboard" => self.record_dashboard(args),
                 "hostJobs" => Ok(self.jobs_json()),
                 "hostIdentity" => Ok(aac_store::build_identity().to_string()),
+                "activityPricingFacts" => self.pricing_facts_json(),
                 _ => ops::dispatch(&self.slot, method, args).map_err(|e| e.to_string()),
             }
         }));
         outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
+    }
+
+    /// G14/G15: the owned read's pricing facts, resolved in Rust over the store dictionary
+    /// (`Resolver::facts_table`, byte-equal to the TS bridge's table). Null when the dictionary
+    /// exceeds the pair cap, as the TS bridge declines. The resolver reads the same
+    /// `<ccsDir>/models-dev-registry-cache.json` the TS refresh writes.
+    fn pricing_facts_json(&self) -> Result<String, String> {
+        let engine = self
+            .engine()
+            .ok_or_else(|| "invalid: the store is not open".to_string())?;
+        let dict = aac_store::activity::models(&engine).map_err(|e| e.to_string())?;
+        let strings = |key: &str| -> Vec<String> {
+            dict[key]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let models = strings("models");
+        let routes = strings("routes");
+        // The bridge's MAX_PRICING_PAIRS cap, counting the empty route facts_table adds.
+        if models.len() * (routes.len() + 1) > 8_000 {
+            return Ok("null".to_string());
+        }
+        let ccs_dir = self.boot.dir.parent().unwrap_or(&self.boot.dir);
+        let mut resolver = aac_views::pricing::Resolver::new(ccs_dir);
+        let table = resolver.facts_table(&models, &routes);
+        Ok(Value::Object(table).to_string())
     }
 
     /// TS's `open` once per boot: the engine the boot opened is the answer (its status, as
@@ -288,9 +457,26 @@ impl StoreHost {
     /// `/api/store/status` from the Engine in process (R3): the writer's own `status`,
     /// admitted by the same shape check the snapshot path uses. No engine, no answer.
     pub(crate) fn status_value(&self) -> Result<Value, Decline> {
-        let engine = self.engine().ok_or(Decline::Unsupported)?;
+        self.wait_ready();
+        let Some(engine) = self.engine() else {
+            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let error = state.boot_error.as_deref().ok_or(Decline::Unsupported)?;
+            let reason = error.split_once(": ").map_or("unknown", |(code, _)| code);
+            return Ok(json!({"state": "unavailable", "reason": reason}));
+        };
         let status = ops::call(&engine, "status", "{}").map_err(|_| Decline::Internal)?;
         aac_store::read_status::from_writer(&status).ok_or(Decline::Unsupported)
+    }
+
+    /// Run the same periodic maintenance and backups for either transport.
+    pub(crate) async fn jobs(self: Arc<Self>, stop: Arc<AtomicBool>) {
+        tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
+        while !stop.load(Ordering::Acquire) {
+            let host = Arc::clone(&self);
+            let _ = tokio::task::spawn_blocking(move || host.job_pass(aac_store::engine::now_ms()))
+                .await;
+            tokio::time::sleep(Duration::from_millis(MAINTAIN_EVERY_MS)).await;
+        }
     }
 
     /// One maintenance pass, TS's loop body with its intervals and meta keys: maintain

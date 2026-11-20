@@ -289,6 +289,8 @@ export const tests = {
 		await t.page.click(`${ROW('claude:pro-a')} .hopen[aria-label="Open on Mac"]`);
 		await eventually(t, async () => opens.length, (n) => n >= 1);
 		await t.check('one Open request for that profile on the Mac', opens.length === 1 && opens[0].body?.platform === 'mac', JSON.stringify(opens));
+		// Open is asynchronous and temporarily disables every Open control.
+		await t.page.locator(`${ROW('claude:pro-a')} .hopen[aria-label="Open on Mac"][aria-disabled="false"]`).waitFor({ state: 'visible' });
 		// A refused control stays tappable (aria-disabled, not disabled), so it can say why.
 		await t.page.click(`${ROW('claude:max-b')} .hopen[aria-label^="Open on Windows"]`, { force: true });
 		await t.text(`${ROW('claude:max-b')} .hreason`, /Open on Windows is unavailable for this profile/);

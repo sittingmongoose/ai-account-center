@@ -1,3 +1,4 @@
+import { compositionAccess } from '../compose-request';
 /**
  * Dashboard Authentication Middleware
  * Session-based auth with httpOnly cookies for CCS dashboard.
@@ -18,6 +19,7 @@ import {
   isDashboardAuthEnabled,
 } from '../../config/config-loader-facade';
 import { effectiveSessionLifetimeDays } from '../../config/schemas/auth';
+import { assertTsWritesFile } from '../../shared/private-files';
 import { bearerToken, guardApiRequest, settleSessionEpoch } from './api-request-guard';
 import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
@@ -25,6 +27,7 @@ import { credentialAllowedOnRequest, isLanProxyPeer, isSecureTransport } from '.
 import { isLoopbackRemoteAddress } from './trusted-networks';
 import { isSessionEpochCurrent, settleCredentialStamp } from '../services/dashboard-auth-state';
 import { DashboardSessionStore } from './dashboard-session-store';
+import { ensureAuthDirectory } from '../services/dashboard-auth-files';
 
 export { isLoopbackRemoteAddress };
 
@@ -106,6 +109,7 @@ function getSessionSecret(): string {
   // 3. Generate and persist new random secret
   const newSecret = crypto.randomBytes(32).toString('hex');
   try {
+    assertTsWritesFile(secretPath, getCcsDir());
     const dir = path.dirname(secretPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -268,28 +272,36 @@ export function closeDashboardSessions(timeoutMs = 2_000): Promise<void> {
   return closingSessions;
 }
 
-/**
- * Create session middleware configured for CCS dashboard.
- */
-export function createSessionMiddleware(): (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => void {
-  const authConfig = getDashboardAuthConfig();
-  const maxAge = effectiveSessionLifetimeDays(authConfig) * 24 * 60 * 60 * 1000;
-  // Sign-ins survive a dashboard restart (the default in-memory store lost them all). A
-  // Remember-me-off session is kept for the lifetime set now, not the one set at startup.
-  activeSessionStore = new DashboardSessionStore({
-    idleMs: () => effectiveSessionLifetimeDays(getDashboardAuthConfig()) * 24 * 60 * 60 * 1000,
-    // A password changed from the CLI or the environment while the dashboard was down signs
-    // every kept session out before the first request is answered.
-    after: settleCredentialStamp(),
-  });
+/** In-process middleware for an app without the public listener lifecycle. */
+export function createSessionMiddleware(): ReturnType<typeof session> {
+  const store = openSessionStore(false);
+  activeSessionStore = store;
+  return sessionMiddleware(store);
+}
 
+/** Claim the shared auth state before the rollback listener reads or updates it. */
+export async function openDashboardSessionMiddleware(): Promise<ReturnType<typeof session>> {
+  await ensureAuthDirectory();
+  const store = openSessionStore(true);
+  await store.whenReady();
+  activeSessionStore = store;
+  return sessionMiddleware(store);
+}
+
+function openSessionStore(requireWriter: boolean): DashboardSessionStore {
+  return new DashboardSessionStore({
+    idleMs: () => effectiveSessionLifetimeDays(getDashboardAuthConfig()) * 24 * 60 * 60 * 1000,
+    // A password changed while the dashboard was down signs out every kept session.
+    after: settleCredentialStamp,
+    requireWriter,
+  });
+}
+
+function sessionMiddleware(store: DashboardSessionStore): ReturnType<typeof session> {
+  const maxAge = effectiveSessionLifetimeDays(getDashboardAuthConfig()) * 24 * 60 * 60 * 1000;
   const middleware = session({
     secret: getSessionSecret(),
-    store: activeSessionStore,
+    store,
     resave: false,
     saveUninitialized: false,
     // Idle expiry: every response restarts the lifetime countdown, so the
@@ -318,6 +330,7 @@ export function createSessionMiddleware(): (
  * Only active when dashboard_auth.enabled = true.
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (compositionAccess(req)) return next();
   // Skip auth if disabled. A kept session from an older epoch is still turned signed-out first:
   // with sessions surviving restarts, a cookie revoked before sign-in was turned off must not
   // reach the routes that ask for a signed-in browser.
@@ -345,9 +358,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
  * path. Inside the router, req.path is relative to /api.
  */
 export function apiAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
-  if (!isDashboardAuthEnabled()) {
-    return next();
-  }
+  if (compositionAccess(req) || !isDashboardAuthEnabled()) return next();
 
   guardApiRequest(req, res, next, req.path, {
     unauthenticated: (response) => rejectWithoutSession(response, `/api${req.path}`),
@@ -366,7 +377,7 @@ export function requireDashboardSession(
   res: Response,
   localAccessError?: string
 ): boolean {
-  if (!isDashboardAuthEnabled()) {
+  if (!(compositionAccess(req)?.authEnabled ?? isDashboardAuthEnabled())) {
     return requireLocalAccessWhenAuthDisabled(req, res, localAccessError);
   }
 
@@ -411,6 +422,8 @@ function isHttpOrigin(origin: URL): boolean {
 }
 
 export function isDashboardWebSocketOriginAllowed(req: IncomingMessage): boolean {
+  const forwarded = compositionAccess(req);
+  if (forwarded) return forwarded.sameOrigin;
   const originHeader = getSingleHeader(req.headers.origin);
   if (!originHeader) return true;
 
@@ -476,10 +489,15 @@ export function requireLocalAccessWhenAuthDisabled(
   res: Response,
   error = 'This endpoint requires localhost access when dashboard auth is disabled.'
 ): boolean {
-  if (isDashboardAuthEnabled()) {
+  const forwarded = compositionAccess(req);
+  if (forwarded?.authEnabled ?? isDashboardAuthEnabled()) {
     return true;
   }
 
+  if (forwarded) {
+    if (!forwarded.local) res.status(403).json({ error });
+    return forwarded.local;
+  }
   if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
     res.status(403).json({ error });
     return false;

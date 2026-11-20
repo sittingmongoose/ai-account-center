@@ -5,7 +5,6 @@ import type { Request } from 'express';
 import type { RustService } from '../../src/web-server/rust-service';
 import { rustStatusInput, isRustStatusView } from '../../src/web-server/rust-read-input';
 import { buildStatusView } from '../../src/web-server/status/status-view';
-import { checkStatusFed } from './status-fed-check';
 
 export async function checkRoundingParity(service: RustService, fixture: any): Promise<void> {
   const rows: any[] = JSON.parse(
@@ -17,7 +16,6 @@ export async function checkRoundingParity(service: RustService, fixture: any): P
     session: { authenticated: true },
   } as Request;
   let checks = 0;
-  let fed = 0;
   async function check(input: any, label: string, fallback = false) {
     const expected = buildStatusView(input);
     const before = { ...service.stats };
@@ -52,13 +50,6 @@ export async function checkRoundingParity(service: RustService, fixture: any): P
       fallback ? 0 : 1,
       `${label}: actual Rust response`
     );
-    // R2: the same admission through the fed path: served byte-equal, or declined to today's handler.
-    assert.equal(
-      await checkStatusFed(service, input, `fed ${label}`),
-      !fallback,
-      `${label}: fed admission`
-    );
-    fed++;
     checks++;
   }
   // The new Node table drives review M1; this must fail at bc3c1f496.
@@ -122,6 +113,6 @@ export async function checkRoundingParity(service: RustService, fixture: any): P
   unproven.quota.good.doc.budgets[1].percent = 1e30;
   await check(unproven, 'unproven numeric word', true);
   console.log(
-    `${checks} numeric Status admissions: exact Node-neighbor values or explicit logged TS fallback; ${fed} through the fed path`
+    `${checks} numeric Status admissions: exact Node-neighbor values or explicit logged TS fallback`
   );
 }

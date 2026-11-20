@@ -1444,6 +1444,18 @@ export function cursorAccountLine(account, now = Date.now()) {
       const notLogged = unlogged > 0
         ? `; ${nf0.format(unlogged)} event${unlogged === 1 ? '' : 's'} not logged (token counts missing)`
         : '';
+      const counts = account.eventCounts;
+      if (total <= 0 && counts?.fetched === 0)
+        return `Cursor account ${read}: Cursor returned no events${local}.`;
+      if (total <= 0 && counts?.fetched > 0 && counts?.kept === 0) {
+        const discarded = [
+          counts.droppedOutOfWindow > 0 ? `${nf0.format(counts.droppedOutOfWindow)} outside the date range` : '',
+          counts.droppedNoTokenUsage > 0 ? `${nf0.format(counts.droppedNoTokenUsage)} without token usage` : '',
+        ].filter(Boolean).join(', ');
+        return `Cursor account ${read}: no measured events${discarded ? ` (${discarded})` : ''}${notLogged}${local}.`;
+      }
+      if (total <= 0 && counts?.kept > 0)
+        return `Cursor account ${read}: zero measured tokens${notLogged}${local}.`;
       if (total <= 0)
         return `Cursor account ${read}: ${unlogged > 0 ? 'no tokens logged' : 'no usage in range'}${notLogged}${local}.`;
       return matched > 0

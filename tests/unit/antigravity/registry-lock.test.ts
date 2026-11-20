@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { AntigravityProfileRegistry, PrivateStorageError } from '../../../src/antigravity';
+import { AntigravityProfileRegistry, PrivateStorageError } from '../../../src/antigravity/registry';
 import { currentBootId, processStartTime } from '../../../src/antigravity/holder-record';
 
 const STALE_AFTER_MS = 11 * 60_000;

@@ -1,0 +1,225 @@
+//! The cached `claude-host` session probe and the TS `withClaudeSignIn` projection.
+//!
+//! The dashboard said "Sign-in needed on Mac" from a five-minute cached `session` step on the
+//! profile's Mac launcher, then filtered the needed platforms to the row's own launchers. The
+//! coordinator cannot know that host state, so the producer asks it here and applies the same
+//! post-projection the TS dashboard applied after the failover service returned.
+use super::Producer;
+use serde_json::{Value, json};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+const ANSWER_TTL_MS: f64 = 5.0 * 60_000.0;
+const FAILURE_TTL_MS: f64 = 60_000.0;
+const FORCED_MIN_AGE_MS: f64 = 30_000.0;
+const MAX_ENTRIES: usize = 64;
+
+#[derive(Clone)]
+pub(super) struct Answer {
+    at: f64,
+    ttl: f64,
+    signed_out: bool,
+}
+
+/// The producer's per-profile cache of the Mac launcher's session state.
+pub(super) type SignInCache = Arc<Mutex<Vec<(String, Answer)>>>;
+
+#[cfg(test)]
+pub(super) type SessionFixture = fn(&str, &Value) -> Value;
+
+impl Producer {
+    /// The TS `getClaudeMacSignInState`: `Some(true)` signed out, `Some(false)` signed in,
+    /// `None` unknown. A failed check is unknown and never a sign-out.
+    pub(super) async fn mac_signed_out(&self, profile: &Value, force: bool) -> Option<bool> {
+        let id = profile["id"].as_str()?;
+        let mac = &profile["mac"];
+        let alias = mac["sshHost"].as_str()?;
+        let path = mac["profilePath"]
+            .as_str()
+            .filter(|path| path.starts_with('/'))?;
+        let launcher = json!({
+            "launcherName": mac["launcherName"],
+            "profilePath": path,
+            "sshHost": alias,
+        });
+        let key = String::from_utf8(aac_views::js_json::write(&json!([
+            self.root.to_string_lossy(),
+            id,
+            launcher
+        ])))
+        .ok()?;
+        let now = aac_core::UtcMs::now().map_or(0.0, |now| now.get() as f64);
+        {
+            let cache = self.sign_in_state.lock().await;
+            if let Some((_, entry)) = cache.iter().find(|(held, _)| held == &key) {
+                let age = now - entry.at;
+                if age < entry.ttl && !(force && age >= FORCED_MIN_AGE_MS) {
+                    return Some(entry.signed_out);
+                }
+            }
+        }
+        let reply = self.probe_mac_session(alias, launcher).await;
+        let signed_out = reply.as_ref().and_then(value_for_signed_in)?;
+        let entry = Answer {
+            at: now,
+            ttl: if reply.is_some_and(|value| value.get("signedIn").is_none()) {
+                FAILURE_TTL_MS
+            } else {
+                ANSWER_TTL_MS
+            },
+            signed_out,
+        };
+        let mut cache = self.sign_in_state.lock().await;
+        cache.retain(|(held, _)| held != &key);
+        cache.push((key, entry));
+        if cache.len() > MAX_ENTRIES {
+            cache.remove(0);
+        }
+        Some(signed_out)
+    }
+    async fn probe_mac_session(&self, alias: &str, launcher: Value) -> Option<Value> {
+        #[cfg(test)]
+        if let Some(probe) = self.mac_session_fixture {
+            return Some(probe(alias, &launcher));
+        }
+        crate::claude_host::call(
+            &self.agents,
+            "mac",
+            alias,
+            json!({"host": "mac", "op": "session", "launcher": launcher}),
+            25_000,
+        )
+        .await
+    }
+}
+
+fn value_for_signed_in(value: &Value) -> Option<bool> {
+    value.get("signedIn")?.as_bool().map(|signed_in| !signed_in)
+}
+
+/// The TS `withClaudeSignIn`: filter the needed platforms to the row's launchers, mark a row
+/// with no windows `needs_sign_in`, and use the fixed sentence unless the row is live.
+pub(super) fn with_mac_sign_in(mut row: Value, mac_signed_out: bool) -> Value {
+    if row.get("provider").and_then(Value::as_str) != Some("claude") {
+        return row;
+    }
+    let capabilities = row
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("claudePlatforms"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut needed: Vec<String> = row
+        .get("signInNeeded")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    if mac_signed_out && !needed.iter().any(|platform| platform == "mac") {
+        needed.push("mac".into());
+    }
+    let platforms: Vec<&str> = ["mac", "windows"]
+        .into_iter()
+        .filter(|platform| {
+            needed.iter().any(|held| held == platform)
+                && capabilities.iter().any(|held| held == platform)
+        })
+        .collect();
+    if platforms.is_empty() {
+        return row;
+    }
+    let live = row.get("status").and_then(Value::as_str) == Some("ok");
+    let hosts = platforms
+        .iter()
+        .map(|platform| if *platform == "mac" { "Mac" } else { "Windows" })
+        .collect::<Vec<_>>()
+        .join(" and ");
+    let message = if live {
+        row.get("message").cloned().unwrap_or(Value::Null)
+    } else {
+        json!(format!(
+            "Sign-in needed on {hosts}. Open shows the sign-in window."
+        ))
+    };
+    let empty_windows = row
+        .get("windows")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    row["signInNeeded"] = json!(platforms);
+    row["message"] = message;
+    if empty_windows {
+        row["status"] = json!("needs_sign_in");
+    }
+    row
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn claude_row() -> Value {
+        json!({
+            "id":"claude:livia","provider":"claude","providerLabel":"Claude","label":"livia",
+            "email":"owner@example.com","plan":null,"platform":"mac","source":"Claude desktop on Mac",
+            "status":"ok","message":null,"fetchedAt":"2026-01-01T00:00:00.000Z",
+            "sampledAt":"2026-01-01T00:00:00.000Z","isActive":false,
+            "windows":[{"key":"five_hour","usedPercent":10.0}],
+            "capabilities":{"codexProfile":null,"claudeProfileId":"livia","claudePlatforms":["mac","windows"]}
+        })
+    }
+
+    #[test]
+    fn a_signed_out_mac_adds_the_platform_and_keeps_a_live_message() {
+        let row = with_mac_sign_in(claude_row(), true);
+        assert_eq!(row["signInNeeded"], json!(["mac"]));
+        assert_eq!(row["message"], Value::Null);
+        assert_eq!(row["status"], "ok");
+    }
+
+    #[test]
+    fn a_row_without_windows_needs_a_sign_in() {
+        let mut template = claude_row();
+        template["status"] = json!("unavailable");
+        template["message"] = json!("Claude desktop usage is temporarily unavailable.");
+        template["windows"] = json!([]);
+        let row = with_mac_sign_in(template, true);
+        assert_eq!(row["signInNeeded"], json!(["mac"]));
+        assert_eq!(row["status"], "needs_sign_in");
+        assert_eq!(
+            row["message"],
+            "Sign-in needed on Mac. Open shows the sign-in window."
+        );
+    }
+
+    #[test]
+    fn a_platform_the_profile_cannot_open_is_never_named() {
+        let mut template = claude_row();
+        template["capabilities"]["claudePlatforms"] = json!(["windows"]);
+        let row = with_mac_sign_in(template, true);
+        assert!(row.get("signInNeeded").is_none());
+        assert_eq!(row["status"], "ok");
+    }
+
+    #[test]
+    fn a_coordinator_set_is_kept_in_platform_order() {
+        let mut template = claude_row();
+        template["signInNeeded"] = json!(["windows"]);
+        let row = with_mac_sign_in(template, true);
+        assert_eq!(row["signInNeeded"], json!(["mac", "windows"]));
+        // A live row keeps its own message; the sentence belongs to a row that is not live.
+        assert_eq!(row["message"], Value::Null);
+        let mut template = claude_row();
+        template["signInNeeded"] = json!(["windows"]);
+        template["status"] = json!("cached");
+        let row = with_mac_sign_in(template, true);
+        assert_eq!(
+            row["message"],
+            "Sign-in needed on Mac and Windows. Open shows the sign-in window."
+        );
+        assert_eq!(row["status"], "cached");
+    }
+}

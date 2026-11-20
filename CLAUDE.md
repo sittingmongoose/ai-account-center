@@ -11,10 +11,10 @@ dashboard authentication, existing profiles (add, remove, sign in again),
 Analytics, explicit app-update jobs and native Mac/Windows bars. It does not
 switch accounts: account switching (Codex activation and auto-switch,
 Antigravity activation and auto-switch) was removed on 2026-11-14, because the
-agents pick their own accounts; do not add it back. The TypeScript server stays; the web UI is Leptos
-**0.9** (client-side rendered) compiled to WebAssembly. Native bars remain Swift and WPF. Every new
-server piece is written in Rust as a native module like `crates/aac-store`.
-Existing TypeScript modules are not ported unless the owner asks.
+agents pick their own accounts. Rust owns the public dashboard listener and CLI. The cut removes
+the TypeScript public server. Its private sidecar supplies the remaining compatibility routes and
+jobs during the transition. The remote Codex update runtime and build tooling retain Node.
+The web UI is Leptos **0.9** compiled to WebAssembly. Native bars remain Swift and WPF.
 
 The primary command is `ai-account-center dashboard`; `ccs config` is compatible.
 Retired `ccsx`, `ccs-codex`, `ccsd`, `ccs-droid` and `ccsxp` bins give migration
@@ -45,7 +45,8 @@ or API routing product.
 
 | Area | Inputs |
 | --- | --- |
-| CLI/account/backend | `src/`, `lib/`, `config/` |
+| Dashboard listener, CLI and native owners | `crates/`, `config/` |
+| Compatibility sidecar and remote Codex update runtime | `src/web-server/sidecar.ts`, `src/codex-auth/codex-update-runtime-entry.ts` |
 | Dashboard | `web-dashboard/leptos/`, `web-dashboard/public/` |
 | Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
 | Native clients | `macos-bar/`, `windows-bar/` |

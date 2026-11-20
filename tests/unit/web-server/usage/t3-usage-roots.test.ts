@@ -11,8 +11,7 @@ import {
 } from '../../../../src/web-server/usage/t3-usage-roots';
 import {
   experimentActivityRequests,
-  type AccountAnalyticsActivityRequest,
-} from '../../../../src/web-server/services/account-analytics-activity';
+  } from '../../../../src/web-server/usage/analytics-request-plan';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
 const minDate = NOW - 31 * 86_400_000;

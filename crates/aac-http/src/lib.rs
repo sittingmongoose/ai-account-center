@@ -1,39 +1,81 @@
-//! Private Unix-socket HTTP service. The TS front door retains authentication and policy.
-#[cfg(unix)]
+//! Private service HTTP core and opt-in M6 dashboard front door.
+//! The collection, settings and account-read owners build on every platform the dashboard does;
+//! the private Unix protocol and the services it alone serves stay on Unix.
+mod account_approvals;
 mod account_reads;
-#[cfg(unix)]
+pub mod account_usage;
 mod agent_transport;
-#[cfg(unix)]
+mod analytics_live;
+mod analytics_route;
+mod analytics_writers;
+mod answers_owned;
+pub mod antigravity_host;
+pub mod antigravity_probes;
+pub mod antigravity_quota;
+pub mod antigravity_renewal;
+pub mod antigravity_runtime;
+pub mod app_update_routes;
+pub mod app_updates;
+mod claude_account_store;
+mod claude_host;
+pub mod claude_lifecycle;
+pub mod claude_open;
+pub mod cli;
+mod codex_quotas;
+mod collection;
+mod collection_cache;
+mod dashboard_fed;
+pub mod dashboard_observations;
 mod feed;
-#[cfg(unix)]
 mod home_fed;
-#[cfg(unix)]
+mod home_producer;
 mod identity;
-#[cfg(unix)]
 mod json_object;
-#[cfg(unix)]
+pub mod key_lifecycle;
+mod lifecycle_effect_pipe;
+pub mod lifecycle_maintenance;
+pub mod lifecycle_policy;
+pub mod lifecycle_queue;
+pub mod lifecycle_recheck;
+pub mod lifecycle_signin;
 mod limits;
-#[cfg(unix)]
+/// Cross-platform: the models.dev fetch job G14's scheduling will run from the service.
+pub mod models_dev;
+/// The public owners one boot runs: the private service and the public host share them.
+mod owners;
+mod preferences_write;
 mod profile_reads;
-#[cfg(unix)]
+pub mod public_auth;
 mod read_files;
 #[cfg(unix)]
 mod read_routes;
-#[cfg(unix)]
 mod registered;
-#[cfg(unix)]
+mod reset_claims;
+mod reset_source_route;
+#[cfg(all(unix, test))]
+mod runs_ingest_gate;
+mod scoreboard_owned;
+pub mod signin_callbacks;
+mod signins;
+mod status_answers_route;
 mod status_cache;
-#[cfg(unix)]
 mod status_fed;
-#[cfg(unix)]
+mod status_owned;
+mod status_produce;
+mod status_run;
 mod store_host;
-#[cfg(unix)]
 mod table;
 #[cfg(unix)]
 mod unix;
-#[cfg(unix)]
+mod usage_routes;
+mod usage_snapshot;
 pub mod view_reply;
-#[cfg(unix)]
+mod visibility_write;
+mod zone_facts;
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, short_name};
+pub use unix::{
+    Boot, NativeAccountUsage, serve, serve_composed, serve_with_account_usage_cache,
+    serve_with_app_update_jobs, serve_with_claude_open, serve_with_native_account_usage,
+    short_name,
+};

@@ -1,0 +1,854 @@
+{
+  "note": "G14 activity-collection parity: TS aggregation + fed pricing facts (synthetic rows only).",
+  "now": 1794744000000,
+  "windowFromMs": 1792065600000,
+  "facts": {
+    "claude-sonnet-4-5\u0000anthropic": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "builtin"
+    },
+    "claude-sonnet-4-5\u0000openai": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "builtin"
+    },
+    "claude-sonnet-4-5\u0000google": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "builtin"
+    },
+    "claude-sonnet-4-5\u0000": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "builtin"
+    },
+    "gpt-5-codex\u0000anthropic": {
+      "rates": {
+        "input": 1.25,
+        "output": 10,
+        "cacheCreation": 0,
+        "cacheRead": 0.125
+      },
+      "source": "builtin"
+    },
+    "gpt-5-codex\u0000openai": {
+      "rates": {
+        "input": 1.25,
+        "output": 10,
+        "cacheCreation": 0,
+        "cacheRead": 0.125
+      },
+      "source": "builtin"
+    },
+    "gpt-5-codex\u0000google": {
+      "rates": {
+        "input": 1.25,
+        "output": 10,
+        "cacheCreation": 0,
+        "cacheRead": 0.125
+      },
+      "source": "builtin"
+    },
+    "gpt-5-codex\u0000": {
+      "rates": {
+        "input": 1.25,
+        "output": 10,
+        "cacheCreation": 0,
+        "cacheRead": 0.125
+      },
+      "source": "builtin"
+    },
+    "mystery-model-xyz\u0000anthropic": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "fallback"
+    },
+    "mystery-model-xyz\u0000openai": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "fallback"
+    },
+    "mystery-model-xyz\u0000google": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "fallback"
+    },
+    "mystery-model-xyz\u0000": {
+      "rates": {
+        "input": 3,
+        "output": 15,
+        "cacheCreation": 3.75,
+        "cacheRead": 0.3
+      },
+      "source": "fallback"
+    }
+  },
+  "cases": [
+    {
+      "name": "claude-anthropic-priced",
+      "kind": "claude",
+      "host": "ubuntu",
+      "rows": [
+        {
+          "k": "claude",
+          "f": "file-claude-10.jsonl",
+          "m": "claude-sonnet-4-5",
+          "h": "2026-11-14 10:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        },
+        {
+          "k": "claude",
+          "f": "file-claude-11.jsonl",
+          "m": "claude-sonnet-4-5",
+          "h": "2026-11-14 11:00",
+          "i": 2000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 6,
+          "p": "anthropic"
+        },
+        {
+          "k": "claude",
+          "f": "other.jsonl",
+          "m": "claude-sonnet-4-5",
+          "h": "2026-11-14 10:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 2,
+          "p": "anthropic"
+        }
+      ],
+      "srows": [
+        {
+          "k": "claude",
+          "f": "file-claude-10.jsonl",
+          "s": "0123456789abcdef",
+          "m": "claude-sonnet-4-5",
+          "a": 1794650400000,
+          "z": 1794651000000,
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        },
+        {
+          "k": "claude",
+          "f": "file-claude-11.jsonl",
+          "s": "0123456789abcdef",
+          "m": "claude-sonnet-4-5",
+          "a": 1794654000000,
+          "z": 1794654600000,
+          "i": 2000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 6,
+          "p": "anthropic"
+        }
+      ],
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-14T10:00:00.000Z",
+              "sessionKey": "0123456789abcdef",
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0062775,
+              "fallbackCostUsd": 0
+            },
+            {
+              "hour": "2026-11-14T11:00:00.000Z",
+              "sessionKey": "0123456789abcdef",
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 2000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 6,
+              "loggedCostUsd": null,
+              "costUsd": 0.009277500000000001,
+              "fallbackCostUsd": 0
+            },
+            {
+              "hour": "2026-11-14T10:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 2,
+              "loggedCostUsd": null,
+              "costUsd": 0.0062775,
+              "fallbackCostUsd": 0
+            }
+          ],
+          "sessions": [
+            {
+              "sessionKey": "0123456789abcdef",
+              "first": "2026-11-14T10:00:00.000Z",
+              "last": "2026-11-14T11:10:00.000Z",
+              "parts": [
+                {
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 3000,
+                  "outputTokens": 400,
+                  "cacheCreationTokens": 100,
+                  "cacheReadTokens": 600,
+                  "costUsd": 0.015555000000000001,
+                  "fallbackCostUsd": 0
+                }
+              ],
+              "target": "claude"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "codex-no-provider-logged-cost",
+      "kind": "codex",
+      "host": "mac",
+      "rows": [
+        {
+          "k": "codex",
+          "f": "file-codex-9.jsonl",
+          "m": "gpt-5-codex",
+          "h": "2026-11-14 09:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0.05,
+          "n": 4
+        },
+        {
+          "k": "codex",
+          "f": "file-codex-9.jsonl",
+          "m": "gpt-5-codex",
+          "h": "2026-11-14 09:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0.02,
+          "n": 4
+        },
+        {
+          "k": "codex",
+          "f": "file-codex-12.jsonl",
+          "m": "gpt-5-codex",
+          "h": "2026-11-14 12:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4
+        }
+      ],
+      "srows": [
+        {
+          "k": "codex",
+          "f": "file-codex-9.jsonl",
+          "s": "fedcba9876543210",
+          "m": "gpt-5-codex",
+          "a": 1794646800000,
+          "z": 1794647400000,
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0.07,
+          "n": 4
+        }
+      ],
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "mac",
+          "tool": "codex",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-14T09:00:00.000Z",
+              "sessionKey": "fedcba9876543210",
+              "route": "openai",
+              "modelRaw": "gpt-5-codex",
+              "inputTokens": 2000,
+              "outputTokens": 400,
+              "cacheCreationTokens": 100,
+              "cacheReadTokens": 600,
+              "events": 8,
+              "loggedCostUsd": 0.07,
+              "costUsd": 0.07,
+              "fallbackCostUsd": 0
+            },
+            {
+              "hour": "2026-11-14T12:00:00.000Z",
+              "sessionKey": null,
+              "route": "openai",
+              "modelRaw": "gpt-5-codex",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0032875000000000005,
+              "fallbackCostUsd": 0
+            }
+          ],
+          "sessions": [
+            {
+              "sessionKey": "fedcba9876543210",
+              "first": "2026-11-14T09:00:00.000Z",
+              "last": "2026-11-14T09:10:00.000Z",
+              "parts": [
+                {
+                  "route": "openai",
+                  "modelRaw": "gpt-5-codex",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.07,
+                  "fallbackCostUsd": 0
+                }
+              ],
+              "target": "codex"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unknown-model-fallback",
+      "kind": "cursor",
+      "host": "ubuntu",
+      "rows": [
+        {
+          "k": "cursor",
+          "f": "file-cursor-14.jsonl",
+          "m": "mystery-model-xyz",
+          "h": "2026-11-14 14:00",
+          "i": 5000,
+          "o": 1000,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        },
+        {
+          "k": "cursor",
+          "f": "file-cursor-15.jsonl",
+          "m": "mystery-model-xyz",
+          "h": "2026-11-14 15:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        }
+      ],
+      "srows": [
+        {
+          "k": "cursor",
+          "f": "file-cursor-14.jsonl",
+          "s": "0123456789abcdef",
+          "m": "mystery-model-xyz",
+          "a": 1794664800000,
+          "z": 1794665400000,
+          "i": 5000,
+          "o": 1000,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        }
+      ],
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "cursor",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-14T14:00:00.000Z",
+              "sessionKey": "0123456789abcdef",
+              "route": "anthropic",
+              "modelRaw": "mystery-model-xyz",
+              "inputTokens": 5000,
+              "outputTokens": 1000,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0302775,
+              "fallbackCostUsd": 0.0302775
+            },
+            {
+              "hour": "2026-11-14T15:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "mystery-model-xyz",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0062775,
+              "fallbackCostUsd": 0.0062775
+            }
+          ],
+          "sessions": [
+            {
+              "sessionKey": "0123456789abcdef",
+              "first": "2026-11-14T14:00:00.000Z",
+              "last": "2026-11-14T14:10:00.000Z",
+              "parts": [
+                {
+                  "route": "anthropic",
+                  "modelRaw": "mystery-model-xyz",
+                  "inputTokens": 5000,
+                  "outputTokens": 1000,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0302775,
+                  "fallbackCostUsd": 0.0302775
+                }
+              ],
+              "target": "cursor"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "reported-and-unknown-basis",
+      "kind": "cursor",
+      "host": "windows",
+      "rows": [
+        {
+          "k": "cursor",
+          "f": "file-cursor-8.jsonl",
+          "m": "claude-sonnet-4-5",
+          "h": "2026-11-14 08:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0.1,
+          "n": 4,
+          "p": "anthropic",
+          "costBasis": "reported"
+        },
+        {
+          "k": "cursor",
+          "f": "file-cursor-8.jsonl",
+          "m": "claude-sonnet-4-5",
+          "h": "2026-11-14 08:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic",
+          "costBasis": "reported"
+        },
+        {
+          "k": "cursor",
+          "f": "file-cursor-9.jsonl",
+          "m": "gpt-5-codex",
+          "h": "2026-11-14 09:00",
+          "i": 3000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "openai",
+          "costBasis": "unknown"
+        }
+      ],
+      "srows": [
+        {
+          "k": "cursor",
+          "f": "file-cursor-8.jsonl",
+          "s": "fedcba9876543210",
+          "m": "claude-sonnet-4-5",
+          "a": 1794643200000,
+          "z": 1794643800000,
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0.1,
+          "n": 4,
+          "p": "anthropic"
+        },
+        {
+          "k": "cursor",
+          "f": "file-cursor-9.jsonl",
+          "s": "fedcba9876543210",
+          "m": "gpt-5-codex",
+          "a": 1794646800000,
+          "z": 1794647400000,
+          "i": 3000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "openai"
+        }
+      ],
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "windows",
+          "tool": "cursor",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-14T08:00:00.000Z",
+              "sessionKey": "fedcba9876543210",
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 2000,
+              "outputTokens": 400,
+              "cacheCreationTokens": 100,
+              "cacheReadTokens": 600,
+              "events": 8,
+              "loggedCostUsd": 0.1,
+              "costUsd": 0.10627750000000001,
+              "fallbackCostUsd": 0
+            },
+            {
+              "hour": "2026-11-14T09:00:00.000Z",
+              "sessionKey": "fedcba9876543210",
+              "route": "openai",
+              "modelRaw": "gpt-5-codex",
+              "inputTokens": 3000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0057875,
+              "fallbackCostUsd": 0
+            }
+          ],
+          "sessions": [
+            {
+              "sessionKey": "fedcba9876543210",
+              "first": "2026-11-14T08:00:00.000Z",
+              "last": "2026-11-14T09:10:00.000Z",
+              "parts": [
+                {
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.1,
+                  "fallbackCostUsd": 0
+                },
+                {
+                  "route": "openai",
+                  "modelRaw": "gpt-5-codex",
+                  "inputTokens": 3000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0057875,
+                  "fallbackCostUsd": 0
+                }
+              ],
+              "target": "cursor"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mixed-providers-sessions",
+      "kind": "claude",
+      "host": "ubuntu",
+      "rows": [
+        {
+          "k": "claude",
+          "f": "file-claude-10.jsonl",
+          "m": "claude-sonnet-4-5",
+          "h": "2026-11-14 10:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        },
+        {
+          "k": "claude",
+          "f": "file-claude-10.jsonl",
+          "m": "gpt-5-codex",
+          "h": "2026-11-14 10:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "openai"
+        },
+        {
+          "k": "claude",
+          "f": "file-claude-11.jsonl",
+          "m": "claude-sonnet-4-5",
+          "h": "2026-11-14 11:00",
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        }
+      ],
+      "srows": [
+        {
+          "k": "claude",
+          "f": "file-claude-10.jsonl",
+          "s": "0123456789abcdef",
+          "m": "claude-sonnet-4-5",
+          "a": 1794650400000,
+          "z": 1794651000000,
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        },
+        {
+          "k": "claude",
+          "f": "file-claude-10.jsonl",
+          "s": "0123456789abcdef",
+          "m": "gpt-5-codex",
+          "a": 1794650400000,
+          "z": 1794651000000,
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "openai"
+        },
+        {
+          "k": "claude",
+          "f": "file-claude-11.jsonl",
+          "s": "fedcba9876543210",
+          "m": "claude-sonnet-4-5",
+          "a": 1794654000000,
+          "z": 1794654600000,
+          "i": 1000,
+          "o": 200,
+          "cr": 300,
+          "cw": 50,
+          "c": 0,
+          "n": 4,
+          "p": "anthropic"
+        }
+      ],
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-14T10:00:00.000Z",
+              "sessionKey": "0123456789abcdef",
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0062775,
+              "fallbackCostUsd": 0
+            },
+            {
+              "hour": "2026-11-14T10:00:00.000Z",
+              "sessionKey": "0123456789abcdef",
+              "route": "openai",
+              "modelRaw": "gpt-5-codex",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0032875000000000005,
+              "fallbackCostUsd": 0
+            },
+            {
+              "hour": "2026-11-14T11:00:00.000Z",
+              "sessionKey": "fedcba9876543210",
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "events": 4,
+              "loggedCostUsd": null,
+              "costUsd": 0.0062775,
+              "fallbackCostUsd": 0
+            }
+          ],
+          "sessions": [
+            {
+              "sessionKey": "fedcba9876543210",
+              "first": "2026-11-14T11:00:00.000Z",
+              "last": "2026-11-14T11:10:00.000Z",
+              "parts": [
+                {
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0062775,
+                  "fallbackCostUsd": 0
+                }
+              ],
+              "target": "claude"
+            },
+            {
+              "sessionKey": "0123456789abcdef",
+              "first": "2026-11-14T10:00:00.000Z",
+              "last": "2026-11-14T10:10:00.000Z",
+              "parts": [
+                {
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0062775,
+                  "fallbackCostUsd": 0
+                },
+                {
+                  "route": "openai",
+                  "modelRaw": "gpt-5-codex",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0032875000000000005,
+                  "fallbackCostUsd": 0
+                }
+              ],
+              "target": "claude"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -4,7 +4,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import { ConfigError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
-import { assertTsWritesFile } from '../../shared/private-files';
+import {
+  assertTsWritesFile,
+  commitRegisteredFile,
+  withTsPrivateFileLeases,
+} from '../../shared/private-files';
 import { getCcsDir } from '../../utils/config-manager';
 
 /**
@@ -163,9 +167,22 @@ async function syncFolder(directory: string): Promise<void> {
   }
 }
 
+export function withRegisteredJsonLock<T>(
+  root: string,
+  id: string,
+  file: string,
+  task: () => Promise<T>
+): Promise<T> {
+  return withPrivateFileLock(file, () => withTsPrivateFileLeases(root, [id], task, true));
+}
+
 /** Atomic replacement; call inside `withPrivateFileLock` for the same file. */
-export async function writePrivateJsonFile(file: string, value: unknown): Promise<void> {
-  await writePrivateTextFile(file, `${JSON.stringify(value, null, 2)}\n`);
+export async function writePrivateJsonFile(
+  file: string,
+  value: unknown,
+  root?: string
+): Promise<void> {
+  await writePrivateTextFile(file, `${JSON.stringify(value, null, 2)}\n`, root);
 }
 
 /**
@@ -173,14 +190,18 @@ export async function writePrivateJsonFile(file: string, value: unknown): Promis
  * with a random name (`wx`, so a planted file or symlink is never followed),
  * fsync, rename, then a best-effort fsync of the folder.
  */
-export async function writePrivateTextFile(file: string, contents: string): Promise<void> {
-  // One writer per registered file (L2): a row the Rust service owns now is never written here.
-  assertTsWritesFile(file, getCcsDir());
+export async function writePrivateTextFile(
+  file: string,
+  contents: string,
+  root?: string
+): Promise<void> {
+  assertTsWritesFile(file, root ?? getCcsDir());
   const directory = path.dirname(file);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   if ((await checkStoreFolder(directory)) !== 'ok') {
     throw new ConfigError('The private store folder is not safe to write.');
   }
+  if (root && commitRegisteredFile(file, root, contents)) return;
   const temporary = path.join(
     directory,
     `.${path.basename(file)}.${randomBytes(8).toString('hex')}.tmp`

@@ -379,7 +379,9 @@ export function createFrameDashboard({
         rememberSeen(storage, now());
         if (Number.isInteger(next.settings?.refreshIntervalSeconds)) applyRefreshInterval(next.settings.refreshIntervalSeconds);
         profiles = Array.isArray(inventory?.profiles) ? inventory.profiles : profiles;
-        antigravityInventory = antigravityProfiles;
+        // An unavailable Antigravity read (null) is not "no saved profiles": it keeps the last state, and the
+        // next answer that carries the inventory replaces it.
+        if (antigravityProfiles !== null && antigravityProfiles !== undefined) antigravityInventory = antigravityProfiles;
         render();
         // the page's actions and refusals follow the accounts: read them again with each refresh while it is open
         if (currentPage === 'accounts') void accounts.loadRegistry();

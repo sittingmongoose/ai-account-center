@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
-import { experimentActivityRequests } from '../../../src/web-server/services/account-analytics-activity';
+import { experimentActivityRequests } from '../../../src/web-server/usage/analytics-request-plan';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
 const minDate = NOW - 31 * 86_400_000;

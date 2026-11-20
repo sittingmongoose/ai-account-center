@@ -1,16 +1,14 @@
-import { describe, expect, it } from 'bun:test';
+import { describe,expect,it } from 'bun:test';
 import {
-  analyticsWindow,
-  analyticsWindowIdentity,
-  appendAccountAnalyticsSnapshot,
-  type AccountAnalyticsHistoryData,
+analyticsWindow,
+analyticsWindowIdentity,
+appendAccountAnalyticsSnapshot
 } from '../../../src/web-server/services/account-analytics-history';
 import { accountSeries } from '../../../src/web-server/services/account-analytics-compose';
-import { AccountAnalyticsService } from '../../../src/web-server/services/account-analytics-service';
 import type {
-  AccountDashboard,
-  DashboardAccount,
-  DashboardAccountWindow,
+AccountDashboard,
+DashboardAccount,
+DashboardAccountWindow,
 } from '../../../src/web-server/services/account-dashboard-types';
 import type { AccountAnalyticsActivity } from '../../../src/web-server/services/account-analytics-types';
 
@@ -144,49 +142,6 @@ describe('Antigravity distinct quota history', () => {
     ]);
   });
 
-  it('shows both registered accounts by default and an exact account filter without synthesizing provider activity', async () => {
-    let history: AccountAnalyticsHistoryData | null = null;
-    let activityCalls = 0;
-    const service = new AccountAnalyticsService({
-      getDashboard: async () => dashboard([account('gmail'), account('party')]),
-      getActivity: async () => {
-        activityCalls++;
-        return NO_ACTIVITY;
-      },
-      createHistoryStore: () => ({
-        read: async () => history,
-        write: async (data) => {
-          history = structuredClone(data);
-        },
-      }),
-      scope: () => '/fixture-injected-no-files',
-      now: () => NOW,
-    });
-    await service.sample();
-    const all = await service.get({
-      platform: 'mac',
-      range: '24h',
-      provider: 'all',
-      account: 'all',
-    });
-    expect(all.accounts.map((row) => row.id)).toEqual([
-      'antigravity:profile:gmail',
-      'antigravity:profile:party',
-    ]);
-    expect(all.accounts.every((row) => row.windows[0].points.length === 1)).toBe(true);
-    expect(all.accounts[0].windows[0].poolId).toBe(POOL);
-    expect(all.accounts[1].windows[0].points[0].resetAt).toBe(RESET);
-    const party = await service.get({
-      platform: 'windows',
-      range: '24h',
-      provider: 'antigravity',
-      account: 'antigravity:profile:party',
-    });
-    expect(party.accounts.map((row) => row.id)).toEqual(['antigravity:profile:party']);
-    expect(party.activity.status).toBe('unavailable');
-    expect(activityCalls).toBe(2);
-  });
-
   it('orders T3 and app weeklies first and leaves pre-T3 observations missing', () => {
     const app = { ...window(), label: 'Gemini weekly, in the Antigravity app' };
     const cli = {
@@ -204,41 +159,5 @@ describe('Antigravity distinct quota history', () => {
     expect(series.windows[0].usedPercent).toBe(34);
     expect(series.windows[0].points.map((point) => point.usedPercent)).toEqual([null]);
     expect(series.windows[1].points.map((point) => point.usedPercent)).toEqual([15.25]);
-  });
-
-  it('keeps changed group history without attaching its old reading to the new current pool', async () => {
-    let now = NOW;
-    let current = account('gmail');
-    let history: AccountAnalyticsHistoryData | null = null;
-    const service = new AccountAnalyticsService({
-      getDashboard: async () => dashboard([current]),
-      getActivity: async () => NO_ACTIVITY,
-      createHistoryStore: () => ({
-        read: async () => history,
-        write: async (data) => {
-          history = structuredClone(data);
-        },
-      }),
-      scope: () => '/fixture-injected-no-files',
-      now: () => now,
-    });
-    await service.sample();
-    await service.get({ platform: 'mac', range: '24h', provider: 'all', account: 'all' });
-    now += 3_600_000;
-    current = { ...current, sampledAt: new Date(now).toISOString(), windows: [window(OTHER_POOL)] };
-    await service.sample();
-    const result = await service.get({
-      platform: 'mac',
-      range: '24h',
-      provider: 'all',
-      account: 'all',
-    });
-    const previous = result.accounts[0].windows.find((row) => row.poolId === POOL);
-    const latest = result.accounts[0].windows.find((row) => row.poolId === OTHER_POOL);
-    expect(previous?.points.filter((point) => point.usedPercent !== null)).toHaveLength(1);
-    expect(previous?.points[previous.points.length - 1]?.usedPercent).toBeNull();
-    expect(previous?.usedPercent).toBeNull();
-    expect(latest?.points.filter((point) => point.usedPercent !== null)).toHaveLength(1);
-    expect(latest?.usedPercent).toBe(15.25);
   });
 });

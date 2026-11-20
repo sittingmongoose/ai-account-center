@@ -1,0 +1,33 @@
+# Example config.yaml for an isolated composition fixture.
+version: 14
+rustService:
+  frontDoor: rust
+  mode: on
+  store: on
+  homeProducer: on
+  groups:
+    home: on
+    status: on
+    scoreboard: on
+    analytics: on
+    analytics-writers: on
+    collection: on
+    writes: on
+    app-updates: on
+    renewal: on
+    usageSnapshot: on
+    claude-open: on
+agentTransport: on
+agentVerbs: on
+agentVerbFamilies:
+  inventory: on
+  signin-expiry: on
+  quota-read: on
+  failover-inventory: on
+  t3-pins: on
+  scan-usage: on
+  launch: on
+  claude-host: on
+  signin-session: on
+  key-store: on
+  claude-history: on
