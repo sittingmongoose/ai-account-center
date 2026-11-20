@@ -759,7 +759,7 @@ fn write_descriptor(
     socket: &Path,
     secret: &str,
     boot_id: &str,
-) -> Result<(), aac_files::Failure> {
+) -> std::io::Result<()> {
     let body = json!({
         "ccsDir": ccs,
         "socketPath": socket,
@@ -767,7 +767,9 @@ fn write_descriptor(
         "bootId": boot_id,
     })
     .to_string();
-    descriptor.write(body.as_bytes())
+    descriptor
+        .write(body.as_bytes())
+        .map_err(std::io::Error::other)
 }
 
 #[cfg(unix)]
