@@ -133,22 +133,23 @@ try {
       scope: () => root,
     })
   );
+  // The profiles route (as the cut composes it) and the owner's raw read, both over real requests.
+  app.get('/api/antigravity/profiles', async (req: express.Request, res: express.Response) => {
+    res.json(await readAntigravityInventory(req, res));
+  });
+  app.get('/api/antigravity/owner', async (req: express.Request, res: express.Response) => {
+    res.json(await runtimeInventory(req, res).catch(() => null));
+  });
   server = await new Promise<http.Server>((resolve) => {
     const started = app.listen(0, '127.0.0.1', () => resolve(started));
   });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('no test port');
   const base = `http://127.0.0.1:${address.port}`;
-  const req = {
-    method: 'GET',
-    sessionID: 'fixture-owner-session',
-    session: { authenticated: true },
-    headers: {},
-  } as unknown as express.Request;
-  const res = { locals: { rustService: service } } as unknown as express.Response;
-
   // The owner's own read (the profiles route in the cut): one saved profile.
-  const owner = (await runtimeInventory(req, res)) as { profiles?: { id?: string }[] };
+  const owner = (await (await fetch(`${base}/api/antigravity/owner`)).json()) as {
+    profiles?: { id?: string }[];
+  };
   if (owner.profiles?.length !== 1) failures.push(`owner read: ${owner.profiles?.length} profiles`);
   else if (owner.profiles[0].id !== 'gmail') failures.push(`owner read: ${owner.profiles[0].id}`);
 
@@ -160,7 +161,7 @@ try {
   else if (homeProfiles[0].id !== 'gmail') failures.push(`Home: ${homeProfiles[0].id}`);
 
   // The composed copy the profiles route answers must agree with Home's.
-  const copy = (await readAntigravityInventory(req, res)) as { profiles?: unknown };
+  const copy = await (await fetch(`${base}/api/antigravity/profiles`)).json();
   if (JSON.stringify(copy) !== JSON.stringify(body.antigravity))
     failures.push('Home and the profiles route disagree');
 
