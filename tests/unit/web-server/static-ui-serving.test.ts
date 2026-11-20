@@ -14,6 +14,7 @@ import path from 'path';
 import zlib from 'zlib';
 
 import { requestErrorKind, startServer } from '../../../src/web-server';
+import { closeDashboardSessions } from '../../../src/web-server/middleware/auth-middleware';
 import { readLogEntries } from '../../../src/services/logging';
 import { negotiateEncoding, resolvePageRoute } from '../../../src/web-server/static-ui';
 
@@ -70,6 +71,7 @@ async function stop(): Promise<void> {
   const server = instance.server;
   instance = undefined;
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeDashboardSessions();
 }
 
 interface RawResponse {

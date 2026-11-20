@@ -300,6 +300,11 @@ describe('analytics remote helper integrity', () => {
       _options: unknown,
       callback: (error: Error | null, stdout: string, stderr: string) => void
     ) => {
+      if (args[0] === '-G') {
+        expect(args.slice(0, 3)).toEqual(['-G', '-F', 'none']);
+        setImmediate(() => callback(null, '', ''));
+        return {};
+      }
       const call = { args: [...args], input: '' };
       calls.push(call);
       return {
@@ -2234,7 +2239,14 @@ it('keeps a successful scan Read during ordinary between-scan cache answers', as
   let calls = 0;
   const deps = {
     cacheDir: cache,
-    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null }),
+    hosts: async () => ({
+      mac: 'fixture',
+      windows: null,
+      nas1: null,
+      alexis: null,
+      odroid: null,
+      '1070ti': null,
+    }),
     now: () => at,
     runHelper: async () => {
       calls++;
@@ -2260,7 +2272,14 @@ it('a productive partial scan retains its last full-read clock and counts readab
   let pass = 0;
   const deps = {
     cacheDir: cache,
-    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null }),
+    hosts: async () => ({
+      mac: 'fixture',
+      windows: null,
+      nas1: null,
+      alexis: null,
+      odroid: null,
+      '1070ti': null,
+    }),
     now: () => at + pass * 360_000,
     runHelper: async () =>
       parseAnalyticsRemoteResponse(
@@ -2300,7 +2319,14 @@ it('a productive partial scan retains its last full-read clock and counts readab
 it('v7 partial clocks become unknown without discarding aggregates or fingerprints', async () => {
   await loadAnalyticsRemoteSources(MIN_DATE, {
     cacheDir: cache,
-    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null }),
+    hosts: async () => ({
+      mac: 'fixture',
+      windows: null,
+      nas1: null,
+      alexis: null,
+      odroid: null,
+      '1070ti': null,
+    }),
     runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(response())),
   });
   const file = path.join(cache, 'analytics-remote-v1/mac.json');
@@ -2318,7 +2344,14 @@ it('saves each computer its own cell notes when two computers scan at once', asy
   const at = Date.parse('2026-11-14T20:00:00Z');
   await loadAnalyticsRemoteSources(MIN_DATE, {
     cacheDir: cache,
-    hosts: async () => ({ mac: 'fixture', windows: null, nas1: 'fixture', alexis: null, odroid: null, '1070ti': null }),
+    hosts: async () => ({
+      mac: 'fixture',
+      windows: null,
+      nas1: 'fixture',
+      alexis: null,
+      odroid: null,
+      '1070ti': null,
+    }),
     now: () => at,
     runHelper: async (_alias, host) =>
       parseAnalyticsRemoteResponse(
@@ -2337,7 +2370,14 @@ it('keeps a Read cell note on cache-only answers', async () => {
   const at = Date.parse('2026-11-14T20:00:00Z');
   await loadAnalyticsRemoteSources(MIN_DATE, {
     cacheDir: cache,
-    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null }),
+    hosts: async () => ({
+      mac: 'fixture',
+      windows: null,
+      nas1: null,
+      alexis: null,
+      odroid: null,
+      '1070ti': null,
+    }),
     now: () => at,
     runHelper: async () =>
       parseAnalyticsRemoteResponse(JSON.stringify(response({ unansweredMounts: 1 }))),

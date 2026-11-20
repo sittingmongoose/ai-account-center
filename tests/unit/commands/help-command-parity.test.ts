@@ -159,16 +159,17 @@ describe('retained help surface', () => {
   test('antigravity recover reports each proof-driven outcome without touching the live login', async () => {
     const lines: string[] = [];
     await handleHelpRoute(['antigravity'], (line) => lines.push(line));
-    expect(lines.join('\n')).toContain('ai-account-center antigravity recover');
+    expect(lines.join('\n')).toContain('Managed in the dashboard');
+    expect(lines.join('\n')).toContain('recover            Finish or undo a stuck switch');
     const errors: string[] = [];
     expect(
-      await antigravityCommand.handleAntigravityCommand(['recover', 'extra'], (l) =>
-        errors.push(l)
-      )
+      await antigravityCommand.handleAntigravityCommand(['recover', 'extra'], (l) => errors.push(l))
     ).toBe(1);
     expect(errors).toHaveLength(1);
     const run = (
-      runtime: () => { recover(): Promise<{ status: string; profileId?: string; email?: string }> } | null
+      runtime: () => {
+        recover(): Promise<{ status: string; profileId?: string; email?: string }>;
+      } | null
     ) => {
       const out: string[] = [];
       return antigravityCommand
@@ -200,7 +201,9 @@ describe('retained help surface', () => {
     expect(lines.join('\n')).not.toContain('ai-account-center antigravity activate <profile>');
     const errors: string[] = [];
     expect(
-      await antigravityCommand.handleAntigravityCommand(['activate', 'party'], (l) => errors.push(l))
+      await antigravityCommand.handleAntigravityCommand(['activate', 'party'], (l) =>
+        errors.push(l)
+      )
     ).toBe(1);
     expect(errors.join('\n')).toContain('antigravity activate is retired');
   });
@@ -216,9 +219,7 @@ describe('retained help surface', () => {
     expect(help.join('\n')).toContain('ai-account-center antigravity runtime refresh');
     const errors: string[] = [];
     expect(
-      await antigravityCommand.handleAntigravityCommand(['runtime', 'prune'], (l) =>
-        errors.push(l)
-      )
+      await antigravityCommand.handleAntigravityCommand(['runtime', 'prune'], (l) => errors.push(l))
     ).toBe(1);
     expect(
       await antigravityCommand.handleAntigravityCommand(['runtime', 'refresh', 'extra'], (l) =>

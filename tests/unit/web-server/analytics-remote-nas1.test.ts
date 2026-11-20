@@ -108,6 +108,11 @@ function interceptProcesses(): { ssh: SshCall[]; other: string[] } {
     _options: unknown,
     callback: (error: Error | null, stdout: string, stderr: string) => void
   ) => {
+    if (args[0] === '-G') {
+      expect(args.slice(0, 3)).toEqual(['-G', '-F', 'none']);
+      setImmediate(() => callback(null, '', ''));
+      return {};
+    }
     const call: SshCall = { file, args: [...args], input: '' };
     seen.ssh.push(call);
     return {

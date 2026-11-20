@@ -9,7 +9,7 @@ import {
 } from './signin-job-types';
 import { SignInOutputParser } from './signin-output';
 import { CODEX_DEVICE_AUTH_ORIGINS } from './codex-account-lifecycle';
-import { MUSE_DEVICE_AUTH_ORIGINS } from './muse-account-lifecycle';
+import { MUSE_DEVICE_AUTH_ORIGINS } from './signin-job-types';
 
 const origins: Record<SignInJob['provider'], readonly string[]> = {
   codex: CODEX_DEVICE_AUTH_ORIGINS,

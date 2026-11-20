@@ -1,4 +1,5 @@
 import { compositionAccess } from '../compose-request';
+import type { CredentialTransport } from './request-auth';
 import type { IncomingMessage } from 'http';
 import type { TLSSocket } from 'tls';
 import * as net from 'net';
@@ -361,7 +362,7 @@ export function isSecureTransport(
  * network, which is plain HTTP on the wire). Sessions and device tokens record
  * it, so the LAN HTTPS proxy can refuse one that crossed the LAN in plain text.
  */
-export type CredentialTransport = 'encrypted' | 'loopback' | 'plain';
+export type { CredentialTransport } from './request-auth';
 
 export function credentialTransport(
   req: IncomingMessage,

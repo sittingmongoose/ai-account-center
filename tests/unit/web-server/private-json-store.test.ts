@@ -116,7 +116,10 @@ describe.skipIf(!posix)('private store folder', () => {
       })
     ).rejects.toThrow();
     await expect(updateAccountRegistry(dir, (registry) => registry)).rejects.toThrow();
-    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(fs.readdirSync(dir).sort()).toEqual([
+      `${ACCOUNT_REGISTRY_FILE}.lock`,
+      'account-visibility.json.lock',
+    ]);
   });
 });
 
@@ -169,6 +172,9 @@ describe.skipIf(!posix)('private store lock key', () => {
           .map((entry) => entry.id)
           .sort()
     ).toEqual([1, 2, 3, 4, 5, 6].map((index) => `zai:acct:0000000${index}`));
-    expect(fs.readdirSync(real)).toEqual([ACCOUNT_REGISTRY_FILE]);
+    expect(fs.readdirSync(real).sort()).toEqual([
+      ACCOUNT_REGISTRY_FILE,
+      `${ACCOUNT_REGISTRY_FILE}.lock`,
+    ]);
   });
 });

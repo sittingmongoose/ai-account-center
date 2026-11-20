@@ -27,6 +27,16 @@ fn cache(root: &Path) -> PathBuf {
     file
 }
 
+#[tokio::test]
+async fn analytics_refuses_without_a_store_owner() {
+    let (home, _auth, addr, handle) = server_with_analytics(true, None).await;
+    let headers = headers(addr).await;
+    let reply = request(addr, ANALYTICS, "GET", &headers, "").await;
+    assert_eq!(body(&reply, 500)["code"], "analytics_unavailable");
+    assert!(!home.path().join("quota-history-v1.json").exists());
+    handle.abort();
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn analytics_capture_reports_failed_replacement_and_retries_while_off() {

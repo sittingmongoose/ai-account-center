@@ -1,5 +1,6 @@
 import type { Request } from 'express';
-import type { CredentialTransport } from './secure-transport';
+
+export type CredentialTransport = 'encrypted' | 'loopback' | 'plain';
 
 /**
  * Who made a request (CONTRACT-auth-devices section 6): a signed-in browser

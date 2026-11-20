@@ -4,6 +4,7 @@ import { signInCallback } from '../../shared/private-file-lease';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { RegistryAccount } from './account-registry-v2';
 import { runClaudeHostOverSsh } from './claude-host-transport';
+import { MUSE_DEVICE_AUTH_ORIGINS } from './signin-job-types';
 import {
   SignInJobError,
   SignInJobStopped,
@@ -39,11 +40,7 @@ import {
  * - Single account in v1: any verified email is accepted (no
  *   `identity_mismatch`; a new login replaces the one slot).
  */
-export const MUSE_DEVICE_AUTH_ORIGINS: readonly string[] = Object.freeze([
-  'https://dev.meta.ai',
-  'https://auth.meta.com',
-  'https://www.meta.ai',
-]);
+export { MUSE_DEVICE_AUTH_ORIGINS } from './signin-job-types';
 export const MUSE_DEVICE_CODE_TIMEOUT_MS = 15 * 60_000;
 const MUSE_HOMES_DIR = '.ccs/muse-homes';
 const HOME_ID = /^[a-f0-9]{8}$/;

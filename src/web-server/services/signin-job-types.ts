@@ -6,6 +6,12 @@ export interface SignInCommand {
   pty: boolean;
 }
 
+export const MUSE_DEVICE_AUTH_ORIGINS: readonly string[] = Object.freeze([
+  'https://dev.meta.ai',
+  'https://auth.meta.com',
+  'https://www.meta.ai',
+]);
+
 /**
  * The sign-in job's public shape, its fixed messages and errors, and the flow
  * contract a provider implements (CONTRACT-registry-lifecycle section 6.6).
