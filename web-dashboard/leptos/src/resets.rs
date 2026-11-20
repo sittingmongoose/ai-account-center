@@ -312,9 +312,9 @@ pub fn why_not(reason: &str, provider: &str) -> String {
             "Use reset becomes available when Claude reports the usage AAC needs to verify this reset.".into()
         }
         "refill-windows-unconfirmed" => "AAC can't confirm which limit this refills right now.".into(),
-        // Resets go through the account's Claude Desktop profile on Windows, never its Claude Code sign-in.
+        // Resets go through the Claude Desktop profile on Windows, or its Claude Code login when Desktop is signed out.
         "signed-out" if provider == "claude" => {
-            "Claude Desktop needs a sign-in on Windows: resets go through its sign-in there (Claude Code sign-ins are checked separately). Open the account on Windows and sign in to Claude Desktop to use them.".into()
+            "Resets need a working Claude sign-in for this account on Windows: Claude Desktop is signed out there and no working Claude Code login for this account was found. Sign in to Claude Code (or Claude Desktop) for this account on Windows to use them.".into()
         }
         "signed-out" => "This login is signed out.".into(),
         "cooldown" => "The provider asked AAC to wait before another reset.".into(),
@@ -984,17 +984,15 @@ mod inventory_read_note_tests {
         assert!(text.contains("Claude is limiting reset requests"));
         assert!(!text.contains("Mac-only"));
         assert!(!text.contains("No resets"));
-        // Resets go through the account's Claude Desktop profile on Windows, not its Claude Code sign-in, so the
-        // prompt names Claude Desktop (AAC's sign-in health tracks Claude Code and can say ok at the same time).
+        // Resets go through the Claude Desktop profile and fall back to the account's Claude Code login on
+        // Windows, so "signed-out" means neither works and the note names both.
         let signed_out = why_not("signed-out", "claude");
         assert!(
-            signed_out.starts_with("Claude Desktop needs a sign-in on Windows"),
+            signed_out.starts_with("Resets need a working Claude sign-in for this account on Windows"),
             "{signed_out}"
         );
-        assert!(
-            signed_out.contains("Claude Code sign-ins are checked separately"),
-            "{signed_out}"
-        );
+        assert!(signed_out.contains("Claude Desktop is signed out"), "{signed_out}");
+        assert!(signed_out.contains("no working Claude Code login"), "{signed_out}");
         assert!(
             inventory_read_note(
                 &Load::Ready(Inventory {
