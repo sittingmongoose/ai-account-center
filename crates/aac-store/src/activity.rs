@@ -467,6 +467,10 @@ pub struct CountsRow {
     /// Records dated after the read was made, left out (`contract::FUTURE_SLACK_MS`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub future_dated: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmeasured_files: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<contract::Freshness>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -503,12 +507,13 @@ pub struct ReadRow {
 
 impl ReadRow {
     /// The parts that make a scan-history row worth keeping when they change.
-    fn signature(&self) -> (String, Option<String>, bool, bool) {
+    fn signature(&self) -> (String, Option<String>, bool, bool, Option<u64>) {
         (
             self.state.clone(),
             self.cause.clone(),
             self.complete,
             self.counts.as_ref().and_then(|c| c.future_dated).is_some(),
+            self.counts.as_ref().and_then(|c| c.unmeasured_files),
         )
     }
 }
@@ -1310,6 +1315,8 @@ fn counts_row(c: &contract::Counts) -> CountsRow {
         failed: c.files_failed,
         newest_ms: c.newest_mtime.as_ref().and_then(contract::Mtime::ms),
         future_dated: c.future_dated.filter(|n| *n > 0),
+        unmeasured_files: c.unmeasured_files.filter(|n| *n > 0),
+        freshness: c.freshness.clone(),
     }
 }
 

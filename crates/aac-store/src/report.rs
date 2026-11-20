@@ -329,7 +329,22 @@ pub fn build_activity_reports(args: &ReportArgs<'_>) -> Vec<Value> {
         }
         let (cells, future) = past_cells(read, limit);
         future_dated += future;
-        let (state, cause) = report_state(source, !cells.is_empty());
+        let (mut state, mut cause) = report_state(source, !cells.is_empty());
+        let mut counts = source["counts"].as_object().cloned().unwrap_or_default();
+        let freshness = &source["counts"]["freshness"];
+        if cause.is_none() && matches!(state.as_str(), "ok" | "no_usage") {
+            cause = match freshness["state"].as_str() {
+                Some("stale") => Some("newer_activity".into()),
+                Some("unknown") if source["state"] == "ok" || freshness["activityComplete"] == false => {
+                    Some("freshness_unverified".into())
+                }
+                _ => None,
+            };
+            if cause.is_some() {
+                // Keep measured cells, but an incomplete read cannot replace previous coverage.
+                state = "partial".into();
+            }
+        }
         let newest_cell = cells
             .iter()
             .filter_map(|c| c["hour"].as_str().and_then(parse_instant))
@@ -363,7 +378,10 @@ pub fn build_activity_reports(args: &ReportArgs<'_>) -> Vec<Value> {
         );
         report.insert("cause".into(), json!(cause));
         if future_dated > 0 {
-            report.insert("counts".into(), json!({ "futureDated": future_dated }));
+            counts.insert("futureDated".into(), json!(future_dated));
+        }
+        if !counts.is_empty() {
+            report.insert("counts".into(), Value::Object(counts));
         }
         report.insert(
             "cells".into(),

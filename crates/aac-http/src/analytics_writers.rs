@@ -345,6 +345,40 @@ fn scan_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>
     }
 }
 
+fn scan_source_state(
+    answer: &Value,
+    kind: &str,
+    host: &str,
+    now: i64,
+    state: &str,
+    cause: Option<&str>,
+) -> Value {
+    use aac_store::contract::{Counts, Freshness, MAX_FILE_COUNT};
+
+    let discovery = &answer["discovery"]["kinds"][kind];
+    let freshness = serde_json::from_value::<Freshness>(discovery["freshness"].clone())
+        .ok()
+        .filter(Freshness::valid_clocks);
+    let unmeasured_files = discovery["unmeasuredFiles"]
+        .as_u64()
+        .filter(|count| (1..=MAX_FILE_COUNT).contains(count));
+    let mut source = json!({
+        "tool": kind,
+        "host": host,
+        "state": state,
+        "cause": cause,
+        "lastScanAt": aac_num::ecma::to_iso_string(now).unwrap_or_default(),
+    });
+    if freshness.is_some() || unmeasured_files.is_some() {
+        source["counts"] = json!(Counts {
+            freshness,
+            unmeasured_files,
+            ..Counts::default()
+        });
+    }
+    source
+}
+
 fn scan_request(
     kinds: &[String],
     cutoff: i64,
@@ -519,13 +553,7 @@ async fn activity_pass(
                         );
                         remote.push(json!({ "tool": kind, "host": host, "data": worker }));
                     }
-                    states.push(json!({
-                        "tool": kind,
-                        "host": host,
-                        "state": state,
-                        "cause": cause,
-                        "lastScanAt": aac_num::ecma::to_iso_string(now).unwrap_or_default(),
-                    }));
+                    states.push(scan_source_state(&answer, kind, host, now, state, cause));
                 }
             }
             Err(aac_core::Cause::AgentMissing) => {
@@ -802,6 +830,124 @@ mod tests {
         let remote = scan_request(&kinds, 0, json!({}), false, None);
         assert_eq!(remote["experimentRoots"], Value::Null);
         assert_eq!(native_scan(&remote)["rows"], json!([]));
+    }
+
+    #[test]
+    fn analytics_projects_scanner_coverage_through_store_to_view() {
+        let dir = tempfile::tempdir().expect("fixture home");
+        let engine = Arc::new(
+            aac_store::ops::open_engine(dir.path().to_str().expect("fixture path"), None, None)
+                .expect("open activity store"),
+        );
+        let now = aac_store::engine::now_ms() as i64 - 60_000;
+        let data_at = now - 3_600_000;
+        let hour = aac_num::ecma::to_iso_string(data_at).expect("hour");
+        let mut answer = json!({
+            "version": 2, "reader": {"name": "aac-usage-scan"},
+            "rows": [{"f": "sdk", "k": "cursor", "p": "anthropic", "m": "claude-opus-4-5",
+                "h": hour[..13].replace('T', " ") + ":00", "i": 100, "o": 0, "n": 1}],
+            "srows": [],
+            "kinds": {"cursor": {"state":"ok"}},
+            "discovery": {"kinds": {"cursor": {
+                "freshness": {"state":"current", "newestDataMs":data_at,
+                    "newestActivityMs":data_at, "activityComplete":true},
+                "unmeasuredFiles":4
+            }}}
+        });
+        let pass = |answer: &Value, now| {
+            assert!(valid_scan_answer(answer, &["cursor".into()]));
+            let (state, cause) = scan_state(answer, "cursor");
+            let source = scan_source_state(answer, "cursor", "ubuntu", now, state, cause);
+            let worker = collect::worker_from_scan(
+                answer["rows"].as_array().expect("scanner hourly rows"),
+                &[],
+                "cursor",
+                "ubuntu",
+                now,
+                &ResolverPricing::new(dir.path()),
+            );
+            let reports = report::build_activity_reports(&ReportArgs {
+                local: &HashMap::new(),
+                remote: &[json!({"tool":"cursor", "host":"ubuntu", "data":worker})],
+                states: &[source],
+                window_from_ms: now - DAY,
+                now,
+                local_complete: &HashSet::new(),
+                scanner_owned: &["cursor".into()].into_iter().collect(),
+            });
+            let receipt = ingest_reports(&engine, &reports).expect("ingest scanner report");
+            assert_eq!(receipt["refused"], json!([]));
+            let range = aac_store::ops::call(
+                &engine,
+                "activityRange",
+                &json!({"fromMs": now - DAY, "toMs": now}).to_string(),
+            )
+            .expect("stored activity range");
+            let tokens: u64 = range["rows"]
+                .as_array()
+                .expect("range rows")
+                .iter()
+                .map(|row| row[5].as_u64().expect("input tokens"))
+                .sum();
+            assert_eq!(tokens, 100, "keep the last measured SDK activity");
+            crate::analytics_route::compose(
+                engine.clone(),
+                dir.path(),
+                None,
+                &crate::analytics_live::Live::default(),
+                Some("range=7d&tz=UTC"),
+                now,
+            )
+            .expect("native Analytics answer")["activity"]
+                .clone()
+        };
+        let current = pass(&answer, now);
+        assert_eq!(current["sources"][0]["state"], "ok");
+        assert_eq!(current["sources"][0]["unmeasuredFiles"], 4);
+        assert!(
+            current["sources"][0]["detail"]
+                .as_str()
+                .expect("unmeasured disclosure")
+                .contains("4 local chat data files expose no numeric usage")
+        );
+
+        answer["rows"] = json!([]);
+        let freshness = &mut answer["discovery"]["kinds"]["cursor"]["freshness"];
+        freshness["state"] = json!("unknown");
+        freshness["activityComplete"] = json!(false);
+        let unknown = pass(&answer, now + 1);
+        assert_eq!(unknown["sources"][0]["state"], "cached");
+        assert_eq!(unknown["sources"][0]["cause"], "freshness_unverified");
+        assert_eq!(
+            unknown["history"]["sources"][0]["freshness"]["newestDataMs"],
+            data_at
+        );
+        assert_eq!(
+            unknown["sources"][0]["lastScanAt"],
+            current["sources"][0]["lastScanAt"]
+        );
+
+        let freshness = &mut answer["discovery"]["kinds"]["cursor"]["freshness"];
+        freshness["state"] = json!("stale");
+        freshness["newestActivityMs"] = json!(now);
+        let stale = pass(&answer, now + 2);
+        assert_eq!(stale["sources"][0]["state"], "stale");
+        assert_eq!(stale["sources"][0]["cause"], "newer_activity");
+        let detail = stale["sources"][0]["detail"]
+            .as_str()
+            .expect("stale disclosure");
+        assert!(detail.contains("newer activity"));
+        assert!(detail.contains("no numeric usage"));
+
+        answer["kinds"]["cursor"]["readFailures"] = json!(1);
+        let failed = pass(&answer, now + 3);
+        assert_eq!(failed["sources"][0]["state"], "unreadable");
+        assert_eq!(failed["sources"][0]["cause"], "read_failed");
+        let detail = failed["sources"][0]["detail"]
+            .as_str()
+            .expect("failure disclosure");
+        assert!(detail.contains("its logs were found but could not be read"));
+        assert!(detail.contains("no numeric usage"));
     }
 
     #[test]
