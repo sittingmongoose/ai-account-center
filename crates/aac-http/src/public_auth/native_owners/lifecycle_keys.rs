@@ -725,6 +725,8 @@ mod tests {
             HubCache::default(),
             DashboardEvents(tokio::sync::broadcast::channel(4).0),
             None,
+            #[cfg(windows)]
+            std::sync::Weak::new(),
         )
         .unwrap();
         let provider = "zai";
