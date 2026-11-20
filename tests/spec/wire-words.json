@@ -2759,7 +2759,6 @@
     "word": "not_started",
     "cause": null,
     "sources": [
-      "scripts/app-updates/app_update_antigravity.py:error.reason",
       "scripts/app-updates/app_update_common.py:reason"
     ]
   },
@@ -4926,9 +4925,6 @@
       "src/web-server/services/analytics-remote-transport.ts:typeof entry.cause",
       "src/web-server/services/analytics-remote-transport.ts:typeof item.cause",
       "src/web-server/services/analytics-remote-transport.ts:typeof state.sessionDigest",
-      "src/web-server/services/app-update-contract.ts:qualifyReason",
-      "src/web-server/services/app-update-contract.ts:typeof reason",
-      "src/web-server/services/app-update-contract.ts:typeof row.qualifyReason",
       "src/web-server/services/cursor-account-reader.ts:cause",
       "src/web-server/services/cursor-account-reader.ts:typeof answer.cause",
       "src/web-server/services/cursor-account-reader.ts:typeof status.fingerprint",
@@ -5156,7 +5152,6 @@
     "word": "timeout",
     "cause": "timeout",
     "sources": [
-      "scripts/app-updates/app_update_antigravity.py:error.code",
       "scripts/app-updates/app_update_common.py:CAUSES",
       "scripts/app-updates/app_update_common.py:UpdateFailure",
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",

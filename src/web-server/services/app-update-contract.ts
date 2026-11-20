@@ -70,13 +70,6 @@ export interface AppUpdateResult {
   heldVersion?: string;
   /** The reset time Muse itself printed with its used-up-quota note; verbatim, never computed. */
   quotaReset?: string;
-  /**
-   * The Antigravity ACP release T3's account-isolation wrapper runs now: a version,
-   * or null when the check says it has no qualified release to run.
-   */
-  wrapperVersion?: string | null;
-  /** The kit's own words when it could not test the new Antigravity ACP release (exit 2). */
-  qualifyReason?: string;
   /** The two ACP adapters a `t3-acp-adapters` row covers; each carries its own versions. */
   parts?: AdapterPart[];
   /** Other Codex or Claude copies beside a managed install; present only when there are some. */
@@ -251,19 +244,8 @@ export function normalizeAppUpdateResults(
 function codeWords(
   code: MessageCode,
   appId: UpdateAppId,
-  {
-    parts,
-    quotaReset,
-    version,
-    wrapperVersion,
-    qualifyReason,
-  }: {
-    parts: AdapterPart[];
-    quotaReset: string | null;
-    version: string | null;
-    wrapperVersion?: string | null;
-    qualifyReason: string | null;
-  }
+  parts: AdapterPart[],
+  quotaReset: string | null
 ): string {
   if (code === 'quit_first')
     return `Quit ${UPDATE_APP_LABELS[appId]} to finish its update, then run Update apps again.`;
@@ -274,8 +256,6 @@ function codeWords(
     return `${UPDATE_APP_LABELS[appId]} is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.`;
   if (code === 'muse_quota_exhausted' || code === 'muse_quota_current')
     return museQuotaWords(code, quotaReset);
-  if (code === 'antigravity_acp_qualified' || code === 'antigravity_acp_isolation_unverified')
-    return isolationWords(code, version, wrapperVersion, qualifyReason);
   return MESSAGES[code];
 }
 
@@ -285,40 +265,13 @@ function museQuotaWords(code: MessageCode, reset: string | null): string {
   return `${lead} Its quota is used up${reset ? ` until ${reset}` : ''}, so the new models appear after its next session.`;
 }
 
-/**
- * The words for an Antigravity ACP release this run installed and the kit's
- * account-isolation verdict. The row's own version is the release installed;
- * wrapperVersion is the release T3's wrapper runs instead (absent when the
- * check printed no usable line, null when it printed none).
- */
-function isolationWords(
-  code: MessageCode,
-  version: string | null,
-  wrapperVersion: string | null | undefined,
-  reason: string | null
-): string {
-  if (version === null) return MESSAGES[code];
-  if (code === 'antigravity_acp_qualified')
-    return `Updated Antigravity ACP to ${version}; account isolation verified`;
-  const runs =
-    wrapperVersion === undefined
-      ? 'T3 keeps using the release it ran before'
-      : wrapperVersion === null
-        ? 'no qualified Antigravity ACP runtime is available to T3'
-        : `T3 keeps using ${wrapperVersion}`;
-  const note = reason ? `. The check could not test it: ${reason}` : '';
-  return `Updated Antigravity ACP to ${version}; account isolation is not verified yet, so ${runs}${note}`;
-}
-
-/** What a row's words may depend on besides its code: its strays, its own version, its adapter parts, its quota note and the isolation check. */
+/** What a row's words may depend on besides its code: its strays, its own version, its adapter parts and its quota note. */
 export interface MessageContext {
   strays?: AppUpdateStray[];
   version?: string | null;
   parts?: AdapterPart[];
   restartedProcesses?: number;
   quotaReset?: string | null;
-  wrapperVersion?: string | null;
-  qualifyReason?: string | null;
 }
 
 /**
@@ -334,20 +287,12 @@ export function messageFor(
     parts = [],
     restartedProcesses,
     quotaReset = null,
-    wrapperVersion,
-    qualifyReason = null,
   }: MessageContext = {}
 ): string {
   const words =
     code === 'updated' && appId === 'antigravity-cli' && restartedProcesses === 0
       ? 'Updated Antigravity. Copies already open keep the old version until restarted.'
-      : codeWords(code, appId, {
-          parts,
-          quotaReset,
-          version,
-          wrapperVersion,
-          qualifyReason,
-        });
+      : codeWords(code, appId, parts, quotaReset);
   const older = olderShadow(strays, version);
   if (!older) return words;
   // Some words end without a full stop ("Skipped: cancelled"); the sentence needs one before it.
@@ -367,15 +312,6 @@ export function rowMessage(
     version: safeVersion(row.version) ?? safeVersion(row.previousVersion),
     parts: appId === 't3-acp-adapters' ? normalizeParts(row.parts) : [],
     quotaReset: typeof row.quotaReset === 'string' ? row.quotaReset : null,
-    wrapperVersion:
-      row.wrapperVersion === undefined
-        ? undefined
-        : row.wrapperVersion === null
-          ? null
-          : typeof row.wrapperVersion === 'string'
-            ? row.wrapperVersion
-            : undefined,
-    qualifyReason: typeof row.qualifyReason === 'string' ? row.qualifyReason : null,
   });
 }
 
@@ -409,52 +345,6 @@ function quotaResetOf(row: Record<string, unknown>, code: MessageCode, appId: Up
   return appId === 'muse-code' && MUSE_QUOTA_CODES.includes(code) && printable ? value : undefined;
 }
 
-const WRAPPER_VERSION = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
-
-interface IsolationNote {
-  /** The release T3's wrapper runs: a version, null for none, undefined when the check did not say. */
-  wrapperVersion: string | null | undefined;
-  /** The check's own words when it could not test (exit 2). */
-  qualifyReason: string | null;
-}
-
-/**
- * The wrapper release and the check's reason an Antigravity ACP isolation row may
- * carry. Absent fields are fine (an older helper, or a line the check never
- * printed); a field anywhere else, or a malformed one, is undefined so the row
- * fails closed instead of repeating words the helper did not earn.
- */
-function isolationNote(
-  row: Record<string, unknown>,
-  code: MessageCode,
-  appId: UpdateAppId
-): IsolationNote | undefined {
-  const wrapper: unknown = row.wrapperVersion;
-  const reason: unknown = row.qualifyReason;
-  if (wrapper === undefined && reason === undefined)
-    return { wrapperVersion: undefined, qualifyReason: null };
-  if (appId !== 'antigravity-acp' || code !== 'antigravity_acp_isolation_unverified')
-    return undefined;
-  if (
-    wrapper !== undefined &&
-    wrapper !== null &&
-    !(typeof wrapper === 'string' && WRAPPER_VERSION.test(wrapper))
-  )
-    return undefined;
-  const printable =
-    reason === undefined ||
-    reason === null ||
-    (typeof reason === 'string' &&
-      reason.length >= 1 &&
-      reason.length <= 160 &&
-      !/[\u0000-\u001f\u007f]/.test(reason));
-  if (!printable) return undefined;
-  return {
-    wrapperVersion: wrapper === undefined ? undefined : (wrapper as string | null),
-    qualifyReason: typeof reason === 'string' ? reason : null,
-  };
-}
-
 /** One helper row for a known app; anything unexpected becomes a fixed helper_invalid row. */
 export function normalizeAppUpdateRow(
   row: Record<string, unknown> | undefined,
@@ -474,9 +364,6 @@ export function normalizeAppUpdateRow(
   // The quota note rides only the two Muse quota codes, and only when Muse printed it well-formed.
   const quotaReset = quotaResetOf(row, code, appId);
   if (quotaReset === undefined) return failure(platform, appId, 'helper_invalid');
-  // The isolation verdict rides only the two Antigravity ACP codes, in a bounded shape.
-  const isolation = isolationNote(row, code, appId);
-  if (isolation === undefined) return failure(platform, appId, 'helper_invalid');
   // The Linux computers restart T3 through its systemd service; the Mac and Windows its desktop
   // app. Windows alone also closes and reopens a running Codex, Claude or ZCode desktop app.
   const linux = HOST_OS[platform] === 'linux';
@@ -577,6 +464,7 @@ export function normalizeAppUpdateRow(
       (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
     (code === 'antigravity_acp_staged' &&
       (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
+    // Legacy codes from the removed isolation check: only ever an updated Antigravity ACP row.
     (code === 'antigravity_acp_qualified' &&
       (appId !== 'antigravity-acp' || row.status !== 'updated')) ||
     (code === 'antigravity_acp_isolation_unverified' &&
@@ -624,8 +512,6 @@ export function normalizeAppUpdateRow(
     forcedStops: forced,
     ...(heldVersion ? { heldVersion } : {}),
     ...(quotaReset ? { quotaReset } : {}),
-    ...(isolation.wrapperVersion !== undefined ? { wrapperVersion: isolation.wrapperVersion } : {}),
-    ...(isolation.qualifyReason ? { qualifyReason: isolation.qualifyReason } : {}),
     ...(parts ? { parts } : {}),
     ...(strays.length ? { strays } : {}),
     ...(diagnostics ? { diagnostics } : {}),

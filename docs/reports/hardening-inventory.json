@@ -358,8 +358,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 209,
-    "filesAffected": 62,
+    "totalMarkers": 211,
+    "filesAffected": 64,
     "topFiles": [
       {
         "file": "src/web-server/rust-service.ts",
@@ -739,7 +739,7 @@
     },
     "largeFiles": {
       "countOver400": 66,
-      "countOver600": 28,
+      "countOver600": 27,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",

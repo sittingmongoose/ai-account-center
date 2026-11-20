@@ -7,7 +7,6 @@ returns (contract: T3 0.1.10-nightly.20261113.4616, AntigravityInstallation.ts).
 """
 
 import contextlib
-import dataclasses
 import json
 import os
 import pathlib
@@ -17,7 +16,7 @@ import socket
 import time
 
 from app_update_antigravity_release import CLI_MANIFEST_BASE, NATIVE_FROM, SIGNIN_CARRIES_TO_NATIVE
-from app_update_common import Install, UpdateFailure, command, diagnostics, result, scrub, version_tuple
+from app_update_common import Install, UpdateFailure, diagnostics, result, version_tuple
 import app_update_t3_rpc as t3_rpc
 
 RELEASE_ID = re.compile(r"^[a-f0-9]{64}$")
@@ -34,11 +33,6 @@ MANIFEST_LIMIT = 16 * 1024
 QUIET_READY_SECONDS = 15
 # T3 bounds one instance's model refresh at 90 seconds.
 REFRESH_SECONDS = 120
-# The account-isolation check after a new release takes about 3 to 5 seconds.
-QUALIFY_SECONDS = 60
-QUALIFY_REASON_MAX = 160
-QUALIFY_LINE = re.compile(r"^(QUALIFY|WRAPPER-RUNS):[ \t]*(.*?)[ \t]*$")
-WRAPPER_RELEASE = re.compile(r"^[0-9a-f]{8}\.\.$")
 SIGNIN_WORDS = re.compile(r"(?i)sign[- ]?in|log[- ]?in|logged in|not authenticated|unauthenticated|re-?authenticate")
 
 
@@ -148,112 +142,6 @@ def detect_antigravity_acp(host):
     except (UpdateFailure, OSError, ValueError, TypeError):
         return Install("antigravity-acp", host, root, manager="official-download", probe="failed",
                        probe_reason="runtime_record_invalid")
-
-
-def active_release(host):
-    """T3's active release id, the one its wrapper selects; None when unreadable."""
-    root = managed_root(host)
-    if root is None:
-        return None
-    try:
-        release_id = read_json(root / "active.json").get("releaseId")
-    except (UpdateFailure, OSError, ValueError):
-        return None
-    return release_id if isinstance(release_id, str) and RELEASE_ID.fullmatch(release_id) else None
-
-
-def qualification_command(host):
-    """The kit's qualification command on this computer, or None when the kit is not installed.
-
-    Linux, Nas1 and the Mac keep the kit under ~/.local/share and its launcher in
-    ~/.local/bin; the PCs run the .cmd inside the kit itself. Either missing keeps
-    Update all's row exactly as it was before this hook existed."""
-    home = pathlib.Path.home()
-    if host == "windows":
-        command_path = home / ".local/share/t3-antigravity-isolated/t3-antigravity-check.cmd"
-        return command_path if command_path.is_file() else None
-    if not (home / ".local/share/t3-antigravity-isolated").is_dir():
-        return None
-    command_path = home / ".local/bin/t3-antigravity-check"
-    return command_path if command_path.is_file() else None
-
-
-@dataclasses.dataclass
-class Qualification:
-    """The kit's verdict on the release this run installed.
-
-    passed is the command's exit code 0; anything else keeps T3 on the release
-    the wrapper already runs. wrapper is that release's version (None when the
-    check says it runs none), and wrapper_known is False when its WRAPPER-RUNS
-    line did not parse, so the row never names a version it did not read.
-    reason is the check's own one-line explanation when it could not test."""
-    passed: bool
-    wrapper: str = None
-    wrapper_known: bool = False
-    reason: str = None
-
-
-def qualification_line(output, name):
-    """The last QUALIFY: or WRAPPER-RUNS: line's text, or None; other lines are never read."""
-    value = None
-    for line in output.splitlines():
-        match = QUALIFY_LINE.match(line.strip())
-        if match and match.group(1) == name:
-            value = match.group(2)
-    return value
-
-
-def wrapper_runs(line):
-    """(known, version) from WRAPPER-RUNS: "<id8>.. <version>" or "none -"."""
-    if not isinstance(line, str):
-        return False, None
-    parts = line.split()
-    if parts and parts[0] == "none":
-        return True, None
-    if len(parts) == 2 and WRAPPER_RELEASE.fullmatch(parts[0]) and STATE_VERSION.fullmatch(parts[1]):
-        return True, parts[1]
-    return False, None
-
-
-def cannot_test_reason(line):
-    """The reason after "QUALIFY: CANNOT TEST [<id8>.. <version>]: ...", one bounded line."""
-    if not isinstance(line, str) or not line.startswith("CANNOT TEST"):
-        return None
-    rest = line[len("CANNOT TEST"):].lstrip()
-    rest = rest[1:] if rest.startswith(":") else rest.partition(":")[2]
-    reason = " ".join(scrub(rest, lines=1).split())
-    return reason if 0 < len(reason) <= QUALIFY_REASON_MAX else None
-
-
-def qualify_release(host, release_id, deadline=None):
-    """Run the kit's account-isolation check for a release this run installed.
-
-    Returns None when the kit or its command is absent, so the row keeps the
-    words it had before. Otherwise exit code 0 is a pass; 1, 2, a timeout (60 s)
-    and any other ending are unverified, and exit 2 carries the check's reason."""
-    executable = qualification_command(host)
-    if executable is None:
-        return None
-    argv = ["cmd.exe", "/c", str(executable)] if host == "windows" else [str(executable)]
-    argv.append("--qualify")
-    if release_id:
-        argv.append(release_id)
-    limit = QUALIFY_SECONDS if deadline is None else max(1, min(QUALIFY_SECONDS, deadline - time.monotonic()))
-    output, code, reason = "", 0, None
-    try:
-        output = command(argv, timeout=limit, capture=True, errors=True, quiet=True)
-    except UpdateFailure as error:
-        if error.code == "timeout":
-            code, reason = 2, "the check did not finish in time"
-        elif error.reason == "not_started":
-            code, reason = 2, "the check could not be started"
-        else:
-            code = error.exit_code if error.exit_code in (1, 2) else 2
-            output = error.output or ""
-    if code == 2 and reason is None:
-        reason = cannot_test_reason(qualification_line(output, "QUALIFY"))
-    known, wrapper = wrapper_runs(qualification_line(output, "WRAPPER-RUNS"))
-    return Qualification(passed=code == 0, wrapper=wrapper, wrapper_known=known, reason=reason)
 
 
 def newest_cli_version(host, deadline):
@@ -468,27 +356,12 @@ def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
                 record.note("reverified")
                 return result(install.app_id, install.platform, "current", before, final.version, install.manager,
                               "current", attempted)
-            record.phase("qualify")
-            # A new release was installed: the kit's check proves each account kept
-            # its own sign-in. Its absence leaves the row exactly as it was before.
-            qualification = qualify_release(install.platform, active_release(install.platform), deadline)
             record.phase("refresh_models")
             outcome, reason = refresh_models(client, enabled)
             if outcome == "signin":
                 record.blame("signin_needed", reason)
                 return result(install.app_id, install.platform, "action_required", before, final.version,
                               install.manager, "antigravity_acp_signin_needed", attempted)
-            if qualification is not None and not qualification.passed:
-                value = result(install.app_id, install.platform, "updated", before, final.version,
-                               install.manager, "antigravity_acp_isolation_unverified", attempted)
-                if qualification.wrapper_known:
-                    value["wrapperVersion"] = qualification.wrapper
-                if qualification.reason:
-                    value["qualifyReason"] = qualification.reason
-                return value
-            if qualification is not None:
-                return result(install.app_id, install.platform, "updated", before, final.version,
-                              install.manager, "antigravity_acp_qualified", attempted)
             if outcome == "failed":
                 record.note(reason)
                 return result(install.app_id, install.platform, "updated", before, final.version,

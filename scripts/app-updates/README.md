@@ -203,24 +203,9 @@ refused for sign-in, or an instance that reads
 `antigravity_acp_signin_needed` with the new version; any other refresh failure
 keeps `updated` / `antigravity_acp_models_stale`.
 
-**Account-isolation check.** After a genuinely new release is installed (never
-when T3 only re-checked its runtime) and before the models are refreshed, the
-helper runs the per-account kit's check as the signed-in user. On Linux, Nas1
-and the Mac that is `~/.local/bin/t3-antigravity-check --qualify <release>`; on
-the PCs it is `cmd /c` on the kit's own
-`%USERPROFILE%\.local\share\t3-antigravity-isolated\t3-antigravity-check.cmd`,
-with the same `--qualify <release>` argument. It parses only the `QUALIFY:` and
-`WRAPPER-RUNS:` lines, prints neither, and never stores the check's full
-output. It is bounded at 60 seconds; a timeout or an unstartable command counts
-as exit 2. Exit 0 keeps the row `updated` / `antigravity_acp_qualified`: the
-release keeps each account on its own sign-in. Exit 1 or 2 also keeps it
-`updated`, with `antigravity_acp_isolation_unverified`: the install happened,
-but T3's wrapper keeps running the release the check printed, carried in
-`wrapperVersion` (`null` when it runs none, absent when the line did not
-parse). Exit 2 also carries the check's own reason in `qualifyReason` (one
-printable line, at most 160 characters; a longer one is dropped, never
-truncated). When the kit or its command is absent the row keeps the words it
-had before. A real sign-in refresh failure still outranks the verdict.
+Update apps does not check Antigravity account isolation. From T3 v0.1.11, T3 itself keeps each Antigravity Google
+sign-in in its own instance, so every new release installs like any other app. Job rows recorded by the former check
+(`antigravity_acp_qualified`, `antigravity_acp_isolation_unverified`) still read as updated.
 
 **Sign-in guard.** The native CLI cannot read the sign-in the runtime pair kept
 in its file store (T3 runs it with `AGY_ACP_FORCE_FILE_STORAGE=1`): T3's
