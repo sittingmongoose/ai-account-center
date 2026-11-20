@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
@@ -6,6 +6,7 @@ import path from 'path';
 import type session from 'express-session';
 import {
   DashboardSessionStore,
+  resetBootMinuteForTests,
   sessionsFile,
 } from '../../../src/web-server/middleware/dashboard-session-store';
 import { DEFAULT_SESSION_LIFETIME_DAYS } from '../../../src/config/schemas/auth';
@@ -34,6 +35,7 @@ beforeEach(() => {
   // The dashboard creates its CCS folder at startup; the store never creates it.
   fs.mkdirSync(path.join(home, '.ccs'));
   resetDashboardAuthStateForTests();
+  resetBootMinuteForTests();
   setAuthClockForTests(() => NOW);
 });
 
@@ -85,6 +87,35 @@ function call<T>(run: (done: (error: unknown, value?: T) => void) => void): Prom
 }
 
 describe('dashboard session store', () => {
+  it("keeps its own sign-ins when uptime's whole seconds move the boot estimate across a minute (TOOL-ISSUES 66)", async () => {
+    // Bun reports uptime in whole seconds. Place the boot estimate on a minute's rounding boundary, then let
+    // uptime tick one second later than the clock after the claim: a fresh estimate rounds to the minute before.
+    const bootMs = Math.floor(Date.now() / 60_000) * 60_000 - 30_000;
+    let reads = 0;
+    const uptime = spyOn(os, 'uptime').mockImplementation(() => {
+      reads += 1;
+      return Math.floor((Date.now() - bootMs) / 1000) + (reads > 1 ? 1 : 0);
+    });
+    try {
+      const writer = store();
+      await call((done) => writer.set(SID, signedIn(NOW + 7 * DAY), done));
+      await writer.whenSaved();
+      await call((done) => writer.set('a-second-sign-in', signedIn(NOW + 7 * DAY), done));
+      await writer.whenSaved();
+      // The writer never takes its own claim for another process's: both sign-ins survive.
+      expect(await call<session.SessionData | null>((done) => writer.get(SID, done))).toMatchObject(
+        {
+          authenticated: true,
+        }
+      );
+      expect(
+        await call<session.SessionData | null>((done) => writer.get('a-second-sign-in', done))
+      ).toMatchObject({ authenticated: true });
+    } finally {
+      uptime.mockRestore();
+    }
+  });
+
   it('keeps a sign-in across a restart, written at once and without the session id', async () => {
     const first = store();
     await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
