@@ -82,6 +82,13 @@ fn route<'a>(method: &Method, path: &'a str) -> Option<(Route, &'a str)> {
     Some((route, account))
 }
 
+pub(super) fn bodyless(method: &Method, path: &str) -> bool {
+    matches!(
+        route(method, path),
+        Some((Route::Inventory | Route::Options(_), _))
+    )
+}
+
 pub(super) fn mount(
     router: Router,
     root: PathBuf,
@@ -163,7 +170,25 @@ async fn admitted(
     );
     let origin = access.origin_present && access.same_origin;
     let (parts, body) = request.into_parts();
-    let body = if parts.method == Method::GET {
+    let account = decode_component(&account);
+    let fields: &[&str] = match route {
+        Route::Options(allow) => {
+            if account.is_none() {
+                return super::plain(400, "The request could not be processed.");
+            }
+            let mut reply = axum::response::IntoResponse::into_response(allow);
+            set_header(&mut reply, "allow", allow);
+            set_header(&mut reply, "content-type", "text/plain");
+            set_header(&mut reply, "content-length", &allow.len().to_string());
+            set_header(&mut reply, "x-content-type-options", "nosniff");
+            return reply;
+        }
+        Route::Inventory => &[],
+        Route::Prepare => &["grantKey"],
+        Route::Check => &["attemptKey"],
+        Route::Claim => &["grantKey", "confirmationToken"],
+    };
+    let body = if matches!(route, Route::Inventory) {
         Value::Null
     } else {
         if !origin {
@@ -177,13 +202,6 @@ async fn admitted(
         }) {
             return code(415, "json-required");
         }
-        let fields: &[&str] = if parts.uri.path().ends_with("/prepare") {
-            &["grantKey"]
-        } else if parts.uri.path().ends_with("/check") {
-            &["attemptKey"]
-        } else {
-            &["grantKey", "confirmationToken"]
-        };
         // The front door already applied the shared Express JSON limit before authentication.
         match super::parse_body(body, false).await {
             Ok((value, bytes)) if !bytes.is_empty() && valid_keys(&value, fields) => value,
@@ -191,17 +209,9 @@ async fn admitted(
             Err(reply) => return reply,
         }
     };
-    let Some(account) = decode_component(&account) else {
+    let Some(account) = account else {
         return super::plain(400, "The request could not be processed.");
     };
-    if let Route::Options(allow) = route {
-        let mut reply = axum::response::IntoResponse::into_response(allow);
-        set_header(&mut reply, "allow", allow);
-        set_header(&mut reply, "content-type", "text/plain");
-        set_header(&mut reply, "content-length", &allow.len().to_string());
-        set_header(&mut reply, "x-content-type-options", "nosniff");
-        return reply;
-    }
     let Ok(permit) = owner.requests.clone().try_acquire_owned() else {
         return unavailable(route);
     };

@@ -1420,7 +1420,8 @@ async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: 
         .split(';');
     let json_content = content_type
         .next()
-        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+        && !reset_routes::bodyless(&parts.method, parts.uri.path());
     let (parsed, bytes, length) = if json_content && !upgrade {
         if content_type
             .filter_map(|parameter| parameter.split_once('='))
@@ -1573,7 +1574,7 @@ mod tests {
                 None,
                 true,
                 None,
-                Some(root),
+                Some(root.clone()),
                 None,
                 None,
                 None,
@@ -1584,6 +1585,16 @@ mod tests {
             )
         } else {
             Router::new().fallback(|| async { decline() })
+        };
+        let router = if cut {
+            reset_routes::mount(
+                router,
+                root.clone(),
+                auth.events(),
+                Arc::new(aac_log::Log::new(root)),
+            )
+        } else {
+            router
         };
         let router = auth.protect(router);
         let handle = tokio::spawn(async move {
@@ -1952,6 +1963,80 @@ mod tests {
                 auth.events().publish(DashboardEvent::StatusChanged {});
             }
             expect_signed_out(socket_message(&mut socket).await);
+        }
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn reset_inventory_head_and_options_do_not_require_a_write_body() {
+        let (_home, _auth, addr, handle) = server_with_analytics(true, None).await;
+        let cookie = login(addr).await;
+        let headers = format!("Cookie: {cookie}\r\n");
+        // Unsupported synthetic account so inventory reads cannot invoke a provider.
+        let inventory = "/api/accounts/offline-fixture/reset-claims";
+        let get = request(addr, inventory, "GET", &headers, "").await;
+        assert_eq!(get.lines().next(), Some("HTTP/1.1 200 OK"));
+        let head = request(addr, inventory, "HEAD", &headers, "").await;
+        assert_eq!(head.lines().next(), Some("HTTP/1.1 200 OK"));
+        let (get_headers, _) = get.split_once("\r\n\r\n").unwrap();
+        let (head_headers, head_body) = head.split_once("\r\n\r\n").unwrap();
+        assert!(head_body.is_empty());
+        for name in [
+            "content-type:",
+            "content-length:",
+            "cache-control:",
+            "etag:",
+        ] {
+            let get_header = get_headers.lines().find(|line| line.starts_with(name));
+            assert!(get_header.is_some(), "{name}");
+            assert_eq!(
+                head_headers.lines().find(|line| line.starts_with(name)),
+                get_header,
+                "{name}"
+            );
+        }
+        for (suffix, allow, extra, body) in [
+            ("", "GET, HEAD, POST", "", ""),
+            (
+                "/prepare/",
+                "POST",
+                "Content-Type: application/json\r\n",
+                "{",
+            ),
+            ("/check", "POST", "", ""),
+        ] {
+            let options = request(
+                addr,
+                &format!("{inventory}{suffix}"),
+                "OPTIONS",
+                &format!("{headers}{extra}"),
+                body,
+            )
+            .await;
+            assert_eq!(options.lines().next(), Some("HTTP/1.1 200 OK"));
+            assert!(
+                options.contains(&format!("\r\nallow: {allow}\r\n")),
+                "{suffix}"
+            );
+            assert!(options.ends_with(&format!("\r\n\r\n{allow}")), "{suffix}");
+        }
+        let origin =
+            format!("{headers}Origin: http://{addr}\r\nContent-Type: application/json\r\n");
+        for (suffix, key) in [("/prepare/", "grantKey"), ("/check/", "attemptKey")] {
+            let result = request(
+                addr,
+                &format!("{inventory}{suffix}"),
+                "POST",
+                &origin,
+                &json!({key:"0".repeat(64)}).to_string(),
+            )
+            .await;
+            assert_eq!(
+                result.lines().next(),
+                Some("HTTP/1.1 409 Conflict"),
+                "{suffix}"
+            );
         }
         handle.abort();
         let _ = handle.await;
