@@ -192,7 +192,7 @@ const unavailable = (windows) =>
   }));
 
 test('Home and Accounts carry no app pool columns; Details still shows both services', () => {
-  // Jared, 2026-11-19: the Antigravity app's numbers belong in Details, not on the main page.
+  // The owner, 2026-11-19: the Antigravity app's numbers belong in Details, not on the main page.
   const pro = account('gmail', { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true }, [
     ...tonightT3,
     ...tonightApp,

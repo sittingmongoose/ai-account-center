@@ -436,7 +436,7 @@ pub fn period(w: &Win) -> &'static str {
 
 /// Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for
 /// the Antigravity app. Never added together. Home shows only T3's (what T3 spends); the app's
-/// appear only in the account's Details (Jared, 2026-11-19).
+/// appear only in the account's Details (the owner, 2026-11-19).
 const ANTIGRAVITY_LABELS: [(&str, &str); 8] = [
     ("cli-gemini-5h", "Gemini 5-hour, in T3 (Antigravity CLI)"),
     (

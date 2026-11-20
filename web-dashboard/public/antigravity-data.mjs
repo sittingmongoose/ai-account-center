@@ -3,7 +3,7 @@ import { visibleUsageWindows } from './visible-usage.mjs';
 
 // Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for the
 // Antigravity app. They are never added together. Home shows only T3's (what T3 spends); the app's
-// appear only in the account's Details (Jared, 2026-11-19: "I won't often care about that").
+// appear only in the account's Details (the owner, 2026-11-19: "I won't often care about that").
 const ANTIGRAVITY_LABELS = [
   { key: 'cli-gemini-5h', label: 'Gemini 5-hour, in T3 (Antigravity CLI)' },
   { key: 'cli-gemini-weekly', label: 'Gemini weekly, in T3 (Antigravity CLI)' },
