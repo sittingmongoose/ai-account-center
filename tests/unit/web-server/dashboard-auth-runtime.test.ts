@@ -63,9 +63,7 @@ beforeEach(() => {
   resetDeviceStoreForTests();
   resetSetupCodeForTests();
   invalidateConfigCache();
-  stubs = [
-    spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {}),
-  ];
+  stubs = [spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {})];
 });
 
 afterEach(async () => {
@@ -186,6 +184,322 @@ function httpsGet(
   });
 }
 
+const rustPublicBinary = process.env.AAC_REVIEW_RUST_HTTP;
+const legacyDashboard = process.env.AAC_REVIEW_LEGACY_DASHBOARD;
+
+async function startRustAuth() {
+  const rust = Bun.spawn([rustPublicBinary!, '--public'], {
+    env: {
+      ...process.env,
+      AAC_RUST_PUBLIC_LISTEN: '127.0.0.1:0',
+      AAC_RUST_COMPOSE_UPSTREAM: '127.0.0.1:1',
+      AAC_RUST_COMPOSE_PROOF: 'a'.repeat(64),
+    },
+    stdout: 'pipe',
+    stderr: 'inherit',
+  });
+  const reader = rust.stdout.pipeThrough(new TextDecoderStream()).getReader();
+  try {
+    let stdout = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('Rust public listener failed to start.');
+      stdout += value;
+      const address = /aac-http public listening on (127\.0\.0\.1:\d+)/.exec(stdout)?.[1];
+      if (address) return { rust, origin: 'http://' + address };
+    }
+  } catch (error) {
+    rust.kill('SIGTERM');
+    await rust.exited;
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function signInRust(origin: string): Promise<string> {
+  const login = await fetch(origin + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin },
+    body: JSON.stringify({ username: USERNAME, password: PASSWORD }),
+  });
+  expect(login.status).toBe(200);
+  const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+  expect(cookie).toStartWith('connect.sid=');
+  return cookie;
+}
+
+it.skipIf(!rustPublicBinary)(
+  'refuses TS rollback while the Rust listener holds a signed-in session',
+  async () => {
+    await writeConfig('configured');
+    const { rust, origin } = await startRustAuth();
+    try {
+      const cookie = await signInRust(origin);
+      const rollback = startServer({
+        port: 0,
+        host: '127.0.0.1',
+        staticDir: path.join(home, 'ui'),
+        rustService: 'off',
+      }).then((started) => {
+        instance = started;
+      });
+      await expect(rollback).rejects.toThrow('Another dashboard holds the saved sign-ins.');
+
+      const logout = await fetch(origin + '/api/auth/logout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin, cookie },
+        body: '{}',
+      });
+      expect(logout.status).toBe(200);
+      const persisted = fs.readFileSync(path.join(home, '.ccs', 'auth', 'sessions.json'), 'utf8');
+      expect(JSON.parse(persisted).sessions).toEqual([]);
+    } finally {
+      rust.kill('SIGTERM');
+      await rust.exited;
+    }
+  }
+);
+
+it.skipIf(!rustPublicBinary || !legacyDashboard)(
+  'keeps a Rust sign-out after the deployed pre-cut listener starts at hour one',
+  async () => {
+    await writeConfig('configured');
+    const ownerFile = path.join(home, '.ccs', 'auth', 'sessions.owner');
+    const sessionsFile = path.join(home, '.ccs', 'auth', 'sessions.json');
+    const legacyStore = path.join(
+      legacyDashboard!,
+      'src/web-server/middleware/dashboard-session-store.ts'
+    );
+    const source = fs.readFileSync(legacyStore, 'utf8');
+    // Reuse the deployed predicate and its helpers. The legacy listener below also
+    // runs this source as part of the entire previous checkout.
+    const predicate = source.match(
+      /private async (claimIsStale\(held: string\): Promise<boolean> \{[\s\S]*?\n  \})/
+    )?.[1];
+    const bootMinute = source.match(/function bootMinute\(\)[\s\S]*?\n\}/)?.[0];
+    const pidAlive = source.match(/function pidAlive\(pid: number\)[\s\S]*?\n\}/)?.[0];
+    const constants = source.match(/const OWNER_BEAT_MS = .*;\nconst OWNER_STALE_MS = .*;/)?.[0];
+    expect([predicate, bootMinute, pidAlive, constants].every(Boolean)).toBe(true);
+    const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(
+      `${constants}
+${bootMinute}
+${pidAlive}
+async function ${predicate}`
+    );
+    const claimIsStale = new Function('fs', 'os', js + '\nreturn claimIsStale;')(
+      fs.promises,
+      os
+    ).bind({ ownerFile }) as (held: string) => Promise<boolean>;
+    const { startServer: startLegacy } = await import(
+      path.join(legacyDashboard!, 'src/web-server/index.ts')
+    );
+    const { closeDashboardSessions: closeLegacy } = await import(
+      path.join(legacyDashboard!, 'src/web-server/middleware/auth-middleware.ts')
+    );
+    const legacyAnalytics = await import(
+      path.join(legacyDashboard!, 'src/web-server/services/account-analytics-service.ts')
+    );
+    stubs.push(
+      spyOn(legacyAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {})
+    );
+    const options = {
+      port: 0,
+      host: '127.0.0.1',
+      staticDir: path.join(home, 'ui'),
+      rustService: 'off' as const,
+    };
+    const { rust, origin } = await startRustAuth();
+    let legacy: typeof instance;
+    let stopped = false;
+    try {
+      const cookie = await signInRust(origin);
+      const held = fs.readFileSync(ownerFile, 'utf8');
+      expect(await claimIsStale(held)).toBe(false);
+      // Simulate an owner that started 59 minutes ago. Keep it fresh for Rust,
+      // then advance the rollback listener by two more minutes past that start.
+      const birth = new Date(Date.now() - 59 * 60_000);
+      fs.utimesSync(ownerFile, birth, birth);
+      const clockOffset = 2 * 60_000;
+      const realNow = Date.now.bind(Date);
+      const realUptime = os.uptime.bind(os);
+      stubs.push(
+        spyOn(Date, 'now').mockImplementation(() => realNow() + clockOffset),
+        spyOn(os, 'uptime').mockImplementation(() => realUptime() + clockOffset / 1000)
+      );
+      expect(await claimIsStale(held)).toBe(true);
+
+      const deadline = realNow() + 18_000;
+      while (fs.statSync(ownerFile).mtimeMs <= birth.getTime() && realNow() < deadline)
+        await Bun.sleep(100);
+      const staleAtStartup = await claimIsStale(held);
+      legacy = await startLegacy(options);
+      const legacyAddress = legacy.server.address() as AddressInfo;
+      const legacySession = await fetch(`http://127.0.0.1:${legacyAddress.port}/api/auth/check`, {
+        headers: { cookie },
+      });
+      const overlapped = (await legacySession.json()).authenticated;
+      const logout = await fetch(origin + '/api/auth/logout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin, cookie },
+        body: '{}',
+      });
+      expect(logout.status).toBe(200);
+      expect(JSON.parse(fs.readFileSync(sessionsFile, 'utf8')).sessions).toEqual([]);
+      rust.kill('SIGTERM');
+      await rust.exited;
+      stopped = true;
+      // The previous writer's close saves anything it loaded during the overlap.
+      await closeLegacy();
+      legacy.cleanup();
+      legacy.server.closeAllConnections();
+      await new Promise<void>((resolve) => legacy!.server.close(() => resolve()));
+      legacy = undefined;
+      const restored = JSON.parse(fs.readFileSync(sessionsFile, 'utf8')).sessions;
+
+      instance = await startServer(options);
+      const address = instance.server.address() as AddressInfo;
+      const after = await fetch(`http://127.0.0.1:${address.port}/api/auth/check`, {
+        headers: { cookie },
+      });
+      expect({
+        staleAtStartup,
+        overlapped,
+        restored: restored.length,
+        after: (await after.json()).authenticated,
+      }).toEqual({ staleAtStartup: false, overlapped: false, restored: 0, after: false });
+    } finally {
+      if (!stopped) {
+        rust.kill('SIGTERM');
+        await rust.exited;
+      }
+      if (legacy) {
+        await closeLegacy();
+        legacy.cleanup();
+        legacy.server.closeAllConnections();
+        await new Promise<void>((resolve) => legacy!.server.close(() => resolve()));
+      }
+    }
+  },
+  30_000
+);
+
+it.skipIf(!rustPublicBinary)(
+  'refuses admission and shutdown persistence after losing its claim',
+  async () => {
+    await writeConfig('configured');
+    const { rust, origin } = await startRustAuth();
+    const ownerFile = path.join(home, '.ccs', 'auth', 'sessions.owner');
+    const sessionsFile = path.join(home, '.ccs', 'auth', 'sessions.json');
+    let admission = 0;
+    try {
+      const cookie = await signInRust(origin);
+      fs.renameSync(ownerFile, ownerFile + '.previous');
+      fs.writeFileSync(ownerFile, 'new owner', { mode: 0o600 });
+      fs.writeFileSync(sessionsFile, '{"version":1,"sessions":[]}\n');
+      admission = (await fetch(origin + '/api/auth/session', { headers: { cookie } })).status;
+    } finally {
+      rust.kill('SIGTERM');
+      await rust.exited;
+    }
+    expect(JSON.parse(fs.readFileSync(sessionsFile, 'utf8')).sessions).toEqual([]);
+    expect(fs.readFileSync(ownerFile, 'utf8')).toBe('new owner');
+    expect(admission).toBe(500);
+  }
+);
+
+it.skipIf(!rustPublicBinary || process.platform !== 'linux')(
+  'reclaims an interrupted session takeover when its kernel lease is free',
+  async () => {
+    await writeConfig('configured');
+    const { rust } = await startRustAuth();
+    rust.kill('SIGKILL');
+    await rust.exited;
+    const auth = path.join(home, '.ccs', 'auth');
+    const gate = path.join(auth, 'sessions.owner.lock');
+    const takeover = path.join(auth, 'sessions.owner.takeover.lock');
+    fs.writeFileSync(takeover, '', { mode: 0o600 });
+    const leaseHolder = Bun.spawn(
+      ['flock', '-x', '-F', takeover, 'sh', '-c', 'echo locked; exec sleep 60'],
+      {
+        stdout: 'pipe',
+      }
+    );
+    const reader = leaseHolder.stdout.getReader();
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('locked');
+      fs.mkdirSync(gate, { mode: 0o1700 });
+      await expect(startRustAuth()).rejects.toThrow('Rust public listener failed to start.');
+    } finally {
+      reader.releaseLock();
+      leaseHolder.kill('SIGKILL');
+      await leaseHolder.exited;
+    }
+    const recovered = await startRustAuth();
+    recovered.rust.kill('SIGTERM');
+    await recovered.rust.exited;
+    expect(fs.existsSync(gate)).toBe(false);
+  }
+);
+
+it.skipIf(!rustPublicBinary || process.platform !== 'linux')(
+  'reclaims only an old empty legacy session takeover directory',
+  async () => {
+    await writeConfig('configured');
+    const { rust } = await startRustAuth();
+    rust.kill('SIGKILL');
+    await rust.exited;
+    const gate = path.join(home, '.ccs', 'auth', 'sessions.owner.lock');
+    fs.mkdirSync(gate);
+    await expect(startRustAuth()).rejects.toThrow('Rust public listener failed to start.');
+    const old = new Date(Date.now() - 61_000);
+    fs.writeFileSync(path.join(gate, 'occupied'), '');
+    fs.utimesSync(gate, old, old);
+    await expect(startRustAuth()).rejects.toThrow('Rust public listener failed to start.');
+    fs.unlinkSync(path.join(gate, 'occupied'));
+    fs.utimesSync(gate, old, old);
+    const recovered = await startRustAuth();
+    recovered.rust.kill('SIGTERM');
+    await recovered.rust.exited;
+    expect(fs.existsSync(gate)).toBe(false);
+  }
+);
+
+it.skipIf(!rustPublicBinary || process.platform !== 'linux')(
+  'saves settings after the legacy empty marker loses its last writer',
+  async () => {
+    await writeConfig('configured');
+    const { rust, origin } = await startRustAuth();
+    const marker = path.join(home, '.ccs', 'config.yaml.lock');
+    try {
+      const cookie = await signInRust(origin);
+      const save = () =>
+        fetch(origin + '/api/auth/session-lifetime', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', origin, cookie },
+          body: '{"days":30}',
+        });
+      const legacyFd = fs.openSync(marker, 'wx', 0o600);
+      try {
+        expect((await save()).status).toBe(500);
+        const old = new Date(Date.now() - 6_000);
+        fs.futimesSync(legacyFd, old, old);
+        expect((await save()).status).toBe(500);
+        expect(fs.statSync(marker).size).toBe(0);
+      } finally {
+        fs.closeSync(legacyFd);
+      }
+      const saved = await save();
+      expect(saved.status).toBe(200);
+      expect((await saved.json()).days).toBe(30);
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      rust.kill('SIGTERM');
+      await rust.exited;
+    }
+  }
+);
+
 describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
   it('serves the same app over TLS, where secureTransport is true', async () => {
     const files = makeCertificate(0o600);
@@ -195,7 +509,7 @@ describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
       https_listener: { enabled: true, port, cert_path: files.cert, key_path: files.key },
     });
     instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: path.join(home, 'ui') });
-    expect(instance.httpsServer).toBeTruthy();
+    expect(instance.httpsAddress).toMatchObject({ address: '127.0.0.1', port });
     const response = await httpsGet(port, '/api/auth/check', '192.0.2.10:3443');
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ secureTransport: true, accessMode: 'login' });
@@ -210,6 +524,7 @@ describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
     });
     instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: path.join(home, 'ui') });
     expect(instance.httpsServer).toBeNull();
+    expect(instance.httpsAddress).toBeNull();
     const plain = (instance.server.address() as AddressInfo).port;
     const check = await fetch(`http://127.0.0.1:${plain}/api/auth/check`);
     expect(check.status).toBe(200);
@@ -219,6 +534,7 @@ describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
     await writeConfig('configured');
     instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: path.join(home, 'ui') });
     expect(instance.httpsServer).toBeNull();
+    expect(instance.httpsAddress).toBeNull();
   });
 });
 

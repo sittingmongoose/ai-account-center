@@ -48,11 +48,36 @@ function checkInstalledLineage(packageRoot = path.resolve(__dirname, '..'), env 
   return result.ok;
 }
 
+function checkInstalledDashboard(packageRoot, platform = process.platform) {
+  const { isSourceCheckout } = require('./deploy-lineage');
+  if (isSourceCheckout(packageRoot)) return;
+  const { bin } = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+  const names = ['ai-account-center', 'ccs', 'ccs-droid', 'ccsd', 'ccs-codex', 'ccsx', 'ccsxp'];
+  const suffix = platform === 'win32' ? '.exe' : '';
+  for (const name of names) {
+    if (bin?.[name] !== 'dist/native/' + name + suffix) {
+      throw new Error('Dashboard command metadata is invalid for this platform: ' + name);
+    }
+  }
+  for (const relative of [
+    ...Object.values(bin),
+    'dist/native/aac-http' + suffix,
+    'dist/web-server/sidecar.js',
+    'dist/antigravity/terminal-signin-entry.js',
+    'dist/ui/app/index.html',
+  ]) {
+    const file = fs.statSync(path.join(packageRoot, relative));
+    if (!file.isFile() || file.size === 0)
+      throw new Error('Incomplete dashboard package: ' + relative);
+  }
+}
+
 if (require.main === module) {
   if (!checkInstalledLineage()) {
     process.exitCode = 1;
   } else {
     try {
+      checkInstalledDashboard(path.resolve(__dirname, '..'));
       initializeAccountDirectory();
       console.log('[OK] AI Account Center storage is ready.');
     } catch (error) {
@@ -62,4 +87,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { initializeAccountDirectory, checkInstalledLineage };
+module.exports = { initializeAccountDirectory, checkInstalledLineage, checkInstalledDashboard };

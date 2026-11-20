@@ -7,10 +7,8 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { ProfileError } from '../../../src/errors/error-types';
+import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import { listClaudeDesktopProfiles } from '../../../src/web-server/services/claude-desktop-profile-service';
-import { openClaudeDesktopProfile } from '../../../src/web-server/services/claude-desktop-open-service';
-import * as desktopTransport from '../../../src/web-server/services/claude-desktop-transport';
 import {
   ClaudeAccountLifecycle,
   ClaudeLifecycleError,
@@ -32,7 +30,9 @@ import {
 
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
 const dirs: string[] = [];
+const writerReleases: Array<() => void> = [];
 afterEach(() => {
+  for (const release of writerReleases.splice(0)) release();
   if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
   else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -127,6 +127,11 @@ function setup(enabled = true) {
   process.env.CCS_HOME = root;
   const ccsDir = path.join(root, '.ccs');
   fs.mkdirSync(ccsDir, { recursive: true });
+  if (process.env.AAC_SPEC_PROVIDER_WRITE_MODE === 'on') {
+    const binary = process.env.AAC_RUST_SERVICE_BINARY;
+    if (!binary) throw new Error('Native writer binary missing');
+    writerReleases.push(registerFileWriter(fs.realpathSync(ccsDir), binary, () => {}));
+  }
   const inventory = {
     version: 1,
     note: 'kept as is',
@@ -189,7 +194,11 @@ function setup(enabled = true) {
 describe('Claude Add', () => {
   it('creates launchers on both hosts and waits in the pending store', async () => {
     const { ccsDir, hosts, lifecycle } = setup();
-    const profile = await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
+    const profile = await lifecycle.add({
+      profileId: 'work2',
+      label: 'Work 2',
+      email: 'work2@example.com',
+    });
     expect(profile).toMatchObject({
       id: 'work2',
       label: 'Work 2',
@@ -213,7 +222,9 @@ describe('Claude Add', () => {
   it('is all or nothing: a failing second host removes the first host again', async () => {
     const { hosts, lifecycle } = setup();
     hosts.fail.create = 'windows';
-    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+    await expect(
+      lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })
+    ).rejects.toMatchObject({
       code: 'host_unreachable',
       host: 'windows',
     });
@@ -233,7 +244,9 @@ describe('Claude Add', () => {
   it('leaves the allowlist unchanged when the Windows step fails', async () => {
     const { hosts, lifecycle } = setup();
     hosts.fail.create = 'windows';
-    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+    await expect(
+      lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })
+    ).rejects.toMatchObject({
       code: 'host_unreachable',
       host: 'windows',
     });
@@ -246,7 +259,9 @@ describe('Claude Add', () => {
     await lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' });
     hosts.calls = [];
     for (const id of ['party', 'work2']) {
-      await expect(lifecycle.add({ profileId: id, label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+      await expect(
+        lifecycle.add({ profileId: id, label: null, email: 'work2@example.com' })
+      ).rejects.toMatchObject({
         code: 'id_in_use',
       });
     }
@@ -255,7 +270,9 @@ describe('Claude Add', () => {
 
   it('answers not_implemented while host steps are switched off', async () => {
     const { hosts, lifecycle } = setup(false);
-    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+    await expect(
+      lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })
+    ).rejects.toMatchObject({
       code: 'not_implemented',
     });
     const party = await lifecycle.findProfile('party');
@@ -318,47 +335,6 @@ describe('Claude Add', () => {
     await expect(lifecycle.checkPendingSignIn('work2', 'mac', null)).rejects.toMatchObject({
       code: 'host_unreachable',
     });
-  });
-});
-
-describe('Pending profiles open on both hosts', () => {
-  it('opens a newly added id on Mac and on Windows; an unknown id is refused', async () => {
-    const { lifecycle } = setup();
-    await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
-    const macOpen = spyOn(desktopTransport, 'openClaudeMacLauncher').mockResolvedValue(undefined);
-    const windowsOpen = spyOn(desktopTransport, 'openClaudeWindowsLauncher').mockResolvedValue(
-      undefined
-    );
-    await openClaudeDesktopProfile('work2', 'mac');
-    expect(macOpen).toHaveBeenCalledTimes(1);
-    expect(macOpen).toHaveBeenCalledWith({
-      launcherName: 'Claude (work2)',
-      launcherPath: '/fake/mac/Claude (work2).app',
-      profilePath: '/fake/mac/Claude-work2',
-      sshHost: 'mac-host',
-    });
-    await openClaudeDesktopProfile('work2', 'windows');
-    expect(windowsOpen).toHaveBeenCalledTimes(1);
-    expect(windowsOpen).toHaveBeenCalledWith(
-      {
-        launcherName: 'Claude (work2)',
-        launcherPath: '/fake/windows/Claude (work2).app',
-        profilePath: '/fake/windows/Claude-work2',
-        sshHost: 'windows-host',
-      },
-      'work2',
-      // The launcher's account list is rebuilt from the current profiles in the same call:
-      // the Windows default first, then the others, the new pending profile included.
-      ['gmail', 'party', 'work2']
-    );
-    // In neither the pending registry nor the manifest: refused, nothing opens.
-    // A malformed id is refused the same way.
-    for (const id of ['no-such-id', 'bad;id']) {
-      await expect(openClaudeDesktopProfile(id, 'mac')).rejects.toBeInstanceOf(ProfileError);
-      await expect(openClaudeDesktopProfile(id, 'windows')).rejects.toBeInstanceOf(ProfileError);
-    }
-    expect(macOpen).toHaveBeenCalledTimes(1);
-    expect(windowsOpen).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -586,6 +562,35 @@ describe('Claude Remove and trash', () => {
     expect(hosts.trashDirs.mac.size + hosts.trashDirs.windows.size).toBe(0);
   });
 
+  it('reserves a due purge before a Restore can move the same host files', async () => {
+    const { hosts, lifecycle, advance } = setup();
+    const { trashId } = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
+    advance(31 * DAY);
+    let began!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => (began = resolve));
+    const hold = new Promise<void>((resolve) => (release = resolve));
+    const purge = hosts.purge.bind(hosts);
+    const delayed = spyOn(hosts, 'purge').mockImplementation(async (host, step) => {
+      if (host === 'mac') {
+        began();
+        await hold;
+      }
+      return purge(host, step);
+    });
+    const sweeping = lifecycle.purgeDue();
+    try {
+      await started;
+      await expect(lifecycle.restore(trashId)).rejects.toMatchObject({ code: 'unknown_trash' });
+      expect((await lifecycle.listTrash())[0]).toMatchObject({ trashId, state: 'deleting' });
+    } finally {
+      release();
+      await sweeping;
+      delayed.mockRestore();
+    }
+    expect(await lifecycle.listTrash()).toEqual([]);
+  });
+
   it('purges one entry now on both hosts, before its 30 days', async () => {
     const { hosts, lifecycle } = setup();
     const { trashId } = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
@@ -615,7 +620,7 @@ describe('Claude Remove and trash', () => {
   });
 
   it('purgeOne refuses a default profile found in the trash and runs nothing', async () => {
-    const { ccsDir, hosts, lifecycle } = setup();
+    const { ccsDir, hosts, lifecycle, advance } = setup();
     const party = await lifecycle.findProfile('party');
     const { trashId } = await lifecycle.remove(party as never);
     // A default marker smuggled into the stored entry (Remove never writes one).
@@ -628,6 +633,8 @@ describe('Claude Remove and trash', () => {
     await expect(lifecycle.purgeOne(trashId)).rejects.toMatchObject({
       code: 'account_protected',
     });
+    advance(31 * DAY);
+    expect(await lifecycle.purgeDue()).toBe(0);
     expect(hosts.calls).toEqual([]);
     expect(await lifecycle.listTrash()).toHaveLength(1);
   });

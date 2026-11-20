@@ -10,6 +10,12 @@ are retired.
 
 - `bun run build:all` compiles TypeScript, builds the locked Leptos 0.9 WASM
   dashboard and verifies `dist/ui/`.
+- Release packages need current-platform native Store and Status addons.
+  Run `bun run store:build` and `bun run status:build` on the target platform,
+  then `bun run build:all`. Stage into a new directory with
+  `node scripts/stage-dashboard-package.js <stage>`, then pack from that
+  directory with `npm pack --ignore-scripts`. Staging verifies the native
+  commit and addon receipts and writes the platform's `bin` targets.
 - [dev-install.sh](../scripts/dev-install.sh) builds and validates this checkout,
   creates a local package tarball and installs it on explicit invocation. It
   keeps the tarball for local reinstall/rollback.
@@ -47,3 +53,32 @@ migration safeguards.
 Original authored tags, changelog entries and upstream credits remain historical
 records. Do not reassign them to the renamed product or restore their old publish
 targets as current tooling.
+
+## Remote Update apps rollout
+
+The Rust cut release gate checks each registered Mac and Windows host that
+participates in Update apps. For a host with a completed rollout, verify the
+staged agent against `config/agent-artifacts.json`. Record the artifact's version
+and SHA-256, the matching active catalog entry, and the supervised install
+evidence for that host. Verify that the installed agent answers the Update apps
+admission handshake.
+
+For each host whose rollout is incomplete, require an actionable setup or
+upgrade row and zero installer requests. The Linux gate exercises a missing Mac
+pin and an older pinned Windows agent through the real transport client.
+
+```sh
+bun test tests/unit/scripts/build-agent.test.ts
+cargo test --locked -j2 -p aac-http --test app_updates fixture_transport_and_service_api
+```
+
+Keep the admission guard in place for every installer request.
+
+## Dashboard rollback
+
+Stop the Rust dashboard and wait for its process to exit before starting the
+previous TypeScript dashboard against the same CCS home. Disable automatic
+restart of the outgoing service during the handoff. A graceful stop drains
+requests and flushes the final session state before releasing its claim. Start
+the restored service only after the stop completes, then verify health and
+dashboard sign-in.

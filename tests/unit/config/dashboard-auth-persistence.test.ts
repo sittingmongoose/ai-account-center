@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -9,6 +10,8 @@ import {
   mutateConfig,
   saveConfig,
 } from '../../../src/config/config-loader-facade';
+import { acquireLock, releaseLock } from '../../../src/config/loader/io-locks';
+import { claimWriterLease } from '../../../src/shared/private-file-lease';
 import { createEmptyUnifiedConfig } from '../../../src/config/unified-config-types';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 
@@ -62,6 +65,35 @@ describe('dashboard authentication configuration persistence', () => {
       expect(finalReload?.dashboard_auth).toEqual({ ...disabledAuth, session_lifetime_days: 1 });
     });
   });
+
+  it.skipIf(process.platform !== 'linux')(
+    'serializes TS takeover of an interrupted config save with the native reclaimer',
+    async () => {
+      await runWithScopedCcsHome(tempHome, () => {
+        saveConfig(createEmptyUnifiedConfig());
+        const root = path.dirname(getConfigYamlPath());
+        const marker = path.join(root, 'config.yaml.lock');
+        const exited = spawnSync('sh', ['-c', 'exit 0']);
+        expect(exited.status).toBe(0);
+        const stale = [exited.pid, Date.now(), 'interrupted-write'].join('\n');
+        fs.writeFileSync(marker, stale, { mode: 0o600 });
+        const held = claimWriterLease(root, path.join(root, 'config.yaml.reclaim.lock'));
+        try {
+          expect(acquireLock()).toBeNull();
+          expect(fs.readFileSync(marker, 'utf8')).toBe(stale);
+        } finally {
+          held.close();
+        }
+        const token = acquireLock();
+        try {
+          expect(token).toBeTruthy();
+          expect(acquireLock()).toBeNull();
+        } finally {
+          if (token) releaseLock(token);
+        }
+      });
+    }
+  );
 
   it('does not invent an authentication block when directly saving a configuration without one', async () => {
     await runWithScopedCcsHome(tempHome, () => {

@@ -8,7 +8,13 @@
  */
 import type { ClaudeDesktopUsageFacts } from './services/claude-desktop-usage-service';
 import type { CodexAuthProfilesFacts } from '../codex-auth/codex-auth-dashboard-service';
-import type { CodexProfileQuotaFacts } from './services/codex-profile-quota-service';
+/** The quota composition input the retired service read (the Rust route reads its own now). */
+interface CodexProfileQuotaFacts {
+  profiles: Array<{ name: string; authValid: boolean }>;
+  rows: unknown[];
+  renewals: ReadonlyMap<string, unknown>;
+  now: number;
+}
 import { rustReadInput } from './rust-read-input';
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -60,6 +66,46 @@ export function acceptRustDesktopProfiles(
     keys(body, ['profiles']) && Array.isArray(body.profiles) && body.profiles.every(object)
       ? { value: { profiles: withOperations(body.profiles) } }
       : null;
+}
+
+const OPEN_OPERATION_STATES = [
+  'checking',
+  'copying',
+  'opening',
+  'opened',
+  'blocked_uncertain',
+  'failed',
+];
+
+function isOpenOperation(value: unknown): boolean {
+  if (value === null) return true;
+  const count = (count: unknown) =>
+    count === null || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0);
+  return (
+    keys(value, ['id', 'platform', 'state', 'confirmedCount', 'totalCount', 'message']) &&
+    typeof value.id === 'string' &&
+    (value.platform === 'mac' || value.platform === 'windows') &&
+    typeof value.state === 'string' &&
+    OPEN_OPERATION_STATES.includes(value.state) &&
+    count(value.confirmedCount) &&
+    count(value.totalCount) &&
+    (value.message === null || typeof value.message === 'string')
+  );
+}
+
+/**
+ * G13: when the Rust Open owner is bound, the service's manifest rows already carry each
+ * Open's `openOperation`; the composition validates that shape and serves the rows as they
+ * are instead of adding this process's (empty) store.
+ */
+export function acceptRustDesktopProfilesWithOperations(body: unknown): { value: unknown } | null {
+  if (!keys(body, ['profiles']) || !Array.isArray(body.profiles) || !body.profiles.every(object))
+    return null;
+  for (const profile of body.profiles) {
+    if (typeof profile.id === 'string' && profile.id && !isOpenOperation(profile.openOperation))
+      return null;
+  }
+  return { value: body };
 }
 
 /** The usage composition input: each profile's identity and what its history read found. */

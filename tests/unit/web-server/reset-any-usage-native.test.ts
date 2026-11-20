@@ -11,7 +11,7 @@ import express from 'express';
 import {
   createResetClaimRouter,
   type ResetWrite,
-} from '../../../src/web-server/routes/reset-claim-routes';
+} from '../../fixtures/reset-adapter/reset-claim-routes';
 const require = createRequire(import.meta.url);
 
 const nativeTest = test.skipIf(!process.env.AAC_RESET_TEST_MODULE);

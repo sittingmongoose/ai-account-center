@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process';
+import type { SignInCommand } from './signin-job-types';
+export type { SignInCommand } from './signin-job-types';
 
 /**
  * Starts a sign-in CLI with a fixed argv and no shell
@@ -14,14 +16,6 @@ import { spawn, type ChildProcess } from 'child_process';
  * (before this side's own SIGKILL ends the relay). Either way the child is the
  * leader of a new process group, and `kill` signals the whole group.
  */
-export interface SignInCommand {
-  file: string;
-  args: string[];
-  /** The complete environment; nothing else is inherited. */
-  env: Record<string, string>;
-  pty: boolean;
-}
-
 export type SignInSpawnFailure = 'missing' | 'failed' | null;
 
 export interface SignInProcessHandle {

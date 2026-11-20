@@ -1,0 +1,1375 @@
+{
+  "note": "G14 report-builder parity: TS answers for the Rust port (synthetic rows only).",
+  "now": 1794744000000,
+  "passes": [
+    {
+      "name": "local-ok-complete",
+      "input": {
+        "local": {
+          "claude": [
+            {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                },
+                {
+                  "hour": "2026-11-15T10:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ]
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "ubuntu",
+            "state": "ok",
+            "lastScanAt": "2026-11-15T11:59:00.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [
+          "claude"
+        ],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T11:59:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            },
+            {
+              "hour": "2026-11-15T10:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "local-hourly-derived-partial",
+      "input": {
+        "local": {
+          "claude": [
+            {
+              "hourly": [
+                {
+                  "hour": "2026-11-15 11:00",
+                  "requestCount": 4,
+                  "modelBreakdowns": [
+                    {
+                      "modelName": "claude-sonnet-4-5",
+                      "provider": "anthropic",
+                      "inputTokens": 1000,
+                      "outputTokens": 200,
+                      "cacheCreationTokens": 50,
+                      "cacheReadTokens": 300,
+                      "cost": 0.02,
+                      "requestCount": 4
+                    }
+                  ]
+                },
+                {
+                  "hour": "2026-11-15 10:00",
+                  "requestCount": 4,
+                  "modelBreakdowns": [
+                    {
+                      "modelName": "claude-sonnet-4-5",
+                      "provider": "anthropic",
+                      "inputTokens": 1000,
+                      "outputTokens": 200,
+                      "cacheCreationTokens": 50,
+                      "cacheReadTokens": 300,
+                      "cost": 0.02,
+                      "requestCount": 4
+                    }
+                  ]
+                }
+              ],
+              "session": []
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "ubuntu",
+            "state": "ok",
+            "lastScanAt": "2026-11-15T12:00:00.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [
+          "claude"
+        ],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "partial",
+          "complete": false,
+          "coverFrom": null,
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.02,
+              "fallbackCostUsd": 0,
+              "events": 4
+            },
+            {
+              "hour": "2026-11-15T10:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.02,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "local-incomplete-ok-becomes-partial",
+      "input": {
+        "local": {
+          "codex": [
+            {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ]
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "codex",
+            "host": "ubuntu",
+            "state": "ok"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "codex",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "partial",
+          "complete": false,
+          "coverFrom": null,
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "scanner-owned-ubuntu-complete",
+      "input": {
+        "local": {
+          "codex": [
+            {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T10:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ]
+            }
+          ]
+        },
+        "remote": [
+          {
+            "tool": "codex",
+            "host": "ubuntu",
+            "data": {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ]
+            }
+          }
+        ],
+        "states": [
+          {
+            "tool": "codex",
+            "host": "ubuntu",
+            "state": "ok",
+            "lastScanAt": "2026-11-15T12:00:00.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [],
+        "scannerOwned": [
+          "codex"
+        ]
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "codex",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "scanner-only-cursor-empty",
+      "input": {
+        "local": {},
+        "remote": [],
+        "states": [
+          {
+            "tool": "cursor",
+            "host": "ubuntu",
+            "state": "no_usage"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "cursor",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "no_usage",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "remote-mac-ok",
+      "input": {
+        "local": {},
+        "remote": [
+          {
+            "tool": "claude",
+            "host": "mac",
+            "data": {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ],
+              "host": "mac"
+            }
+          }
+        ],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "mac",
+            "state": "ok",
+            "lastScanAt": "2026-11-15T11:59:30.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "mac",
+          "tool": "claude",
+          "readAt": "2026-11-15T11:59:30.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "future-dated-counted",
+      "input": {
+        "local": {
+          "claude": [
+            {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                },
+                {
+                  "hour": "2026-11-15T12:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 7
+                }
+              ],
+              "futureDated": 2
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "ubuntu",
+            "state": "ok",
+            "lastScanAt": "2026-11-15T12:00:00.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [
+          "claude"
+        ],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "counts": {
+            "futureDated": 2
+          },
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            },
+            {
+              "hour": "2026-11-15T12:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 7
+            }
+          ],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "sessions-dedupe-and-target",
+      "input": {
+        "local": {
+          "claude": [
+            {
+              "hourly": [],
+              "session": [
+                {
+                  "sessionId": "0123456789abcdef",
+                  "firstActivity": "2026-11-15T10:00:00.000Z",
+                  "lastActivity": "2026-11-15T11:00:00.000Z",
+                  "target": "claude",
+                  "modelBreakdowns": [
+                    {
+                      "modelName": "claude-sonnet-4-5",
+                      "provider": "anthropic",
+                      "inputTokens": 1000,
+                      "outputTokens": 200,
+                      "cacheCreationTokens": 50,
+                      "cacheReadTokens": 300,
+                      "cost": 0.02,
+                      "requestCount": 4
+                    }
+                  ]
+                },
+                {
+                  "sessionId": "0123456789abcdef",
+                  "firstActivity": "2026-11-15T10:00:00.000Z",
+                  "lastActivity": "2026-11-15T11:00:00.000Z",
+                  "target": "claude",
+                  "modelBreakdowns": [
+                    {
+                      "modelName": "claude-sonnet-4-5",
+                      "provider": "anthropic",
+                      "inputTokens": 9000,
+                      "outputTokens": 200,
+                      "cacheCreationTokens": 50,
+                      "cacheReadTokens": 300,
+                      "cost": 0.02,
+                      "requestCount": 4
+                    }
+                  ]
+                },
+                {
+                  "sessionId": "fedcba9876543210",
+                  "firstActivity": "2026-11-15T10:00:00.000Z",
+                  "lastActivity": "2026-11-15T11:00:00.000Z",
+                  "target": "Bad Target!",
+                  "modelBreakdowns": [
+                    {
+                      "modelName": "claude-sonnet-4-5",
+                      "provider": "anthropic",
+                      "inputTokens": 1000,
+                      "outputTokens": 200,
+                      "cacheCreationTokens": 50,
+                      "cacheReadTokens": 300,
+                      "cost": 0.02,
+                      "requestCount": 4
+                    }
+                  ]
+                },
+                {
+                  "sessionId": "not-a-key",
+                  "firstActivity": "2026-11-15T10:00:00.000Z",
+                  "lastActivity": "2026-11-15T11:00:00.000Z",
+                  "target": "claude",
+                  "modelBreakdowns": [
+                    {
+                      "modelName": "claude-sonnet-4-5",
+                      "provider": "anthropic",
+                      "inputTokens": 1000,
+                      "outputTokens": 200,
+                      "cacheCreationTokens": 50,
+                      "cacheReadTokens": 300,
+                      "cost": 0.02,
+                      "requestCount": 4
+                    }
+                  ]
+                },
+                {
+                  "sessionId": "fedcba9876543210",
+                  "firstActivity": "2026-11-15T13:00:00.000Z",
+                  "lastActivity": "2026-11-15T14:00:00.000Z",
+                  "target": "claude",
+                  "modelBreakdowns": [
+                    {
+                      "modelName": "claude-sonnet-4-5",
+                      "provider": "anthropic",
+                      "inputTokens": 1000,
+                      "outputTokens": 200,
+                      "cacheCreationTokens": 50,
+                      "cacheReadTokens": 300,
+                      "cost": 0.02,
+                      "requestCount": 4
+                    }
+                  ]
+                }
+              ],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ]
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "ubuntu",
+            "state": "ok",
+            "lastScanAt": "2026-11-15T12:00:00.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [
+          "claude"
+        ],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "ok",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": [
+            {
+              "sessionKey": "0123456789abcdef",
+              "first": "2026-11-15T10:00:00.000Z",
+              "last": "2026-11-15T11:00:00.000Z",
+              "parts": [
+                {
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 9000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.02,
+                  "fallbackCostUsd": 0
+                }
+              ],
+              "target": "claude"
+            },
+            {
+              "sessionKey": "fedcba9876543210",
+              "first": "2026-11-15T10:00:00.000Z",
+              "last": "2026-11-15T11:00:00.000Z",
+              "parts": [
+                {
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.02,
+                  "fallbackCostUsd": 0
+                }
+              ],
+              "target": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "states-grid",
+      "input": {
+        "local": {
+          "claude": [
+            {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ]
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "ubuntu",
+            "state": "cached",
+            "cause": "mirror_election",
+            "lastScanAt": "2026-11-15T12:00:00.000Z"
+          },
+          {
+            "tool": "claude",
+            "host": "mac",
+            "state": "unavailable",
+            "detail": "SSH timed out after 30s"
+          },
+          {
+            "tool": "claude",
+            "host": "windows",
+            "state": "unavailable",
+            "detail": "no local usage log found"
+          },
+          {
+            "tool": "codex",
+            "host": "ubuntu",
+            "state": "not_installed"
+          },
+          {
+            "tool": "codex",
+            "host": "mac",
+            "state": "scan_failed",
+            "cause": "reader_crash"
+          },
+          {
+            "tool": "gemini",
+            "host": "ubuntu",
+            "state": "scanning"
+          },
+          {
+            "tool": "gemini",
+            "host": "mac",
+            "state": "installed_no_logs"
+          },
+          {
+            "tool": "zcode",
+            "host": "ubuntu",
+            "state": "ok",
+            "lastScanAt": "2026-11-15T12:00:00.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [
+          "claude",
+          "zcode"
+        ],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "partial",
+          "complete": false,
+          "coverFrom": null,
+          "cause": "mirror_election",
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": []
+        },
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "mac",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "unreadable",
+          "complete": false,
+          "coverFrom": null,
+          "cause": "timeout",
+          "cells": [],
+          "sessions": []
+        },
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "windows",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "no_reader",
+          "complete": false,
+          "coverFrom": null,
+          "cause": "no_local_usage_records",
+          "cells": [],
+          "sessions": []
+        },
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "codex",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "not_installed",
+          "complete": false,
+          "coverFrom": null,
+          "cause": null,
+          "cells": [],
+          "sessions": []
+        },
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "mac",
+          "tool": "codex",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "scan_failed",
+          "complete": false,
+          "coverFrom": null,
+          "cause": "reader_crash",
+          "cells": [],
+          "sessions": []
+        },
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "gemini",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "scanning",
+          "complete": false,
+          "coverFrom": null,
+          "cause": null,
+          "cells": [],
+          "sessions": []
+        },
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "mac",
+          "tool": "gemini",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "installed_no_logs",
+          "complete": false,
+          "coverFrom": null,
+          "cause": null,
+          "cells": [],
+          "sessions": []
+        },
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "zcode",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "no_usage",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "no-usage-empty",
+      "input": {
+        "local": {
+          "claude": [
+            {
+              "hourly": [],
+              "session": []
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "ubuntu",
+            "state": "no_usage",
+            "lastScanAt": "2026-11-15T12:00:00.000Z"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [
+          "claude"
+        ],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "no_usage",
+          "complete": true,
+          "coverFrom": "2026-10-15T12:00:00.000Z",
+          "cause": null,
+          "cells": [],
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "name": "unavailable-with-cells-partial",
+      "input": {
+        "local": {
+          "claude": [
+            {
+              "hourly": [],
+              "session": [],
+              "cells": [
+                {
+                  "hour": "2026-11-15T11:00:00.000Z",
+                  "sessionKey": null,
+                  "route": "anthropic",
+                  "modelRaw": "claude-sonnet-4-5",
+                  "inputTokens": 1000,
+                  "outputTokens": 200,
+                  "cacheCreationTokens": 50,
+                  "cacheReadTokens": 300,
+                  "costUsd": 0.0123,
+                  "fallbackCostUsd": 0,
+                  "events": 4
+                }
+              ]
+            }
+          ]
+        },
+        "remote": [],
+        "states": [
+          {
+            "tool": "claude",
+            "host": "ubuntu",
+            "state": "unavailable",
+            "detail": "partial read"
+          }
+        ],
+        "windowFromMs": 1792065600000,
+        "now": 1794744000000,
+        "localComplete": [],
+        "scannerOwned": []
+      },
+      "expected": [
+        {
+          "schema": "aac.usage-report.v1",
+          "computer": "ubuntu",
+          "tool": "claude",
+          "readAt": "2026-11-15T12:00:00.000Z",
+          "state": "partial",
+          "complete": false,
+          "coverFrom": null,
+          "cause": null,
+          "cells": [
+            {
+              "hour": "2026-11-15T11:00:00.000Z",
+              "sessionKey": null,
+              "route": "anthropic",
+              "modelRaw": "claude-sonnet-4-5",
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "cacheCreationTokens": 50,
+              "cacheReadTokens": 300,
+              "costUsd": 0.0123,
+              "fallbackCostUsd": 0,
+              "events": 4
+            }
+          ],
+          "sessions": []
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "name": "backfill-complete",
+      "input": {
+        "computer": "ubuntu",
+        "tool": "claude",
+        "data": [
+          {
+            "hourly": [],
+            "session": [
+              {
+                "sessionId": "0123456789abcdef",
+                "firstActivity": "2026-11-15T10:00:00.000Z",
+                "lastActivity": "2026-11-15T11:00:00.000Z",
+                "target": "claude",
+                "modelBreakdowns": [
+                  {
+                    "modelName": "claude-sonnet-4-5",
+                    "provider": "anthropic",
+                    "inputTokens": 1000,
+                    "outputTokens": 200,
+                    "cacheCreationTokens": 50,
+                    "cacheReadTokens": 300,
+                    "cost": 0.02,
+                    "requestCount": 4
+                  }
+                ]
+              }
+            ],
+            "cells": [
+              {
+                "hour": "2026-11-15T11:00:00.000Z",
+                "sessionKey": null,
+                "route": "anthropic",
+                "modelRaw": "claude-sonnet-4-5",
+                "inputTokens": 1000,
+                "outputTokens": 200,
+                "cacheCreationTokens": 50,
+                "cacheReadTokens": 300,
+                "costUsd": 0.0123,
+                "fallbackCostUsd": 0,
+                "events": 4
+              },
+              {
+                "hour": "2026-11-15T10:00:00.000Z",
+                "sessionKey": null,
+                "route": "anthropic",
+                "modelRaw": "claude-sonnet-4-5",
+                "inputTokens": 1000,
+                "outputTokens": 200,
+                "cacheCreationTokens": 50,
+                "cacheReadTokens": 300,
+                "costUsd": 0.0123,
+                "fallbackCostUsd": 0,
+                "events": 4
+              }
+            ]
+          }
+        ],
+        "kind": "backfill",
+        "readAt": 1794743940000,
+        "complete": true,
+        "now": 1794744000000
+      },
+      "expected": {
+        "schema": "aac.usage-report.v1",
+        "computer": "ubuntu",
+        "tool": "claude",
+        "readAt": "2026-11-15T11:59:00.000Z",
+        "state": "ok",
+        "complete": true,
+        "coverFrom": "2026-11-15T10:00:00.000Z",
+        "cause": null,
+        "cells": [
+          {
+            "hour": "2026-11-15T11:00:00.000Z",
+            "sessionKey": null,
+            "route": "anthropic",
+            "modelRaw": "claude-sonnet-4-5",
+            "inputTokens": 1000,
+            "outputTokens": 200,
+            "cacheCreationTokens": 50,
+            "cacheReadTokens": 300,
+            "costUsd": 0.0123,
+            "fallbackCostUsd": 0,
+            "events": 4
+          },
+          {
+            "hour": "2026-11-15T10:00:00.000Z",
+            "sessionKey": null,
+            "route": "anthropic",
+            "modelRaw": "claude-sonnet-4-5",
+            "inputTokens": 1000,
+            "outputTokens": 200,
+            "cacheCreationTokens": 50,
+            "cacheReadTokens": 300,
+            "costUsd": 0.0123,
+            "fallbackCostUsd": 0,
+            "events": 4
+          }
+        ],
+        "sessions": [
+          {
+            "sessionKey": "0123456789abcdef",
+            "first": "2026-11-15T10:00:00.000Z",
+            "last": "2026-11-15T11:00:00.000Z",
+            "parts": [
+              {
+                "route": "anthropic",
+                "modelRaw": "claude-sonnet-4-5",
+                "inputTokens": 1000,
+                "outputTokens": 200,
+                "cacheCreationTokens": 50,
+                "cacheReadTokens": 300,
+                "costUsd": 0.02,
+                "fallbackCostUsd": 0
+              }
+            ],
+            "target": "claude"
+          }
+        ],
+        "kind": "backfill"
+      }
+    },
+    {
+      "name": "import-partial",
+      "input": {
+        "computer": "mac",
+        "tool": "codex",
+        "data": [
+          {
+            "hourly": [
+              {
+                "hour": "2026-11-15 11:00",
+                "requestCount": 4,
+                "modelBreakdowns": [
+                  {
+                    "modelName": "claude-sonnet-4-5",
+                    "provider": "anthropic",
+                    "inputTokens": 1000,
+                    "outputTokens": 200,
+                    "cacheCreationTokens": 50,
+                    "cacheReadTokens": 300,
+                    "cost": 0.02,
+                    "requestCount": 4
+                  }
+                ]
+              }
+            ],
+            "session": []
+          }
+        ],
+        "kind": "import",
+        "readAt": 1794743940000,
+        "complete": true,
+        "cause": "old_cache",
+        "now": 1794744000000
+      },
+      "expected": {
+        "schema": "aac.usage-report.v1",
+        "computer": "mac",
+        "tool": "codex",
+        "readAt": "2026-11-15T11:59:00.000Z",
+        "state": "partial",
+        "complete": false,
+        "coverFrom": null,
+        "cause": "old_cache",
+        "cells": [
+          {
+            "hour": "2026-11-15T11:00:00.000Z",
+            "sessionKey": null,
+            "route": "anthropic",
+            "modelRaw": "claude-sonnet-4-5",
+            "inputTokens": 1000,
+            "outputTokens": 200,
+            "cacheCreationTokens": 50,
+            "cacheReadTokens": 300,
+            "costUsd": 0.02,
+            "fallbackCostUsd": 0,
+            "events": 4
+          }
+        ],
+        "sessions": [],
+        "kind": "import"
+      }
+    },
+    {
+      "name": "backfill-empty-no-usage",
+      "input": {
+        "computer": "ubuntu",
+        "tool": "gemini",
+        "data": [
+          {
+            "hourly": [],
+            "session": []
+          }
+        ],
+        "kind": "backfill",
+        "readAt": 1794744000000,
+        "complete": true,
+        "now": 1794744000000
+      },
+      "expected": {
+        "schema": "aac.usage-report.v1",
+        "computer": "ubuntu",
+        "tool": "gemini",
+        "readAt": "2026-11-15T12:00:00.000Z",
+        "state": "no_usage",
+        "complete": true,
+        "coverFrom": "2026-11-15T12:00:00.000Z",
+        "cause": null,
+        "cells": [],
+        "sessions": [],
+        "kind": "backfill"
+      }
+    },
+    {
+      "name": "import-incomplete-scanning",
+      "input": {
+        "computer": "ubuntu",
+        "tool": "claude",
+        "data": [
+          {
+            "hourly": [],
+            "session": []
+          }
+        ],
+        "kind": "import",
+        "readAt": 1794744000000,
+        "complete": false,
+        "now": 1794744000000
+      },
+      "expected": {
+        "schema": "aac.usage-report.v1",
+        "computer": "ubuntu",
+        "tool": "claude",
+        "readAt": "2026-11-15T12:00:00.000Z",
+        "state": "scanning",
+        "complete": false,
+        "coverFrom": null,
+        "cause": null,
+        "cells": [],
+        "sessions": [],
+        "kind": "import"
+      }
+    },
+    {
+      "name": "backfill-future-counted",
+      "input": {
+        "computer": "ubuntu",
+        "tool": "claude",
+        "data": [
+          {
+            "hourly": [],
+            "session": [],
+            "cells": [
+              {
+                "hour": "2026-11-15T13:00:00.000Z",
+                "sessionKey": null,
+                "route": "anthropic",
+                "modelRaw": "claude-sonnet-4-5",
+                "inputTokens": 1000,
+                "outputTokens": 200,
+                "cacheCreationTokens": 50,
+                "cacheReadTokens": 300,
+                "costUsd": 0.0123,
+                "fallbackCostUsd": 0,
+                "events": 3
+              }
+            ],
+            "futureDated": 1
+          }
+        ],
+        "kind": "backfill",
+        "readAt": 1794744000000,
+        "complete": true,
+        "now": 1794744000000
+      },
+      "expected": {
+        "schema": "aac.usage-report.v1",
+        "computer": "ubuntu",
+        "tool": "claude",
+        "readAt": "2026-11-15T12:00:00.000Z",
+        "state": "no_usage",
+        "complete": true,
+        "coverFrom": "2026-11-15T12:00:00.000Z",
+        "cause": null,
+        "counts": {
+          "futureDated": 4
+        },
+        "cells": [],
+        "sessions": [],
+        "kind": "backfill"
+      }
+    }
+  ]
+}

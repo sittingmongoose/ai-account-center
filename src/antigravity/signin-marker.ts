@@ -8,6 +8,7 @@ import {
   parseHolderRecord,
 } from './holder-record';
 import { AntigravityError } from './errors';
+import { signInStaging } from '../shared/private-file-lease';
 import { ANTIGRAVITY_SIGNIN_DIR, signInRoot } from './signin-sandbox';
 
 /**
@@ -69,10 +70,20 @@ export function antigravitySignInRunning(
 }
 
 /** Unlink `file` only while it is still the file judged. */
-function unlinkIfSame(file: string, judged: fs.Stats): void {
+function unlinkIfSame(file: string, judged: fs.Stats, dashboardRoot?: string): void {
   try {
     const current = fs.lstatSync(file);
-    if (current.dev === judged.dev && current.ino === judged.ino) fs.unlinkSync(file);
+    if (current.dev !== judged.dev || current.ino !== judged.ino) return;
+    if (dashboardRoot) {
+      const removed = signInStaging(dashboardRoot, 'antigravity', [
+        'marker-remove',
+        path.basename(file),
+        String(current.dev),
+        String(current.ino),
+      ]);
+      if (removed !== undefined) return;
+    }
+    fs.unlinkSync(file);
   } catch {
     /* Gone already. */
   }
@@ -85,21 +96,41 @@ function unlinkIfSame(file: string, judged: fs.Stats): void {
  */
 export function claimAntigravitySignInMarker(
   ccsDir: string,
-  profileId: string
+  profileId: string,
+  dashboard = false
 ): SignInMarker | null {
   const file = markerFile(ccsDir, profileId);
   const root = signInRoot(ccsDir);
   const temp = path.join(root, `.marker-${randomBytes(8).toString('hex')}`);
-  fs.writeFileSync(temp, ownHolderRecord(), { flag: 'wx', mode: 0o600 });
+  const holder = ownHolderRecord();
+  let ownsTemp = false;
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        // link(2) publishes the complete record at once and fails if one exists.
-        fs.linkSync(temp, file);
+      const native = dashboard
+        ? signInStaging(
+            ccsDir,
+            'antigravity',
+            ['marker-claim', path.basename(file), path.basename(temp)],
+            holder
+          )
+        : undefined;
+      let claimed = native === 1;
+      if (native === undefined) {
+        if (!ownsTemp) {
+          fs.writeFileSync(temp, holder, { flag: 'wx', mode: 0o600 });
+          ownsTemp = true;
+        }
+        try {
+          // Publish the complete record, only if nothing holds the name.
+          fs.linkSync(temp, file);
+          claimed = true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+      if (claimed) {
         const own = fs.lstatSync(file);
-        return { release: () => unlinkIfSame(file, own) };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        return { release: () => unlinkIfSame(file, own, dashboard ? ccsDir : undefined) };
       }
       let judged: fs.Stats;
       try {
@@ -108,14 +139,16 @@ export function claimAntigravitySignInMarker(
         continue;
       }
       if (markerStaleReason(file, Date.now()) === null) return null;
-      unlinkIfSame(file, judged);
+      unlinkIfSame(file, judged, dashboard ? ccsDir : undefined);
     }
     return null;
   } finally {
-    try {
-      fs.unlinkSync(temp);
-    } catch {
-      /* Already gone. */
+    if (ownsTemp) {
+      try {
+        fs.unlinkSync(temp);
+      } catch {
+        /* Already gone. */
+      }
     }
   }
 }
@@ -138,7 +171,7 @@ export function sweepAntigravitySignInMarkers(ccsDir: string, now: number = Date
         ? markerStaleReason(file, now) !== null
         : TEMP_NAME.test(name) && judged.isFile() && now - judged.mtimeMs > TEMP_MAX_AGE_MS;
       if (!stale) continue;
-      unlinkIfSame(file, judged);
+      unlinkIfSame(file, judged, ccsDir);
       removed += 1;
     } catch {
       /* Retried at the next sweep. */

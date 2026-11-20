@@ -16,8 +16,13 @@ import type { Request, Response } from 'express';
 import { createHomeViewRouter } from '../../../src/web-server/routes/home-view-routes';
 import { createAccountDashboardRouter } from '../../../src/web-server/routes/account-dashboard-routes';
 import { RustService } from '../../../src/web-server/rust-service';
-import { readClaudeDesktopProfiles } from '../../../src/web-server/routes/claude-desktop-routes';
-import { readAntigravityInventory } from '../../../src/web-server/routes/antigravity-routes';
+import {
+  openPairs,
+  readAntigravityInventory,
+  readClaudeDesktopProfiles,
+  runtimeInventory,
+} from '../../../src/web-server/routes/home-view-routes';
+
 import { getCcsDir } from '../../../src/utils/config-manager';
 import {
   homeReadInput,
@@ -28,13 +33,45 @@ import {
 import type { AccountDashboard } from '../../../src/web-server/services/account-dashboard-types';
 
 const NOW = Date.parse('2026-11-14T12:00:00.000Z');
-const PROBE = ['-1,234.57', '1.23M', '-$1,234.50', 'Jan 5, 12:07 AM', '1:07 PM', 'Mon, Jan 5, 1:07 PM', 'Jan 5', '_abB'];
+const PROBE = [
+  '-1,234.57',
+  '1.23M',
+  '-$1,234.50',
+  'Jan 5, 12:07 AM',
+  '1:07 PM',
+  'Mon, Jan 5, 1:07 PM',
+  'Jan 5',
+  '_abB',
+];
 const DAY = 86_400_000;
 const FROM = Math.floor(NOW / DAY) * DAY - 120 * DAY;
 // The page's New York offsets (view-model.mjs homeZoneFacts): EST from Nov 1, 2026, EDT from Mar 14, 2027 ...
-const ZONE = { from: FROM, to: FROM + 520 * DAY, offsets: [[FROM, -240], [1793512800000, -300], [1805007600000, -240]] };
-const CONTEXT = { now: NOW, timeZone: 'America/New_York', platform: 'mac', intervalSeconds: 60, username: 'owner', host: '192.0.2.10:3000', formatProbe: PROBE, zone: ZONE };
-const VIEW = { version: 3, sections: [], cards: [], registry: [], chrome: { statusLead: 'Updated' } };
+const ZONE = {
+  from: FROM,
+  to: FROM + 520 * DAY,
+  offsets: [
+    [FROM, -240],
+    [1793512800000, -300],
+    [1805007600000, -240],
+  ],
+};
+const CONTEXT = {
+  now: NOW,
+  timeZone: 'America/New_York',
+  platform: 'mac',
+  intervalSeconds: 60,
+  username: 'owner',
+  host: '192.0.2.10:3000',
+  formatProbe: PROBE,
+  zone: ZONE,
+};
+const VIEW = {
+  version: 3,
+  sections: [],
+  cards: [],
+  registry: [],
+  chrome: { statusLead: 'Updated' },
+};
 const header = (value: unknown) => encodeURIComponent(JSON.stringify(value));
 
 const dashboard: AccountDashboard = {
@@ -46,7 +83,11 @@ const dashboard: AccountDashboard = {
 
 type Envelope = {
   data: Record<string, unknown>;
-  presentation: { dates: Record<string, Record<string, string>>; epochs: Record<string, number>; order: Record<string, number> };
+  presentation: {
+    dates: Record<string, Record<string, string>>;
+    epochs: Record<string, number>;
+    order: Record<string, number>;
+  };
 };
 
 let server: Server;
@@ -56,7 +97,11 @@ let answer: unknown;
 let failDashboard = false;
 let failProfiles = false;
 let offered = true;
-const saved = { auth: process.env.CCS_DASHBOARD_AUTH_ENABLED, home: process.env.AAC_RUST_HOME_VIEW };
+const saved = {
+  auth: process.env.CCS_DASHBOARD_AUTH_ENABLED,
+  home: process.env.AAC_RUST_HOME_VIEW,
+  group: process.env.AAC_RUST_GROUP_HOME,
+};
 
 /** A service in on mode whose compose() records the envelope and answers `answer` the way the bridge does. */
 function offeringService(): RustService {
@@ -81,11 +126,15 @@ beforeAll(() => {
   // requireDashboardSession checks the session only when sign-in is on (no config file is read).
   process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
   process.env.AAC_RUST_HOME_VIEW = 'on';
+  // This file proves D7's envelope wiring with stubbed reads; the fed group (default-ready, on when unset)
+  // would answer from the real dashboard read first. home-feed.test.ts proves the fed path.
+  process.env.AAC_RUST_GROUP_HOME = 'off';
 });
 afterAll(() => {
   for (const [key, value] of [
     ['CCS_DASHBOARD_AUTH_ENABLED', saved.auth],
     ['AAC_RUST_HOME_VIEW', saved.home],
+    ['AAC_RUST_GROUP_HOME', saved.group],
   ] as const)
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -99,7 +148,8 @@ beforeEach(async () => {
   offered = true;
   const app = express();
   app.use((req, res, next) => {
-    if (req.headers['x-test-session'] === 'true') Object.assign(req, { session: { authenticated: true }, sessionID: 'fixture-session' });
+    if (req.headers['x-test-session'] === 'true')
+      Object.assign(req, { session: { authenticated: true }, sessionID: 'fixture-session' });
     if (offered) res.locals.rustService = offeringService();
     next();
   });
@@ -117,7 +167,10 @@ beforeEach(async () => {
       readInventory: async () => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
     })
   );
-  app.use('/api/accounts', createAccountDashboardRouter({ getDashboard: async () => structuredClone(dashboard) }));
+  app.use(
+    '/api/accounts',
+    createAccountDashboardRouter({ getDashboard: async () => structuredClone(dashboard) })
+  );
   server = await new Promise<Server>((resolve) => {
     const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
   });
@@ -141,11 +194,13 @@ describe('GET /api/views/home', () => {
   it('is not offered with the switch off: the request goes on to the next handler (404 here)', async () => {
     offered = false;
     expect((await home()).status).toBe(404);
-    const plain = await (await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })).json();
+    const plain = await (
+      await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })
+    ).json();
     expect(plain.server).toEqual({ version: '0.0.0-test', commit: null });
   });
 
-  it('is not offered with the service on but AAC_RUST_HOME_VIEW off', async () => {
+  it('is not offered with the service on but both Home switches off', async () => {
     process.env.AAC_RUST_HOME_VIEW = 'off';
     try {
       expect((await home()).status).toBe(404);
@@ -154,14 +209,62 @@ describe('GET /api/views/home', () => {
     }
   });
 
+  it("the front door's Open pairs reach Home's rows (the sidecar worker has no Open tracker)", async () => {
+    const operation = {
+      id: 'op_1',
+      platform: 'mac',
+      state: 'opening',
+      confirmedCount: 0,
+      totalCount: 2,
+      message: null,
+    };
+    const progress = Buffer.from(JSON.stringify([['a', operation]])).toString('base64url');
+    const withHeader = await fetch(`${baseUrl}/api/views/home`, {
+      headers: {
+        'x-test-session': 'true',
+        'x-aac-home-context': header(CONTEXT),
+        'x-aac-open-progress': progress,
+      },
+    });
+    const body = (await withHeader.json()) as {
+      profiles?: { id?: string; openOperation?: unknown }[];
+    };
+    expect(body.profiles?.[0].openOperation).toEqual(operation);
+  });
+
+  it('default-ready: the group unset offers Home with the service on even with AAC_RUST_HOME_VIEW off', async () => {
+    process.env.AAC_RUST_HOME_VIEW = 'off';
+    delete process.env.AAC_RUST_GROUP_HOME;
+    try {
+      // The dashboard answer names the offer; no fed read runs on this route.
+      const plain = await (
+        await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })
+      ).json();
+      expect(plain.server.views).toEqual(['home']);
+    } finally {
+      process.env.AAC_RUST_HOME_VIEW = 'on';
+      process.env.AAC_RUST_GROUP_HOME = 'off';
+    }
+  });
+
   it('offered: the dashboard answer names it, and the one read carries the data and the Rust view', async () => {
-    const plain = await (await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })).json();
+    const plain = await (
+      await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })
+    ).json();
     expect(plain.server.views).toEqual(['home']);
-    const response = await home('?platform=windows&refresh=true', { context: header({ ...CONTEXT, platform: 'windows' }) });
+    const response = await home('?platform=windows&refresh=true', {
+      context: header({ ...CONTEXT, platform: 'windows' }),
+    });
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     const body = await response.json();
-    expect(Object.keys(body)).toEqual(['schemaVersion', 'dashboard', 'profiles', 'antigravity', 'view']);
+    expect(Object.keys(body)).toEqual([
+      'schemaVersion',
+      'dashboard',
+      'profiles',
+      'antigravity',
+      'view',
+    ]);
     expect(body.dashboard.server.views).toEqual(['home']);
     expect(body.profiles).toEqual([{ id: 'a', name: 'A', openOperation: null }]);
     expect(body.view).toEqual(VIEW);
@@ -171,8 +274,14 @@ describe('GET /api/views/home', () => {
     expect(Object.keys(sent)).toEqual(['data', 'presentation']);
     expect(Object.keys(sent.data)).toEqual(['ctx', 'dashboard', 'profiles', 'antigravity']);
     expect(sent.data.ctx).toEqual({ ...CONTEXT, platform: 'windows' } as never);
-    expect(sent.presentation.dates[String(NOW)]).toEqual({ iso: '2026-11-14T12:00:00.000Z', clock: '7:00 AM', day: 'Nov 14' });
-    expect(sent.presentation.epochs['2026-11-14T11:59:00.000Z']).toBe(Date.parse('2026-11-14T11:59:00.000Z'));
+    expect(sent.presentation.dates[String(NOW)]).toEqual({
+      iso: '2026-11-14T12:00:00.000Z',
+      clock: '7:00 AM',
+      day: 'Nov 14',
+    });
+    expect(sent.presentation.epochs['2026-11-14T11:59:00.000Z']).toBe(
+      Date.parse('2026-11-14T11:59:00.000Z')
+    );
   });
 
   it('a context the server cannot read: the data comes back and the page builds its own view', async () => {
@@ -251,30 +360,59 @@ describe('home context and envelope', () => {
     };
     const envelope = homeReadInput(CONTEXT as HomeContext, data, [], null) as Envelope;
     // 2026-03-08T07:30Z is 3:30 AM EDT, just after the change
-    const change = homeReadInput(CONTEXT as HomeContext, { at: '2026-03-08T07:30:00.000Z' }, [], null) as Envelope;
+    const change = homeReadInput(
+      CONTEXT as HomeContext,
+      { at: '2026-03-08T07:30:00.000Z' },
+      [],
+      null
+    ) as Envelope;
     expect(change.presentation.dates[String(Date.parse('2026-03-08T07:30:00.000Z'))]).toEqual({
       iso: '2026-03-08T07:30:00.000Z',
       clock: '3:30 AM',
       day: 'Mar 8',
     });
-    expect(Object.keys(envelope.presentation.order).sort()).toEqual(['', '2', 'cursor:A', 'cursor:b', 'undefined', 'work'].sort());
-    expect(envelope.presentation.order['cursor:A']).toBeLessThan(envelope.presentation.order['cursor:b']);
+    expect(Object.keys(envelope.presentation.order).sort()).toEqual(
+      ['', '2', 'cursor:A', 'cursor:b', 'undefined', 'work'].sort()
+    );
+    expect(envelope.presentation.order['cursor:A']).toBeLessThan(
+      envelope.presentation.order['cursor:b']
+    );
     expect(envelope.presentation.order['not ranked']).toBeUndefined();
   });
 
   it('isHomeView admits only a version 3 view', () => {
     expect(isHomeView(VIEW)).toBe(true);
-    for (const value of [null, [], { ...VIEW, version: 2 }, { ...VIEW, cards: {} }, { ...VIEW, chrome: [] }])
+    for (const value of [
+      null,
+      [],
+      { ...VIEW, version: 2 },
+      { ...VIEW, cards: {} },
+      { ...VIEW, chrome: [] },
+    ])
       expect(isHomeView(value)).toBe(false);
   });
 
   it('the stored spec envelopes are what this front door computes (tests/spec/views/home/cases.json)', () => {
-    const table = JSON.parse(fs.readFileSync(path.join(import.meta.dir, '../../spec/views/home/cases.json'), 'utf8')) as {
-      cases: Array<{ name: string; ctx: HomeContext; dashboard: unknown; profiles: unknown; antigravity: unknown; presentation: unknown }>;
+    const table = JSON.parse(
+      fs.readFileSync(path.join(import.meta.dir, '../../spec/views/home/cases.json'), 'utf8')
+    ) as {
+      cases: Array<{
+        name: string;
+        ctx: HomeContext;
+        dashboard: unknown;
+        profiles: unknown;
+        antigravity: unknown;
+        presentation: unknown;
+      }>;
     };
     expect(table.cases.length).toBeGreaterThan(150);
     for (const c of table.cases) {
-      const { presentation } = homeReadInput(c.ctx, c.dashboard, c.profiles, c.antigravity) as Envelope;
+      const { presentation } = homeReadInput(
+        c.ctx,
+        c.dashboard,
+        c.profiles,
+        c.antigravity
+      ) as Envelope;
       const want = c.name === 'decline/facts' ? { ...presentation, dates: {} } : presentation;
       expect(JSON.stringify(c.presentation)).toBe(JSON.stringify(want));
     }
@@ -287,7 +425,15 @@ describe('compose() for /api/views/home over a private socket', () => {
   const secret = 'e'.repeat(64);
   const bootId = 'd'.repeat(24);
   let reply: { status: number; body: string } = { status: 200, body: JSON.stringify(VIEW) };
-  let seen: { method?: string; url?: string; principal?: unknown; cookie?: unknown; body: string }[] = [];
+  /** The native owner's answer to GET /api/antigravity/profiles with no TS input (the raw read). */
+  let inventoryReply: { status: number; body: string } | null = null;
+  let seen: {
+    method?: string;
+    url?: string;
+    principal?: unknown;
+    cookie?: unknown;
+    body: string;
+  }[] = [];
   const fake = http.createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
@@ -295,12 +441,22 @@ describe('compose() for /api/views/home over a private socket', () => {
       const principal = JSON.parse(String(req.headers['x-aac-principal']));
       seen.push({ method: req.method, url: req.url, principal, cookie: req.headers.cookie, body });
       res.setHeader('x-aac-service-boot', bootId);
+      // The owner's own read: an empty body is the native inventory (`profile_reads`).
+      const answer =
+        inventoryReply && req.url === '/api/antigravity/profiles' && body === ''
+          ? inventoryReply
+          : reply;
       // as the real service: Home is for a verified dashboard session only
-      res.statusCode = principal.kind === 'session' ? reply.status : 401;
-      res.end(principal.kind === 'session' ? reply.body : '{"error":"Authentication required"}');
+      res.statusCode = principal.kind === 'session' ? answer.status : 401;
+      res.end(principal.kind === 'session' ? answer.body : '{"error":"Authentication required"}');
     });
   });
-  const req = { method: 'GET', sessionID: 'fixture-session', session: { authenticated: true }, headers: { cookie: 'must-not-forward' } } as unknown as Request;
+  const req = {
+    method: 'GET',
+    sessionID: 'fixture-session',
+    session: { authenticated: true },
+    headers: { cookie: 'must-not-forward' },
+  } as unknown as Request;
   const envelope = homeReadInput(CONTEXT as HomeContext, dashboard, [], null);
   const compose = (s: RustService, request = req, input: unknown = () => envelope) =>
     s.compose(request, '/api/views/home', input, () => null, isHomeView);
@@ -323,6 +479,7 @@ describe('compose() for /api/views/home over a private socket', () => {
   beforeEach(() => {
     seen = [];
     reply = { status: 200, body: JSON.stringify(VIEW) };
+    inventoryReply = null;
   });
 
   it('sends the envelope once as the read body, with a hashed session principal, and serves a valid view', async () => {
@@ -359,12 +516,18 @@ describe('compose() for /api/views/home over a private socket', () => {
   it('a device gets no view; the socket is never called off or for an input over the 4 MiB cap', async () => {
     expect(await compose(service('off'))).toBeNull();
     expect(seen).toEqual([]);
-    const device = { method: 'GET', headers: {}, auth: { kind: 'device', deviceId: 'dev_fixture' } } as unknown as Request;
+    const device = {
+      method: 'GET',
+      headers: {},
+      auth: { kind: 'device', deviceId: 'dev_fixture' },
+    } as unknown as Request;
     expect(await compose(service(), device)).toBeNull();
     // L1: TS gates from the route table's roles too, so a device never reaches the socket here.
     expect(seen).toEqual([]);
     const big = service();
-    expect(await compose(big, req, { data: { pad: 'x'.repeat(4 * 1024 * 1024) }, presentation: {} })).toBeNull();
+    expect(
+      await compose(big, req, { data: { pad: 'x'.repeat(4 * 1024 * 1024) }, presentation: {} })
+    ).toBeNull();
     expect(big.stats.fallbacks).toBe(1);
     expect(seen).toEqual([]);
   });
@@ -374,11 +537,25 @@ describe('compose() for /api/views/home over a private socket', () => {
     // the service reads its own boot root only: another root is the TS reader (no manifest in this test home)
     expect(await readClaudeDesktopProfiles(req, res)).toEqual([]);
     expect(seen).toEqual([]);
-    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, { ccsDir: getCcsDir() });
-    reply = { status: 200, body: JSON.stringify({ profiles: [{ id: 'a', email: 'a@example.test' }, { email: 'b@example.test' }] }) };
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
+    });
+    reply = {
+      status: 200,
+      body: JSON.stringify({
+        profiles: [{ id: 'a', email: 'a@example.test' }, { email: 'b@example.test' }],
+      }),
+    };
     expect(await readClaudeDesktopProfiles(req, res)).toEqual([
+      // No Rust Open owner is bound here, so no operation can exist and each id-bearing row says so.
       { id: 'a', email: 'a@example.test', openOperation: null },
       { email: 'b@example.test' },
+    ]);
+    // A row without the field makes the Open state unknown; a row carrying null means "none running".
+    expect(openPairs([{ id: 'a' }])).toBeNull();
+    expect(openPairs([{ id: 'a', openOperation: null }])).toEqual([]);
+    expect(openPairs([{ id: 'a', openOperation: { id: 'op_1' } }])).toEqual([
+      ['a', { id: 'op_1' }],
     ]);
     expect(seen.map((r) => [r.url, r.body])).toEqual([['/api/claude/desktop-profiles', '']]);
     expect(s.stats.served).toBe(1);
@@ -391,9 +568,176 @@ describe('compose() for /api/views/home over a private socket', () => {
   it("Home's Antigravity copy is composed as GET /api/antigravity/profiles composes it", async () => {
     const s = service();
     const res = { locals: { rustService: s } } as unknown as Response;
-    reply = { status: 503, body: JSON.stringify({ error: 'TypeScript read fallback required' }) };
-    expect(await readAntigravityInventory(req, res)).toEqual({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] });
-    expect(seen.map((r) => r.url)).toEqual(['/api/antigravity/profiles']);
-    expect(s.stats.fallbacks).toBe(1);
+    // The service reads its own boot root only; this test home is the worker's.
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
+    });
+    // The native owner's read: one saved profile, as profile_reads answers with no TS input.
+    const raw = {
+      schemaVersion: 1,
+      hostId: 'ubuntu',
+      profiles: [
+        {
+          id: 'gmail',
+          email: 'gmail@example.test',
+          plan: 'Google AI Pro',
+          selected: true,
+          available: true,
+          runtimeVerified: true,
+          identityVerified: true,
+          credentialRevision: 'f'.repeat(64),
+          savedAt: '2026-10-01T16:40:00.000Z',
+        },
+      ],
+    };
+    inventoryReply = { status: 200, body: JSON.stringify(raw) };
+    // The composed copy the same route answers for that read.
+    reply = { status: 200, body: JSON.stringify(raw) };
+    expect(await runtimeInventory(req, res)).toEqual(raw);
+    expect(seen.at(-1)?.url).toBe('/api/antigravity/profiles');
+    expect(seen.at(-1)?.body).toBe('');
+    expect(await readAntigravityInventory(req, res)).toEqual(raw);
+    expect(seen.filter((r) => r.url === '/api/antigravity/profiles')).toHaveLength(3);
+    // An owner that cannot answer is unavailable (null), never an empty inventory.
+    inventoryReply = {
+      status: 503,
+      body: JSON.stringify({ error: 'TypeScript read fallback required' }),
+    };
+    expect(await readAntigravityInventory(req, res)).toBeNull();
+  });
+
+  it('an active Open on the profiles route reaches Home, and an unreadable owner stays unavailable', async () => {
+    const s = service();
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
+    });
+    const operation = {
+      id: 'op_1',
+      platform: 'mac',
+      state: 'opening',
+      confirmedCount: 0,
+      totalCount: 2,
+      message: null,
+    };
+    // The public profiles route serves each profile's live Open progress (Profiles::open).
+    reply = {
+      status: 200,
+      body: JSON.stringify({
+        profiles: [{ id: 'p1', email: 'one@example.test', openOperation: operation }],
+      }),
+    };
+    const res = { locals: { rustService: s } } as unknown as Response;
+    expect(await readClaudeDesktopProfiles(req, res)).toEqual([
+      { id: 'p1', email: 'one@example.test', openOperation: operation },
+    ]);
+    // Retained Home answers with the same rows (production profiles read, the group off so no fed answer).
+    const instance = express();
+    instance.use((rq, rs, next) => {
+      Object.assign(rq, { session: { authenticated: true }, sessionID: 'fixture-session' });
+      rs.locals.rustService = s;
+      next();
+    });
+    instance.use(
+      '/api/views',
+      createHomeViewRouter({
+        getDashboard: async () => structuredClone(dashboard),
+        scope: () => getCcsDir(),
+      })
+    );
+    const own = await new Promise<Server>((resolve) => {
+      const started = instance.listen(0, '127.0.0.1', () => resolve(started));
+    });
+    const address = own.address();
+    if (!address || typeof address === 'string') throw new Error('No test port');
+    const url = `http://127.0.0.1:${address.port}/api/views/home?platform=mac`;
+    try {
+      const body = (await (
+        await fetch(url, { headers: { 'x-aac-home-context': header(CONTEXT) } })
+      ).json()) as { profiles?: { openOperation?: unknown }[] };
+      expect(body.profiles?.[0].openOperation).toEqual(operation);
+      // An owner that cannot answer leaves the Open state unknown: the TS manifest rows carry no
+      // field, so the fed path declines instead of feeding an empty list (home-feed.test.ts).
+      reply = { status: 503, body: JSON.stringify({ error: 'TypeScript read fallback required' }) };
+      expect(await readClaudeDesktopProfiles(req, res)).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
+  });
+
+  it('Home and /api/antigravity/profiles agree on a non-empty saved registry (the shipping switch unset)', async () => {
+    const s = service();
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
+    });
+    // One saved profile, as the native owner reads the registry.
+    const raw = {
+      schemaVersion: 1,
+      hostId: 'ubuntu',
+      profiles: [
+        {
+          id: 'gmail',
+          email: 'gmail@example.test',
+          plan: 'Google AI Pro',
+          selected: true,
+          available: true,
+          runtimeVerified: true,
+          identityVerified: true,
+          credentialRevision: 'f'.repeat(64),
+          savedAt: '2026-10-01T16:40:00.000Z',
+        },
+      ],
+    };
+    inventoryReply = { status: 200, body: JSON.stringify(raw) };
+    reply = { status: 200, body: JSON.stringify(raw) };
+    // The retained Home path: production inventory deps (no injection), the group is off so the fed path declines.
+    const instance = express();
+    instance.use((rq, rs, next) => {
+      Object.assign(rq, { session: { authenticated: true }, sessionID: 'fixture-session' });
+      rs.locals.rustService = s;
+      next();
+    });
+    instance.use(
+      '/api/views',
+      createHomeViewRouter({
+        getDashboard: async () => structuredClone(dashboard),
+        readProfiles: async () => [{ id: 'a', name: 'A', openOperation: null }],
+        scope: () => getCcsDir(),
+      })
+    );
+    instance.get('/api/antigravity/profiles', async (rq, rs) => {
+      rs.json(await readAntigravityInventory(rq, rs));
+    });
+    const own = await new Promise<Server>((resolve) => {
+      const started = instance.listen(0, '127.0.0.1', () => resolve(started));
+    });
+    const address = own.address();
+    if (!address || typeof address === 'string') throw new Error('No test port');
+    const homeUrl = `http://127.0.0.1:${address.port}/api/views/home?platform=mac`;
+    const profilesUrl = `http://127.0.0.1:${address.port}/api/antigravity/profiles`;
+    try {
+      const homeReply = await (
+        await fetch(homeUrl, { headers: { 'x-aac-home-context': header(CONTEXT) } })
+      ).json();
+      const profilesReply = await (await fetch(profilesUrl)).json();
+      // The same saved profile reaches both answers.
+      expect(homeReply.antigravity).toEqual(profilesReply);
+      expect(homeReply.antigravity.profiles).toHaveLength(1);
+      expect(homeReply.antigravity.profiles[0].id).toBe('gmail');
+      // An unavailable read is unavailable on both, never an empty inventory.
+      inventoryReply = {
+        status: 503,
+        body: JSON.stringify({ error: 'TypeScript read fallback required' }),
+      };
+      expect(
+        (
+          await (
+            await fetch(homeUrl, { headers: { 'x-aac-home-context': header(CONTEXT) } })
+          ).json()
+        ).antigravity
+      ).toBeNull();
+      expect(await (await fetch(profilesUrl)).json()).toBeNull();
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
   });
 });

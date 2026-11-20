@@ -19,7 +19,7 @@ export function setupGracefulShutdown(
   server: HTTPServer,
   _wss: WebSocketServer,
   cleanup?: () => void
-): void {
+): () => void {
   let shuttingDown = false;
   const shutdown = () => {
     if (shuttingDown) return;
@@ -46,4 +46,5 @@ export function setupGracefulShutdown(
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  return shutdown;
 }

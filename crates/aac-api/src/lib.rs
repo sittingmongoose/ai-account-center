@@ -10,7 +10,7 @@ pub struct Health {
     pub status: String,
 }
 
-/// Existing account refresh setting, still written exclusively by TypeScript.
+/// Existing account refresh setting, shared by the front door and the private service.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountRefreshSettings {

@@ -34,6 +34,7 @@ export function sendRustView(
 ): void {
   res.setHeader('Cache-Control', cacheControl);
   res.setHeader('ETag', reply.etag);
+  res.setHeader('x-aac-view', reply.view);
   res.vary('Cookie');
   const validators = res.req.get('If-None-Match');
   if (

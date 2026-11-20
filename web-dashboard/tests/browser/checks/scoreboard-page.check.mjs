@@ -121,6 +121,41 @@ export const tests = {
 		await t.audit('scoreboard unavailable');
 	},
 
+	// No stubs: the real server's Scoreboard over the kit's fixture runs and catalog. R4 (`--set rustOwned=1`): the Rust
+	// service ingested the runs into the hosted store and answered the page's reads itself; off, it served none.
+	async 'scoreboard end to end on the server'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		// The owned ingest is a background pass: the page's first read may come before it lands, so wait for the data.
+		await t.until('the server answers with the fixture runs', async () => {
+			const r = await fetch('/api/scoreboard', { credentials: 'same-origin' });
+			if (!r.ok) return false;
+			const view = await r.json();
+			return Array.isArray(view.uses) && view.uses.length > 0 && (view.history?.runs ?? 0) > 0;
+		}, null, { timeout: 60000 });
+		// The bridge's counters around the page's own reads: the wait above may meet the owner before its first
+		// catalog scan and ingest (declined `feed`, today's handler answers), which is start-up, not a finding.
+		const counters = () => t.page.evaluate(async () => {
+			const r = await fetch('/api/diag?bridge=1', { credentials: 'same-origin' });
+			const route = r.ok ? (await r.json()).bridge?.routes?.['/api/scoreboard'] ?? null : null;
+			const all = { ...(route?.declined ?? {}), ...(route?.fedDeclined ?? {}), ...(route?.unavailable ?? {}) };
+			return { served: route?.served ?? 0, fedServed: route?.fedServed ?? 0, declines: all };
+		});
+		const before = await counters();
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.waitForSelector('.picks');
+		await t.count('.sb-unavail', 0);
+		await t.audit('scoreboard end to end 1440');
+		const after = await counters();
+		const served = Math.max(after.served - before.served, after.fedServed - before.fedServed);
+		const reasons = Object.keys(after.declines).filter((r) => (after.declines[r] ?? 0) > (before.declines[r] ?? 0));
+		if (t.args.rustOwned) {
+			await t.check('the owned path served the page Scoreboard reads', served > 0, JSON.stringify({ before, after }));
+			// A read racing a new generation answers through today's handler (`stale`); any other reason is a finding.
+			await t.check('no Scoreboard read fell back but for a race', reasons.every((r) => r === 'stale'), reasons.join(', '));
+		} else await t.check('switch off: no Rust Scoreboard read', after.served === 0 && after.fedServed === 0, JSON.stringify(after));
+	},
+
 	async 'scoreboard desktop'(t) {
 		await t.viewport(1440, 900);
 		await openBoard(t);

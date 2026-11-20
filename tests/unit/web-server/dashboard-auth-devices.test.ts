@@ -5,14 +5,11 @@
  * services behind the tray routes are stubbed.
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
-import express from 'express';
+import type express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { createAntigravityRouter } from '../../../src/web-server/routes/antigravity-routes';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
-import * as claudeOpen from '../../../src/web-server/services/claude-desktop-open-service';
-import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
 import {
   setAuthClockForTests,
   settleAuthWrites,
@@ -34,22 +31,23 @@ import {
 let harness: Harness | null = null;
 let stubs: Array<{ mockRestore: () => void }> = [];
 
-function antigravityRouter(app: express.Express): void {
-  app.use(
-    '/api/antigravity',
-    createAntigravityRouter({
-      getInventory: async () => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
-      getAccounts: async () => [],
-    })
-  );
+function profileFixtures(app: express.Express): void {
+  // The harness mounts these after the live authentication middleware. Native route
+  // bodies have their own profile-group contract tests.
+  app.get('/api/antigravity/profiles', (_request, response) => {
+    response.json({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] });
+  });
+  app.get('/api/claude/desktop-profiles', (_request, response) => {
+    response.json({ profiles: [] });
+  });
+  app.post('/api/claude/desktop-profiles/:id/open', (_request, response) => {
+    response.status(200).json({ launched: true });
+  });
 }
 
 beforeEach(() => {
   stubs = [
     spyOn(accountDashboard, 'getAccountDashboard').mockResolvedValue({ stub: true } as never),
-    spyOn(claudeProfiles, 'listClaudeDesktopProfileMetadata').mockResolvedValue([] as never),
-    spyOn(claudeOpen, 'claudeOpenUsesManagedHistory').mockResolvedValue(false as never),
-    spyOn(claudeOpen, 'openClaudeDesktopProfile').mockResolvedValue(undefined as never),
   ];
 });
 
@@ -180,7 +178,7 @@ describe('POST /api/auth/devices/pair', () => {
 
 describe('Bearer device tokens', () => {
   it('reach every tray route on the allowlist', async () => {
-    harness = await startAuthHarness({ before: antigravityRouter });
+    harness = await startAuthHarness({ before: profileFixtures });
     const { client } = await pairedTray(harness);
     const calls: Array<[string, string, unknown?]> = [
       ['GET', '/api/accounts/dashboard?platform=mac&refresh=false'],

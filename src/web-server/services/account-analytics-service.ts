@@ -1,12 +1,25 @@
+import { readNativeCollection, workerReadsNative } from '../native-collection-feed';
+import { broadcastDashboardEvent } from '../dashboard-events';
+import { privateFileOwners } from '../../shared/private-files';
+import { publishSampledDashboard } from '../views/dashboard-feed';
+import {
+  requestRustStore,
+  rustStoreConnection,
+  scheduleRustCollection,
+} from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import { createHash } from 'crypto';
 import { BoundedCache } from '../../utils/bounded-cache';
 import { getAccountDashboard } from './account-dashboard-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import { readDashboardPreferences } from './dashboard-preferences';
+import { rustAnalyticsWritersOn } from '../rust-service-groups';
+import { startAnalyticsWriterFeeds, stopAnalyticsWriterFeeds } from './analytics-writer-feeds';
+import type { RustService } from '../rust-service';
 import {
   fixedAnalyticsSourceEntries,
   getAccountAnalyticsActivity,
+  getAccountAnalyticsActivityLive,
   startAccountAnalyticsActivityBackground,
   stopAccountAnalyticsActivityBackground,
   type AccountAnalyticsActivityResult,
@@ -54,6 +67,7 @@ import {
   MAX_ACCOUNTS_PER_SAMPLE,
   storeObservationFromAccount,
 } from '../../store/usage-observations';
+import type { AnalyticsOwnedActivity, AnalyticsOwnedFacts } from '../rust-analytics-owned-input';
 import { backfillUsageHistory } from '../../store/usage-backfill';
 import { AnalyticsSavedViews } from './account-analytics-saved-views';
 import { createLogger } from '../../services/logging';
@@ -75,6 +89,12 @@ export interface AccountAnalyticsDeps {
     to: number,
     options?: { tz?: string }
   ) => Promise<AccountAnalyticsActivityResult>;
+  /** The owned read's live collector state (R5/A2); absent keeps the TS computation. */
+  getActivityLive?: (
+    query: AccountAnalyticsQuery,
+    from: number,
+    to: number
+  ) => AnalyticsOwnedActivity;
   /** The server's provider table; a dashboard registry, when present, overrides labels and order. */
   providerTable?: () => AnalyticsProviderEntry[];
   createHistoryStore?: (scope: string) => AccountAnalyticsHistoryStore;
@@ -113,6 +133,13 @@ export type AccountAnalyticsComposer = (
   legacy: () => AccountAnalyticsComposed
 ) => Promise<AccountAnalyticsComposed>;
 
+/**
+ * Hands the whole computation to the owned Rust read (R5/A2): it reads the hosted store itself
+ * and answers the full answer, activity included, or null to keep this file's computation.
+ */
+export type AccountAnalyticsOwnedComposer = (
+  facts: AnalyticsOwnedFacts
+) => Promise<AccountAnalytics | null>;
 /** A computation slower than this is logged with its phases (`analytics.read_timing`). */
 const SLOW_READ_MS = 1_000;
 
@@ -265,6 +292,7 @@ export class AccountAnalyticsService {
   /** Computations in the order they started. */
   private sequence = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private cancelRustTick: (() => void) | undefined;
   private pendingSample: Promise<void> | null = null;
   private running = false;
   private generation = 0;
@@ -377,6 +405,26 @@ export class AccountAnalyticsService {
       state.backfilled = true;
     }
     const now = (this.deps.now ?? Date.now)();
+    const hosted =
+      privateFileOwners()['account-usage-observations'] === 'rust-service'
+        ? rustStoreConnection(scope)
+        : null;
+    if (hosted) {
+      try {
+        await requestRustStore(
+          hosted,
+          'recordDashboard',
+          JSON.stringify({
+            now,
+            accounts: accounts.slice(0, MAX_ACCOUNTS_PER_SAMPLE),
+          })
+        );
+        state.available = true;
+        return;
+      } catch {
+        // record is idempotent if the reply was lost after the store committed.
+      }
+    }
     const observations = accounts.slice(0, MAX_ACCOUNTS_PER_SAMPLE).flatMap((account) => {
       const observation = storeObservationFromAccount(account, now, Number.POSITIVE_INFINITY);
       return observation ? [observation] : [];
@@ -425,7 +473,8 @@ export class AccountAnalyticsService {
    */
   async get(
     requested: AccountAnalyticsQuery,
-    composer?: AccountAnalyticsComposer
+    composer?: AccountAnalyticsComposer,
+    owned?: AccountAnalyticsOwnedComposer
   ): Promise<AccountAnalytics> {
     // Malformed ranges and zones fail before any collector or history read.
     validateAccountAnalyticsRangeShape(requested);
@@ -472,7 +521,7 @@ export class AccountAnalyticsService {
       const started = new Promise<void>((resolve) => setImmediate(resolve)).then(() => {
         const begin = elapsed();
         const sequence = ++this.sequence;
-        return this.compute(query, scope, tz, composer).then(
+        return this.compute(query, scope, tz, composer, owned).then(
           (answer) => {
             this.computeMs.set(flightKey, elapsed() - begin);
             this.settle(flightKey, sequence, false);
@@ -619,7 +668,8 @@ export class AccountAnalyticsService {
     query: AccountAnalyticsQuery,
     scope: string,
     tz: string,
-    composer?: AccountAnalyticsComposer
+    composer?: AccountAnalyticsComposer,
+    owned?: AccountAnalyticsOwnedComposer
   ): Promise<AccountAnalytics> {
     const clock = this.deps.now ?? Date.now;
     const elapsed = this.deps.elapsedMs ?? (() => performance.now());
@@ -633,6 +683,35 @@ export class AccountAnalyticsService {
     };
     const dashboard = await (this.deps.getDashboard ?? getAccountDashboard)(query.platform, false);
     lap('dashboardMs');
+    // The owned read (R5/A2): Rust reads the hosted store itself and composes the whole answer.
+    // It runs before this file's history and activity reads; a decline keeps them, unchanged.
+    if (owned && this.deps.getActivityLive) {
+      const ownedNow = clock();
+      const ownedBounds = await this.storedBounds(scope, ownedNow);
+      const ownedRetained = ownedBounds
+        ? ownedBounds.oldest
+        : ownedNow - ACCOUNT_ANALYTICS_RETAINED_MS;
+      const provisional = resolveAccountAnalyticsRange(
+        query,
+        ownedNow,
+        ownedRetained,
+        ownedBounds ?? undefined
+      );
+      const ownedState = this.state(scope);
+      const answer = await owned({
+        query,
+        scope,
+        now: ownedNow,
+        tz,
+        available: ownedState.available,
+        bounds: ownedBounds,
+        provisional,
+        dashboard,
+        providerTable: (this.deps.providerTable ?? defaultAnalyticsProviderTable)(),
+        activity: this.deps.getActivityLive(query, provisional.from, provisional.to),
+      });
+      if (answer) return answer;
+    }
     const state = this.state(scope);
     // Reads initialise history but never append observations; the sampler owns writes.
     if (!state.loaded) {
@@ -763,11 +842,21 @@ export class AccountAnalyticsService {
     if (this.pendingSample) return this.pendingSample;
     const scope = (this.deps.scope ?? getCcsDir)();
     this.pendingSample = (async () => {
+      const platforms = ['mac', 'windows'] as const;
       const dashboards = await Promise.allSettled(
-        ['mac', 'windows'].map((platform) =>
-          (this.deps.getDashboard ?? getAccountDashboard)(platform as 'mac' | 'windows', false)
+        platforms.map((platform) =>
+          (this.deps.getDashboard ?? getAccountDashboard)(platform, false)
         )
       );
+      if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+        void Promise.allSettled(
+          dashboards.map((result, index) =>
+            result.status === 'fulfilled'
+              ? publishSampledDashboard(scope, platforms[index], result.value)
+              : undefined
+          )
+        );
+      }
       const unique = new Map<string, DashboardAccount>();
       for (const result of dashboards)
         if (result.status === 'fulfilled')
@@ -789,33 +878,31 @@ export class AccountAnalyticsService {
             )
               unique.set(identity, account);
           }
-      const accounts = [...unique.values()];
-      const state = await this.record(accounts, scope);
-      if (sampleListeners.size > 0) {
-        const sampledAt = (this.deps.now ?? Date.now)();
-        const history = state.usageStore
-          ? await this.historyFor(
-              state,
-              sampledAt - SNAPSHOT_HISTORY_MS,
-              sampledAt,
-              sampledAt,
-              null
-            )
-          : state.data;
-        const longBurn = state.usageStore
-          ? await longBurnFor(state.usageStore, accounts, sampledAt).catch(() => undefined)
-          : undefined;
-        notifySample({
-          accounts,
-          history: state.available ? history : null,
-          sampledAt,
-          ...(longBurn ? { longBurn } : {}),
-        });
-      }
+      await this.recordSample([...unique.values()], (this.deps.now ?? Date.now)());
     })().finally(() => {
       this.pendingSample = null;
     });
     return this.pendingSample;
+  }
+
+  async recordSample(accounts: DashboardAccount[], sampledAt: number): Promise<void> {
+    const scope = (this.deps.scope ?? getCcsDir)();
+    const state = await this.record(accounts, scope);
+    broadcastDashboardEvent({ type: 'analytics-changed' });
+    if (sampleListeners.size > 0) {
+      const history = state.usageStore
+        ? await this.historyFor(state, sampledAt - SNAPSHOT_HISTORY_MS, sampledAt, sampledAt, null)
+        : state.data;
+      const longBurn = state.usageStore
+        ? await longBurnFor(state.usageStore, accounts, sampledAt).catch(() => undefined)
+        : undefined;
+      notifySample({
+        accounts,
+        history: state.available ? history : null,
+        sampledAt,
+        ...(longBurn ? { longBurn } : {}),
+      });
+    }
   }
 
   private schedule(generation: number): void {
@@ -825,15 +912,43 @@ export class AccountAnalyticsService {
     const interval = Number.isFinite(configured)
       ? Math.min(3_600_000, Math.max(30_000, configured))
       : 60_000;
-    // Node's Timeout and Bun's Timer are both real timers. One annotation covers the call.
-    this.timer = (this.deps.schedule ?? setTimeout)(() => {
+    const poll = () => {
       if (!this.running || generation !== this.generation) return;
       this.timer = undefined;
+      this.cancelRustTick = undefined;
       void this.sample()
         .catch(() => {})
         .finally(() => this.schedule(generation));
-    }, interval) as ReturnType<typeof setTimeout>;
-    this.timer.unref?.();
+    };
+    const scheduleReference = (delay: number) => {
+      this.timer = (this.deps.schedule ?? setTimeout)(poll, delay) as ReturnType<typeof setTimeout>;
+      this.timer.unref?.();
+    };
+    if (
+      !this.deps.schedule &&
+      privateFileOwners()['account-usage-observations'] === 'rust-service'
+    ) {
+      const began = performance.now();
+      this.cancelRustTick = scheduleRustCollection(
+        (this.deps.scope ?? getCcsDir)(),
+        Math.trunc(interval),
+        (due) => {
+          this.cancelRustTick = undefined;
+          if (!this.running || generation !== this.generation) return;
+          if (due) poll();
+          else scheduleReference(Math.max(0, interval - (performance.now() - began)));
+        }
+      );
+      if (this.cancelRustTick) return;
+    }
+    scheduleReference(interval);
+  }
+
+  private clearSamplingTimer(): void {
+    this.cancelRustTick?.();
+    this.cancelRustTick = undefined;
+    (this.deps.cancelSchedule ?? clearTimeout)(this.timer);
+    this.timer = undefined;
   }
 
   start(): void {
@@ -848,36 +963,91 @@ export class AccountAnalyticsService {
   /** Changing settings replaces the deadline without letting an old poll fork timers. */
   reschedule(): void {
     if (!this.running) return;
-    (this.deps.cancelSchedule ?? clearTimeout)(this.timer);
-    this.timer = undefined;
+    this.clearSamplingTimer();
     this.schedule(++this.generation);
   }
 
   stop(): void {
     this.running = false;
     ++this.generation;
-    (this.deps.cancelSchedule ?? clearTimeout)(this.timer);
-    this.timer = undefined;
+    this.clearSamplingTimer();
   }
 }
 
 let service: AccountAnalyticsService | undefined;
 function singleton(): AccountAnalyticsService {
-  service ??= new AccountAnalyticsService({ persistViews: true });
+  service ??= new AccountAnalyticsService({
+    persistViews: true,
+    getActivityLive: getAccountAnalyticsActivityLive,
+  });
   return service;
 }
 export function getAccountAnalytics(
   query: AccountAnalyticsQuery,
-  composer?: AccountAnalyticsComposer
+  composer?: AccountAnalyticsComposer,
+  owned?: AccountAnalyticsOwnedComposer
 ): Promise<AccountAnalytics> {
-  return singleton().get(query, composer);
+  return singleton().get(query, composer, owned);
 }
-export function startAccountAnalyticsSampling(): void {
-  singleton().start();
+let stopNativeSamples: (() => void) | undefined;
+
+function startNativeSamples(): () => void {
+  const stopped = new AbortController();
+  let last = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  async function next(): Promise<void> {
+    try {
+      const sample = (await readNativeCollection('/sample', stopped.signal)) as {
+        sampledAt?: number;
+        accounts?: DashboardAccount[];
+      };
+      if (
+        !stopped.signal.aborted &&
+        typeof sample.sampledAt === 'number' &&
+        Number.isSafeInteger(sample.sampledAt) &&
+        sample.sampledAt > last &&
+        Array.isArray(sample.accounts)
+      ) {
+        await singleton().recordSample(sample.accounts, sample.sampledAt);
+        last = sample.sampledAt;
+      }
+    } catch {
+      // No sample is available during cold start. Only the native owner can produce one.
+    } finally {
+      if (!stopped.signal.aborted) {
+        timer = setTimeout(() => void next(), 2500);
+        timer.unref();
+      }
+    }
+  }
+  void next();
+  return () => {
+    stopped.abort();
+    clearTimeout(timer);
+  };
+}
+
+export function startAccountAnalyticsSampling(
+  rustService?: RustService,
+  nativeCollection = false
+): void {
+  // G14: with the writers group on, the Rust service samples quota and collects activity; the
+  // front door feeds it the inputs and stands its own writers down so nothing writes twice.
+  if (rustService?.mode === 'on' && rustAnalyticsWritersOn()) {
+    startAnalyticsWriterFeeds(rustService, nativeCollection);
+    return;
+  }
+  if (!nativeCollection && !workerReadsNative()) singleton().start();
+  if (process.platform === 'win32' && nativeCollection && workerReadsNative()) {
+    stopNativeSamples ??= startNativeSamples();
+  }
   // Usage history is collected in the background too, so it grows while no page is open.
   startAccountAnalyticsActivityBackground();
 }
 export function stopAccountAnalyticsSampling(): void {
+  stopNativeSamples?.();
+  stopNativeSamples = undefined;
+  stopAnalyticsWriterFeeds();
   stopAccountAnalyticsActivityBackground();
   service?.stop();
   service?.flushSavedViews();

@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'http';
-import { randomBytes } from 'crypto';
+import type { Writable } from 'node:stream';
+import type { AppUpdateHostProgress, AppUpdateJob } from './services/app-update-contract';
 import { WebSocket, type WebSocketServer } from 'ws';
 import type { RequestAuthKind } from './middleware/request-auth';
 import type { SignInJob } from './services/signin-jobs';
@@ -20,7 +21,87 @@ export type DashboardEvent =
   | { type: 'reset-claims-changed'; id: string }
   | { type: 'signin-job'; job: SignInJob }
   /** A Status tab source changed; the page re-reads /api/status. Browser sessions only. */
-  | { type: 'status-changed' };
+  | { type: 'status-changed' }
+  | { type: 'analytics-changed' }
+  | { type: 'app-update-job'; job: AppUpdateProgress };
+
+type AppUpdateProgress = Pick<
+  AppUpdateJob,
+  'id' | 'state' | 'cancelRequested' | 'expectedResults'
+> & {
+  completedResults: number;
+  hosts: Array<AppUpdateHostProgress & { host: string }>;
+};
+
+type EventSink = (event: DashboardEvent) => void;
+const eventSinks = new Set<EventSink>();
+const MAX_FEED_FRAME = 64 * 1024;
+
+/** Attach an inherited child stdin. The owner controls the pipe lifetime and child restart. */
+export function attachDashboardEventFeed(pipe: Writable): () => void {
+  const detach = () => {
+    eventSinks.delete(send);
+  };
+  const send = (event: DashboardEvent) => {
+    // Slow or disconnected subscribers can repair missed hints by polling after reconnect.
+    if (pipe.destroyed || pipe.writableEnded || pipe.writableNeedDrain) return;
+    const line = JSON.stringify(event) + '\n';
+    if (Buffer.byteLength(line) <= MAX_FEED_FRAME) pipe.write(line);
+  };
+  pipe.on('error', detach);
+  pipe.once('close', () => {
+    detach();
+    pipe.off('error', detach);
+  });
+  eventSinks.add(send);
+  return detach;
+}
+
+/** A job as a client on a plain transport sees it. */
+export function redactSignInJob<
+  T extends { verification: unknown; result: null | { email: string | null } },
+>(job: T): T {
+  return { ...job, verification: null, result: job.result ? { ...job.result, email: null } : null };
+}
+
+/** Existing sign-in WebSocket shape, with transport-specific redaction. */
+export function signInJobEvent(
+  job: SignInJob,
+  client: DashboardEventClient
+): { type: 'signin-job'; job: SignInJob } | null {
+  if (client.authKind !== 'session') return null;
+  return { type: 'signin-job', job: client.secure ? job : redactSignInJob(job) };
+}
+
+function eventForClient(
+  event: DashboardEvent,
+  client: DashboardEventClient
+): DashboardEvent | null {
+  if (event.type === 'accounts-changed') return event;
+  if (event.type === 'signin-job') return signInJobEvent(event.job, client);
+  return client.authKind === 'session' ? event : null;
+}
+
+/** Project one owner job onto the small, output-free WebSocket progress shape. */
+export function broadcastAppUpdateProgress(job: AppUpdateJob): number {
+  return broadcastDashboardEvent({
+    type: 'app-update-job',
+    job: {
+      id: job.id,
+      state: job.state,
+      cancelRequested: job.cancelRequested,
+      completedResults: job.results.length,
+      expectedResults: job.expectedResults,
+      hosts: Object.entries(job.hosts ?? {}).map(([host, progress]) => ({
+        host,
+        state: progress.state,
+        currentApp: progress.currentApp,
+        phase: progress.phase,
+        phaseSince: progress.phaseSince ?? null,
+      })),
+    },
+  });
+}
 
 export interface DashboardEventClient {
   /**
@@ -108,13 +189,23 @@ export function attachDashboardEventServer(
  * function source builds the event per client (null skips that client).
  */
 export function broadcastDashboardEvent(source: EventSource): number {
+  if (typeof source !== 'function') {
+    for (const sink of eventSinks) {
+      try {
+        sink(source);
+      } catch {
+        /* The owner has already published state. A missed hint is recoverable by polling. */
+      }
+    }
+  }
   let sent = 0;
   for (const wss of servers) {
     for (const client of wss.clients) {
       if (client.readyState !== WebSocket.OPEN) continue;
       let event: DashboardEvent | null;
       try {
-        event = typeof source === 'function' ? source(clientView(clients.get(client))) : source;
+        const view = clientView(clients.get(client));
+        event = typeof source === 'function' ? source(view) : eventForClient(source, view);
       } catch {
         event = null;
       }
@@ -156,10 +247,4 @@ export function closeStaleSessionClients(isCurrent: (epoch: number | null) => bo
     }
   }
   return closed;
-}
-
-/** Reset state hints contain no account data and go only to signed-in browser sessions. */
-export function broadcastResetClaimChange(): number {
-  const event = { type: 'reset-claims-changed' as const, id: randomBytes(16).toString('hex') };
-  return broadcastDashboardEvent((client) => (client.authKind === 'session' ? event : null));
 }

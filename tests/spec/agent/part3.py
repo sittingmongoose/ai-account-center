@@ -178,7 +178,23 @@ def history_parity():
         compare('claude-history',actual,{'unchanged':value},error is not None)
         if error: raise error
         return value
-    with mock.patch.object(helper.BoundProfile, 'collect', collect), mock.patch.object(helper.BoundProfile, 'unchanged', unchanged):
+    original_cleanup = helper.BoundProfile.snapshot_cleanup
+    def snapshot_cleanup(bound):
+        with tempfile.TemporaryDirectory(prefix='aac-history-cleanup-parity-') as tmp:
+            home = Path(tmp) / 'home'
+            shutil.copytree(bound.home, home, symlinks=True)
+            expected = original_cleanup(bound)
+            args = dict(mode='snapshot-cleanup', profileId=bound.profile, platform=bound.platform,
+                        policy=bound.policy, _historyFixture=dict(home=str(home)))
+            actual = call('claude-history', args)
+            assert actual == expected, 'snapshot cleanup did not return the reference receipt'
+            actual_root = home / bound.root.relative_to(bound.home)
+            present = lambda root: sorted(p.name for p in root.iterdir()
+                                          if p.name.startswith('.history-index-snapshot-'))
+            assert present(actual_root) == present(bound.root), 'snapshot cleanup changed another leaf'
+            compare('claude-history', actual, expected)
+            return expected
+    with mock.patch.object(helper.BoundProfile, 'collect', collect), mock.patch.object(helper.BoundProfile, 'unchanged', unchanged), mock.patch.object(helper.BoundProfile, 'snapshot_cleanup', snapshot_cleanup):
         result = unittest.TextTestRunner(verbosity=0).run(unittest.defaultTestLoader.loadTestsFromModule(module))
     assert result.wasSuccessful()
     # Real-file witnesses for Python splitlines and a dangling pending-directory link.

@@ -228,6 +228,17 @@ export class AacStore {
   activitySources(query: { fromMs: number; toMs: number }): Promise<ActivitySources> {
     return this.call('activitySources', query);
   }
+  /** The activity dictionary's model and route names: the owned read's pricing-fact superset. */
+  activityModels(): Promise<{ models: string[]; routes: string[] }> {
+    return this.call('activityModels');
+  }
+  /**
+   * G14/G15: the owned read's pricing facts resolved in Rust (`Resolver::facts_table` over the
+   * activity dictionary), byte-equal to the TS table. Host-only; null when the pair cap is exceeded.
+   */
+  activityPricingFacts(): Promise<Record<string, unknown> | null> {
+    return this.call('activityPricingFacts');
+  }
   /**
    * Imports the retired `cache/codex-native-usage-v1.json` once (Codex usage whose rollout files are
    * gone): Rust reads it as a stream, takes the cached input out of input, adds or raises only.

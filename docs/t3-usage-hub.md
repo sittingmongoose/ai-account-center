@@ -6,7 +6,7 @@ two hub requests T3 makes, so T3 shows the 5-hour and weekly bars of every
 AAC-managed Codex and Claude account. The readings are the dashboard's own,
 from its cache.
 
-Source: `src/web-server/usage-hub/`. Command: `src/commands/usage-hub-command.ts`.
+The public listener serves the hub from `crates/aac-http/src/public_auth/hub.rs`.
 
 ## What it answers
 
@@ -80,21 +80,13 @@ in pingdotgg/t3code (tag `v0.0.46-nightly.20261006.2735`, rechecked against
   cookies, credential contents, paths, sources or collector messages. Answers
   are `Cache-Control: no-store`.
 
-## Turning it on
+## Connecting the hub
 
-On the computer that runs the dashboard:
-
-```bash
-ai-account-center dashboard usage-hub status            # on or off, fingerprint, URLs, LAN access
-ai-account-center dashboard usage-hub generate --stdout # make the key; it is printed once
-ai-account-center dashboard usage-hub rotate --stdout   # replace it; the old key stops working
-ai-account-center dashboard usage-hub off               # remove it; the hub answers 404
-```
-
-`generate` and `rotate` write only the key to standard output, and only with
-`--stdout` (or `--print-once`); every message goes to standard error. Pipe the
-key where it is needed instead of leaving it in a terminal or a file. A lost
-key is rotated, never shown again.
+The Rust service reads the saved hub key from the existing dashboard state.
+Run `ai-account-center dashboard usage-hub status` to check the setup.
+Use `generate --stdout` or `rotate --stdout` under `dashboard usage-hub` to
+print a key once, or `off` to disable the hub. Keep the key in a secret store
+and copy it directly into the T3 usage provider.
 
 In T3, on each T3 environment that should show the bars: **Settings, Providers,
 Usage providers, Add hub**, with:

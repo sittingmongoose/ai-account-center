@@ -315,6 +315,40 @@ the same rounds, with the design's server-time and RSS bars evaluated in the rep
 node tests/spec/agent/lifecycle.mjs <aac-agent> <aac-http>
 ```
 
+## M4a/M4b: launch and claude-host (lane F)
+
+`launch-table.ts` and `claude-host-table.ts` generate the checked-in parity tables from the
+real reference builders (`app-launcher.ts`'s `buildSystemdRunArgs`/`systemdRunEnvironment`,
+`windowsHostScript`, `macOpenCommand`, `windowsOpenCommand`, `windowsAccountListScript`, the
+fixed bootstrap and `claudeHostPurgePermit`). `--check` fails on drift; the Rust ports compare
+every row byte for byte (`crates/aac-agent/src/launch.rs` and `src/claude_host.rs` table tests).
+The launch table covers every app shape on linux/darwin/win32 with no launch; the claude-host
+table covers every operation, the wide/José/no-start-menu launcher shapes and the spec's
+refusal cases. `crates/aac-agent/src/claude_host/categories.rs` (the SAFE_PATH L/M/N ranges)
+is generated from Node by the same claude-host table script.
+
+`cargo test -p aac-agent --test launch_exec --features parity-fixtures` proves the execution
+contract with a compiled recorder standing in for systemd-run (argv, environment, exit-code
+fail-closed) and a detached marker child (full environment replacement, cwd, pid). No real
+app starts.
+
+```sh
+python tests/spec/agent/claude_host_parity.py <aac-agent-with-parity-fixtures>
+```
+
+runs the reference Mac program and the verb on identical temporary homes (create, double
+create, trash/restore byte-identical trees, permitted purge, undo, session markers, path
+refusals, the ps needle rule) and the fixture-safe Windows steps (session, state, purge)
+against the real `windowsHostScript` run locally behind the reference bootstrap. Purge
+without the TS-issued permit, with a forged one and with an expired one is refused; the
+shell-folder/task steps are refused in fixture mode and stay covered by the text table.
+On POSIX the Mac section also compares modes; on Windows the reference's text writes are
+emulated with POSIX newline semantics (its production platform). `tests/unit/web-server/
+claude-host-agent.test.ts` checks the permit binding, the adapter reply validation through
+the real TS fallback transport with a fake runner, and the labelled fallback with no
+artifact. The Mac host-program spec tests (`claude-host-transport.test.ts`) and the loader
+trampoline case in `app-launcher.test.ts` need `/bin/sh` and run on POSIX only.
+
 ## R1: Home, fed
 
 `home-read-parity.mjs` (run by `run.mjs` after the lifecycle) answers `GET /api/views/home` through the
@@ -403,5 +437,18 @@ AAC_M6_TARGET_CLI=/path/to/other-cli bun tests/spec/m6-edge-parity.ts       # CL
 
 The target run discovers the build id from the frame page (`/pkg/<12 hex>/`), sends the same requests, compares the
 recorded rows and, for a built asset, the served bytes with the packaged file under `AAC_M6_STATIC_DIR`. It refuses
-to combine with `--regenerate`. The legacy bin case is TS-only because the compat bin names are package entry
-points.
+to combine with `--regenerate`. The Rust CLI gate also invokes a temporary retired bin name.
+
+For an isolated Rust run, let the fixture build the same UI and seed the same
+management key and account rows:
+
+```sh
+cargo build -p aac-http --locked
+AAC_RUST_PUBLIC_BINARY="$PWD/target/debug/aac-http" \
+  AAC_M6_TARGET_CLI="$PWD/target/debug/ai-account-center" \
+  bun tests/spec/m6-edge-parity.ts --rust-fixture
+```
+
+On Windows use the corresponding .exe paths. The full spec runner selects the
+isolated Rust HTTP fixture when AAC_RUST_PUBLIC_BINARY is set. The
+--regenerate option only records from the TS target.

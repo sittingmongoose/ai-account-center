@@ -1,6 +1,13 @@
+import { activeFileWriterBinary } from '../../shared/private-file-lease';
+import { agentTransport, agentVerbs } from './agent-verbs';
+import { openCursorThroughAgent } from './cursor-open';
 import { getCcsDir } from '../../utils/config-manager';
 import { broadcastDashboardEvent } from '../dashboard-events';
-import { getAccountConfirmations, type AccountConfirmationStore } from './account-confirmations';
+import {
+  getAccountConfirmations,
+  type AccountApprovals,
+  type AccountConfirmationStore,
+} from './account-confirmations';
 import {
   getAccountDashboard,
   invalidateAccountDashboard,
@@ -35,7 +42,8 @@ import { runClaudeHostOverSsh } from './claude-host-transport';
 import type { CodexAccountLifecycle } from './codex-account-lifecycle';
 import type { MuseAccountLifecycle } from './muse-account-lifecycle';
 import { providerSignInState, type ProviderRegistryFacts } from './dashboard-provider-registry';
-import type { SignInFlowSpec, SignInJobRunner } from './signin-jobs';
+import type { SignInFlowSpec, SignInJob, SignInJobRunner } from './signin-jobs';
+import { readSignInJournal } from './signin-journal-read';
 
 /**
  * Everything the lifecycle actions touch, injectable for tests: stores, the
@@ -45,6 +53,7 @@ import type { SignInFlowSpec, SignInJobRunner } from './signin-jobs';
 export interface LifecycleEnv {
   ccsDir: () => string;
   runner: () => SignInJobRunner;
+  readSignInJournal?: (id: string) => Promise<SignInJob | null | undefined>;
   codex: () => CodexAccountLifecycle;
   claude: () => ClaudeAccountLifecycle;
   /** Antigravity saved profiles; without it Antigravity actions answer not_implemented. */
@@ -60,7 +69,10 @@ export interface LifecycleEnv {
   providerFacts: (context: { secureTransport?: boolean }) => ProviderRegistryFacts;
   getDashboard: (context: { secureTransport?: boolean }) => Promise<AccountDashboard>;
   probe: (source: AdditionalUsageSource) => Promise<DashboardAccount>;
-  refreshAdditional: (id: string) => Promise<DashboardAccount | null>;
+  refreshAdditional: (
+    id: string,
+    source: AdditionalUsageSource
+  ) => Promise<DashboardAccount | null>;
   replaceRow: (account: DashboardAccount) => void;
   keyStore: (location: KeyStoreLocation) => KeyStoreBackend | null;
   /** Open Cursor in the Mac console session over the account's ssh alias. */
@@ -75,6 +87,7 @@ export interface LifecycleEnv {
 export interface LifecycleContext {
   secure: boolean;
   sessionKey: string;
+  approvals?: AccountApprovals;
 }
 
 export interface LifecycleResult {
@@ -104,6 +117,7 @@ export function defaultLifecycleEnv(): LifecycleEnv {
   return {
     ccsDir: getCcsDir,
     runner: getSignInJobRunner,
+    readSignInJournal: (id) => readSignInJournal(getCcsDir(), id),
     codex: getCodexLifecycle,
     claude: getClaudeLifecycle,
     antigravity: getAntigravityLifecycle,
@@ -116,6 +130,12 @@ export function defaultLifecycleEnv(): LifecycleEnv {
     replaceRow: replaceAccountDashboardRow,
     keyStore: (location) => keyStoreFor(location, { ccsDir: getCcsDir() }),
     openCursor: async (sshHost) => {
+      const root = getCcsDir();
+      const native =
+        activeFileWriterBinary(root) !== undefined &&
+        agentTransport() === 'on' &&
+        agentVerbs() === 'on';
+      if (await openCursorThroughAgent(root, sshHost, native)) return;
       await runClaudeHostOverSsh(sshHost, OPEN_CURSOR_COMMAND, '');
     },
     onChanged: accountsChanged,

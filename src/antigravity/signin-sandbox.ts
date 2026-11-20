@@ -1,3 +1,4 @@
+import { signInStaging } from '../shared/private-file-lease';
 import { randomBytes } from 'crypto';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
@@ -54,7 +55,7 @@ export const PRIVATE_SESSION_BUS_CONFIG = [
 ].join('\n');
 
 /** Variables the official CLI may see; nothing else from the caller's environment. */
-const PASSED_ENV = [
+export const PASSED_ENV = [
   'USER',
   'LOGNAME',
   'LANG',
@@ -110,30 +111,44 @@ export function signInRoot(ccsDir: string): string {
 }
 
 /** Owned 0700 folders, browser stubs and the bus config; nothing else. */
-export function prepareSignInStaging(ccsDir: string): SignInStaging {
+export function prepareSignInStaging(ccsDir: string, dashboard = false): SignInStaging {
   const root = signInRoot(ccsDir);
   const directory = path.join(
     root,
     `${ANTIGRAVITY_SIGNIN_STAGING_PREFIX}${randomBytes(8).toString('hex')}`
   );
-  privateFolder(directory);
   const home = path.join(directory, 'home');
   const mask = path.join(home, '.gemini');
   const stubs = path.join(directory, 'browser-stubs');
-  for (const folder of [
-    home,
-    mask,
-    path.join(mask, 'antigravity-cli'),
-    path.join(mask, 'antigravity-cli', 'log'),
-    path.join(mask, WORKDIR),
-    stubs,
-  ])
-    privateFolder(folder);
-  for (const name of BROWSER_STUBS) {
-    fs.writeFileSync(path.join(stubs, name), '#!/bin/sh\nexit 0\n', { mode: 0o700, flag: 'wx' });
-  }
   const busConfig = path.join(directory, 'session-bus.conf');
-  fs.writeFileSync(busConfig, PRIVATE_SESSION_BUS_CONFIG, { mode: 0o600, flag: 'wx' });
+  const native = dashboard
+    ? signInStaging(
+        ccsDir,
+        'antigravity',
+        ['prepare', path.basename(directory)],
+        PRIVATE_SESSION_BUS_CONFIG
+      )
+    : undefined;
+  if (native === undefined) {
+    privateFolder(directory);
+    for (const folder of [
+      home,
+      mask,
+      path.join(mask, 'antigravity-cli'),
+      path.join(mask, 'antigravity-cli', 'log'),
+      path.join(mask, WORKDIR),
+      stubs,
+    ]) {
+      privateFolder(folder);
+    }
+    for (const name of BROWSER_STUBS) {
+      fs.writeFileSync(path.join(stubs, name), '#!/bin/sh\nexit 0\n', {
+        mode: 0o700,
+        flag: 'wx',
+      });
+    }
+    fs.writeFileSync(busConfig, PRIVATE_SESSION_BUS_CONFIG, { mode: 0o600, flag: 'wx' });
+  }
   return {
     directory,
     home,
@@ -394,13 +409,26 @@ export function maskedCredentialState(
 }
 
 /** Remove one staging folder and everything in it (the new credential included). */
-export function removeSignInStaging(staging: Pick<SignInStaging, 'directory'>): void {
-  if (!STAGING_NAME.test(path.basename(staging.directory))) return;
+export function removeSignInStaging(
+  staging: Pick<SignInStaging, 'directory'>,
+  ccsDir?: string
+): void {
+  const name = path.basename(staging.directory);
+  if (!STAGING_NAME.test(name)) return;
+  if (
+    ccsDir &&
+    path.resolve(staging.directory) ===
+      path.join(path.resolve(ccsDir), ANTIGRAVITY_SIGNIN_DIR, name) &&
+    signInStaging(ccsDir, 'antigravity', ['cleanup', name]) !== undefined
+  )
+    return;
   fs.rmSync(staging.directory, { recursive: true, force: true });
 }
 
 /** At startup and daily: staging folders older than one hour are removed. */
 export function sweepSignInStaging(ccsDir: string, now: number = Date.now()): number {
+  const checked = signInStaging(ccsDir, 'antigravity', ['sweep', String(now)]);
+  if (checked !== undefined) return checked;
   const root = path.join(path.resolve(ccsDir), ANTIGRAVITY_SIGNIN_DIR);
   let names: string[];
   try {

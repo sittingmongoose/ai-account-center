@@ -5,17 +5,19 @@ Leptos browser app / native Mac or Windows bar
                  |
        authenticated account APIs
                  |
-       TypeScript dashboard services
+          Rust public listener
+                 |
+     Rust owners / private compatibility worker
         /            |             \
  native profiles   observed history  existing-host collectors
  saved logins        Analytics      Python / browser bridge
 ```
 
-The web dashboard is a Leptos 0.9 app (the app frame) compiled through Rust to WebAssembly. The
-TypeScript server stays (new server pieces are Rust native modules such as
-`crates/aac-store`; existing TypeScript is not ported unless the owner asks);
-native bars remain Swift/WPF. The primary CLI command
-is `ai-account-center dashboard`, with `ccs config` compatibility.
+The Leptos 0.9 dashboard compiles to WebAssembly. The Rust public service owns
+HTTP, authentication, sessions, devices, WebSocket, the usage hub and static
+assets. Remaining compatibility adapters run in a private TypeScript worker.
+Remote Codex stop/start still uses its standalone Node bundle. The native bars
+remain Swift/WPF. Use `ai-account-center dashboard` or `ccs config` to start the service.
 
 ## Computers
 

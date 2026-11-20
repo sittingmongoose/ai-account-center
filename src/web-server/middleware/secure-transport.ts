@@ -1,3 +1,4 @@
+import { compositionAccess } from '../compose-request';
 import type { IncomingMessage } from 'http';
 import type { TLSSocket } from 'tls';
 import * as net from 'net';
@@ -106,6 +107,8 @@ export function isLanProxyPeer(
   req: IncomingMessage,
   options: SecureTransportOptions = {}
 ): boolean {
+  const composed = compositionAccess(req);
+  if (composed) return composed.lanProxy;
   if (configuredTrustedProxy(options) !== 'lan-https-proxy') return false;
   const addresses = options.trustedProxyAddresses ?? trustedProxyAddresses();
   return isTrustedProxyAddress(req.socket?.remoteAddress, addresses);
@@ -160,6 +163,8 @@ export function forwardedClientAddress(req: IncomingMessage): ParsedAddress | nu
  * exactly as before.
  */
 export function requestClientAddress(req: IncomingMessage & { ip?: unknown }): string | null {
+  const composed = compositionAccess(req);
+  if (composed) return composed.client;
   if (isForwardedThroughTrustedProxy(req)) {
     const client = typeof req.ip === 'string' ? req.ip.trim() : '';
     if (client.includes('%') || net.isIP(client) === 0) return 'invalid';
@@ -317,6 +322,8 @@ export function describeConnection(req: IncomingMessage): ConnectionDescription 
  * computer; the settings parser refuses loopback proxy addresses anyway).
  */
 export function isDirectLoopbackRequest(req: IncomingMessage): boolean {
+  const composed = compositionAccess(req);
+  if (composed) return composed.directLoopback;
   if (isLanProxyPeer(req)) return false;
   if (!isLoopbackRemoteAddress(req.socket?.remoteAddress)) return false;
   if (carriesForwardedHeaders(req)) return false;
@@ -327,6 +334,8 @@ export function isSecureTransport(
   req: IncomingMessage,
   options: SecureTransportOptions = {}
 ): boolean {
+  const composed = compositionAccess(req);
+  if (composed) return composed.secure;
   const socket = req.socket as (TLSSocket & { encrypted?: boolean }) | undefined;
   if (socket?.encrypted === true) return true;
   // The LAN HTTPS proxy: secure only when it says the outer transport was
@@ -358,6 +367,8 @@ export function credentialTransport(
   req: IncomingMessage,
   options: SecureTransportOptions = {}
 ): CredentialTransport {
+  const composed = compositionAccess(req);
+  if (composed) return composed.transport;
   const socket = req.socket as (TLSSocket & { encrypted?: boolean }) | undefined;
   if (socket?.encrypted === true) return 'encrypted';
   if (isLanProxyPeer(req, options)) return lanProxyRequestIsSecure(req) ? 'encrypted' : 'plain';

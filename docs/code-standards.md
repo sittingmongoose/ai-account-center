@@ -7,8 +7,10 @@ contracts.
 
 ## Boundaries
 
-Keep the backend in TypeScript, web presentation in Leptos 0.9 and native bars
-in Swift/WPF. Reuse existing account DTOs, browser helpers and guard services.
+Keep the public dashboard and native service owners in Rust, web presentation
+in Leptos 0.9 and native bars in Swift/WPF. Keep TypeScript compatibility and
+remote Codex update code at their documented boundaries. Reuse existing
+account DTOs, browser helpers and guard services.
 Do not introduce a runtime dispatcher or resurrect React/Vite to solve a view
 change. Keep imports within the domain that owns the behavior.
 

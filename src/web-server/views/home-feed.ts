@@ -8,7 +8,7 @@
  *     key, so it is written once per request and sent only when it differs). Its facts, computed once per
  *     generation: the `localeCompare` ranks of the words Home sorts by and the `Date.parse` epochs of every
  *     `resetAt`/`sampledAt` string the pass reads;
- *   - `home-opens`: this process's Claude Open progress per profile (`ClaudeOpenOperations.forScope`);
+ *   - `home-opens`: the Claude Open progress per profile (the Rust owner holds it now);
  *   - `home-antigravity`: the runtime's inventory in the ISO envelope, which Rust composes when it arrives.
  * - **Per request** only the generation ids, the clock (`now`, `updatedAt`), the platform, the transport fact and
  *   the page's context cross (`x-aac-feed`, `x-aac-home-context`; no body). Rust reads the desktop manifest
@@ -27,13 +27,41 @@ import { jsonExact, rustAntigravityInventoryInput } from '../rust-profile-input'
 import { sendRustView } from '../rust-view-reply';
 import type { AccountDashboard } from '../services/account-dashboard-types';
 import type { HomeDashboardRead } from '../services/account-dashboard-service';
-import { getClaudeOpenOperations } from '../services/claude-open-operations';
 import { homeSortWords, type HomeContext } from './home-context';
 import { homeZoneAgrees } from './home-zone';
+import { loadUnifiedConfig } from '../../config/unified-config-loader';
 
 const ROUTE = '/api/views/home';
 /** aac-views `home::fed::{VIEW, VERSION}`. */
 export const HOME_FED_VIEW = 'home@3';
+
+/**
+ * G17: the Rust Home feed producer switch (`rustService.homeProducer` in config.yaml, `AAC_RUST_HOME_PRODUCER`
+ * wins). Off by default: the TS producer below stays the path until lane I's collection feeds the Rust one
+ * and the cut deletes this file. Read once per service (config.yaml is not read per request).
+ */
+export function homeProducerOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  let value: unknown = env.AAC_RUST_HOME_PRODUCER;
+  if (value === undefined) {
+    try {
+      value = loadUnifiedConfig()?.rustService?.homeProducer;
+    } catch {
+      value = undefined;
+    }
+  }
+  return value === 'on';
+}
+
+const producerModes = new WeakMap<RustService, boolean>();
+
+function producerOn(service: RustService): boolean {
+  let on = producerModes.get(service);
+  if (on === undefined) {
+    on = homeProducerOn();
+    producerModes.set(service, on);
+  }
+  return on;
+}
 
 interface Held {
   key: string;
@@ -62,7 +90,7 @@ export class BootFeeds {
  * held moves past it ([`seen`]); both stay safe integers for centuries.
  */
 let last = 0;
-function nextGeneration(): string {
+export function nextGeneration(): string {
   last = Math.max(last + 1, Date.now() * 1000);
   return String(last);
 }
@@ -72,7 +100,7 @@ function seen(held: string): void {
 }
 const boots = new WeakMap<RustService, BootFeeds>();
 
-function feedsOf(service: RustService, boot: string): BootFeeds {
+export function feedsOf(service: RustService, boot: string): BootFeeds {
   let feeds = boots.get(service);
   if (!feeds || feeds.boot !== boot) {
     feeds = new BootFeeds(boot);
@@ -212,6 +240,45 @@ export function passFaithful(dashboard: AccountDashboard): boolean {
   return true;
 }
 
+/** Shared dashboard bytes and Home's date/sort facts, serialized once for a publication. */
+export function dashboardPublication(dashboard: AccountDashboard) {
+  if (!jsonExact(dashboard)) return null;
+  return {
+    data: JSON.stringify({ ...dashboard, updatedAt: '' }),
+    facts: JSON.stringify({
+      order: localeRanks(homeSortWords(dashboard)),
+      epochs: resetEpochs(dashboard),
+    }),
+  };
+}
+
+/** Shared generation for Accounts, trays and Home. */
+export function ensureDashboardFeed(
+  service: RustService,
+  feeds: BootFeeds,
+  platform: 'mac' | 'windows',
+  secure: boolean,
+  dashboard: AccountDashboard
+): Promise<Generation> {
+  const dashboardText = JSON.stringify({ ...dashboard, updatedAt: '' });
+  return ensure(
+    service,
+    feeds,
+    `home-dashboard-${platform}-${secure ? 1 : 0}`,
+    dashboardText,
+    () => {
+      if (!jsonExact(dashboard)) return null;
+      return {
+        data: dashboardText,
+        facts: JSON.stringify({
+          order: localeRanks(homeSortWords(dashboard)),
+          epochs: resetEpochs(dashboard),
+        }),
+      };
+    }
+  );
+}
+
 export interface HomeFedRequest {
   platform: 'mac' | 'windows';
   secure: boolean;
@@ -221,6 +288,12 @@ export interface HomeFedRequest {
   read: HomeDashboardRead;
   /** The Antigravity runtime's inventory, as the original handler reads it. */
   inventory: unknown;
+  /**
+   * The public Open owner's live progress for this scope, as `[profileId, operation]` pairs — the
+   * same state the profiles route reads. Null when it cannot be read: the fed path declines rather
+   * than feeding an empty list, which the page would draw as "no Open running".
+   */
+  opens: unknown[] | null;
   /** The CCS directory the TS readers use (`getCcsDir()`). */
   scope: string;
 }
@@ -247,39 +320,49 @@ export async function answerHomeFed(
   if (input.context && !homeZoneAgrees(input.context)) return declined('zone');
   if (!passFaithful(dashboard)) return declined('input');
   const feeds = feedsOf(service, boot);
-  const dashboardText = JSON.stringify({ ...dashboard, updatedAt: '' });
-  const opens = JSON.stringify(getClaudeOpenOperations().forScope(input.scope));
-  // R1b: the inventory's own JSON text is its change key: its ISO envelope (`rustReadInput`) is a function of
-  // that text, so it is computed only when the key changes. A value JSON cannot carry exactly is pushed as null.
+  if (!Array.isArray(input.opens)) return declined('input');
   const inventoryExact = jsonExact(input.inventory);
-  const antigravityKey = inventoryExact
-    ? `inventory:${JSON.stringify(input.inventory)}`
-    : 'inexact';
-  const generations = await Promise.all([
-    ensure(
-      service,
-      feeds,
-      `home-dashboard-${input.platform}-${input.secure ? 1 : 0}`,
-      dashboardText,
-      () =>
-        jsonExact(dashboard)
-          ? {
-              data: dashboardText,
-              facts: JSON.stringify({
-                order: localeRanks(homeSortWords(dashboard)),
-                epochs: resetEpochs(dashboard),
-              }),
-            }
-          : null
-    ),
-    ensure(service, feeds, 'home-opens', opens, () => ({ data: opens, facts: 'null' })),
-    ensure(service, feeds, 'home-antigravity', antigravityKey, () => ({
-      data: inventoryExact
-        ? JSON.stringify(rustAntigravityInventoryInput(input.inventory) ?? null)
-        : 'null',
-      facts: 'null',
-    })),
-  ]);
+  let generations: Generation[];
+  if (producerOn(service)) {
+    // G17: Rust produces the change keys, the facts, the envelope and the generations from the raw inputs
+    // (`PUT /internal/home-inputs`). The send gates stay here: the fallback reads the original values.
+    if (!jsonExact(dashboard) || !inventoryExact) return declined('input');
+    const produced = await service.putHomeInputs({
+      platform: input.platform,
+      secure: input.secure,
+      dashboard,
+      opens: input.opens,
+      antigravity: input.inventory,
+    });
+    if (!produced) return declined('feed');
+    if ('declined' in produced) {
+      service.producerDeclined(ROUTE, produced.declined);
+      return false;
+    }
+    generations = [
+      { generation: produced.dashboard },
+      { generation: produced.opens },
+      { generation: produced.antigravity },
+    ];
+  } else {
+    // G13: Open progress lives in the Rust owner and arrives with the profiles read.
+    const opens = JSON.stringify(input.opens);
+    // R1b: the inventory's own JSON text is its change key: its ISO envelope (`rustReadInput`) is a function of
+    // that text, so it is computed only when the key changes. A value JSON cannot carry exactly is pushed as null.
+    const antigravityKey = inventoryExact
+      ? `inventory:${JSON.stringify(input.inventory)}`
+      : 'inexact';
+    generations = await Promise.all([
+      ensureDashboardFeed(service, feeds, input.platform, input.secure, dashboard),
+      ensure(service, feeds, 'home-opens', opens, () => ({ data: opens, facts: 'null' })),
+      ensure(service, feeds, 'home-antigravity', antigravityKey, () => ({
+        data: inventoryExact
+          ? JSON.stringify(rustAntigravityInventoryInput(input.inventory) ?? null)
+          : 'null',
+        facts: 'null',
+      })),
+    ]);
+  }
   const ids: string[] = [];
   for (const generation of generations) {
     if ('declined' in generation) return declined(generation.declined);

@@ -55,7 +55,7 @@ impl From<Read> for Regular {
         match outcome {
             Read::Bytes(bytes, meta) => Regular::Read(bytes, *meta),
             Read::Absent | Read::Unreadable(std::io::ErrorKind::NotADirectory) => Regular::Missing,
-            Read::Link | Read::NotRegular => Regular::Unusual,
+            Read::Link | Read::Directory | Read::NotRegular => Regular::Unusual,
             Read::TooLarge => Regular::TooLarge,
             Read::Foreign => Regular::Foreign,
             Read::BadMode => Regular::Loose,
