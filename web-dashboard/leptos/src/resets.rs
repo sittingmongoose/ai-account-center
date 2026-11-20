@@ -306,7 +306,10 @@ pub fn why_not(reason: &str, provider: &str) -> String {
             "AAC can't read this account's Codex limits right now, so it won't use this reset.".into()
         }
         "refill-windows-unconfirmed" => "AAC can't confirm which limit this refills right now.".into(),
-        "signed-out" if provider == "claude" => "Listed resets need a verified OAuth sign-in on Windows. Sign in again before using them.".into(),
+        // Resets go through the account's Claude Desktop profile on Windows, never its Claude Code sign-in.
+        "signed-out" if provider == "claude" => {
+            "Claude Desktop needs a sign-in on Windows: resets go through its sign-in there (Claude Code sign-ins are checked separately). Open the account on Windows and sign in to Claude Desktop to use them.".into()
+        }
         "signed-out" => "This login is signed out.".into(),
         "cooldown" => "The provider asked AAC to wait before another reset.".into(),
         "rate-limited" if provider == "claude" => "Claude is limiting reset requests. Try again later.".into(),
@@ -966,8 +969,17 @@ mod inventory_read_note_tests {
         assert!(text.contains("Claude is limiting reset requests"));
         assert!(!text.contains("Mac-only"));
         assert!(!text.contains("No resets"));
+        // Resets go through the account's Claude Desktop profile on Windows, not its Claude Code sign-in, so the
+        // prompt names Claude Desktop (AAC's sign-in health tracks Claude Code and can say ok at the same time).
         let signed_out = why_not("signed-out", "claude");
-        assert!(signed_out.contains("Listed resets need a verified OAuth sign-in on Windows"));
+        assert!(
+            signed_out.starts_with("Claude Desktop needs a sign-in on Windows"),
+            "{signed_out}"
+        );
+        assert!(
+            signed_out.contains("Claude Code sign-ins are checked separately"),
+            "{signed_out}"
+        );
         assert!(
             inventory_read_note(
                 &Load::Ready(Inventory {

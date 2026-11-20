@@ -211,7 +211,7 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   public func claudeOpenHelp(_ platform: String) -> String {
     let name = platform == "mac" ? "Mac" : "Windows"
     return signInNeededPlatforms.contains(platform)
-      ? "Sign-in needed on \(name). Open shows the Claude sign-in window for \(identity); sign in once on that computer."
+      ? "Claude Desktop needs a sign-in on \(name). Open shows the Claude Desktop sign-in window for \(identity); sign in once on that computer. Claude Code sign-ins are checked separately."
       : "Open \(identity) in Claude on \(name)"
   }
   public var canOpenOnMac: Bool {

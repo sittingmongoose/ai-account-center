@@ -414,7 +414,8 @@ public static partial class Checks
         report.Checks["claude_sign_in_needed_is_named_per_computer_before_open"] = signIn.Accounts[0].SignInNeededText == "Sign-in needed on Windows"
             && signIn.Accounts[1].SignInNeededText == "Sign-in needed on Mac and Windows"
             && signIn.Accounts[2].SignInNeededText is null && signIn.Accounts[3].SignInNeededText is null && signIn.Accounts[4].SignInNeededText is null
-            && MainWindow.OpenTip(signIn.Accounts[0], "windows").StartsWith("Sign-in needed on Windows. Open shows the Claude sign-in window", StringComparison.Ordinal)
+            && MainWindow.OpenTip(signIn.Accounts[0], "windows").StartsWith("Claude Desktop needs a sign-in on Windows. Open shows the Claude Desktop sign-in window", StringComparison.Ordinal)
+            && MainWindow.OpenTip(signIn.Accounts[0], "windows").EndsWith("Claude Code sign-ins are checked separately.", StringComparison.Ordinal)
             && MainWindow.OpenTip(signIn.Accounts[0], "mac") == "Open fake-a@example.com in Claude on Mac";
         // An older dashboard still sends the retired switching fields (account switching was removed on 2026-11-14): the
         // tray ignores them and keeps the rest of the dashboard.
