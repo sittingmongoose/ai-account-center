@@ -194722,7 +194722,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 4:29 PM."
+          "detail": "All 7 machines read by 4:29 PM."
         },
         {
           "id": "browsers",
@@ -195122,6 +195122,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -195309,7 +195383,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 11:29 AM."
+          "detail": "All 7 machines read by 11:29 AM."
         },
         {
           "id": "browsers",
@@ -195709,6 +195783,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -195896,7 +196044,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 4:29 PM."
+          "detail": "All 7 machines read by 4:29 PM."
         },
         {
           "id": "browsers",
@@ -196296,6 +196444,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -197001,6 +197223,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -198078,6 +198374,80 @@
               "detail": "browser-check has no row for this machine."
             },
             "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
           }
         ]
       },
@@ -199089,6 +199459,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -200197,6 +200641,80 @@
               "detail": "browser-check has no row for this machine."
             },
             "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
           }
         ]
       },
@@ -201239,6 +201757,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -202347,6 +202939,80 @@
               "detail": "browser-check has no row for this machine."
             },
             "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
           }
         ]
       },
@@ -203354,6 +204020,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -204427,6 +205167,80 @@
               "detail": "browser-check has no row for this machine."
             },
             "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
           }
         ]
       },
@@ -205467,6 +206281,80 @@
               "detail": "browser-check has no row for this machine."
             },
             "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
           }
         ]
       },
@@ -205960,7 +206848,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 4:29 PM."
+          "detail": "All 7 machines read by 4:29 PM."
         },
         {
           "id": "browsers",
@@ -206360,6 +207248,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -206547,7 +207509,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 11:29 AM."
+          "detail": "All 7 machines read by 11:29 AM."
         },
         {
           "id": "browsers",
@@ -206947,6 +207909,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -207134,7 +208170,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 4:29 PM."
+          "detail": "All 7 machines read by 4:29 PM."
         },
         {
           "id": "browsers",
@@ -207534,6 +208570,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -207721,7 +208831,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 4:29 PM."
+          "detail": "All 7 machines read by 4:29 PM."
         },
         {
           "id": "browsers",
@@ -208121,6 +209231,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -208308,7 +209492,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 11:29 AM."
+          "detail": "All 7 machines read by 11:29 AM."
         },
         {
           "id": "browsers",
@@ -208708,6 +209892,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "ok",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 30,
@@ -208895,7 +210153,7 @@
           "ageSeconds": 30,
           "staleAfterSeconds": 180,
           "state": "ok",
-          "detail": "All 5 machines read by 4:29 PM."
+          "detail": "All 7 machines read by 4:29 PM."
         },
         {
           "id": "browsers",
@@ -209328,6 +210586,80 @@
               "detail": "Waiting for the first reading."
             },
             "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
           }
         ]
       },
@@ -209450,7 +210782,7 @@
               "short": "not current",
               "tone": "warn",
               "section": null,
-              "detail": "Not current: Agent reports: The agent reports folder has not answered since 4:30 PM; pm-mail registry: Waiting for the first reading; Machines: Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample."
+              "detail": "Not current: Agent reports: The agent reports folder has not answered since 4:30 PM; pm-mail registry: Waiting for the first reading; Machines: Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM. Odroid stale: No new reading since 4:29 PM. 1070ti stale: No new reading since 4:29 PM; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample."
             }
           ],
           "worst": null
@@ -209482,7 +210814,7 @@
           "ageSeconds": 2030,
           "staleAfterSeconds": 180,
           "state": "stale",
-          "detail": "Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM."
+          "detail": "Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM. Odroid stale: No new reading since 4:29 PM. 1070ti stale: No new reading since 4:29 PM."
         },
         {
           "id": "browsers",
@@ -209882,6 +211214,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "stale",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 2030,
+            "detail": "No new reading since 4:29 PM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "stale",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 2030,
+            "detail": "No new reading since 4:29 PM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "stale",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 2030,
@@ -210037,7 +211443,7 @@
               "short": "not current",
               "tone": "warn",
               "section": null,
-              "detail": "Not current: Agent reports: The agent reports folder has not answered since 11:30 AM; pm-mail registry: Waiting for the first reading; Machines: Ubuntu VM stale: No new reading since 11:29 AM. Mac stale: No new reading since 11:29 AM. Windows PC stale: No new reading since 11:29 AM. Nas1 stale: No new reading since 11:29 AM. Alexis PC stale: No new reading since 11:29 AM; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample."
+              "detail": "Not current: Agent reports: The agent reports folder has not answered since 11:30 AM; pm-mail registry: Waiting for the first reading; Machines: Ubuntu VM stale: No new reading since 11:29 AM. Mac stale: No new reading since 11:29 AM. Windows PC stale: No new reading since 11:29 AM. Nas1 stale: No new reading since 11:29 AM. Alexis PC stale: No new reading since 11:29 AM. Odroid stale: No new reading since 11:29 AM. 1070ti stale: No new reading since 11:29 AM; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample."
             }
           ],
           "worst": null
@@ -210069,7 +211475,7 @@
           "ageSeconds": 2030,
           "staleAfterSeconds": 180,
           "state": "stale",
-          "detail": "Ubuntu VM stale: No new reading since 11:29 AM. Mac stale: No new reading since 11:29 AM. Windows PC stale: No new reading since 11:29 AM. Nas1 stale: No new reading since 11:29 AM. Alexis PC stale: No new reading since 11:29 AM."
+          "detail": "Ubuntu VM stale: No new reading since 11:29 AM. Mac stale: No new reading since 11:29 AM. Windows PC stale: No new reading since 11:29 AM. Nas1 stale: No new reading since 11:29 AM. Alexis PC stale: No new reading since 11:29 AM. Odroid stale: No new reading since 11:29 AM. 1070ti stale: No new reading since 11:29 AM."
         },
         {
           "id": "browsers",
@@ -210469,6 +211875,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "stale",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 2030,
+            "detail": "No new reading since 11:29 AM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "stale",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 2030,
+            "detail": "No new reading since 11:29 AM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "stale",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 2030,
@@ -210624,7 +212104,7 @@
               "short": "not current",
               "tone": "warn",
               "section": null,
-              "detail": "Not current: Agent reports: The agent reports folder has not answered since 4:30 PM; pm-mail registry: Waiting for the first reading; Machines: Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample."
+              "detail": "Not current: Agent reports: The agent reports folder has not answered since 4:30 PM; pm-mail registry: Waiting for the first reading; Machines: Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM. Odroid stale: No new reading since 4:29 PM. 1070ti stale: No new reading since 4:29 PM; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample."
             }
           ],
           "worst": null
@@ -210656,7 +212136,7 @@
           "ageSeconds": 2030,
           "staleAfterSeconds": 180,
           "state": "stale",
-          "detail": "Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM."
+          "detail": "Ubuntu VM stale: No new reading since 4:29 PM. Mac stale: No new reading since 4:29 PM. Windows PC stale: No new reading since 4:29 PM. Nas1 stale: No new reading since 4:29 PM. Alexis PC stale: No new reading since 4:29 PM. Odroid stale: No new reading since 4:29 PM. 1070ti stale: No new reading since 4:29 PM."
         },
         {
           "id": "browsers",
@@ -211056,6 +212536,80 @@
           {
             "id": "alexis",
             "label": "Alexis PC",
+            "state": "stale",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 2030,
+            "detail": "No new reading since 4:29 PM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "stale",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 2030,
+            "detail": "No new reading since 4:29 PM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
             "state": "stale",
             "asOf": "2026-11-06T16:29:30.000Z",
             "ageSeconds": 2030,
