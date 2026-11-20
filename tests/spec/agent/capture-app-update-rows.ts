@@ -3,6 +3,7 @@
  * The fixture is independent of the TS implementation after it is captured.
  */
 import { normalizeAppUpdateRow, type UpdateAppId, type UpdatePlatform } from '../../../src/web-server/services/app-update-contract';
+import { HOST_OS } from '../../../src/web-server/services/dashboard-hosts';
 
 const cases: [UpdatePlatform, UpdateAppId, Record<string, unknown>][] = [
   ['ubuntu', 'antigravity-cli', { status:'held', messageCode:'held_for_review', heldVersion:'1.5.9', version:'1.5.8', manager:'native' }],
@@ -43,9 +44,29 @@ const cases: [UpdatePlatform, UpdateAppId, Record<string, unknown>][] = [
     status: 'updated', messageCode: 'muse_quota_exhausted', version: '1.5.0', manager: 'native',
     quotaReset: '5 pm\nquota',
   }],
+  ['odroid', 't3-code', {
+    status: 'updated', messageCode: 't3_restart_scheduled', version: '0.1.10-nightly.20261113.4616',
+    manager: 'native', restartTargets: [{ kind: 'systemd', service: 't3code.service', delaySeconds: 30 }],
+  }],
+  ['ubuntu', 'antigravity-acp', {
+    status: 'updated', messageCode: 'antigravity_acp_qualified', version: '1.4.6', manager: 'official-download',
+  }],
+  ['mac', 'antigravity-acp', {
+    status: 'updated', messageCode: 'antigravity_acp_isolation_unverified', version: '1.4.6',
+    manager: 'official-download', wrapperVersion: '1.4.5', qualifyReason: 'bwrap is missing',
+  }],
+  ['windows', 'antigravity-acp', {
+    status: 'updated', messageCode: 'antigravity_acp_isolation_unverified', version: '1.4.6',
+    manager: 'official-download', wrapperVersion: null,
+  }],
+  ['nas1', 'antigravity-acp', {
+    status: 'updated', messageCode: 'antigravity_acp_isolation_unverified', version: '1.4.6',
+    manager: 'official-download', wrapperVersion: 'invalid version',
+  }],
 ];
 const golden = cases.map(([host, app, facts]) => {
-  const row = { appId:app, platform:host === 'nas1' ? 'ubuntu' : host === 'alexis' ? 'windows' : host, ...facts };
+  const os = HOST_OS[host];
+  const row = { appId:app, platform: os === 'linux' ? 'ubuntu' : os, ...facts };
   return { host, app, row, expected: normalizeAppUpdateRow(row, app, host) };
 });
 const bytes = JSON.stringify(golden, null, 2) + '\n';

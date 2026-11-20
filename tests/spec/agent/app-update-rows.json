@@ -481,5 +481,155 @@
       "forcedStops": 0,
       "restartTargets": []
     }
+  },
+  {
+    "host": "odroid",
+    "app": "t3-code",
+    "row": {
+      "appId": "t3-code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "t3_restart_scheduled",
+      "version": "0.1.10-nightly.20261113.4616",
+      "manager": "native",
+      "restartTargets": [
+        {
+          "kind": "systemd",
+          "service": "t3code.service",
+          "delaySeconds": 30
+        }
+      ]
+    },
+    "expected": {
+      "appId": "t3-code",
+      "appLabel": "T3 Code",
+      "platform": "odroid",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "0.1.10-nightly.20261113.4616",
+      "manager": "native",
+      "message": "Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect. A release that upgrades a large T3 database can keep T3 offline for several minutes before it reconnects.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": [
+        {
+          "kind": "systemd",
+          "service": "t3code.service",
+          "delaySeconds": 30
+        }
+      ]
+    }
+  },
+  {
+    "host": "ubuntu",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "antigravity_acp_qualified",
+      "version": "1.4.6",
+      "manager": "official-download"
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "ubuntu",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.4.6",
+      "manager": "official-download",
+      "message": "Updated Antigravity ACP to 1.4.6; account isolation verified",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "mac",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "mac",
+      "status": "updated",
+      "messageCode": "antigravity_acp_isolation_unverified",
+      "version": "1.4.6",
+      "manager": "official-download",
+      "wrapperVersion": "1.4.5",
+      "qualifyReason": "bwrap is missing"
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "mac",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.4.6",
+      "manager": "official-download",
+      "message": "Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so T3 keeps using 1.4.5. The check could not test it: bwrap is missing",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "wrapperVersion": "1.4.5",
+      "qualifyReason": "bwrap is missing",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "windows",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "windows",
+      "status": "updated",
+      "messageCode": "antigravity_acp_isolation_unverified",
+      "version": "1.4.6",
+      "manager": "official-download",
+      "wrapperVersion": null
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "windows",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.4.6",
+      "manager": "official-download",
+      "message": "Updated Antigravity ACP to 1.4.6; account isolation is not verified yet, so no qualified Antigravity ACP runtime is available to T3",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "wrapperVersion": null,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "nas1",
+    "app": "antigravity-acp",
+    "row": {
+      "appId": "antigravity-acp",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "antigravity_acp_isolation_unverified",
+      "version": "1.4.6",
+      "manager": "official-download",
+      "wrapperVersion": "invalid version"
+    },
+    "expected": {
+      "appId": "antigravity-acp",
+      "appLabel": "Antigravity ACP (T3)",
+      "platform": "nas1",
+      "status": "failed",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "The update helper returned an unsupported result.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
   }
 ]
