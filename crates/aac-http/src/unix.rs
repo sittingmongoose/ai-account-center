@@ -2054,8 +2054,7 @@ async fn serve_inner(
                     },
                     |cache| {
                         (native.published)(&cache);
-                        if store.is_some()
-                            && let Some(produce) = &status_produce
+                        if let Some(produce) = &status_produce
                             && let Some(usage) = samples
                                 .lock()
                                 .unwrap_or_else(|poison| poison.into_inner())

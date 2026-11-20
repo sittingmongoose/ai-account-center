@@ -46,6 +46,8 @@ pub(super) struct OwnerHost {
     embed: bool,
     #[cfg(unix)]
     link: Mutex<Option<ServiceLink>>,
+    #[cfg(all(test, unix))]
+    descriptor_lookups: std::sync::atomic::AtomicUsize,
     #[cfg(unix)]
     embedded: tokio::sync::Mutex<Option<Embedded>>,
     /// The in-process public owners this boot started (Accounts collection, Re-check,
@@ -92,6 +94,8 @@ impl OwnerHost {
             embed,
             #[cfg(unix)]
             link: Mutex::new(None),
+            #[cfg(all(test, unix))]
+            descriptor_lookups: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(unix)]
             embedded: tokio::sync::Mutex::new(None),
             public: Mutex::new(None),
@@ -242,9 +246,6 @@ impl OwnerHost {
         if std::env::var("AAC_RUST_CUT_FIXTURE_NO_STATUS_USAGE").as_deref() == Ok("1") {
             return;
         }
-        if crate::store_host::disabled_for_public(&self.root) {
-            return;
-        }
         let usage = self
             .usage_samples
             .lock()
@@ -296,6 +297,9 @@ impl OwnerHost {
     fn published_link(&self) -> Option<ServiceLink> {
         let mut held = self.link.lock().unwrap_or_else(|p| p.into_inner());
         if held.is_none() {
+            #[cfg(test)]
+            self.descriptor_lookups
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *held = ServiceLink::load(&self.root);
         }
         held.clone()
@@ -643,6 +647,24 @@ mod tests {
         assert!(
             matches!(result, Ok(None)),
             "the event loop must own the retry cadence"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn status_events_back_off_when_no_service_publishes() {
+        let root = tempfile::tempdir().unwrap();
+        let host = OwnerHost::new(root.path().to_path_buf(), false);
+        let events = DashboardEvents(tokio::sync::broadcast::channel(1).0);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(60), host.status_events(events))
+                .await
+                .is_err()
+        );
+        // The descriptor was probed at 0, 1, 3, 7, 15 and 31 seconds.
+        assert_eq!(
+            host.descriptor_lookups
+                .load(std::sync::atomic::Ordering::Relaxed),
+            6
         );
     }
     use serde_json::Value;

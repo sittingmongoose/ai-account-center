@@ -136,7 +136,12 @@ async fn native_boot_builds_all_selectors_from_private_settings_without_a_feed()
             "trayHiddenProviders":[],"trayHiddenAccountIds":[]
         }),
     );
-    let boot = Boot::from_json(&input).unwrap();
+    let mut input: Value = serde_json::from_slice(&input).unwrap();
+    input["owned"] = json!({
+        "reportsRoot":root.join("reports"),"registryDir":root.join("registry"),
+        "status":true,"scoreboard":false
+    });
+    let boot = Boot::from_json(&serde_json::to_vec(&input).unwrap()).unwrap();
 
     let cache = AccountUsageCache::default();
     let (observed, mut reports) = mpsc::unbounded_channel();
@@ -218,6 +223,33 @@ async fn native_boot_builds_all_selectors_from_private_settings_without_a_feed()
         "platform":"windows","secure":true,"now":0,"updatedAt":"2026-01-01T00:00:00.000Z"
     });
     let socket = folder.join("http.sock");
+    let status_socket = socket.clone();
+    let usage = tokio::task::spawn_blocking(move || {
+        let from = now - 86_400_000;
+        let zone = json!({"timeZone":"UTC","from":from,"to":now+86_400_000,"offsets":[[from,0]]});
+        let extra = format!("x-aac-owned: 1\r\nx-aac-now: {now}\r\nx-aac-zone: {zone}\r\n");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let response = exchange(&status_socket, "GET", "/api/status", admin(), &extra);
+            let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+            assert!(headers.starts_with("HTTP/1.1 200"), "{response}");
+            let view: Value = serde_json::from_str(body).unwrap();
+            let usage = view["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|source| source["id"] == "usage")
+                .unwrap();
+            if usage["state"] == "ok" || std::time::Instant::now() >= deadline {
+                return usage.clone();
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(usage["state"], "ok", "Status usage source: {usage}");
+    assert!(!root.join("store").exists());
     let (accounts, put) = tokio::task::spawn_blocking(move || {
         (
             exchange(

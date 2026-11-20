@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -58,4 +58,48 @@ describe.skipIf(!haveNativeStoreServer)('Status with the history store off', () 
       20000
     );
   }
+
+  it('publishes live account samples without the history store', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aac-status-live-usage-'));
+    let fixture: Awaited<ReturnType<typeof startNativeStoreServer>> | undefined;
+    try {
+      // An unbound profile gives the collector a real account row without a provider probe.
+      const account = {
+        id: 'antigravity:acct:00000001',
+        label: 'Fixture account',
+        platform: 'mac',
+        provider: 'antigravity',
+        credential: { kind: 'antigravity-profile', profileId: 'fixture' },
+      };
+      await writeFile(
+        path.join(root, 'account-usage-accounts.json'),
+        JSON.stringify({ version: 2, accounts: [account] }),
+        { mode: 0o600 }
+      );
+      fixture = await startNativeStoreServer(root, 'off', { collection: true, worker });
+      const { send, cookie, url } = fixture;
+      const headers = { cookie, origin: url };
+      const dashboard = await send('/api/accounts/dashboard', { headers });
+      expect(dashboard.status).toBe(200);
+      expect((await dashboard.json()).accounts).toContainEqual(
+        expect.objectContaining({ id: account.id })
+      );
+      const deadline = Date.now() + 2000;
+      let state;
+      do {
+        const status = await send('/api/status', { headers });
+        expect(status.status).toBe(200);
+        state = (await status.json()).sources.find(
+          (source: { id: string }) => source.id === 'usage'
+        )?.state;
+        if (state === 'ok') break;
+        await Bun.sleep(50);
+      } while (Date.now() < deadline);
+      expect(state).toBe('ok');
+      expect(existsSync(path.join(root, 'store'))).toBe(false);
+    } finally {
+      await fixture?.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15000);
 });

@@ -19,7 +19,7 @@ const credentials = { username: 'fixture-admin', password: 'fixture-password-onl
 export async function startNativeStoreServer(
   root: string,
   store = 'on',
-  options: { rustStore?: 'off'; configStore?: 'off'; worker?: string } = {}
+  options: { rustStore?: 'off'; configStore?: 'off'; worker?: string; collection?: boolean } = {}
 ) {
   await writeFile(
     path.join(root, 'config.yaml'),
@@ -43,10 +43,12 @@ export async function startNativeStoreServer(
       CCS_HOME: root,
       HOME: root,
       USERPROFILE: root,
+      APPDATA: path.join(root, 'AppData', 'Roaming'),
+      LOCALAPPDATA: path.join(root, 'AppData', 'Local'),
       AAC_STORE: store,
       ...(options.rustStore ? { AAC_RUST_STORE: options.rustStore } : {}),
       AAC_STORE_SHARE_BACKUP_DIR: 'off',
-      AAC_RUST_GROUP_COLLECTION: 'off',
+      AAC_RUST_GROUP_COLLECTION: options.collection ? 'on' : 'off',
       AAC_RUST_GROUP_APP_UPDATES: 'off',
       AAC_RUST_GROUP_RENEWAL: 'off',
       AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
