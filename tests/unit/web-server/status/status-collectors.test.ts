@@ -191,6 +191,59 @@ describe('status collectors', () => {
     expect(JSON.stringify(status)).not.toContain('lease-secret-id');
   });
 
+  it("adds the fleet's phone caps from the workers that can run each platform, never a drained one", () => {
+    // The real gateway on 2026-11-20: every worker reports iPhone and Android rows, the gateway summed 6 iPhones.
+    const worker = (
+      label: string,
+      catalog: string,
+      ios: number,
+      android: number,
+      drained = false
+    ) => ({
+      id: label,
+      label,
+      connection: 'connected',
+      drained,
+      catalog: { [catalog]: [] },
+      capacity: {
+        ios: { running: 0, maxRunning: ios, reserved: 0, overLimit: false, limit: ios },
+        android: {
+          running: label === 'vm' ? 1 : 0,
+          maxRunning: android,
+          reserved: 0,
+          overLimit: false,
+        },
+        global: {
+          running: label === 'vm' ? 1 : 0,
+          maxRunning: Math.max(ios, android),
+          reserved: 0,
+          overLimit: false,
+        },
+      },
+    });
+    const status = parseSimlockStatus({
+      daemon: { health: 'running', mode: 'gateway' },
+      capacity: {
+        ios: { running: 0, maxRunning: 6, reserved: 0, overLimit: false },
+        android: { running: 1, maxRunning: 5, reserved: 0, overLimit: false },
+        global: { running: 1, maxRunning: 7, reserved: 0, overLimit: false },
+      },
+      devices: [],
+      leases: [],
+      workers: [
+        worker('nas1', 'android', 1, 1),
+        worker('vm', 'android', 1, 1),
+        worker('mac', 'ios', 2, 1),
+        worker('1070ti', 'android', 2, 2, true),
+      ],
+    });
+    expect(status.capacity).toEqual([
+      { platform: 'ios', running: 0, max: 2, reserved: 0, overLimit: false },
+      { platform: 'android', running: 1, max: 2, reserved: 0, overLimit: false },
+      { platform: 'global', running: 1, max: 4, reserved: 0, overLimit: false },
+    ]);
+  });
+
   it('keeps a host browser-check could not read as an error with unknown counts', () => {
     const rows = parseBrowserSlots({
       rows: [

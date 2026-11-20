@@ -601,6 +601,45 @@ function isoFromMs(value: unknown): string | null {
 }
 
 /** `simlock status --json` -> capacity and leases. Lease ids, owner ids and tokens are not kept. */
+/**
+ * The fleet's capacity added up from its workers (2026-11-20). Every worker reports an iPhone and an Android row,
+ * but runs only the platforms its catalog lists, and a drained worker takes no new phones; the gateway's own sum
+ * counts them all (6 iPhones where only the Mac's 2 exist). So: running and reserved from every worker, the cap
+ * only where the worker can run that platform (any platform when it lists no catalog) and is not drained; the
+ * overall cap from every worker that is not drained. Null when no worker carries capacity (an older gateway or a
+ * lone worker's own reading): its top-level capacity stands.
+ */
+function capacityFromWorkers(workers: unknown): Record<string, Record<string, unknown>> | null {
+  if (!Array.isArray(workers)) return null;
+  const rows: Record<
+    string,
+    { running: number; maxRunning: number; reserved: number; overLimit: boolean }
+  > = {};
+  let carried = false;
+  for (const worker of workers) {
+    const w = (worker ?? {}) as Record<string, unknown>;
+    const cap = w.capacity;
+    if (!cap || typeof cap !== 'object' || Array.isArray(cap)) continue;
+    carried = true;
+    const catalog =
+      w.catalog && typeof w.catalog === 'object' && !Array.isArray(w.catalog)
+        ? Object.keys(w.catalog)
+        : null;
+    const drained = w.drained === true;
+    for (const [platform, value] of Object.entries(cap as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const v = value as Record<string, unknown>;
+      const row = (rows[platform] ??= { running: 0, maxRunning: 0, reserved: 0, overLimit: false });
+      row.running += int(v.running) ?? 0;
+      row.reserved += int(v.reserved) ?? 0;
+      row.overLimit ||= v.overLimit === true;
+      const runs = platform === 'global' || catalog === null || catalog.includes(platform);
+      if (runs && !drained) row.maxRunning += int(v.maxRunning ?? v.limit) ?? 0;
+    }
+  }
+  return carried ? rows : null;
+}
+
 export function parseSimlockStatus(raw: unknown): SimlockStatus {
   if (!raw || typeof raw !== 'object')
     throw new ValidationError('simlock answered in an unknown shape.');
@@ -612,7 +651,10 @@ export function parseSimlockStatus(raw: unknown): SimlockStatus {
   if (health === 'failed') throw new NetworkError('The Simlock daemon reports that it failed.');
   if (rec.daemon !== undefined && (rec.capacity === undefined || !Array.isArray(rec.leases)))
     throw new ValidationError('simlock answered without its capacity and leases.');
-  const capacityRaw = (rec.capacity ?? {}) as Record<string, unknown>;
+  const capacityRaw = (capacityFromWorkers(rec.workers) ?? rec.capacity ?? {}) as Record<
+    string,
+    unknown
+  >;
   if (typeof capacityRaw !== 'object')
     throw new ValidationError('simlock answered in an unknown shape.');
   const offline = new Set<string>();

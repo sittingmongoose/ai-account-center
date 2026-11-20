@@ -100,15 +100,20 @@ async function holdAuthCheck(t) {
 	return () => release();
 }
 
-/** Opens a tab for the first time with its read held back, and checks its splash, then its content. */
-async function pageFirstLoad(t, { tab, api, ready, label, shot }) {
+/** The answer a failed first read gets, and the words each page must then show in its banner. */
+const FAILED = { status: 500, json: { error: 'Fixture: the first read failed.' } };
+
+/** Opens a tab for the first time with its read held back, and checks its splash, then its content. With `fail`, the
+ * held read answers 500 instead: the page must leave its splash for its banner with `fail`'s words. */
+async function pageFirstLoad(t, { tab, api, ready, label, shot, fail = null }) {
 	await signedInContext(t, { viewport: { width: 1440, height: 900 } });
 	await stubHome(t);
 	let release;
 	const held = new Promise((r) => (release = r));
 	await t.page.route((u) => new URL(u).pathname === api, async (route) => {
 		await held;
-		if (api === '/api/accounts/analytics') await route.fulfill({ json: analyticsFixture({ range: new URL(route.request().url()).searchParams.get('range') || '7d' }) });
+		if (fail) await route.fulfill(FAILED);
+		else if (api === '/api/accounts/analytics') await route.fulfill({ json: analyticsFixture({ range: new URL(route.request().url()).searchParams.get('range') || '7d' }) });
 		else await route.continue();
 	});
 	await t.goto('/app/home?e2e', { settleMs: 0 });
@@ -120,10 +125,16 @@ async function pageFirstLoad(t, { tab, api, ready, label, shot }) {
 	await t.check(`${label}: the corner has no loading words while the page loads`, !/^(reading|loading)/i.test(corner), `corner: "${corner}"`);
 	if (shot) await t.shot(shot, `${label}: the page splash in the content area (desktop, light)`);
 	release();
-	await t.until(`${label}: content drawn`, ready, null, { timeout: 30000 });
-	await t.equal(`${label}: the splash is gone once content is drawn`, await t.page.evaluate(() => !!document.querySelector('.route:not([hidden]) .page-splash')), false);
+	if (fail) {
+		await t.until(`${label}: the failure is said in the page's banner`, (words) => [...document.querySelectorAll('.route:not([hidden]) .banner')]
+			.some((b) => !b.hidden && b.getClientRects().length > 0 && b.textContent.includes(words)), fail, { timeout: 30000 });
+		await t.visible('.route:not([hidden]) .banner:not([hidden])', `${label}: the banner is on screen`);
+	} else await t.until(`${label}: content drawn`, ready, null, { timeout: 30000 });
+	await t.equal(`${label}: the splash is gone once ${fail ? 'the failure is shown' : 'content is drawn'}`, await t.page.evaluate(() => !!document.querySelector('.route:not([hidden]) .page-splash')), false);
 	const r = await read(t);
 	await t.equal(`${label}: no "Reading" or "Loading" words in the corner`, r.corner.join(' | '), '');
+	// the answered 500 is the only console error a failed read may leave
+	if (fail) await t.noConsoleErrors(`${label}: no console error but the answered 500`, { allow: [/status of 500/] });
 }
 
 export const tests = {
@@ -162,7 +173,21 @@ export const tests = {
 
 	async 'splash scoreboard first load: page splash, then content'(t) {
 		await pageFirstLoad(t, { tab: 'scoreboard', api: '/api/scoreboard', label: 'scoreboard',
-			ready: () => !!document.querySelector('.route:not([hidden]) .sb-stack') || !!document.querySelector('.route:not([hidden]) .banner') });
+			ready: () => !!document.querySelector('.route:not([hidden]) .sb-stack') });
+	},
+
+	// A failed first read: the page's splash gives way to its banner, never waits on (status/scoreboard: FetchError
+	// sentence for the 500; Analytics: the server's own error words).
+	async 'splash status failed first read: banner, no splash'(t) {
+		await pageFirstLoad(t, { tab: 'status', api: '/api/status', label: 'status failed', fail: 'The server answered 500.' });
+	},
+
+	async 'splash analytics failed first read: banner, no splash'(t) {
+		await pageFirstLoad(t, { tab: 'analytics', api: '/api/accounts/analytics', label: 'analytics failed', fail: FAILED.json.error });
+	},
+
+	async 'splash scoreboard failed first read: banner, no splash'(t) {
+		await pageFirstLoad(t, { tab: 'scoreboard', api: '/api/scoreboard', label: 'scoreboard failed', fail: 'The server answered 500.' });
 	},
 
 	async 'splash screenshots: light and dark, desktop and phone'(t) {
