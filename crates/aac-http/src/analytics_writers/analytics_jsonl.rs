@@ -535,6 +535,20 @@ mod tests {
     }
 
     #[test]
+    fn a_file_larger_than_the_remaining_budget_is_a_source_limit() {
+        let root = tempfile::tempdir().expect("fixture home");
+        let file = root.path().join("rows.jsonl");
+        std::fs::write(&file, b"{\"ts\":1,\"model\":\"fixture\"}\n").expect("fixture log");
+        let fields = json!({"timestamp": "ts", "model": "model"});
+        let mapping = Mapping::parse(Some(&fields)).expect("fixture fields");
+        let mut budget = Budget { bytes: 8, rows: 1 };
+        let (rows, fault) = file_rows(&file, &mapping, 0, &mut budget);
+        assert!(rows.is_empty());
+        assert_eq!(fault, Some("source_limit"));
+        assert_eq!(budget.bytes, 0);
+    }
+
+    #[test]
     fn a_saved_mapped_source_reads_its_rows_into_the_range() {
         let now = 1_795_176_000_000i64; // 2026-11-20T12:00:00Z
         let cutoff = now - 31 * 86_400_000;
