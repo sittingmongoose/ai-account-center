@@ -629,11 +629,16 @@ else:
 #[tokio::test]
 async fn collection_off_answers_accounts_and_recheck_without_the_worker() {
     for env_override in [false, true] {
-        rust_answers_disabled_collection(env_override).await;
+        rust_answers_disabled_collection(env_override, false).await;
     }
 }
 
-async fn rust_answers_disabled_collection(env_override: bool) {
+#[tokio::test]
+async fn collection_off_preserves_the_saved_quota_reading() {
+    rust_answers_disabled_collection(true, true).await;
+}
+
+async fn rust_answers_disabled_collection(env_override: bool, check_history: bool) {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let password = "fixture-public-password";
@@ -646,6 +651,9 @@ async fn rust_answers_disabled_collection(env_override: bool) {
             "rustService":{"groups":{"collection":if env_override {"on"} else {"off"}}}
         }),
     );
+    if check_history {
+        seed_quota_history(&root);
+    }
     let script = root.join("worker.js");
     fs::write(&script, r#"
         const http = require('node:http');
@@ -678,6 +686,9 @@ async fn rust_answers_disabled_collection(env_override: bool) {
         .arg(address.port().to_string())
         .env("CCS_HOME", &root)
         .env("CCS_DIR", &root)
+        .env("HOME", &root)
+        .env("AAC_STORE_SHARE_BACKUP_DIR", "off")
+        .env("AAC_STATUS_DOORBELL", "off")
         .env("AAC_TS_SIDECAR", &script)
         .env("AAC_AGENT_TRANSPORT", "off")
         .env("AAC_RUST_GROUP_HOME", "off")
@@ -690,6 +701,12 @@ async fn rust_answers_disabled_collection(env_override: bool) {
         .kill_on_drop(true);
     if env_override {
         command.env("AAC_RUST_GROUP_COLLECTION", "off");
+    }
+    if check_history {
+        // A worker-free boot starts the embedded Store owner.
+        command
+            .env("AAC_TS_SIDECAR", "off")
+            .env("AAC_RUST_STORE", "on");
     }
     let mut child = command.spawn().unwrap();
     let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
@@ -769,6 +786,9 @@ async fn rust_answers_disabled_collection(env_override: bool) {
             );
         }
     }
+    if check_history {
+        check_saved_quota_history(&client, &base, cookie).await;
+    }
     let settings = client
         .get(format!("{base}/api/accounts/settings"))
         .header(header::COOKIE, cookie)
@@ -781,4 +801,65 @@ async fn rust_answers_disabled_collection(env_override: bool) {
     );
     child.kill().await.unwrap();
     assert!(aac_files::OwnedStore::claim_collection(&root).is_ok());
+}
+
+fn seed_quota_history(root: &Path) {
+    // A non-prefixed id and an email-bound identity exercise the Store's identity lookup.
+    file(
+        root,
+        "account-usage-accounts.json",
+        json!({"version":2,"accounts":[{
+            "id":"fixture-account","provider":"zai","platform":"ubuntu","label":"Fixture",
+            "credential":{"kind":"discover"}
+        }]}),
+    );
+    let now = i64::try_from(aac_store::engine::now_ms()).unwrap();
+    let sampled_at = aac_num::ecma::to_iso_string(now - 60_000).unwrap();
+    let engine =
+        aac_store::ops::open_engine(root.join("store").to_str().unwrap(), None, None).unwrap();
+    let reading = json!({
+        "id":"fixture-account","provider":"zai","email":"fixture@example.invalid",
+        "platform":"ubuntu","source":"Saved fixture","status":"ok","sampledAt":sampled_at,
+        "windows":[{"key":"five_hour","label":"5-hour limit","kind":"rate_limit","usedPercent":37}]
+    });
+    let recorded = aac_store::sampler::record_sample(&engine, &[reading], now).unwrap();
+    assert_eq!(recorded.sampled, 1);
+}
+
+async fn check_saved_quota_history(client: &Client, base: &str, cookie: &str) {
+    let history = client
+        .get(format!(
+            "{base}/api/usage/history?provider=zai&resolution=raw"
+        ))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap();
+    let history = json_reply(history, StatusCode::OK, true).await;
+    assert_eq!(history["series"].as_array().unwrap().len(), 1);
+    assert_eq!(history["series"][0]["points"][0][2], 37);
+    let analytics = client
+        .get(format!(
+            "{base}/api/accounts/analytics?platform=windows&range=7d&provider=zai&account=fixture-account&tz=UTC"
+        ))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap();
+    let analytics = json_reply(analytics, StatusCode::OK, true).await;
+    assert_eq!(
+        (
+            &analytics["history"]["status"],
+            &analytics["history"]["sampleCount"]
+        ),
+        (&json!("unavailable"), &json!(1)),
+        "Analytics must report unavailable coverage alongside the stored sample"
+    );
+    assert_eq!(analytics["summary"]["availableAccounts"], 0);
+    assert_eq!(analytics["stale"], true);
+    let account = &analytics["accounts"][0];
+    assert_eq!(account["id"], "fixture-account");
+    assert_eq!(account["status"], "unavailable");
+    assert_eq!(account["windows"][0]["usedPercent"], Value::Null);
+    assert_eq!(account["windows"][0]["points"][0]["usedPercent"], 37);
 }

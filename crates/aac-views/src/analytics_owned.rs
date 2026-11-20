@@ -378,6 +378,7 @@ pub struct NativeInput {
     /// The display zone name.
     pub tz: String,
     /// The platform's dashboard (`accounts` entry lists, `providers`, `settings`).
+    /// A null `accounts` value means the current inventory could not be established.
     pub dashboard: Object,
     /// The activity collector grid; empty lets the store's own reads fill it.
     pub live_sources: Value,

@@ -8,6 +8,7 @@
 //! registry and display-safe login fields, collector rows, renewal notes, the Antigravity
 //! runtime). Nothing here scans, refreshes a provider or opens a credential. `None` asks for
 //! the logged TS fallback.
+use crate::antigravity_runtime::{RegistryRead, empty_inventory, read_registry};
 use aac_files::read::Read;
 use aac_status::read_context::Envelope;
 use serde_json::{Value, json};
@@ -57,28 +58,35 @@ fn now_ms() -> i64 {
 
 /// The empty Ubuntu answers the reference runtime returns when it is not installed. The
 /// Antigravity runtime only exists on Linux; every other host answers these without a runtime.
-fn empty_inventory() -> Value {
-    json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []})
-}
-
 fn empty_quotas(at: i64) -> Value {
     crate::antigravity_quota::public_quotas(&[], at, at).unwrap_or(Value::Null)
 }
 
 /// The public listener's Antigravity inventory (the same installed host, one per process).
 pub(crate) fn antigravity_inventory(root: &Path) -> Option<Value> {
-    if !cfg!(target_os = "linux") || crate::antigravity_runtime::read_state(root).is_none() {
+    if !cfg!(target_os = "linux") {
         return Some(empty_inventory());
     }
-    antigravity_host(root).map(|host| host.inventory(now_ms()))
+    match read_registry(root) {
+        RegistryRead::Absent => Some(empty_inventory()),
+        RegistryRead::Available(_) => antigravity_host(root)?.inventory(now_ms()),
+        RegistryRead::Unreadable => None,
+    }
 }
 
 /// The public listener's Antigravity quotas, with the route's own refresh selection.
 pub(crate) fn antigravity_quotas(root: &Path, refresh: bool, at: i64) -> Option<Value> {
-    if !cfg!(target_os = "linux") || crate::antigravity_runtime::read_state(root).is_none() {
+    if !cfg!(target_os = "linux") {
         return Some(empty_quotas(at));
     }
-    antigravity_host(root).map(|host| host.quotas(refresh, at))
+    match read_registry(root) {
+        RegistryRead::Absent => Some(empty_quotas(at)),
+        RegistryRead::Available(_) => {
+            let quotas = antigravity_host(root)?.quotas(refresh, at);
+            (!quotas.is_null()).then_some(quotas)
+        }
+        RegistryRead::Unreadable => None,
+    }
 }
 
 fn envelope(bytes: &[u8]) -> Option<Envelope> {
@@ -117,13 +125,11 @@ pub(crate) fn answer(
         "/api/codex/profiles/quotas" => aac_views::codex_profiles::quotas(envelope(bytes)?).ok(),
         // G6: the installed runtime answers with its own live proof, workers and probes once TS
         // stops sending its input. A host that cannot resolve its trusted paths declines (TS).
-        "/api/antigravity/profiles" if bytes.is_empty() => {
-            antigravity_host(root).map(|host| host.inventory(now_ms()))
-        }
+        "/api/antigravity/profiles" if bytes.is_empty() => antigravity_inventory(root),
         "/api/antigravity/profiles" => aac_views::antigravity::inventory(envelope(bytes)?).ok(),
         // G6: the quota read once TS stops sending its input, from the installed host's worker.
         "/api/antigravity/profiles/quotas" if bytes.is_empty() => {
-            antigravity_host(root).map(|host| host.quotas(false, now_ms()))
+            antigravity_quotas(root, false, now_ms())
         }
         "/api/antigravity/profiles/quotas" => aac_views::antigravity::quotas(envelope(bytes)?).ok(),
         _ => None,

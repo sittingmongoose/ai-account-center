@@ -12,7 +12,8 @@ use crate::antigravity_probes::{
 };
 use crate::antigravity_quota::{Cooldowns, QuotaRequest, QuotaService, Worker, public_quotas};
 use crate::antigravity_runtime::{
-    LiveIdentity, hash_word, inventory_with_probes, read_state, sha256_hex,
+    LiveIdentity, RegistryRead, empty_inventory, hash_word, inventory_from_state,
+    inventory_probe_fields, read_registry, sha256_hex,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -242,22 +243,21 @@ impl Host {
     }
 
     /// The public inventory, with the paused and runtime-service probes attached.
-    pub fn inventory(&self, now: i64) -> Value {
+    pub fn inventory(&self, now: i64) -> Option<Value> {
+        let state = match read_registry(&self.ccs) {
+            RegistryRead::Absent => return Some(empty_inventory()),
+            RegistryRead::Available(state) => state,
+            RegistryRead::Unreadable => return None,
+        };
         let live = self.live_identity(now);
-        if read_state(&self.ccs).is_none() {
-            // No saved runtime: the route's empty Ubuntu inventory, with no probes.
-            return json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []});
-        }
+        let inventory = inventory_from_state(&self.ccs, &state, live.as_ref(), now)?;
         let paused = self.paused(now);
         let problem = self.problem(now);
-        inventory_with_probes(
-            &self.ccs,
-            live.as_ref(),
-            now,
+        Some(inventory_probe_fields(
+            inventory,
             paused.as_ref(),
             problem.as_ref(),
-        )
-        .unwrap_or_else(|| json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []}))
+        ))
     }
 
     /// The public quotas answer from the runtime's own accounts.
@@ -269,8 +269,10 @@ impl Host {
     }
 
     pub(crate) fn accounts(&self, refresh: bool, now: i64) -> Option<Vec<Value>> {
-        let Some(state) = read_state(&self.ccs) else {
-            return Some(Vec::new());
+        let state = match read_registry(&self.ccs) {
+            RegistryRead::Absent => return Some(Vec::new()),
+            RegistryRead::Available(state) => state,
+            RegistryRead::Unreadable => return None,
         };
         let live = self.live_identity(now);
         let mut guard = self.state.lock().ok()?;
@@ -655,7 +657,7 @@ print(json.dumps({{"format":"antigravity-consumer-json",
         )
         .unwrap();
         let now = crate::antigravity_runtime::js_date("2026-10-01T17:00:00.000Z").unwrap();
-        let inventory = host.inventory(now);
+        let inventory = host.inventory(now).unwrap();
         assert_eq!(inventory["profiles"][0]["id"], json!("gmail"));
         assert_eq!(inventory["profiles"][0]["selected"], json!(true));
         assert_eq!(inventory["profiles"][0]["available"], json!(true));

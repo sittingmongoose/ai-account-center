@@ -2169,6 +2169,16 @@ pub struct HistoryQuery {
 /// Rebuilds the JSON history's account observations (`AccountAnalyticsObservation`) for a time
 /// range from the spans: one full account record at every time any of its spans starts or ends.
 pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
+    read_history_records(engine, query, false)
+}
+
+/// The native Analytics reader can include the stored provider for each historical identity.
+/// The binding's historyRecords keeps its existing response shape.
+pub fn history_records_with_provider(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
+    read_history_records(engine, query, true)
+}
+
+fn read_history_records(engine: &Engine, query: &HistoryQuery, include_provider: bool) -> Result<Json> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let accounts = read.open_table(db::ACCOUNT)?;
@@ -2366,20 +2376,21 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
                         wins.push(window_json(wmeta, smeta, row));
                     }
                 }
-                records.push((
-                    tau as i64,
-                    json!({
-                        "identity": meta.identity,
-                        "accountId": meta.account_id,
-                        "sampledAt": iso(tau as i64),
-                        "observedAt": iso(observed),
-                        "platform": state.platform,
-                        "source": state.source,
-                        "status": state.status,
-                        "isActive": state.is_active,
-                        "windows": wins,
-                    }),
-                ));
+                let mut record = json!({
+                    "identity": meta.identity,
+                    "accountId": meta.account_id,
+                    "sampledAt": iso(tau as i64),
+                    "observedAt": iso(observed),
+                    "platform": state.platform,
+                    "source": state.source,
+                    "status": state.status,
+                    "isActive": state.is_active,
+                    "windows": wins,
+                });
+                if include_provider {
+                    record["provider"] = json!(meta.provider);
+                }
+                records.push((tau as i64, record));
             }
         }
         records.sort_by_key(|(t, _)| *t);
