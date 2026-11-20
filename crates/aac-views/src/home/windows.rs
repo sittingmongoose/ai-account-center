@@ -434,12 +434,26 @@ pub fn period(w: &Win) -> &'static str {
     "other"
 }
 
-const ANTIGRAVITY_COLUMNS: [(&str, &str); 4] = [
-    ("gemini-5h", "Gemini 5-hour"),
-    ("gemini-weekly", "Gemini weekly"),
-    ("3p-5h", "Claude and GPT 5-hour"),
-    ("3p-weekly", "Claude and GPT weekly"),
+/// Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for
+/// the Antigravity app. T3's come first: they are what T3 spends. Never added together.
+const ANTIGRAVITY_COLUMNS: [(&str, &str); 8] = [
+    ("cli-gemini-5h", "Gemini 5-hour, in T3 (Antigravity CLI)"),
+    ("cli-gemini-weekly", "Gemini weekly, in T3 (Antigravity CLI)"),
+    ("cli-3p-5h", "Claude and GPT 5-hour, in T3 (Antigravity CLI)"),
+    ("cli-3p-weekly", "Claude and GPT weekly, in T3 (Antigravity CLI)"),
+    ("gemini-5h", "Gemini 5-hour, in the Antigravity app"),
+    ("gemini-weekly", "Gemini weekly, in the Antigravity app"),
+    ("3p-5h", "Claude and GPT 5-hour, in the Antigravity app"),
+    ("3p-weekly", "Claude and GPT weekly, in the Antigravity app"),
 ];
+
+/// antigravity-data.mjs `antigravityService`: which Google quota service a window's key names.
+pub fn antigravity_service(key: Option<&str>) -> &'static str {
+    match key {
+        Some(k) if k.starts_with("cli-") => "cli",
+        _ => "app",
+    }
+}
 
 /// antigravity-data.mjs `antigravityWindowLabel`.
 pub fn antigravity_window_label(w: &Win) -> String {
@@ -535,10 +549,14 @@ pub fn short_window_label(provider: Option<&str>, w: &Win) -> R<String> {
     }
     let short = lookup(
         &[
-            ("gemini-5h", "Gemini 5hr"),
-            ("gemini-weekly", "Gemini wk"),
-            ("3p-5h", "Claude GPT 5hr"),
-            ("3p-weekly", "Claude GPT wk"),
+            ("cli-gemini-5h", "T3 Gemini 5hr"),
+            ("cli-gemini-weekly", "T3 Gemini wk"),
+            ("cli-3p-5h", "T3 Claude GPT 5hr"),
+            ("cli-3p-weekly", "T3 Claude GPT wk"),
+            ("gemini-5h", "App Gemini 5hr"),
+            ("gemini-weekly", "App Gemini wk"),
+            ("3p-5h", "App Claude GPT 5hr"),
+            ("3p-weekly", "App Claude GPT wk"),
         ],
         w.key().unwrap_or("undefined"),
     )?;

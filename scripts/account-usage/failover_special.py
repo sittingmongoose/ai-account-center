@@ -68,7 +68,8 @@ class HttpClient:
     @staticmethod
     def request_json(url, headers=None, body=None, form=False):
         if url not in {USERINFO_URL, TOKEN_URL, desktop.AGY_BASE + "loadCodeAssist",
-                       desktop.AGY_BASE + "retrieveUserQuotaSummary"}:
+                       desktop.AGY_BASE + "retrieveUserQuotaSummary", desktop.AGY_CLI_BASE + "loadCodeAssist",
+                       desktop.AGY_CLI_BASE + "retrieveUserQuotaSummary"}:
             raise helpers.UsageError("error", "The account request is unavailable.")
         headers = dict(headers or {})
         headers["Accept"] = "application/json"
@@ -384,8 +385,7 @@ def _refresh(credential, home):
 
 def _quota(credential, sample):
     headers = {"Authorization": "Bearer " + credential.access, "User-Agent": desktop.AGY_USER_AGENT}
-    load = HttpClient.request_json(desktop.AGY_BASE + "loadCodeAssist", headers, {
-        "metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
+    load = desktop.antigravity_load(HttpClient.request_json, headers)
     project = load.get("cloudaicompanionProject")
     if isinstance(project, dict):
         project = project.get("id") or project.get("projectId")
@@ -395,8 +395,12 @@ def _quota(credential, sample):
     sample["plan"], reported = desktop.antigravity_reported_plan(load)
     if reported:
         sample["reportedPlan"] = reported
-    summary = HttpClient.request_json(desktop.AGY_BASE + "retrieveUserQuotaSummary", headers, {"project": project})
-    sample["windows"] = desktop.normalize_antigravity(summary) + desktop.normalize_antigravity_credits(load)
+    # Both services, T3's CLI first; this path keeps its summary-only reads (no per-model call).
+    windows = []
+    for service, _groups, service_windows, _retry in desktop.antigravity_services(
+            HttpClient.request_json, headers, project, lambda: False):
+        windows += desktop.antigravity_service_label(service_windows, service)
+    sample["windows"] = windows + desktop.normalize_antigravity_credits(load)
 
 
 def _collect_antigravity(candidate, home, platform):

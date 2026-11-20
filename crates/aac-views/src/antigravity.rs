@@ -318,7 +318,9 @@ struct Plan {
     credits: bool,
 }
 
-const STARTER: &str = "Weekly quota only; no 5-hour refresh.";
+/// Google keeps separate Antigravity limits for the CLI that T3 runs and for the Antigravity app (2026-11-19).
+const STARTER: &str =
+    "Weekly quota only; no 5-hour refresh. T3 (the Antigravity CLI) and the Antigravity app have separate limits.";
 const NO_QUOTA: &str = "This plan does not include Antigravity coding quota.";
 const CLI_QUOTA: &str = "This plan includes separate Gemini CLI quota that AAC does not read; no Antigravity coding quota.";
 const POOLED: &str =
@@ -382,7 +384,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Pro (trial)",
         aliases: &["pro-trial", "Google AI Pro trial"],
         policy: "five-hour-weekly",
-        summary: "Refreshes every 5 hours up to a weekly limit. Gemini 4 Neon, Gemini 4 Argon and their Orchestrators only on trials with eligible premium devices; no Gemini 4 Hydrogen or Claude 5.5 during a trial.",
+        summary: "Refreshes every 5 hours up to a weekly limit. Gemini 4 Neon, Gemini 4 Argon and their Orchestrators only on trials with eligible premium devices; no Gemini 4 Hydrogen or Claude 5.5 during a trial. T3 (the Antigravity CLI) and the Antigravity app have separate limits.",
         models: Models::Trial,
         credits: false,
     },
@@ -391,7 +393,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Pro",
         aliases: &["pro", "Gemini Code Assist in Google One AI Pro"],
         policy: "five-hour-weekly",
-        summary: "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
+        summary: "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own. T3 (the Antigravity CLI) and the Antigravity app have separate limits.",
         models: Models::PaidConsumer,
         credits: true,
     },
@@ -400,7 +402,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Ultra",
         aliases: &["ultra", "Gemini Code Assist in Google One AI Ultra"],
         policy: "five-hour-weekly",
-        summary: "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.",
+        summary: "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon counts against it); Claude and GPT models have their own. T3 (the Antigravity CLI) and the Antigravity app have separate limits.",
         models: Models::UltraConsumer,
         credits: true,
     },
@@ -409,7 +411,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Ultra 5x",
         aliases: &["ultra-5x"],
         policy: "five-hour-weekly",
-        summary: "5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.",
+        summary: "5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon counts against it); Claude and GPT models have their own. T3 (the Antigravity CLI) and the Antigravity app have separate limits.",
         models: Models::UltraConsumer,
         credits: true,
     },
@@ -418,7 +420,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Ultra 20x",
         aliases: &["ultra-20x"],
         policy: "five-hour-weekly",
-        summary: "20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.",
+        summary: "20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon counts against it); Claude and GPT models have their own. T3 (the Antigravity CLI) and the Antigravity app have separate limits.",
         models: Models::UltraConsumer,
         credits: true,
     },
@@ -503,7 +505,7 @@ const PLANS: &[Plan] = &[
             "Workspace Enterprise Plus",
         ],
         policy: "weekly",
-        summary: "Antigravity Starter Quota: Weekly quota only; no 5-hour refresh. Workspace plans add no higher limits or AI credits.",
+        summary: "Antigravity Starter Quota: Weekly quota only; no 5-hour refresh. Workspace plans add no higher limits or AI credits. T3 (the Antigravity CLI) and the Antigravity app have separate limits.",
         models: Models::Consumer,
         credits: false,
     },

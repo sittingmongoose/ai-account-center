@@ -483,6 +483,7 @@ class AntigravityAppMetadataTests(unittest.TestCase):
 
 
 
+@patch("desktop_usage.AGY_SERVICES", (("app", "https://cloudcode-pa.googleapis.com/v1internal:"),))  # legacy single-service fixtures; both services: AntigravityServiceTests
 class CollectionTests(unittest.TestCase):
     @patch("desktop_usage.muse_credentials", return_value=helpers.Credential("dca:private-fixture"))
     @patch("desktop_usage.request_json")
@@ -874,6 +875,131 @@ class HttpSafetyTests(unittest.TestCase):
         with self.assertRaises(helpers.UsageError):
             helpers.NoRedirect().redirect_request(None, None, 302, "private fixture", {}, "https://other.example")
 
+
+
+# Tonight's real reply shapes (2026-11-19 ~23:56Z, gmail, Google AI Pro), redacted: after a ~25M-token
+# Gemini 4 Neon run in T3, the CLI's daily service showed it; the app's production service did not.
+CLI_SUMMARY_PRO = {"groups": [
+    {"displayName": "Gemini Models", "buckets": [
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.9152058, "resetTime": "2026-11-26T22:06:23Z"},
+        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.7032202, "resetTime": "2026-11-20T03:06:23Z"}]},
+    {"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-26T23:56:34Z"},
+        {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-11-20T04:56:34Z"}]},
+    {"displayName": "Gemini 4 Argon", "buckets": [
+        {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-26T23:56:34Z"}]}]}
+APP_SUMMARY_PRO = {"groups": [
+    {"displayName": "Gemini Models", "buckets": [
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.9991121, "resetTime": "2026-11-20T05:47:39Z"},
+        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-11-20T04:55:30Z"}]},
+    {"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-26T23:55:30Z"},
+        {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-11-20T04:55:30Z"}]},
+    {"displayName": "Gemini 4 Argon", "buckets": [
+        {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 0.6216592, "resetTime": "2026-11-20T05:47:49Z"}]}]}
+FREE_SUMMARY = {"groups": [
+    {"displayName": "Gemini Models", "buckets": [
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-26T23:55:31Z"}]},
+    {"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-26T23:55:31Z"}]}]}
+LOAD_PRO = {"cloudaicompanionProject": "project-fixture", "paidTier": {"id": "g1-pro-tier", "name": "Google AI Pro"}}
+LOAD_FREE = {"cloudaicompanionProject": "project-fixture", "paidTier": {"id": "free-tier", "name": "Antigravity Starter Quota"}}
+
+
+def services_router(replies):
+    """A request_json stand-in answering by URL; a reply that is an exception is raised."""
+    calls = []
+
+    def request(url, headers=None, body=None, form=False):
+        calls.append(url)
+        reply = replies[url]
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+    request.calls = calls
+    return request
+
+
+APP, CLI = usage.AGY_BASE, usage.AGY_CLI_BASE
+
+
+class AntigravityServiceTests(unittest.TestCase):
+    """Both of Google's Antigravity quota services: the CLI's (what T3 spends) first, the app's second."""
+
+    def read(self, replies):
+        request = services_router(replies)
+        result = helpers.account("antigravity", "ubuntu")
+        with patch("desktop_usage.request_json", request):
+            usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result)
+        return result, request.calls
+
+    def test_tonights_neon_run_shows_in_the_cli_pools_and_the_app_pools_stay_separate(self):
+        result, _ = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO,
+                               APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
+        keys = [w["key"] for w in result["windows"]]
+        self.assertEqual(keys, ["cli-gemini-weekly", "cli-gemini-5h", "cli-3p-weekly", "cli-3p-5h", "cli-gemini-argon-wtu-weekly",
+                                "gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h", "gemini-argon-wtu-weekly"])
+        by = {w["key"]: w for w in result["windows"]}
+        self.assertAlmostEqual(by["cli-gemini-5h"]["usedPercent"], 29.68, places=2)
+        self.assertAlmostEqual(by["cli-gemini-weekly"]["usedPercent"], 8.48, places=2)
+        self.assertAlmostEqual(by["gemini-weekly"]["usedPercent"], 0.09, places=2)  # never added to the CLI's 8.48
+        self.assertAlmostEqual(by["gemini-argon-wtu-weekly"]["usedPercent"], 37.83, places=2)
+        self.assertEqual(by["cli-gemini-argon-wtu-weekly"]["usedPercent"], 0)
+        self.assertEqual(by["cli-gemini-5h"]["label"], "Gemini Models · 5-hour · In T3 (Antigravity CLI)")
+        self.assertEqual(by["gemini-5h"]["label"], "Gemini Models · 5-hour · In the Antigravity app")
+        self.assertEqual(result["plan"], "Google AI Pro")
+
+    def test_one_service_failing_leaves_it_out_and_the_other_still_shows(self):
+        down = helpers.UsageError("error", "The usage service is temporarily unavailable.")
+        result, _ = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": down,
+                               APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
+        self.assertEqual([w["key"] for w in result["windows"]], ["gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h", "gemini-argon-wtu-weekly"])
+        result, _ = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO,
+                               APP + "retrieveUserQuotaSummary": down})
+        self.assertEqual([w["key"] for w in result["windows"]], ["cli-gemini-weekly", "cli-gemini-5h", "cli-3p-weekly", "cli-3p-5h",
+                                                                 "cli-gemini-argon-wtu-weekly"])
+        self.assertFalse(any(w["usedPercent"] == 0 and w["key"].startswith("gemini-") for w in result["windows"]))
+
+    def test_both_services_failing_raises_instead_of_showing_zero(self):
+        down = helpers.UsageError("error", "The usage service is temporarily unavailable.")
+        with self.assertRaises(helpers.UsageError):
+            self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": down, APP + "retrieveUserQuotaSummary": down})
+
+    def test_a_credential_google_refuses_on_either_service_needs_sign_in(self):
+        refused = helpers.UsageError("needs_sign_in", "The saved account could not authenticate with the usage service.")
+        with self.assertRaises(helpers.UsageError) as caught:
+            self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": refused,
+                       APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
+        self.assertEqual(caught.exception.status, "needs_sign_in")
+
+    def test_free_shows_zero_on_both_services_weekly_only(self):
+        result, _ = self.read({APP + "loadCodeAssist": LOAD_FREE, CLI + "retrieveUserQuotaSummary": FREE_SUMMARY,
+                               APP + "retrieveUserQuotaSummary": FREE_SUMMARY})
+        self.assertEqual([(w["key"], w["usedPercent"], w["windowMinutes"]) for w in result["windows"]],
+                         [("cli-gemini-weekly", 0, 10080), ("cli-3p-weekly", 0, 10080), ("gemini-weekly", 0, 10080), ("3p-weekly", 0, 10080)])
+
+    def test_the_project_comes_from_the_cli_service_when_the_app_service_is_down(self):
+        down = helpers.UsageError("error", "The usage service is temporarily unavailable.")
+        result, calls = self.read({APP + "loadCodeAssist": down, CLI + "loadCodeAssist": LOAD_PRO,
+                                   CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO, APP + "retrieveUserQuotaSummary": down})
+        self.assertEqual(calls[:2], [APP + "loadCodeAssist", CLI + "loadCodeAssist"])
+        self.assertEqual(result["windows"][1]["key"], "cli-gemini-5h")
+
+    def test_neon_has_no_pool_of_its_own_its_models_derive_the_cli_gemini_window(self):
+        # If a summary ever omits the Gemini group, the per-model read derives it; on the CLI's service
+        # that list carries the Gemini 4 Neon models inside the Gemini Models windows (same fraction).
+        no_gemini = {"groups": [CLI_SUMMARY_PRO["groups"][1]]}
+        per_model = {"buckets": [
+            {"modelId": "gemini-3.8-flash-high", "remainingFraction": 0.7032202, "resetTime": "2026-11-20T03:06:23Z", "tokenType": "WTUS"},
+            {"modelId": "gemini-4-neon-xhigh", "remainingFraction": 0.7032202, "resetTime": "2026-11-20T03:06:23Z", "tokenType": "WTUS"},
+            {"modelId": "gemini-4-neon-high", "remainingFraction": 0.7032202, "resetTime": "2026-11-20T03:06:23Z", "tokenType": "WTUS"}]}
+        result, calls = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": no_gemini,
+                                   CLI + "retrieveUserQuota": per_model, APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
+        self.assertIn(CLI + "retrieveUserQuota", calls)
+        cli_gemini = [w for w in result["windows"] if w["key"].startswith("cli-") and "Gemini" in w["label"] and "Argon" not in w["label"]]
+        self.assertTrue(cli_gemini, result["windows"])
+        self.assertAlmostEqual(cli_gemini[0]["usedPercent"], 29.68, places=2)
+        self.assertFalse(any("neon" in w["key"].lower() or "Neon" in w["label"] for w in result["windows"]))
 
 if __name__ == "__main__":
     unittest.main()

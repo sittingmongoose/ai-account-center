@@ -68,8 +68,10 @@ const PAID_CLAUDE_MODELS = ['Claude Sonnet 5.5', 'Claude Opus 5.5'];
 const MODEL_REMOVAL_AT = Date.parse('2026-12-01T00:00:00Z');
 const DUAL_WINDOW = 'Refreshes every 5 hours up to a weekly limit.';
 const STARTER = 'Weekly quota only; no 5-hour refresh.';
+// Google keeps separate Antigravity limits for the CLI that T3 runs and for the Antigravity app (2026-11-19).
+const SEPARATE = 'T3 (the Antigravity CLI) and the Antigravity app have separate limits.';
 const POOLS =
-  'Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.';
+  'Gemini models share one limit that costlier models use up faster (Gemini 4 Neon counts against it); Claude and GPT models have their own.';
 const PRO_POOLS =
   'Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.';
 const TRIAL =
@@ -92,28 +94,28 @@ const PLANS = {
     label: 'Free',
     aliases: ['free-tier', 'Antigravity Starter Quota'],
     quotaPolicy: 'weekly',
-    summary: STARTER,
+    summary: `${STARTER} ${SEPARATE}`,
     models: 'consumer',
   },
   plus: {
     label: 'Google AI Plus',
     aliases: ['plus'],
     quotaPolicy: 'weekly',
-    summary: STARTER,
+    summary: `${STARTER} ${SEPARATE}`,
     models: 'consumer',
   },
   'pro-trial': {
     label: 'Google AI Pro (trial)',
     aliases: ['pro-trial', 'Google AI Pro trial'],
     quotaPolicy: 'five-hour-weekly',
-    summary: `${DUAL_WINDOW} ${TRIAL}`,
+    summary: `${DUAL_WINDOW} ${TRIAL} ${SEPARATE}`,
     models: 'trial',
   },
   pro: {
     label: 'Google AI Pro',
     aliases: ['pro', 'Gemini Code Assist in Google One AI Pro'],
     quotaPolicy: 'five-hour-weekly',
-    summary: `${DUAL_WINDOW} ${PRO_POOLS}`,
+    summary: `${DUAL_WINDOW} ${PRO_POOLS} ${SEPARATE}`,
     models: 'paid-consumer',
     creditsOverage: true,
   },
@@ -121,7 +123,7 @@ const PLANS = {
     label: 'Google AI Ultra',
     aliases: ['ultra', 'Gemini Code Assist in Google One AI Ultra'],
     quotaPolicy: 'five-hour-weekly',
-    summary: `${DUAL_WINDOW} ${POOLS}`,
+    summary: `${DUAL_WINDOW} ${POOLS} ${SEPARATE}`,
     models: 'ultra-consumer',
     creditsOverage: true,
   },
@@ -129,7 +131,7 @@ const PLANS = {
     label: 'Google AI Ultra 5x',
     aliases: ['ultra-5x'],
     quotaPolicy: 'five-hour-weekly',
-    summary: `5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. ${POOLS}`,
+    summary: `5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. ${POOLS} ${SEPARATE}`,
     models: 'ultra-consumer',
     creditsOverage: true,
   },
@@ -137,7 +139,7 @@ const PLANS = {
     label: 'Google AI Ultra 20x',
     aliases: ['ultra-20x'],
     quotaPolicy: 'five-hour-weekly',
-    summary: `20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. ${POOLS}`,
+    summary: `20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. ${POOLS} ${SEPARATE}`,
     models: 'ultra-consumer',
     creditsOverage: true,
   },
@@ -202,7 +204,7 @@ const PLANS = {
       'Workspace Enterprise Plus',
     ],
     quotaPolicy: 'weekly',
-    summary: `Antigravity Starter Quota: ${STARTER} Workspace plans add no higher limits or AI credits.`,
+    summary: `Antigravity Starter Quota: ${STARTER} Workspace plans add no higher limits or AI credits. ${SEPARATE}`,
     models: 'consumer',
   },
 } satisfies Record<string, PlanDefinition>;

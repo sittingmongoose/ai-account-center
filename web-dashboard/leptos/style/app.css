@@ -2474,6 +2474,9 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .htable.cols-5 > .hhead, .htable.cols-6 > .hhead { display: none; }
   .htable.cols-5 .hcell-cap, .htable.cols-6 .hcell-cap { display: block; }
 }
+/* More than six windows (Antigravity's two quota services, home.rs): always stacked, each cell named. */
+.htable.cols-many > .hhead { display: none; }
+.htable.cols-many .hcell-cap { display: block; }
 .hslot { grid-area: slot; display: flex; align-items: center; cursor: default; }
 .hopens { display: flex; gap: 6px; }
 .hopen { width: 30px; height: 30px; border-radius: 8px; }

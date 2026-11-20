@@ -25,15 +25,26 @@ from desktop_helpers import (
 
 MUSE_URL = "https://api.meta.ai/muse-code/key"
 AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
+# Google keeps two separate sets of Antigravity quota counters per account. The Antigravity
+# app reads and spends the production service above. The Antigravity CLI (1.5.x, the runtime
+# T3 runs) uses the daily service below by default (only CLOUD_CODE_URL changes it) and spends
+# that service's counters: on 2026-11-19 a ~25M-token Gemini 4 Neon run in T3 used 29.68% of
+# the daily Gemini 5-hour window while production stayed at 0%. Both are read; the CLI's come
+# first (what T3 spends), keyed "cli-<bucket>". They are separate limits: never added together.
+AGY_CLI_BASE = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+AGY_CLI_KEY_PREFIX = "cli-"
+AGY_WHERE = {"cli": "In T3 (Antigravity CLI)", "app": "In the Antigravity app"}
+AGY_SERVICES = (("cli", AGY_CLI_BASE), ("app", AGY_BASE))
 # The quota summary gates its Gemini (and Argon) groups on the client version
 # in the User-Agent: 1.0.0-era clients stopped receiving them on 2026-10-22,
 # while current Antigravity client versions still do. One constant, so a future
 # version bump is a single change; the per-model retrieveUserQuota fallback in
 # normalize_antigravity_gemini covers any window the summary then omits.
 # Re-checked 2026-11-13: this string and the Antigravity 1.5.8 client's get the
-# same groups and buckets. 1.5.x clients call the daily-cloudcode-pa host, whose
-# summary matches this one; only its per-model read also lists the Gemini 4
-# Hydrogen models, inside the Gemini Models windows (no bucket of their own).
+# same groups and buckets. 1.5.x clients call the daily-cloudcode-pa host: same
+# groups, but its own counters (see AGY_CLI_BASE), and its per-model read also
+# lists Gemini 4 Hydrogen and Neon inside the Gemini Models windows (no bucket
+# of their own).
 AGY_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=linux; arch=amd64)"
 # The transport's deadline spans the whole collector process. This budget
 # starts when the module is imported, so credential reads and every quota
@@ -598,13 +609,68 @@ def fetch_antigravity(credential, result, home=None, budget_started=None):
         fetch_antigravity_quota(refresh_antigravity(credential, home), result, budget)
 
 
+def antigravity_load(request, headers):
+    """loadCodeAssist from the app's service, else the CLI's (same account, same project)."""
+    body = {"metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}}
+    try:
+        return request(AGY_BASE + "loadCodeAssist", headers, body)
+    except UsageError as error:
+        if error.status == "needs_sign_in":
+            raise
+        return request(AGY_CLI_BASE + "loadCodeAssist", headers, body)
+
+
+def antigravity_service_label(windows, service):
+    """One service's windows, labelled by where their quota is spent. The CLI's keys get the
+    cli- prefix so both services' buckets coexist; the app's keep their historical keys."""
+    for window in windows:  # in place, so pool records holding these windows follow
+        if service == "cli":
+            window["key"] = AGY_CLI_KEY_PREFIX + window["key"]
+        window["label"] = (window.get("label") or "Antigravity") + " \u00b7 " + AGY_WHERE[service]
+    return windows
+
+
+def antigravity_services(request, headers, project, per_model_allowed=lambda: True):
+    """Both services' quota summaries, the CLI's first.
+
+    Returns [(service, groups, windows, retry_after)] for each service that answered, windows
+    still unlabelled. A service that fails is left out (its pools then show as unavailable,
+    never as zero) while the other still shows; a needs_sign_in failure, or both failing, raises.
+    """
+    answered, failures = [], []
+    for service, base in AGY_SERVICES:
+        try:
+            summary = request(base + "retrieveUserQuotaSummary", headers, {"project": project})
+        except UsageError as error:
+            if error.status == "needs_sign_in":
+                raise
+            failures.append(error)
+            continue
+        windows = normalize_antigravity(summary)
+        retry_after = None
+        # The optional per-model read runs only when this summary carries no Gemini group, and
+        # only while the transport's remaining deadline still fits it.
+        if not antigravity_summary_has_gemini(windows) and per_model_allowed():
+            per_model = None
+            try:
+                per_model = request(base + "retrieveUserQuota", headers, {"project": project})
+            except UsageError as error:
+                retry = getattr(error, "retry_after", None)
+                if isinstance(retry, int) and 0 < retry <= 86400:
+                    retry_after = retry
+            windows += normalize_antigravity_gemini(per_model, windows)
+        answered.append((service, agy_groups(summary), windows, retry_after))
+    if not answered:
+        raise failures[-1]
+    return answered
+
+
 def fetch_antigravity_quota(credential, result, budget_started=None):
     # The control plane selects Antigravity quota/project behavior by native
     # client User-Agent. A generic UA returns Gemini eligibility tiers instead.
     started = budget_started if budget_started is not None else time.monotonic()
     headers = {"Authorization": "Bearer " + credential.access, "User-Agent": AGY_USER_AGENT}
-    load = request_json(AGY_BASE + "loadCodeAssist", headers,
-                        {"metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
+    load = antigravity_load(request_json, headers)
     project = load.get("cloudaicompanionProject")
     if isinstance(project, dict):
         project = project.get("id") or project.get("projectId")
@@ -614,22 +680,15 @@ def fetch_antigravity_quota(credential, result, budget_started=None):
     result["plan"], reported = antigravity_reported_plan(load)
     if reported:
         result["reportedPlan"] = reported
-    payload = request_json(AGY_BASE + "retrieveUserQuotaSummary", headers, {"project": project})
-    windows = normalize_antigravity(payload)
-    per_model = None
-    # The optional per-model read runs only when the summary carries no Gemini
-    # group, and only while the transport's remaining deadline still fits it:
-    # each call may hold its socket for 8 of the transport's 25 seconds.
-    if not antigravity_summary_has_gemini(windows) and time.monotonic() - started <= AGY_OPTIONAL_BUDGET_SECONDS:
-        try:
-            per_model = request_json(AGY_BASE + "retrieveUserQuota", headers, {"project": project})
-        except UsageError as error:
-            # The optional read stays optional, but a provider throttle must not be:
-            # surface its cooldown so refreshes stop retrying the endpoint early.
-            retry_after = getattr(error, "retry_after", None)
-            if retry_after is not None and retry_after > 0 and "retryAfterSeconds" not in result:
-                result["retryAfterSeconds"] = retry_after
-    windows += normalize_antigravity_gemini(per_model, windows)
+    windows = []
+    # Each call may hold its socket for 8 of the transport's 25 seconds.
+    for service, _groups, service_windows, retry_after in antigravity_services(
+            request_json, headers, project, lambda: time.monotonic() - started <= AGY_OPTIONAL_BUDGET_SECONDS):
+        windows += antigravity_service_label(service_windows, service)
+        # The optional read stays optional, but a provider throttle must not be:
+        # surface its cooldown so refreshes stop retrying the endpoint early.
+        if retry_after is not None and "retryAfterSeconds" not in result:
+            result["retryAfterSeconds"] = retry_after
     result["windows"] = windows + normalize_antigravity_credits(load)
 
 

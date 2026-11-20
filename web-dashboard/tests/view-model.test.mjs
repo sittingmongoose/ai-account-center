@@ -345,9 +345,10 @@ test('Antigravity is the same kind of section, with no live login until the nati
   assert.equal(ag.kind, 'accounts');
   assert.deepEqual(
     ag.columns.map((c) => c.label),
-    ['Gemini 5-hour', 'Gemini weekly', 'Claude and GPT 5-hour', 'Claude and GPT weekly']
+    ['Gemini 5-hour, in T3 (Antigravity CLI)', 'Gemini weekly, in T3 (Antigravity CLI)', 'Claude and GPT 5-hour, in T3 (Antigravity CLI)', 'Claude and GPT weekly, in T3 (Antigravity CLI)', 'Gemini 5-hour, in the Antigravity app', 'Gemini weekly, in the Antigravity app', 'Claude and GPT 5-hour, in the Antigravity app', 'Claude and GPT weekly, in the Antigravity app']
   );
-  assert.equal(ag.rows[0].cells[1].valueText, '0.09');
+  assert.equal(ag.rows[0].cells[5].valueText, '0.09');
+  assert.equal(ag.rows[0].cells[1].naText, 'Unavailable');  // no T3 reading here: never zero
   assert.equal(ag.rows[0].active, false);
   assert.equal('canActivate' in ag.rows[0], false);
   assert.equal('auto' in ag, false);
@@ -1275,12 +1276,12 @@ test('antigravity columns carry single-line short labels for the stacked 2x2 gri
   const columns = section(vm, 'antigravity').columns;
   assert.deepEqual(
     columns.map((col) => col.shortLabel),
-    ['Gemini 5hr', 'Gemini wk', 'Claude GPT 5hr', 'Claude GPT wk']
+    ['T3 Gemini 5hr', 'T3 Gemini wk', 'T3 Claude GPT 5hr', 'T3 Claude GPT wk', 'App Gemini 5hr', 'App Gemini wk', 'App Claude GPT 5hr', 'App Claude GPT wk']
   );
   // the full labels stay for the table heads and Details
   assert.deepEqual(
     columns.map((col) => col.label),
-    ['Gemini 5-hour', 'Gemini weekly', 'Claude and GPT 5-hour', 'Claude and GPT weekly']
+    ['Gemini 5-hour, in T3 (Antigravity CLI)', 'Gemini weekly, in T3 (Antigravity CLI)', 'Claude and GPT 5-hour, in T3 (Antigravity CLI)', 'Claude and GPT weekly, in T3 (Antigravity CLI)', 'Gemini 5-hour, in the Antigravity app', 'Gemini weekly, in the Antigravity app', 'Claude and GPT 5-hour, in the Antigravity app', 'Claude and GPT weekly, in the Antigravity app']
   );
 });
 
@@ -1385,8 +1386,9 @@ test('Claude model-scoped weeklies get their own columns; the Weekly column is t
 });
 
 test('Antigravity short labels abbreviate only canonical quota keys', () => {
-  for (const [key, label] of Object.entries({ 'gemini-5h': 'Gemini 5hr', 'gemini-weekly': 'Gemini wk',
-    '3p-5h': 'Claude GPT 5hr', '3p-weekly': 'Claude GPT wk' })) {
+  for (const [key, label] of Object.entries({ 'cli-gemini-5h': 'T3 Gemini 5hr', 'cli-gemini-weekly': 'T3 Gemini wk',
+    'cli-3p-5h': 'T3 Claude GPT 5hr', 'cli-3p-weekly': 'T3 Claude GPT wk', 'gemini-5h': 'App Gemini 5hr',
+    'gemini-weekly': 'App Gemini wk', '3p-5h': 'App Claude GPT 5hr', '3p-weekly': 'App Claude GPT wk' })) {
     assert.equal(shortWindowLabel('antigravity', { key }), label);
   }
   assert.equal(shortWindowLabel('antigravity', { key: 'future-weekly', label: 'Future weekly' }), 'Future weekly');

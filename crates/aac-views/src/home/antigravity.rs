@@ -1,7 +1,7 @@
 //! antigravity-data.mjs: the saved Ubuntu profiles bound to their dashboard rows, the runtime's warnings and the
 //! plan-dependent words of the Antigravity section.
 use super::Acc;
-use super::windows::{Win, antigravity_canonical, visible};
+use super::windows::{Win, antigravity_canonical, antigravity_service, visible};
 use crate::js::*;
 use serde_json::Value;
 
@@ -266,19 +266,24 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
 /// antigravity-data.mjs `antigravityMissingWindow`.
 pub fn missing_window(account: Acc, key: &str) -> R<&'static str> {
     let plan = account.get("antigravityPlan");
-    if (key == "3p-5h" || key == "3p-weekly") && is_false(get(plan, "thirdPartyModels")) {
+    if matches!(key, "3p-5h" | "3p-weekly" | "cli-3p-5h" | "cli-3p-weekly")
+        && is_false(get(plan, "thirdPartyModels"))
+    {
         return Ok("Not on plan");
     }
-    if (key == "gemini-5h" || key == "3p-5h") && is_str(get(plan, "quotaPolicy"), "weekly") {
+    if matches!(key, "gemini-5h" | "3p-5h" | "cli-gemini-5h" | "cli-3p-5h")
+        && is_str(get(plan, "quotaPolicy"), "weekly")
+    {
         return Ok("Weekly only");
     }
-    if !antigravity_canonical(key) && has_live_reading(account)? {
+    if !antigravity_canonical(key) && has_live_reading(account, antigravity_service(Some(key)))? {
         return Ok("Not reported");
     }
     Ok("Unavailable")
 }
 
-fn has_live_reading(account: Acc) -> R<bool> {
+/// A live (not cached) reading of the same quota service (T3's CLI or the app).
+fn has_live_reading(account: Acc, service: &str) -> R<bool> {
     if !is_str(account.get("status"), "ok") {
         return Ok(false);
     }
@@ -288,6 +293,7 @@ fn has_live_reading(account: Acc) -> R<bool> {
             !is_str(w.get("kind"), "balance")
                 && !is_str(w.get("status"), "cached")
                 && !is_true(w.get("cached"))
+                && antigravity_service(w.key()) == service
         }))
 }
 

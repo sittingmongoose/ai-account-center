@@ -30,6 +30,7 @@ def summary():
     ]}
 
 
+@patch("desktop_usage.AGY_SERVICES", (("app", "https://cloudcode-pa.googleapis.com/v1internal:"),))  # legacy single-service fixtures
 class AntigravityPlanMetadataTests(unittest.TestCase):
     def test_private_plan_metadata_keeps_ids_and_names_without_tier_secrets(self):
         raw = {'planInfo': {'planType': 'pro', 'private': 'hidden'},
@@ -108,7 +109,7 @@ class AntigravityPlanMetadataTests(unittest.TestCase):
         derived = [window for window in result['windows'] if window['key'].startswith('gemini')]
         self.assertEqual(len(derived), 1)
         self.assertEqual(derived[0]['key'], 'gemini-5h')
-        self.assertEqual(derived[0]['label'], 'Gemini Models · 5-hour')
+        self.assertEqual(derived[0]['label'], 'Gemini Models · 5-hour · In the Antigravity app')
         self.assertEqual(derived[0]['remainingPercent'], 40)
         self.assertEqual(derived[0]['modelIds'], ['gemini-3.1-pro', 'gemini-3.8-flash-tiered'])
         # A derived window carries no provider bucket membership and no pool.
@@ -227,6 +228,102 @@ class AntigravityPlanMetadataTests(unittest.TestCase):
         self.assertEqual([window['key'] for window in result['windows']], ['3p-5h'])
         self.assertFalse([url for url in requested if url.endswith('retrieveUserQuota')])
 
+
+
+class AntigravityTwoServiceSnapshotTests(unittest.TestCase):
+    """The saved-login read of both quota services (T3's CLI first), each account with its own login."""
+
+    APP, CLI = desktop.AGY_BASE, desktop.AGY_CLI_BASE
+    USERINFO = 'https://www.googleapis.com/oauth2/v2/userinfo'
+
+    def profile(self, email, subject, access):
+        raw = json.dumps({'auth_method': 'consumer', 'token': {
+            'access_token': access, 'refresh_token': 'invented-refresh-' + access,
+            'token_type': 'Bearer', 'expiry': '2030-01-01T00:00:00Z'}}).encode()
+        credential = PrivateCredential(raw, revision(raw))
+        identity = VerifiedIdentity(email, subject, '2026-11-19T00:00:00Z')
+        return SavedProfile(email.split('@')[0], identity.email, identity.identity_key, credential.revision, credential)
+
+    def run_read(self, profile, replies):
+        accounts = {'access-pro': {'email': 'pro.fixture@example.com', 'id': '111', 'verified_email': True},
+                    'access-free': {'email': 'free.fixture@example.party', 'id': '222', 'verified_email': True}}
+
+        def request(url, headers=None, body=None, form=False):
+            if url == self.USERINFO:
+                return accounts[headers['Authorization'].split()[-1]]
+            reply = replies[url]
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+        with tempfile.TemporaryDirectory(prefix='aac-two-services-') as root:
+            dependencies = existing_collector_dependencies(desktop, helpers, Path(root), now=lambda: NOW)
+            with patch.object(helpers, 'request_json', side_effect=request):
+                return collect_snapshot(profile, dependencies)
+
+    def summary(self, gemini_5h, gemini_weekly, argon=None):
+        groups = [{'displayName': 'Gemini Models', 'buckets': [
+                      {'bucketId': 'gemini-weekly', 'window': 'weekly', 'remainingFraction': gemini_weekly, 'resetTime': '2026-11-26T22:06:23Z'},
+                      {'bucketId': 'gemini-5h', 'window': '5h', 'remainingFraction': gemini_5h, 'resetTime': '2026-11-20T03:06:23Z'}]},
+                  {'displayName': 'Claude and GPT models', 'buckets': [
+                      {'bucketId': '3p-weekly', 'window': 'weekly', 'remainingFraction': 1, 'resetTime': '2026-11-26T23:56:34Z'},
+                      {'bucketId': '3p-5h', 'window': '5h', 'remainingFraction': 1, 'resetTime': '2026-11-20T04:56:34Z'}]}]
+        if argon is not None:
+            groups.append({'displayName': 'Gemini 4 Argon', 'buckets': [
+                {'bucketId': 'gemini-argon-wtu-weekly', 'window': 'weekly', 'remainingFraction': argon, 'resetTime': '2026-11-20T05:47:49Z'}]})
+        return {'groups': groups}
+
+    def replies(self, **overrides):
+        replies = {self.APP + 'loadCodeAssist': {'cloudaicompanionProject': 'invented-project', 'planInfo': {'planType': 'pro'}},
+                   self.CLI + 'retrieveUserQuotaSummary': self.summary(0.7032202, 0.9152058, 1),
+                   self.APP + 'retrieveUserQuotaSummary': self.summary(1, 0.9991121, 0.6216592)}
+        replies.update(overrides)
+        return replies
+
+    def test_both_services_publish_their_own_pools_cli_first(self):
+        result = self.run_read(self.profile('pro.fixture@example.com', '111', 'access-pro'), self.replies())
+        self.assertEqual(result['status'], 'fresh')
+        keys = [w['key'] for w in result['windows']]
+        self.assertEqual(keys[:5], ['cli-gemini-weekly', 'cli-gemini-5h', 'cli-3p-weekly', 'cli-3p-5h', 'cli-gemini-argon-wtu-weekly'])
+        self.assertEqual(keys[5:], ['gemini-weekly', 'gemini-5h', '3p-weekly', '3p-5h', 'gemini-argon-wtu-weekly'])
+        by = {w['key']: w for w in result['windows']}
+        self.assertAlmostEqual(by['cli-gemini-5h']['usedPercent'], 29.68, places=2)
+        self.assertAlmostEqual(by['gemini-weekly']['usedPercent'], 0.09, places=2)
+        self.assertEqual(by['cli-gemini-5h']['poolLabel'], 'Gemini Models')
+        self.assertNotEqual(by['cli-gemini-5h']['poolId'], by['gemini-5h']['poolId'])  # separate limits, never merged
+        self.assertEqual(by['cli-gemini-5h']['poolId'], by['cli-gemini-weekly']['poolId'])
+        pools = result['pools']
+        self.assertEqual(len(pools), 6)
+        self.assertEqual(len({pool['id'] for pool in pools}), 6)
+        import hashlib
+        legacy = 'bucket-group:' + hashlib.sha256(json.dumps(['gemini-5h', 'gemini-weekly'], separators=(',', ':')).encode()).hexdigest()
+        self.assertEqual(by['gemini-5h']['poolId'], legacy)  # the app's pool IDs keep their history
+
+    def test_the_cli_service_failing_keeps_the_app_pools_and_no_zero(self):
+        result = self.run_read(self.profile('pro.fixture@example.com', '111', 'access-pro'), self.replies(
+            **{self.CLI + 'retrieveUserQuotaSummary': helpers.UsageError('error', 'The usage service is temporarily unavailable.')}))
+        self.assertEqual(result['status'], 'fresh')
+        self.assertEqual([w['key'] for w in result['windows']], ['gemini-weekly', 'gemini-5h', '3p-weekly', '3p-5h', 'gemini-argon-wtu-weekly'])
+
+    def test_each_account_is_read_with_its_own_login_and_a_wrong_login_is_never_published(self):
+        pro = self.profile('pro.fixture@example.com', '111', 'access-pro')
+        free_with_its_own = self.profile('free.fixture@example.party', '222', 'access-free')
+        self.assertEqual(self.run_read(pro, self.replies())['email'], 'pro.fixture@example.com')
+        self.assertEqual(self.run_read(free_with_its_own, self.replies())['email'], 'free.fixture@example.party')
+        # The free account's saved entry now holding the pro account's login (a shared slot or a stale copy):
+        wrong = SavedProfile('free', 'free.fixture@example.party', free_with_its_own.identity_key, pro.credential_revision, pro.credential)
+        result = self.run_read(wrong, self.replies())
+        self.assertEqual(result['status'], 'needs_sign_in')
+        self.assertEqual(result['windows'], [])
+        self.assertEqual(result['identityValidation'], 'mismatch')
+
+    def test_a_missing_or_unreadable_login_is_unavailable_never_zero(self):
+        raw = b'{"auth_method": "consumer"}'
+        broken = PrivateCredential(raw, revision(raw))
+        profile = SavedProfile('pro', 'pro.fixture@example.com', VerifiedIdentity('pro.fixture@example.com', '111', '2026-11-19T00:00:00Z').identity_key,
+                               broken.revision, broken)
+        result = self.run_read(profile, self.replies())
+        self.assertNotEqual(result['status'], 'fresh')
+        self.assertEqual(result['windows'], [])
 
 if __name__ == '__main__':
     unittest.main()

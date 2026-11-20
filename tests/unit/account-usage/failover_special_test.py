@@ -48,6 +48,7 @@ def quota(credential, sample):
                                                    reset="2099-01-01T00:00:00Z")]
 
 
+@patch("desktop_usage.AGY_SERVICES", (("app", "https://cloudcode-pa.googleapis.com/v1internal:"),))  # legacy single-service fixtures
 class SpecialFailoverTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="aac-special-failover-")
@@ -505,6 +506,40 @@ class HttpClientTests(unittest.TestCase):
                 special.HttpClient.request_json("https://unrelated.example.test")
         opener.open.assert_called_once()
 
+
+
+class TwoServiceQuotaTests(unittest.TestCase):
+    """The failover path (what Home uses) reads both Antigravity quota services, T3's CLI first."""
+
+    def summary(self, five, weekly):
+        return {"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": weekly, "resetTime": "2026-11-26T22:06:23Z"},
+            {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": five, "resetTime": "2026-11-20T03:06:23Z"}]}]}
+
+    def test_both_services_are_read_and_labelled_and_the_transport_allows_only_their_urls(self):
+        app, cli = special.desktop.AGY_BASE, special.desktop.AGY_CLI_BASE
+        replies = {app + "loadCodeAssist": {"cloudaicompanionProject": "invented-project"},
+                   cli + "retrieveUserQuotaSummary": self.summary(0.7032202, 0.9152058),
+                   app + "retrieveUserQuotaSummary": self.summary(1, 0.9991121)}
+        calls = []
+
+        def request(url, headers=None, body=None, form=False):
+            calls.append(url)
+            return replies[url]
+        sample = {}
+        with patch.object(special.HttpClient, "request_json", side_effect=request):
+            special._quota(special.helpers.Credential("fixture-access"), sample)
+        self.assertEqual(calls, [app + "loadCodeAssist", cli + "retrieveUserQuotaSummary", app + "retrieveUserQuotaSummary"])
+        self.assertEqual([w["key"] for w in sample["windows"]], ["cli-gemini-weekly", "cli-gemini-5h", "gemini-weekly", "gemini-5h"])
+        self.assertAlmostEqual(sample["windows"][1]["usedPercent"], 29.68, places=2)
+        self.assertTrue(sample["windows"][0]["label"].endswith("In T3 (Antigravity CLI)"))
+        self.assertTrue(sample["windows"][2]["label"].endswith("In the Antigravity app"))
+        opener = Mock()
+        opener.open.return_value = io.BytesIO(b"{}")
+        with patch.object(special.urllib.request, "build_opener", return_value=opener):
+            special.HttpClient.request_json(cli + "retrieveUserQuotaSummary", {}, {})
+            with self.assertRaises(special.helpers.UsageError):
+                special.HttpClient.request_json(cli + "retrieveUserQuota", {}, {})
 
 if __name__ == "__main__":
     unittest.main()
