@@ -419,6 +419,18 @@ impl OwnerHost {
         let secret = config.get("secret")?.as_str()?.to_owned();
         let boot_id = config.get("bootId")?.as_str()?.to_owned();
         let boot = crate::unix::Boot::from_json(config.to_string().as_bytes()).ok()?;
+        // The supervisor's job: the socket's own private folder, or the service has nowhere
+        // to bind and the boot never becomes ready.
+        let folder = socket.parent()?;
+        std::fs::create_dir_all(folder).ok()?;
+        std::fs::create_dir_all(ccs.join("run")).ok()?;
+        for path in [folder, &ccs.join("run")] {
+            std::fs::set_permissions(
+                path,
+                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+            )
+            .ok()?;
+        }
         let descriptor = ccs.join("run").join("aac-http.json");
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
