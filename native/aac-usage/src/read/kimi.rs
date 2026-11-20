@@ -1,9 +1,8 @@
 //! History-only Kimi Code usage from OMP session logs.
 //!
-//! Jared used Kimi only through OMP. These logs are ordinary OMP JSONL (`type=message`,
-//! assistant `usage`); the model or route names Kimi Code, so the row is attributed to
-//! `kimi-code` instead of OMP. Keep in sync with `aac_store::collect::is_kimi_code_usage`
-//! and `aac_views::analytics_activity`.
+//! OMP JSONL records assistant usage in `type=message` rows. When the saved model or
+//! route names Kimi Code, the reader attributes the row to `kimi-code`. Keep in sync
+//! with `aac_store::collect::is_kimi_code_usage` and `aac_views::analytics_activity`.
 
 /// Dashboard route written onto a Kimi Code row.
 pub const KIMI_CODE_ROUTE: &str = "kimi-code";
