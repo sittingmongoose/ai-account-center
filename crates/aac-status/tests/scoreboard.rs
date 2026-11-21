@@ -711,6 +711,53 @@ fn a_count_of_one_reads_singular() {
 }
 
 #[test]
+fn a_cell_one_run_short_reads_singular() {
+    // sb2-R1-N1: a cell one run short of the bar says "1 run", not "1 runs". The
+    // golden's Haiku has only this job, so its head and sheet head count one run too.
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    for use_in in doc["uses"].as_array_mut().unwrap() {
+        for task in use_in["taskTypes"].as_array_mut().unwrap() {
+            if task["id"] != "worknode-build" {
+                continue;
+            }
+            for row in task["rows"].as_array_mut().unwrap() {
+                if row["model"].as_str() == Some("anthropic/claude-haiku-5-5") {
+                    row["n"]["observed"] = json!(1);
+                    row["observed"]["n"] = json!(1);
+                }
+            }
+        }
+    }
+    let view = by_model(&serde_json::from_value(doc).unwrap()).unwrap();
+    for panel in &view.views {
+        let haiku = panel
+            .models
+            .iter()
+            .find(|m| m.key == "anthropic/claude-haiku-5-5|claude-code|")
+            .unwrap();
+        let cell = haiku
+            .cells
+            .get("worknode-build")
+            .and_then(|cell| cell.as_ref())
+            .unwrap();
+        assert_eq!(cell.verdict, "not-enough-data");
+        assert_eq!(cell.word, "1 run");
+        assert_eq!(cell.sub, vec!["needs 5".to_string()]);
+    }
+    // No count phrase anywhere in the answer calls one run plural ("11 runs" is fine).
+    let text = serde_json::to_string(&view).unwrap();
+    for plural in ["1 runs", "1 real runs", "1 benchmark runs"] {
+        for (at, _) in text.match_indices(plural) {
+            let before = text[..at].chars().next_back();
+            assert!(
+                !before.is_some_and(|c| c.is_ascii_digit()),
+                "one run read plural at byte {at}: {text}"
+            );
+        }
+    }
+}
+
+#[test]
 fn unknown_speed_and_cost_are_not_called_the_same() {
     // The review fixture builder's review runs, with wallSeconds and cost set to null.
     // Both models stay Recommended. Unknown speed and unknown cost are not a tie. R1.

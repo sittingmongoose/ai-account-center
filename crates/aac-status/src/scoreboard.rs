@@ -27,6 +27,10 @@
 //! the sheet (one row per model per job), so it never compares a model with itself or
 //! another process of the same model; a speed that formats to a zero time reads "–"
 //! (unknown), never a measured zero; "1 models" reads "1 model".
+//!
+//! Fix of 2026-11-21 (sb2-R1-N1): every run count reads singular for one ("1 run",
+//! "1 real run", "1 benchmark run"), in the cells, measures, compare, basis, picks,
+//! heads, intro and read note alike.
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -587,23 +591,24 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
                 verdict: "avoid".to_string(),
                 word,
                 sub: vec![format!(
-                    "cheated in {} of {} runs",
+                    "cheated in {} of {} {}",
                     fmt_opt(cheating.of),
-                    fmt_opt(cheating.per)
+                    fmt_opt(cheating.per),
+                    if cheating.per == Some(1) { "run" } else { "runs" }
                 )],
             });
         }
         return Ok(CellOut {
             verdict: "avoid".to_string(),
             word,
-            sub: vec![format!("{n} runs")],
+            sub: vec![format!("{n} {}", runs_word(n))],
         });
     }
     if row.verdict == "not-enough-data" {
         if n < min_runs {
             return Ok(CellOut {
                 verdict: "not-enough-data".to_string(),
-                word: format!("{n} runs"),
+                word: format!("{n} {}", runs_word(n)),
                 sub: vec![format!("needs {min_runs}")],
             });
         }
@@ -621,9 +626,9 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
             verdict: "not-enough-data".to_string(),
             word,
             sub: vec![if c.reviews == 0 {
-                format!("{n} runs, none reviewed yet")
+                format!("{n} {}, none reviewed yet", runs_word(n))
             } else {
-                format!("{n} runs, {reviewed} reviewed, needs {min_runs}")
+                format!("{n} {}, {reviewed} reviewed, needs {min_runs}", runs_word(n))
             }],
         });
     }
@@ -631,7 +636,7 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
         return Ok(CellOut {
             verdict: row.verdict.clone(),
             word,
-            sub: vec!["benchmark".to_string(), format!("{n} runs")],
+            sub: vec!["benchmark".to_string(), format!("{n} {}", runs_word(n))],
         });
     }
     if only_ranked(row) {
@@ -639,9 +644,9 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
             verdict: row.verdict.clone(),
             word,
             sub: if tried == 1 {
-                vec![format!("{n} runs"), "only model tried".to_string()]
+                vec![format!("{n} {}", runs_word(n)), "only model tried".to_string()]
             } else {
-                vec![format!("{n} real runs"), "nothing to compare".to_string()]
+                vec![format!("{n} real {}", runs_word(n)), "nothing to compare".to_string()]
             },
         });
     }
@@ -653,7 +658,7 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
             verdict: row.verdict.clone(),
             word,
             sub: vec![
-                format!("{n} runs"),
+                format!("{n} {}", runs_word(n)),
                 format!(
                     "{} {} of {}{}",
                     if ranked1 { "passed review" } else { "passed" },
@@ -670,7 +675,7 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
     Ok(CellOut {
         verdict: row.verdict.clone(),
         word,
-        sub: vec![format!("{n} runs")],
+        sub: vec![format!("{n} {}", runs_word(n))],
     })
 }
 
@@ -682,8 +687,13 @@ fn band(measure: &MeasureIn) -> Json {
     json!({ "low": measure.low, "high": measure.high, "value": measure.value })
 }
 
+/// The unit word of a run count: singular for exactly one.
+fn runs_word(n: i64) -> &'static str {
+    if n == 1 { "run" } else { "runs" }
+}
+
 fn over_words(n: i64) -> String {
-    format!("Over {n} {}", if n == 1 { "run" } else { "runs" })
+    format!("Over {n} {}", runs_word(n))
 }
 
 fn likely_between(measure: &MeasureIn) -> Result<String> {
@@ -822,9 +832,15 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
             let lo = minutes(stat.low.ok_or_else(|| shape("a per-task speed with no value"))?)?;
             let hi = minutes(stat.high.ok_or_else(|| shape("a per-task speed with no value"))?)?;
             if zero_time(&lo) && zero_time(&hi) {
-                format!("Over {} runs.", stat.n)
+                format!("{}.", over_words(stat.n))
             } else {
-                format!("Fastest {}, slowest {}, over {} runs.", honest(lo), honest(hi), stat.n)
+                format!(
+                    "Fastest {}, slowest {}, over {} {}.",
+                    honest(lo),
+                    honest(hi),
+                    stat.n,
+                    runs_word(stat.n)
+                )
             }
         } else if job.id == "scout"
             && sp.low.as_f64().is_some()
@@ -837,7 +853,7 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
                 1,
             )?;
             if lo == "0.0" && hi == "0.0" {
-                format!("Over {} runs.", sp.n)
+                format!("{}.", over_words(sp.n))
             } else {
                 format!(
                     "Range {} to {} s.",
@@ -846,7 +862,7 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
                 )
             }
         } else {
-            format!("Over {} runs.", sp.n)
+            format!("{}.", over_words(sp.n))
         };
         out.push(MeasureOut {
             label: format!("Time per {unit}"),
@@ -868,7 +884,7 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
             label,
             value: round1(co.value.as_f64().unwrap_or(0.0))?,
             sub: "credits".to_string(),
-            note: format!("All {} runs had a known cost.", co.n),
+            note: format!("All {} {} had a known cost.", co.n, runs_word(co.n)),
             range: None,
         });
     } else if let Some(credits) = cost
@@ -880,7 +896,11 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
             label: format!("Cost per {unit}"),
             value: format!("≈ {}", round1(credits.value.unwrap_or(0.0))?),
             sub: "credits, estimated".to_string(),
-            note: format!("From {} runs; an estimate, not a measured cost.", credits.n),
+            note: format!(
+                "From {} {}; an estimate, not a measured cost.",
+                credits.n,
+                runs_word(credits.n)
+            ),
             range: None,
         });
     }
@@ -895,9 +915,10 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
         let thorough = m.get("thoroughness");
         let read = if job.id != "scout" && thorough.is_some_and(|th| th.number(&th.value) == Some(1.0)) {
             format!(
-                "Read everything it was given in {} of {} runs.",
+                "Read everything it was given in {} of {} {}.",
                 thorough.unwrap().n,
-                c.n
+                c.n,
+                runs_word(c.n)
             )
         } else {
             String::new()
@@ -908,7 +929,7 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
             format!("{} of {}", fmt_opt(ch.of), fmt_opt(ch.per))
         };
         let sub = if ch.number(&ch.value) == Some(0.0) {
-            format!("in {runs_total} runs")
+            format!("in {runs_total} {}", runs_word(runs_total))
         } else {
             "runs flagged".to_string()
         };
@@ -948,8 +969,9 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
         };
         runs.push(strong(name(&other.label, &other.effort)));
         runs.push(run(format!(
-            " is also Recommended here, with {} runs{}.",
+            " is also Recommended here, with {} {}{}.",
             oc.n,
+            runs_word(oc.n),
             if same_known("speed") && same_known("cost") {
                 " at the same speed and cost"
             } else {
@@ -961,8 +983,9 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
     if only_ranked(row) && row.verdict == "fine" {
         runs.push(strong("Why only Fine:"));
         runs.push(run(format!(
-            " no other model has {min_runs} real {} runs, so there is nothing to compare.",
-            job.label
+            " no other model has {min_runs} real {} {}, so there is nothing to compare.",
+            job.label,
+            runs_word(min_runs)
         )));
         let bench = row.benchmarks.iter().find(|b| b.ranked);
         let peer = others
@@ -1006,7 +1029,8 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
                 .unwrap_or("");
             let n = older.n.observed + older.n.benchmark;
             runs.push(run(format!(
-                " The older pipeline {major}.x has {n} benchmark runs, too few for a verdict."
+                " The older pipeline {major}.x has {n} benchmark {}, too few for a verdict.",
+                runs_word(n)
             )));
         }
         return Ok(runs);
@@ -1024,9 +1048,14 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
                 let flagged = cheating.is_some_and(|ch| ch.number(&ch.value).is_some_and(|v| v >= 0.2));
                 runs.push(run(if flagged {
                     format!(
-                        ", cheated in {} of {} runs.",
+                        ", cheated in {} of {} {}.",
                         fmt_opt(cheating.unwrap().of),
-                        fmt_opt(cheating.unwrap().per)
+                        fmt_opt(cheating.unwrap().per),
+                        if cheating.unwrap().per == Some(1) {
+                            "run"
+                        } else {
+                            "runs"
+                        }
                     )
                 } else {
                     ".".to_string()
@@ -1073,7 +1102,7 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
 fn report_basis(row: &RowIn) -> Result<String> {
     let c = column(row).ok_or_else(|| shape("a verdict row with no column to stand on"))?;
     if row.basis.as_deref() == Some("benchmark") {
-        return Ok(format!("{} benchmark runs", c.n));
+        return Ok(format!("{} benchmark {}", c.n, runs_word(c.n)));
     }
     if row.benchmarks.iter().any(|b| b.n > 0) && row.n.observed != 0 {
         let bench: i64 = row.benchmarks.iter().map(|b| b.n).sum();
@@ -1090,18 +1119,21 @@ fn report_basis(row: &RowIn) -> Result<String> {
             None => String::new(),
         };
         return Ok(format!(
-            "{} real runs and {bench} benchmark runs{process}",
-            row.n.observed
+            "{} real {} and {bench} benchmark {}{process}",
+            row.n.observed,
+            runs_word(row.n.observed),
+            runs_word(bench)
         ));
     }
     if let Some(q) = c.measures.get("quality").filter(|q| q.per.is_some_and(|per| per >= 2)) {
         return Ok(format!(
-            "{} real runs, {} checked by a blind reviewer",
+            "{} real {}, {} checked by a blind reviewer",
             c.n,
+            runs_word(c.n),
             fmt_opt(q.per)
         ));
     }
-    Ok(format!("{} real runs", c.n))
+    Ok(format!("{} real {}", c.n, runs_word(c.n)))
 }
 
 /// The pick for one job: the top recommended row, or why there is none.
@@ -1140,17 +1172,19 @@ fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
         let why = if tried == 1 {
             let x = &job.rows[chosen[0]];
             vec![run(format!(
-                "{} is the only model tried ({} runs, {}).",
+                "{} is the only model tried ({} {}, {}).",
                 name(&x.label, &x.effort),
                 x.n.observed + x.n.benchmark,
+                runs_word(x.n.observed + x.n.benchmark),
                 verdict_word(&x.verdict)
             ))]
         } else if obs_top.len() == 1 {
             let x = &job.rows[obs_top[0]];
             vec![run(format!(
-                "Only {} has {} real runs, so there is nothing to compare it with.",
+                "Only {} has {} real {}, so there is nothing to compare it with.",
                 name(&x.label, &x.effort),
-                x.n.observed
+                x.n.observed,
+                runs_word(x.n.observed)
             ))]
         } else {
             vec![run("No model has enough reviewed runs yet.")]
@@ -1175,7 +1209,7 @@ fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
     let mut why: Vec<Run> = Vec::new();
     if top.basis.as_deref() == Some("benchmark") {
         why.push(strong("Benchmark only"));
-        why.push(run(format!(", {} runs.", c.n)));
+        why.push(run(format!(", {} {}.", c.n, runs_word(c.n))));
         let miss = c.measures.get("silent-misses");
         let next_miss = next.and_then(column).and_then(|nc| nc.measures.get("silent-misses"));
         let missed = miss.is_some_and(|m| m.has_value());
@@ -1212,7 +1246,8 @@ fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
             )));
             why.push(strong(c.n.to_string()));
             why.push(run(format!(
-                " real runs{}.",
+                " real {}{}.",
+                runs_word(c.n),
                 if c.n > next_c.n { ", the most" } else { "" }
             )));
         } else {
@@ -1221,7 +1256,7 @@ fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
                 why.push(strong(format!("{} of {}", fmt_opt(q.of), fmt_opt(q.per))));
                 why.push(run(". "));
             }
-            why.push(run(format!("{} real runs.", c.n)));
+            why.push(run(format!("{} real {}.", c.n, runs_word(c.n))));
             if let Some(next) = next {
                 why.push(run(format!(" {} is next.", name(&next.label, &next.effort))));
             }
@@ -1488,7 +1523,8 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                 head_runs: vec![
                     strong(runs.to_string()),
                     run(format!(
-                        " runs: {} real work, {} benchmark · {} blind {}",
+                        " {}: {} real work, {} benchmark · {} blind {}",
+                        runs_word(runs),
                         model.real,
                         model.bench,
                         model.reviews,
@@ -1496,8 +1532,9 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                     )),
                 ],
                 sheet_head: format!(
-                    "{} · {runs} runs · {} blind {}",
+                    "{} · {runs} {} · {} blind {}",
                     model.runtime.as_deref().map(runtime_word).unwrap_or(""),
+                    runs_word(runs),
                     model.reviews,
                     if model.reviews == 1 { "review" } else { "reviews" }
                 ),
@@ -1597,8 +1634,9 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
         meta: vec![
             strong(out_models.len().to_string()),
             run(format!(
-                " {} with runs · a verdict needs {min_runs} runs of that job",
-                if out_models.len() == 1 { "model" } else { "models" }
+                " {} with runs · a verdict needs {min_runs} {} of that job",
+                if out_models.len() == 1 { "model" } else { "models" },
+                runs_word(min_runs)
             )),
         ],
         picks,
@@ -1700,7 +1738,8 @@ fn read_note(sources: &[SourceIn]) -> (Vec<Run>, Option<String>) {
     let read = scan_runs_sentence(detail);
     if let Some((runs, at, observed, benchmark)) = &read {
         note.push(run(format!(
-            "Read from {runs} runs at {at}: {observed} real work, {benchmark} benchmark."
+            "Read from {runs} {} at {at}: {observed} real work, {benchmark} benchmark.",
+            runs_word(*runs)
         )));
     }
     if let Some(files) = scan_unreadable(detail) {
@@ -1710,7 +1749,7 @@ fn read_note(sources: &[SourceIn]) -> (Vec<Run>, Option<String>) {
             format!(" {files} run files could not be read (a damaged write) and are left out.")
         }));
     }
-    let summary = read.map(|(runs, at, _, _)| format!("{runs} runs read at {at}"));
+    let summary = read.map(|(runs, at, _, _)| format!("{runs} {} read at {at}", runs_word(runs)));
     (note, summary)
 }
 
@@ -1756,7 +1795,8 @@ pub fn by_model(view: &ViewIn) -> Result<ByModel> {
         default_view: "pipeline",
         intro: format!(
             "Which model to use for which job. Each row is one model at one effort. A verdict needs at least {min_runs} \
-             runs of that job, and real work also needs a blind review. Real work and benchmarks are never mixed."
+             {} of that job, and real work also needs a blind review. Real work and benchmarks are never mixed.",
+            runs_word(min_runs)
         ),
         read_note: note,
         read_link: ReadLink {
