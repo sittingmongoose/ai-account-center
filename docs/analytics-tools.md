@@ -52,6 +52,16 @@ tokens or cost. Coverage completeness comes from the usage read itself:
 
 Old fingerprints are read once to establish their measured clocks.
 
+A source's measured numbers can stand while its coverage does not. A
+usage-shaped record the reader could not decode is named on the file's
+fingerprint (`unreadUsage`): the tokens already measured stay, the source reports
+`unknown`, and the page says its tokens are not counted until a later scan reads
+it. A number the reader could only date from a file time (Antigravity's untimed
+step) stays counted, and only logged event times enter the measured clock; the
+source carries `estimatedClock` and the page says those dates are not usage
+dates. Both disclosures survive unchanged rescans until a verified read clears
+them.
+
 Cursor SDK run stores remain under `.cursor/projects/*/sdk-agent-store/*/index.db`
 on all operating systems. Current CLI chat roots include `.cursor/chats`,
 `$XDG_CONFIG_HOME/cursor/chats` (default `.config/cursor/chats`) and the native

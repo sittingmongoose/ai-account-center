@@ -89,6 +89,14 @@ pub struct Counts {
     pub future_dated: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmeasured_files: Option<u64>,
+    /// A usage-shaped record the reader could not decode: the measured numbers stand, coverage is
+    /// unverified (wave 82's `unreadUsage`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread_usage: Option<bool>,
+    /// The numbers include a date the reader estimated from a file time, never a logged event
+    /// (wave 82's `estimatedClock`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_clock: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freshness: Option<Freshness>,
 }

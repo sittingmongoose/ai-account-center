@@ -1166,6 +1166,31 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
             .get("unmeasuredFiles")
             .and_then(Value::as_u64)
             .filter(|n| *n > 0);
+        // The scanner's own disclosures (wave 82): measured numbers, unverified coverage.
+        let disclosed = |key: &str, needle: &str, note: &str| -> Option<String> {
+            if source.get(key).and_then(Value::as_bool) != Some(true) {
+                return None;
+            }
+            (!detail.as_deref().is_some_and(|text| text.contains(needle))).then(|| note.to_owned())
+        };
+        let notes = [
+            disclosed(
+                "unreadUsage",
+                "usage-shaped record",
+                "a usage-shaped record could not be read; its tokens are not counted until a later scan reads it",
+            ),
+            disclosed(
+                "estimatedClock",
+                "no event timestamp",
+                "some usage records carry no event timestamp; their file times are not used as usage dates",
+            ),
+        ];
+        for note in notes.into_iter().flatten() {
+            detail = Some(match detail {
+                Some(detail) => format!("{detail}; {note}"),
+                None => note,
+            });
+        }
         if let Some(count) = unmeasured {
             let files = if count == 1 {
                 "file exposes"
@@ -1272,6 +1297,16 @@ fn coverage_of(sources_state: &Value) -> R<Value> {
             }
             if let Some(count) = counts.get("unmeasured_files") {
                 row["unmeasuredFiles"] = count.clone();
+            }
+            // Wave 82's coverage disclosures: a usage-shaped record the reader could not decode,
+            // and a date it estimated from a file time. Only true is evidence.
+            for (from, to) in [
+                ("unread_usage", "unreadUsage"),
+                ("estimated_clock", "estimatedClock"),
+            ] {
+                if counts.get(from).and_then(Value::as_bool) == Some(true) {
+                    row[to] = json!(true);
+                }
             }
         }
         source_rows.push(row);

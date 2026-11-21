@@ -265,6 +265,13 @@
       ]
     },
     {
+      "file": "crates/aac-files/src/auth_owner.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-files/src/codex_identity.rs",
       "kind": "safety",
       "evidence": [

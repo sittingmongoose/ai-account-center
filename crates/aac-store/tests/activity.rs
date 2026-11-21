@@ -546,6 +546,62 @@ fn a_failed_read_is_a_state_and_never_a_zero() {
 }
 
 #[test]
+fn a_scanner_coverage_disclosure_survives_the_store_and_moves_with_its_scan() {
+    let dir = temp_dir("act-disclosure");
+    let engine = open(&dir);
+    let read = T0 + 40 * D;
+    let measured = json!({
+        "freshness": {
+            "state": "unknown", "newestDataMs": read - H, "newestActivityMs": read - H,
+            "activityComplete": false,
+        },
+        "unmeasuredFiles": 1,
+    });
+    let mut first = report(
+        "ubuntu",
+        read,
+        "ok",
+        false,
+        None,
+        vec![cell(read - H, Some(SESSION_A), "gpt-6", 100)],
+    );
+    first["tool"] = json!("cursor");
+    first["counts"] = measured.clone();
+    let answer = ingest(&engine, vec![first.clone()]);
+    assert_eq!(answer["refused"], json!([]));
+    let sources = call(&engine, "activitySources", json!({ "fromMs": read - D, "toMs": read }));
+    let counts = &sources["sources"][0]["counts"];
+    assert!(counts["unread_usage"].is_null());
+    assert!(counts["estimated_clock"].is_null());
+    assert_eq!(call(&engine, "activityCounts", json!({}))["scans"], json!(1));
+
+    // The scanner names a usage-shaped record it could not decode and a date it estimated. The
+    // measured cell and date stay; the disclosure reaches the source and is a history row of its own.
+    let mut disclosed = first.clone();
+    disclosed["readAt"] = json!(iso(read + 60_000));
+    disclosed["counts"]["unreadUsage"] = json!(true);
+    disclosed["counts"]["estimatedClock"] = json!(true);
+    let answer = ingest(&engine, vec![disclosed]);
+    assert_eq!(answer["refused"], json!([]));
+    assert_eq!(
+        tokens_in(&engine, read - D, read),
+        100,
+        "an incomplete coverage never discards the measured usage"
+    );
+    let sources = call(&engine, "activitySources", json!({ "fromMs": read - D, "toMs": read }));
+    let counts = &sources["sources"][0]["counts"];
+    assert_eq!(counts["unread_usage"], json!(true));
+    assert_eq!(counts["estimated_clock"], json!(true));
+    assert_eq!(counts["freshness"]["newestDataMs"], json!(read - H));
+    assert_eq!(sources["sources"][0]["lastReadMs"], json!(read + 60_000));
+    assert_eq!(
+        call(&engine, "activityCounts", json!({}))["scans"],
+        json!(2),
+        "the disclosure is part of the read's own history"
+    );
+}
+
+#[test]
 fn the_retired_codex_cache_is_imported_once_with_cached_input_taken_out() {
     let dir = temp_dir("act-legacy");
     let engine = open(&dir);
