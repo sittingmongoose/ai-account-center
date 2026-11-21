@@ -1311,17 +1311,32 @@ def reset_login_binding(account, cache):
     return hashlib.sha256(json.dumps([account, cache], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _reset_target_organization(request):
+    if request.get("action") == "claim":
+        write = request.get("write")
+        target = write.get("identity") if isinstance(write, dict) else None
+        if not isinstance(target, dict) or not isinstance(target.get("organization"), str):
+            raise UsageUnavailable()
+        return target["organization"]
+    return request.get("expectedSavedOrganization")
+
+
 def _desktop_reset_login(request):
     """The Desktop profile's saved login, read without any provider call."""
     profile_id = request["profile"]
     if (sys.platform != "win32" or not valid_profile_id(profile_id)
             or resolve_expected_email(request["expectedEmail"]) is None):
         raise UsageUnavailable()
+    organization = _reset_target_organization(request)
     root = resolve_profile_path(profile_id, request.get("profileDir"), None, request.get("isDefault") is True)
     account, cache = decrypt_cache(root)
     candidates = eligible_entries(account, cache)
     if not candidates:
-        raise UsageUnavailable()
+        raise UsageUnavailable("needs_sign_in")
+    if organization is not None:
+        candidates = [entry for entry in candidates if entry[1][2] == organization]
+        if not candidates:
+            raise UsageUnavailable()
     if resolve_profile_path(profile_id, request.get("profileDir"), None, request.get("isDefault") is True) != root:
         raise UsageUnavailable()
     return {"account": account, "organization": candidates[0][1][2], "binding": reset_login_binding(account, cache)}
@@ -1766,7 +1781,7 @@ def _reset_host(request, dispatch):
             result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
                              profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
                              private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
-                             expected_saved_organization=request.get("expectedSavedOrganization"))
+                             expected_saved_organization=_reset_target_organization(request))
         else:
             # A Claude Code login for this email exists: the Desktop profile
             # stays first, and a signed-out Desktop gives way to it.

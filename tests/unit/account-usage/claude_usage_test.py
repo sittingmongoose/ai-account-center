@@ -2520,6 +2520,65 @@ class ResetCodeLoginTests(unittest.TestCase):
             self.assertEqual(usage.reset_host(dict(self.request, action="claim", write=write)), {"outcome": "not-sent"})
         fake.opener.open.assert_not_called()
 
+    def test_desktop_target_organization_is_selected_when_desktop_cache_holds_two_organizations(self):
+        other_token = "fixture-private-other-desktop-token"
+        now = time.time()
+        two_org_cache = {
+            **cache(key(org=ORG), expiresAt=(now + 7200) * 1000),
+            **cache(key(org=OTHER), token=other_token, expiresAt=(now + 3600) * 1000),
+        }
+        self.desktop = (ACCOUNT, two_org_cache)
+        request = dict(self.request, expectedSavedOrganization=OTHER)
+        with mock.patch.object(usage, "Client") as client:
+            captured = usage.reset_host(dict(request, action="capture"))
+        client.assert_not_called()
+        self.assertEqual((captured.get("account"), captured.get("organization")), (ACCOUNT, OTHER))
+        fake = self.client(profile(organization={"uuid": OTHER}), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            read = usage.reset_host(dict(request, expectedSavedBinding=captured["savedLoginBinding"]))
+        self.assertEqual(read["identity"]["organization"], OTHER)
+        self.assertEqual([call[1] for call in fake.calls], [other_token, other_token])
+        write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"],
+                 "method": "claude.reset_rate_limits",
+                 "body": {"program": "cedar_ember", "grant_id": "code_grant", "request_id": "a" * 64}}
+
+        class Response:
+            def __enter__(inner): return inner
+            def __exit__(inner, *args): pass
+            def read(inner, limit): return b'{"result":"reset"}'
+
+        # Works both when another organization's Code login is on disk and when no Code logins exist.
+        for remove_codes in (False, True):
+            if remove_codes:
+                __import__("shutil").rmtree(self.home / ".claude-t3")
+            sent = []
+            fake = self.client(profile(organization={"uuid": OTHER}), self.payload())
+            fake.opener.open.side_effect = lambda req, **kwargs: (sent.append(req) or Response())
+            with mock.patch.object(usage, "Client", return_value=fake):
+                claimed = usage.reset_host(dict(self.request, action="claim", write=write))
+            self.assertEqual(claimed, {"outcome": "reset"})
+            self.assertEqual([call[1] for call in fake.calls], [other_token, other_token])
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0].get_header("Authorization"), "Bearer " + other_token)
+            self.assertTrue(sent[0].full_url.endswith("/" + OTHER + "/reset_rate_limits"))
+        # A target organization absent from both Desktop and Code stays refused with no provider I/O.
+        missing = json.loads(json.dumps(write))
+        missing["identity"]["organization"] = ACCOUNT
+        with mock.patch.object(usage, "Client") as client:
+            self.assertEqual(usage.reset_host(dict(self.request, action="capture", expectedSavedOrganization=ACCOUNT)),
+                             {"unavailable": True, "reason": "no-matching-code-login"})
+            self.assertEqual(usage.reset_host(dict(self.request, action="claim", write=missing)),
+                             {"outcome": "not-sent"})
+        client.assert_not_called()
+
+    def test_expired_desktop_cache_without_code_logins_captures_as_signed_out(self):
+        __import__("shutil").rmtree(self.home / ".claude-t3")
+        self.desktop = (ACCOUNT, cache(expiresAt=(time.time() - 60) * 1000))
+        with mock.patch.object(usage, "Client") as client:
+            self.assertEqual(usage.reset_host(dict(self.request, action="capture")),
+                             {"unavailable": True, "reason": "signed-out"})
+        client.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

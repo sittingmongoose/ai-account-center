@@ -37,6 +37,26 @@ scope['decrypt_cache']=decrypt
 if (root/'ambiguous-code').exists() or (root/'no-code').exists():
  def no_desktop(*args):raise scope['UsageUnavailable']('needs_sign_in')
  scope['decrypt_cache']=no_desktop
+if (root/'expired-desktop').exists():
+ def expired_decrypt(*args):
+  account=(root/'login').read_text()
+  key='acct:'+account+'|'+CLIENT+':'+ORG+':https://api.anthropic.com:user:inference user:profile'
+  return account,{key:{'token':'fixture-token-'+account,'refreshToken':'fixture-refresh','expiresAt':1000}}
+ scope['decrypt_cache']=expired_decrypt
+ scope['code_reset_logins']=lambda *args:[]
+if (root/'two-org-desktop').exists():
+ def two_org_decrypt(*args):
+  account=(root/'login').read_text()
+  org_key='acct:'+account+'|'+CLIENT+':'+ORG+':https://api.anthropic.com:user:inference user:profile'
+  other_key='acct:'+account+'|'+CLIENT+':'+CLIENT+':https://api.anthropic.com:user:inference user:profile'
+  if not (root/'capture-done').exists():
+   return account,{org_key:{'token':'fixture-token-'+account,'refreshToken':'fixture-refresh','expiresAt':4102444800000}}
+  return account,{other_key:{'token':'fixture-token-other','refreshToken':'fixture-refresh','expiresAt':4102448400000},org_key:{'token':'fixture-token-'+account,'refreshToken':'fixture-refresh','expiresAt':4102444800000}}
+ scope['decrypt_cache']=two_org_decrypt
+ def other_org_code(*args):
+  if not (root/'capture-done').exists():return []
+  return [{'account':(root/'login').read_text(),'organization':CLIENT,'binding':'b'*64}]
+ scope['code_reset_logins']=other_org_code
 if (root/'no-code').exists():
  scope['code_reset_logins']=lambda *args:[]
 if (root/'pinned-code-drift').exists():
@@ -88,7 +108,7 @@ scope['Client']=Client
 if request['action']=='read' and (root/'swap-before-read').exists():
  (root/'login').write_text('44444444-4444-4444-4444-444444444444')
 result=scope['reset_host'](request)
-if request['action']=='capture' and (root/'pinned-code-drift').exists():(root/'capture-done').write_text('')
+if request['action']=='capture' and ((root/'pinned-code-drift').exists() or (root/'two-org-desktop').exists()):(root/'capture-done').write_text('')
 print(json.dumps(result,allow_nan=False))
 "#.replace("AAC_SOURCE_JSON", &serde_json::to_string(source).unwrap())
     .replace("AAC_ROOT_JSON", &serde_json::to_string(dir.path().to_str().unwrap()).unwrap());
@@ -144,6 +164,31 @@ fn claude_pinned_read_without_a_matching_code_login_keeps_its_named_refusal() {
     assert_eq!(
         reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
         "no-matching-code-login"
+    );
+    assert!(!dir.path().join("provider-reads").exists());
+}
+#[test]
+fn claude_expired_desktop_capture_without_code_logins_reports_signed_out() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("expired-desktop"), "").unwrap();
+    let db = dir.path().join("claims.sqlite");
+    assert_eq!(
+        reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
+        "signed-out"
+    );
+    assert!(!dir.path().join("provider-reads").exists());
+}
+#[test]
+fn claude_pinned_read_selects_the_captured_desktop_org_when_another_org_expires_later() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("two-org-desktop"), "").unwrap();
+    let db = dir.path().join("claims.sqlite");
+    // Capture pins ORG; before read, a newer-expiry CLIENT token appears in Desktop's cache
+    // alongside a CLIENT Code login. The binding changed (cache mutated), so the helper must
+    // still select ORG rather than dropping Desktop and failing as no-matching-code-login.
+    assert_eq!(
+        reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
+        "stale-inventory"
     );
     assert!(!dir.path().join("provider-reads").exists());
 }
