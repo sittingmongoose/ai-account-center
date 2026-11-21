@@ -88,7 +88,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1206 |
 | `src/web-server/status/status-collectors.ts` | 1203 |
-| `src/web-server/services/usage-failover-service.ts` | 1166 |
+| `src/web-server/services/usage-failover-service.ts` | 1186 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
 | `src/web-server/rust-service.ts` | 1035 |
 | `src/web-server/model-pricing-data.ts` | 1023 |

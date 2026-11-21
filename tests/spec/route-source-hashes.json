@@ -3,7 +3,7 @@
   "crates/aac-http/src/public_auth/analytics_routes.rs": "7c228d2b2f5bbb97877b0a1161deb11816b4c78f0b6d8eca75bd3b2a16c690a4",
   "crates/aac-http/src/public_auth/home_group.rs": "710e8a69954931eaaaa7b1b53f397a6674f2887d099a8bea5ab5770cb8dbb515",
   "crates/aac-http/src/public_auth/native_group.rs": "d3eec05d0125ea574cb8195762f2c4a5be840e886069d6caa358204ded76aaf2",
-  "crates/aac-http/src/public_auth/reset_routes.rs": "c4e7323bcb65a2eeffc6b639821ebcc880439e5c4c3b202c38a2d8406efa192c",
+  "crates/aac-http/src/public_auth/reset_routes.rs": "2121452f2beb39e3ebc175a830c9743c46ed44b48ff6fbe4ae20740b3aa74474",
   "src/web-server/compose-request.ts": "b48b41b7f36c47236965168743dde68b39e8161e2f6508416f951b1d264c92f4",
   "src/web-server/compose-server.ts": "88495222e3f5f674f679305bce85e2fe70b482d30675ed78ca53a9027d9f8d97",
   "src/web-server/index.ts": "c53e230ac0b71b9d049852b4786881a1c9a234443984ee38ba8c7e51e05cf645",
