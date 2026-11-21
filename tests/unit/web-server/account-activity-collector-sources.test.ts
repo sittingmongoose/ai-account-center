@@ -7,7 +7,10 @@ import {
   parseJsonlMappedUsageLine,
 } from '../../../src/web-server/usage/account-activity-collector';
 import type { JsonlFieldMapping } from '../../../src/web-server/usage/worker-client';
-import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
+import {
+  analyticsSessionKey,
+  publishedSessionKey,
+} from '../../../src/web-server/usage/analytics-session-key';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
 const MIN_DATE = NOW - 31 * 86_400_000;
@@ -361,5 +364,21 @@ describe('generic jsonl account activity', () => {
     );
     expect(counts?.inputTokens).toBe(0);
     expect(counts?.outputTokens).toBe(0);
+  });
+});
+
+describe('analytics session key empty-id boundary (m0-spec-F1c)', () => {
+  it('an empty raw session id is no id: null, not a digest of the empty string', () => {
+    // Matches the remote helper's _session_key and the Rust session_key, which
+    // both return None for an empty id; the parity fixture records the agreement.
+    expect(analyticsSessionKey('claude', '')).toBeNull();
+    expect(publishedSessionKey('claude', '')).toBeNull();
+    expect(analyticsSessionKey('codex', '')).toBeNull();
+  });
+
+  it('a non-empty raw id still publishes a 16-hex digest', () => {
+    const key = analyticsSessionKey('claude', 'fixture-session');
+    expect(key).toMatch(/^[0-9a-f]{16}$/);
+    expect(publishedSessionKey('claude', 'fixture-session')).toBe(key);
   });
 });

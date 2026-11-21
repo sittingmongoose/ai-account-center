@@ -15,7 +15,10 @@ const SESSION_KEY_SHAPE = /^[0-9a-f]{16}$/;
 export function analyticsSessionKey(
   tool: AccountAnalyticsActivityProvider,
   sessionId: string
-): string {
+): string | null {
+  // An empty raw id is no id: null, matching the remote helper's _session_key
+  // and the Rust session_key, never a digest of the empty string.
+  if (!sessionId) return null;
   return createHash('sha256')
     .update(`${SESSION_KEY_NAMESPACE}:${tool}:${sessionId}`)
     .digest('hex')
@@ -33,6 +36,6 @@ export function analyticsSessionKey(
 export function publishedSessionKey(
   tool: AccountAnalyticsActivityProvider,
   sessionId: string
-): string {
+): string | null {
   return SESSION_KEY_SHAPE.test(sessionId) ? sessionId : analyticsSessionKey(tool, sessionId);
 }

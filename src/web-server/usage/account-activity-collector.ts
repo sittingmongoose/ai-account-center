@@ -1205,8 +1205,10 @@ export function aggregateRows(
   };
   for (const row of rows) {
     add(hours, `${row.entry.timestamp.slice(0, 10)} ${row.entry.timestamp.slice(11, 13)}:00`, row);
-    if (row.entry.sessionId)
-      add(sessions, analyticsSessionKey(sessionTool, row.entry.sessionId), row);
+    if (row.entry.sessionId) {
+      const sessionKey = analyticsSessionKey(sessionTool, row.entry.sessionId);
+      if (sessionKey !== null) add(sessions, sessionKey, row);
+    }
   }
   const values = (bucket: Bucket) => {
     const modelBreakdowns = [...bucket.models.values()];

@@ -19,6 +19,7 @@ import type {
   AccountAnalyticsActivityTotals,
   AccountAnalyticsModelRates,
   AccountAnalyticsQuery,
+  AccountAnalyticsSessionRow,
   AccountAnalyticsUsageProvider,
 } from './account-analytics-types';
 
@@ -631,6 +632,8 @@ export function projectAccountAnalyticsActivity(
       const session = candidate.session;
       // Readers key a session at ingest; this publishes that key, hashing a row that still carries an id.
       const key = publishedSessionKey(candidate.tool, session.sessionId);
+      // An empty raw id publishes no key (null); such a session is not sampled.
+      if (key === null) return null;
       const priced = priceBreakdowns(session, pricing);
       const values = accumulator();
       addValues(values, totals(session));
@@ -663,7 +666,8 @@ export function projectAccountAnalyticsActivity(
             : null,
         ...publish(values),
       };
-    });
+    })
+    .filter((row): row is AccountAnalyticsSessionRow => row !== null);
   const sessionTotal = distinctSessions.size;
   if (usable && sample.length > 0)
     base.message = `${base.message} Session rows show each session's whole retained totals, which can include activity outside this range.`;

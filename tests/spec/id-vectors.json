@@ -23,9 +23,9 @@
     {
       "tool": "claude",
       "sessionId": "",
-      "sessionKey": "5b209f91ec343f74",
+      "sessionKey": null,
       "sessionHash": "5b209f91ec343f741450e6d356e0db9a15d9a369a18db8790996f7b30140c20a",
-      "publishedSessionKey": "5b209f91ec343f74"
+      "publishedSessionKey": null
     },
     {
       "tool": "muse",
