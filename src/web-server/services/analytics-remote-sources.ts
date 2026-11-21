@@ -2269,11 +2269,13 @@ export async function loadAnalyticsRemoteSources(
                             ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
                             : oversized
                               ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
-                              : kind?.unconfirmedFiles
-                                ? `${kind.unconfirmedFiles.toLocaleString('en-US')} previously read log${kind.unconfirmedFiles === 1 ? ' was' : 's were'} not confirmed this time; their earlier usage remains included`
-                                : kept
-                                  ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                                  : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                              : kind?.unreadUsage
+                                ? 'a usage-shaped record could not be read; only readable usage is included'
+                                : kind?.unconfirmedFiles
+                                  ? `${kind.unconfirmedFiles.toLocaleString('en-US')} previously read log${kind.unconfirmedFiles === 1 ? ' was' : 's were'} not confirmed this time; their earlier usage remains included`
+                                  : kept
+                                    ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                                    : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }

@@ -1400,39 +1400,55 @@ def code_reset_logins(expected_email, home=None):
 def reset_logins(request, codes):
     """Which saved login a reset goes through, without any provider call.
 
-    The Desktop profile stays first while it holds an eligible sign-in for the
-    same account a Claude Code login names (or when there is no Code login). A
-    signed-out Desktop profile, or one signed in to a different account, gives
-    way to the first Claude Code login for this email. The saved binding covers
-    every login the read may use, so a change to either between capture and
-    claim is refused like any other changed login.
+    A pinned read or claim filters saved logins by its target. An unpinned
+    capture can use Desktop, or fall back to a single Code login for the email.
+    The provider must confirm the selected login's identity before usage is read.
     """
+    organization = request.get("expectedSavedOrganization")
+    account = None
+    if request.get("action") == "claim":
+        target = request["write"]["identity"]
+        organization, account = target["organization"], target["account"]
+
+    def matches_target(login):
+        return ((organization is None or login["organization"] == organization)
+                and (account is None or login["account"] == account))
+
+    codes = [code for code in codes if matches_target(code)]
+    # One identity signed in twice (for example ~/.claude and ~/.claude-t3/<account>) is one choice: keep the
+    # first login per (account, organization) in folder order, and stay ambiguous only across distinct pairs.
+    seen = set()
+    codes = [code for code in codes
+             if (code["account"], code["organization"]) not in seen
+             and not seen.add((code["account"], code["organization"]))]
     try:
         desktop = _desktop_reset_login(request)
     except UsageUnavailable:
         desktop = None
-    if desktop is not None and (not codes or any(c["account"] == desktop["account"] for c in codes)):
+    if desktop is not None and (not matches_target(desktop)
+                                or (codes and not any(c["account"] == desktop["account"] for c in codes))):
+        desktop = None
+    if desktop is not None:
         chosen = desktop
-    elif codes:
+        codes = [c for c in codes if (c["account"], c["organization"]) == (desktop["account"], desktop["organization"])]
+    elif len(codes) == 1:
         chosen = codes[0]
     else:
-        raise UsageUnavailable()
-    if desktop is not None and (desktop["account"], desktop["organization"]) != (chosen["account"], chosen["organization"]):
-        desktop = None
-    code = next((c for c in codes if (c["account"], c["organization"]) == (chosen["account"], chosen["organization"])), None)
+        raise UsageUnavailable("identity_unconfirmed")
+    code = codes[0] if len(codes) == 1 else None
     if desktop is not None and code is not None:
         binding = hashlib.sha256(json.dumps(["claude-reset-login-v2", desktop["binding"], code["binding"]],
                                             separators=(",", ":")).encode()).hexdigest()
     else:
         binding = (desktop or code)["binding"]
     return {"account": chosen["account"], "organization": chosen["organization"], "binding": binding,
-            "desktop": desktop, "code": code}
+            "desktop": desktop, "code": code, "codeAmbiguous": len(codes) > 1}
 
 
 def capture_reset_login(request):
     """Read saved credentials only; no OAuth/provider call belongs in the Store capture section."""
     codes = code_reset_logins(request.get("expectedEmail"))
-    login = reset_logins(request, codes) if codes else _desktop_reset_login(request)
+    login = reset_logins(request, codes) if codes or request.get("expectedSavedOrganization") else _desktop_reset_login(request)
     return {"account": login["account"], "organization": login["organization"], "savedLoginBinding": login["binding"],
             "observedAtMs": int(time.time() * 1000)}
 
@@ -1750,8 +1766,11 @@ def _reset_host(request, dispatch):
                                  profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
                                  private_reset_sink=captured.append, expected_saved_binding=login["desktop"]["binding"],
                                  expected_saved_organization=login["organization"])
-            if result.get("status") == "needs_sign_in" and not captured and login["code"] is not None:
-                result = collect_code_reset(login["code"], request["expectedEmail"], captured.append, verify_saved)
+            if result.get("status") == "needs_sign_in" and not captured:
+                if login["codeAmbiguous"]:
+                    return {"unavailable": True, "reason": "identity-unconfirmed"}
+                if login["code"] is not None:
+                    result = collect_code_reset(login["code"], request["expectedEmail"], captured.append, verify_saved)
             if len(captured) == 1:
                 inner = captured[0]["verifyLogin"]
 
@@ -1826,6 +1845,9 @@ def _reset_host(request, dispatch):
             if error.code == 429:
                 return {"outcome": "rate-limited", "retryAfterMs": (retry_after_seconds(error.headers.get("Retry-After")) or 60) * 1000}
             return {"outcome": "signed-out" if error.code in (401, 403) else "ambiguous"}
+    except UsageUnavailable as error:
+        if error.status == "identity_unconfirmed":
+            return {"unavailable": True, "reason": "identity-unconfirmed"}
     except Exception:
         # Neither exception text nor provider response bodies cross the helper boundary.
         pass

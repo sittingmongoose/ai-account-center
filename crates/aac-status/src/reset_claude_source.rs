@@ -136,8 +136,11 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
             .as_object_mut()
             .ok_or("shape")?
             .remove("expectedSavedOrganization");
-        let captured: Capture = serde_json::from_value(helper(command, capture_request, Duration::from_secs(4))?)
-            .map_err(|_| "credential-host-unavailable")?;
+        let raw = helper(command, capture_request, Duration::from_secs(4))?;
+        if raw["unavailable"] == true && raw["reason"] == "identity-unconfirmed" {
+            return Err("identity-unconfirmed");
+        }
+        let captured: Capture = serde_json::from_value(raw).map_err(|_| "credential-host-unavailable")?;
         if captured.account.is_empty()
             || captured.account.len() > 256
             || captured.organization.is_empty()

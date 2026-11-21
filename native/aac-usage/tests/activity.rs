@@ -630,6 +630,46 @@ fn an_omp_tear_inside_content_and_a_joined_record_are_both_accounted_for() {
     assert!(again["rows"].as_array().unwrap().is_empty());
 }
 
+#[test]
+fn omp_tears_before_role_are_unread_even_with_a_joined_user_record() {
+    let at = (now_ms() - 2 * HOUR) / 1000 * 1000;
+    for (prefix, unread) in [
+        (r#"{"type":"message","id":"fixture","message":{"ro"#, true),
+        (r#"{"type":"message","id":"fixture","message":{"role":"ass"#, true),
+        (
+            r#"{"type":"message","id":"fixture","message":{"role":"user","content":"torn"#,
+            false,
+        ),
+        (
+            r#"{"type":"message","id":"fixture","message":{"role":"toolResult","content":"torn"#,
+            false,
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let log = home
+            .path()
+            .join(".omp/agent/sessions/2026-11-20T10-00-00_fixture.jsonl");
+        write(
+            &log,
+            &format!(
+                "{}{prefix}{{\"type\":\"message\",\"message\":{{\"role\":\"user\"}}}}\n",
+                omp_event(at, true),
+            ),
+        );
+        let result = scan(home.path(), &["omp"], None);
+        assert_eq!(result["kinds"]["omp"]["unreadUsage"].as_bool().unwrap_or(false), unread);
+        assert_eq!(
+            clock(&result, "omp"),
+            (
+                if unread { "unknown" } else { "current" }.into(),
+                Some(at),
+                Some(at),
+                !unread
+            ),
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn an_estimated_antigravity_date_is_disclosed_across_unchanged_rescans() {

@@ -142,6 +142,10 @@ fn blocked(s: &Snapshot, g: &Grant, now: i64) -> Option<&'static str> {
     {
         return Some("no-weekly-usage");
     }
+    if s.identity.provider == "claude" && g.kind == "fable" && s.windows.get("seven_day_overage_included") == Some(&0.0)
+    {
+        return Some("no-fable-usage");
+    }
     let missing_required_window = if permits_unobserved {
         !s.windows.contains_key("seven_day")
     } else {

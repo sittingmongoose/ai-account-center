@@ -408,6 +408,42 @@ fn claude_fable_reset_confirms_with_nonzero_weekly_usage() {
 }
 
 #[test]
+fn claude_zero_fable_usage_blocks_listing_and_spending() {
+    let (_d, mut s) = open();
+    let mut before = snapshot("claude");
+    before.grants[1].kind = "fable".into();
+    let fable = "seven_day_overage_included";
+    before.grants[1].clears = vec![fable.into()];
+    before.windows.insert(fable.into(), 20.0);
+    let key = inventory(&mut s, &before);
+    let token = prepare(&mut s, &key, &before);
+
+    let mut empty = before;
+    empty.windows.insert(fable.into(), 0.0);
+    empty.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+    let result = s.begin("route-account", &key, &caller(), &token, &empty, NOW, &entropy(3));
+    assert_eq!(result.unwrap_err(), "no-fable-usage");
+    assert!(s.pending("route-account", NOW).unwrap()["attemptKey"].is_null());
+
+    let listed = s.read_inventory("route-account", &empty, NOW, &entropy(12)).unwrap();
+    let row = &listed["grants"][1];
+    assert_eq!(row["claimable"], false);
+    assert_eq!(row["claimBlockedReason"], "no-fable-usage");
+    assert_eq!(
+        s.prepare(
+            "route-account",
+            row["grantKey"].as_str().unwrap(),
+            &caller(),
+            &empty,
+            NOW,
+            &entropy(2),
+        )
+        .unwrap_err(),
+        "no-fable-usage"
+    );
+}
+
+#[test]
 fn claude_fable_reset_names_the_scope_when_either_read_omits_it() {
     let fable = "seven_day_overage_included";
     for (had_fable, has_fable) in [(true, false), (false, true), (false, false)] {

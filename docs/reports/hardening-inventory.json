@@ -735,7 +735,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2427
+          "loc": 2429
         },
         {
           "file": "src/web-server/status/answers.ts",
