@@ -1,0 +1,19 @@
+{
+  "sessions": [
+    {
+      "sessionId": "",
+      "lastActivity": "2026-10-02T11:00:00Z"
+    },
+    {
+      "sessionId": "valid-fixture-session",
+      "lastActivity": "2026-10-02T10:30:00Z"
+    }
+  ],
+  "expected": {
+    "total": 2,
+    "truncated": true,
+    "sampleKeys": [
+      "7ed1fbc8e3abf66d"
+    ]
+  }
+}

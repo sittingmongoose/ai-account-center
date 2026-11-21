@@ -38,6 +38,8 @@ SessionUsage,
 } from '../../../src/web-server/usage/types';
 import type { UsageWorkerResult } from '../../../src/web-server/usage/worker-client';
 
+import emptySession from '../../fixtures/analytics-empty-session.json';
+
 let ccsHome = '';
 let previousCcsHome: string | undefined;
 beforeAll(() => {
@@ -600,6 +602,18 @@ describe('analytics contract: session sample', () => {
       .slice(0, 16);
     expect(first.sessions?.sample[0].key).toBe(expectedKey);
     for (const row of first.sessions?.sample ?? []) expect(row.key).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('omits an empty session id from the sample and keeps it in the total', () => {
+    const sessions = emptySession.sessions.map(({ sessionId, lastActivity }) =>
+      sessionRow(sessionId, lastActivity, [{ model: 'model-a', input: 10 }])
+    );
+    const activity = project([source('claude', result([], sessions))]);
+    expect(activity.sessions?.total).toBe(emptySession.expected.total);
+    expect(activity.sessions?.sample.map((row) => row.key)).toEqual(
+      emptySession.expected.sampleKeys
+    );
+    expect(activity.sessions?.truncated).toBe(emptySession.expected.truncated);
   });
 
   it('counts sessions whose activity overlaps the range and says rows carry whole-session totals', () => {

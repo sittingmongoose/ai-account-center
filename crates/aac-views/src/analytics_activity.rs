@@ -2981,6 +2981,58 @@ mod tests {
                 }
             }
         }
+
+    #[test]
+    fn an_empty_session_id_is_counted_but_not_sampled() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/analytics-empty-session.json"
+        ))
+        .expect("shared projection fixture");
+        let activity = fixture["sessions"][0]["lastActivity"]
+            .as_str()
+            .expect("activity time");
+        let sessions = serde_json::from_value(fixture["sessions"].clone()).expect("session rows");
+        let sources = [SourceData {
+            provider: "claude".into(),
+            fetched_at: activity.into(),
+            data: vec![WorkerResult {
+                hourly: vec![],
+                session: sessions,
+            }],
+        }];
+        let query = json!({"provider": "all", "account": "all"});
+        let pricing = Pricing {
+            rates: HashMap::new(),
+        };
+        let options = ProjectionOptions {
+            tz: "UTC",
+            zone: None,
+            pricing: &pricing,
+            sources: json!([]),
+            refreshing: false,
+            refreshing_remote: json!([]),
+        };
+        let at = ecma::parse_instant(activity).expect("fixture time") as f64;
+        let projected = project(
+            &sources,
+            query.as_object().expect("query"),
+            at - 3_600_000.0,
+            at + 3_600_000.0,
+            "ok",
+            "Fixture",
+            &options,
+        )
+        .expect("projected activity");
+        let sessions = &projected["sessions"];
+        assert_eq!(sessions["total"], fixture["expected"]["total"]);
+        let keys: Vec<_> = sessions["sample"]
+            .as_array()
+            .expect("session sample")
+            .iter()
+            .map(|row| &row["key"])
+            .collect();
+        assert_eq!(json!(keys), fixture["expected"]["sampleKeys"]);
+        assert_eq!(sessions["truncated"], fixture["expected"]["truncated"]);
     }
 
     #[test]
