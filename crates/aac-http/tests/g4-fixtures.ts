@@ -225,13 +225,15 @@ scenarios.push(runScenario('unreadable-store', museTarget(''), template(), [
   { op: 'peek', now: BASE_TIME + 32000, inventories: {}, collections: {} },
 ]));
 
-// 11. A 429 streak spends one usage call per interval across the same token's computers.
+// 11. A 429 streak still falls back to the account's healthy computer when the first
+// candidate fails without a 429; the clean read there steps the streak down.
+const claudeWindowsTarget = (ccsDir: string): UsageFailoverTarget => ({ ccsDir, accountId: 'claude:windows-fallback', provider: 'claude', binding: 'claude-windows-binding', primarySources: [{ ...WINDOWS, selector: 'default', claudeProfile: { id: 'default', email: 'same@example.test' } }], claudeDesktopCadence: true });
 const cadenceToken = (locator: string) => candidate({ locator, selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } });
-scenarios.push(runScenario('claude-429-streak-candidates', claudeTarget(''), claudeTemplate(), [
-  { op: 'collect', now: BASE_TIME, inventories: { mac: [cadenceToken('1'.repeat(64))], windows: [cadenceToken('2'.repeat(64))], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 120 } } },
-  { op: 'collect', now: BASE_TIME + 421000, inventories: { mac: [cadenceToken('1'.repeat(64))], windows: [cadenceToken('2'.repeat(64))], ubuntu: [] }, collections: { mac: 'error', windows: okCollection(BASE_TIME + 421000) } },
-  { op: 'collect', now: BASE_TIME + 540999, inventories: { mac: [cadenceToken('1'.repeat(64))], windows: [cadenceToken('2'.repeat(64))], ubuntu: [] }, collections: { mac: 'error', windows: okCollection(BASE_TIME + 540999) } },
-  { op: 'collect', now: BASE_TIME + 841000, inventories: { mac: [cadenceToken('1'.repeat(64))], windows: [cadenceToken('2'.repeat(64))], ubuntu: [] }, collections: { mac: okCollection(BASE_TIME + 841000) } },
+const fallbackInventories = () => ({ windows: [cadenceToken('1'.repeat(64))], mac: [cadenceToken('2'.repeat(64))], ubuntu: [] });
+scenarios.push(runScenario('claude-429-streak-fallback', claudeWindowsTarget(''), claudeTemplate(), [
+  { op: 'collect', now: BASE_TIME, inventories: fallbackInventories(), collections: { windows: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 120 } } },
+  { op: 'collect', now: BASE_TIME + 421000, inventories: fallbackInventories(), collections: { windows: { sample: null, failureCode: 'unavailable' }, mac: okCollection(BASE_TIME + 421000) } },
+  { op: 'collect', now: BASE_TIME + 841000, inventories: fallbackInventories(), collections: { windows: { sample: null, failureCode: 'unavailable' }, mac: okCollection(BASE_TIME + 841000) } },
 ]));
 
 const corpus = await Promise.all(scenarios);
