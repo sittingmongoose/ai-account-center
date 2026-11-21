@@ -93,12 +93,16 @@ def main():
                  "CCS_HOME", "CCS_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
                  "AAC_AGENT_REPORTS_DIR", "AAC_PM_MAIL_REGISTRY_DIR"):
         env[name] = str(home / name)
-    env.pop("AAC_ALLOW_DEPLOY_REGRESSION", None)
-    env.pop("AAC_TS_SIDECAR", None)
-    env.pop("SSH_AUTH_SOCK", None)
+    for name in ("AAC_ALLOW_DEPLOY_REGRESSION", "AAC_TS_SIDECAR", "SSH_AUTH_SOCK",
+                 "AAC_RUST_GROUP_COLLECTION", "AAC_RUST_STORE", "XDG_RUNTIME_DIR"):
+        env.pop(name, None)
     for name in ("AAC_AGENT_VERBS", "AAC_AGENT_TRANSPORT", "AAC_STATUS_DOORBELL",
-                 "AAC_STORE_SHARE_BACKUP_DIR", "AAC_RUST_GROUP_COLLECTION", "AAC_RUST_STORE"):
+                 "AAC_STORE_SHARE_BACKUP_DIR"):
         env[name] = "off"
+    temporary = scratch / "tmp"
+    temporary.mkdir(mode=0o700)
+    for name in ("TMPDIR", "TMP", "TEMP"):
+        env[name] = str(temporary)
     env["npm_config_userconfig"] = str(home / "absent-npmrc")
     env["npm_config_cache"] = str(args.npm_cache.resolve())
     ccs = Path(env["CCS_DIR"])
@@ -127,6 +131,9 @@ def main():
     installed = prefix / "node_modules/@sittingmongoose/ai-account-center"
     subprocess.run([node, str(stage_script), "--verify-release-artifacts", str(installed)],
                    cwd=scratch, env=env, check=True)
+    subprocess.run([node, "-e", "require(process.argv[1]).verifyLocalDist(process.argv[2])",
+                    str(root / "scripts/build-usage-scan.js"),
+                    str(installed / "dist/native/aac-usage")], cwd=scratch, env=env, check=True)
     metadata = json.loads((installed / "dist/build-info.json").read_text(encoding="utf-8"))
     if (metadata["commit"] != args.commit or metadata["dirty"] is not False
             or metadata["onMain"] is not True or record["commit"] not in metadata["lineage"]):

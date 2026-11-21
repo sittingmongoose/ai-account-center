@@ -502,6 +502,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers/migration/mirror_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/analytics_writers/scan_state.rs",
       "kind": "internal",
       "evidence": [],

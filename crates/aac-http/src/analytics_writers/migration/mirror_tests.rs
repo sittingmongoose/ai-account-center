@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use super::*;
 use aac_store::collect;
 use serde_json::json;

@@ -126,7 +126,8 @@ function readSourceBuild(repoRoot, now = new Date()) {
 function requireLandedSource(repoRoot, source, expected) {
   if (!COMMIT.test(expected) || source?.commit !== expected)
     throw new Error('Check out the exact landed release commit');
-  if (source.shallow !== false) throw new Error('Use a full source checkout for deployment lineage');
+  if (source.shallow !== false)
+    throw new Error('Use a full source checkout for deployment lineage');
   if (source.onMain !== true)
     throw new Error('Wait for origin/main to contain the release before staging');
   const status = git(repoRoot, ['status', '--porcelain', '--untracked-files=normal']);
