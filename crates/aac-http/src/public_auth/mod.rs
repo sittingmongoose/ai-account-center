@@ -1736,17 +1736,36 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn reclaims_only_proven_dead_legacy_session_owners() {
-        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        use std::{io::Write, os::unix::fs::OpenOptionsExt, process::Command};
+
+        const ISOLATED: &str = "AAC_TEST_ISOLATED_SESSION_OWNER";
+        if std::env::var_os(ISOLATED).is_none() {
+            // Another test can fork while the session lease is held. Its child inherits
+            // the lock until exec, so run the reclaim assertions in a separate process.
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "public_auth::tests::reclaims_only_proven_dead_legacy_session_owners",
+                ])
+                .env(ISOLATED, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            assert!(
+                child.status.success() && stdout.contains("1 passed; 0 failed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+            return;
+        }
+
         let home = tempfile::tempdir().unwrap();
         let root = home.path();
         let open = || DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false);
         drop(open().unwrap());
         let marker = root.join("auth/sessions.owner");
         let (host, boot) = aac_files::process::host_boot().unwrap();
-        let mut old_dashboard = std::process::Command::new("sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .unwrap();
+        let mut old_dashboard = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
         let dead = old_dashboard.id();
         assert!(old_dashboard.wait().unwrap().success());
         let live = std::process::id();
