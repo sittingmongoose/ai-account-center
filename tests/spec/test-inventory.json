@@ -2048,6 +2048,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/settled_groups.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-usage/tests/unreadable.rs",
       "kind": "internal",
       "evidence": [],
