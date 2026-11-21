@@ -37,6 +37,8 @@ const SAFE_REASONS = new Set([
   'grant-changed',
   'identity-changed',
   'identity-unconfirmed',
+  'no-matching-code-login',
+  'ambiguous-code-login',
   'rate-limited',
   'stale-inventory',
   'provider-read-only',

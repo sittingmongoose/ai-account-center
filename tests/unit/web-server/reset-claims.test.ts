@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import express from 'express';
 import { scrubLoggedUrl } from '../../../src/web-server/middleware/request-logging-middleware';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { Server } from 'http';
@@ -272,6 +272,16 @@ test('a refusal passes on only an allowlisted native code, and says whether the 
     ],
     [{ op: 'begin', message: 'no-weekly-usage: private detail' }, 'no-weekly-usage', false],
     [{ op: 'begin', message: 'no-fable-usage: private detail' }, 'no-fable-usage', false],
+    [
+      { op: 'begin', message: 'no-matching-code-login: private detail' },
+      'no-matching-code-login',
+      false,
+    ],
+    [
+      { op: 'begin', message: 'ambiguous-code-login: private detail' },
+      'ambiguous-code-login',
+      false,
+    ],
     [{ op: 'begin', message: 'private-account-name: leaked words' }, null, false],
     [{ op: 'finish', message: 'storage-unavailable: Reset operation refused.' }, null, true],
   ] as const) {
@@ -577,4 +587,42 @@ test('non-Claude not-sent stays unconfirmed and requires a verification read', a
   expect(reads).toBe(2);
   expect(served.finishes[0].outcome).toBe('ambiguous');
   expect((await response.json()).outcome).toBe('claimed-unconfirmed');
+});
+
+test('inventory read preserves allowlisted Code login refusals and matches Rust SAFE_REASONS', async () => {
+  for (const reason of ['no-matching-code-login', 'ambiguous-code-login', 'signed-out'] as const) {
+    const source: ResetSource = {
+      async read() {
+        throw new Error(`${reason}: private detail`);
+      },
+      async send() {
+        throw new Error('must not send');
+      },
+    };
+    const { url, calls } = await serve('session', source);
+    const res = await fetch(`${url}/accounts/claude%3Asynthetic/reset-claims`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('unavailable');
+    expect(body.reason).toBe(reason);
+    expect(body.grants).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain('private');
+    expect(calls).toEqual(['pending']);
+  }
+  const root = join(import.meta.dir, '../../..');
+  const rustSource = readFileSync(
+    join(root, 'crates/aac-http/src/public_auth/reset_routes.rs'),
+    'utf8'
+  );
+  const tsSource = readFileSync(
+    join(root, 'tests/fixtures/reset-adapter/reset-claim-routes.ts'),
+    'utf8'
+  );
+  const rustBlock = /const SAFE_REASONS: &\[&str\] = &\[([^\]]+)\];/.exec(rustSource);
+  const tsBlock = /const SAFE_REASONS = new Set\(\[([^\]]+)\]\);/.exec(tsSource);
+  expect(rustBlock).not.toBeNull();
+  expect(tsBlock).not.toBeNull();
+  const rustReasons = [...rustBlock![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const tsReasons = [...tsBlock![1].matchAll(/'([^']+)'/g)].map((m) => m[1]).sort();
+  expect(tsReasons).toEqual(rustReasons);
 });

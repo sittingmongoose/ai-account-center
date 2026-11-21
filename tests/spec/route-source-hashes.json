@@ -30,5 +30,5 @@
   "src/web-server/rust-service-transport.ts": "80a190f2e9a60a9d66e65bd3ae349ca03b96d578ddf0d635109a792e1afdad6d",
   "src/web-server/rust-service.ts": "9c42049eb2d78894d2b75ef20a1b328053b8fb15531026cf759a91a37eb83d62",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa",
-  "tests/fixtures/reset-adapter/reset-claim-routes.ts": "09850964c45bcc73b8c15a780c74150e83db9bb16e0a86c8c4082dd8dd449694"
+  "tests/fixtures/reset-adapter/reset-claim-routes.ts": "561743650eb6ccabf4c59dc2a121ed6dc2b65a0d548f21230dd377fca2b14c61"
 }
