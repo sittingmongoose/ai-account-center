@@ -251,18 +251,22 @@ fn settle_sessions(collector: &mut Collector, found: Vec<PathBuf>) -> Vec<PathBu
 
 /// Every copy once, before any owner is elected (RECHECK-BIG-1 M2): first by the file itself
 /// (device and inode, so a hard link under any folder name is the same file), then by content
-/// for plain copies. The first copy by path is kept, so the choice is the same on every scan.
+/// for plain copies. Keep a published owner while it is present; choose by path on a cold read.
 ///
 /// Settled copies take part too (RECHECK-FINAL-ASTRA M1): their identity and size come from their
-/// prints, and their content is hashed only when an unsettled copy has the same size. A settled
-/// copy that loses to an earlier copy leaves the settled set, as a full read would drop it.
+/// prints, and their content is hashed only when an unsettled copy has the same size.
 fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<PathBuf> {
-    found.sort_by_key(|p| path_text(p));
     let settled: HashSet<PathBuf> = found
         .iter()
         .filter(|p| collector.settled_key("muse", p).is_some())
         .cloned()
         .collect();
+    found.sort_by_cached_key(|path| {
+        let key = util::filekey("muse", path);
+        let prior = &collector.prior["muse"][&key];
+        let published = prior.is_object() && prior["readThrough"].is_null();
+        (!settled.contains(path), !published, path_text(path))
+    });
     let mut identities: HashSet<(u64, u64)> = HashSet::new();
     let mut unique: Vec<PathBuf> = Vec::new();
     for path in found {
