@@ -1415,6 +1415,12 @@ def reset_logins(request, codes):
                 and (account is None or login["account"] == account))
 
     codes = [code for code in codes if matches_target(code)]
+    # One identity signed in twice (for example ~/.claude and ~/.claude-t3/<account>) is one choice: keep the
+    # first login per (account, organization) in folder order, and stay ambiguous only across distinct pairs.
+    seen = set()
+    codes = [code for code in codes
+             if (code["account"], code["organization"]) not in seen
+             and not seen.add((code["account"], code["organization"]))]
     try:
         desktop = _desktop_reset_login(request)
     except UsageUnavailable:

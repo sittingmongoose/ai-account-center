@@ -2376,9 +2376,16 @@ class ResetCodeLoginTests(unittest.TestCase):
         with mock.patch.object(usage, "Client") as client:
             self.assertEqual(usage.reset_host(dict(self.request, action="capture")), unavailable)
             self.assertEqual(usage.reset_host(dict(self.request, expectedSavedOrganization=ACCOUNT)), unavailable)
-            self.write_code_login("duplicate", org=OTHER)
-            self.assertEqual(usage.reset_host(dict(self.request, expectedSavedOrganization=OTHER)), unavailable)
         client.assert_not_called()
+
+    def test_one_identity_signed_in_twice_is_one_code_login_not_ambiguous(self):
+        # Review of e5c184fa8 (Medium): two Code logins for the same account and organization must not hide the reset.
+        self.write_code_login("second", org=OTHER)
+        self.write_code_login("duplicate", org=OTHER)
+        with mock.patch.object(usage, "Client") as client:
+            captured = usage.reset_host(dict(self.request, action="capture", expectedSavedOrganization=OTHER))
+        client.assert_not_called()
+        self.assertEqual((captured.get("account"), captured.get("organization")), (ACCOUNT, OTHER))
 
     def test_a_signed_out_desktop_with_tokens_rejected_also_falls_back(self):
         self.desktop = (ACCOUNT, cache())
