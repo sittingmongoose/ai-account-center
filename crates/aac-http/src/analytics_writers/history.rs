@@ -479,6 +479,142 @@ mod tests {
     }
 
     #[test]
+    fn recheck_offline_original_then_returns() {
+        offline_original_then_returns(false);
+    }
+
+    #[test]
+    fn recheck_migrated_mirror_then_original_returns() {
+        offline_original_then_returns(true);
+    }
+
+    fn offline_original_then_returns(migrate: bool) {
+        let home = tempfile::tempdir().expect("temporary scan home");
+        let root = home.path();
+        let store_path = root.join("store");
+        let open = || {
+            aac_store::ops::open_engine(&store_path.to_string_lossy(), None, None)
+                .expect("open fixture store")
+        };
+        let now = aac_store::engine::now_ms() as i64;
+        let at = (now - 60 * super::super::DAY).div_euclid(3_600_000) * 3_600_000;
+        let event = json!({
+            "type":"assistant",
+            "timestamp":aac_num::ecma::to_iso_string(at).expect("old usage time"),
+            "sessionId":"shared-claude-session",
+            "message":{
+                "id":"same-assistant-message","model":"claude-opus-4-5",
+                "usage":{"input_tokens":70,"output_tokens":30}
+            }
+        });
+        let scan = |computer: &str, directory: &str, mirrored: bool| {
+            let home = root.join(computer);
+            let project = home.join(".claude/projects").join(directory);
+            std::fs::create_dir_all(&project).expect("project directory");
+            std::fs::write(project.join("same-log.jsonl"), format!("{event}\n"))
+                .expect("assistant log");
+            let request = json!({"kinds":["claude"], "minDateMs":LOOKBACK, "cwd":false});
+            let request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
+                .expect("scanner request");
+            let answer =
+                aac_usage::protocol::scan(&request, &home, &aac_usage::discover::Env::default());
+            let row = &answer["rows"][0];
+            assert_eq!(row["i"], 70, "{computer}: {answer}");
+            let fingerprint =
+                &answer["kinds"]["claude"]["fingerprints"][row["f"].as_str().expect("file key")];
+            assert_eq!(fingerprint["claudeMirror"], mirrored);
+            assert!(fingerprint["claudeName"].is_string());
+            answer
+        };
+        let original = Source {
+            computer: "nas1",
+            tool: "claude",
+            epoch: 0,
+        };
+        let mirror = Source {
+            computer: "odroid",
+            ..original
+        };
+        let pricing = ResolverPricing::new(root);
+        let submit = |store: &Engine, source: &Source<'_>, answer: &Value| {
+            let cache = source.load(store).expect("load source checkpoint");
+            source
+                .accept(store, cache, answer, true, now, &pricing)
+                .expect("accept Claude scan");
+        };
+        let store = open();
+        let read = |store: &Engine| {
+            aac_store::ops::call(
+                store,
+                "activityRange",
+                &json!({"fromMs":at, "toMs":at + 3_600_000}).to_string(),
+            )
+            .expect("read historical Claude hour")
+        };
+        let mirror_answer = scan("odroid", "ssh-12345678-1234-1234-1234-123456789abc", true);
+        let sources = [mirror, original];
+        if migrate {
+            let dir = root.join("cache/analytics-remote-v1");
+            std::fs::create_dir_all(&dir).expect("legacy cache directory");
+            std::fs::write(
+                dir.join("odroid.json"),
+                json!({
+                    "version": 8, "lastScanAt": aac_num::ecma::to_iso_string(now),
+                    "fingerprints": {"claude": mirror_answer["kinds"]["claude"]["fingerprints"]},
+                    "rows": mirror_answer["rows"], "srows": mirror_answer["srows"],
+                })
+                .to_string(),
+            )
+            .expect("legacy mirror cache");
+            let migration = super::super::migration::Migration {
+                store: &store,
+                root,
+                local: Some("nas1"),
+                now,
+                pricing: ResolverPricing::new(root),
+            };
+            assert!(migration.run().expect("migrate available mirror"));
+        } else {
+            submit(&store, &mirror, &mirror_answer);
+            Job::default()
+                .publish_claude(&store, &[mirror], now, &pricing)
+                .expect("publish the available mirror");
+        }
+        let first = read(&store);
+        assert_eq!(first["rows"][0][5], 70);
+        assert_eq!(first["rows"][0][6], 30);
+        store.close().expect("close between scanners");
+        drop(store);
+
+        let store = open();
+        submit(&store, &original, &scan("nas1", "original-project", false));
+        Job::default()
+            .publish_claude(
+                &store,
+                if migrate { &sources[1..] } else { &sources },
+                now,
+                &pricing,
+            )
+            .expect("publish after the original returns");
+        let once = read(&store);
+
+        let total: u64 = once["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r[5].as_u64().unwrap())
+            .sum();
+        assert_eq!(total, 70, "one log counted once: {once}");
+        let output: u64 = once["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r[6].as_u64().unwrap())
+            .sum();
+        assert_eq!(output, 30, "one log counted once: {once}");
+    }
+
+    #[test]
     fn analytics_historical_claude_mirror_is_counted_once_across_computers() {
         let home = tempfile::tempdir().expect("temporary scan home");
         let root = home.path();
