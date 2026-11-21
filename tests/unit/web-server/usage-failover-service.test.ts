@@ -273,6 +273,30 @@ describe('identity-bound usage source failover', () => {
     expect(h.collected()).toHaveLength(before);
   });
 
+  it('lists each stored identity once, marking those another entry already names', async () => {
+    const h = await harness();
+    const a = { kind: 'muse-team', key: 'a'.repeat(64) };
+    const b = { kind: 'muse-team', key: 'b'.repeat(64) };
+    h.inventories.set('mac', [
+      candidate({ identity: a }),
+      candidate({ locator: '3'.repeat(64), identity: b }),
+      candidate({ locator: '5'.repeat(64), identity: a }),
+      candidate({ locator: '7'.repeat(64), selectors: ['aac-key:11223344'], identity: a }),
+    ]);
+    expect(await h.service.discoveredIdentities(h.target, ['aac-key:11223344'])).toEqual([
+      { identity: a, bound: true },
+      { identity: b, bound: false },
+    ]);
+    expect(await h.service.discoveredIdentities(h.target, [])).toEqual([
+      { identity: a, bound: false },
+      { identity: b, bound: false },
+    ]);
+    expect(h.collected()).toHaveLength(0);
+    h.inventories.set('mac', new Error('offline'));
+    h.advance();
+    expect(await h.service.discoveredIdentities(h.target, [])).toBeNull();
+  });
+
   it('names the credential identity of the shown reading without starting a read', async () => {
     const h = await harness();
     expect(h.service.readingIdentity(h.target)).toBeNull();

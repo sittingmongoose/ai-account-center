@@ -32,7 +32,11 @@ import {
 } from './additional-usage-transport';
 import { HOST_LABELS, sourceComputer, type DashboardHost } from './dashboard-hosts';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
-import { sameUsageIdentity, type UsageFailoverTarget } from './usage-failover-contract';
+import {
+  sameUsageIdentity,
+  type UsageFailoverTarget,
+  type UsageIdentity,
+} from './usage-failover-contract';
 
 const CACHE_TTL_MS = 120_000;
 const REFRESH_DEBOUNCE_MS = 5_000;
@@ -68,7 +72,7 @@ export interface AdditionalAccountDeps {
   /** Shared identity-bound source selection; null keeps the legacy collector path. */
   failover?:
     | (Pick<UsageFailoverService, 'collect' | 'peek'> &
-        Partial<Pick<UsageFailoverService, 'readingIdentity'>>)
+        Partial<Pick<UsageFailoverService, 'readingIdentity' | 'discoveredIdentities'>>)
     | null;
   now?: () => number;
   /** Overrides LOCAL_FILE_DEADLINE_MS for the account list read, so tests need not wait. */
@@ -371,6 +375,9 @@ function sourceKey(source: AdditionalUsageSource): string {
 
 const DEFAULT_SOURCES = parseSourceManifest(null).sources;
 
+/** Providers whose discover entry reads every stored key, one row each (owner, card OCG1). */
+const EXPANDS_DISCOVERY: ReadonlySet<string> = new Set(['opencode-go']);
+
 /**
  * Per-CCS-scope cache, one entry per account (CONTRACT-registry-lifecycle 3.1).
  * Read order: a valid registry v2 is the only source; an invalid v2 file shows
@@ -382,13 +389,17 @@ export class AdditionalAccountService {
   private readonly ccsDir: string;
   private readonly failover:
     | (Pick<UsageFailoverService, 'collect' | 'peek'> &
-        Partial<Pick<UsageFailoverService, 'readingIdentity'>>)
+        Partial<Pick<UsageFailoverService, 'readingIdentity' | 'discoveredIdentities'>>)
     | null;
   private readonly cursorQuota: CursorQuotaReader | null;
   private fingerprint = '';
   private caches = new Map<string, SourceCache>();
   private manifestPending: Promise<Manifest> | null = null;
   private lastManifest: Manifest | null = null;
+  /** Sources a discover entry expanded into, pinned to one stored key's identity. */
+  private pinned = new WeakMap<AdditionalUsageSource, UsageIdentity>();
+  /** The last snapshot's sources after discovery expanded, for placeholders and Re-check. */
+  private lastSources: { fingerprint: string; sources: AdditionalUsageSource[] } | null = null;
 
   constructor(private readonly deps: AdditionalAccountDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
@@ -435,7 +446,62 @@ export class AdditionalAccountService {
           selector,
         },
       ],
+      ...(this.pinned.has(source) ? { expectedIdentity: this.pinned.get(source) } : {}),
     };
+  }
+
+  /**
+   * Owner, 2026-11-21 (card OCG1): every OpenCode Go key stored on the computer is read, once.
+   * A `discover` entry stands for each stored key that no other entry of the provider already
+   * names (`aac-key:<id>`): one row per such key, pinned to that key's identity, with an id and
+   * label from the identity's digest (never the key). When every stored key is already named,
+   * the discover entry adds no row and no read. An unreadable store keeps the entry as it was.
+   */
+  private async expandDiscovery(
+    sources: AdditionalUsageSource[]
+  ): Promise<AdditionalUsageSource[]> {
+    const discover = this.failover?.discoveredIdentities?.bind(this.failover);
+    if (!discover) return sources;
+    const expanded = await Promise.all(
+      sources.map(async (source): Promise<AdditionalUsageSource[]> => {
+        const account = source.account;
+        if (
+          !EXPANDS_DISCOVERY.has(source.provider) ||
+          !account ||
+          account.credential.kind !== 'discover'
+        )
+          return [source];
+        const bound = sources
+          .filter(
+            (other) =>
+              other !== source &&
+              other.provider === source.provider &&
+              sourceHost(other) === sourceHost(source) &&
+              (other.sshHost ?? null) === (source.sshHost ?? null)
+          )
+          .flatMap((other) => {
+            const credential = other.account?.credential;
+            return credential?.kind === 'aac-key' ? [`aac-key:${credential.keyId}`] : [];
+          });
+        const found = await discover(this.failoverTarget(source), bound).catch(() => null);
+        if (!found || found.length === 0) return [source];
+        const unbound = found.filter((item) => !item.bound);
+        return unbound.map(({ identity }) => {
+          const digest = identity.key.slice(0, 8);
+          const pinned: AdditionalUsageSource = {
+            ...source,
+            account: {
+              ...account,
+              id: `${account.id}:${digest}`,
+              label: `${account.label ?? LABELS[source.provider]} ${digest}`,
+            },
+          };
+          this.pinned.set(pinned, identity);
+          return pinned;
+        });
+      })
+    );
+    return expanded.flat();
   }
 
   private async readManifest(): Promise<Manifest> {
@@ -671,9 +737,11 @@ export class AdditionalAccountService {
         ),
       };
     }
-    const current = new Set(config.sources.map(sourceKey));
+    const all = await this.expandDiscovery(config.sources);
+    this.lastSources = { fingerprint: config.fingerprint, sources: all };
+    const current = new Set(all.map(sourceKey));
     for (const key of this.caches.keys()) if (!current.has(key)) this.caches.delete(key);
-    const sources = config.sources.filter(
+    const sources = all.filter(
       (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
     );
     return {
@@ -739,7 +807,9 @@ export class AdditionalAccountService {
   ): Promise<DashboardAccount | null> {
     const config = await this.loadManifest();
     if (!config.valid) return null;
-    const source = config.sources.find(
+    const known =
+      this.lastSources?.fingerprint === config.fingerprint ? this.lastSources.sources : [];
+    const source = [...config.sources, ...known].find(
       (candidate) => (candidate.account?.id ?? `${candidate.provider}:usage`) === id
     );
     if (!source || (reviewed && sourceKey(reviewed) !== sourceKey(source))) return null;
@@ -753,7 +823,9 @@ export class AdditionalAccountService {
   configured(opts: { excludeAntigravity?: boolean } = {}): AdditionalAccountsSnapshot | null {
     const config = this.lastManifest;
     if (!config) return null;
-    const sources = config.sources.filter(
+    const expanded =
+      this.lastSources?.fingerprint === config.fingerprint ? this.lastSources.sources : null;
+    const sources = (expanded ?? config.sources).filter(
       (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
     );
     const rows = sources.map((source) => {

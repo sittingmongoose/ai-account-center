@@ -659,6 +659,35 @@ export class UsageFailoverService {
     return this.run(target, template, false);
   }
   /**
+   * Every distinct credential identity the target's primary computer stores for its selector,
+   * in store order, each marked `bound` when a candidate carrying one of `bound` selectors (an
+   * account the registry already names, such as `aac-key:<id>`) holds the same identity. It is
+   * an inventory of local stores only: no provider is asked and no secret leaves the helper.
+   * Null when the computer's stores could not be read.
+   */
+  async discoveredIdentities(
+    target: UsageFailoverTarget,
+    bound: string[]
+  ): Promise<Array<{ identity: UsageIdentity; bound: boolean }> | null> {
+    const source = target.primarySources[0];
+    if (!source) return null;
+    const candidates = await this.inventory(target, source);
+    if (candidates === null) return null;
+    const taken = candidates
+      .filter((candidate) => candidate.selectors.some((selector) => bound.includes(selector)))
+      .map((candidate) => candidate.identity);
+    const found: Array<{ identity: UsageIdentity; bound: boolean }> = [];
+    for (const candidate of candidates) {
+      if (!candidate.selectors.includes(source.selector)) continue;
+      if (found.some((item) => sameUsageIdentity(item.identity, candidate.identity))) continue;
+      found.push({
+        identity: candidate.identity,
+        bound: taken.some((identity) => sameUsageIdentity(identity, candidate.identity)),
+      });
+    }
+    return found;
+  }
+  /**
    * The credential identity the target's shown reading came from, or null when it has none
    * yet. Read-only: never loads, creates or changes state and never asks a provider.
    */
