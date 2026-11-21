@@ -673,6 +673,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/json_object.rs",
       "kind": "internal",
       "evidence": [],

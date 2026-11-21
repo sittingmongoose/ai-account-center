@@ -82,7 +82,7 @@ pub fn production_deps(ccs: &Path) -> Deps {
     }
     .to_string();
     let home = home_dir();
-    let package_root = std::env::current_exe()
+    let package_root = crate::identity::executable_path_for_assets()
         .ok()
         .and_then(|exe| {
             exe.parent()

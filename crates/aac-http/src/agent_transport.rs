@@ -153,7 +153,7 @@ pub(crate) fn package_root() -> Option<PathBuf> {
         let root = PathBuf::from(root);
         return root.is_absolute().then_some(root);
     }
-    let exe = std::env::current_exe().ok()?;
+    let exe = crate::identity::executable_path_for_assets().ok()?;
     let native = exe.parent()?;
     let dist = native.parent()?;
     if native.file_name()? != "native" || dist.file_name()? != "dist" {

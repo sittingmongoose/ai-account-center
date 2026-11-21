@@ -228,7 +228,7 @@ pub(crate) fn antigravity_signin(args: &[String], ccs: &Path) -> Result<i32, Str
     let script = env::var_os("AAC_TS_CLI")
         .map(PathBuf::from)
         .or_else(|| {
-            let exe = env::current_exe().ok()?;
+            let exe = crate::identity::executable_path_for_assets().ok()?;
             let directory = exe.parent()?;
             [
                 "../antigravity/terminal-signin-entry.js",

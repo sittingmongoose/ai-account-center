@@ -28,6 +28,21 @@ fn executable() -> io::Result<PathBuf> {
     std::env::current_exe()
 }
 
+/// The installed binary's location for finding assets next to it. Some Unix
+/// launchers report the path of the package-manager symlink.
+pub(crate) fn executable_path_for_assets() -> io::Result<PathBuf> {
+    let path = std::env::current_exe()?;
+    #[cfg(unix)]
+    let path = resolve_asset_path(path);
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn resolve_asset_path(path: PathBuf) -> PathBuf {
+    // A running executable can lose its directory entry during an upgrade.
+    path.canonicalize().unwrap_or(path)
+}
+
 fn sha256_hex(path: &PathBuf) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
@@ -67,5 +82,33 @@ impl Identity {
 
     pub(crate) fn header(&self) -> HeaderValue {
         self.0.clone()
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::resolve_asset_path;
+    use std::os::unix::fs::symlink;
+    use std::{fs, path::Path};
+
+    #[test]
+    fn package_assets_follow_an_installed_executable_symlink() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let prefix = fixture.path();
+        let installed = Path::new("lib/node_modules/fixture-package/dist/native/ai-account-center");
+        let executable = prefix.join(installed);
+        fs::create_dir_all(executable.parent().expect("native directory"))
+            .expect("native directory");
+        fs::create_dir(prefix.join("bin")).expect("bin directory");
+        fs::write(&executable, b"fixture").expect("installed binary");
+        let shim = prefix.join("bin/ai-account-center");
+        symlink(Path::new("..").join(installed), &shim).expect("installed bin symlink");
+
+        assert_eq!(
+            resolve_asset_path(shim),
+            executable.canonicalize().expect("installed binary path")
+        );
+        let replaced = prefix.join("dist/native/replaced");
+        assert_eq!(resolve_asset_path(replaced.clone()), replaced);
     }
 }

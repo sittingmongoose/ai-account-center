@@ -856,7 +856,7 @@ fn reader_target() -> &'static str {
 
 /// The packaged reader next to the native bin (`dist/native/aac-cursor-account`), digest-checked.
 fn cursor_reader() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
+    let exe = crate::identity::executable_path_for_assets().ok()?;
     let directory = exe.parent()?.join("../native/aac-cursor-account");
     let manifest = read_private(&directory.join("manifest.json"), 1024 * 1024)?;
     let object = manifest.as_object()?;

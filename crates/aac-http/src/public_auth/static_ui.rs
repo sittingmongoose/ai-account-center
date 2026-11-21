@@ -88,7 +88,7 @@ impl StaticUi {
                 if !EMBEDDED_UI.is_empty() {
                     return None;
                 }
-                let binary = std::env::current_exe().ok()?;
+                let binary = crate::identity::executable_path_for_assets().ok()?;
                 let directory = binary.parent()?;
                 [directory.join("ui"), directory.join("../../dist/ui")]
                     .into_iter()

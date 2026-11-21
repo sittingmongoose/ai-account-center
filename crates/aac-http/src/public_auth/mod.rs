@@ -831,7 +831,7 @@ async fn cut_diagnostics(axum::Extension(access): axum::Extension<DashboardAcces
 }
 
 fn running_package_root() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
+    let exe = crate::identity::executable_path_for_assets().ok()?;
     exe.ancestors()
         .skip(1)
         .find(|root| root.join("package.json").is_file() && root.join("dist").is_dir())
