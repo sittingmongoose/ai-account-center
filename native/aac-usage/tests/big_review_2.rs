@@ -237,11 +237,12 @@ fn a_muse_byte_copy_under_a_renamed_folder_counts_once() {
 const MUSE_FILE_MS: u64 = 1_790_100_000_000;
 const MUSE_SETTLED_BEFORE: u64 = 1_791_000_000_000;
 
-fn settled_scan(home: &Path, prior: Option<&Value>) -> Value {
+/// The writer's request: `_store` is always present; `settled_before` 0 leaves the day open.
+fn store_scan(home: &Path, prior: Option<&Value>, settled_before: u64) -> Value {
     let mut request = ask(&["muse"], prior);
     request.fingerprints.insert(
         "_store".into(),
-        json!({"settledBefore": {"muse": MUSE_SETTLED_BEFORE}, "settledSlot": 1}),
+        json!({"settledBefore": {"muse": settled_before}, "settledSlot": 1}),
     );
     protocol::scan(&request, home, &env(home))
 }
@@ -305,6 +306,14 @@ impl Persisted {
 /// RECHECK-FINAL-ASTRA M1: a copy of a settled Muse session added later under a renamed folder,
 /// as a hard link or as bytes, still counts once: one persisted session and one 100/10 hour.
 fn settled_copy_counts_once(link: bool, earlier_copy: bool) {
+    copy_counts_once(link, earlier_copy, true);
+}
+
+/// RECHECK-ROUND3 M1: the same while the owner's day is still open (nothing settled). The
+/// published owner keeps the session in both path orders.
+fn copy_counts_once(link: bool, earlier_copy: bool, settle: bool) {
+    let settled_before = if settle { MUSE_SETTLED_BEFORE } else { 0 };
+    let settled_scan = |home: &Path, prior: Option<&Value>| store_scan(home, prior, settled_before);
     let home = tempfile::tempdir().unwrap();
     let h = home.path();
     let (owner, copy) = if earlier_copy {
@@ -326,7 +335,11 @@ fn settled_copy_counts_once(link: bool, earlier_copy: bool) {
         .values()
         .next()
         .unwrap();
-    assert_eq!(print["settledCheckedSlot"], 1, "the session settled: {settled}");
+    if settle {
+        assert_eq!(print["settledCheckedSlot"], 1, "the session settled: {settled}");
+    } else {
+        assert!(print["settledCheckedSlot"].is_null(), "the day is open: {settled}");
+    }
     store.apply(&settled);
 
     let kept = h.join(format!(".local/share/muse/sessions/{copy}/session.jsonl"));
@@ -357,6 +370,21 @@ fn a_muse_hard_link_added_after_settling_counts_once() {
 fn a_muse_byte_copy_added_after_settling_counts_once() {
     for earlier in [false, true] {
         settled_copy_counts_once(false, earlier);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_muse_hard_link_of_an_unsettled_owner_counts_once() {
+    for earlier in [false, true] {
+        copy_counts_once(true, earlier, false);
+    }
+}
+
+#[test]
+fn a_muse_byte_copy_of_an_unsettled_owner_counts_once() {
+    for earlier in [false, true] {
+        copy_counts_once(false, earlier, false);
     }
 }
 

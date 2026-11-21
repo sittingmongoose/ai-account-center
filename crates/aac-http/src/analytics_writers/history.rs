@@ -393,6 +393,17 @@ mod tests {
 
     #[test]
     fn settled_muse_copy_keeps_one_store_session_in_both_path_orders() {
+        muse_copy_keeps_one_store_session(true);
+    }
+
+    /// RECHECK-ROUND3 M1: the same with the owner's day still open (nothing settled, no closed
+    /// day): the published owner keeps one Store session in both path orders.
+    #[test]
+    fn unsettled_muse_copy_keeps_one_store_session_in_both_path_orders() {
+        muse_copy_keeps_one_store_session(false);
+    }
+
+    fn muse_copy_keeps_one_store_session(settle: bool) {
         for (first, second) in [("a", "b"), ("b", "a")] {
             for hard_link in [false, true] {
                 let fixture = tempfile::tempdir().expect("fixture home");
@@ -429,7 +440,8 @@ mod tests {
                     let mut prints = cache.fingerprints.clone();
                     prints.insert(
                         "_store".into(),
-                        json!({"settledBefore":{"muse":at + super::super::DAY},"settledSlot":1}),
+                        json!({"settledBefore":{"muse":if settle { at + super::super::DAY } else { 0 }},
+                            "settledSlot":1}),
                     );
                     aac_usage::protocol::scan(
                         &aac_usage::protocol::parse_request(
@@ -466,7 +478,7 @@ mod tests {
                         .expect("activity report");
                     assert_eq!(
                         result["sessions"]["total"], 1,
-                        "{first}/{second}/{hard_link}: {result}"
+                        "{first}/{second}/{hard_link}/settled {settle}: {result}"
                     );
                     assert_eq!(result["rows"][0][5], 100, "{result}");
                     assert_eq!(result["rows"][0][6], 10, "{result}");
@@ -476,7 +488,9 @@ mod tests {
                 let mut cache = scan_state::Cache::default();
                 publish(&store, &mut cache);
                 publish(&store, &mut cache);
-                activity::close_days(&store, now as u64).expect("settle Muse hour");
+                if settle {
+                    activity::close_days(&store, now as u64).expect("settle Muse hour");
+                }
                 read(&store);
                 let snapshot = cache.encode().expect("scanner checkpoint");
                 store.close().expect("close Store");
