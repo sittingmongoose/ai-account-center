@@ -3,7 +3,11 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { claudeDesktopDelayMs } from '../../../src/web-server/services/usage-failover-claude-cadence';
-import { readIdentityUsageCooldown } from '../../../src/web-server/services/usage-failover-cooldown';
+import {
+  identityUsageCooldownKey,
+  readIdentityUsageCooldown,
+  readUsageCooldownState,
+} from '../../../src/web-server/services/usage-failover-cooldown';
 import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
 import { localUsageHost } from '../../../src/web-server/services/usage-failover-transport';
 import { stopProcessBroker } from '../../../src/utils/managed-process';
@@ -2368,6 +2372,45 @@ async function claudeSourceChangeFixture() {
   return { h, observed, target, row, deps, hold, fail };
 }
 
+async function claudeBackoffFixture() {
+  const h = await harness();
+  const observed = candidate({ identity: { kind: 'claude-account-org-v1', key: 'a'.repeat(64) } });
+  h.inventories.set('windows', [observed]);
+  const target: UsageFailoverTarget = {
+    ...h.target,
+    provider: 'claude',
+    accountId: 'claude:backoff-decay',
+    primarySources: [{ ...WINDOWS, selector: 'discover' }],
+    claudeDesktopCadence: true,
+  };
+  const row = { ...template(), provider: 'claude' as const, id: target.accountId };
+  const streak = () =>
+    readUsageCooldownState(
+      target.ccsDir,
+      identityUsageCooldownKey(target.ccsDir, 'claude', observed.identity),
+      h.now()
+    ).claude429Streak ?? 0;
+  const succeed = () =>
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+  const rateLimit = () =>
+    h.collections.set('windows', { sample: null, failureCode: 'rate_limited' });
+  const toHold = (service: UsageFailoverService) => {
+    const until = service.cooldownUntil(target);
+    h.advance(Math.max(0, until - h.now()));
+  };
+  const build = async (levels: number, service = h.service) => {
+    expect((await service.collect(target, row)).status).toBe('ok');
+    for (let level = 1; level <= levels; level++) {
+      h.advance(level === 1 ? 420_000 : Math.max(0, service.cooldownUntil(target) - h.now()));
+      rateLimit();
+      expect((await service.collect(target, row)).cacheReason).toBe('rate_limited');
+      expect(streak()).toBe(level);
+    }
+    return service;
+  };
+  return { h, observed, target, row, streak, succeed, rateLimit, toHold, build };
+}
+
 describe('Windows Claude quota cadence', () => {
   it('spreads five profiles across minute polls, grows to a cap, and respects Retry-After', () => {
     const profiles = ['00000000', '0000ea60', '0001d4c0', '0002bf20', '0003a980'];
@@ -2382,7 +2425,106 @@ describe('Windows Claude quota cadence', () => {
     expect(claudeDesktopDelayMs(profiles[1], 86_400, 2)).toBe(86_400_000);
   });
 
-  it('preserves the sample and growing hold through restart, then resets after success', async () => {
+  it('steps the 429 streak down one level per success instead of back to the fastest pace', async () => {
+    const f = await claudeBackoffFixture();
+    const service = await f.build(4);
+    f.toHold(service);
+    f.succeed();
+    expect((await service.collect(f.target, f.row)).status).toBe('ok');
+    expect(f.streak()).toBe(3);
+    const before = f.h.collected().length;
+    f.h.advance(479_999);
+    expect((await service.collect(f.target, f.row)).status).toBe('ok');
+    expect(f.h.collected()).toHaveLength(before);
+
+    f.h.advance(300_001);
+    f.rateLimit();
+    await service.collect(f.target, f.row);
+    expect(f.streak()).toBe(4);
+    const hold = service.cooldownUntil(f.target) - f.h.now();
+    expect(hold).toBeGreaterThanOrEqual(960_000);
+    expect(hold).toBeLessThan(1_260_000);
+  });
+
+  it('returns to the normal pace one clean read at a time', async () => {
+    const f = await claudeBackoffFixture();
+    const service = await f.build(4);
+    for (const remaining of [3, 2, 1, 0]) {
+      f.toHold(service);
+      f.succeed();
+      expect((await service.collect(f.target, f.row)).status).toBe('ok');
+      expect(f.streak()).toBe(remaining);
+      const base = (remaining ? Math.min(1800, 120 * 2 ** (remaining - 1)) : 120) * 1000;
+      const before = f.h.collected().length;
+      f.h.advance(base - 1);
+      await service.collect(f.target, f.row);
+      expect(f.h.collected()).toHaveLength(before);
+      f.h.advance(300_001);
+    }
+
+    const before = f.h.collected().length;
+    await service.collect(f.target, f.row);
+    expect(f.streak()).toBe(0);
+    expect(f.h.collected()).toHaveLength(before + 1);
+    f.h.advance(119_999);
+    await service.collect(f.target, f.row);
+    expect(f.h.collected()).toHaveLength(before + 1);
+    f.h.advance(300_001);
+    await service.collect(f.target, f.row);
+    expect(f.h.collected()).toHaveLength(before + 2);
+  });
+
+  it('persists the stepped-down streak and pace across restart', async () => {
+    const f = await claudeBackoffFixture();
+    await f.build(3);
+    const restarted = new UsageFailoverService(f.h.deps);
+    expect(f.streak()).toBe(3);
+    f.toHold(restarted);
+    f.succeed();
+    expect((await restarted.collect(f.target, f.row)).status).toBe('ok');
+    expect(f.streak()).toBe(2);
+    const before = f.h.collected().length;
+    f.h.advance(239_999);
+    await restarted.collect(f.target, f.row);
+    expect(f.h.collected()).toHaveLength(before);
+
+    const again = new UsageFailoverService(f.h.deps);
+    f.h.advance(300_001);
+    f.rateLimit();
+    await again.collect(f.target, f.row);
+    expect(f.streak()).toBe(3);
+    const hold = again.cooldownUntil(f.target) - f.h.now();
+    expect(hold).toBeGreaterThanOrEqual(480_000);
+    expect(hold).toBeLessThan(780_000);
+  });
+
+  it('spends one usage call per interval for a rate-limited token across its candidates', async () => {
+    const f = await claudeBackoffFixture();
+    const service = await f.build(1);
+    f.h.inventories.set('mac', [
+      {
+        ...candidate(),
+        locator: '9'.repeat(64),
+        revision: '8'.repeat(64),
+        identity: { kind: 'claude-account-org-v1', key: 'a'.repeat(64) },
+      },
+    ]);
+    f.toHold(service);
+    f.h.collections.set('windows', new Error('fixture offline'));
+    const before = f.h.collected().length;
+    await service.collect(f.target, f.row);
+    expect(f.h.collected()).toHaveLength(before + 1);
+    expect(f.h.collected().at(-1)!.host).toBe('windows');
+
+    f.h.advance(119_999);
+    await service.collect(f.target, f.row);
+    expect(f.h.collected()).toHaveLength(before + 1);
+    f.h.advance(300_001);
+    await service.collect(f.target, f.row);
+    expect(f.h.collected()).toHaveLength(before + 2);
+  });
+
+  it('preserves the sample and growing hold through restart, then steps down after success', async () => {
     const h = await harness();
     const target: UsageFailoverTarget = {
       ...h.target,
@@ -2424,8 +2566,8 @@ describe('Windows Claude quota cadence', () => {
     h.advance(firstDelay);
     h.collections.set('windows', { sample: null, failureCode: 'rate_limited' });
     await restarted.collect(target, row);
-    expect(restarted.cooldownUntil(target) - h.now()).toBe(firstDelay);
-    h.advance(firstDelay);
+    expect(restarted.cooldownUntil(target) - h.now()).toBe(firstDelay + 120_000);
+    h.advance(firstDelay + 120_000);
     h.collections.set('windows', {
       sample: null,
       failureCode: 'rate_limited',
