@@ -1584,8 +1584,14 @@ pub fn repair_claude_import(engine: &Engine, raw: &Report, selected: &Report) ->
     Ok(())
 }
 
-/// Look up selected session keys in the Store, without scanning the rest of history.
-pub fn session_computers(engine: &Engine, tool: &str, keys: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
+/// Look up selected sessions and their dated cell sources. The session summary keeps
+/// the highest-cost copy on a token tie, so it can lose the original computer.
+pub fn session_computers(
+    engine: &Engine,
+    tool: &str,
+    keys: &BTreeSet<String>,
+    days: &BTreeSet<u32>,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let reversed = read.open_table(ACT_DICT_REV)?;
@@ -1595,17 +1601,42 @@ pub fn session_computers(engine: &Engine, tool: &str, keys: &BTreeSet<String>) -
         let dict = read.open_table(ACT_DICT)?;
         let mut names = Names::new(&dict);
         let sessions = read.open_table(ACT_SESSION)?;
-        let mut computers = BTreeMap::new();
-        for key in keys {
-            let bytes = session_bytes(Some(key));
-            if bytes == NO_SESSION {
-                continue;
-            }
-            let index = session_key(tool.value(), &bytes);
+        let tool = tool.value();
+        let keys: BTreeMap<_, _> = keys
+            .iter()
+            .map(|key| (session_bytes(Some(key)), key))
+            .filter(|(bytes, _)| *bytes != NO_SESSION)
+            .collect();
+        let mut computers = BTreeMap::<String, BTreeSet<String>>::new();
+        for (bytes, key) in &keys {
+            let index = session_key(tool, bytes);
             if let Some(value) = sessions.get(index.as_slice())? {
                 let row: SessionRow = db::unpack(value.value())?;
                 if row.c != 0 {
-                    computers.insert(key.clone(), names.get(K_COMPUTER, row.c)?);
+                    computers
+                        .entry((*key).clone())
+                        .or_default()
+                        .insert(names.get(K_COMPUTER, row.c)?);
+                }
+            }
+        }
+        let hours = read.open_table(ACT_HOUR)?;
+        for &day in days {
+            let first = Key::new().u32(day);
+            let last = Key::new().u32(day).u32(u32::MAX).u32(u32::MAX);
+            for entry in hours.range(first.as_slice()..=last.as_slice())? {
+                let (id, value) = entry?;
+                if db::be_u32(id.value(), 8) != tool {
+                    continue;
+                }
+                let computer = db::be_u32(id.value(), 4);
+                for cell in decode_cells(value.value())? {
+                    if let Some(key) = keys.get(&cell.session) {
+                        computers
+                            .entry((*key).clone())
+                            .or_default()
+                            .insert(names.get(K_COMPUTER, computer)?);
+                    }
                 }
             }
         }

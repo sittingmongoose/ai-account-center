@@ -4,7 +4,6 @@ use super::*;
 use aac_store::collect;
 use serde_json::json;
 
-const ORIGINAL: &str = "legacy/cache/analytics-remote-v1/nas1.json";
 const MIRROR: &str = "legacy/cache/analytics-remote-v1/odroid.json";
 
 fn scan(home: &Path, project: &str, at: i64, session: &str, usage: (u64, u64)) -> Value {
@@ -32,7 +31,7 @@ fn scan(home: &Path, project: &str, at: i64, session: &str, usage: (u64, u64)) -
     })
 }
 
-fn import(migration: &Migration<'_>, host: &str, cache: &Value) {
+fn import(migration: &Migration<'_>, host: &str, cache: &Value, valued: bool) {
     let worker = collect::worker_from_scan(
         cache["rows"].as_array().unwrap(),
         cache["srows"].as_array().unwrap(),
@@ -41,7 +40,19 @@ fn import(migration: &Migration<'_>, host: &str, cache: &Value) {
         migration.now,
         &migration.pricing,
     );
-    migration.import_rows(host, "claude", &[worker]).unwrap();
+    let mut report = migration.rows_report(host, "claude", &[worker]);
+    if !valued {
+        // Wave 84 can save a session without a price. A later raw mirror can then
+        // win the session index's same-token price tie.
+        for session in report["sessions"].as_array_mut().unwrap() {
+            for part in session["parts"].as_array_mut().unwrap() {
+                for cost in ["costUsd", "loggedCostUsd", "fallbackCostUsd"] {
+                    part[cost] = Value::Null;
+                }
+            }
+        }
+    }
+    super::super::history::commit_report(migration.store, report).unwrap();
 }
 
 fn migration<'a>(store: &'a Engine, root: &'a Path, now: i64) -> Migration<'a> {
@@ -74,15 +85,29 @@ fn run_fixture(repair: bool) {
     assert_eq!(mirror["rows"].as_array().unwrap().len(), 2);
     let path = root.join("cache/analytics-remote-v1/odroid.json");
     let store = open();
-    import(&migration(&store, root, now), "nas1", &original);
+    import(&migration(&store, root, now), "nas1", &original, false);
     assert_eq!(
         activity::close_days(&store, now as u64).unwrap()["closed"],
         json!([at / 86_400_000])
     );
-    let mut staged = vec![(MIRROR.to_owned(), serde_json::to_vec(&mirror).unwrap())];
+    let staged = vec![(MIRROR.to_owned(), serde_json::to_vec(&mirror).unwrap())];
     if repair {
-        import(&migration(&store, root, now), "odroid", &mirror);
-        staged.push((ORIGINAL.to_owned(), serde_json::to_vec(&original).unwrap()));
+        import(&migration(&store, root, now), "odroid", &mirror, true);
+        let before = aac_store::ops::call(
+            &store,
+            "activityRange",
+            &json!({"fromMs":at,"toMs":at+3_600_000}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            before["sessions"]["sample"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["sessionKey"] == original["srows"][0]["s"])
+                .unwrap()["computer"],
+            "odroid"
+        );
         let epoch = activity::recovery_epoch(&store).unwrap();
         store
             .set_meta("analytics_files_migrated_v2", &epoch.to_string())

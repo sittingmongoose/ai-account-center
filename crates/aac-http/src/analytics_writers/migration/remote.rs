@@ -65,6 +65,7 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
     let mut mirrors = BTreeSet::new();
     let mut originals = BTreeSet::new();
     let mut session_names = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut mirror_days = BTreeSet::new();
     for archive in archives {
         let mut cache = read_cache(migration, *archive)?;
         let prints = cache
@@ -101,6 +102,12 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
                         .or_default()
                         .insert(name.to_owned());
                 }
+                if let Some(hour) = row["h"].as_str()
+                    && let Some(ms) =
+                        contract::parse_iso(&format!("{}:00Z", hour.replace(' ', "T")))
+                {
+                    mirror_days.insert((ms / 86_400_000) as u32);
+                }
             }
         }
         parts.push(claude_mirrors::Part {
@@ -134,12 +141,17 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
         !originals.contains(name) || !mirrors.contains(&(name.clone(), host.as_str()))
     });
     let keys = session_names.keys().cloned().collect();
-    for (session, computer) in activity::session_computers(migration.store, "claude", &keys)? {
+    for (session, computers) in
+        activity::session_computers(migration.store, "claude", &keys, &mirror_days)?
+    {
         let names = &session_names[&session];
-        if names.len() == 1
-            && let Some(name) = names.first()
-            && !mirrors.contains(&(name.clone(), computer.as_str()))
-        {
+        if let Some(name) = names.first().filter(|_| names.len() == 1) {
+            let mut candidates = computers
+                .into_iter()
+                .filter(|computer| !mirrors.contains(&(name.clone(), computer.as_str())));
+            let Some(computer) = candidates.next().filter(|_| candidates.next().is_none()) else {
+                continue;
+            };
             // The same transcript is already in dated Store history on this source.
             // Never treat a host known to hold this mirror as an original.
             originals.insert(name.clone());
