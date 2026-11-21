@@ -32,8 +32,31 @@ pub fn is_dead(pid: u32) -> bool {
     false
 }
 
+/// Tests only: the identity `host_boot` reports instead of the host's.
+#[cfg(test)]
+pub(crate) type BootSource = fn() -> Option<(String, u64)>;
+
+#[cfg(test)]
+static TEST_BOOT_SOURCE: std::sync::Mutex<Option<BootSource>> = std::sync::Mutex::new(None);
+
+/// Tests only: substitute the boot identity, so a drifting estimate is observable without
+/// moving the clock. `None` restores the host's.
+#[cfg(test)]
+pub(crate) fn set_test_boot_source(source: Option<BootSource>) {
+    *TEST_BOOT_SOURCE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = source;
+}
+
 /// Hostname and boot time in epoch minutes, matching the TS dashboard's owner marker.
 pub fn host_boot() -> Option<(String, u64)> {
+    #[cfg(test)]
+    if let Some(source) = *TEST_BOOT_SOURCE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
+        return source();
+    }
     Some((hostname()?, boot_ms()?.checked_add(30_000)? / 60_000))
 }
 
