@@ -9,7 +9,7 @@ use crate::{
     account_reads::public_account_id,
     account_usage::{
         producer, provider_caches,
-        sources::{self, Source},
+        sources::{self, Credential, Source},
     },
     key_lifecycle::{self, Effect, Workflow},
     public_auth::{
@@ -58,6 +58,25 @@ impl Refusal {
             ),
         }
     }
+}
+
+/// What removing this entry actually does (the review's effects). A named key's removal deletes
+/// that one stored key; the OpenCode Go discover entry deletes no key, it stops reading every
+/// stored key no account names (N2). Other entries keep the generic review.
+fn remove_effects(source: &Source, computer: &str) -> Vec<String> {
+    if key_id(source).is_some() {
+        return vec![format!("The stored key is deleted from {computer}.")];
+    }
+    if source.provider == "opencode-go" && matches!(source.credential, Credential::Discover) {
+        return vec![
+            "It stops reading every stored key no account names.".to_owned(),
+            "No stored key is deleted.".to_owned(),
+        ];
+    }
+    vec![
+        "The account is no longer read by the dashboard.".to_owned(),
+        format!("Its sign-in on {computer} is not changed."),
+    ]
 }
 
 pub(super) async fn handle(native: &NativeOwners, raw_id: &str, request: Request) -> Reply {
@@ -145,16 +164,8 @@ pub(super) async fn handle(native: &NativeOwners, raw_id: &str, request: Request
         "id":source.id,"platform":source.platform,"sshHost":source.ssh_host,"credential":source.credential
     }).to_string());
     let (_, computer) = producer::source_host(&source.platform, source.ssh_host.as_deref());
-    let keyed = format!("The stored key is deleted from {computer}.");
-    let discovered = format!("Its sign-in on {computer} is not changed.");
-    let effects: &[&str] = if key_id(&source).is_some() {
-        &[&keyed]
-    } else {
-        &[
-            "The account is no longer read by the dashboard.",
-            &discovered,
-        ]
-    };
+    let effects = remove_effects(&source, &computer);
+    let effects: Vec<&str> = effects.iter().map(String::as_str).collect();
     if let Some(reply) = approve(
         native,
         Review {
@@ -162,7 +173,7 @@ pub(super) async fn handle(native: &NativeOwners, raw_id: &str, request: Request
             session: &session,
             fingerprint: &fingerprint,
             token: offered,
-            effects,
+            effects: &effects,
         },
     ) {
         return reply;
@@ -497,4 +508,57 @@ async fn remove(native: &NativeOwners, source: &Source) -> Result<(), Refusal> {
     })
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_effects;
+    use crate::account_usage::sources::{Credential, Source};
+
+    fn source(provider: &str, credential: Credential) -> Source {
+        Source {
+            id: format!("{provider}:usage"),
+            provider: provider.to_owned(),
+            platform: "ubuntu".to_owned(),
+            ssh_host: None,
+            label: None,
+            credential,
+            created_at: None,
+            created_by: None,
+        }
+    }
+
+    #[test]
+    fn the_discover_entry_review_stops_reading_unnamed_keys_and_deletes_none() {
+        // N2: removing the OpenCode Go discover entry deletes no key; it stops reading every
+        // stored key no account names.
+        let discover = source("opencode-go", Credential::Discover);
+        assert_eq!(
+            remove_effects(&discover, "Ubuntu"),
+            [
+                "It stops reading every stored key no account names.",
+                "No stored key is deleted.",
+            ]
+        );
+        // A named key's own removal still deletes that one stored key.
+        let named = source(
+            "opencode-go",
+            Credential::AacKey {
+                key_id: "52f3251b".to_owned(),
+            },
+        );
+        assert_eq!(
+            remove_effects(&named, "Ubuntu"),
+            ["The stored key is deleted from Ubuntu."]
+        );
+        // A discover entry of a provider that does not expand stored keys keeps the generic review.
+        let zai = source("zai", Credential::Discover);
+        assert_eq!(
+            remove_effects(&zai, "Ubuntu"),
+            [
+                "The account is no longer read by the dashboard.",
+                "Its sign-in on Ubuntu is not changed.",
+            ]
+        );
+    }
 }

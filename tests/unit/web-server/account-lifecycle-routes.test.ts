@@ -947,6 +947,22 @@ describe('remove with a confirmation token', () => {
     }
   });
 
+  it('the OpenCode Go discover entry removal review stops reading unnamed keys and deletes none (N2)', async () => {
+    const f = await fixture();
+    const prepared = await f.request('POST', '/opencode-go:usage/remove', {});
+    expect(prepared.status).toBe(200);
+    expect((prepared.body.confirmation as { effects: string[] }).effects).toEqual([
+      'It stops reading every stored key no account names.',
+      'No stored key is deleted.',
+    ]);
+    // A discover entry of a provider that does not expand stored keys keeps the generic review.
+    const zai = await f.request('POST', '/zai:usage/remove', {});
+    expect((zai.body.confirmation as { effects: string[] }).effects).toEqual([
+      'The account is no longer read by the dashboard.',
+      'Its sign-in on Ubuntu is not changed.',
+    ]);
+  });
+
   it('refuses the active, default and last Codex profile at prepare and at commit', async () => {
     const f = await fixture();
     codexProfile('gmail');

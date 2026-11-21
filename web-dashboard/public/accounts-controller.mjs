@@ -695,8 +695,12 @@ export function createAccountsController(deps) {
       const { payload } = await call(requests.removeCommit(id, line.token));
       delete state.lines[id];
       const purge = Date.parse(payload?.purgeAfter);
+      // The discover entry's removal deletes no key; it stops reading the stored keys no account names (N2).
+      const entry = (state.registry?.accounts || []).find(account => account?.id === id);
+      const discoversStoredKeys = provider === 'opencode-go' && entry?.credential?.kind === 'discover';
       toast('ok', `Removed ${who}`, payload?.trashId
         ? `Its Claude data is in the trash on Mac and Windows${Number.isFinite(purge) ? ` until ${dayFmt.format(new Date(purge))}` : ''}; Restore brings it back.`
+        : discoversStoredKeys ? 'Stopped reading every stored key no account names; no stored key was deleted.'
         : KEY_PROVIDERS.includes(provider) ? 'The stored key was deleted from the dashboard computer.' : `${label(provider)} no longer reads it.`);
       await reload();
     } catch (error) {

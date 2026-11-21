@@ -148,6 +148,8 @@ function sourceLines(provider, account, reg) {
     return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || (account.host ?? account.platform))}`];
   }
   if (def.kind === 'apikey' && credential?.kind && credential.kind !== 'aac-key') {
+    // The OpenCode Go discover entry stands for the stored keys no account names (N2); it is not an app sign-in.
+    if (provider === 'opencode-go' && credential.kind === 'discover') return ['Stored keys no account names', hostLabel(account)];
     return ['Signed in through the app', hostLabel(account)];
   }
   return [def.src, hostLabel(account)];
@@ -187,6 +189,9 @@ function removeControl(provider, account, reg, entry, extra = {}) {
     return coming(fields, `Removing this ${providerLabel(provider)} account from the dashboard is not on this server yet.`);
   }
   if (reg.removeRefusal) return refuse(reg.removeRefusal);
+  // Removing the OpenCode Go discover entry deletes no key: it stops reading every stored key no account names (N2).
+  if (provider === 'opencode-go' && reg.credential?.kind === 'discover')
+    return action({ ...fields, enabled: true, tip: 'Remove stops reading every stored key no account names. No stored key is deleted.' });
   return action({ ...fields, enabled: true, tip: REMOVE_TIP[ACCOUNT_KINDS[provider].kind] || 'Remove' });
 }
 const REMOVE_TIP = {

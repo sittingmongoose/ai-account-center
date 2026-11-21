@@ -753,9 +753,9 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       ['remove', true],
     ]
   );
-  // a key the provider's own app holds shows no key action at all: Re-check with Remove
+  // the discover entry stands for the stored keys no account names (N2): Re-check with Remove
   const found = row(vm, 'opencode-go:usage');
-  assert.equal(found.src, 'Signed in through the app');
+  assert.equal(found.src, 'Stored keys no account names');
   assert.deepEqual(
     found.actions.map((a) => [a.act, a.label, a.enabled]),
     [
@@ -2620,4 +2620,29 @@ test('OpenCode Go per-key Remove tip names the computer and warns about other un
   const nas = accountsViewModel(data([go('opencode-go:usage:cccccccc', 'Key cccccccc', { host: 'nas1' })], { providers: providers() }), { now, registry: r });
   assert.equal(tipOf(nas, 'opencode-go:usage:cccccccc'), 'Stored on Nas1 outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.');
   assert.equal(row(nas, 'opencode-go:usage:cccccccc').src, 'Key stored on Nas1');
+});
+
+test('OpenCode Go discover row in the unreadable-store state: Remove says it stops reading unnamed keys, deletes none (N2)', () => {
+  const go = (id, label, status = 'ok') =>
+    account({ id, provider: 'opencode-go', providerLabel: 'OpenCode Go', label, email: null, plan: 'Go', platform: 'ubuntu', status, capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] } });
+  // The stores cannot be read: the server shows the discover entry as itself, with Re-check and Remove.
+  const accounts = [
+    go('opencode-go:usage', 'OpenCode Go', 'unavailable'),
+    go('opencode-go:acct:52f3251b', 'Account 2'),
+    go('opencode-go:acct:2e034ec2', 'Account 3'),
+  ];
+  const r = registry([
+    reg('opencode-go:usage', 'opencode-go', { label: 'OpenCode Go', credential: { kind: 'discover' }, actions: { recheck: true, remove: true } }),
+    reg('opencode-go:acct:52f3251b', 'opencode-go', { label: 'Account 2', credential: { kind: 'aac-key', last4: '1111', storedOn: 'ubuntu' }, actions: { recheck: true, remove: true, replaceKey: true } }),
+    reg('opencode-go:acct:2e034ec2', 'opencode-go', { label: 'Account 3', credential: { kind: 'aac-key', last4: '2222', storedOn: 'ubuntu' }, actions: { recheck: true, remove: true, replaceKey: true } }),
+  ]);
+  const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
+  const bare = row(vm, 'opencode-go:usage');
+  const remove = bare.actions.find((a) => a.act === 'remove');
+  assert.equal(remove.enabled, true);
+  assert.equal(remove.tip, 'Remove stops reading every stored key no account names. No stored key is deleted.');
+  assert.equal(bare.src, 'Stored keys no account names');
+  assert.equal(bare.srcSub, 'Ubuntu');
+  // A named key's own Remove still deletes that one stored key: its tip stays.
+  assert.equal(row(vm, 'opencode-go:acct:52f3251b').actions.find((a) => a.act === 'remove').tip, 'Remove deletes the stored key from the dashboard computer.');
 });

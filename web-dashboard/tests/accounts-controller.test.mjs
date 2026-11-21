@@ -583,6 +583,32 @@ test('Remove: the confirmation names the effects, the token is sent back once, a
   assert.equal(last(off.toasts).title, 'Not on this server yet');
 });
 
+test('Remove of the OpenCode Go discover entry says it stopped reading unnamed keys, not that a key was deleted (N2)', async () => {
+  const token = 'T'.repeat(43);
+  const h = harness({ routes: {
+    'POST /api/accounts/opencode-go%3Ausage/remove': body => body.confirmationToken
+      ? { removed: true, trashId: null, purgeAfter: null }
+      : { confirmation: { token, expiresAt: '2026-10-02T12:02:00Z', effects: ['It stops reading every stored key no account names.', 'No stored key is deleted.'] } },
+    'GET /api/accounts/registry': { accounts: [], trash: [] },
+  }, data: { accounts: [{ id: 'opencode-go:usage', provider: 'opencode-go', label: 'OpenCode Go', status: 'unavailable' }], settings: {} } });
+  h.ctl.state.registry = { accounts: [{ id: 'opencode-go:usage', provider: 'opencode-go', label: 'OpenCode Go', credential: { kind: 'discover' } }], trash: [] };
+  await h.ctl.handle('remove', 'opencode-go:usage');
+  await h.ctl.handle('remove-commit', 'opencode-go:usage');
+  assert.equal(last(h.toasts).title, 'Removed OpenCode Go');
+  assert.equal(last(h.toasts).body, 'Stopped reading every stored key no account names; no stored key was deleted.');
+  // A named OpenCode Go key's own removal still deletes that one stored key.
+  const named = harness({ routes: {
+    'POST /api/accounts/opencode-go%3Aacct%3A52f3251b/remove': body => body.confirmationToken
+      ? { removed: true, trashId: null, purgeAfter: null }
+      : { confirmation: { token, effects: ['The stored key is deleted from Ubuntu.'] } },
+    'GET /api/accounts/registry': { accounts: [], trash: [] },
+  }, data: { accounts: [{ id: 'opencode-go:acct:52f3251b', provider: 'opencode-go', label: 'Account 2' }], settings: {} } });
+  named.ctl.state.registry = { accounts: [{ id: 'opencode-go:acct:52f3251b', provider: 'opencode-go', label: 'Account 2', credential: { kind: 'aac-key', keyId: '52f3251b' } }], trash: [] };
+  await named.ctl.handle('remove', 'opencode-go:acct:52f3251b');
+  await named.ctl.handle('remove-commit', 'opencode-go:acct:52f3251b');
+  assert.equal(last(named.toasts).body, 'The stored key was deleted from the dashboard computer.');
+});
+
 test('Restore from the Claude trash: confirmation, then back on both hosts', async () => {
   const token = 'R'.repeat(43);
   const h = harness({ routes: {
