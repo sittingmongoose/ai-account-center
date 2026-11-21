@@ -444,3 +444,130 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
         diffs.join("\n\n")
     );
 }
+
+#[tokio::test]
+async fn claude_code_covers_a_signed_out_desktop_across_restart() {
+    let dir = tempfile::tempdir().expect("account root");
+    let fixture = |selector: &str, locator: &str| {
+        json!({
+            "locator":locator.repeat(64), "selectors":[selector], "revision":"e".repeat(64),
+            "identity":{"kind":"claude-account-org-v1","key":"c".repeat(64)},
+            "email":"same@example.test"
+        })
+    };
+    let desktop = fixture("claude-desktop-profile:personal", "6");
+    let code = fixture("t3", "5");
+    let target = target(
+        &json!({
+            "accountId":"claude:personal", "provider":"claude", "binding":"fixture",
+            "expectedEmail":"same@example.test", "claudeDesktopCadence":true,
+            "primarySources":[{"host":"windows","platform":"windows","selector":"claude-desktop-profile:personal"}]
+        }),
+        dir.path().to_owned(),
+    );
+    let template = json!({
+        "id":"claude:personal", "provider":"claude", "platform":"windows",
+        "status":"unavailable", "email":"same@example.test", "windows":[]
+    });
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let coordinator = || {
+        FailoverCoordinator::new(
+            Arc::new(FakeDeps {
+                state: state.clone(),
+            }),
+            collection_owners(),
+        )
+    };
+
+    // Each case gets a fresh account root. Rejected Code must clear existing coverage.
+    for (name, mut peers, starts_signed_out) in [
+        ("bootstrap", vec![code.clone()], true),
+        ("after-desktop", vec![code.clone()], false),
+        (
+            "ambiguous",
+            vec![code.clone(), {
+                let mut candidate = fixture("t3", "7");
+                candidate["identity"]["key"] = json!("d".repeat(64));
+                candidate
+            }],
+            true,
+        ),
+        (
+            "other-email",
+            vec![{
+                let mut candidate = code.clone();
+                candidate["email"] = json!("other@example.test");
+                candidate
+            }],
+            true,
+        ),
+    ] {
+        let mut target = target.clone();
+        target.account_id = format!("claude:{name}");
+        let coordinator_instance = coordinator();
+        let step = |minutes: i64, candidates: &[Value], signed_out: bool, reject: bool| {
+            let now = 1_791_979_200_000 + minutes * 60_000;
+            let sample = json!({
+                "status":"ok", "email":"same@example.test",
+                "sampledAt":aac_num::ecma::to_iso_string(now), "fetchedAt":aac_num::ecma::to_iso_string(now),
+                "windows":[{"key":"five_hour","label":"5-hour limit","usedPercent":42}]
+            });
+            let mut state = state.lock().expect("fixture state");
+            state.calls.clear();
+            set_step(
+                &mut state,
+                &json!({
+                    "now":now, "inventories":{"windows":candidates},
+                    "signInNeeded":{"windows":if signed_out { vec!["claude-desktop-profile:personal"] } else { vec![] }},
+                    "collections":{"windows":if reject {
+                        json!({"sample":null,"failureCode":"needs_sign_in"})
+                    } else {
+                        json!({"sample":sample,"failureCode":null})
+                    }}
+                }),
+            );
+        };
+        if !starts_signed_out {
+            peers.insert(0, desktop.clone());
+            step(0, &peers, false, false);
+            let row = coordinator_instance.collect(&target, &template).await;
+            assert_eq!(row["status"], "ok", "{name}");
+            assert!(row.get("signInNeeded").is_none(), "{name}");
+            peers.remove(0);
+        }
+        step(10, &peers, true, false);
+        let row = coordinator_instance.collect(&target, &template).await;
+        let collected: Vec<Value> = state
+            .lock()
+            .expect("fixture state")
+            .calls
+            .iter()
+            .filter(|(_, request)| request["action"] == "collect")
+            .map(|(_, request)| request["candidate"]["locator"].clone())
+            .collect();
+        if matches!(name, "ambiguous" | "other-email") {
+            assert!(collected.is_empty(), "{name}");
+            assert_eq!(row["signInNeeded"], json!(["windows"]), "{name}");
+            assert!(row.get("claudeDesktopSignedOut").is_none(), "{name}");
+            continue;
+        }
+        assert_eq!(row["status"], "ok", "{name}: {row}");
+        assert_eq!(
+            row["source"], "Verified quota on Windows (fallback)",
+            "{name}"
+        );
+        assert_eq!(collected, vec![code["locator"].clone()], "{name}");
+        for result in [row, coordinator().peek(&target, &template)] {
+            assert!(result.get("signInNeeded").is_none(), "{name}: {result}");
+            assert_eq!(
+                result["claudeDesktopSignedOut"],
+                json!(["windows"]),
+                "{name}"
+            );
+        }
+        step(20, &peers, true, true);
+        let rejected = coordinator_instance.collect(&target, &template).await;
+        assert_eq!(rejected["signInNeeded"], json!(["windows"]), "{name}");
+        assert!(rejected.get("claudeDesktopSignedOut").is_none(), "{name}");
+    }
+}

@@ -97,51 +97,62 @@ fn value_for_signed_in(value: &Value) -> Option<bool> {
     value.get("signedIn")?.as_bool().map(|signed_in| !signed_in)
 }
 
-/// The TS `withClaudeSignIn`: filter the needed platforms to the row's launchers, mark a row
-/// with no windows `needs_sign_in`, and use the fixed sentence unless the row is live.
-pub(super) fn with_mac_sign_in(mut row: Value, mac_signed_out: bool) -> Value {
+/// Apply the launcher-specific note after the coordinator has projected the verified login.
+pub(super) fn with_mac_sign_in(mut row: Value, mac_signed_out: bool, covered: bool) -> Value {
     if row.get("provider").and_then(Value::as_str) != Some("claude") {
         return row;
     }
-    let capabilities = row
-        .get("capabilities")
-        .and_then(|capabilities| capabilities.get("claudePlatforms"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut needed: Vec<String> = row
-        .get("signInNeeded")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(|value| value.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    if mac_signed_out && !needed.iter().any(|platform| platform == "mac") {
-        needed.push("mac".into());
-    }
+    let has_platform = |list: &Value, platform: &str| {
+        list.as_array()
+            .is_some_and(|list| list.iter().any(|held| held == platform))
+    };
     let platforms: Vec<&str> = ["mac", "windows"]
         .into_iter()
         .filter(|platform| {
-            needed.iter().any(|held| held == platform)
-                && capabilities.iter().any(|held| held == platform)
+            has_platform(&row["capabilities"]["claudePlatforms"], platform)
+                && (has_platform(&row["signInNeeded"], platform)
+                    || (covered && has_platform(&row["claudeDesktopSignedOut"], platform))
+                    || (*platform == "mac" && mac_signed_out))
         })
         .collect();
+    if let Some(fields) = row.as_object_mut() {
+        fields.remove("signInNeeded");
+        fields.remove("claudeDesktopSignedOut");
+    }
     if platforms.is_empty() {
         return row;
     }
-    let live = row.get("status").and_then(Value::as_str) == Some("ok");
     let hosts = platforms
         .iter()
         .map(|platform| if *platform == "mac" { "Mac" } else { "Windows" })
         .collect::<Vec<_>>()
         .join(" and ");
+    if covered {
+        row["claudeDesktopSignedOut"] = json!(platforms);
+        if row["message"].as_str().is_none_or(str::is_empty) {
+            row["message"] = json!(format!(
+                "Claude Desktop is signed out on {hosts}. AAC reads this account through its Claude Code login, so no sign-in is needed."
+            ));
+        }
+        return row;
+    }
+    let live = row.get("status").and_then(Value::as_str) == Some("ok");
+    let controls = platforms
+        .iter()
+        .map(|platform| {
+            if *platform == "mac" {
+                "Open on Mac"
+            } else {
+                "Open on Windows"
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" or ");
     let message = if live {
         row.get("message").cloned().unwrap_or(Value::Null)
     } else {
         json!(format!(
-            "Sign-in needed on {hosts}. Open shows the sign-in window."
+            "No working Claude sign-in for this account on {hosts}. To sign in, use {controls} in Details: it opens this account's Claude Desktop, which shows its sign-in window."
         ))
     };
     let empty_windows = row
@@ -174,7 +185,7 @@ mod tests {
 
     #[test]
     fn a_signed_out_mac_adds_the_platform_and_keeps_a_live_message() {
-        let row = with_mac_sign_in(claude_row(), true);
+        let row = with_mac_sign_in(claude_row(), true, false);
         assert_eq!(row["signInNeeded"], json!(["mac"]));
         assert_eq!(row["message"], Value::Null);
         assert_eq!(row["status"], "ok");
@@ -186,12 +197,25 @@ mod tests {
         template["status"] = json!("unavailable");
         template["message"] = json!("Claude desktop usage is temporarily unavailable.");
         template["windows"] = json!([]);
-        let row = with_mac_sign_in(template, true);
+        let row = with_mac_sign_in(template, true, false);
         assert_eq!(row["signInNeeded"], json!(["mac"]));
         assert_eq!(row["status"], "needs_sign_in");
         assert_eq!(
             row["message"],
-            "Sign-in needed on Mac. Open shows the sign-in window."
+            "No working Claude sign-in for this account on Mac. To sign in, use Open on Mac in Details: it opens this account's Claude Desktop, which shows its sign-in window."
+        );
+    }
+
+    #[test]
+    fn a_windows_sign_in_prompt_names_the_open_control() {
+        let mut template = claude_row();
+        template["status"] = json!("unavailable");
+        template["windows"] = json!([]);
+        template["signInNeeded"] = json!(["windows"]);
+        let row = with_mac_sign_in(template, false, false);
+        assert_eq!(
+            row["message"],
+            "No working Claude sign-in for this account on Windows. To sign in, use Open on Windows in Details: it opens this account's Claude Desktop, which shows its sign-in window."
         );
     }
 
@@ -199,7 +223,7 @@ mod tests {
     fn a_platform_the_profile_cannot_open_is_never_named() {
         let mut template = claude_row();
         template["capabilities"]["claudePlatforms"] = json!(["windows"]);
-        let row = with_mac_sign_in(template, true);
+        let row = with_mac_sign_in(template, true, false);
         assert!(row.get("signInNeeded").is_none());
         assert_eq!(row["status"], "ok");
     }
@@ -208,17 +232,17 @@ mod tests {
     fn a_coordinator_set_is_kept_in_platform_order() {
         let mut template = claude_row();
         template["signInNeeded"] = json!(["windows"]);
-        let row = with_mac_sign_in(template, true);
+        let row = with_mac_sign_in(template, true, false);
         assert_eq!(row["signInNeeded"], json!(["mac", "windows"]));
         // A live row keeps its own message; the sentence belongs to a row that is not live.
         assert_eq!(row["message"], Value::Null);
         let mut template = claude_row();
         template["signInNeeded"] = json!(["windows"]);
         template["status"] = json!("cached");
-        let row = with_mac_sign_in(template, true);
+        let row = with_mac_sign_in(template, true, false);
         assert_eq!(
             row["message"],
-            "Sign-in needed on Mac and Windows. Open shows the sign-in window."
+            "No working Claude sign-in for this account on Mac and Windows. To sign in, use Open on Mac or Open on Windows in Details: it opens this account's Claude Desktop, which shows its sign-in window."
         );
         assert_eq!(row["status"], "cached");
     }

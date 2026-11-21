@@ -11,6 +11,7 @@
  * identities, every SSH argv and stdin payload, and exactly one send per claim. Also: the
  * explicit-transport SSH policy with an older client, the not-sent and ambiguous send rules.
  * Unix only. `--ts-only` runs the TS adapter alone.
+ * `--claude-verification-only` checks the Rust listener without the TS addon.
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -21,6 +22,7 @@ import { Database } from 'bun:sqlite';
 import { startResetFixture } from './reset-http-fixture';
 
 const tsOnly = process.argv.includes('--ts-only');
+const claudeVerificationOnly = process.argv.includes('--claude-verification-only');
 const repo = path.resolve(import.meta.dir, '../..');
 const fixtures = path.join(repo, 'tests/fixtures/reset-source');
 // The native module, the service and the helper find `codex` and `ssh` on the process PATH,
@@ -65,10 +67,8 @@ Object.assign(process.env, {
   AAC_AGENT_TRANSPORT: 'off',
   AAC_NO_LOCAL_RUST_BUILD: '1',
 });
-assert.ok(process.env.AAC_STATUS_MODULE, 'AAC_STATUS_MODULE must name the built native module');
-
-const { createResetClaimRouter } = await import('../fixtures/reset-adapter/reset-claim-routes');
-const { createResetSourceAdapter } = await import('../fixtures/reset-adapter/reset-source-adapter');
+if (!claudeVerificationOnly)
+  assert.ok(process.env.AAC_STATUS_MODULE, 'AAC_STATUS_MODULE must name the built native module');
 
 const CODEX = 'codex:fixture';
 const CLAUDE = 'claude:fixture-claude';
@@ -122,6 +122,7 @@ function seed(root: string, config?: Record<string, unknown>) {
     'claims.jsonl',
     'claimed',
     'claim-mode',
+    'usage.json',
   ])
     fs.rmSync(path.join(bin, name), { force: true });
   fs.writeFileSync(path.join(bin, 'login'), X);
@@ -145,6 +146,10 @@ interface Reply {
 }
 
 async function startReference() {
+  const { createResetClaimRouter } = await import('../fixtures/reset-adapter/reset-claim-routes');
+  const { createResetSourceAdapter } = await import(
+    '../fixtures/reset-adapter/reset-source-adapter'
+  );
   const app = express();
   app.use(express.json());
   app.use((req: any, _res, next) => {
@@ -165,6 +170,26 @@ async function startReference() {
   };
 }
 
+function accountRequests(origin: string, cookie: string, account: string) {
+  const url = `${origin}/api/accounts/${encodeURIComponent(account)}/reset-claims`;
+  return async (suffix = '', body?: unknown): Promise<Reply> => {
+    const response = await fetch(url + suffix, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers:
+        body === undefined
+          ? { cookie: cookie }
+          : { cookie: cookie, origin, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
+    const text = await response.text();
+    const parsed = JSON.parse(text);
+    assert.equal(text, JSON.stringify(parsed), 'exact Express JSON encoding');
+    return { status: response.status, body: parsed };
+  };
+}
+
 async function scenario(root: string, rust: boolean, hang = false) {
   process.env.CCS_DIR = root;
   const fixture = rust ? await startResetFixture(repo, root) : await startReference();
@@ -172,23 +197,7 @@ async function scenario(root: string, rust: boolean, hang = false) {
   const steps: Record<string, Reply> = {};
   try {
     for (const account of [CODEX, CLAUDE]) {
-      const url = `${origin}/api/accounts/${encodeURIComponent(account)}/reset-claims`;
-      const send = async (suffix: string, body?: unknown): Promise<Reply> => {
-        const response = await fetch(url + suffix, {
-          method: body === undefined ? 'GET' : 'POST',
-          headers:
-            body === undefined
-              ? { cookie: fixture.cookie }
-              : { cookie: fixture.cookie, origin, 'Content-Type': 'application/json' },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-        assert.equal(response.headers.get('cache-control'), 'no-store');
-        assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
-        const text = await response.text();
-        const parsed = JSON.parse(text);
-        assert.equal(text, JSON.stringify(parsed), 'exact Express JSON encoding');
-        return { status: response.status, body: parsed };
-      };
+      const send = accountRequests(origin, fixture.cookie, account);
       const tag = account.split(':')[0];
       steps[`${tag}.before`] = await send('');
       const grants = (steps[`${tag}.before`].body as any).grants;
@@ -221,6 +230,86 @@ async function scenario(root: string, rust: boolean, hang = false) {
     sshArgv: lines(path.join(bin, 'ssh-argv.jsonl')),
     sshPayload: lines(path.join(bin, 'ssh-payload.jsonl')),
   };
+}
+
+/** Exercise the same typed ledger through authentication, capture, send and receipt projection. */
+async function claudeVerification(rollover: boolean, observedFable: boolean) {
+  const name = rollover ? 'weekly-rollover' : observedFable ? 'fable-only' : 'fable-unobserved';
+  const root = path.join(scratch, name);
+  seed(root);
+  const usagePath = path.join(bin, 'usage.json');
+  const usage = {
+    clears: rollover ? ['seven_day'] : ['seven_day_overage_included'],
+    before: {
+      five_hour: 40,
+      seven_day: 80,
+      ...(observedFable ? { seven_day_overage_included: 12 } : {}),
+    },
+    after: {
+      five_hour: 40,
+      seven_day: 68,
+      ...(observedFable ? { seven_day_overage_included: 0 } : {}),
+    },
+  };
+  fs.writeFileSync(usagePath, JSON.stringify(usage));
+  const fixture = await startResetFixture(repo, root);
+  try {
+    const send = accountRequests(fixture.url, fixture.cookie, CLAUDE);
+    const listing = await send();
+    assert.equal(listing.status, 200);
+    const [grant] = (listing.body as any).grants;
+    assert.equal(grant.kind, rollover ? 'weekly' : 'fable');
+    assert.equal(grant.claimable, true);
+    if (!rollover)
+      assert.equal(
+        grant.refillsText,
+        'Refills the Fable limit and restores the portion of your weekly allowance used by Fable.'
+      );
+    const grantKey = grant.grantKey as string;
+    const prepare = await send('/prepare', { grantKey });
+    assert.equal(prepare.status, 200, JSON.stringify(prepare.body));
+    const confirmationToken = (prepare.body as any).confirmationToken as string;
+    if (rollover) {
+      usage.before.seven_day = 0;
+      fs.writeFileSync(usagePath, JSON.stringify(usage));
+      const claim = await send('', { grantKey, confirmationToken });
+      assert.equal(claim.status, 409, JSON.stringify(claim.body));
+      const refusal = claim.body as any;
+      assert.equal(refusal.code, 'reset-state-unavailable');
+      assert.equal(refusal.action, 'check-again');
+      assert.equal(refusal.reason, 'no-weekly-usage');
+      assert.equal(refusal.sent, false);
+      assert.deepEqual(refusal.evidence.pendingAttempts, []);
+      const after = await send();
+      const [unused] = (after.body as any).grants;
+      assert.equal(unused.resetsLeft, 1);
+      assert.equal(unused.claimable, false);
+      assert.equal(unused.claimBlockedReason, 'no-weekly-usage');
+      assert.equal(lines(path.join(bin, 'claims.jsonl')).length, 0);
+    } else {
+      const claim = await send('', { grantKey, confirmationToken });
+      assert.equal(claim.status, 200, JSON.stringify(claim.body));
+      const receipt = claim.body as any;
+      assert.equal(receipt.outcome, 'claimed');
+      assert.equal(receipt.verification, 'confirmed');
+      assert.equal(receipt.providerSuccess, true);
+      assert.deepEqual(receipt.windows, [
+        ...(observedFable ? [{ id: 'seven_day_overage_included', usedPercent: 0 }] : []),
+        { id: 'seven_day', usedPercent: 68 },
+      ]);
+      assert.deepEqual(
+        receipt.unobservedWindows,
+        observedFable ? undefined : ['seven_day_overage_included']
+      );
+      const checked = await send('/check', { attemptKey: receipt.attemptKey });
+      assert.equal(checked.status, 200);
+      assert.deepEqual(checked.body, receipt);
+      assert.equal(lines(path.join(bin, 'claims.jsonl')).length, 1);
+    }
+    console.log(`PASS Claude reset listener: ${name}`);
+  } finally {
+    await fixture.stop();
+  }
 }
 
 /** Opaque 64-hex values become their order of first appearance; clock readings become 0. */
@@ -275,8 +364,25 @@ const explicit = (root: string) => ({
   agentTransportSsh: { knownHostsFile: path.join(path.dirname(root), 'known_hosts') },
 });
 
-const results: Record<string, any> = {};
-try {
+async function runClaudeVerification() {
+  const failures: unknown[] = [];
+  for (const [rollover, observedFable] of [
+    [true, false],
+    [false, true],
+    [false, false],
+  ]) {
+    try {
+      await claudeVerification(rollover, observedFable);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length)
+    throw new AggregateError(failures, `Claude reset listener: ${failures.length}/3 cases failed`);
+}
+
+async function runResetSourceParity() {
+  const results: Record<string, any> = {};
   const variants = [
     ['plain', false, undefined, false],
     ['explicit-old-client', false, explicit, true],
@@ -365,6 +471,11 @@ try {
   console.log(
     `reset source parity: 3 root variants x ${Object.keys(results['plain.ts'].steps).length} replies, ssh argv/payloads, ledger identities, one send per claim, direct send rules (${tsOnly ? 'TS' : 'TS/Rust'})`
   );
+}
+
+try {
+  if (!claudeVerificationOnly) await runResetSourceParity();
+  if (!tsOnly) await runClaudeVerification();
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

@@ -275,6 +275,7 @@ const SAFE_REASONS: &[&str] = &[
     "grant-unavailable",
     "redeeming",
     "refill-windows-unconfirmed",
+    "no-weekly-usage",
     "signed-out",
 ];
 
