@@ -246,6 +246,14 @@ pub(crate) fn cursor_rows(value: &Value) -> Vec<&Value> {
         .collect()
 }
 
+/// Preserve the billing feed's verified UTC span through the private observation.
+pub(crate) fn cursor_coverage(value: &Value) -> Option<(&str, &str)> {
+    let from = value["coverageFrom"].as_str()?;
+    let until = value["coverageUntil"].as_str()?;
+    let parse = |stamp: &str| aac_views::js::parse_date(stamp).ok().flatten();
+    (parse(from)? < parse(until)?).then_some((from, until))
+}
+
 /// Read the saved Cursor account summary. This function only reads the existing cache.
 pub fn cursor_account(root: &Path) -> Result<Option<Value>, Decline> {
     let Some(value) = cursor_cache(root, "cursor-account-observation", CURSOR_ACCOUNT_FILE)? else {
@@ -271,6 +279,10 @@ pub fn cursor_account(root: &Path) -> Result<Option<Value>, Decline> {
         "rows": rows, "events": counter(&value["events"]).unwrap_or(0),
         "unmeasured": counter(&value["unmeasured"]).unwrap_or(0),
     });
+    if let Some((from, until)) = cursor_coverage(&value) {
+        answer["coverageFrom"] = json!(from);
+        answer["coverageUntil"] = json!(until);
+    }
     if let Some(counts) = cursor_event_counts(&value) {
         answer["eventCounts"] = counts;
     }

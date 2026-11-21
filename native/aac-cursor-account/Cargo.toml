@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 publish = false
-description = "AI Account Center: the Cursor account's usage events through AAC's own API key (DESIGN 17); runs on the dashboard's computer only"
+description = "AI Account Center: the Cursor account's usage events through Cursor sign-in or an API key (DESIGN 17); runs on the dashboard's computer only"
 repository = "https://github.com/sittingmongoose/ai-account-center"
 license = "MIT"
 
@@ -16,6 +16,9 @@ name = "aac-cursor-account"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 sha2 = "0.11"
 # Blocking HTTPS with rustls and bundled web roots: no system certificate store, no async runtime.

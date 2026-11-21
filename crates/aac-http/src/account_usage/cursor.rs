@@ -247,7 +247,11 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
     let checked = aac_num::ecma::to_iso_string(now).ok_or(Decline::Date)?;
     let state = super::provider_caches::cursor_state(&current["state"]).unwrap_or("unavailable");
     let previous = previous.unwrap_or(&Value::Null);
-    let key = if state == "no_key" {
+    let sign_in_lost = matches!(state, "no_key" | "key_rejected")
+        && super::provider_caches::cursor_coverage(previous).is_some();
+    let state = if sign_in_lost { "unavailable" } else { state };
+    let coverage = super::provider_caches::cursor_coverage(current);
+    let key = if state == "no_key" || coverage.is_some() {
         Value::Null
     } else {
         key(&current["key"]).unwrap_or_else(|| previous["key"].clone())
@@ -264,6 +268,10 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
             "events":super::provider_caches::counter(&current["events"]).unwrap_or(0),
             "unmeasured":super::provider_caches::counter(&current["unmeasured"]).unwrap_or(0),
         });
+        if let Some((from, until)) = coverage {
+            answer["coverageFrom"] = json!(from);
+            answer["coverageUntil"] = json!(until);
+        }
         if let Some(counts) = super::provider_caches::cursor_event_counts(current) {
             answer["eventCounts"] = counts;
         }
@@ -276,10 +284,16 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
         "key":key, "rows":old["rows"].as_array().map(Vec::as_slice).unwrap_or_default(),
         "events":old["events"].as_u64().unwrap_or(0), "unmeasured":old["unmeasured"].as_u64().unwrap_or(0),
     });
+    if let Some((from, until)) = super::provider_caches::cursor_coverage(old) {
+        result["coverageFrom"] = json!(from);
+        result["coverageUntil"] = json!(until);
+    }
     if let Some(counts) = super::provider_caches::cursor_event_counts(old) {
         result["eventCounts"] = counts;
     }
-    if state == "unavailable" {
+    if sign_in_lost {
+        result["cause"] = json!("signin_needed");
+    } else if state == "unavailable" {
         result["cause"] = json!(
             current["cause"]
                 .as_str()
@@ -291,4 +305,29 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
         );
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn billing_coverage_and_rows_survive_sign_in_loss() {
+        let now = 1_794_067_200_000;
+        let fresh = json!({"state":"read","readAt":now,"coverageFrom":"2026-11-07T00:00:00.000Z",
+            "coverageUntil":"2026-11-07T16:00:00.000Z","rows":[{"h":"2026-11-07 08:00",
+                "m":"fixture-model","i":1,"o":2,"cr":3,"cw":4,"n":1,"cents":0,"uncosted":1}]});
+        let previous = project(&fresh, None, now).unwrap();
+        for current in [
+            json!({"state":"unavailable","cause":"signin_needed"}),
+            json!({"state":"no_key"}),
+        ] {
+            let failed = project(&current, Some(&previous), now + 60_000).unwrap();
+            assert_eq!(failed["state"], "unavailable");
+            assert_eq!(failed["cause"], "signin_needed");
+            for field in ["readAt", "rows", "coverageFrom", "coverageUntil"] {
+                assert_eq!(failed[field], previous[field]);
+            }
+        }
+    }
 }

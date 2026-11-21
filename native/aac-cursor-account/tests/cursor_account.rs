@@ -41,6 +41,7 @@ type Reply = (u16, Vec<(&'static str, String)>, String);
 struct Seen {
     path: String,
     authorization: String,
+    cookie: String,
     connect: bool,
     body: String,
 }
@@ -64,6 +65,7 @@ where
             }
             let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
             let (mut length, mut authorization, mut connect) = (0usize, String::new(), false);
+            let mut cookie = String::new();
             loop {
                 let mut header = String::new();
                 reader.read_line(&mut header).unwrap();
@@ -75,6 +77,7 @@ where
                 match name.to_ascii_lowercase().as_str() {
                     "content-length" => length = value.trim().parse().unwrap(),
                     "authorization" => authorization = value.trim().to_string(),
+                    "cookie" => cookie = value.trim().to_string(),
                     "connect-protocol-version" => connect = value.trim() == "1",
                     _ => {}
                 }
@@ -86,6 +89,7 @@ where
             log.lock().unwrap().push(Seen {
                 path: path.clone(),
                 authorization,
+                cookie,
                 connect,
                 body: body.clone(),
             });
@@ -696,4 +700,261 @@ fn a_read_with_events_never_asks_the_plan() {
     assert_eq!(read["state"], "read", "{read}");
     assert_eq!(read["events"], 1);
     assert!(calls.iter().all(|c| c.path != PLAN));
+}
+
+const BILLING_NOW: i64 = 1_794_067_200_000; // 2026-11-07 16:00 UTC
+const BILLING_HOUR: i64 = 3_600_000;
+
+fn billing_token(exp: u64) -> String {
+    // Base64url-encode the synthetic JWT claims with the same test helper as the key fixture.
+    let claims = json!({"sub": "auth0|user_TEST_billing", "exp": exp}).to_string();
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut payload = String::new();
+    for chunk in claims.as_bytes().chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..chunk.len() + 1 {
+            payload.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+    }
+    format!("e30.{payload}.fake_billing_signature")
+}
+
+fn billing_signin(root: &std::path::Path, exp: u64) -> String {
+    let token = billing_token(exp);
+    std::fs::write(root.join("auth.json"), json!({"accessToken": token}).to_string()).unwrap();
+    token
+}
+
+fn billing_read(root: &std::path::Path, base: &str, now: i64) -> (Value, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_aac-cursor-account"))
+        .args(["read", "--ccs-dir"])
+        .arg(root)
+        .env("CCS_HOME", root)
+        .env("AAC_CURSOR_API_BASE", base)
+        .env("AAC_CURSOR_BILLING_BASE", base)
+        .env("AAC_CURSOR_TEST_SIGNIN_DIR", root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(
+        child.stdin.take().unwrap(),
+        "{}",
+        json!({"sinceMs": now - 31 * 24 * BILLING_HOUR, "untilMs": now})
+    )
+    .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert!(out.stderr.is_empty());
+    let text = String::from_utf8(out.stdout).unwrap();
+    (serde_json::from_str(&text).unwrap(), text)
+}
+
+fn billing_item(id: &str) -> Value {
+    json!({
+        "billingItemId": id, "product": "cursor", "chargeCategory": "usage",
+        "eventTime": "2026-11-07T08:30:00.123Z",
+        "displayExtras": {"model": "claude-sonnet-4-5", "userEmail": "fixture@example.invalid",
+                          "displayLabel": "private label"},
+        "principal": "fixture-principal",
+        "usage": {"prompt-text-tokens": "17", "completion-text-tokens": 5,
+                  "cached-prompt-text-tokens": "90", "cache-write-text-tokens": "11"},
+        "totalTokens": 123, "pricing": {"amount": 0}
+    })
+}
+
+fn billing_page(items: Vec<Value>, cursor: Option<&str>) -> Reply {
+    (
+        200,
+        vec![],
+        json!({"data": items, "pagination": {"hasMore": cursor.is_some(), "nextCursor": cursor}}).to_string(),
+    )
+}
+
+#[test]
+fn billing_maps_disjoint_counters_dedupes_and_never_exports_private_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let token = billing_signin(root.path(), 4_000_000_000);
+    let (base, seen) = fake(|path, _| {
+        if path.contains("cursor=fixture-next") {
+            let mut broken = billing_item("fixture-malformed");
+            broken["usage"]["prompt-text-tokens"] = json!("-1");
+            let mut other = billing_item("not-usage");
+            other["chargeCategory"] = json!("subscription");
+            let mut alias = billing_item("fixture-alias");
+            alias["displayExtras"]["model"] = json!("Claude 4.5 Sonnet (Thinking)");
+            let mut other_product = billing_item("not-cursor");
+            other_product["product"] = json!("other");
+            return billing_page(
+                vec![billing_item("fixture-id"), broken, other, alias, other_product],
+                None,
+            );
+        }
+        billing_page(vec![billing_item("fixture-id")], Some("fixture-next"))
+    });
+    let (answer, output) = billing_read(root.path(), &base, BILLING_NOW);
+    assert_eq!(answer["state"], "read");
+    assert_eq!(answer["events"], 2);
+    assert_eq!(answer["unmeasured"], 1);
+    assert_eq!(
+        answer["rows"][0],
+        json!({"h":"2026-11-07 08:00","m":"claude-sonnet-4-5",
+        "i":34,"o":10,"cr":180,"cw":22,"n":2,"cents":0.0,"uncosted":2})
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.path.contains("cursor=fixture-next"))
+    );
+    for private in [
+        &token,
+        "WorkosCursorSessionToken",
+        "user_TEST_billing",
+        "fixture-id",
+        "fixture@example.invalid",
+        "fixture-principal",
+        "private label",
+        "fixture-next",
+    ] {
+        assert!(!output.contains(private));
+    }
+}
+
+#[test]
+fn billing_expiry_never_calls_and_auth_refusal_never_reports_zero() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 1);
+    let (base, seen) = fake(|_, _| (401, vec![], "{}".into()));
+    let (expired, _) = billing_read(root.path(), &base, BILLING_NOW);
+    assert_eq!(expired, json!({"state": "unavailable", "cause": "signin_needed"}));
+    assert!(seen.lock().unwrap().is_empty());
+    billing_signin(root.path(), 4_000_000_000);
+    let (refused, _) = billing_read(root.path(), &base, BILLING_NOW);
+    assert_eq!(refused, expired);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    let (redirect, seen) = fake(|_, _| (302, vec![("Location", "/api/auth/login".into())], "{}".into()));
+    assert_eq!(billing_read(root.path(), &redirect, BILLING_NOW).0, expired);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn billing_repeated_cursor_keeps_the_answer_unavailable() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (base, seen) = fake(|_, _| billing_page(vec![], Some("repeated")));
+    assert_eq!(
+        billing_read(root.path(), &base, BILLING_NOW).0,
+        json!({"state": "unavailable", "cause": "bad_response"})
+    );
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn billing_first_fill_stops_at_twenty_pages_without_publishing_a_partial_window() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let page = std::sync::atomic::AtomicUsize::new(0);
+    let (base, seen) = fake(move |_, _| {
+        let next = page.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        billing_page(vec![billing_item("fixture-id")], Some(&next.to_string()))
+    });
+    let (answer, _) = billing_read(root.path(), &base, BILLING_NOW);
+    assert_eq!(answer["state"], "unavailable");
+    assert_eq!(answer["cause"], "backfill_pending");
+    assert!(answer["rows"].is_null());
+    assert_eq!(seen.lock().unwrap().len(), 20);
+    let (resume, seen) = fake(|_, _| billing_page(vec![billing_item("fixture-id")], None));
+    let resumed = billing_read(root.path(), &resume, BILLING_NOW + 600_000).0;
+    assert_eq!(resumed["events"], 1);
+    assert_eq!(resumed["coverageFrom"], "2026-11-07T04:00:00.000Z");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn billing_resumes_history_and_replaces_recent_hours_wholesale() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (base, seen) = fake(|path, _| {
+        let mut item = billing_item("fixture-late");
+        item["eventTime"] = json!("2026-11-07T15:30:00.123Z");
+        if path.contains("startTime=2026-11-07T14") {
+            item["usage"]["prompt-text-tokens"] = json!(30);
+        }
+        if path.contains("endTime=2026-11-07T16") {
+            return billing_page(vec![item], None);
+        }
+        billing_page(vec![], None)
+    });
+    let (first, _) = billing_read(root.path(), &base, BILLING_NOW);
+    let first_calls = seen.lock().unwrap().len();
+    assert_eq!(first["rows"][0]["i"], 17);
+    assert_eq!(first["newestItemAt"], 1_794_065_400_123_i64);
+    let (next, _) = billing_read(root.path(), &base, BILLING_NOW + 600_000);
+    assert_eq!(next["rows"][0]["i"], 30);
+    assert_eq!(next["events"], 1);
+    assert!(next["coverageFrom"].as_str() < first["coverageFrom"].as_str());
+    assert!(
+        seen.lock().unwrap()[first_calls]
+            .path
+            .contains("startTime=2026-11-07T14")
+    );
+}
+
+#[test]
+fn billing_caps_the_combined_recent_read_and_historical_attempt_at_forty_pages() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (base, _) = fake(|_, _| billing_page(vec![], None));
+    let first = billing_read(root.path(), &base, BILLING_NOW).0;
+    let page = std::sync::atomic::AtomicUsize::new(0);
+    let (base, seen) = fake(move |path, _| {
+        let index = page.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if index == 24 {
+            let mut item = billing_item("new-recent-item");
+            item["eventTime"] = json!("2026-11-07T15:30:00.123Z");
+            return billing_page(vec![item], None);
+        }
+        assert!(path.contains("query-billing-items"));
+        billing_page(vec![], Some(&index.to_string()))
+    });
+    let read = billing_read(root.path(), &base, BILLING_NOW + 600_000).0;
+    assert_eq!(read["state"], "read");
+    assert_eq!(read["coverageFrom"], first["coverageFrom"]);
+    assert_eq!(read["events"], 1);
+    assert_eq!(read["pages"], 40);
+    assert_eq!(seen.lock().unwrap().len(), 40);
+}
+
+#[test]
+fn billing_uses_the_latest_signin_and_leaves_the_desktop_database_untouched() {
+    let root = tempfile::tempdir().unwrap();
+    let cli = billing_signin(root.path(), 4_000_000_000);
+    let desktop = billing_token(4_100_000_000);
+    let db_path = root.path().join("Cursor/User/globalStorage/state.vscdb");
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    db.execute_batch("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+        .unwrap();
+    db.execute("INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', ?)", [&desktop])
+        .unwrap();
+    drop(db);
+    let original = std::fs::read(&db_path).unwrap();
+    let expected = desktop.clone();
+    let (base, seen) = fake(move |path, _| {
+        assert!(path.contains("scope=user"));
+        billing_page(vec![], None)
+    });
+    let (answer, output) = billing_read(root.path(), &base, BILLING_NOW);
+    assert_eq!(answer["state"], "read");
+    assert_eq!(
+        seen.lock().unwrap()[0].cookie,
+        format!("WorkosCursorSessionToken=user_TEST_billing%3A%3A{expected}")
+    );
+    assert_eq!(std::fs::read(&db_path).unwrap(), original);
+    assert!(!output.contains(&cli) && !output.contains(&desktop));
 }
