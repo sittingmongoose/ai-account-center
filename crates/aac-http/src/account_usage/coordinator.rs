@@ -1031,25 +1031,29 @@ impl FailoverCoordinator {
     /// The credential identity the target's shown reading came from, or None before it has one
     /// (`readingIdentity`). Read-only: never creates or changes state and asks no provider. A
     /// saved reading on disk counts when no state is loaded yet, so the first sample after a
-    /// restart still names the identity (N3).
+    /// restart still names the identity (N3). A loaded state with no saved reading names
+    /// nothing and never falls back to disk (L1): after a refused persist, disk can still hold
+    /// an older reading the loaded state has already let go of, exactly as in TypeScript.
     pub fn reading_identity(&self, target: &UsageFailoverTarget) -> Option<UsageIdentity> {
         let key = self.key(target);
-        let memory = self
+        let held = self
             .states
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&key)
-            .and_then(|state| {
+            .map(|state| {
                 state
                     .saved
                     .as_ref()
                     .map(|saved| saved.candidate.identity.clone())
             });
-        memory.or_else(|| {
-            self.load(target, &key)
+        match held {
+            Some(saved) => saved,
+            None => self
+                .load(target, &key)
                 .saved
-                .map(|saved| saved.candidate.identity)
-        })
+                .map(|saved| saved.candidate.identity),
+        }
     }
 
     /// Collect a reading for the account.
@@ -2031,5 +2035,132 @@ impl FailoverCoordinator {
             }
         }
         account
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aac_files::registry;
+    use std::collections::BTreeMap;
+
+    /// T1 fixture effects: the peek must never ask a computer, so every read is a failure.
+    struct NoReads;
+
+    impl FailoverDeps for NoReads {
+        fn transport<'a>(
+            &'a self,
+            _host: &'a UsageHost,
+            _request: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, ()>> + Send + 'a>> {
+            Box::pin(async { unreachable!("the peek must not read a computer") })
+        }
+        fn hosts<'a>(&'a self) -> Pin<Box<dyn Future<Output = Vec<UsageHost>> + Send + 'a>> {
+            Box::pin(async { unreachable!("the peek must not list computers") })
+        }
+        fn now(&self) -> f64 {
+            1_791_979_200_000.0
+        }
+    }
+
+    fn collection_owners() -> Owners {
+        let rows = registry::rows().expect("registry");
+        let mut files = BTreeMap::new();
+        for row in rows {
+            let owner = if row.moves_with.as_deref() == Some("collection") {
+                "rust-service"
+            } else {
+                row.owner.word()
+            };
+            files.insert(row.id.clone(), owner.to_owned());
+        }
+        Owners::from_boot(rows, &files).expect("owners")
+    }
+
+    fn peek_target(ccs_dir: PathBuf) -> UsageFailoverTarget {
+        UsageFailoverTarget {
+            account_id: "opencode-go:acct:2e034ec2".to_owned(),
+            provider: "opencode-go".to_owned(),
+            ccs_dir,
+            binding: "fixture".to_owned(),
+            primary_sources: vec![PrimarySource {
+                host: UsageHost {
+                    host: "ubuntu".to_owned(),
+                    platform: "ubuntu".to_owned(),
+                    ssh_host: None,
+                },
+                selector: "aac-key:2e034ec2".to_owned(),
+                claude_profile: None,
+            }],
+            claude_desktop_cadence: false,
+            expected_email: None,
+            expected_identity: None,
+        }
+    }
+
+    fn saved_state() -> State {
+        let now = 1_791_979_200_000.0;
+        let at = aac_num::ecma::to_iso_string(now as i64).expect("iso time");
+        let candidate = parse_candidate(&json!({
+            "locator":"1".repeat(64), "selectors":["aac-key:2e034ec2"], "revision":"2".repeat(64),
+            "identity":{"kind":"opencode-go-key","key":"a".repeat(64)}
+        }))
+        .expect("candidate");
+        let reading = parse_reading(
+            &json!({
+                "status":"ok", "sampledAt":at, "fetchedAt":at,
+                "windows":[{"key":"weekly","label":"Weekly","usedPercent":16}]
+            }),
+            now,
+        )
+        .expect("reading");
+        State {
+            identity: Some(candidate.identity.clone()),
+            saved: Some(SavedReading {
+                reading,
+                host: "ubuntu".to_owned(),
+                candidate,
+                fallback: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// T1: the disk peek names the saved identity without creating state, and a reading saved
+    /// for one identity never answers a target pinned to another even when the file sits under
+    /// the pinned target's own key. The state map must stay empty through both peeks.
+    #[test]
+    fn reading_identity_peek_creates_no_state() {
+        let dir = tempfile::tempdir().expect("account root");
+        let target = peek_target(dir.path().to_owned());
+        let owners = collection_owners();
+        let writer = FailoverCoordinator::new(Arc::new(NoReads), owners.clone());
+        let mut state = saved_state();
+        writer.persist(&target, &mut state);
+        let mut other = target.clone();
+        other.expected_identity = Some(UsageIdentity {
+            kind: "opencode-go-key".to_owned(),
+            key: "b".repeat(64),
+        });
+        writer.persist(&other, &mut state);
+
+        let peeker = FailoverCoordinator::new(Arc::new(NoReads), owners);
+        let saved_identity = state.saved.expect("saved reading").candidate.identity;
+        assert_eq!(peeker.reading_identity(&target), Some(saved_identity));
+        assert!(
+            peeker
+                .states
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
+        assert_eq!(peeker.reading_identity(&other), None);
+        assert!(
+            peeker
+                .states
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
     }
 }

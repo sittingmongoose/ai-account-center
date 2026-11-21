@@ -580,12 +580,12 @@ async fn reading_identity_names_the_shown_reading_without_a_read() {
     assert_eq!(state.lock().expect("fixture state").calls.len(), calls);
 }
 
-/// N3: the first sample after a restart holds no state in memory, but the saved reading on
-/// disk still names the identity. The peek reads it without a provider call, without creating
-/// state and without writing anything, so an unreadable named key file never hides the
-/// unnamed key's row for that sample.
-#[tokio::test]
-async fn reading_identity_after_restart_peeks_the_saved_reading_without_a_read() {
+fn opencode_reading_fixture() -> (
+    tempfile::TempDir,
+    UsageFailoverTarget,
+    Value,
+    Arc<Mutex<FakeState>>,
+) {
     let dir = tempfile::tempdir().expect("account root");
     let target = target(
         &json!({
@@ -616,6 +616,16 @@ async fn reading_identity_after_restart_peeks_the_saved_reading_without_a_read()
             }}}
         }),
     );
+    (dir, target, template, state)
+}
+
+/// N3: the first sample after a restart holds no state in memory, but the saved reading on
+/// disk still names the identity. The peek reads it without a provider call, without creating
+/// state and without writing anything, so an unreadable named key file never hides the
+/// unnamed key's row for that sample.
+#[tokio::test]
+async fn reading_identity_after_restart_peeks_the_saved_reading_without_a_read() {
+    let (dir, target, template, state) = opencode_reading_fixture();
     let coordinator = || {
         FailoverCoordinator::new(
             Arc::new(FakeDeps {
@@ -639,12 +649,86 @@ async fn reading_identity_after_restart_peeks_the_saved_reading_without_a_read()
     );
     assert_eq!(state.lock().expect("fixture state").calls.len(), calls);
     assert_eq!(read_dir_json(&failover_dir), before);
-    // A reading saved for one identity never answers a target pinned to another.
+    // A reading saved for one identity never answers a target pinned to another. With no file
+    // under the pinned key that None is trivial; T1 also writes the saved reading under the
+    // pinned target's OWN key with the other identity, so the identity check itself must refuse.
     let mut other = target.clone();
     other.expected_identity = Some(identity(
         &json!({"kind":"opencode-go-key","key":"b".repeat(64)}),
     ));
     assert_eq!(restarted.reading_identity(&other), None);
+    let (_, saved) = read_dir_json(&failover_dir);
+    let (_, mut pinned) = saved.expect("saved reading");
+    pinned["key"] = json!(restarted.key(&other));
+    let pinned_path = failover_dir.join(format!("{}.json", restarted.key(&other)));
+    std::fs::write(&pinned_path, js_json::write(&pinned)).expect("pinned cache");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&pinned_path, std::fs::Permissions::from_mode(0o600))
+            .expect("pinned cache mode");
+    }
+    let snapshot = |dir: &PathBuf| -> BTreeMap<String, Value> {
+        let mut out = BTreeMap::new();
+        for entry in std::fs::read_dir(dir).expect("failover dir").flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let text = std::fs::read_to_string(entry.path()).expect("cache text");
+            out.insert(name, serde_json::from_str(&text).expect("cache json"));
+        }
+        out
+    };
+    let pinned_before = snapshot(&failover_dir);
+    assert_eq!(restarted.reading_identity(&other), None);
+    // The pinned peek writes nothing and creates no file, exactly like the unpinned one.
+    assert_eq!(snapshot(&failover_dir), pinned_before);
+    assert_eq!(state.lock().expect("fixture state").calls.len(), calls);
+}
+
+#[tokio::test]
+async fn reading_identity_ignores_old_disk_reading_after_cache_write_is_refused() {
+    let (dir, target, template, state) = opencode_reading_fixture();
+    let deps = Arc::new(FakeDeps {
+        state: state.clone(),
+    });
+    let writer = FailoverCoordinator::new(deps.clone(), collection_owners());
+    assert_eq!(writer.collect(&target, &template).await["status"], "ok");
+    let failover_dir = dir.path().join("account-usage-failover");
+    let before = read_dir_json(&failover_dir);
+    assert!(before.1.is_some(), "an old reading was saved");
+
+    // Ownership stays with TypeScript, so this coordinator can read the existing file
+    // but cannot persist the loss of the reading when the source's identity changes.
+    let owners = Owners::defaults(registry::rows().expect("registry"));
+    let cache_name = format!("{}.json", writer.key(&target));
+    assert!(
+        owners
+            .claim(
+                registry::rows().expect("registry"),
+                "account-usage-observations",
+                dir.path(),
+                Some(&cache_name),
+            )
+            .is_err()
+    );
+    let reader = FailoverCoordinator::new(deps, owners);
+    let old_identity = identity(&json!({"kind":"opencode-go-key","key":"a".repeat(64)}));
+    assert_eq!(reader.reading_identity(&target), Some(old_identity));
+
+    {
+        let mut state = state.lock().expect("fixture state");
+        state.now += 600_000.0;
+        state
+            .inventories
+            .get_mut("ubuntu")
+            .expect("inventory")
+            .as_mut()
+            .expect("candidates")[0]["identity"]["key"] = json!("b".repeat(64));
+        state.collections.clear();
+    }
+    let row = reader.collect(&target, &template).await;
+    assert_eq!(row["status"], "unavailable", "{row}");
+    assert_eq!(read_dir_json(&failover_dir).1, before.1);
+    assert_eq!(reader.reading_identity(&target), None);
 }
 
 #[tokio::test]
