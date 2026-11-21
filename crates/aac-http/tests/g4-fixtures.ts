@@ -169,15 +169,17 @@ scenarios.push(runScenario('peer-429-hold', museTarget(''), template(), [
   { op: 'collect', now: BASE_TIME + 32000, inventories: { mac: 'error', windows: [candidate({ locator: '5'.repeat(64), identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) } })] }, collections: { windows: okCollection(BASE_TIME + 32000) } },
 ]));
 
-// 4. Claude Desktop 429 cadence: stepped delay + offset, then verified-success reset.
+// 4. Claude Desktop 429 cadence: stepped delay + offset, one step down per verified success.
 const claudeTarget = (ccsDir: string): UsageFailoverTarget => ({ ccsDir, accountId: 'claude:default', provider: 'claude', binding: 'claude-binding', primarySources: [{ ...MAC, selector: 'default', claudeProfile: { id: 'default', email: 'same@example.test' } }], claudeDesktopCadence: true });
 const claudeTemplate = (): DashboardAccount => ({ ...template(), id: 'claude:default', provider: 'claude', providerLabel: 'Claude', platform: 'mac' });
 scenarios.push(runScenario('claude-429-cadence', claudeTarget(''), claudeTemplate(), [
   { op: 'collect', now: BASE_TIME, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 120 } } },
   { op: 'cooldownUntil', now: BASE_TIME + 1000, inventories: {}, collections: {} },
-  { op: 'collect', now: BASE_TIME + 400000, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 60 } } },
-  { op: 'collect', now: BASE_TIME + 1000000, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: okCollection(BASE_TIME + 1000000) } },
-  { op: 'cooldownUntil', now: BASE_TIME + 1000001, inventories: {}, collections: {} },
+  { op: 'collect', now: BASE_TIME + 421000, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 60 } } },
+  { op: 'collect', now: BASE_TIME + 961000, restart: true, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: okCollection(BASE_TIME + 961000) } },
+  { op: 'cooldownUntil', now: BASE_TIME + 961001, inventories: {}, collections: {} },
+  { op: 'collect', now: BASE_TIME + 1501000, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 60 } } },
+  { op: 'cooldownUntil', now: BASE_TIME + 1501001, inventories: {}, collections: {} },
 ]));
 
 // 5. identity_mismatch on the primary clears the saved reading and identity.
@@ -221,6 +223,17 @@ scenarios.push(runScenario('unreadable-store', museTarget(''), template(), [
   { op: 'collect', now: BASE_TIME, inventories: { mac: [candidate()], windows: [], ubuntu: [] }, collections: { mac: okCollection(BASE_TIME) } },
   { op: 'collect', now: BASE_TIME + 31000, inventories: { mac: 'error', windows: [], ubuntu: [] }, collections: {} },
   { op: 'peek', now: BASE_TIME + 32000, inventories: {}, collections: {} },
+]));
+
+// 11. A 429 streak still falls back to the account's healthy computer when the first
+// candidate fails without a 429; the clean read there steps the streak down.
+const claudeWindowsTarget = (ccsDir: string): UsageFailoverTarget => ({ ccsDir, accountId: 'claude:windows-fallback', provider: 'claude', binding: 'claude-windows-binding', primarySources: [{ ...WINDOWS, selector: 'default', claudeProfile: { id: 'default', email: 'same@example.test' } }], claudeDesktopCadence: true });
+const cadenceToken = (locator: string) => candidate({ locator, selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } });
+const fallbackInventories = () => ({ windows: [cadenceToken('1'.repeat(64))], mac: [cadenceToken('2'.repeat(64))], ubuntu: [] });
+scenarios.push(runScenario('claude-429-streak-fallback', claudeWindowsTarget(''), claudeTemplate(), [
+  { op: 'collect', now: BASE_TIME, inventories: fallbackInventories(), collections: { windows: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 120 } } },
+  { op: 'collect', now: BASE_TIME + 421000, inventories: fallbackInventories(), collections: { windows: { sample: null, failureCode: 'unavailable' }, mac: okCollection(BASE_TIME + 421000) } },
+  { op: 'collect', now: BASE_TIME + 841000, inventories: fallbackInventories(), collections: { windows: { sample: null, failureCode: 'unavailable' }, mac: okCollection(BASE_TIME + 841000) } },
 ]));
 
 const corpus = await Promise.all(scenarios);

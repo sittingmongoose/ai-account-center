@@ -1585,20 +1585,34 @@ impl FailoverCoordinator {
         if target.claude_desktop_cadence && reading.status == "ok" && failure_code.is_none() {
             let now = self.now();
             let cooldown = self.cooldown_state(&target.ccs_dir, cooldown_key);
-            if cooldown.until == 0.0 && cooldown.claude_429_streak.is_some_and(|n| n > 0) {
-                self.hold_cooldown_inner(&target.ccs_dir, cooldown_key, now, Some(0));
-            }
+            // One clean read lowers a 429 streak one level: the next read keeps the
+            // slower pace, so a token shared with other clients stops re-tripping 429.
+            let streak = cooldown.step_down_streak();
             let floor = read_refresh_seconds(&target.ccs_dir).max(
                 response
                     .get("refreshAfterSeconds")
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0),
             );
-            if let Ok(delay) = failover::claude_delay_ms(&self.key(target), floor, 0) {
+            if let Ok(delay) = failover::claude_delay_ms(&self.key(target), floor, streak) {
                 state.next_attempt = now + delay;
             }
+            if cooldown.claude_429_streak.is_some_and(|n| n > 0) {
+                let requested = if streak > 0 { state.next_attempt } else { now };
+                let until =
+                    self.hold_cooldown_inner(&target.ccs_dir, cooldown_key, requested, Some(streak));
+                self.set_cooldown(&target.ccs_dir, cooldown_key, until, Some(streak));
+            }
             if state.fresh == Some(true) {
-                state.fresh_until = state.next_attempt;
+                // A stepped-down pace is not a fresh reading: the row goes cached once a
+                // normal refresh interval has passed, whatever the slower hold allows.
+                state.fresh_until = if cooldown.claude_429_streak.is_some_and(|n| n > 0) {
+                    state
+                        .next_attempt
+                        .min(now + read_refresh_seconds(&target.ccs_dir) * 1000.0)
+                } else {
+                    state.next_attempt
+                };
             }
             return "done";
         }
