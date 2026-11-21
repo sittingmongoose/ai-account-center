@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { stageManifest } = require('./build-dashboard-native');
-const { readSourceBuild, recordBuild } = require('./deploy-lineage');
+const { readSourceBuild, recordBuild, requireLandedSource } = require('./deploy-lineage');
 const store = require('./build-native');
 const status = require('./build-status-native');
 const { verifyLocalDist } = require('./build-usage-scan');
@@ -82,8 +82,9 @@ function verifyAddon(builder, buildCommand) {
   throw new Error(`Missing or stale native addon ${name}. Run ${buildCommand} before staging.`);
 }
 
-function stagePackage(destination) {
+function stagePackage(destination, expected) {
   const source = readSourceBuild(root);
+  if (expected !== undefined) requireLandedSource(root, source, expected);
   if (source) {
     const binary = path.join(
       root,
@@ -145,20 +146,30 @@ function stagePackage(destination) {
   if (metadata.commit !== (source?.commit ?? null)) {
     throw new Error('The source checkout changed while the package was staged.');
   }
+  if (expected !== undefined) {
+    requireLandedSource(root, metadata, expected);
+    verifyReleaseArtifacts(resolved);
+  }
   return resolved;
 }
 
 if (require.main === module) {
-  if (process.argv.length === 4 && process.argv[2] === '--verify-release-artifacts') {
-    const targets = verifyReleaseArtifacts(path.resolve(process.argv[3]));
+  const [command, first, second, ...extra] = process.argv.slice(2);
+  if (command === '--verify-release-artifacts' && first && !second) {
+    const targets = verifyReleaseArtifacts(path.resolve(first));
     console.log(`Installed exact pinned agents and Cursor readers: ${targets.join(', ')}`);
-  } else if (process.argv.length !== 3 || process.argv[2] === '--verify-release-artifacts') {
+  } else if (command === '--stage-landed-release' && first && second && !extra.length) {
+    console.log(stagePackage(second, first));
+  } else if (command && !command.startsWith('--') && !first) {
+    console.log(stagePackage(command));
+  } else {
     console.error('Usage: node scripts/stage-dashboard-package.js <new-package-directory>');
     console.error(
       '   or: node scripts/stage-dashboard-package.js --verify-release-artifacts <installed-package>'
     );
+    console.error(
+      '   or: node scripts/stage-dashboard-package.js --stage-landed-release <commit> <new-package-directory>'
+    );
     process.exitCode = 1;
-  } else {
-    console.log(stagePackage(process.argv[2]));
   }
 }

@@ -73,7 +73,10 @@ fn run_fixture(repair: bool) {
     let path = root.join("cache/analytics-remote-v1/odroid.json");
     let store = open();
     import(&migration(&store, root, now), "nas1", &original);
-    activity::close_days(&store, now as u64).unwrap();
+    assert_eq!(
+        activity::close_days(&store, now as u64).unwrap()["closed"],
+        json!([at / 86_400_000])
+    );
     let mut staged = vec![(MIRROR.to_owned(), serde_json::to_vec(&mirror).unwrap())];
     if repair {
         import(&migration(&store, root, now), "odroid", &mirror);
@@ -124,4 +127,42 @@ fn settled_original_survives_mirror_migration_after_staging_restart() {
 #[test]
 fn repair_removes_the_imported_mirror_and_keeps_unrelated_usage() {
     run_fixture(true);
+}
+
+#[test]
+fn all_mirror_caches_are_staged_before_the_legacy_owner_is_applied() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let store =
+        aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None).unwrap();
+    let now = aac_store::engine::now_ms() as i64;
+    let mirror = scan(
+        &root.join("mirror"),
+        "ssh-12345678-1234-1234-1234-123456789abc",
+        now - 6 * 86_400_000,
+        "shared",
+        (70, 30),
+    );
+    let print = mirror["fingerprints"]["claude"].as_object().unwrap();
+    let (name, true) =
+        super::super::claude_mirrors::identity(print.values().next().unwrap()).unwrap()
+    else {
+        panic!("expected a mirror fingerprint");
+    };
+    let cache = root.join("cache/analytics-remote-v1");
+    fs::create_dir_all(&cache).unwrap();
+    let bytes = serde_json::to_vec(&mirror).unwrap();
+    for host in ["mac", "odroid"] {
+        fs::write(cache.join(format!("{host}.json")), &bytes).unwrap();
+    }
+    let old_map = json!({"version":1, "owners":{(name): "odroid"}});
+    fs::write(cache.join("claude-mirror-owners.json"), old_map.to_string()).unwrap();
+
+    assert!(migration(&store, root, now).run().unwrap());
+    let cells = activity::dump_cells(&store).unwrap();
+    let [(host, _, cell)] = cells.as_slice() else {
+        panic!("expected one mirror host cell");
+    };
+    assert_eq!((host.as_str(), cell.i, cell.o), ("odroid", 70, 30));
+    assert!(fs::read_dir(&cache).unwrap().next().is_none());
 }

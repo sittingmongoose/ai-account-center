@@ -27,6 +27,11 @@ struct LegacyCache {
     last_scan_at: Option<String>,
 }
 
+struct Selection {
+    owners: claude_mirrors::Owners,
+    originals: BTreeSet<String>,
+}
+
 fn read_cache(migration: &Migration<'_>, archive: Archive<'_>) -> Result<LegacyCache> {
     let bytes = analytics_cache::archived(migration.store, archive.path)?
         .ok_or_else(|| Error::new("io", "missing staged Analytics computer cache"))?;
@@ -54,10 +59,7 @@ fn legacy_owners(migration: &Migration<'_>) -> Result<claude_mirrors::Owners> {
     Ok(previous)
 }
 
-fn choose_owners(
-    migration: &Migration<'_>,
-    archives: &[Archive<'_>],
-) -> Result<claude_mirrors::Owners> {
+fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<Selection> {
     let mut parts = Vec::new();
     let mut states = Vec::new();
     let mut mirrors = BTreeSet::new();
@@ -140,6 +142,7 @@ fn choose_owners(
         {
             // The same transcript is already in dated Store history on this source.
             // Never treat a host known to hold this mirror as an original.
+            originals.insert(name.clone());
             committed.insert(name.clone(), computer);
         }
     }
@@ -148,23 +151,30 @@ fn choose_owners(
         // Keep the same election if the boot stops between reports or before retirement.
         claude_mirrors::save(migration.store, claude_mirrors::HISTORY, &selected)?;
     }
-    Ok(selected)
+    Ok(Selection {
+        owners: selected,
+        originals,
+    })
 }
 
 fn rows_for(
     cache: &scan_state::Cache,
     tool: &str,
     computer: &str,
-    owners: Option<&claude_mirrors::Owners>,
+    selection: Option<&Selection>,
 ) -> (Vec<Value>, Vec<Value>) {
     let prints = cache.fingerprints.get("claude").unwrap_or(&Value::Null);
     let keep = |row: &&Value| {
         row["k"] == tool
             && (tool != "claude"
-                || owners.is_none_or(|owners| {
-                    claude_mirrors::row_identity(row, prints)
-                        .and_then(|(name, _)| owners.get(name))
-                        .is_none_or(|owner| owner == computer)
+                || selection.is_none_or(|selection| {
+                    claude_mirrors::row_identity(row, prints).is_none_or(|(name, mirror)| {
+                        (!mirror || !selection.originals.contains(name))
+                            && selection
+                                .owners
+                                .get(name)
+                                .is_none_or(|owner| owner == computer)
+                    })
                 }))
     };
     (

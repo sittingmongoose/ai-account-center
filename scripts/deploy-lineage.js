@@ -122,6 +122,18 @@ function readSourceBuild(repoRoot, now = new Date()) {
   };
 }
 
+/** Before staging a release for distribution, require its exact clean landed checkout. */
+function requireLandedSource(repoRoot, source, expected) {
+  if (!COMMIT.test(expected) || source?.commit !== expected)
+    throw new Error('Check out the exact landed release commit');
+  if (source.shallow !== false) throw new Error('Use a full source checkout for deployment lineage');
+  if (source.onMain !== true)
+    throw new Error('Wait for origin/main to contain the release before staging');
+  const status = git(repoRoot, ['status', '--porcelain', '--untracked-files=normal']);
+  if (source.dirty !== false || status?.trim() !== '')
+    throw new Error('Use a clean landed release checkout');
+}
+
 function recordBuild(repoRoot, outDir = path.join(repoRoot, 'dist')) {
   const info = readSourceBuild(repoRoot) ?? {
     version: 1,
@@ -288,6 +300,7 @@ module.exports = {
   parseLedger,
   readSourceBuild,
   recordBuild,
+  requireLandedSource,
 };
 
 if (require.main === module) {

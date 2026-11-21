@@ -30,6 +30,7 @@ const lineage = require(path.join(SCRIPTS, 'deploy-lineage.js')) as {
     lineage: string[];
   } | null;
   recordBuild: (root: string, outDir?: string) => { commit: string | null };
+  requireLandedSource: (root: string, source: unknown, expected: string) => void;
 };
 
 const A = 'a'.repeat(40);
@@ -261,6 +262,9 @@ describe('deployment lineage guard', () => {
       onMain: false,
       lineage: [second, first],
     });
+    const requireLanded = (expected = second) =>
+      lineage.requireLandedSource(repo, lineage.readSourceBuild(repo), expected);
+    expect(() => requireLanded()).toThrow('Wait for origin/main to contain the release');
     // Merged and pushed from another clone: the stale origin/main ref is refreshed once, even
     // when this clone's fetch mapping does not include main.
     git(repo, 'config', 'remote.origin.fetch', '+refs/heads/other:refs/remotes/origin/other');
@@ -269,6 +273,10 @@ describe('deployment lineage guard', () => {
     git(other, 'merge', '-q', '--ff-only', 'FETCH_HEAD');
     git(other, 'push', '-q', 'origin', 'main');
     expect(lineage.readSourceBuild(repo)?.onMain).toBe(true);
+    expect(() => requireLanded()).toThrow('Use a clean landed release checkout');
+    fs.renameSync(path.join(repo, 'notes.txt'), path.join(scope, 'notes.txt'));
+    expect(() => requireLanded()).not.toThrow();
+    expect(() => requireLanded(first)).toThrow('Check out the exact landed release commit');
     fs.writeFileSync(path.join(repo, 'src', 'c.ts'), 'export const c = 3;\n');
     expect(lineage.readSourceBuild(repo)?.dirty).toBe(true);
     expect(lineage.readSourceBuild(path.join(repo, 'src'))).toBeNull();
