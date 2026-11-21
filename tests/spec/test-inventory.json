@@ -1930,6 +1930,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/activity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-usage/tests/agy_header.rs",
       "kind": "internal",
       "evidence": [],
@@ -2638,6 +2644,13 @@
       ]
     },
     {
+      "file": "tests/unit/app-updates/app_update_acp_followup_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/app-updates/app_update_agent_worker_test.py",
       "kind": "helper",
       "evidence": [
@@ -2698,6 +2711,13 @@
     },
     {
       "file": "tests/unit/app-updates/app_update_t3_rpc_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_t3_self_update_test.py",
       "kind": "helper",
       "evidence": [
         "helper"
@@ -3999,6 +4019,12 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-signin-open-path.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/claude-signin-renewal.test.ts",

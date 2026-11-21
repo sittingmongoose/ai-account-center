@@ -131,7 +131,7 @@ pub fn claude(cedar: &Value, expiries: &[Option<i64>]) -> Result<Vec<Grant>> {
                 "fable"
             } else if let Some(t) = explicit {
                 match t {
-                    "session" | "weekly" | "full" => t,
+                    "session" | "weekly" | "full" | "fable" => t,
                     _ => "unknown",
                 }
             } else if clears.is_empty() {
@@ -155,6 +155,7 @@ pub fn claude(cedar: &Value, expiries: &[Option<i64>]) -> Result<Vec<Grant>> {
                 "session" if !session || weekly => "unknown",
                 "weekly" if !weekly || session => "unknown",
                 "full" if !session || !weekly => "unknown",
+                "fable" if session || !clears.iter().any(|k| k == "seven_day_overage_included") => "unknown",
                 other => other,
             };
             let words = if kind == "unknown" {

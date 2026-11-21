@@ -64,7 +64,7 @@ export async function runAntigravityTerminalRefresh(deps: TerminalRefreshDeps): 
   if (result.status === 'unreviewed') {
     const version = isNativeVersion(result.installedVersion) ? result.installedVersion : null;
     return fail(
-      `Antigravity updated${version ? ` to ${version}` : ''}; switching paused until reviewed.`
+      `Antigravity updated${version ? ` to ${version}` : ''}; it does not match the reviewed runtime build.`
     );
   }
   if (result.status === 'no-installation')

@@ -47,6 +47,7 @@ const SAFE_REASONS = new Set([
   'grant-unavailable',
   'redeeming',
   'refill-windows-unconfirmed',
+  'no-weekly-usage',
   'signed-out',
 ]);
 /** A native rejection reads `<code>: <message>`; only an allowlisted code is passed on. */

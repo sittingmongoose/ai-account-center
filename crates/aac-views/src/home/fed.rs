@@ -193,17 +193,9 @@ pub fn prepare_antigravity(data: &[u8]) -> Result<Value, Decline> {
         .unwrap_or_default();
     let shaped = [
         &["schemaVersion", "hostId", "profiles"][..],
-        &["schemaVersion", "hostId", "nativeUpdatePaused", "profiles"],
         &[
             "schemaVersion",
             "hostId",
-            "runtimeServiceProblem",
-            "profiles",
-        ],
-        &[
-            "schemaVersion",
-            "hostId",
-            "nativeUpdatePaused",
             "runtimeServiceProblem",
             "profiles",
         ],

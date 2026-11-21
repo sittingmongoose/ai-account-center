@@ -49,8 +49,8 @@ describe('runtime refresh command', () => {
         0,
         'refreshed to the reviewed 1.2.16 build',
       ],
-      [{ status: 'unreviewed', installedVersion: '1.2.99' }, 1, 'updated to 1.2.99; switching paused until reviewed'],
-      [{ status: 'unreviewed', installedVersion: null }, 1, 'updated; switching paused until reviewed'],
+      [{ status: 'unreviewed', installedVersion: '1.2.99' }, 1, 'updated to 1.2.99; it does not match the reviewed runtime build'],
+      [{ status: 'unreviewed', installedVersion: null }, 1, 'updated; it does not match the reviewed runtime build'],
       [{ status: 'no-installation' }, 1, 'No Antigravity runtime is installed'],
       [{ status: 'gate-closed' }, 1, 'not released in this build'],
       [{ status: 'failed' }, 1, 'could not complete its checks'],
@@ -61,10 +61,10 @@ describe('runtime refresh command', () => {
     }
   });
 
-  it('scrubs a hostile installed version from the paused message', async () => {
+  it('scrubs a hostile installed version from the unreviewed message', async () => {
     const runResult = await run({ status: 'unreviewed', installedVersion: '1.2.99; id' });
     expect(runResult.code).toBe(1);
-    expect(runResult.out).toContain('updated; switching paused until reviewed');
+    expect(runResult.out).toContain('updated; it does not match the reviewed runtime build');
     expect(runResult.out).not.toContain('1.2.99; id');
   });
 });

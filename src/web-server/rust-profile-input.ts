@@ -199,9 +199,7 @@ export function isRustAntigravityInventory(value: unknown): boolean {
   return (
     [
       'schemaVersion\nhostId\nprofiles',
-      'schemaVersion\nhostId\nnativeUpdatePaused\nprofiles',
       'schemaVersion\nhostId\nruntimeServiceProblem\nprofiles',
-      'schemaVersion\nhostId\nnativeUpdatePaused\nruntimeServiceProblem\nprofiles',
     ].includes(names) && Array.isArray(value.profiles)
   );
 }

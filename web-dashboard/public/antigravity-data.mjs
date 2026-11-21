@@ -146,12 +146,6 @@ function boundProfiles(data, inventory) {
 /** The saved Ubuntu profiles bound to their dashboard rows: which login is live, and what the runtime reports. */
 export function antigravityView(data, inventory) {
   const rows = boundProfiles(data, inventory);
-  const pausedVersion = inventory?.nativeUpdatePaused && typeof inventory.nativeUpdatePaused.installedVersion === 'string'
-    && inventory.nativeUpdatePaused.installedVersion.length <= 128
-    && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(inventory.nativeUpdatePaused.installedVersion)
-    ? inventory.nativeUpdatePaused.installedVersion : null;
-  const updatePaused = inventory?.nativeUpdatePaused
-    ? `Antigravity updated${pausedVersion ? ` to ${pausedVersion}` : ''}; its runtime is paused until reviewed` : null;
   return {
     antigravityAccounts: rows.map(row => ({
       id: row.account.id, profile: row.profile.id, email: row.profile.email, plan: row.account.plan || row.profile.plan || '',
@@ -160,7 +154,6 @@ export function antigravityView(data, inventory) {
       status: (row.profile.selected ? row.profile.runtimeVerified ? 'Selected · running verified' : 'Selected · runtime unverified' : row.account.status === 'needs_sign_in' ? 'Sign-in needed' : row.profile.available ? 'Saved login' : 'Login unavailable') + ({ cached: ' · Cached', needs_sign_in: ' · Sign-in needed', unavailable: ' · Usage unavailable', error: ' · Refresh failed' }[row.account.status] || ''),
       note: [row.account.source, row.account.status, timeLabel(row.account.sampledAt, 'Sampled'), row.account.message].filter(Boolean).join(' · '),
     })),
-    antigravityUpdatePaused: updatePaused,
     antigravityServiceProblem: antigravityServiceProblem(inventory),
   };
 }

@@ -840,7 +840,7 @@ test('Home headers, amounts and the Antigravity warnings read the data truthfull
   );
   assert.equal(runs(ag.metaRuns), 'Google Antigravity CLI · *1* account');
   assert.deepEqual(ag.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
-  const paused = section(
+  const leftover = section(
     dashboardViewModel(
       data([
         account({
@@ -855,12 +855,8 @@ test('Home headers, amounts and the Antigravity warnings read the data truthfull
     ),
     'antigravity'
   );
-  assert.equal(paused.foot.shown, true);
-  assert.equal(paused.foot.warn, true);
-  assert.equal(
-    runs(paused.foot.runs),
-    'Antigravity updated to 1.2.17; its runtime is paused until reviewed'
-  );
+  // Account switching is retired: an old paused-update marker shows no footer.
+  assert.deepEqual(leftover.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
   const failed = section(
     dashboardViewModel(
       data([

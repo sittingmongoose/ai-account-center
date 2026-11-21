@@ -276,24 +276,48 @@ export function claudeSignInHosts(platforms: Iterable<ClaudeDashboardPlatform>):
  * Carry the per-computer sign-in state onto a Claude row. Readings already on
  * the row stay (as before, cached); only the wording says why they are not
  * live. A row with no readings at all reads as "Sign-in needed".
+ *
+ * `covered`: another verified login for the same account (its Claude Code
+ * login) reads it, so a signed-out Claude Desktop profile is not needed. Those
+ * computers move to `claudeDesktopSignedOut` with a quiet note, never a prompt.
  */
 export function withClaudeSignIn(
   account: DashboardAccount,
-  needed: ReadonlySet<ClaudeDashboardPlatform> | undefined
+  needed: ReadonlySet<ClaudeDashboardPlatform> | undefined,
+  covered = false
 ): DashboardAccount {
   const rest: DashboardAccount = { ...account };
   delete rest.signInNeeded;
+  delete rest.claudeDesktopSignedOut;
+  const all = new Set<ClaudeDashboardPlatform>([
+    ...(needed ?? []),
+    ...(covered ? (account.claudeDesktopSignedOut ?? []) : []),
+  ]);
   const platforms = (['mac', 'windows'] as const).filter(
-    (platform) => needed?.has(platform) && account.capabilities.claudePlatforms.includes(platform)
+    (platform) => all.has(platform) && account.capabilities.claudePlatforms.includes(platform)
   );
   if (account.provider !== 'claude' || platforms.length === 0) {
-    return 'signInNeeded' in account ? rest : account;
+    return 'signInNeeded' in account || 'claudeDesktopSignedOut' in account ? rest : account;
   }
   const hosts = claudeSignInHosts(platforms);
+  if (covered) {
+    return {
+      ...rest,
+      claudeDesktopSignedOut: platforms,
+      message:
+        account.message ||
+        `Claude Desktop is signed out on ${hosts}. AAC reads this account through its Claude Code login, so no sign-in is needed.`,
+    };
+  }
   const live = account.status === 'ok';
+  // No verified login reads this account (no Claude Code login covers it), so the note names the exact control
+  // that signs in: Open on <computer> launches this account's Claude Desktop profile, which shows its sign-in.
+  const controls = platforms
+    .map((platform) => `Open on ${platform === 'mac' ? 'Mac' : 'Windows'}`)
+    .join(' or ');
   const message = live
     ? account.message
-    : `Sign-in needed on ${hosts}. Open shows the sign-in window.`;
+    : `No working Claude sign-in for this account on ${hosts}. To sign in, use ${controls} in Details: it opens this account's Claude Desktop, which shows its sign-in window.`;
   return {
     ...rest,
     signInNeeded: platforms,

@@ -66,9 +66,6 @@
         "python": "3.14",
         "builtFor": "3.13",
         "exitStatus": null
-      },
-      "nativeUpdatePaused": {
-        "installedVersion": "1.6.0"
       }
     },
     "selectedProfileId": "party"
@@ -107,10 +104,7 @@
           "verifiedAt": "2026-10-01T16:40:00.000Z",
           "hostId": "ubuntu"
         }
-      ],
-      "nativeUpdatePaused": {
-        "installedVersion": null
-      }
+      ]
     },
     "selectedProfileId": null
   },

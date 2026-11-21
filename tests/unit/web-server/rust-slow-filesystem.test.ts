@@ -34,9 +34,13 @@ for (const kind of ['metadata', 'descriptor'])
           );
           const value = JSON.parse(text.trim().split('\n').at(-1)!);
           expect(value.delayed).toBe(mode === 'shadow');
+          // A loaded Nas1 can miss the 700 ms heartbeat budget. The stat shim
+          // sleeps for 6200 ms, so 1200 ms still detects a main-thread stat
+          // with room for scheduling jitter. Keep the tighter read budget for
+          // the descriptor shim, whose sleep is only 1300 ms.
+          expect(value.maxGapMs).toBeLessThan(kind === 'metadata' ? 1200 : 700);
           expect(value.responses).toBeGreaterThan(5);
           expect(value.maxHttpMs).toBeLessThan(700);
-          expect(value.maxGapMs).toBeLessThan(700);
         }
       } finally {
         fs.rmSync(root, { recursive: true, force: true });

@@ -534,9 +534,22 @@ function normalClaim(text: string): string {
   }
 }
 
-/** When this computer last started, in whole minutes since the epoch (stable within a boot). */
+/** This process's estimate of when the computer last started; set on first use, then fixed. */
+let processBootMinute: number | null = null;
+
+/**
+ * When this computer last started, in whole minutes since the epoch. Measured once per process: uptime comes
+ * in whole seconds, so a fresh estimate can round to the neighbouring minute, and the writer would then take its
+ * own claim for another process's and drop every sign-in (CI flake TOOL-ISSUES 66, 2026-11-20).
+ */
+/** Tests only: forget this process's boot estimate so the next use measures again. */
+export function resetBootMinuteForTests(): void {
+  processBootMinute = null;
+}
+
 function bootMinute(): number {
-  return Math.round((Date.now() - os.uptime() * 1000) / 60_000);
+  processBootMinute ??= Math.round((Date.now() - os.uptime() * 1000) / 60_000);
+  return processBootMinute;
 }
 
 /** The cookie's expiry in epoch milliseconds, or null for a browser-session cookie. */

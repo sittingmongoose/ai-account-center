@@ -495,6 +495,16 @@ export const tests = {
 				await t.equal(`${f.name}: no sideways scroll`, wide, 0);
 				await t.equal(`${f.name}: no chart label overlaps another`, await overlaps(t), []);
 				await t.audit(`analytics ${f.name}`);
+				// The standard audit caps its walk at 12 intermediate stops. Size
+				// the overflow walk from the document so tall layouts get every
+				// overlapping viewport between the first and last.
+				const maxStops = await t.page.evaluate(() => {
+					const page = document.scrollingElement;
+					return Math.ceil((page.scrollHeight - page.clientHeight) / (innerHeight * 0.8));
+				});
+				if (maxStops > 12) {
+					await t.noOverflow(`${f.name}: no overflow or clipped text along the entire page`, { maxStops });
+				}
 				// the long ranges: 90 days (month starts on a phone) and All over two years (weekly buckets)
 				for (const [button, sub] of [['90D', /Daily buckets/], ['All', /Weekly buckets/]]) {
 					await t.page.locator(`.ax-tools-row .seg button:has-text("${button}")`).click();

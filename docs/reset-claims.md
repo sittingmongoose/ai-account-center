@@ -30,8 +30,9 @@ or null, so any signed-in session can Check again after a reload). Inventory als
 pending discovery, history and the UI's spend lock. Check again still requires evidence matching
 the attempt's original profile, host and source binding to confirm settlement; another alias's
 evidence leaves it unconfirmed. A confirmed claim or check answers `windows`:
-each refilled window's id and used percent from the verification read (empty unless confirmed; for Codex, only
-the windows whose used percent fell). Prepare also answers `usage`: the id and used percent of each window the
+each verified window's id and used percent from the verification read (empty unless confirmed; for Codex, only
+the windows whose used percent fell). A confirmed Claude full or Fable reset reports any refill without a comparable
+before and after reading in `unobservedWindows`. Prepare also answers `usage`: the id and used percent of each window the
 grant targets, from prepare's own fresh read (display only). Every attempt result, including `latestAttempt`,
 answers `sentUsage`: the same windows' used percent in the read the claim was reserved on, just before the send.
 A Codex result line says it ("When sent: Weekly 52% used, 5-hour 3% used."). A refused prepare
@@ -43,8 +44,15 @@ Tokens and target keys are 64 hex characters. Request objects have exact fields;
 raw provider grant IDs, host paths, organization IDs and executable names cannot
 be provided by the browser. Responses and errors never echo private input.
 `claimed` requires a fresh same-identity read with the exact grant decrement.
-Claude also requires no affected window increasing and at least one affected
-percentage falling. Codex requires only the exact credit's decrement: OpenAI
+A Claude full reset requires the overall weekly reading to fall. Every other
+refilled limit with readings on both sides must fall or already be at zero.
+A Fable reset requires the overall weekly reading to fall and checks that Fable
+usage falls when both Fable readings are available. Fable gives back its share
+of overall weekly usage, which can leave a nonzero weekly reading. The two
+percentages have separate allowances and do not provide a conversion between them.
+Claude session and weekly resets still require their affected readings, with at
+least one falling and none increasing.
+Codex requires only the exact credit's decrement: OpenAI
 chooses which limits a credit refills, so window movement is evidence, not proof.
 Only a `redeemed` credit is a decrement. A `redeeming` credit keeps its count but
 cannot be used or sent; it confirms a claim only when OpenAI itself answered
@@ -228,7 +236,10 @@ OAuth claim transport are unchanged. A throttled inventory stays unavailable and
 shows a rate-limit explanation, including when no public reset rows are present.
 Reset verification uses the same normalized usage windows as the dashboard.
 The provider's legacy Fable reset bucket is matched only to the exact unscoped
-Fable quota; missing or conflicting quota readings never enable a claim.
+Fable quota. A full or Fable grant can be used when some refill limits are
+unavailable. Both need a positive overall weekly reading before Use reset
+appears. A weekly grant also needs positive weekly usage. AAC checks this again
+on the fresh reading immediately before reserving the claim.
 
 A web inventory read still requires an eligible saved OAuth token and a successful
 OAuth account/organization check. The private Windows process retains that token;

@@ -659,6 +659,7 @@ mod tests {
         assert!(!muse_email_valid("a b@c.d"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn antigravity_sandbox_builds_bwrap_argv_and_env() {
         let env =

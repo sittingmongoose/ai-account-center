@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1084,
+    "totalOccurrences": 1083,
     "filesAffected": 107,
     "hotpathOccurrences": 486,
     "hotpathFilesAffected": 54,
@@ -530,16 +530,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 712,
-      "typedThrows": 238,
+      "totalThrows": 713,
+      "typedThrows": 239,
       "plainThrows": 40,
       "otherThrows": 434,
-      "adoptionRatio": 0.3343,
+      "adoptionRatio": 0.3352,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 420,
-          "typed": 172,
+          "count": 421,
+          "typed": 173,
           "plain": 7
         },
         {
@@ -735,7 +735,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2399
+          "loc": 2427
         },
         {
           "file": "src/web-server/status/answers.ts",
@@ -743,7 +743,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1765
+          "loc": 1791
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -755,15 +755,15 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1200
+          "loc": 1203
+        },
+        {
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 1166
         },
         {
           "file": "src/web-server/rust-service-transport.ts",
           "loc": 1124
-        },
-        {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1095
         },
         {
           "file": "src/web-server/rust-service.ts",
@@ -775,7 +775,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 984
+          "loc": 991
         },
         {
           "file": "src/web-server/status/status-view.ts",

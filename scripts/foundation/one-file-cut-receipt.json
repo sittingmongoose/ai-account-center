@@ -18,12 +18,6 @@
       "persist:f6cad27a0fd815892dd7bcdc2afca63558fe1e95dc896923284a0d56474658c6"
     ]
   },
-  "crates/aac-http/src/antigravity_host.rs": {
-    "reason": "The Antigravity host hashes the selected executable before it accepts the reviewed installation.",
-    "uses": [
-      "File::open:666e07a448d352c5ef31b5e956e0712399b8372affe44d619079bdc736bf274f"
-    ]
-  },
   "crates/aac-http/src/antigravity_quota.rs": {
     "reason": "The existing Antigravity collector publishes a scoped cooldown sidecar using the previous cache layout.",
     "uses": [

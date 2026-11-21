@@ -1,7 +1,6 @@
 import { AntigravityError } from './errors';
 import { cloneAntigravityPlan } from './plan';
 import path from 'path';
-import { isNativeVersion } from './native-version';
 import { AntigravityProfileRegistry, identityKey } from './registry';
 import { AntigravitySwitchService, type AntigravityRecoveryResult } from './switch-service';
 import type { AntigravitySwitchDriver, NativeCredential, VerifiedIdentity } from './types';
@@ -42,11 +41,6 @@ export interface AntigravityRuntimeDependencies {
   driver: AntigravitySwitchDriver;
   collectQuota(request: SavedQuotaRequest): Promise<SavedQuotaSnapshot>;
   now?: () => number;
-  /**
-   * Reports the paused state when the installed CLI moved past the reviewed
-   * pin. Absent in fixtures; production passes the read-only native probe.
-   */
-  readNativeUpdatePaused?: () => Promise<{ installedVersion: string | null } | null>;
   /**
    * Why the installed runtime service is not running, when a read-only check
    * found a cause. Absent in fixtures; production passes runtime-health.ts.
@@ -261,22 +255,12 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
     hasProfiles: () => deps.registry.listProfiles().length > 0,
     getInventory: async () => {
       const inventory = await usage.getInventory();
-      const paused = (await deps.readNativeUpdatePaused?.().catch(() => null)) ?? null;
       const serviceProblem = publicRuntimeServiceProblem(
         await deps.readRuntimeServiceProblem?.().catch(() => null)
       );
       return {
         ...inventory,
         ...(serviceProblem ? { runtimeServiceProblem: serviceProblem } : {}),
-        ...(paused
-          ? {
-              nativeUpdatePaused: {
-                installedVersion: isNativeVersion(paused.installedVersion)
-                  ? paused.installedVersion
-                  : null,
-              },
-            }
-          : {}),
       };
     },
     getAccounts: async (options) => (await usage.getAccounts(options)).map(copyAccount),

@@ -460,10 +460,11 @@ export class UsageFailoverService {
         template.statusReason !== 'identity_unbound'
       )
         template = { ...template, plan: state.observedPlan };
-      return this.withSignIn(template, state);
+      return this.withSignIn(target, template, state);
     }
     const { reading, host, fallback } = state.saved;
-    if (!emailMatches(target.expectedEmail, reading.email)) return this.withSignIn(template, state);
+    if (!emailMatches(target.expectedEmail, reading.email))
+      return this.withSignIn(target, template, state);
     const refreshDue = state.fresh === true && this.now() >= state.freshUntil;
     const held = state.primaryFailure === 'rate_limited' && state.nextAttempt > this.now();
     const stale = cached || reading.status === 'cached' || refreshDue;
@@ -525,9 +526,59 @@ export class UsageFailoverService {
     if (template.provider !== 'claude') result.platform = helperPlatform(host);
     if (host !== result.platform) result.host = host;
     else delete result.host;
-    return this.withSignIn(result, state);
+    return this.withSignIn(target, result, state);
   }
-  private withSignIn(account: DashboardAccount, state: State): DashboardAccount {
+  /**
+   * Claude only: another verified login for this same account (a Claude Code
+   * login, or another Desktop profile) holds the saved reading. A Desktop
+   * profile that is signed out is then not needed, so it is a quiet note and
+   * never a sign-in prompt. A reading left over from the primary Desktop
+   * profile itself does not count.
+   */
+  claudeLoginCovers(target: UsageFailoverTarget): boolean {
+    return this.otherLoginWorks(target, this.state(target));
+  }
+  /**
+   * Claude only, while the Desktop primary is signed out: the one account
+   * identity whose saved login email (on any computer) is this account's
+   * email. Two identities for one email are ambiguous and adopt nothing. The
+   * read itself still checks the live profile names the same account.
+   */
+  private async claudeEmailPeer(
+    target: UsageFailoverTarget,
+    state: State,
+    peerLists: () => Promise<Array<{ host: UsageHost; candidates: UsageCandidate[] | null }>>
+  ): Promise<UsageIdentity | null> {
+    if (target.provider !== 'claude' || !target.expectedEmail || state.primarySignIn.size === 0)
+      return null;
+    const found = new Map<string, UsageIdentity>();
+    for (const { candidates } of await peerLists())
+      for (const candidate of candidates ?? [])
+        if (
+          candidate.email &&
+          emailMatches(target.expectedEmail, candidate.email) &&
+          !target.primarySources.some((source) => candidate.selectors.includes(source.selector))
+        )
+          found.set(JSON.stringify([candidate.identity.kind, candidate.identity.key]), {
+            ...candidate.identity,
+          });
+    return found.size === 1 ? [...found.values()][0] : null;
+  }
+  private otherLoginWorks(target: UsageFailoverTarget, state: State): boolean {
+    const saved = state.saved;
+    return (
+      target.provider === 'claude' &&
+      !!saved &&
+      sameUsageIdentity(state.identity, saved.candidate.identity) &&
+      emailMatches(target.expectedEmail, saved.reading.email) &&
+      !target.primarySources.some((source) => saved.candidate.selectors.includes(source.selector))
+    );
+  }
+  private withSignIn(
+    target: UsageFailoverTarget,
+    account: DashboardAccount,
+    state: State
+  ): DashboardAccount {
     const messages: Record<string, string> = {
       needs_sign_in: 'Sign in again on the configured source to refresh usage.',
       no_browser_cookie: 'Connect a browser quota session for the configured account.',
@@ -565,10 +616,14 @@ export class UsageFailoverService {
           : {}),
       };
     if (account.provider !== 'claude') return account;
-    const signInNeeded = [...new Set([...(account.signInNeeded ?? []), ...state.primarySignIn])];
+    const out = new Set<string>([...(account.signInNeeded ?? []), ...state.primarySignIn]);
+    const signedOut = (['mac', 'windows'] as const).filter((host) => out.has(host));
     const result = projectClaudeFailoverExtras({ ...account }, this.now());
-    if (signInNeeded.length) result.signInNeeded = signInNeeded;
-    else delete result.signInNeeded;
+    delete result.signInNeeded;
+    delete result.claudeDesktopSignedOut;
+    if (signedOut.length && this.otherLoginWorks(target, state))
+      result.claudeDesktopSignedOut = signedOut;
+    else if (signedOut.length) result.signInNeeded = signedOut;
     return result;
   }
   private retainExtras(
@@ -597,7 +652,7 @@ export class UsageFailoverService {
         Date.parse(template.sampledAt ?? '') > Date.parse(state.saved.reading.sampledAt ?? '') ||
         (template.status === 'cached' && template.sampledAt === state.saved.reading.sampledAt))
     )
-      return this.withSignIn(template, state);
+      return this.withSignIn(target, template, state);
     return this.project(target, template, state, !state.fresh);
   }
   collect(target: UsageFailoverTarget, template: DashboardAccount): Promise<DashboardAccount> {
@@ -660,7 +715,7 @@ export class UsageFailoverService {
           this.now() < state.freshUntil &&
           template.sampledAt === state.saved.reading.sampledAt))
     )
-      return this.withSignIn(template, state);
+      return this.withSignIn(target, template, state);
     return this.project(target, template, state, !state.fresh);
   }
   private async refresh(
@@ -729,6 +784,25 @@ export class UsageFailoverService {
       primaries.push({ host: source, candidate });
       break;
     }
+    let lists: Array<{ host: UsageHost; candidates: UsageCandidate[] | null }> | null = null;
+    const peerLists = async () => {
+      if (lists) return lists;
+      const hosts = [
+        ...target.primarySources,
+        ...(await (this.deps.hosts ?? configuredUsageHosts)()),
+      ].filter(
+        (host, index, all) => all.findIndex((other) => hostKey(other) === hostKey(host)) === index
+      );
+      lists = await Promise.all(
+        hosts.map(async (host) => ({ host, candidates: await this.inventory(target, host) }))
+      );
+      for (const { host } of lists) this.applyInventorySignIn(target, state, host);
+      return lists;
+    };
+    const signedOutPeer =
+      !primaries.length && missingPrimary && !target.expectedIdentity
+        ? await this.claudeEmailPeer(target, state, peerLists)
+        : null;
     if (!primaries.length && target.provider === 'cursor' && !target.expectedIdentity) {
       const scan = await this.cursorSession(target, state);
       const cached = state.identity;
@@ -757,6 +831,16 @@ export class UsageFailoverService {
         state.observedPlanPeer = null;
         return;
       } else if (!cached) return;
+    } else if (signedOutPeer) {
+      // A signed-out Desktop profile is not a removed account: its Claude Code login reads it.
+      const peer = signedOutPeer;
+      if (!sameUsageIdentity(state.identity, peer)) {
+        state.saved = null;
+        state.observedPlan = null;
+        state.observedPlanAt = null;
+        state.observedPlanPeer = null;
+      }
+      state.identity = peer;
     } else if (!primaries.length && missingPrimary && !target.expectedIdentity) {
       state.identity = null;
       state.primary = null;
@@ -766,21 +850,8 @@ export class UsageFailoverService {
       state.observedPlanPeer = null;
       return;
     }
-    let lists: Array<{ host: UsageHost; candidates: UsageCandidate[] | null }> | null = null;
-    const peerLists = async () => {
-      if (lists) return lists;
-      const hosts = [
-        ...target.primarySources,
-        ...(await (this.deps.hosts ?? configuredUsageHosts)()),
-      ].filter(
-        (host, index, all) => all.findIndex((other) => hostKey(other) === hostKey(host)) === index
-      );
-      lists = await Promise.all(
-        hosts.map(async (host) => ({ host, candidates: await this.inventory(target, host) }))
-      );
-      for (const { host } of lists) this.applyInventorySignIn(target, state, host);
-      return lists;
-    };
+    if (!state.identity && state.primarySignIn.size > 0 && !target.expectedIdentity)
+      state.identity = await this.claudeEmailPeer(target, state, peerLists);
     if (!state.identity) return; // Never bootstrap from an unrelated peer login.
     const cooldownKey = identityUsageCooldownKey(target.ccsDir, target.provider, state.identity);
     const applyCooldown = (): boolean => {

@@ -454,13 +454,14 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     }
     // Persist measured clocks with each confirmed file. Fresh scans use session event times;
     // unchanged files retain the clock established by their previous read. No mtime is ever
-    // substituted for a usage time, including for a file that has no numeric usage records.
+    // substituted for a usage time: a reader's file-time estimate (Antigravity's untimed step)
+    // stays out of this clock, including for a file that has no logged event date.
     let mut data_clocks: std::collections::HashMap<(&str, &str), i64> = std::collections::HashMap::new();
-    for row in &collector.srow_list {
+    for ((kind, filekey), at) in &collector.verified_clocks {
         data_clocks
-            .entry((&row.kind, &row.filekey))
-            .and_modify(|at| *at = (*at).max(row.last))
-            .or_insert(row.last);
+            .entry((kind.as_str(), filekey.as_str()))
+            .and_modify(|seen| *seen = (*seen).max(*at))
+            .or_insert(*at);
     }
     for (kind, prints) in &mut collector.fresh {
         for (key, print) in prints {
@@ -534,6 +535,26 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         }
         if (kind == "zcode" && collector.wal_unread) || collector.kind_wal_unread.contains(kind) {
             entry.insert("walUnread".into(), json!(true));
+        }
+        // A usage-shaped record the reader could not decode: measured older usage stands, coverage
+        // does not. The evidence is also on the file's print for unchanged rescans.
+        if collector
+            .fresh
+            .get(kind)
+            .is_some_and(|prints| prints.values().any(|p| p.unread_usage == Some(true)))
+        {
+            entry.insert("partial".into(), json!(true));
+            entry.insert("unreadUsage".into(), json!(true));
+        }
+        // Numbers dated only by a file-time estimate: counted, with no measured event date. The
+        // disclosure is carried on the file's print so it survives unchanged rescans.
+        if collector.estimated_clocks.contains(kind)
+            || collector
+                .fresh
+                .get(kind)
+                .is_some_and(|prints| prints.values().any(|p| p.estimated_clock == Some(true)))
+        {
+            entry.insert("estimatedClock".into(), json!(true));
         }
         if let Some(count) = collector.unreadable_records.get(kind).filter(|n| **n > 0) {
             entry.insert("partial".into(), json!(true));
@@ -611,10 +632,13 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                     .into_iter()
                     .chain(retained)
                     .max();
+                // Activity follows usage: a retained clock is usage evidence too, so the activity
+                // date never falls behind the data date.
                 let activity = discovered["freshness"]["newestActivityMs"].as_i64();
                 if retained.is_some() {
                     let complete = discovered["freshness"]["activityComplete"] == true;
-                    discovered["freshness"] = discover::freshness(data, activity, collector.min_date_ms, complete);
+                    discovered["freshness"] =
+                        discover::freshness(data, data.or(activity), collector.min_date_ms, complete);
                 }
             }
             discovery_kinds.insert(kind.clone(), discovered);

@@ -851,7 +851,8 @@ private func checkClaudeSignInNeeded() throws {
     && byID["claude:fake-e"]?.signInNeededText == nil && byID["claude:fake-f"]?.signInNeededText == nil,
     "A malformed, missing or null signInNeeded, or a computer the profile cannot open on, names nothing")
   try expect(byID["claude:fake-a"]!.claudeOpenHelp("windows")
-    .hasPrefix("Sign-in needed on Windows. Open shows the Claude sign-in window")
+    .hasPrefix("Claude Desktop needs a sign-in on Windows. Open shows the Claude Desktop sign-in window")
+    && byID["claude:fake-a"]!.claudeOpenHelp("windows").hasSuffix("Claude Code sign-ins are checked separately.")
     && byID["claude:fake-a"]!.claudeOpenHelp("mac") == "Open fake-a@example.com in Claude on Mac",
     "The Open tip says what Open will show on the computer that needs a sign-in")
 }

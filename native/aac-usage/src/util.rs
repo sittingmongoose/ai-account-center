@@ -186,6 +186,13 @@ pub struct Print {
     pub unreadable_records: Option<u64>,
     /// The last read was immutable while the write-ahead log held rows: said again while unchanged.
     pub wal_unread: Option<bool>,
+    /// A usage-shaped record this file holds could not be decoded: the file's earlier measurement
+    /// stands, but coverage is unverified. Retained through unchanged scans, cleared on a verified
+    /// read.
+    pub unread_usage: Option<bool>,
+    /// The file's numbers include a date the reader had to estimate from the file's time: counted,
+    /// but the measured clock never uses it.
+    pub estimated_clock: Option<bool>,
     /// The newest measured usage event in this file, retained through unchanged scans. None
     /// means no event was measured, not a zero-token event. `usage_clock` versions this evidence.
     pub newest_usage_ms: Option<i64>,
@@ -261,6 +268,8 @@ impl Print {
             progress: None,
             unreadable_records: None,
             wal_unread: None,
+            unread_usage: None,
+            estimated_clock: None,
             newest_usage_ms: None,
             usage_clock: false,
             path_key: None,
@@ -321,6 +330,12 @@ impl Print {
         }
         if let Some(state) = &self.append_state {
             map.insert("appendState".into(), state.clone());
+        }
+        if let Some(unread) = self.unread_usage {
+            map.insert("unreadUsage".into(), Value::from(unread));
+        }
+        if let Some(estimated) = self.estimated_clock {
+            map.insert("estimatedClock".into(), Value::from(estimated));
         }
         if let Some(progress) = &self.progress {
             if let Some(through) = progress.through {
@@ -632,6 +647,24 @@ mod tests {
         assert_eq!(hour_label(1_790_867_100_000, now).as_deref(), Some("2026-10-01 15:00"));
         assert_eq!(hour_label(-1, now), None);
         assert_eq!(hour_label(now + 3_600_001, now), None);
+    }
+
+    #[test]
+    fn usage_evidence_preserves_the_append_checkpoint() {
+        let mut print = Print::plain(150, 20, String::new(), String::new());
+        let checkpoint = json!({"through": 100});
+        print.path_key = Some("path-key".into());
+        print.file_identity = Some("file-identity".into());
+        print.append_state = Some(checkpoint.clone());
+        print.unread_usage = Some(true);
+        print.estimated_clock = Some(true);
+
+        let encoded = print.to_json();
+        assert_eq!(encoded["pathKey"], "path-key");
+        assert_eq!(encoded["fileIdentity"], "file-identity");
+        assert_eq!(encoded["appendState"], checkpoint);
+        assert_eq!(encoded["unreadUsage"], true);
+        assert_eq!(encoded["estimatedClock"], true);
     }
 
     #[test]

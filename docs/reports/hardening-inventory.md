@@ -6,7 +6,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1084 |
+| Sync fs occurrences (all) | 1083 |
 | Sync fs files affected (all) | 107 |
 | Sync fs occurrences (runtime hotpaths) | 486 |
 | Sync fs files affected (runtime hotpaths) | 54 |
@@ -50,7 +50,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 33.4% (238/712) |
+| typed-error adoption (typed/total throws) | 33.5% (239/713) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 51 (221 total, 170 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
@@ -82,17 +82,17 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | LOC |
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 4028 |
-| `src/web-server/services/analytics-remote-sources.ts` | 2399 |
+| `src/web-server/services/analytics-remote-sources.ts` | 2427 |
 | `src/web-server/status/answers.ts` | 2069 |
-| `src/web-server/services/analytics-remote-transport.ts` | 1765 |
+| `src/web-server/services/analytics-remote-transport.ts` | 1791 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1206 |
-| `src/web-server/status/status-collectors.ts` | 1200 |
+| `src/web-server/status/status-collectors.ts` | 1203 |
+| `src/web-server/services/usage-failover-service.ts` | 1166 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
-| `src/web-server/services/usage-failover-service.ts` | 1095 |
 | `src/web-server/rust-service.ts` | 1035 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
-| `src/web-server/services/account-dashboard-service.ts` | 984 |
+| `src/web-server/services/account-dashboard-service.ts` | 991 |
 | `src/web-server/status/status-view.ts` | 903 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
 | `src/web-server/usage/codex-quota/quota-fetcher-codex.ts` | 798 |

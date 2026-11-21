@@ -108,9 +108,13 @@ pub fn tables(connection: &Connection) -> rusqlite::Result<Vec<String>> {
     Ok(names)
 }
 
-/// Note a database's print as read this scan; true when unchanged since the prior one.
+/// Note a database's print as read this scan; true when unchanged since the prior one. A database
+/// whose last read could not see its write-ahead log is read again even when its bytes match: the
+/// log may be visible now, and its rows must be counted.
 pub fn note_db(collector: &mut Collector, kind: &str, filekey: &str, current: Print) -> bool {
-    let unchanged = same(collector.prior_print(kind, filekey), &current);
+    let prior = collector.prior_print(kind, filekey);
+    let waited = prior.is_some_and(|p| p.get("walUnread").and_then(Value::as_bool) == Some(true));
+    let unchanged = !waited && same(prior, &current);
     collector
         .pending
         .entry(kind.to_string())

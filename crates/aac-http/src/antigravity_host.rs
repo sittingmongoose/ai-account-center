@@ -6,10 +6,7 @@
 //! Fixture tests use invented homes, fake worker scripts and a fake probe runner; nothing here
 //! spawns the real CLI, reads a real credential or reaches a provider.
 
-use crate::antigravity_probes::{
-    NativeUpdatePaused, PausedCache, ProblemReader, SocketState, bounded_run, diagnose,
-    native_update_paused, read_native_release, socket_state,
-};
+use crate::antigravity_probes::{ProblemReader, SocketState, bounded_run, diagnose, socket_state};
 use crate::antigravity_quota::{Cooldowns, QuotaRequest, QuotaService, Worker, public_quotas};
 use crate::antigravity_runtime::{
     LiveIdentity, RegistryRead, empty_inventory, hash_word, inventory_from_state,
@@ -76,7 +73,6 @@ struct IdentityCache {
 /// The process's mutable Antigravity state.
 struct State {
     identity: Option<IdentityCache>,
-    paused: PausedCache,
     problem: Option<ProblemReader>,
     service: QuotaService,
     cooldowns: Cooldowns,
@@ -104,7 +100,6 @@ pub(crate) struct Paths<'a> {
 
 type HealthRun = dyn Fn(&str, &[&str], u64) -> Option<String> + Send + Sync;
 type HealthRunner = Box<HealthRun>;
-type VersionReader = Box<dyn FnMut() -> Option<String> + Send>;
 
 /// The process's one Antigravity host per CCS root (Accounts and Profiles share it).
 fn hosts() -> &'static Mutex<HashMap<PathBuf, Arc<Host>>> {
@@ -125,17 +120,12 @@ pub struct Host {
     health_script: PathBuf,
     installed: Option<Installed>,
     runner: HealthRunner,
-    version: Mutex<VersionReader>,
     state: Mutex<State>,
 }
 
 impl Host {
     /// A host over explicit trusted paths. Construction reads no credential and spawns nothing.
-    pub(crate) fn new(
-        paths: &Paths<'_>,
-        runner: HealthRunner,
-        version: VersionReader,
-    ) -> Option<Self> {
+    pub(crate) fn new(paths: &Paths<'_>, runner: HealthRunner) -> Option<Self> {
         let quota = Worker::new(paths.python, paths.quota, paths.collectors)?;
         let native = Worker::new(paths.python, paths.native, paths.collectors)?;
         let installed = read_installed(paths.ccs, paths.home);
@@ -148,10 +138,8 @@ impl Host {
             health_script: paths.health.to_path_buf(),
             installed,
             runner,
-            version: Mutex::new(version),
             state: Mutex::new(State {
                 identity: None,
-                paused: PausedCache::default(),
                 problem: None,
                 service: QuotaService::default(),
                 cooldowns: Cooldowns::default(),
@@ -219,7 +207,6 @@ impl Host {
                 health: &scripts.join("antigravity/runtime_health.py"),
             },
             Box::new(bounded_run),
-            Box::new(|| None),
         )
     }
 
@@ -288,7 +275,7 @@ impl Host {
             })
     }
 
-    /// The public inventory, with the paused and runtime-service probes attached.
+    /// The public inventory, with the runtime-service diagnostic.
     pub fn inventory(&self, now: i64) -> Option<Value> {
         let state = match read_registry(&self.ccs) {
             RegistryRead::Absent => return Some(empty_inventory()),
@@ -297,13 +284,8 @@ impl Host {
         };
         let live = self.live_identity(now);
         let inventory = inventory_from_state(&self.ccs, &state, live.as_ref(), now)?;
-        let paused = self.paused(now);
         let problem = self.problem(now);
-        Some(inventory_probe_fields(
-            inventory,
-            paused.as_ref(),
-            problem.as_ref(),
-        ))
+        Some(inventory_probe_fields(inventory, problem.as_ref()))
     }
 
     /// The public quotas answer from the runtime's own accounts.
@@ -350,28 +332,6 @@ impl Host {
                 .service
                 .get_accounts(&read, &mut collect, &mut guard.cooldowns, refresh),
         )
-    }
-
-    fn paused(&self, _now: i64) -> Option<Value> {
-        let release = read_native_release(
-            &self
-                .health_script
-                .parent()
-                .map(|dir| dir.join("runtime/release.json"))
-                .unwrap_or_default(),
-        );
-        let mut guard = self.state.lock().ok()?;
-        let mut version = self.version.lock().ok()?;
-        let paused = native_update_paused(
-            &self.home,
-            &release,
-            &pin_matches,
-            &mut **version,
-            &mut guard.paused,
-        );
-        paused.map(|NativeUpdatePaused { installed_version }| {
-            json!({"installedVersion": installed_version})
-        })
     }
 
     fn problem(&self, now: i64) -> Option<Value> {
@@ -494,36 +454,6 @@ fn file_identity(home: &Path) -> Option<String> {
         identities.push(format!("{}:{}", meta.is_dir(), meta.len()));
     }
     Some(identities.join("/"))
-}
-
-/// `verifyOwnedAntigravityNativePin`: the binary's sha256 over one bounded read.
-fn pin_matches(binary: &Path, sha256: &str) -> bool {
-    let Ok(meta) = std::fs::symlink_metadata(binary) else {
-        return false;
-    };
-    if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 256 * 1024 * 1024 {
-        return false;
-    }
-    use sha2::{Digest, Sha256};
-    let Ok(mut file) = std::fs::File::open(binary) else {
-        return false;
-    };
-    use std::io::Read;
-    let mut digest = Sha256::new();
-    let mut chunk = [0u8; 65_536];
-    loop {
-        match file.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => digest.update(&chunk[..n]),
-            Err(_) => return false,
-        }
-    }
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
-        == sha256
 }
 
 #[cfg(test)]
@@ -699,7 +629,6 @@ print(json.dumps({{"format":"antigravity-consumer-json",
             Box::new(|file, _args, _timeout| {
                 (file != "systemctl").then(|| r#"{"ok":true}"#.to_owned())
             }),
-            Box::new(|| None),
         )
         .unwrap();
         let now = crate::antigravity_runtime::js_date("2026-10-01T17:00:00.000Z").unwrap();
@@ -717,6 +646,7 @@ print(json.dumps({{"format":"antigravity-consumer-json",
         );
     }
 
+    #[cfg(target_os = "linux")]
     fn counting_quota_script(email: &str, subject: &str) -> String {
         format!(
             r#"import base64,hashlib,json,os,sys
@@ -758,6 +688,7 @@ else:
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn accounts_and_profiles_share_one_quota_owner_per_profile() {
         let Some(python) = python() else {
@@ -852,7 +783,6 @@ print(json.dumps({{"format":"antigravity-consumer-json",
                 Box::new(|file, _args, _timeout| {
                     (file != "systemctl").then(|| r#"{"ok":true}"#.to_owned())
                 }),
-                Box::new(|| None),
             )
             .unwrap(),
         );

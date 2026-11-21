@@ -26,11 +26,12 @@ from app_update_common import (
 )
 from app_update_cursor import detect_cursor, update_cursor
 from app_update_antigravity import detect_antigravity_acp, update_antigravity_acp
+import app_update_t3_rpc as t3_rpc
 from app_update_macos import MUSE_WARM_PROMPT, gui_command
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, cli_instances, family, scan, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
-from app_update_t3 import detect_t3, update_t3
+from app_update_t3 import detect_t3, exact_version, update_t3
 from app_update_zcode import detect_adapters, detect_zcode, update_adapters, update_zcode, ubuntu_unit_busy
 
 CLI_NAMES = {"antigravity-cli": "agy", "muse-code": "muse", "omp": "omp", "codex-cli": "codex", "claude-code": "claude"}
@@ -1139,6 +1140,80 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     return {"results": [results[app_id] for app_id in order]}
 
 
+# After a Linux computer's part of a dashboard job, its detached worker waits 30 quiet seconds,
+# restarts T3 and waits for it (a database upgrade can hold the new server for minutes). The
+# follow-up waits this long for that server before it says T3 did not answer.
+ACP_FOLLOW_UP_SECONDS = 20 * 60
+FOLLOW_UP_POLL_SECONDS = 10
+FOLLOW_UP_LOCK_SECONDS = 2
+
+
+def follow_up_antigravity_acp(platform, expected, emit=None, cancelled=None, seconds=ACP_FOLLOW_UP_SECONDS,
+                              clock=time.monotonic, sleep=time.sleep):
+    """Antigravity ACP against the T3 server this run installed, after the deferred restart.
+
+    In the run the row read t3_restart_pending: the server answering then was the one being
+    replaced, and its offer is the previous T3's. The dashboard runs this once the computer's part
+    is done (the restart worker's gate). It waits, bounded, for T3's endpoint to name `expected`
+    (None: whichever T3 answers) without holding the helper lock, which the worker takes to
+    restart T3; then it takes that lock and runs the same guarded install through T3 as a run
+    does. AAC never restarts T3 or stops a T3-owned process here."""
+    emit = emit or (lambda event: None)
+    cancelled = cancelled or (lambda: False)
+    app_id = "antigravity-acp"
+    end = clock() + seconds
+
+    def skipped():
+        return result(app_id, platform, "skipped", code="skipped_cancelled")
+
+    with row_diagnostics() as record:
+        install = detect_antigravity_acp(platform)
+        if install is None:
+            return with_diagnostics(result(app_id, platform, "not_installed"), record)
+        if install.owner:
+            record.owner = install.owner
+        if install.probe is not None:
+            record.blame("unknown", install.probe_reason or "probe_failed")
+            return with_diagnostics(result(app_id, platform, "unknown", None, None, None, "readiness_unknown"), record)
+        before = install.version
+        emit({"event": "app", "appId": app_id, "phase": "checking"})
+        record.phase("t3_restart")
+        while True:
+            if cancelled():
+                return with_diagnostics(skipped(), record)
+            remaining = end - clock()
+            if remaining <= 0:
+                record.blame("t3_not_ready", "restart_not_seen")
+                return with_diagnostics(result(app_id, platform, "action_required", before, before, install.manager,
+                                               "t3_not_ready"), record)
+            try:
+                t3_rpc.wait_ready(platform, float("inf"), expected, seconds=min(FOLLOW_UP_POLL_SECONDS, remaining))
+                break
+            except UpdateFailure as error:
+                if error.code != "t3_not_ready":
+                    record.blame(error.cause or "t3_absent", error.reason or "no_t3_install")
+                    return with_diagnostics(result(app_id, platform, "action_required", before, before,
+                                                   install.manager, error.code), record)
+        while True:
+            if cancelled():
+                return with_diagnostics(skipped(), record)
+            try:
+                with execution_lock():
+                    current = detect_antigravity_acp(platform) or install
+                    emit({"event": "app", "appId": app_id, "phase": "updating"})
+                    # The install keeps its own bound (15 minutes) from here, past the wait's.
+                    row = update_antigravity_acp(current, None, lambda name: emit({"event": "app", "appId": app_id, "phase": name}),
+                                                 expected_t3=expected)
+                    return with_diagnostics(row, record)
+            except UpdateFailure as error:
+                if error.code != "busy":
+                    raise
+            if clock() >= end:
+                return with_diagnostics(result(app_id, platform, "action_required", before, before, install.manager,
+                                               "busy"), record)
+            sleep(FOLLOW_UP_LOCK_SECONDS)
+
+
 def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None, app=None, budget=None):
     """The fixed separate InteractiveToken task owns GUI/terminal restarts.
 
@@ -1477,6 +1552,9 @@ def main():
     # packaged release file); without it a packaged release file next to this
     # helper is read, and without either a managed Antigravity update runs idle-only.
     parser.add_argument("--agy-reviewed")
+    # Only the dashboard's follow-up after a Linux computer's deferred T3 restart: the T3 version
+    # that must answer, or "any". Checks and installs Antigravity ACP alone.
+    parser.add_argument("--acp-after-t3-restart", metavar="T3_VERSION")
     args = parser.parse_args()
     native = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"
     if args.platform != native:
@@ -1496,6 +1574,11 @@ def main():
         if args.state_dir is None or args.platform != "ubuntu":
             parser.error("A dashboard job requires Ubuntu and an explicit state directory.")
         os.environ["AAC_UPDATE_DASHBOARD_JOB"] = "1"
+    follow_up = args.acp_after_t3_restart
+    if follow_up is not None:
+        if not args.apply or args.platform != "ubuntu" or args.dashboard_job or args.task_child or (
+                follow_up != "any" and exact_version(follow_up) is None):
+            parser.error("--acp-after-t3-restart needs --apply on Ubuntu and a T3 version or 'any'.")
     task_nonce = None
     agy_reviewed = parse_reviewed_versions(args.agy_reviewed) if args.agy_reviewed is not None else read_release_versions()
     if args.task_child and args.apply and args.platform == "windows":
@@ -1525,6 +1608,9 @@ def main():
         progress(event)
     emit = remember
     def invoke():
+        if follow_up is not None:
+            version = None if follow_up == "any" else follow_up
+            return {"results": [follow_up_antigravity_acp(args.platform, version, emit, cancelled)]}
         if not args.apply:
             return inventory_payload(args.platform)
         if args.app and args.agent_worker_child:

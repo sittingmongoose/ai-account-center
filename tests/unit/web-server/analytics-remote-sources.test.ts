@@ -17,6 +17,7 @@ import {
 } from '../../../src/web-server/services/analytics-remote-transport';
 import {
   analyticsRemoteTargets,
+  applyLocalScannerFreshness,
   loadAnalyticsRemoteCachedSources,
   localScannerOwned,
   loadAnalyticsRemoteSources as readRemoteSources,
@@ -2387,4 +2388,71 @@ it('keeps a Read cell note on cache-only answers', async () => {
   );
   expect(cell?.state).toBe('ok');
   expect(cell?.detail).toContain('1 network folder on this computer did not answer');
+});
+
+describe('usage-only activity coverage disclosures', () => {
+  it('parses the scanner flags for unread usage and estimated dates', () => {
+    const parsed = parseAnalyticsRemoteResponse(
+      JSON.stringify(
+        response({
+          kinds: {
+            omp: {
+              state: 'ok',
+              partial: true,
+              unreadUsage: true,
+              fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20, unreadUsage: true } },
+            },
+          },
+          discovery: {
+            kinds: {
+              omp: {
+                installed: true,
+                signals: ['home'],
+                roots: [],
+                counts: { roots: 0, filesFound: 1, filesRead: 1, filesFailed: 0, newestMtime: 20 },
+                freshness: {
+                  state: 'unknown',
+                  newestDataMs: 10,
+                  newestActivityMs: 10,
+                  activityComplete: false,
+                },
+                unreadUsage: true,
+                estimatedClock: true,
+              },
+            },
+          },
+        })
+      )
+    );
+    expect(parsed.kinds.omp).toMatchObject({ state: 'ok', partial: true, unreadUsage: true });
+    expect(parsed.kinds.omp.fingerprints[FILE_1]).toMatchObject({ unreadUsage: true });
+    expect(parsed.discovery?.kinds.omp).toMatchObject({ unreadUsage: true, estimatedClock: true });
+    expect(() =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(response({ kinds: { omp: { state: 'ok', unreadUsage: 'yes', fingerprints: {} } } }))
+      )
+    ).toThrow();
+  });
+
+  it('discloses an unread usage record and an estimated date on the source', () => {
+    const unread: Record<string, unknown> = {
+      tool: 'omp',
+      host: 'ubuntu',
+      state: 'ok',
+      lastScanAt: null,
+      rowCount: 1,
+    };
+    applyLocalScannerFreshness(unread as never, {
+      state: 'unknown',
+      newestDataMs: 10,
+      newestActivityMs: 10,
+      activityComplete: false,
+      unreadUsage: true,
+      estimatedClock: true,
+    });
+    expect(unread.state).toBe('cached');
+    expect(unread.cause).toBe('freshness_unverified');
+    expect(String(unread.detail)).toContain('a usage-shaped record could not be read');
+    expect(String(unread.detail)).toContain('no event timestamp');
+  });
 });

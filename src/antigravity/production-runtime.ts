@@ -15,7 +15,6 @@ import { createUbuntuNativeCredentialStore } from './native-credential-transport
 import { createUbuntuAntigravityDriver } from './ubuntu-driver';
 import { createUbuntuRuntimeBridge } from './ubuntu-runtime-bridge';
 import { AntigravityProfileRegistry } from './registry';
-import { readNativeUpdatePaused } from './native-version';
 import { createRuntimeServiceProblemReader } from './runtime-health';
 import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver } from './types';
@@ -212,16 +211,10 @@ export function createInstalledAntigravityRuntimeFactory(
     const components = createInstalledAntigravityComponents(directory, home);
     if (components) {
       const { quotaWorker, driver } = components;
-      const pausedProbe = {
-        home,
-        ccsDir: directory,
-        pinMatches: verifyOwnedAntigravityNativePin,
-      };
       const readRuntimeServiceProblem = createRuntimeServiceProblemReader(components.installed);
       return createPersistentAntigravityRuntime(directory, {
         driver,
         collectQuota: quotaWorker.collectQuota,
-        readNativeUpdatePaused: () => readNativeUpdatePaused(pausedProbe),
         readRuntimeServiceProblem,
       });
     }
@@ -247,15 +240,9 @@ export function createInstalledAntigravityRuntimeFactory(
       stopOwnedRestarts: unsupported,
     };
     const now = options.now ?? Date.now;
-    const pausedProbe = {
-      home,
-      ccsDir: directory,
-      pinMatches: verifyOwnedAntigravityNativePin,
-    };
     return createPersistentAntigravityRuntime(directory, {
       driver,
       collectQuota: options.collectQuota ?? createAntigravityQuotaWorker().collectQuota,
-      readNativeUpdatePaused: () => readNativeUpdatePaused(pausedProbe),
       now,
     });
   };

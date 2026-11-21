@@ -115,6 +115,13 @@
     ]
   },
   {
+    "word": "after_handoff",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
     "word": "agent_state",
     "cause": null,
     "sources": [
@@ -318,6 +325,7 @@
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
       "scripts/app-updates/app_update_t3.py:error.code",
       "scripts/app-updates/app_updates.py:UpdateFailure",
+      "scripts/app-updates/app_updates.py:error.code",
       "src/antigravity/account-lifecycle.ts:error.code",
       "src/antigravity/switch-service.ts:error.code",
       "src/antigravity/types.ts:ActivationStatus",
@@ -1033,6 +1041,7 @@
     "cause": "provider_error",
     "sources": [
       "scripts/account-usage/claude_usage.py:result['status']",
+      "scripts/account-usage/claude_usage.py:status",
       "scripts/account-usage/desktop_helpers.py:UsageError",
       "scripts/account-usage/desktop_usage.py:(result['status'], result['message'])",
       "scripts/account-usage/failover_special.py:helpers.UsageError",
@@ -1543,6 +1552,7 @@
     "sources": [
       "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
+      "scripts/account-usage/claude_usage.py:resetReason",
       "scripts/account-usage/claude_usage.py:result.get('resetReason')",
       "scripts/account-usage/claude_usage.py:result['resetReason']"
     ]
@@ -2224,6 +2234,7 @@
     "sources": [
       "scripts/account-usage/claude_usage.py:error.status",
       "scripts/account-usage/claude_usage.py:result.get('status')",
+      "scripts/account-usage/claude_usage.py:status",
       "scripts/account-usage/cursor_usage.py:CollectionError",
       "scripts/account-usage/desktop_helpers.py:UsageError",
       "scripts/account-usage/desktop_usage.py:UsageError",
@@ -3326,6 +3337,7 @@
     "sources": [
       "scripts/account-usage/claude_usage.py:cooldown['failureCode']",
       "scripts/account-usage/claude_usage.py:error.status",
+      "scripts/account-usage/claude_usage.py:failureCode",
       "scripts/account-usage/claude_usage.py:result.get('failureCode')",
       "scripts/account-usage/claude_usage.py:result['status']",
       "scripts/account-usage/cursor_usage.py:error.failure_code",
@@ -3717,6 +3729,8 @@
       "scripts/app-updates/app_update_t3.py:UpdateFailure",
       "scripts/app-updates/app_update_t3.py:error.code",
       "scripts/app-updates/app_update_t3.py:status",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code",
       "scripts/app-updates/app_update_terminal.py:UpdateFailure",
       "scripts/app-updates/app_update_zcode.py:status",
       "scripts/app-updates/app_updates.py:row['status']",
@@ -4781,6 +4795,7 @@
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
       "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
       "scripts/app-updates/app_update_t3_rpc.py:cause",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code",
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
     ]
   },
@@ -4834,6 +4849,8 @@
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
       "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
       "scripts/app-updates/app_update_t3_rpc.py:cause",
+      "scripts/app-updates/app_update_t3_rpc.py:reason",
+      "scripts/app-updates/app_updates.py:error.code",
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
     ]
   },
@@ -4844,6 +4861,34 @@
       "scripts/app-updates/app_update_common.py:CAUSES",
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "t3_self_update_commit",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "t3_self_update_reply",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "t3_self_update_transport",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "t3_self_update_version",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3.py:reason"
     ]
   },
   {
@@ -4866,7 +4911,8 @@
     "word": "t3_session_revoke_failed",
     "cause": "provider_error",
     "sources": [
-      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure"
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code"
     ]
   },
   {
@@ -5235,6 +5281,7 @@
     "cause": "provider_error",
     "sources": [
       "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_t3.py:cause",
       "scripts/app-updates/app_update_t3_rpc.py:cause",
       "scripts/app-updates/app_updates.py:status",
       "src/antigravity/managed-updater.ts:NativeReviewState",
@@ -5552,6 +5599,8 @@
       "scripts/app-updates/app_update_desktop.py:UpdateFailure",
       "scripts/app-updates/app_update_macos.py:UpdateFailure",
       "scripts/app-updates/app_update_t3.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code",
       "scripts/app-updates/app_update_zcode.py:UpdateFailure",
       "src/antigravity/managed-update-command.ts:ManagedFailureCode"
     ]

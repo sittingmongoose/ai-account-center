@@ -14,7 +14,7 @@ function fixture() {
 const view = f => antigravityView(f.data, f.inventory);
 test('no inventory binds no accounts and invents nothing', () => {
   const v = antigravityView({ accounts: [] }, null);
-  assert.equal(v.antigravityAccounts.length, 0); assert.equal(v.antigravityUpdatePaused, null); assert.equal(v.antigravityServiceProblem, null);
+  assert.equal(v.antigravityAccounts.length, 0); assert.equal('antigravityUpdatePaused' in v, false); assert.equal(v.antigravityServiceProblem, null);
 });
 test('two bound Ubuntu rows keep the live login, the running distinction and all four Details windows', () => {
   const f = fixture(); f.inventory.profiles[0].runtimeVerified = false;
@@ -25,14 +25,10 @@ test('two bound Ubuntu rows keep the live login, the running distinction and all
   assert.equal(allDetailWindows(f.data, 'antigravity').length, 8); assert.equal(allDetailWindows(f.data, f.data.accounts[0].id).length, 4);
   assert.ok(allDetailWindows(f.data, 'antigravity').every(w => w.reset));
 });
-test('paused update names the installed version; hostile or missing versions stay generic', () => {
-  const f = fixture(); assert.equal(view(f).antigravityUpdatePaused, null);
+test('a leftover paused-update marker is ignored: account switching is retired', () => {
+  const f = fixture(); assert.equal('antigravityUpdatePaused' in view(f), false);
   f.inventory.nativeUpdatePaused = { installedVersion: '1.2.17' };
-  assert.equal(view(f).antigravityUpdatePaused, 'Antigravity updated to 1.2.17; its runtime is paused until reviewed');
-  for (const installedVersion of [null, '1.2', '1.2.17; id', 'x'.repeat(129), 42]) {
-    const g = fixture(); g.inventory.nativeUpdatePaused = { installedVersion };
-    assert.equal(view(g).antigravityUpdatePaused, 'Antigravity updated; its runtime is paused until reviewed');
-  }
+  assert.equal('antigravityUpdatePaused' in view(f), false);
 });
 test('a runtime service that cannot load its parser is named plainly; hostile fields stay generic', () => {
   const f = fixture(); assert.equal(view(f).antigravityServiceProblem, null);

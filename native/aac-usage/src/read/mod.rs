@@ -15,6 +15,7 @@ use crate::collector::{self, Collector, MAX_FILES, MAX_LINE_BYTES};
 use crate::fsx;
 use crate::util::{self, path_text};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -277,9 +278,17 @@ pub fn read_lines<R: Read>(
             line_box.line_ended = chunk.ends_with(b"\n");
             continue;
         }
-        let Ok(line) = std::str::from_utf8(&chunk) else {
-            line_box.through = offset;
-            continue;
+        // OMP's records are written whole and cut at arbitrary bytes, so a tear can split a
+        // multi-byte character. Its text is parsed lossily instead of skipped: the torn record is
+        // classified and a whole record joined after it is still counted. Other formats keep the
+        // strict read.
+        let line: Cow<'_, str> = match std::str::from_utf8(&chunk) {
+            Ok(line) => Cow::Borrowed(line),
+            Err(_) if kind == "omp" => Cow::Owned(String::from_utf8_lossy(&chunk).into_owned()),
+            Err(_) => {
+                line_box.through = offset;
+                continue;
+            }
         };
         line_box.offset = start;
         parse(line.trim_start_matches('\u{feff}'), collector, kind, filekey, line_box);

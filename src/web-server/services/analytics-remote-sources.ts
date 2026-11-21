@@ -137,7 +137,12 @@ function sourceCounts(kind: AnalyticsDiscoveryKind | undefined): {
 /** Project the native reader's coverage verdict. The dates are evidence, not guessed usage. */
 function applyFreshness(
   entry: Pick<AnalyticsRemoteSourceState, 'state' | 'detail' | 'cause'>,
-  found: Pick<AnalyticsDiscoveryKind, 'freshness' | 'unmeasuredFiles'> | undefined
+  found:
+    | Pick<
+        AnalyticsDiscoveryKind,
+        'freshness' | 'unmeasuredFiles' | 'unreadUsage' | 'estimatedClock'
+      >
+    | undefined
 ): void {
   if (!found) return;
   const clock = found.freshness;
@@ -169,21 +174,40 @@ function applyFreshness(
     const note = `usage is stale: newest measured data ${data}; newer activity ${activity}; activity does not establish token counts or cost`;
     entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
   }
+  if (found.unreadUsage && !entry.detail?.includes('usage-shaped record')) {
+    const note =
+      'a usage-shaped record could not be read; its tokens are not counted until a later scan reads it';
+    entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+  }
+  if (found.estimatedClock && !entry.detail?.includes('no event timestamp')) {
+    const note =
+      'some usage records carry no event timestamp; their file times are not used as usage dates';
+    entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+  }
   if (found.unmeasuredFiles && !entry.detail?.includes('no numeric usage')) {
     const note = `${found.unmeasuredFiles} local chat data file${found.unmeasuredFiles === 1 ? '' : 's'} expose no numeric usage; their tokens and cost are not counted`;
     entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
   }
 }
 
-type SourceFreshness = NonNullable<AnalyticsDiscoveryKind['freshness']>;
+type SourceFreshness = NonNullable<AnalyticsDiscoveryKind['freshness']> & {
+  /** The scanner's disclosure: a usage-shaped record it could not decode, and dates it estimated. */
+  unreadUsage?: boolean;
+  estimatedClock?: boolean;
+};
 type LocalFreshness = Partial<Record<AnalyticsRemoteKind, SourceFreshness>>;
 
 /** Independent coverage is useful even before the native reader owns any numeric rows. */
 function localFreshnessOf(discovery: AnalyticsRemoteDiscovery | undefined): LocalFreshness {
   const result: LocalFreshness = {};
   for (const tool of LOCAL_SCANNER_KINDS) {
-    const clock = discovery?.kinds[tool]?.freshness;
-    if (clock) result[tool] = { ...clock };
+    const kind = discovery?.kinds[tool];
+    if (!kind?.freshness) continue;
+    result[tool] = {
+      ...kind.freshness,
+      ...(kind.unreadUsage ? { unreadUsage: true } : {}),
+      ...(kind.estimatedClock ? { estimatedClock: true } : {}),
+    };
   }
   return result;
 }
@@ -212,7 +236,11 @@ export function applyLocalScannerFreshness(
       state: stale ? 'stale' : incomplete ? 'unknown' : 'current',
     };
   }
-  applyFreshness(entry, { freshness: resolved });
+  applyFreshness(entry, {
+    freshness: resolved,
+    ...(clock.unreadUsage ? { unreadUsage: true } : {}),
+    ...(clock.estimatedClock ? { estimatedClock: true } : {}),
+  });
 }
 
 const NO_READER_LABELS: Record<AnalyticsNoReaderTool, string> = {

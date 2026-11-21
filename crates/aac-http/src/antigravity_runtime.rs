@@ -540,34 +540,9 @@ fn public_inventory(rows: &[Value]) -> Option<Value> {
     Some(json!({ "schemaVersion": 1, "hostId": "ubuntu", "profiles": profiles }))
 }
 
-/// [`inventory`] plus the two read-only probes `runtime-composition.ts` attaches: a paused managed
-/// update (`isNativeVersion`) and a runtime-service problem (`publicRuntimeServiceProblem`).
-pub fn inventory_with_probes(
-    ccs: &Path,
-    live: Option<&LiveIdentity>,
-    now_ms: i64,
-    paused: Option<&Value>,
-    problem: Option<&Value>,
-) -> Option<Value> {
-    Some(inventory_probe_fields(
-        inventory(ccs, live, now_ms)?,
-        paused,
-        problem,
-    ))
-}
-
-pub(crate) fn inventory_probe_fields(
-    mut out: Value,
-    paused: Option<&Value>,
-    problem: Option<&Value>,
-) -> Value {
+pub(crate) fn inventory_probe_fields(mut out: Value, problem: Option<&Value>) -> Value {
     if let Some(problem) = aac_views::antigravity::runtime_problem_value(problem) {
         out["runtimeServiceProblem"] = problem;
-    }
-    if let Some(paused) = paused {
-        out["nativeUpdatePaused"] = json!({
-            "installedVersion": aac_views::antigravity::native_version_word(paused.get("installedVersion")),
-        });
     }
     out
 }
@@ -777,14 +752,10 @@ mod tests {
             .get("live")
             .filter(|value| !value.is_null())
             .and_then(LiveIdentity::from_value);
-        let inventory = inventory_with_probes(
-            &ccs,
-            live.as_ref(),
-            now,
-            case.get("paused"),
-            case.get("problem"),
-        )
-        .unwrap_or_else(|| panic!("state unreadable for {}", case["name"]));
+        let inventory = inventory(&ccs, live.as_ref(), now)
+            .unwrap_or_else(|| panic!("state unreadable for {}", case["name"]));
+        let inventory = inventory_probe_fields(inventory, case.get("problem"));
+        assert!(inventory.get("nativeUpdatePaused").is_none());
         let state = read_state(&ccs).unwrap();
         let overlay = read_inventory(&state, live.as_ref(), now);
         let selected = selected_profile_id(&ccs, live.as_ref(), now);

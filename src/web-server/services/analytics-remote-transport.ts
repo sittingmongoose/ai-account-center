@@ -185,6 +185,10 @@ export interface AnalyticsRemoteFingerprint {
   unreadableRecords?: number;
   /** The last read was immutable while the write-ahead log held rows. */
   walUnread?: boolean;
+  /** A usage-shaped record this file holds could not be decoded; its tokens are not counted. */
+  unreadUsage?: boolean;
+  /** This file's numbers include a date estimated from its file time, never a logged event. */
+  estimatedClock?: boolean;
 }
 
 /** Codex's carry-over for a resumed read; no identifier (the session travels as a digest). */
@@ -278,6 +282,10 @@ export interface AnalyticsRemoteKindResult {
   optionalSearchLimited?: boolean;
   /** Previously read files not confirmed while optional discovery was incomplete. */
   unconfirmedFiles?: number;
+  /** A usage-shaped record could not be decoded: measured older usage stands, coverage is unverified. */
+  unreadUsage?: boolean;
+  /** Numbers dated only by a file-time estimate (Antigravity's untimed step): no measured event date. */
+  estimatedClock?: boolean;
 }
 
 /** Where a root came from (the usage-report contract's `origin`). */
@@ -370,6 +378,10 @@ export interface AnalyticsDiscoveryKind {
   };
   /** Local data files without numeric usage (Cursor CLI blobs and WAL files, for example). */
   unmeasuredFiles?: number;
+  /** A usage-shaped record could not be decoded: the measured date stands, coverage is unverified. */
+  unreadUsage?: boolean;
+  /** The numbers are counted, but their date is a file-time estimate, never a measured event. */
+  estimatedClock?: boolean;
 }
 
 /** A tool without a reader that this computer has. */
@@ -439,6 +451,8 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
   )
     return null;
   if (entry.unmeasuredFiles !== undefined && !count(entry.unmeasuredFiles)) return null;
+  if (entry.unreadUsage !== undefined && typeof entry.unreadUsage !== 'boolean') return null;
+  if (entry.estimatedClock !== undefined && typeof entry.estimatedClock !== 'boolean') return null;
   if (
     typeof entry.installed !== 'boolean' ||
     !signalsOk(entry.signals) ||
@@ -503,6 +517,8 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
     ...(entry.unmeasuredFiles !== undefined
       ? { unmeasuredFiles: entry.unmeasuredFiles as number }
       : {}),
+    ...(entry.unreadUsage === true ? { unreadUsage: true } : {}),
+    ...(entry.estimatedClock === true ? { estimatedClock: true } : {}),
     signals: [...(entry.signals as string[])],
     roots,
     counts: {
@@ -837,7 +853,9 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
     (print.readName === undefined || validLogName(print.readName)) &&
     (print.decodedSize === undefined || nonNegative(print.decodedSize)) &&
     (print.unreadableRecords === undefined || nonNegative(print.unreadableRecords)) &&
-    (print.walUnread === undefined || typeof print.walUnread === 'boolean')
+    (print.walUnread === undefined || typeof print.walUnread === 'boolean') &&
+    (print.unreadUsage === undefined || typeof print.unreadUsage === 'boolean') &&
+    (print.estimatedClock === undefined || typeof print.estimatedClock === 'boolean')
   );
 }
 
@@ -953,6 +971,8 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       searchLimit?: unknown;
       optionalSearchLimited?: unknown;
       unconfirmedFiles?: unknown;
+      unreadUsage?: unknown;
+      estimatedClock?: unknown;
     };
     if (
       entry.state !== 'ok' &&
@@ -974,6 +994,10 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     )
       throw new AnalyticsRemoteTransportError();
     if (entry.walUnread !== undefined && typeof entry.walUnread !== 'boolean')
+      throw new AnalyticsRemoteTransportError();
+    if (entry.unreadUsage !== undefined && typeof entry.unreadUsage !== 'boolean')
+      throw new AnalyticsRemoteTransportError();
+    if (entry.estimatedClock !== undefined && typeof entry.estimatedClock !== 'boolean')
       throw new AnalyticsRemoteTransportError();
     if (
       entry.readFailures !== undefined &&
@@ -1079,6 +1103,8 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
         ? { replacedFiles: entry.replacedFiles as string[] }
         : {}),
       ...(entry.walUnread === true ? { walUnread: true } : {}),
+      ...(entry.unreadUsage === true ? { unreadUsage: true } : {}),
+      ...(entry.estimatedClock === true ? { estimatedClock: true } : {}),
       ...(entry.unreadable === true ? { unreadable: true } : {}),
       ...(unfinished?.length ? { unfinished, unfinishedCount } : {}),
       ...(entry.unreadableRecords !== undefined

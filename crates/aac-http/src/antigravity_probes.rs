@@ -4,7 +4,7 @@
 //!   `diagnoseRuntimeService` and `createRuntimeServiceProblemReader` over a bounded runner (the
 //!   packaged `runtime_health.py` first, then `systemctl --user show`).
 //! - `runtime-socket-probe.ts`: `probeRuntimeSocket` (`stopped`/`listening`/`unknown`).
-//! - `native-version.ts`: `readNativeRelease` and `readNativeUpdatePaused` over the installed CLI.
+//! - `native-version.ts`: `readNativeRelease` for reviewed runtime builds.
 //!
 //! Every external command is an input: tests pass fake runners, fake scripts and a fake systemctl.
 //! Nothing here starts, stops or changes a service, and no provider is reached.
@@ -500,89 +500,6 @@ pub(crate) fn native_binary_problem_public(home: &Path, uid: Option<u32>) -> boo
     native_binary_problem(home, uid)
 }
 
-fn binary_stat_key(binary: &Path) -> Option<String> {
-    let meta = std::fs::symlink_metadata(binary).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let modified = meta.mtime() * 1_000_000_000 + meta.mtime_nsec();
-        Some(format!(
-            "{}:{}:{}:{}",
-            meta.dev(),
-            meta.ino(),
-            modified,
-            meta.len()
-        ))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = meta;
-        None
-    }
-}
-
-/// A paused managed update: the installed CLI matches no reviewed build.
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeUpdatePaused {
-    /// The installed CLI's version when it could be read as a reviewed-style word.
-    pub installed_version: Option<String>,
-}
-
-/// The process's paused verdicts, keyed by binary and the reviewed set (`pausedCache`).
-#[derive(Default)]
-pub struct PausedCache {
-    entries: HashMap<PathBuf, (String, Option<NativeUpdatePaused>)>,
-}
-
-/// `readNativeUpdatePaused`: no verdict for a missing/unsafe CLI or an empty release set; a
-/// reviewed match unpauses; otherwise the installed version (bounded) marks the pause.
-pub fn native_update_paused(
-    home: &Path,
-    release: &NativeRelease,
-    pin_matches: &dyn Fn(&Path, &str) -> bool,
-    read_version: &mut dyn FnMut() -> Option<String>,
-    cache: &mut PausedCache,
-) -> Option<NativeUpdatePaused> {
-    if native_binary_problem(home, current_uid()) || release.reviewed.is_empty() {
-        return None;
-    }
-    let binary = home.join(".local").join("bin").join("agy");
-    let stat_key = binary_stat_key(&binary);
-    let set_key = release
-        .reviewed
-        .iter()
-        .map(|entry| format!("{}:{}", entry.version, entry.sha256))
-        .collect::<Vec<_>>()
-        .join(",");
-    let cache_key = stat_key.map(|stat| format!("{stat}|{set_key}"));
-    if let Some((key, value)) = cache.entries.get(&binary)
-        && Some(key) == cache_key.as_ref()
-    {
-        return value.clone();
-    }
-    let matched = release
-        .reviewed
-        .iter()
-        .any(|entry| pin_matches(&binary, &entry.sha256));
-    let value = if matched {
-        None
-    } else {
-        let version = read_version().filter(|version| native_version(version));
-        Some(NativeUpdatePaused {
-            installed_version: version,
-        })
-    };
-    if cache.entries.len() >= 8
-        && let Some(first) = cache.entries.keys().next().cloned()
-    {
-        cache.entries.remove(&first);
-    }
-    cache
-        .entries
-        .insert(binary, (cache_key.unwrap_or_default(), value.clone()));
-    value
-}
-
 pub(crate) fn current_uid() -> Option<u32> {
     #[cfg(unix)]
     {
@@ -781,65 +698,5 @@ mod tests {
         assert!(read_native_release(&file).reviewed.is_empty());
         std::fs::write(&file, b"not json").unwrap();
         assert!(read_native_release(&file).reviewed.is_empty());
-    }
-
-    #[test]
-    fn a_reviewed_binary_unpauses_and_an_unreviewed_one_names_its_version() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-        let binary = home.join(".local").join("bin").join("agy");
-        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-        std::fs::write(&binary, b"fixture native").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let release = NativeRelease {
-            gate_open: true,
-            reviewed: vec![ReviewedNative {
-                version: "1.6.0".into(),
-                sha256: "b".repeat(64),
-            }],
-        };
-        let mut cache = PausedCache::default();
-        let matched = |_: &Path, _: &str| true;
-        let mut version = || Some("1.5.0".to_owned());
-        assert_eq!(
-            native_update_paused(home, &release, &matched, &mut version, &mut cache),
-            None
-        );
-        let unmatched = |_: &Path, _: &str| false;
-        let mut version = || Some("1.5.0".to_owned());
-        // A different pin matcher is a different call: the cache belongs to the matched one.
-        let mut cache = PausedCache::default();
-        assert_eq!(
-            native_update_paused(home, &release, &unmatched, &mut version, &mut cache)
-                .unwrap()
-                .installed_version
-                .as_deref(),
-            Some("1.5.0")
-        );
-        // An empty reviewed set is not a pause; neither is a missing CLI.
-        assert_eq!(
-            native_update_paused(
-                home,
-                &NativeRelease::default(),
-                &unmatched,
-                &mut version,
-                &mut cache
-            ),
-            None
-        );
-        assert_eq!(
-            native_update_paused(
-                &home.join("missing"),
-                &release,
-                &unmatched,
-                &mut version,
-                &mut cache
-            ),
-            None
-        );
     }
 }

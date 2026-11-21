@@ -22,10 +22,11 @@ import uuid
 import zipfile
 
 from app_update_common import (
-    APP_LABELS, Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock,
+    APP_LABELS, Install, UpdateFailure, asar_package, cli_probe, command, diagnostics, download, execution_lock,
     gui_launch_environment, powershell, private_temporary,
     ps_quote, result, write_private_json, process_identity,
 )
+import app_update_t3_rpc as t3_rpc
 from app_update_processes import family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
 
 RELEASES = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=20"
@@ -455,6 +456,26 @@ def update_windows(install, version, temporary, deadline, phase):
             restart_desktops(install, contexts)
         raise
     return len(contexts), forced
+
+
+def installed_desktop_version(install):
+    return mac_bundle_version(install.path) if install.platform == "mac" else windows_bundle_version(install.path)
+
+
+def update_running_desktop(install, version, deadline, phase):
+    """A running T3 desktop updates itself through T3's own updater (app_update_t3_rpc).
+
+    Nothing here stops, swaps or relaunches T3: T3 downloads, verifies, installs and relaunches
+    itself, so its own CLIs and agents are never this helper's targets. The row says updated
+    only when the relaunched server answers on the new build and the installed app names it.
+    """
+    before = install.version
+    installed = t3_rpc.desktop_self_update(
+        install.platform, version, deadline, lambda value: bool(exact_version(value)) and version_key(value) > version_key(before),
+        phase, ready_seconds=health_budget(deadline))
+    if installed_desktop_version(install) != installed:
+        raise UpdateFailure("restart_failed", cause="unknown", reason="t3_self_update_version")
+    return installed
 
 
 def schedule_restart(version):
@@ -956,8 +977,13 @@ def update_t3(install, deadline, phase=None):
                     after = version
             if desktop_needed:
                 attempted = True
-                restarted, forced = {"mac": update_mac, "windows": update_windows}[install.platform](install, version, temporary, deadline, phase)
-                after = version
+                if t3_rpc.desktop_updater_offered(before):
+                    # T3 is running and offers its own updater: never replace it underneath itself.
+                    after = update_running_desktop(install, version, deadline, phase)
+                    restarted, forced = 1, 0
+                else:
+                    restarted, forced = {"mac": update_mac, "windows": update_windows}[install.platform](install, version, temporary, deadline, phase)
+                    after = version
         code = "t3_restart_scheduled" if install.platform == "ubuntu" else "t3_updated"
         value = result("t3-code", install.platform, "updated", before, after, install.manager, code, attempted, restarted)
         value["forcedStops"] = forced
@@ -969,10 +995,11 @@ def update_t3(install, deadline, phase=None):
             value["restartTargets"] = [{"kind": "desktop"}] if desktop_needed else []
         return value
     except UpdateFailure as error:
+        diagnostics().blame(error.cause, error.reason)
         # Rollback can itself fail (locked files, app refusing to close).
         # Report whatever bits are actually installed, not the old snapshot.
         if attempted and install.desktop:
-            after = mac_bundle_version(install.path) if install.platform == "mac" else windows_bundle_version(install.path)
+            after = installed_desktop_version(install)
         status = "restart_failed" if (after and after != before) or error.code == "restart_failed" else "failed"
         return result("t3-code", install.platform, status, before, after, install.manager, "update_failed" if error.code == "download_blocked" else error.code, attempted)
     except Exception:
