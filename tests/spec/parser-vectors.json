@@ -1431,10 +1431,10 @@
       "function": "number",
       "kind": "number",
       "input": "1.25",
-      "python": 1.25,
+      "python": null,
       "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
       "typescript": null,
-      "disagreement": true
+      "disagreement": false
     },
     {
       "module": "plan_common",
@@ -1447,10 +1447,10 @@
       "function": "number",
       "kind": "number",
       "input": " 2 ",
-      "python": 2,
+      "python": null,
       "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
       "typescript": null,
-      "disagreement": true
+      "disagreement": false
     },
     {
       "module": "plan_common",

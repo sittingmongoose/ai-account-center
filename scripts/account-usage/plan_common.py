@@ -78,7 +78,18 @@ def platform_name():
 
 
 def number(value):
-    """Finite nonnegative numeric scalars only, including API numeric strings."""
+    """Finite nonnegative numeric scalars only. A numeric string is not a scalar:
+    the TS reference boundary (claude-desktop-live-service `nonnegative`) returns
+    null for '1.25' and ' 2 ', so this refuses every non-number too."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def api_number(value):
+    """A provider API scalar that may arrive as a numeric string (Kimi amounts and
+    percentages, Z.ai counters). Coerces with float(); the strict public scalar
+    boundary that matches TS is `number` above."""
     if isinstance(value, bool) or value is None:
         return None
     try:
@@ -90,7 +101,7 @@ def number(value):
 
 def percent(value):
     """Preserve reported used utilization above 100%; clamp only visual bars."""
-    return number(value)
+    return api_number(value)
 
 
 def reset_at(value):
@@ -99,6 +110,15 @@ def reset_at(value):
         return None
     try:
         timestamp = number(value)
+        if timestamp is None and isinstance(value, str):
+            # A numeric-string timestamp still normalizes here; only the public
+            # scalar boundary above refuses strings, not the reset reader.
+            try:
+                coerced = float(value)
+            except (TypeError, ValueError, OverflowError):
+                coerced = None
+            if coerced is not None and math.isfinite(coerced) and coerced >= 0:
+                timestamp = coerced
         if timestamp is not None:
             if timestamp <= 0:
                 return None
@@ -155,15 +175,15 @@ def usage_window(key, label, used_percent=None, reset=None, minutes=None,
         "usedPercent": used_percent,
         "remainingPercent": round(max(0, 100 - used_percent), 8) if used_percent is not None else None,
         "resetAt": reset_at(reset),
-        "windowMinutes": number(minutes),
-        "used": number(used),
-        "limit": number(limit),
+        "windowMinutes": api_number(minutes),
+        "used": api_number(used),
+        "limit": api_number(limit),
         "unit": unit,
     }
     if kind in ("rate_limit", "balance", "spend", "extra_usage"):
         result["kind"] = kind
     if remaining is not None:
-        result["remaining"] = number(remaining)
+        result["remaining"] = api_number(remaining)
     if expires_at is not None:
         result["expiresAt"] = reset_at(expires_at)
     if isinstance(unlimited, bool):

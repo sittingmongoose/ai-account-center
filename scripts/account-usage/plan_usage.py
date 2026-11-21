@@ -18,7 +18,7 @@ import urllib.parse
 import uuid
 
 from plan_common import (CAPSULE_ID, KEY_ID, KEY_PROVIDERS, CollectionError, HttpClient, PROVIDERS, account,
-                         credentials, number, percent, plan_label, platform_name, reset_at, usage_window, utc_now)
+                         credentials, api_number, percent, plan_label, platform_name, reset_at, usage_window, utc_now)
 
 
 def _valid_windows(windows):
@@ -44,9 +44,9 @@ def parse_go(payload):
 
 
 def _kimi_counts(detail):
-    limit = number(detail.get("limit"))
-    used = number(detail.get("used"))
-    remaining = number(detail.get("remaining"))
+    limit = api_number(detail.get("limit"))
+    used = api_number(detail.get("used"))
+    remaining = api_number(detail.get("remaining"))
     if limit is not None and limit > 0:
         if used is None and remaining is not None and remaining <= limit:
             used = limit - remaining
@@ -75,7 +75,7 @@ def _kimi_booster(payload):
     result = []
     balance = wallet.get("balance")
     if isinstance(balance, dict) and balance.get("type") == "BOOSTER":
-        total_raw, left_raw = number(balance.get("amount")), number(balance.get("amountLeft"))
+        total_raw, left_raw = api_number(balance.get("amount")), api_number(balance.get("amountLeft"))
 
         def cents(raw):
             if raw is None:
@@ -91,7 +91,7 @@ def _kimi_booster(payload):
                                         used=used / scale if used is not None else None,
                                         limit=total / scale, remaining=left / scale if left is not None else None,
                                         unit=unit, kind="balance"))
-    limit, used = number(monthly_limit.get("priceInCents")), number(monthly_used.get("priceInCents"))
+    limit, used = api_number(monthly_limit.get("priceInCents")), api_number(monthly_used.get("priceInCents"))
     enabled = wallet.get("monthlyChargeLimitEnabled")
     if limit is not None or used is not None or isinstance(enabled, bool):
         ratio = percent(100 * used / limit) if used is not None and limit is not None and limit > 0 else None
@@ -119,7 +119,7 @@ def parse_kimi(payload):
             detail, window = item.get("detail"), item.get("window")
             if not isinstance(detail, dict) or not isinstance(window, dict):
                 continue
-            duration = number(window.get("duration"))
+            duration = api_number(window.get("duration"))
             unit = window.get("timeUnit")
             multiplier = {"TIME_UNIT_MINUTE": 1, "TIME_UNIT_HOUR": 60, "TIME_UNIT_DAY": 1440, "TIME_UNIT_WEEK": 10080,
                           "TIME_UNIT_SECOND": 1 / 60}.get(unit)
@@ -141,7 +141,7 @@ def parse_kimi(payload):
                                               ("limit_month_total", "monthly", "Monthly total", None),
                                               ("limit_month_code", "monthly-code", "Monthly coding", None)):
             item = usages.get(upstream)
-            ratio = number(item.get("used_ratio")) if isinstance(item, dict) else None
+            ratio = api_number(item.get("used_ratio")) if isinstance(item, dict) else None
             legacy = windows.get(key)
             modern_reset = reset_at(item.get("reset_time")) if isinstance(item, dict) else None
             legacy_reset = legacy.get("resetAt") if legacy else None
@@ -188,7 +188,7 @@ def parse_zai(payload):
         meter_type = item.get("type")
         if meter_type not in ("TOKENS_LIMIT", "CREDIT_LIMIT", "TIME_LIMIT"):
             continue
-        count = number(item.get("number"))
+        count = api_number(item.get("number"))
         time_unit = item.get("unit")
         monthly_requests = meter_type == "TIME_LIMIT" and time_unit == 5 and count == 1
         # Public implementations disagree on units 4/5 outside the observed
@@ -209,7 +209,7 @@ def parse_zai(payload):
         if key in seen:
             key += "-{}".format(index)
         seen.add(key)
-        used, limit = number(item.get("currentValue")), number(item.get("usage"))
+        used, limit = api_number(item.get("currentValue")), api_number(item.get("usage"))
         ratio = percent(item.get("percentage"))
         if used is not None and limit is not None and limit > 0:
             ratio = percent(100 * used / limit)
@@ -223,7 +223,7 @@ def parse_zai(payload):
         if meter_type == "TIME_LIMIT" and isinstance(details, list):
             labels = {"search-prime": "Search", "web-reader": "Web reader", "zread": "Zread"}
             for detail in details[:30]:
-                if not isinstance(detail, dict) or detail.get("modelCode") not in labels or number(detail.get("usage")) is None:
+                if not isinstance(detail, dict) or detail.get("modelCode") not in labels or api_number(detail.get("usage")) is None:
                     continue
                 code = detail["modelCode"]
                 windows.append(usage_window(key + "-" + code, labels[code], used=detail["usage"],
@@ -337,13 +337,13 @@ def parse_qwen(payload, subscription=None, quota_config=None, addon=None):
     for prefix, key, label, minutes in (("per5Hour", "5h", "5 hours", 300),
                                        ("per1Week", "weekly", "Weekly", 10080),
                                        ("per1Month", "monthly", "Monthly", None)):
-        ratio = number(data.get(prefix + "Percentage"))
+        ratio = api_number(data.get(prefix + "Percentage"))
         reset = data.get(prefix + "ResetTime")
         if ratio is None and reset_at(reset) is None:
             continue
         used_percent = ratio * 100 if ratio is not None and ratio <= 1 else ratio
         limit_keys = {"5h": ("five_hour", "fiveHour"), "weekly": ("weekly",), "monthly": ("monthly",)}[key]
-        limit = next((number(quotas.get(name)) for name in limit_keys if number(quotas.get(name)) is not None), None)
+        limit = next((api_number(quotas.get(name)) for name in limit_keys if api_number(quotas.get(name)) is not None), None)
         valid_percent = percent(used_percent)
         used = limit * valid_percent / 100 if limit is not None and valid_percent is not None else None
         remaining = limit - used if limit is not None and used is not None else None
@@ -361,13 +361,13 @@ def parse_qwen(payload, subscription=None, quota_config=None, addon=None):
         except CollectionError:
             extras = None
         if isinstance(extras, dict):
-            limit, remaining = number(extras.get("totalCredits")), number(extras.get("remainingCredits"))
+            limit, remaining = api_number(extras.get("totalCredits")), api_number(extras.get("remainingCredits"))
             used = limit - remaining if limit is not None and remaining is not None and remaining <= limit else None
             ratio = 100 * used / limit if used is not None and limit > 0 else None
             if limit is not None or remaining is not None:
                 windows.append(usage_window("addon-credits", "Additional credits", ratio, used=used,
                                             limit=limit, remaining=remaining, unit="credits", kind="balance"))
-            active = number(extras.get("activeCount"))
+            active = api_number(extras.get("activeCount"))
             if active is not None:
                 windows.append(usage_window("addon-packs", "Active credit packs", remaining=active,
                                             unit="packs", kind="balance"))
@@ -376,7 +376,7 @@ def parse_qwen(payload, subscription=None, quota_config=None, addon=None):
                 for index, item in enumerate(items[:100]):
                     if not isinstance(item, dict):
                         continue
-                    total, remaining = number(item.get("totalCredits")), number(item.get("remainingCredits"))
+                    total, remaining = api_number(item.get("totalCredits")), api_number(item.get("remainingCredits"))
                     expiry = reset_at(item.get("endTime"))
                     if total is None and remaining is None and expiry is None:
                         continue
@@ -388,8 +388,8 @@ def parse_qwen(payload, subscription=None, quota_config=None, addon=None):
                     windows.append(usage_window(key, "Additional credit pack {}".format(index + 1), ratio,
                                                 used=spent, limit=total, remaining=remaining, expires_at=expiry,
                                                 unit="credits", kind="balance"))
-                if all(isinstance(item, dict) and (number(item.get("totalCredits")) is not None or
-                       number(item.get("remainingCredits")) is not None or reset_at(item.get("endTime")) is not None) for item in items):
+                if all(isinstance(item, dict) and (api_number(item.get("totalCredits")) is not None or
+                       api_number(item.get("remainingCredits")) is not None or reset_at(item.get("endTime")) is not None) for item in items):
                     windows.append(usage_window("addon-listed-packs", "Listed active credit packs", remaining=len(items),
                                                 unit="packs", kind="balance"))
     return plan, _valid_windows(windows)

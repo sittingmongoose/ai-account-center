@@ -252,6 +252,22 @@ class PlanUsageTests(unittest.TestCase):
         for value in (True, 0, "2026-10-02T00:00:00", "private", float("inf")):
             self.assertIsNone(common.reset_at(value))
 
+    def test_number_scalar_refuses_numeric_strings_like_ts(self):
+        # m0-spec-F1b: the TS reference boundary (nonnegative) returns null for
+        # numeric strings; the plan helper must agree, not float() them.
+        for value in ("1.25", " 2 ", "0", "1e3", "  ", "+2"):
+            self.assertIsNone(common.number(value))
+        self.assertEqual(common.number(1.25), 1.25)
+        self.assertEqual(common.number(0), 0)
+        # The collector's API scalar still coerces numeric strings (Kimi amounts).
+        self.assertEqual(common.api_number("1.25"), 1.25)
+        self.assertEqual(common.api_number(" 2 "), 2.0)
+        self.assertIsNone(common.api_number("bad"))
+        # The reset reader still normalizes a numeric-string timestamp; only the
+        # public scalar boundary refuses strings.
+        self.assertEqual(common.reset_at("1790899200"), "2026-10-02T00:00:00Z")
+        self.assertEqual(common.reset_at("1790899200000"), "2026-10-02T00:00:00Z")
+
     def test_email_and_plan_are_scalar_allowlisted(self):
         self.assertEqual(common.email_address("user@example.com"), "user@example.com")
         self.assertIsNone(common.email_address("token secret"))
