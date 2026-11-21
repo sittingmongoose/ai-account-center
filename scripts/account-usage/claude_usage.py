@@ -1401,6 +1401,7 @@ RESET_LOGIN_REASONS = {
     "identity_unconfirmed": "identity-unconfirmed",
     "no_matching_code_login": "no-matching-code-login",
     "ambiguous_code_login": "ambiguous-code-login",
+    "signed_out": "signed-out",
 }
 
 
@@ -1461,8 +1462,10 @@ def capture_reset_login(request):
         try:
             login = _desktop_reset_login(request)
         except UsageUnavailable as error:
+            # Nothing is pinned yet, so a signed-out Desktop is the sign-in the user can
+            # perform. A missing Code login is only the refusal for a pinned target.
             if error.status == "needs_sign_in":
-                raise UsageUnavailable("no_matching_code_login") from error
+                raise UsageUnavailable("signed_out") from error
             raise
     return {"account": login["account"], "organization": login["organization"], "savedLoginBinding": login["binding"],
             "observedAtMs": int(time.time() * 1000)}

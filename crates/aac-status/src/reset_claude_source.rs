@@ -127,6 +127,7 @@ fn login_reason(raw: &Value) -> Option<&'static str> {
         "identity-unconfirmed" => Some("identity-unconfirmed"),
         "no-matching-code-login" => Some("no-matching-code-login"),
         "ambiguous-code-login" => Some("ambiguous-code-login"),
+        "signed-out" => Some("signed-out"),
         _ => None,
     }
 }
@@ -181,12 +182,8 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
     if let Some(reason) = login_reason(&raw) {
         return Err(reason);
     }
-    if raw["unavailable"] == true {
-        match raw["reason"].as_str() {
-            Some("rate-limited") => return Err("rate-limited"),
-            Some("signed-out") => return Err("signed-out"),
-            _ => {}
-        }
+    if raw["unavailable"] == true && raw["reason"].as_str() == Some("rate-limited") {
+        return Err("rate-limited");
     }
     if raw["savedLoginBinding"] != capture.saved_login_binding
         || raw["identity"]["account"] != capture.account

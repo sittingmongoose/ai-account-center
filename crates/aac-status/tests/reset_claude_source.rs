@@ -39,6 +39,15 @@ if (root/'ambiguous-code').exists() or (root/'no-code').exists():
  scope['decrypt_cache']=no_desktop
 if (root/'no-code').exists():
  scope['code_reset_logins']=lambda *args:[]
+if (root/'pinned-code-drift').exists():
+ def drift_decrypt(*args):
+  if (root/'capture-done').exists():raise scope['UsageUnavailable']('needs_sign_in')
+  return decrypt(*args)
+ scope['decrypt_cache']=drift_decrypt
+ def drift_codes(*args):
+  if not (root/'capture-done').exists():return []
+  return [{'account':(root/'login').read_text(),'organization':CLIENT,'binding':'b'*64}]
+ scope['code_reset_logins']=drift_codes
 if (root/'ambiguous-code').exists():
  scope['code_reset_logins']=lambda *args:[
   {'account':(root/'login').read_text(),'organization':org,'binding':'a'*64}
@@ -78,7 +87,9 @@ class Client:
 scope['Client']=Client
 if request['action']=='read' and (root/'swap-before-read').exists():
  (root/'login').write_text('44444444-4444-4444-4444-444444444444')
-print(json.dumps(scope['reset_host'](request),allow_nan=False))
+result=scope['reset_host'](request)
+if request['action']=='capture' and (root/'pinned-code-drift').exists():(root/'capture-done').write_text('')
+print(json.dumps(result,allow_nan=False))
 "#.replace("AAC_SOURCE_JSON", &serde_json::to_string(source).unwrap())
     .replace("AAC_ROOT_JSON", &serde_json::to_string(dir.path().to_str().unwrap()).unwrap());
     let bootstrap = "import sys,json,io;p=json.loads(sys.stdin.buffer.read().decode('utf-8'));sys.stdin=io.StringIO(json.dumps(p['request']));exec(compile(p['helperSource'],'managed-fixture','exec'))";
@@ -113,10 +124,23 @@ fn claude_ambiguous_capture_keeps_its_named_refusal() {
     assert!(!dir.path().join("provider-reads").exists());
 }
 #[test]
-fn claude_capture_without_a_matching_code_login_keeps_its_named_refusal() {
+fn claude_signed_out_desktop_capture_names_the_signin_instead_of_a_missing_code_login() {
     let (dir, command) = setup();
     std::fs::write(dir.path().join("no-code"), "").unwrap();
     let db = dir.path().join("claims.sqlite");
+    assert_eq!(
+        reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
+        "signed-out"
+    );
+    assert!(!dir.path().join("provider-reads").exists());
+}
+#[test]
+fn claude_pinned_read_without_a_matching_code_login_keeps_its_named_refusal() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("pinned-code-drift"), "").unwrap();
+    let db = dir.path().join("claims.sqlite");
+    // Capture pins the Desktop login's organization; before the read, Desktop signs out and a
+    // Code login for another organization appears, so no login matches the pinned target.
     assert_eq!(
         reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
         "no-matching-code-login"

@@ -221,8 +221,11 @@ pub(crate) enum Legacy {
     Imported(usize),
     /// The file could not be read as checkpoints, but the store has refilled; the file is gone.
     Refilled,
-    /// The archived file is unimportable and the store has yet to refill.
+    /// The archived file is unimportable and the store has yet to refill; this open
+    /// recorded it, so [`open_with`] warns once.
     Kept,
+    /// The same unimportable bytes were recorded by an earlier store open.
+    AlreadyKept,
 }
 
 /// Import the main-branch reader's SQLite file once, then remove it (and a journal it left).
@@ -297,10 +300,10 @@ pub(crate) fn retire_legacy(engine: &Engine, root: &Path) -> Result<Legacy> {
             Legacy::Refilled
         }
         None => {
-            if !rejected {
-                analytics_cache::put(engine, REJECTED_KEY, fingerprint.as_bytes())?;
-                tracing::warn!("Cursor billing file kept until the store refills");
+            if rejected {
+                return Ok(Legacy::AlreadyKept);
             }
+            analytics_cache::put(engine, REJECTED_KEY, fingerprint.as_bytes())?;
             return Ok(Legacy::Kept);
         }
     };
@@ -331,7 +334,8 @@ pub(crate) fn open(root: &Path) -> BillingStore {
 
 pub(crate) fn open_with(engine: &Arc<Engine>, root: &Path) -> BillingStore {
     match retire_legacy(engine, root) {
-        Ok(Legacy::Absent | Legacy::Kept) => {}
+        Ok(Legacy::Absent | Legacy::AlreadyKept) => {}
+        Ok(Legacy::Kept) => tracing::warn!("Cursor billing file kept until the store refills"),
         Ok(outcome) => tracing::info!(?outcome, "Cursor billing file moved into the store"),
         Err(error) => {
             tracing::warn!(code = error.code, "Cursor billing file kept");
@@ -590,24 +594,16 @@ mod tests {
         let file = root.join("cache").join(LEGACY_FILE);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, b"not a database").unwrap();
-        let messages = root.join("migration.log");
-        let writer = std::fs::File::create(&messages).unwrap();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(Arc::new(writer))
-            .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            let engine = open_store(root);
-            open_with(&engine, root);
-            engine.close().unwrap();
-            drop(engine);
-            let engine = open_store(root);
-            open_with(&engine, root);
-        });
-        let log = std::fs::read_to_string(messages).unwrap();
-        assert_eq!(log.matches("Cursor billing file kept").count(), 1);
 
         let engine = open_store(root);
         assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Kept);
+        engine.close().unwrap();
+        drop(engine);
+
+        // A second store open finds the same bytes already remembered and keeps them quietly.
+        let engine = open_store(root);
+        open_with(&engine, root);
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::AlreadyKept);
         assert!(file.exists());
         // A changed source must be considered again.
         let other = tempfile::tempdir().unwrap();

@@ -4533,6 +4533,13 @@
     ]
   },
   {
+    "word": "signed_out",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS"
+    ]
+  },
+  {
     "word": "signed-in",
     "cause": null,
     "sources": [
@@ -4544,6 +4551,7 @@
     "cause": null,
     "sources": [
       "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
       "src/web-server/services/account-dashboard-service.ts:macState",
       "src/web-server/services/account-dashboard-service.ts:state",
