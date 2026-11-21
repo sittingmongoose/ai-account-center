@@ -137,7 +137,9 @@ impl Usage {
             Err(reply) => return reply,
         };
 
-        if !sources::is_additional_account_id(&id) {
+        if !sources::is_additional_account_id(&id)
+            && crate::account_usage::producer::recheck::discovered_key_id(&id).is_none()
+        {
             return self.other_recheck(&id, body).await;
         }
         let resolved = match self.producer.lookup_recheck(&id).await {

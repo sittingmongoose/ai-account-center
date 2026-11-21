@@ -1,6 +1,7 @@
 //! G7's per-account Re-check: one source through the native collector, its row
 //! published into the shared generation cache under lane J's guards.
 use super::Producer;
+use crate::account_usage::coordinator::UsageIdentity;
 use crate::account_usage::producer::CompanionInputs;
 use crate::account_usage::{AccountUsageCache, Desktop, sources, sources::Source};
 use crate::lifecycle_recheck;
@@ -14,6 +15,21 @@ pub struct Resolved {
     pub source: Source,
     /// The version 1 manifest supplied this source.
     pub legacy: bool,
+    /// The stored key a per-key OpenCode Go row reads (card OCG1); None for a registry entry.
+    pub pin: Option<UsageIdentity>,
+}
+
+/// A per-key OpenCode Go row id (`<discover entry id>:<identity digest>`, card OCG1): the
+/// entry id it expands from, or None for any other id.
+pub(crate) fn discovered_key_id(id: &str) -> Option<&str> {
+    let (base, digest) = id.rsplit_once(':')?;
+    (base.starts_with("opencode-go:")
+        && sources::is_additional_account_id(base)
+        && digest.len() == 8
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    .then_some(base)
 }
 
 /// The TS per-source forced-refresh debounce (`REFRESH_DEBOUNCE_MS`).
@@ -53,6 +69,7 @@ pub(crate) async fn lookup(
                 .map(|source| Resolved {
                     source,
                     legacy: false,
+                    pin: None,
                 }))
         }
         Ok(sources::Sources::Legacy) => {
@@ -66,6 +83,7 @@ pub(crate) async fn lookup(
                 .map(|source| Resolved {
                     source,
                     legacy: true,
+                    pin: None,
                 }))
         }
         Err(reason) => Err(reason),
@@ -82,7 +100,34 @@ impl Producer {
     }
 
     pub(crate) async fn lookup_recheck(&self, id: &str) -> Result<Option<Resolved>, Decline> {
-        lookup(self.root.clone(), id).await
+        if let Some(found) = lookup(self.root.clone(), id).await? {
+            return Ok(Some(found));
+        }
+        let Some(base) = discovered_key_id(id) else {
+            return Ok(None);
+        };
+        let root = self.root.clone();
+        let registry = tokio::task::spawn_blocking(move || sources::read_registry(&root))
+            .await
+            .map_err(|_| Decline::Internal)??;
+        let sources::Sources::V2(rows) = registry else {
+            return Ok(None);
+        };
+        if !rows.iter().any(|source| source.id == base) {
+            return Ok(None);
+        }
+        // The same expansion and pinning as sampling: only a stored key that no other entry
+        // names has a row, so a digest of a named key (a duplicate) stays unknown.
+        Ok(self
+            .expand_discovery(rows, false)
+            .await
+            .into_iter()
+            .find(|(source, pin)| pin.is_some() && source.id == id)
+            .map(|(source, pin)| Resolved {
+                source,
+                legacy: false,
+                pin,
+            }))
     }
 
     /// Collect exactly one source now: the reading caches' TTL is skipped while
@@ -96,8 +141,14 @@ impl Producer {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             forced_refresh(&mut forced, &resolved.source.id, now)
         };
-        self.additional_row(&resolved.source, resolved.legacy, now, force)
-            .await
+        self.pinned_row(
+            &resolved.source,
+            resolved.pin.as_ref(),
+            resolved.legacy,
+            now,
+            force,
+        )
+        .await
     }
 
     /// Probe a tentative key through the same provider collector as a dashboard re-check.
@@ -120,7 +171,7 @@ impl Producer {
         let Some(current) = self.resolve_recheck(id).await else {
             return Ok(false);
         };
-        if !same_binding(&current.source, expected) {
+        if !same_binding(&current.source, expected) || current.source.id != expected.id {
             return Ok(false);
         }
         for desktop in [Desktop::Mac, Desktop::Windows] {
@@ -475,5 +526,205 @@ mod tests {
             Ok(false)
         );
         assert_eq!(held(&cache, "mac", false).0, before);
+    }
+
+    /// Fixture helper transport: OpenCode Go stores on Ubuntu with three keys (a, b, c), two of
+    /// them also held by the registry's key slots; a collect answers the asked key's own reading.
+    struct StoredKeys {
+        collected: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::account_usage::coordinator::FailoverDeps for StoredKeys {
+        fn transport<'a>(
+            &'a self,
+            _host: &'a crate::account_usage::coordinator::UsageHost,
+            request: &'a Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, ()>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                let stored = |locator: &str, selector: &str, key: &str| {
+                    json!({
+                        "locator":locator.repeat(64), "selectors":[selector], "revision":"2".repeat(64),
+                        "identity":{"kind":"opencode-go-credential","key":key.repeat(64)}
+                    })
+                };
+                if request["action"] == "inventory" {
+                    return Ok(json!({"version":1,"action":"inventory","candidates":[
+                        stored("1", "discover", "a"), stored("3", "discover", "b"),
+                        stored("5", "discover", "c"), stored("7", "aac-key:2e034ec2", "a"),
+                        stored("9", "aac-key:52f3251b", "b")
+                    ]}));
+                }
+                let key = request["candidate"]["identity"]["key"]
+                    .as_str()
+                    .unwrap_or("")
+                    .get(..1)
+                    .unwrap_or("")
+                    .to_owned();
+                self.collected
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(key.clone());
+                let used = match key.as_str() {
+                    "a" => 11,
+                    "b" => 22,
+                    "c" => 33,
+                    _ => 99,
+                };
+                let at = "2026-11-21T17:00:00.000Z";
+                Ok(json!({
+                    "version":1,"action":"collect","candidate":request["candidate"],"failureCode":null,
+                    "sample":{"status":"ok","sampledAt":at,"fetchedAt":at,
+                        "windows":[{"key":"weekly","label":"Weekly","usedPercent":used}]}
+                }))
+            })
+        }
+
+        fn hosts<'a>(
+            &'a self,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Vec<crate::account_usage::coordinator::UsageHost>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Vec::new() })
+        }
+
+        fn now(&self) -> f64 {
+            1_795_280_400_000.0
+        }
+    }
+
+    /// Card OCG1 follow-up: Re-check finds each per-key OpenCode Go row and reads that one key,
+    /// with the same pinning and no-duplicate rules as sampling; an unknown id stays unknown.
+    #[tokio::test]
+    async fn a_recheck_reads_each_stored_opencode_go_key_of_its_own_row() {
+        let dir = tempfile::tempdir().expect("fixture root");
+        let root = fs::canonicalize(dir.path()).expect("canonical root");
+        set_mode(&root, 0o700);
+        let entry = |id: &str, credential: Value| {
+            json!({
+                "id":id,"provider":"opencode-go","platform":"ubuntu","sshHost":null,
+                "label":"OpenCode Go","credential":credential,"createdAt":null,"createdBy":null
+            })
+        };
+        registry(
+            &root,
+            json!([
+                entry("opencode-go:usage", json!({"kind":"discover"})),
+                entry(
+                    "opencode-go:acct:52f3251b",
+                    json!({"kind":"aac-key","keyId":"52f3251b"})
+                ),
+                entry(
+                    "opencode-go:acct:2e034ec2",
+                    json!({"kind":"aac-key","keyId":"2e034ec2"})
+                ),
+            ]),
+        );
+        let owners = Owners::defaults(aac_files::registry::rows().expect("bundled private files"));
+        let deps = std::sync::Arc::new(StoredKeys {
+            collected: std::sync::Mutex::default(),
+        });
+        let mut producer = Producer::new(root.clone(), owners.clone());
+        producer.failover = std::sync::Arc::new(
+            crate::account_usage::coordinator::FailoverCoordinator::new(deps.clone(), owners),
+        );
+        let rows = [
+            ("opencode-go:usage:cccccccc", "c", 33.0),
+            ("opencode-go:acct:52f3251b", "b", 22.0),
+            ("opencode-go:acct:2e034ec2", "a", 11.0),
+        ];
+        let cache = AccountUsageCache::default();
+        publish(
+            &cache,
+            rows.iter()
+                .map(|(id, _, _)| row(id, "opencode-go"))
+                .collect(),
+        );
+        let companions = CompanionInputs::default();
+        for (id, key, used) in rows {
+            deps.collected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            let answer = producer
+                .recheck(&cache, &companions, id)
+                .await
+                .expect("recheck")
+                .unwrap_or_else(|| panic!("{id} must resolve"));
+            assert_eq!(answer["id"], id);
+            assert_eq!(answer["status"], "ok", "{id}: {answer}");
+            assert_eq!(
+                answer["windows"][0]["usedPercent"].as_f64(),
+                Some(used),
+                "{id}"
+            );
+            assert_eq!(
+                *deps.collected.lock().unwrap_or_else(|e| e.into_inner()),
+                [key],
+                "{id} reads its own key, once"
+            );
+            let (_, dashboard) = held(&cache, "mac", false);
+            let published = dashboard["accounts"]
+                .as_array()
+                .expect("accounts")
+                .iter()
+                .find(|account| account["id"] == id)
+                .cloned()
+                .expect("published row");
+            assert_eq!(
+                published["windows"][0]["usedPercent"].as_f64(),
+                Some(used),
+                "{id}"
+            );
+        }
+        // Unknown digests, and the digest of a key another entry already names (no duplicate
+        // row), stay "not found" and read nothing.
+        deps.collected
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        for unknown in [
+            "opencode-go:usage:dddddddd",
+            "opencode-go:usage:aaaaaaaa",
+            "opencode-go:acct:99999999",
+            "zai:usage:cccccccc",
+        ] {
+            assert!(
+                producer
+                    .recheck(&cache, &companions, unknown)
+                    .await
+                    .expect("recheck")
+                    .is_none(),
+                "{unknown}"
+            );
+        }
+        assert!(
+            deps.collected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn only_a_digest_after_an_opencode_go_entry_id_is_a_per_key_row() {
+        assert_eq!(
+            discovered_key_id("opencode-go:usage:cccccccc"),
+            Some("opencode-go:usage")
+        );
+        for other in [
+            "opencode-go:usage",
+            "opencode-go:acct:52f3251b",
+            "opencode-go:usage:CCCCCCCC",
+            "opencode-go:usage:ccccccc",
+            "zai:usage:cccccccc",
+            "codex:work:cccccccc",
+        ] {
+            assert_eq!(discovered_key_id(other), None, "{other}");
+        }
     }
 }

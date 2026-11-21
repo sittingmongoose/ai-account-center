@@ -185,7 +185,7 @@ impl Producer {
     /// entry of the provider already names (`aac-key:<id>`): one row per such key, pinned to
     /// that key's identity. When every stored key is already named, the entry adds no row and
     /// no read; an unreadable store keeps the entry as it was.
-    async fn expand_discovery(
+    pub(super) async fn expand_discovery(
         &self,
         sources: Vec<Source>,
         legacy: bool,
@@ -209,7 +209,7 @@ impl Producer {
     }
 
     /// One source's row, its read pinned to one stored key's identity when it has one.
-    async fn pinned_row(
+    pub(super) async fn pinned_row(
         &self,
         source: &Source,
         pin: Option<&UsageIdentity>,
