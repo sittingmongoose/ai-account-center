@@ -1629,7 +1629,7 @@ describe('usage freshness between dashboard refreshes', () => {
     expect(calls).toBe(1);
   });
 
-  it('retains the real sample and explains a timed out collection', async () => {
+  it('returns the last good rows with their read time while a read is still running', async () => {
     let now = Date.parse('2026-10-01T12:00:00Z');
     let blocked = false;
     const service = new AccountDashboardService(
@@ -1639,14 +1639,69 @@ describe('usage freshness between dashboard refreshes', () => {
         getAdditionalAccounts: async () => (blocked ? new Promise(() => {}) : [additional()]),
       })
     );
-    const first = await service.get('windows');
+    const first = (await service.get('windows')).accounts.find((a) => a.id === 'cursor:usage')!;
     now += 61_000;
     blocked = true;
-    const next = await service.get('windows', true);
-    expect(next.accounts.find((a) => a.id === 'cursor:usage')).toMatchObject({
+    const next = (await service.get('windows', true)).accounts.find(
+      (a) => a.id === 'cursor:usage'
+    )!;
+    // A slow read is not a failed one: no "did not finish" relabel of a current reading.
+    expect(next).toMatchObject({
+      status: 'ok',
+      message: null,
+      sampledAt: first.sampledAt,
+      fetchedAt: first.fetchedAt,
+    });
+    expect(next.cacheReason).toBeUndefined();
+  });
+
+  it('shows a hung read as a pending refresh, never as live or failed', async () => {
+    let now = Date.parse('2026-10-01T12:00:00Z');
+    let blocked = false;
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        responseBudgetMs: 10,
+        getAdditionalAccounts: async () => (blocked ? new Promise(() => {}) : [additional()]),
+      })
+    );
+    const first = (await service.get('windows')).accounts.find((a) => a.id === 'cursor:usage')!;
+    blocked = true;
+    now += 121_000;
+    const next = (await service.get('windows', true)).accounts.find(
+      (a) => a.id === 'cursor:usage'
+    )!;
+    expect(next).toMatchObject({
+      status: 'cached',
+      cacheReason: 'refresh_pending',
+      fetchedAt: first.fetchedAt,
+    });
+    expect(next.message).not.toContain('did not finish');
+  });
+
+  it('keeps a real failure a failure', async () => {
+    let now = Date.parse('2026-10-01T12:00:00Z');
+    let failing = false;
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        responseBudgetMs: 1000,
+        getAdditionalAccounts: async () => {
+          if (failing) throw new Error('fixture read failed');
+          return [additional()];
+        },
+      })
+    );
+    const first = (await service.get('windows')).accounts.find((a) => a.id === 'cursor:usage')!;
+    now += 61_000;
+    failing = true;
+    const next = (await service.get('windows', true)).accounts.find(
+      (a) => a.id === 'cursor:usage'
+    )!;
+    expect(next).toMatchObject({
       status: 'cached',
       cacheReason: 'read_failed',
-      sampledAt: first.accounts.find((a) => a.id === 'cursor:usage')!.sampledAt,
+      fetchedAt: first.fetchedAt,
     });
   });
 });
@@ -1683,11 +1738,19 @@ it('keeps a timed-out Antigravity collection retained in its synchronous project
   );
   now += 61_000;
   blocked = true;
+  // Still reading at the deadline: the retained row keeps its own read time and status.
+  expect(
+    (await service.get('windows', true)).accounts.find((a) => a.id === account.id)
+  ).toMatchObject({
+    status: 'ok',
+    sampledAt: account.sampledAt,
+  });
+  now += 60_000;
   expect(
     (await service.get('windows', true)).accounts.find((a) => a.id === account.id)
   ).toMatchObject({
     status: 'cached',
-    cacheReason: 'read_failed',
+    cacheReason: 'refresh_pending',
     sampledAt: account.sampledAt,
   });
 });
