@@ -304,10 +304,15 @@ impl Persisted {
 
 /// RECHECK-FINAL-ASTRA M1: a copy of a settled Muse session added later under a renamed folder,
 /// as a hard link or as bytes, still counts once: one persisted session and one 100/10 hour.
-fn settled_copy_counts_once(link: bool) {
+fn settled_copy_counts_once(link: bool, earlier_copy: bool) {
     let home = tempfile::tempdir().unwrap();
     let h = home.path();
-    let live = h.join(".local/share/muse/sessions/session-a/session.jsonl");
+    let (owner, copy) = if earlier_copy {
+        ("session-b", "session-a")
+    } else {
+        ("session-a", "session-b")
+    };
+    let live = h.join(format!(".local/share/muse/sessions/{owner}/session.jsonl"));
     write(&live, &muse_session(100));
     age(&live);
     let mut store = Persisted::default();
@@ -324,7 +329,7 @@ fn settled_copy_counts_once(link: bool) {
     assert_eq!(print["settledCheckedSlot"], 1, "the session settled: {settled}");
     store.apply(&settled);
 
-    let kept = h.join("lab/retained/run/muse/session-b/session.jsonl");
+    let kept = h.join(format!(".local/share/muse/sessions/{copy}/session.jsonl"));
     fs::create_dir_all(kept.parent().unwrap()).unwrap();
     if link {
         fs::hard_link(&live, &kept).unwrap();
@@ -343,12 +348,16 @@ fn settled_copy_counts_once(link: bool) {
 #[cfg(unix)]
 #[test]
 fn a_muse_hard_link_added_after_settling_counts_once() {
-    settled_copy_counts_once(true);
+    for earlier in [false, true] {
+        settled_copy_counts_once(true, earlier);
+    }
 }
 
 #[test]
 fn a_muse_byte_copy_added_after_settling_counts_once() {
-    settled_copy_counts_once(false);
+    for earlier in [false, true] {
+        settled_copy_counts_once(false, earlier);
+    }
 }
 
 // ----- M3: enumeration errors are named, never an empty success -----------------------------------
