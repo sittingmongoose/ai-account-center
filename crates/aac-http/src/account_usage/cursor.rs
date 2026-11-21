@@ -232,7 +232,12 @@ impl Reader {
         let dedupe = async {
             let (binary, os, billing, local) = tokio::task::spawn_blocking(move || {
                 let (binary, os, billing) = local_reader().ok()?;
-                Some((binary?, os, billing, local_cursor_cells(&engine, since, until)?))
+                Some((
+                    binary?,
+                    os,
+                    billing,
+                    local_cursor_cells(&engine, since, until)?,
+                ))
             })
             .await
             .ok()??;
@@ -527,7 +532,11 @@ mod tests {
         let (one, zero, other) = (OsStr::new("1"), OsStr::new("0"), OsStr::new("yes"));
         let test = OsStr::new("test");
         assert!(billing_enabled(None, None, installed.path()));
-        assert!(billing_enabled(None, Some(OsStr::new("production")), installed.path()));
+        assert!(billing_enabled(
+            None,
+            Some(OsStr::new("production")),
+            installed.path()
+        ));
         assert!(!billing_enabled(None, None, checkout.path()));
         assert!(!billing_enabled(None, Some(test), installed.path()));
         assert!(!billing_enabled(Some(zero), None, installed.path()));

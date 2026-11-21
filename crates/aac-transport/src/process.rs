@@ -684,7 +684,10 @@ impl Computer {
                     cmd.env("AAC_APP_UPDATE_STATE_DIR", directory);
                 }
                 if let Some(enabled) = options.local_cursor_billing {
-                    cmd.env("AAC_CURSOR_BILLING_ENABLED", if enabled { "1" } else { "0" });
+                    cmd.env(
+                        "AAC_CURSOR_BILLING_ENABLED",
+                        if enabled { "1" } else { "0" },
+                    );
                 }
                 (cmd, None)
             }
