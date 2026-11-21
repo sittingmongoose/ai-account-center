@@ -385,6 +385,8 @@ fn scan_source_state(
     let unmeasured_files = discovery["unmeasuredFiles"]
         .as_u64()
         .filter(|count| (1..=MAX_FILE_COUNT).contains(count));
+    let unread_usage = (discovery["unreadUsage"] == true).then_some(true);
+    let estimated_clock = (discovery["estimatedClock"] == true).then_some(true);
     let mut source = json!({
         "tool": kind,
         "host": host,
@@ -392,10 +394,16 @@ fn scan_source_state(
         "cause": cause,
         "lastScanAt": aac_num::ecma::to_iso_string(now).unwrap_or_default(),
     });
-    if freshness.is_some() || unmeasured_files.is_some() {
+    if freshness.is_some()
+        || unmeasured_files.is_some()
+        || unread_usage.is_some()
+        || estimated_clock.is_some()
+    {
         source["counts"] = json!(Counts {
             freshness,
             unmeasured_files,
+            unread_usage,
+            estimated_clock,
             ..Counts::default()
         });
     }
@@ -1148,6 +1156,7 @@ mod tests {
                 .contains("4 local chat data files expose no numeric usage")
         );
 
+        let measured = answer["rows"].clone();
         answer["rows"] = json!([]);
         let freshness = &mut answer["discovery"]["kinds"]["cursor"]["freshness"];
         freshness["state"] = json!("unknown");
@@ -1164,10 +1173,62 @@ mod tests {
             current["sources"][0]["lastScanAt"]
         );
 
+        // A usage-shaped record the reader could not decode and a file-time estimate: the measured
+        // totals and dates stand, and the view names both pieces of evidence.
+        let discovery = &mut answer["discovery"]["kinds"]["cursor"];
+        discovery["unreadUsage"] = json!(true);
+        discovery["estimatedClock"] = json!(true);
+        let disclosed = pass(&answer, now + 2);
+        assert_eq!(disclosed["sources"][0]["state"], "cached");
+        assert_eq!(disclosed["sources"][0]["cause"], "freshness_unverified");
+        let detail = disclosed["sources"][0]["detail"]
+            .as_str()
+            .expect("coverage disclosure");
+        assert!(detail.contains("current usage coverage is unverified"));
+        assert!(detail.contains(
+            "a usage-shaped record could not be read; its tokens are not counted until a later scan reads it"
+        ));
+        assert!(detail.contains(
+            "some usage records carry no event timestamp; their file times are not used as usage dates"
+        ));
+        assert_eq!(disclosed["sources"][0]["unmeasuredFiles"], 4);
+        assert_eq!(
+            disclosed["history"]["sources"][0]["freshness"]["newestDataMs"], data_at,
+            "measured date kept while the new evidence is incomplete"
+        );
+        assert_eq!(
+            disclosed["history"]["sources"][0]["unreadUsage"],
+            json!(true)
+        );
+        assert_eq!(
+            disclosed["history"]["sources"][0]["estimatedClock"],
+            json!(true)
+        );
+
+        // An estimated date alone is disclosed and keeps a current clock: numbers are counted.
+        let discovery = &mut answer["discovery"]["kinds"]["cursor"];
+        discovery["unreadUsage"] = Value::Null;
+        discovery["freshness"]["state"] = json!("current");
+        discovery["freshness"]["activityComplete"] = json!(true);
+        answer["rows"] = measured;
+        let estimated = pass(&answer, now + 3);
+        assert_eq!(estimated["sources"][0]["state"], "ok");
+        assert_eq!(estimated["sources"][0]["cause"], Value::Null);
+        let detail = estimated["sources"][0]["detail"]
+            .as_str()
+            .expect("estimate disclosure");
+        assert!(detail.contains("no event timestamp"));
+        assert!(!detail.contains("usage-shaped record"));
+        assert_eq!(
+            estimated["history"]["sources"][0]["unreadUsage"],
+            Value::Null,
+            "a verified read clears the disclosure"
+        );
+
         let freshness = &mut answer["discovery"]["kinds"]["cursor"]["freshness"];
         freshness["state"] = json!("stale");
         freshness["newestActivityMs"] = json!(now);
-        let stale = pass(&answer, now + 2);
+        let stale = pass(&answer, now + 4);
         assert_eq!(stale["sources"][0]["state"], "stale");
         assert_eq!(stale["sources"][0]["cause"], "newer_activity");
         let detail = stale["sources"][0]["detail"]
@@ -1176,8 +1237,9 @@ mod tests {
         assert!(detail.contains("newer activity"));
         assert!(detail.contains("no numeric usage"));
 
+        answer["rows"] = json!([]);
         answer["kinds"]["cursor"]["readFailures"] = json!(1);
-        let failed = pass(&answer, now + 3);
+        let failed = pass(&answer, now + 5);
         assert_eq!(failed["sources"][0]["state"], "unreadable");
         assert_eq!(failed["sources"][0]["cause"], "read_failed");
         let detail = failed["sources"][0]["detail"]
