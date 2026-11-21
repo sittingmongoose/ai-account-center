@@ -55,7 +55,7 @@ public static class FixtureRender
             await Settle(window);
             SavePng(window, Path.Combine(directory, $"panel-{name}.png"));
             report.Checks[$"{name}_fable_on_max_only"] = Fable(window);
-            report.Checks[$"{name}_provider_order_today"] = Order(window, new[] { "section:claude", "section:codex", "section:antigravity", "provider:cursor", "provider:muse", "provider:kimi-code", "provider:qwen", "provider:zai", "provider:opencode-go" });
+            report.Checks[$"{name}_provider_order_today"] = Order(window, new[] { "section:claude", "section:codex", "section:antigravity", "provider:cursor", "provider:muse", "provider:kimi-code", "provider:qwen", "provider:zai", "provider:opencode-go:opencode-go:example-1", "provider:opencode-go:opencode-go:example-2" });
             report.Checks[$"{name}_tabular_instrument_sans_resolves"] = FontResolves();
             report.Checks[$"{name}_section_columns_and_names_aligned"] = Columns(window, measures, name);
             // Account switching was removed on 2026-11-14: no Activate, auto-switch toggle or threshold anywhere, and the
@@ -170,6 +170,38 @@ public static class FixtureRender
             await Settle(window);
             report.Checks[$"{name}_provider_details_leave_out_tray_hidden_accounts"] = firstClick && FindUid(window.ContentPanel, "details") is not null && !LeaksHidden();
             window.ToggleDetailsForCheck("prov:zai");
+            await Settle(window);
+
+            // Owner, 2026-11-21: each OpenCode Go account is its own row with its own meters, status and Details, never
+            // "1 of N" under one row; one account's Details lists only that account.
+            var goTwo = Clone(fixture);
+            var goSecond = goTwo.Accounts.First(account => account.Id == "opencode-go:example-2");
+            goSecond.Status = "unavailable"; goSecond.Windows.Clear(); goSecond.Message = "Account usage is temporarily unavailable.";
+            window.ApplyDashboardSample(goTwo);
+            await Settle(window);
+            window.ContentScroll.ScrollToEnd();
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"panel-{name}-opencode-rows.png"));
+            window.ContentScroll.ScrollToHome();
+            var goCards = new[] { "opencode-go:example-1", "opencode-go:example-2" }.Select(id => FindUid(window.ContentPanel, "provider:opencode-go:" + id)).ToArray();
+            string Meta(string id) => FindUid(window.ContentPanel, "meta:" + id) is { } meta ? string.Concat(All(meta).OfType<TextBlock>().Reverse().Select(text => text.Text)) : ""; // who, then its state (docked first)
+            report.Checks[$"{name}_opencode_go_one_row_per_account"] = goCards.All(card => card is not null)
+                && FindUid(window.ContentPanel, "provider:opencode-go") is null
+                && FindMetersIn(goCards[0]!).Any() && !FindMetersIn(goCards[1]!).Any()
+                && Meta("opencode-go:example-1").StartsWith("opencode-go-1 · Cached ", StringComparison.Ordinal)
+                && Meta("opencode-go:example-2") == "opencode-go-2 · Unavailable"
+                && !All(window.ContentPanel).OfType<TextBlock>().Any(text => text.Text.Contains(" · 1 of 2", StringComparison.Ordinal));
+            window.ToggleDetailsForCheck("prov:opencode-go:opencode-go:example-1");
+            await Settle(window);
+            bool Shows(string text) => All(window.ContentPanel).OfType<TextBlock>().Any(block => block.Text.Contains(text, StringComparison.Ordinal));
+            // Details of a provider row with several accounts heads each one with its address; one account's own Details
+            // lists that account alone, so no head and the other account never appears.
+            var goDetails = FindUid(window.ContentPanel, "details");
+            report.Checks[$"{name}_opencode_go_row_details_are_its_own"] = goDetails is not null
+                && FindUid(window.ContentPanel, "provider:opencode-go:opencode-go:example-1") is { } goFirst && FindUid(goFirst, "details") is not null
+                && All(goDetails).OfType<TextBlock>().Any()
+                && !Shows("opencode-go-1@example.com") && !Shows("opencode-go-2@example.com");
+            window.ToggleDetailsForCheck("prov:opencode-go:opencode-go:example-1");
             await Settle(window);
 
             // Details: full-row expansion under Claude 1.
@@ -705,6 +737,8 @@ public static class FixtureRender
         return max.All(id => meters.Any(meter => meter.Key == id + "|fable" && meter.Target == 0))
             && meters.All(meter => meter.Key != "claude:example-2|fable");
     }
+
+    private static IEnumerable<Meter> FindMetersIn(DependencyObject parent) => All(parent).OfType<Meter>();
 
     private static bool Order(MainWindow window, string[] expected)
     {

@@ -518,7 +518,9 @@ public partial class MainWindow : Window
         {
             if (hidden.Contains(provider)) continue;
             var accounts = shown.Where(account => account.Provider == provider).ToArray();
-            ContentPanel.Children.Add(provider is "claude" or "codex" or "antigravity" ? AccountSection(provider, accounts) : ProviderCard(provider, accounts));
+            if (provider is "claude" or "codex" or "antigravity") { ContentPanel.Children.Add(AccountSection(provider, accounts)); continue; }
+            var rows = Formatting.TrayRows(provider, accounts);
+            foreach (var row in rows) ContentPanel.Children.Add(ProviderCard(provider, row, accountRow: rows.Length > 1));
         }
         if (dashboard.Accounts.Count == 0) RenderEmpty("No accounts found", "Your signed-in accounts appear here when AI Account Center discovers them.");
         else if (ContentPanel.Children.Count == (staleSample ? 1 : 0))
@@ -1042,9 +1044,11 @@ public partial class MainWindow : Window
         return Formatting.Amount(used, null) + " of " + limitText + (string.IsNullOrWhiteSpace(window.Unit) ? "" : " " + window.Unit);
     }
 
-    private UIElement ProviderCard(string provider, DashboardAccount[] accounts)
+    private UIElement ProviderCard(string provider, DashboardAccount[] accounts, bool accountRow = false)
     {
         var representative = Representative(accounts);
+        // One account's own row (OpenCode Go) is keyed by that account, so each opens its own Details.
+        var rowId = accountRow ? "prov:" + provider + ":" + representative.Id : "prov:" + provider;
         var windows = Meters(representative).Take(3).ToArray();
         var qwen = provider == "qwen";
         var grid = new Grid { Margin = new Thickness(12, 6, 10, 6), MinHeight = 40 };
@@ -1057,10 +1061,27 @@ public partial class MainWindow : Window
         grid.Children.Add(Ui.Mark(provider, 24));
         var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         identity.Children.Add(Ui.Text(Formatting.ProviderName(provider, representative.ProviderLabel), 13, "Ink", FontWeights.SemiBold, trim: true));
-        var meta = accounts.Length > 1 ? $"{ShortName(representative)} · 1 of {accounts.Length}" : StatusWord(representative) + " " + Formatting.Relative(representative.SampledAt ?? representative.FetchedAt);
-        var metaText = Ui.Text(meta.Trim(), 11.5, "Ink3", trim: true);
-        if (accounts.Length > 1) metaText.ToolTip = Ui.Tip($"These meters are {representative.Email ?? representative.Label} ({StatusWord(representative).ToLowerInvariant()} {Formatting.Relative(representative.SampledAt)}). Details lists all {accounts.Length} accounts.");
-        identity.Children.Add(metaText);
+        if (accountRow)
+        {
+            // The status and reading time stay whole; only a long name is cut short.
+            var (who, state) = Formatting.AccountRowMeta(representative);
+            var line = new DockPanel { LastChildFill = true };
+            var stateText = Ui.Text((who.Length > 0 ? " · " : "") + state, 11.5, "Ink3");
+            DockPanel.SetDock(stateText, Dock.Right);
+            line.Children.Add(stateText);
+            line.Children.Add(Ui.Text(who, 11.5, "Ink3", trim: true));
+            var plan = string.IsNullOrWhiteSpace(representative.Plan) ? "" : $" ({representative.Plan})";
+            line.ToolTip = Ui.Tip($"{Formatting.ProviderName(provider)} {representative.Email ?? representative.Label}{plan}: {StatusWord(representative).ToLowerInvariant()} {Formatting.Relative(representative.SampledAt ?? representative.FetchedAt)}.");
+            line.Uid = "meta:" + representative.Id;
+            identity.Children.Add(line);
+        }
+        else
+        {
+            var meta = accounts.Length > 1 ? $"{ShortName(representative)} · 1 of {accounts.Length}" : StatusWord(representative) + " " + Formatting.Relative(representative.SampledAt ?? representative.FetchedAt);
+            var metaText = Ui.Text(meta.Trim(), 11.5, "Ink3", trim: true);
+            if (accounts.Length > 1) metaText.ToolTip = Ui.Tip($"These meters are {representative.Email ?? representative.Label} ({StatusWord(representative).ToLowerInvariant()} {Formatting.Relative(representative.SampledAt)}). Details lists all {accounts.Length} accounts.");
+            identity.Children.Add(metaText);
+        }
         Grid.SetColumn(identity, 2); grid.Children.Add(identity);
         if (windows.Length == 0)
         {
@@ -1084,11 +1105,13 @@ public partial class MainWindow : Window
             var packs = Formatting.QwenPacks(representative);
             if (packs.Length > 0) { var button = QwenPacksButton(packs); Grid.SetColumn(button, 6); grid.Children.Add(button); }
         }
-        var row = RowShell(grid, "prov:" + provider, false, () => ToggleDetails("prov:" + provider), "View all " + Formatting.ProviderName(provider) + " usage windows, balances and reset times", -1);
+        var row = RowShell(grid, rowId, false, () => ToggleDetails(rowId), accountRow
+            ? "View " + Formatting.ProviderName(provider) + " " + (representative.Email ?? representative.Label) + " usage windows, balances and reset times"
+            : "View all " + Formatting.ProviderName(provider) + " usage windows, balances and reset times", -1);
         var stack = new StackPanel();
         stack.Children.Add(row);
-        if (expanded.Contains("prov:" + provider)) stack.Children.Add(DetailsHost(ProviderDetails(provider, accounts), open: true));
-        var card = Card(stack); card.Uid = "provider:" + provider;
+        if (expanded.Contains(rowId)) stack.Children.Add(DetailsHost(ProviderDetails(provider, accounts), open: true));
+        var card = Card(stack); card.Uid = accountRow ? "provider:" + provider + ":" + representative.Id : "provider:" + provider;
         return card;
     }
 
@@ -1167,8 +1190,18 @@ public partial class MainWindow : Window
         FrameworkElement body;
         if (id.StartsWith("prov:", StringComparison.Ordinal))
         {
-            var provider = id[5..];
-            body = ProviderDetails(provider, DetailAccounts(dashboard, provider));
+            // "prov:<provider>" is a provider row; "prov:<provider>:<account id>" is one account's own row.
+            var rest = id[5..];
+            var colon = rest.IndexOf(':');
+            var provider = colon < 0 ? rest : rest[..colon];
+            var accounts = DetailAccounts(dashboard, provider);
+            if (colon >= 0)
+            {
+                var accountId = rest[(colon + 1)..];
+                accounts = accounts.Where(account => account.Id == accountId).ToArray();
+                if (accounts.Length == 0) return;
+            }
+            body = ProviderDetails(provider, accounts);
         }
         else
         {

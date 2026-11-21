@@ -227,17 +227,27 @@ struct ProviderRow: View {
       let rep = group.representative
       let meters = rep.glanceMeters
       HStack(spacing: 12) {
-        ProviderMark(provider: group.id, size: 24).frame(width: 24)
+        ProviderMark(provider: group.provider, size: 24).frame(width: 24)
         VStack(alignment: .leading, spacing: 1) {
           Text(group.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label).lineLimit(1)
-          Text(meta).font(.system(size: 11.5)).foregroundStyle(palette.label2).lineLimit(1)
+          if let parts = group.accountMeta() {
+            // The status and reading time stay whole; only a long name or plan is cut short.
+            HStack(spacing: 0) {
+              Text(verbatim: parts.who).lineLimit(1).truncationMode(.middle)
+              Text(verbatim: parts.who.isEmpty ? "" : " · ").lineLimit(1).fixedSize()
+              Text(verbatim: parts.state).lineLimit(1).fixedSize()
+            }
+            .font(.system(size: 11.5)).foregroundStyle(palette.label2)
+          } else {
+            Text(meta).font(.system(size: 11.5)).foregroundStyle(palette.label2).lineLimit(1)
+          }
         }
         .frame(width: 158, alignment: .leading)
         if meters.isEmpty {
           Text(rep.message ?? "Usage unavailable").font(.system(size: 12)).foregroundStyle(palette.label3)
             .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-        } else if group.id == "qwen" {
-          meter(meters[0], label: TrayColumns.shortLabel(provider: group.id, meters[0]), amount: true)
+        } else if group.provider == "qwen" {
+          meter(meters[0], label: TrayColumns.shortLabel(provider: group.provider, meters[0]), amount: true)
             .frame(maxWidth: .infinity, alignment: .leading)
           let packs = group.accounts.flatMap { account in account.creditPacks.map { (account, $0) } }
           if !packs.isEmpty { QwenPacksButton(packs: packs, showAccount: group.accounts.count > 1, maxHeight: maxDetailHeight) }
@@ -245,7 +255,7 @@ struct ProviderRow: View {
           ForEach(0..<3, id: \.self) { index in
             Group {
               if index < meters.count {
-                meter(meters[index], label: TrayColumns.shortLabel(provider: group.id, meters[index]), amount: meters.count == 1)
+                meter(meters[index], label: TrayColumns.shortLabel(provider: group.provider, meters[index]), amount: meters.count == 1)
               } else {
                 Color.clear.frame(height: 1)
               }
@@ -262,7 +272,8 @@ struct ProviderRow: View {
       .background { ConcentricRectangle().fill(rowHovered ? palette.rowHover : .clear) }
       .contentShape(Rectangle())
       .overlay {
-        DetailsRowTarget(tooltip: "\(group.label) usage details: windows, balances and reset times",
+        DetailsRowTarget(tooltip: group.isAccountRow ? group.accountHelp
+          : "\(group.label) usage details: windows, balances and reset times",
           identifier: "provider-row-\(group.id)", onHover: { value in withAnimation(.easeOut(duration: 0.14)) { hovered = value } }) {
           showDetails = true
         }
@@ -275,14 +286,7 @@ struct ProviderRow: View {
     }
   }
 
-  private var meta: String {
-    let rep = group.representative
-    if group.accounts.count > 1 {
-      let short = rep.identity.split(separator: "@").first.map(String.init) ?? rep.identity
-      return "\(short) · 1 of \(group.accounts.count)"
-    }
-    return "\(TrayFormat.statusWord(rep.status)) \(TrayFormat.relative(AccountFormatting.date(rep.sampledAt ?? rep.fetchedAt)))"
-  }
+  private var meta: String { group.meta() }
 
   private func meter(_ window: AccountQuotaWindow, label: String, amount: Bool) -> some View {
     let key = "\(group.representative.id)|\(window.key)"

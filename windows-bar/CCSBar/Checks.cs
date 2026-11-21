@@ -386,6 +386,22 @@ public static partial class Checks
         report.Checks["plan_class_gate_agrees_with_the_other_layers"] = classUltra.IsMaxPlanAccount && !classProNamedMax.IsMaxPlanAccount
             && namedMaxNoClass.IsMaxPlanAccount && !classOnlyOnClaude.IsMaxPlanAccount && !nameOnlyOnClaude.IsMaxPlanAccount;
         var mixed = new[] { "zai", "newcode", "codex", "claude", "antigravity", "zai" }.Select(provider => new DashboardAccount { Provider = provider }).ToArray();
+        // Owner, 2026-11-21: OpenCode Go accounts are each their own tray row; other providers keep one row.
+        var goAccounts = new[]
+        {
+            new DashboardAccount { Id = "opencode-go:acct:a", Provider = "opencode-go", Label = "Account 2", Status = "ok", SampledAt = Formatting.Now().AddMinutes(-1).ToString("O") },
+            new DashboardAccount { Id = "opencode-go:acct:b", Provider = "opencode-go", Label = "Account 3", Email = "go-b@example.com", Status = "cached", SampledAt = Formatting.Now().AddMinutes(-3).ToString("O") },
+            new DashboardAccount { Id = "opencode-go:acct:c", Provider = "opencode-go", Label = "Account 4", Status = "unavailable" },
+        };
+        var kimiAccounts = new[] { new DashboardAccount { Id = "kimi:a", Provider = "kimi-code" }, new DashboardAccount { Id = "kimi:b", Provider = "kimi-code" } };
+        var goRows = Formatting.TrayRows("opencode-go", goAccounts);
+        report.Checks["opencode_go_accounts_are_separate_rows"] = goRows.Length == 3 && goRows.All(row => row.Length == 1)
+            && goRows.Select(row => row[0].Id).SequenceEqual(goAccounts.Select(account => account.Id))
+            && Formatting.TrayRows("opencode-go", goAccounts[..1]).Length == 1
+            && Formatting.TrayRows("kimi-code", kimiAccounts) is { Length: 1 } kimiRows && kimiRows[0].Length == 2;
+        report.Checks["opencode_go_row_names_its_account_and_status"] = Formatting.AccountRowMeta(goAccounts[0]) == ("Account 2", "Live 1m ago")
+            && Formatting.AccountRowMeta(goAccounts[1]) == ("go-b", "Cached 3m ago")
+            && Formatting.AccountRowMeta(goAccounts[2]) == ("Account 4", "Unavailable");
         report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
         // The trays honour only "Show in tray" (providers[].trayVisible, settings.trayHiddenProviders); "Show on
         // dashboard" (providers[].visible, settings.hiddenProviders) never hides anything here.

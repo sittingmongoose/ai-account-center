@@ -321,6 +321,7 @@ enum PreviewRenderer {
       let visible = dashboard.visibleAccounts
       let sectionAccounts = visible.filter { ["claude", "codex", "antigravity"].contains($0.provider) }
       let otherGroups = dashboard.providerGroups.filter { !["claude", "codex", "antigravity"].contains($0.id) }
+        .flatMap(\.trayRows)
       var expectedHelp = Set(["header-menu", "footer-dashboard", "footer-refresh", "footer-settings"])
       for account in visible where account.provider == "claude" && account.capabilities.claudeProfileId != nil {
         for platform in account.capabilities.claudePlatforms where ["mac", "windows"].contains(platform) {
