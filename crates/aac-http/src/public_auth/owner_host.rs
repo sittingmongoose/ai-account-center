@@ -557,7 +557,11 @@ impl OwnerHost {
         let store = crate::store_host::StoreBoot::for_public(&ccs);
         let boot_id = random_hex::<12>()?;
         let secret = random_hex::<32>()?;
-        let socket = socket_layout(&ccs, &boot_id)?;
+        let runtime_roots = ["AAC_RUST_RUN_DIR", "XDG_RUNTIME_DIR"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from);
+        let socket = socket_layout(&ccs, &boot_id, runtime_roots);
         Some(json!({
             "ccsDir": ccs,
             "socketPath": socket,
@@ -665,37 +669,34 @@ pub(super) fn renewal_home() -> Option<PathBuf> {
 /// The supervisor's socket layout, including a private short path on deeply nested homes.
 #[cfg(unix)]
 #[allow(unsafe_code)]
-fn socket_layout(ccs: &Path, boot_id: &str) -> Option<PathBuf> {
+fn socket_layout(
+    ccs: &Path,
+    boot_id: &str,
+    runtime_roots: impl IntoIterator<Item = PathBuf>,
+) -> PathBuf {
     let boot = format!("aac-http-{boot_id}");
     let fits = |path: &Path| path.as_os_str().as_encoded_bytes().len() <= 100;
     let classic = ccs.join("run").join(&boot).join("http.sock");
     if fits(&classic) {
-        return Some(classic);
+        return classic;
     }
     let hash = crate::unix::short_name(ccs);
-    for name in ["AAC_RUST_RUN_DIR", "XDG_RUNTIME_DIR"] {
-        if let Some(root) = std::env::var_os(name)
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-        {
-            let path = root
-                .join(format!("aac-{hash}"))
-                .join(&boot)
-                .join("http.sock");
-            if fits(&path) {
-                return Some(path);
-            }
+    for root in runtime_roots.into_iter().filter(|path| path.is_absolute()) {
+        let path = root
+            .join(format!("aac-{hash}"))
+            .join(&boot)
+            .join("http.sock");
+        if fits(&path) && root.is_dir() {
+            return path;
         }
     }
     // SAFETY: geteuid has no preconditions and touches no memory.
     let uid = unsafe { libc::geteuid() };
-    Some(
-        Path::new("/tmp")
-            .join(format!("aac-{uid}"))
-            .join(hash)
-            .join(boot)
-            .join("http.sock"),
-    )
+    Path::new("/tmp")
+        .join(format!("aac-{uid}"))
+        .join(hash)
+        .join(boot)
+        .join("http.sock")
 }
 
 /// Check every directory controlled by the service and create its boot leaf exclusively.
@@ -785,6 +786,28 @@ fn remove_descriptor(descriptor: &aac_files::OwnedStore, boot_id: &str) {
 mod tests {
     #![allow(unsafe_code, clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn a_missing_runtime_root_keeps_a_long_home_bootable() {
+        let scratch = tempfile::tempdir_in("/tmp").unwrap();
+        let ccs = scratch.path().join("c".repeat(110));
+        let missing = scratch.path().join("missing");
+        let boot = "c".repeat(24);
+        let socket = socket_layout(&ccs, &boot, [missing.clone(), scratch.path().to_path_buf()]);
+        assert_eq!(
+            socket,
+            scratch
+                .path()
+                .join(format!("aac-{}", crate::unix::short_name(&ccs)))
+                .join(format!("aac-http-{boot}"))
+                .join("http.sock")
+        );
+
+        let fallback = socket_layout(&ccs, &boot, [missing]);
+        assert!(fallback.starts_with("/tmp"));
+        assert!(!fallback.starts_with(scratch.path()));
+        assert!(fallback.ends_with(format!("aac-http-{boot}/http.sock")));
+    }
 
     #[tokio::test(start_paused = true)]
     async fn status_event_lookup_returns_promptly_when_no_service_publishes() {
