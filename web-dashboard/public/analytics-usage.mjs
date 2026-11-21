@@ -1428,6 +1428,17 @@ export function cursorAccountLine(account, now = Date.now()) {
   if (!account || typeof account !== 'object') return '';
   const at = Date.parse(text(account.readAt));
   const read = finite(at) ? `read ${relTxt(at, now)}` : 'never read';
+  const from = Date.parse(text(account.coverageFrom));
+  const until = Date.parse(text(account.coverageUntil));
+  const covered = finite(from) && finite(until);
+  const utc = stamp => new Date(stamp).toISOString().slice(0, 16).replace('T', ' ');
+  const coverage = covered ? ` Coverage from ${utc(from)} to ${utc(until)} UTC.` : '';
+  const modelNotice = finite(account.unrecognizedModels) && account.unrecognizedModels > 0
+    ? ' Model name not recognised.'
+    : '';
+  const saved = finite(at) ? ` Showing usage ${read}.${coverage}${modelNotice}` : '';
+  const computer = text(account.computer);
+  const signin = `Cursor sign-in needed on ${computer || 'the dashboard computer'}.`;
   switch (account.state) {
     case 'read': {
       // The account feed is the authoritative account total; the local runs are an overlapping
@@ -1457,10 +1468,10 @@ export function cursorAccountLine(account, now = Date.now()) {
       if (total <= 0 && counts?.kept > 0)
         return `Cursor account ${read}: zero measured tokens${notLogged}${local}.`;
       if (total <= 0)
-        return `Cursor account ${read}: ${unlogged > 0 ? 'no tokens logged' : 'no usage in range'}${notLogged}${local}.`;
+        return `Cursor account ${read}: ${unlogged > 0 ? 'no tokens logged' : covered ? 'no usage in covered hours' : 'no usage in range'}${notLogged}${local}.${coverage}${modelNotice}`;
       return matched > 0
-        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${notLogged}${local}.`
-        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${notLogged}${local}.`;
+        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${notLogged}${local}.${coverage}${modelNotice}`
+        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${notLogged}${local}.${coverage}${modelNotice}`;
     }
     case 'no_key':
       return 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.';
@@ -1469,11 +1480,18 @@ export function cursorAccountLine(account, now = Date.now()) {
     case 'no_reader':
       return 'Cursor account: its reader is not built for this computer.';
     case 'unavailable':
+      if (account.cause === 'read_in_progress') return 'Cursor account read in progress.' + saved;
+      if (account.cause === 'signin_needed') return signin + saved;
+      if (account.cause === 'backfill_pending') return 'Cursor account history is still loading.' + saved;
       // The key's token reads the plan meter but sees no usage events (Cursor answers `{}`): never "no usage",
       // and an earlier empty read is not offered as the account's usage.
+      if (account.cause === 'events_not_visible' && computer)
+        return signin + ' The key reads the plan meter only.' + saved;
       if (account.cause === 'events_not_visible')
         return "Cursor account: the key reads the plan meter but not the usage events, so the account's per-request usage is not counted; the Cursor quota card shows the share of the plan used.";
       // An empty answer the plan meter could not confirm (unread, or unable to cover the range): never "no usage".
+      if (account.cause === 'events_unverified' && computer)
+        return signin + ' The plan meter could not verify the empty events response.' + saved;
       if (account.cause === 'events_unverified')
         return "Cursor account: Cursor returned no usage events, and the plan meter could not confirm that nothing was used in this range, so the account's usage is unverified and not counted.";
       return `Cursor account not read just now (${text(account.cause) || 'unavailable'}); ${finite(at) ? `showing its usage as read ${relTxt(at, now)}` : 'nothing of it is counted'}.`;

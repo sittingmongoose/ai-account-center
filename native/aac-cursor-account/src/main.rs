@@ -119,6 +119,9 @@ fn main() {
             ) else {
                 usage()
             };
+            if let Some(answer) = aac_cursor_account::billing::read(&ccs, since, until, now_ms()) {
+                return print(answer);
+            }
             let stored = match keys::load(&ccs) {
                 Ok(Some(stored)) => stored,
                 Ok(None) => return print(json!({"state": "no_key"})),

@@ -15,6 +15,8 @@ export default async (ctx) => {
       url: `http://${ctx.reachHost}:${port}/__upgrade/ready`,
       timeoutMs: 30000,
       env: {
+        AAC_CURSOR_BILLING_ENABLED: '0',
+        AAC_CURSOR_API_BASE: 'http://127.0.0.1:1',
         AAC_UPGRADE_PREVIOUS_UI: String(ctx.args.previousUi || ''),
         AAC_UPGRADE_FIX1_UI: String(ctx.args.fix1Ui || ''),
       },

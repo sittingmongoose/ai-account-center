@@ -350,6 +350,13 @@ export interface AccountAnalyticsHistoryCoverage {
 }
 
 export interface AccountAnalyticsCursorAccount {
+  /** UTC coverage of the signed-in billing feed. */
+  coverageFrom?: string;
+  coverageUntil?: string;
+  /** Measured events whose model name required a fallback slug. */
+  unrecognizedModels?: number;
+  /** The dashboard computer where Cursor sign-in is needed. */
+  computer?: string;
   state: 'no_key' | 'key_rejected' | 'read' | 'unavailable' | 'no_reader';
   /** When the account was last asked (any state). */
   checkedAt: string | null;

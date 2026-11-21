@@ -596,3 +596,25 @@ test('newer independent activity displays Stale with its measured-data and activ
   assert.match(cell.tip, /2026-09-29T12:00:00.000Z/);
   assert.match(cell.tip, /2026-10-01T11:00:00.000Z/);
 });
+
+test('Cursor billing shows hourly coverage and keeps the read time after sign-in expires', () => {
+  const now = Date.parse('2026-11-13T16:30:00Z');
+  const fields = { readAt: '2026-11-13T16:00:00.000Z', coverageFrom: '2026-11-12T12:00:00.000Z',
+    coverageUntil: '2026-11-13T16:00:00.000Z', computer: 'Ubuntu VM' };
+  assert.match(cursorAccountLine({ ...fields, state: 'read', accountTokens: 0 }, now),
+    /no usage in covered hours\. Coverage from 2026-11-12 12:00 to 2026-11-13 16:00 UTC/);
+  assert.match(cursorAccountLine({ ...fields, state: 'unavailable', cause: 'signin_needed' }, now),
+    /^Cursor sign-in needed on Ubuntu VM\. Showing usage read .*\. Coverage from/);
+  assert.equal(cursorAccountLine({ state: 'unavailable', cause: 'signin_needed', computer: 'Ubuntu VM' }, now),
+    'Cursor sign-in needed on Ubuntu VM.');
+});
+
+test('a fallback Cursor model keeps its measured totals and names the model issue', () => {
+  const observations = { state: 'read', accountTokens: 123, unrecognizedModels: 1, unmeasured: 0 };
+  const line = cursorAccountLine(observations, now);
+  assert.match(line, /123 tokens on the account/);
+  assert.match(line, /Model name not recognised\./);
+  assert.doesNotMatch(line, /token counts missing/);
+  assert.match(cursorAccountLine({ ...observations, state: 'unavailable', cause: 'read_in_progress' }, now),
+    /^Cursor account read in progress\./);
+});
