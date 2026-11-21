@@ -771,7 +771,7 @@
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1155
+          "loc": 1175
         },
         {
           "file": "src/antigravity/registry.ts",

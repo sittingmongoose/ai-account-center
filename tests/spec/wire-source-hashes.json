@@ -191,7 +191,7 @@
   "src/web-server/services/usage-failover-claude-extras.ts": "82de15067759c2735a706f0e3cbe39ef054b4d6f10c2447252eaab5fd85fd43b",
   "src/web-server/services/usage-failover-codex.ts": "b0882189e863d985f8f7509a553b8e24fd321fbe42351943932f6f3345f90615",
   "src/web-server/services/usage-failover-contract.ts": "85e0a694d936f54c4080e097f94ab593c75213a71e05081815362fbc582b8b7e",
-  "src/web-server/services/usage-failover-service.ts": "f75f937d56552210387cbd81374c80543785dad3c547d621274b6204f74949ea",
+  "src/web-server/services/usage-failover-service.ts": "a70b7bc81f45464c486d809464a11b6201cf97161081974b4fbdca43f052b446",
   "src/web-server/services/usage-failover-transport.ts": "d3057887bd2375827fc2fc7d5ee3b91cf34674cf9dc394523c3bde257b00dc80",
   "src/web-server/services/usage-scan-binary.ts": "eef2a213833852e0b05a17de16fa7f46e730dad939a9f156ee424e2ee91561b7",
   "src/web-server/status/agent-reports-reader.ts": "aac616e91219de905fe61497a00f1f2fa051300f662546acef8e019eeb297bf5",
