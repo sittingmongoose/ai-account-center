@@ -262,6 +262,7 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
   public let unlimited: Bool?
   public let enabled: Bool?
   public let status: String?
+  public let cached: Bool?
   public let sampledAt: String?
   /// Antigravity quota pool this window belongs to, exactly as the adapter reported it.
   public let poolId: String?
@@ -274,7 +275,7 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
   public var id: String { key }
 
   private enum CodingKeys: String, CodingKey {
-    case key, label, usedPercent, remainingPercent, resetAt, windowMinutes, used, limit, unit, kind, remaining, expiresAt, unlimited, enabled, status, sampledAt, poolId, resetPassed, clears
+    case key, label, usedPercent, remainingPercent, resetAt, windowMinutes, used, limit, unit, kind, remaining, expiresAt, unlimited, enabled, status, cached, sampledAt, poolId, resetPassed, clears
   }
 
   public init(from decoder: Decoder) throws {
@@ -294,6 +295,7 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
     unlimited = try container.decodeIfPresent(Bool.self, forKey: .unlimited)
     enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
     status = try container.decodeIfPresent(String.self, forKey: .status)
+    cached = try? container.decodeIfPresent(Bool.self, forKey: .cached)
     sampledAt = try container.decodeIfPresent(String.self, forKey: .sampledAt)
     poolId = try container.decodeIfPresent(String.self, forKey: .poolId)
     resetPassed = try container.decodeIfPresent(Bool.self, forKey: .resetPassed)

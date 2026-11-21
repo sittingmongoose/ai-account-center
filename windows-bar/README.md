@@ -13,9 +13,11 @@ The panel is 760 logical pixels wide (850 tall), clamped to the monitor's work a
 - **Claude, Codex, Antigravity:** one card each with column captions over the meters. Claude shows 5-hour, Weekly and,
   for Max plans only, Fable (`seven_day_fable`; "Not reported yet" when a Max account has no Fable window; Pro accounts
   get no Fable cell). Each Claude row ends with the Open on Mac / Open on Windows pair. Antigravity shows T3's CLI quota under
-  "In T3 (Antigravity CLI)" with 5-hour and weekly columns for Gemini and Claude/GPT. Failed CLI readings and
-  app-only dashboards show "Unavailable". App quotas and AI credit balances are in the dashboard's Details pop-up.
-  The tray keeps the plan summary, model list and plan-specific quota messages.
+  "In T3 (Antigravity CLI)". When any canonical pool is reported, the tray uses Home's four captions in order:
+  T3 Gemini 5hr, T3 Gemini wk, T3 Claude GPT 5hr, T3 Claude GPT wk. Extra T3 pools follow, up to five compact columns total.
+  A missing extra pool shows "Not reported" when T3 has a live reading. The tray uses "Unavailable" for failed CLI
+  readings and keeps the plan summary, model list and plan-specific quota messages. App quotas and AI credit balances are
+  in the dashboard's Details pop-up.
 - **Other providers** (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go, and any provider the server adds later,
   with a neutral mark): one card per provider with up to three labelled meters; Qwen's packs button lists every pack.
 - **Footer:** Dashboard, Refresh and Settings.
