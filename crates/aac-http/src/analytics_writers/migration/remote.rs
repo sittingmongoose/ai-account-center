@@ -13,7 +13,7 @@ const PREVIOUS_RECEIPT: &str = "analytics_remote_import_v3";
 const PREVIOUS_SOURCES: &str = "analytics_remote_import_v3_sources";
 
 fn index_digest(index: &[(String, String)]) -> Result<String> {
-    Ok(aac_core::sha256_hex(&serde_json::to_vec(index)?))
+    Ok(aac_core::sha256_hex(serde_json::to_vec(index)?))
 }
 
 /// Verify the previous group receipt before another source can change the

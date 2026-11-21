@@ -279,7 +279,7 @@ fn obsolete_cache(repair: bool) {
         )
         .unwrap();
         let index = analytics_cache::archived_index(&store, remote::PREFIX).unwrap();
-        let digest = aac_core::sha256_hex(&serde_json::to_vec(&index).unwrap());
+        let digest = aac_core::sha256_hex(serde_json::to_vec(&index).unwrap());
         let epoch = activity::recovery_epoch(&store).unwrap().to_string();
         store
             .set_meta("analytics_remote_import_v3", &format!("{epoch}:{digest}"))
@@ -344,6 +344,37 @@ fn pre_v7_paths_never_seed_historical_or_live_rows() {
 #[test]
 fn pre_v7_paths_are_repaired_even_after_a_previous_migration() {
     obsolete_cache(true);
+}
+
+#[test]
+fn obsolete_path_repair_keeps_a_newer_store_observation() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let store =
+        aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None).unwrap();
+    let now = aac_store::engine::now_ms() as i64;
+    let at = hour(now);
+    let key = "1111111111111111";
+    let old = legacy_cache(6, at, vec![cache_row("codex", at, "old-path", key, 100)]);
+    let newer = legacy_cache(
+        8,
+        at,
+        vec![cache_row("codex", at, "same-session", key, 150)],
+    );
+    let current = migration(&store, root, now);
+    import_tool(&current, "odroid", "codex", &old, true);
+    import_tool(&current, "odroid", "codex", &newer, true);
+    stage(root, "odroid", &old);
+    mark_v2_import(&store, MIRROR, &serde_json::to_vec(&old).unwrap());
+    assert!(current.run().unwrap());
+    assert_eq!(totals(&store), vec![("odroid".into(), 150, 10)]);
+    let range = aac_store::ops::call(
+        &store,
+        "activityRange",
+        &json!({"fromMs":at,"toMs":at + 3_600_000}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(range["sessions"]["total"], 1, "{range}");
 }
 
 #[test]
@@ -447,7 +478,7 @@ fn one_unreadable_host_delays_only_mirror_history_until_its_retry() {
     use std::os::unix::fs::PermissionsExt;
     partial_remote(|path| {
         fs::write(path, b"{}").unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
     });
 }
 
