@@ -8,7 +8,7 @@
 //! accounts as TS read them, in the ISO-only presentation envelope: `Date.parse` epochs and
 //! `toISOString` words come from its facts. Every input TS throws on (a 500) is a [`Refuse`].
 use crate::js::{ascii_word, date_parse, email_shape, has_control, is_true, trim};
-use crate::spread::{Admit, Refuse, req, truthy, utf16_len};
+use crate::spread::{Admit, Refuse, req, utf16_len};
 use aac_status::read_context::{Context, Envelope, js_whitespace};
 use serde_json::{Map, Value, json};
 
