@@ -170,6 +170,20 @@ export class UsageFailoverService {
       this.validateSaved(target, existing);
       return existing;
     }
+    const state = this.load(target, key);
+    this.states.set(key, state);
+    if (this.states.size > 256) {
+      for (const [old, entry] of this.states) {
+        if (old !== key && !entry.pending) {
+          this.states.delete(old);
+          break;
+        }
+      }
+    }
+    return state;
+  }
+  /** The persisted cache as state, read-only: it creates and changes nothing (N3). */
+  private load(target: UsageFailoverTarget, key: string): State {
     const state: State = {
       identity: target.expectedIdentity ?? null,
       primary: null,
@@ -257,15 +271,6 @@ export class UsageFailoverService {
       /* Missing or damaged cache is not quota. */
     }
     this.validateSaved(target, state);
-    this.states.set(key, state);
-    if (this.states.size > 256) {
-      for (const [old, entry] of this.states) {
-        if (old !== key && !entry.pending) {
-          this.states.delete(old);
-          break;
-        }
-      }
-    }
     return state;
   }
   private persist(target: UsageFailoverTarget, state: State): void | Promise<void> {
@@ -702,10 +707,14 @@ export class UsageFailoverService {
   }
   /**
    * The credential identity the target's shown reading came from, or null when it has none
-   * yet. Read-only: never loads, creates or changes state and never asks a provider.
+   * yet. Read-only: never creates or changes state and never asks a provider. A saved reading
+   * on disk counts when no state is loaded yet, so the first sample after a restart still
+   * names the identity (N3).
    */
   readingIdentity(target: UsageFailoverTarget): UsageIdentity | null {
-    return this.states.get(this.key(target))?.saved?.candidate.identity ?? null;
+    const key = this.key(target);
+    const state = this.states.get(key) ?? this.load(target, key);
+    return state.saved?.candidate.identity ?? null;
   }
   recover(target: UsageFailoverTarget, primary: DashboardAccount): Promise<DashboardAccount> {
     return this.run(target, primary, true);

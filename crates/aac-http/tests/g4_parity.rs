@@ -580,6 +580,73 @@ async fn reading_identity_names_the_shown_reading_without_a_read() {
     assert_eq!(state.lock().expect("fixture state").calls.len(), calls);
 }
 
+/// N3: the first sample after a restart holds no state in memory, but the saved reading on
+/// disk still names the identity. The peek reads it without a provider call, without creating
+/// state and without writing anything, so an unreadable named key file never hides the
+/// unnamed key's row for that sample.
+#[tokio::test]
+async fn reading_identity_after_restart_peeks_the_saved_reading_without_a_read() {
+    let dir = tempfile::tempdir().expect("account root");
+    let target = target(
+        &json!({
+            "accountId":"opencode-go:acct:2e034ec2", "provider":"opencode-go", "binding":"fixture",
+            "primarySources":[{"host":"ubuntu","platform":"ubuntu","selector":"aac-key:2e034ec2"}]
+        }),
+        dir.path().to_owned(),
+    );
+    let template = json!({
+        "id":"opencode-go:acct:2e034ec2", "provider":"opencode-go", "platform":"ubuntu",
+        "status":"unavailable", "email":null, "windows":[]
+    });
+    let candidate = json!({
+        "locator":"1".repeat(64), "selectors":["aac-key:2e034ec2"], "revision":"2".repeat(64),
+        "identity":{"kind":"opencode-go-key","key":"a".repeat(64)}
+    });
+    let now = 1_791_979_200_000_i64;
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    set_step(
+        &mut state.lock().expect("fixture state"),
+        &json!({
+            "now":now, "hosts":[{"host":"ubuntu","platform":"ubuntu","sshHost":null}],
+            "inventories":{"ubuntu":[candidate]},
+            "collections":{"ubuntu":{"failureCode":null,"sample":{
+                "status":"ok", "sampledAt":aac_num::ecma::to_iso_string(now),
+                "fetchedAt":aac_num::ecma::to_iso_string(now),
+                "windows":[{"key":"weekly","label":"Weekly","usedPercent":16}]
+            }}}
+        }),
+    );
+    let coordinator = || {
+        FailoverCoordinator::new(
+            Arc::new(FakeDeps {
+                state: state.clone(),
+            }),
+            collection_owners(),
+        )
+    };
+    let row = coordinator().collect(&target, &template).await;
+    assert_eq!(row["status"], "ok", "{row}");
+    let failover_dir = dir.path().join("account-usage-failover");
+    let before = read_dir_json(&failover_dir);
+    // Restart: a fresh coordinator has no state in memory; the disk cache still names the key.
+    let restarted = coordinator();
+    let calls = state.lock().expect("fixture state").calls.len();
+    assert_eq!(
+        restarted.reading_identity(&target),
+        Some(identity(
+            &json!({"kind":"opencode-go-key","key":"a".repeat(64)})
+        ))
+    );
+    assert_eq!(state.lock().expect("fixture state").calls.len(), calls);
+    assert_eq!(read_dir_json(&failover_dir), before);
+    // A reading saved for one identity never answers a target pinned to another.
+    let mut other = target.clone();
+    other.expected_identity = Some(identity(
+        &json!({"kind":"opencode-go-key","key":"b".repeat(64)}),
+    ));
+    assert_eq!(restarted.reading_identity(&other), None);
+}
+
 #[tokio::test]
 async fn claude_code_covers_a_signed_out_desktop_across_restart() {
     let dir = tempfile::tempdir().expect("account root");

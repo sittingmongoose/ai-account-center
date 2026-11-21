@@ -342,6 +342,28 @@ describe('identity-bound usage source failover', () => {
     expect(h.calls).toHaveLength(before);
   });
 
+  it('after a restart, names the saved reading known only on disk without a read or a write (N3)', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const dir = path.join(h.target.ccsDir, 'account-usage-failover');
+    const names = (await fs.readdir(dir)).sort();
+    const before = await Promise.all(names.map((name) => fs.readFile(path.join(dir, name), 'utf8')));
+    const restarted = new UsageFailoverService(h.deps);
+    const calls = h.calls.length;
+    expect(restarted.readingIdentity(h.target)).toEqual(candidate().identity);
+    expect(h.calls).toHaveLength(calls);
+    // The peek creates no state and writes nothing: the saved files are unchanged.
+    const after = await Promise.all(names.map((name) => fs.readFile(path.join(dir, name), 'utf8')));
+    expect(after).toEqual(before);
+    expect((await fs.readdir(dir)).sort()).toEqual(names);
+    // A reading saved for another identity never answers a pinned target.
+    const pinned: UsageFailoverTarget = {
+      ...h.target,
+      expectedIdentity: { kind: 'muse-team', key: 'b'.repeat(64) },
+    };
+    expect(restarted.readingIdentity(pinned)).toBeNull();
+  });
+
   it('keeps the verified account when the primary could not read its sign-ins', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());

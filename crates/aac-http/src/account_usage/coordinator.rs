@@ -351,6 +351,19 @@ impl FailoverCoordinator {
             self.validate_saved(target, existing);
             return existing.clone();
         }
+        let state = self.load(target, &key);
+        states.insert(key.clone(), state.clone());
+        if states.len() > 256 {
+            let evict = states.keys().find(|k| *k != &key).cloned();
+            if let Some(old) = evict {
+                states.remove(&old);
+            }
+        }
+        state
+    }
+
+    /// The persisted cache as state, read-only: it creates and changes nothing (N3).
+    fn load(&self, target: &UsageFailoverTarget, key: &str) -> State {
         let mut state = State {
             identity: target.expected_identity.clone(),
             ..Default::default()
@@ -358,7 +371,7 @@ impl FailoverCoordinator {
         let value = contract::read_private_cache(&self.file(target));
         if let Some(obj) = value.as_object()
             && obj.get("version").and_then(Value::as_f64) == Some(1.0)
-            && obj.get("key").and_then(Value::as_str) == Some(key.as_str())
+            && obj.get("key").and_then(Value::as_str) == Some(key)
         {
             if let Some(sign_in) = obj.get("primarySignIn").and_then(Value::as_array)
                 && sign_in.len() <= 2
@@ -462,13 +475,6 @@ impl FailoverCoordinator {
             }
         }
         self.validate_saved(target, &mut state);
-        states.insert(key.clone(), state.clone());
-        if states.len() > 256 {
-            let evict = states.keys().find(|k| *k != &key).cloned();
-            if let Some(old) = evict {
-                states.remove(&old);
-            }
-        }
         state
     }
 
@@ -1023,15 +1029,27 @@ impl FailoverCoordinator {
     }
 
     /// The credential identity the target's shown reading came from, or None before it has one
-    /// (`readingIdentity`). Read-only: never loads, creates or changes state and asks no provider.
+    /// (`readingIdentity`). Read-only: never creates or changes state and asks no provider. A
+    /// saved reading on disk counts when no state is loaded yet, so the first sample after a
+    /// restart still names the identity (N3).
     pub fn reading_identity(&self, target: &UsageFailoverTarget) -> Option<UsageIdentity> {
         let key = self.key(target);
-        let states = self.states.lock().unwrap_or_else(|e| e.into_inner());
-        states
-            .get(&key)?
-            .saved
-            .as_ref()
-            .map(|saved| saved.candidate.identity.clone())
+        let memory = self
+            .states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .and_then(|state| {
+                state
+                    .saved
+                    .as_ref()
+                    .map(|saved| saved.candidate.identity.clone())
+            });
+        memory.or_else(|| {
+            self.load(target, &key)
+                .saved
+                .map(|saved| saved.candidate.identity)
+        })
     }
 
     /// Collect a reading for the account.

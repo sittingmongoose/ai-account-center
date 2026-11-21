@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'bun:test';
+import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import {
   AdditionalAccountService,
@@ -13,7 +15,15 @@ import type {
   AccountRegistryRead,
   RegistryAccount,
 } from '../../../src/web-server/services/account-registry-v2';
-import type { UsageFailoverTarget } from '../../../src/web-server/services/usage-failover-contract';
+import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
+import type {
+  UsageCandidate,
+  UsageFailoverTarget,
+  UsageHelperRequest,
+  UsageHelperResponse,
+  UsageHost,
+  UsageReading,
+} from '../../../src/web-server/services/usage-failover-contract';
 
 const observed = '2026-10-14T00:00:00.000Z';
 
@@ -334,6 +344,126 @@ describe('additional accounts use verified failover sources', () => {
       );
       expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
       expect(calls.map((call) => call.accountId)).toEqual(['opencode-go:acct:2e034ec2']);
+    });
+
+    it('after a restart, an unreadable named key file still leaves the unnamed key its row (N3)', async () => {
+      // The real coordinator on a temporary CCS folder: the first sample reads and saves every
+      // key; after a restart the named slot's file is unreadable and its identity is known only
+      // on disk. The unnamed key keeps its row, and no account shows twice.
+      const ccsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-ocg1-restart-'));
+      try {
+        const accounts = [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ];
+        const readRegistry = async (): Promise<AccountRegistryRead> => ({
+          state: 'ok',
+          registry: { version: 2, accounts },
+        });
+        const mac: UsageHost = { host: 'mac', platform: 'mac', sshHost: 'fixture-mac' };
+        const stored = (letter: string, selectors: string[]): UsageCandidate => ({
+          locator: letter.repeat(64),
+          selectors,
+          identity: id(letter),
+          revision: '2'.repeat(64),
+          email: null,
+          plan: 'Go',
+        });
+        let now = Date.parse('2026-10-14T12:00:00.000Z');
+        const sample = (): UsageReading => ({
+          status: 'ok',
+          email: null,
+          plan: 'Go',
+          fetchedAt: new Date(now).toISOString(),
+          sampledAt: new Date(now).toISOString(),
+          windows: [
+            {
+              key: 'weekly',
+              label: 'Weekly',
+              usedPercent: 10,
+              remainingPercent: 90,
+              used: 10,
+              limit: 100,
+              resetAt: null,
+              windowMinutes: 10080,
+              unit: 'credits',
+            },
+          ],
+        });
+        const collected: Array<{ selectors: string[]; identityKey: string }> = [];
+        const serviceFor = (candidates: UsageCandidate[], incompleteSelectors?: string[]) => {
+          const transport = async (
+            _host: UsageHost,
+            request: UsageHelperRequest
+          ): Promise<UsageHelperResponse> => {
+            if (request.action === 'inventory')
+              return {
+                version: 1,
+                action: 'inventory',
+                candidates: structuredClone(candidates),
+                ...(incompleteSelectors ? { incompleteSelectors } : {}),
+              };
+            collected.push({
+              selectors: structuredClone(request.candidate?.selectors ?? []),
+              identityKey: request.candidate?.identity.key ?? '',
+            });
+            return {
+              version: 1,
+              action: 'collect',
+              candidate: structuredClone(request.candidate),
+              sample: sample(),
+              failureCode: null,
+            };
+          };
+          return new AdditionalAccountService({
+            ccsDir,
+            readRegistry,
+            now: () => now,
+            failover: new UsageFailoverService({
+              transport,
+              hosts: async () => [mac],
+              now: () => now,
+            }),
+          });
+        };
+        const readable = [
+          stored('a', ['discover', 'aac-key:2e034ec2']),
+          stored('b', ['discover', 'aac-key:52f3251b']),
+          stored('c', ['discover']),
+        ];
+        const first = await serviceFor(readable).get();
+        expect(first.map((row) => row.id)).toEqual([
+          'opencode-go:usage:cccccccc',
+          'opencode-go:acct:52f3251b',
+          'opencode-go:acct:2e034ec2',
+        ]);
+        // Restart: Account 3's key file cannot be read; the stores still list its key.
+        const before = collected.length;
+        now += 31_000;
+        const partial = [
+          stored('a', ['discover']),
+          stored('b', ['discover', 'aac-key:52f3251b']),
+          stored('c', ['discover']),
+        ];
+        const rows = await serviceFor(partial, ['aac-key:2e034ec2']).get();
+        expect(rows.map((row) => row.id)).toEqual([
+          'opencode-go:usage:cccccccc',
+          'opencode-go:acct:52f3251b',
+          'opencode-go:acct:2e034ec2',
+        ]);
+        // Every key is still read exactly once: Account 3 through the store's own listing of
+        // its identity (never through the unreadable slot), the unnamed key pinned to itself.
+        const after = collected.slice(before);
+        expect(after.some((call) => call.selectors.includes('aac-key:2e034ec2'))).toBe(false);
+        expect(after.map((call) => call.identityKey).sort()).toEqual([
+          'a'.repeat(64),
+          'b'.repeat(64),
+          'c'.repeat(64),
+        ]);
+      } finally {
+        await fs.rm(ccsDir, { recursive: true, force: true });
+      }
     });
 
     it('two entries that read the same key still show one row', async () => {
