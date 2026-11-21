@@ -81,12 +81,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | LOC |
 |---|---:|
-| `src/web-server/usage/account-activity-collector.ts` | 4028 |
+| `src/web-server/usage/account-activity-collector.ts` | 4030 |
 | `src/web-server/services/analytics-remote-sources.ts` | 2429 |
 | `src/web-server/status/answers.ts` | 2069 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1791 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
-| `src/web-server/services/usage-failover-service.ts` | 1235 |
+| `src/web-server/services/usage-failover-service.ts` | 1244 |
 | `src/antigravity/registry.ts` | 1206 |
 | `src/web-server/status/status-collectors.ts` | 1203 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
