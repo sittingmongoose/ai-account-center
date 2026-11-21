@@ -790,8 +790,6 @@ def _parse_omp_line(line, collector, kind, filekey, session=None):
     if not isinstance(message, dict) or message.get("role") != "assistant":
         return
     model = _clean_model(message.get("model"))
-    if model is None:
-        return
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return
@@ -801,9 +799,6 @@ def _parse_omp_line(line, collector, kind, filekey, session=None):
         _non_negative_number(usage.get("cacheRead")),
         _non_negative_number(usage.get("cacheWrite")),
     ]
-    if any(value is None for value in values):
-        return
-    tokens = [int(values[0]), int(values[1]), int(values[2]), int(values[3])]
     cost = 0.0
     cost_block = usage.get("cost")
     if isinstance(cost_block, dict):
@@ -812,8 +807,14 @@ def _parse_omp_line(line, collector, kind, filekey, session=None):
             cost = total
     # Zero-usage pings (e.g. union-alpha) carry no usage; never sum
     # cumulative goal counters or context snapshots (we only read usage.*).
-    if tokens[0] + tokens[1] + tokens[2] + tokens[3] == 0 and cost == 0:
+    if all(value is not None for value in values) and sum(values) == 0 and cost == 0:
         return
+    # A complete record the reader cannot measure is unread usage, as in the scanner's
+    # parse_record: a missing model or usage field, or a timestamp it cannot read.
+    if model is None or any(value is None for value in values):
+        collector.pending[kind][filekey]["unreadUsage"] = True
+        return
+    tokens = [int(values[0]), int(values[1]), int(values[2]), int(values[3])]
     timestamp = record.get("timestamp")
     epoch_ms = None
     if isinstance(timestamp, str):
@@ -826,13 +827,17 @@ def _parse_omp_line(line, collector, kind, filekey, session=None):
                 moment = moment.replace(tzinfo=datetime.timezone.utc)
             epoch_ms = int(moment.timestamp() * 1000)
         except ValueError:
+            collector.pending[kind][filekey]["unreadUsage"] = True
             return
     elif isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
         epoch_ms = int(timestamp)
         while epoch_ms > 4102444800:
             epoch_ms //= 1000
         epoch_ms *= 1000
-    if epoch_ms is None or epoch_ms < collector.min_date_ms:
+    if epoch_ms is None:
+        collector.pending[kind][filekey]["unreadUsage"] = True
+        return
+    if epoch_ms < collector.min_date_ms:
         return
     hour = _hour_label(epoch_ms, collector.now_ms)
     if hour is None:

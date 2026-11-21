@@ -110,6 +110,56 @@ def run(binary, helper):
             else:
                 for key in ("rows", "srows"):
                     assert native[key] == answer[key], (key, native[key], answer[key])
+        # lows-r1-L1: complete assistant records the reader cannot measure (missing model, a
+        # missing usage field, a bad or missing timestamp, a negative count) are unread usage on
+        # both sides; zero-usage pings and non-assistant records stay clean, and the flag survives
+        # an unchanged rescan.
+        def record(message, timestamp="2026-11-11T21:03:00Z"):
+            envelope = {"type": "message", "message": message}
+            if timestamp is not None:
+                envelope["timestamp"] = timestamp
+            return json.dumps(envelope) + "\n"
+
+        measured = {"role": "assistant", "model": "fixture-model", "provider": "fixture-provider",
+                    "usage": {"input": 140, "output": 0, "cacheRead": 0, "cacheWrite": 0}}
+        unread = [
+            record({key: value for key, value in measured.items() if key != "model"}),
+            record({"role": "assistant", "model": "fixture-model", "provider": "fixture-provider",
+                    "usage": {"output": 0, "cacheRead": 0, "cacheWrite": 0}}),
+            record(measured, timestamp="not-a-date"),
+            record(measured, timestamp=None),
+            record({"role": "assistant", "model": "fixture-model", "provider": "fixture-provider",
+                    "usage": {"input": -5, "output": 0, "cacheRead": 0, "cacheWrite": 0}}),
+        ]
+        clean = [
+            record(measured),
+            record({"role": "assistant", "model": "fixture-model", "provider": "fixture-provider",
+                    "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}),
+            record({"role": "user", "model": "fixture-model",
+                    "usage": {"input": 120, "output": 0, "cacheRead": 0, "cacheWrite": 0}}),
+        ]
+        session.write_text("".join(clean + unread), encoding="utf-8")
+        for command in ([binary], [sys.executable, helper]):
+            answer = request(command, ["omp"])
+            assert sum(row["i"] for row in answer["rows"]) == 140, answer["rows"]
+            assert answer["kinds"]["omp"].get("unreadUsage") is True, answer["kinds"]["omp"]
+            assert answer["kinds"]["omp"].get("partial") is True, answer["kinds"]["omp"]
+            replay = request(command, ["omp"], {"omp": answer["kinds"]["omp"]["fingerprints"]})
+            assert replay["rows"] == [] and replay["kinds"]["omp"].get("unreadUsage") is True
+            if command == [binary]:
+                native = answer
+                assert answer["discovery"]["kinds"]["omp"]["freshness"]["state"] == "unknown"
+            else:
+                for key in ("rows", "srows"):
+                    assert native[key] == answer[key], (key, native[key], answer[key])
+        session.write_text("".join(clean), encoding="utf-8")
+        for command in ([binary], [sys.executable, helper]):
+            answer = request(command, ["omp"])
+            assert sum(row["i"] for row in answer["rows"]) == 140, answer["rows"]
+            assert "unreadUsage" not in answer["kinds"]["omp"], answer["kinds"]["omp"]
+            assert "partial" not in answer["kinds"]["omp"], answer["kinds"]["omp"]
+            if command == [binary]:
+                assert answer["discovery"]["kinds"]["omp"]["freshness"]["state"] == "current"
         # Review M2: identical SDK data with a CLI store just beyond the activity depth cap.
         chat.unlink()
         old = 1794430860
@@ -129,7 +179,7 @@ def run(binary, helper):
         assert check["state"] == "current" and check["activityComplete"] is True, check
         assert check["newestDataMs"] == old * 1000 and check["newestActivityMs"] == old * 1000, check
         print(json.dumps({"result": "PASS", "os": sys.platform,
-                          "checks": ["sdk tokens", "cli unmeasured", "usage-only activity", "OMP unchanged clocks", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity", "torn OMP parity", "deep unverified/shallow current"]}))
+                          "checks": ["sdk tokens", "cli unmeasured", "usage-only activity", "OMP unchanged clocks", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity", "torn OMP parity", "malformed OMP parity", "deep unverified/shallow current"]}))
 
 
 if __name__ == "__main__":
