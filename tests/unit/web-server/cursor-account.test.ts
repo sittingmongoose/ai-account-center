@@ -105,6 +105,40 @@ describe('reading the account', () => {
     expect(await read()).toMatchObject({ state: 'no_key', rows: [], key: null });
   });
 
+  it('keeps measured billing rows and coverage when the Cursor sign-in expires or disappears', async () => {
+    const coverage = {
+      coverageFrom: '2026-11-13T00:00:00.000Z',
+      coverageUntil: new Date(NOW).toISOString(),
+    };
+    let answer: unknown = { state: 'read', ...coverage, readAt: NOW, rows: [ROW], events: 2 };
+    const read = () =>
+      readCursorAccount(SINCE, NOW, {
+        cacheDir: path.join(dir, 'cache'),
+        ccsDir: dir,
+        now: () => NOW,
+        force: true,
+        run: async () => answer,
+      });
+    await read();
+    for (const failure of [{ state: 'unavailable', cause: 'signin_needed' }, { state: 'no_key' }]) {
+      answer = failure;
+      const last = await read();
+      expect(last).toMatchObject({
+        ...coverage,
+        state: 'unavailable',
+        cause: 'signin_needed',
+        readAt: new Date(NOW).toISOString(),
+        rows: [ROW],
+        events: 2,
+      });
+      const summary = await cursorAccountOutside(last, [], {
+        run: async () => ({ rows: [ROW], summary: { accountTokens: 1320 } }),
+      });
+      expect(summary).toMatchObject({ ...coverage, accountTokens: 1320 });
+      expect(summary.computer).toBeTruthy();
+    }
+  });
+
   it('says when no reader is built for this computer', async () => {
     const read = await readCursorAccount(SINCE, NOW, {
       cacheDir: path.join(dir, 'cache'),

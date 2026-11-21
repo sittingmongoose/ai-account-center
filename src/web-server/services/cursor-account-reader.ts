@@ -1,5 +1,5 @@
 /**
- * The Cursor account through AAC's own API key (DESIGN 17 in the share folder
+ * The Cursor account through Cursor sign-in or AAC's API key (DESIGN 17 in the share folder
  * 2026-11-13-analytics-discovery). The work is the Rust reader `aac-cursor-account`
  * (native/aac-cursor-account), packaged per target in dist/native/aac-cursor-account and run on
  * this computer only, digest-checked before every run. This module is the transport: it runs the
@@ -19,6 +19,7 @@ import { ProviderError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import type { DashboardAccount } from './account-dashboard-types';
 import type { AnalyticsRemoteRow } from './analytics-remote-transport';
+import { HOST_LABELS, localComputer } from './dashboard-hosts';
 import { localUsageScanTarget, type UsageScanTarget } from './usage-scan-binary';
 
 export const CURSOR_ACCOUNT_NAME = 'aac-cursor-account';
@@ -44,8 +45,14 @@ export interface CursorAccountRow {
   uncosted: number;
 }
 
+interface CursorBillingCoverage {
+  /** Contiguous UTC window verified by the billing-items endpoint. */
+  coverageFrom?: string;
+  coverageUntil?: string;
+}
+
 /** The last answer, kept across restarts. */
-export interface CursorAccountRead {
+export interface CursorAccountRead extends CursorBillingCoverage {
   state: CursorAccountState;
   /** When this answer was read (any state). */
   checkedAt: string;
@@ -62,7 +69,8 @@ export interface CursorAccountRead {
 }
 
 /** What Analytics shows for the account (DESIGN 17.5) beside the totals it never joins. */
-export interface CursorAccountAnswer {
+export interface CursorAccountAnswer extends CursorBillingCoverage {
+  computer?: string;
   state: CursorAccountState;
   checkedAt: string | null;
   readAt: string | null;
@@ -180,6 +188,18 @@ export function parseCursorAccountRows(value: unknown): CursorAccountRow[] {
     .slice(0, 100_000);
 }
 
+function billingCoverage(value: { coverageFrom?: unknown; coverageUntil?: unknown }): CursorBillingCoverage {
+  const { coverageFrom, coverageUntil } = value;
+  const stamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  return typeof coverageFrom === 'string' &&
+    typeof coverageUntil === 'string' &&
+    stamp.test(coverageFrom) &&
+    stamp.test(coverageUntil) &&
+    Date.parse(coverageFrom) < Date.parse(coverageUntil)
+    ? { coverageFrom, coverageUntil }
+    : {};
+}
+
 function cacheFile(cacheDir: string): string {
   return path.join(cacheDir, 'cursor-account-v1.json');
 }
@@ -200,6 +220,7 @@ function loadRead(cacheDir: string): CursorAccountRead | null {
       return null;
     return {
       state: value.state as CursorAccountState,
+      ...billingCoverage(value),
       checkedAt: value.checkedAt,
       readAt: typeof value.readAt === 'string' ? value.readAt : null,
       ...(typeof value.cause === 'string' ? { cause: value.cause } : {}),
@@ -265,6 +286,9 @@ export async function readCursorAccount(
       cause: 'reader_failed',
     };
   }
+  if (previous?.coverageFrom && ['no_key', 'key_rejected'].includes(String(answer?.state))) {
+    answer = { state: 'unavailable', cause: 'signin_needed' };
+  }
   const state = STATES.has(String(answer?.state))
     ? (answer.state as CursorAccountState)
     : 'unavailable';
@@ -278,9 +302,10 @@ export async function readCursorAccount(
     read = {
       state,
       checkedAt,
+      ...billingCoverage({ coverageFrom: answer.coverageFrom, coverageUntil: answer.coverageUntil }),
       readAt: typeof answer.readAt === 'number' ? new Date(answer.readAt).toISOString() : checkedAt,
       account: typeof answer.account === 'string' ? answer.account : null,
-      key: keyInfo,
+      key: answer.coverageFrom ? null : keyInfo,
       rows: parseCursorAccountRows(answer.rows),
       events: count(answer.events) ? (answer.events as number) : 0,
       unmeasured: count(answer.unmeasured) ? (answer.unmeasured as number) : 0,
@@ -293,6 +318,7 @@ export async function readCursorAccount(
       state,
       checkedAt,
       readAt: keep?.readAt ?? null,
+      ...(keep ? billingCoverage(keep) : {}),
       ...(state === 'unavailable'
         ? {
             cause:
@@ -328,6 +354,10 @@ export async function cursorAccountOutside(
     checkedAt: read.checkedAt,
     readAt: read.readAt,
     ...(read.cause ? { cause: read.cause } : {}),
+    ...(read.cause && ['signin_needed', 'events_not_visible', 'events_unverified'].includes(read.cause)
+      ? { computer: HOST_LABELS[localComputer()] }
+      : {}),
+    ...billingCoverage(read),
     ...(read.key?.last4 ? { last4: read.key.last4 } : {}),
     unmeasured: read.unmeasured,
   };
@@ -340,11 +370,16 @@ export async function cursorAccountOutside(
     rows: [],
   };
   if (!read.rows.length) return empty;
+  const from = read.coverageFrom?.slice(0, 13).replace('T', ' ');
+  const until = read.coverageUntil?.replace('T', ' ');
+  const covered = from && until
+    ? local.filter(({ h }) => h.slice(0, 13) >= from && `${h}:00.000Z` < until)
+    : local;
   let answer: { rows?: unknown; summary?: Record<string, unknown> };
   try {
     answer = (await (deps.run ?? runCursorAccount)(
       ['dedupe'],
-      JSON.stringify({ account: read.rows, local })
+      JSON.stringify({ account: read.rows, local: covered })
     )) as typeof answer;
   } catch {
     // Without the dedupe the account's numbers cannot be trusted either: only the states remain.

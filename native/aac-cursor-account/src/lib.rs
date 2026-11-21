@@ -6,6 +6,7 @@
 //! key, token or account id.
 
 pub mod api;
+pub mod billing;
 pub mod dedupe;
 pub mod keys;
 pub mod util;
