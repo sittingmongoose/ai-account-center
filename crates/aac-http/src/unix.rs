@@ -1470,11 +1470,13 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(row.handler, Decline::Unsupported);
             };
             let root = shared.boot.ccs_dir.clone();
+            let cursor_root = root.clone();
+            let compose_query = query.clone();
             // The same fed dashboard generation Accounts and Home render, as the read's input.
             let cache = shared.account_usage.clone();
             let feeds = shared.feeds.clone();
             let live = Arc::clone(&shared.analytics_live);
-            match shared
+            let result = shared
                 .limits
                 .blocking(row.pool, move || {
                     store.wait_ready();
@@ -1482,17 +1484,39 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     let now = aac_store::engine::now_ms() as i64;
                     let snapshot = analytics_snapshot(&cache, &feeds, now);
                     let answer = crate::analytics_route::compose(
-                        engine,
+                        Arc::clone(&engine),
                         &root,
                         snapshot.as_ref(),
                         &live,
-                        query.as_deref(),
+                        compose_query.as_deref(),
                         now,
                     );
-                    crate::analytics_route::encode(answer, query.as_deref())
+                    Ok((answer, engine, now))
                 })
-                .await
-            {
+                .await;
+            let result = match result {
+                Ok((mut answer, engine, now)) => {
+                    if shared.owners.owner(crate::account_usage::cursor::ROW)
+                        == Some(registry::Role::RustService)
+                        && let Ok(value) = &mut answer
+                        && let Some(activity) = value["activity"].as_object_mut()
+                    {
+                        let force = url::form_urlencoded::parse(
+                            query.as_deref().unwrap_or_default().as_bytes(),
+                        )
+                        .any(|(key, value)| key == "refresh" && value == "true");
+                        if let Some(status) = Arc::clone(&shared.cursor)
+                            .analytics(cursor_root, shared.owners.clone(), engine, now, force)
+                            .await
+                        {
+                            activity.insert("cursorAccount".into(), status);
+                        }
+                    }
+                    crate::analytics_route::encode(answer, query.as_deref())
+                }
+                Err(reason) => Err(reason),
+            };
+            match result {
                 Ok((status, bytes)) => (
                     StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                     [(axum::http::header::CONTENT_TYPE, "application/json")],

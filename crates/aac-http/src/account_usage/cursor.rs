@@ -167,6 +167,86 @@ async fn execute(
 }
 
 impl Reader {
+    /// Keep Analytics responsive while a signed-in account walk is still running.
+    pub(crate) async fn analytics(
+        self: Arc<Self>,
+        root: PathBuf,
+        owners: Owners,
+        engine: Arc<aac_store::engine::Engine>,
+        now: i64,
+        force: bool,
+    ) -> Option<Value> {
+        let since = now.saturating_sub(31 * 86_400_000).max(0);
+        let request = Request {
+            since_ms: since,
+            until_ms: now,
+            force,
+        };
+        let read_root = root.clone();
+        let task = tokio::spawn(async move { self.read(read_root, owners, request).await });
+        let observation = match tokio::time::timeout(Duration::from_millis(200), task).await {
+            Ok(Ok(Ok(value))) => value,
+            _ => {
+                let cached_root = root.clone();
+                Arc::new(
+                    tokio::task::spawn_blocking(move || cursor_account(&cached_root))
+                        .await
+                        .ok()?
+                        .ok()??,
+                )
+            }
+        };
+        let summary = analytics_status(&observation);
+        let rows = observation["rows"].as_array()?;
+        if rows.is_empty() {
+            return Some(summary);
+        }
+        let (since, until) = super::provider_caches::cursor_coverage(&observation)
+            .and_then(|(from, through)| {
+                let from = parse_date(from).ok().flatten()?;
+                let through = parse_date(through).ok().flatten()?;
+                Some((since.max(from), now.min(through.saturating_sub(1))))
+            })
+            .unwrap_or((since, now));
+        let dedupe = async {
+            let (binary, os, local) = tokio::task::spawn_blocking(move || {
+                let (binary, os) = local_reader().ok()?;
+                Some((binary?, os, local_cursor_cells(&engine, since, until)?))
+            })
+            .await
+            .ok()??;
+            let input = json!({"account":rows, "local":local}).to_string();
+            let answer = execute(&root, binary, os, &["dedupe"], input.as_bytes()).await;
+            let mut summary = summary;
+            let totals = answer["summary"].as_object()?;
+            for field in [
+                "accountTokens",
+                "matchedTokens",
+                "outsideTokens",
+                "localUnmatchedTokens",
+            ] {
+                summary[field] = json!(totals.get(field)?.as_u64()?);
+            }
+            if rows
+                .iter()
+                .any(|row| row["uncosted"].as_u64().unwrap_or(0) > 0)
+            {
+                summary["costPartial"] = json!(true);
+            }
+            Some(summary)
+        };
+        tokio::time::timeout(Duration::from_secs(2), dedupe)
+            .await
+            .ok()
+            .flatten()
+            .or_else(|| {
+                let mut unavailable = analytics_status(&observation);
+                unavailable["state"] = json!("unavailable");
+                unavailable["cause"] = json!("dedupe_failed");
+                Some(unavailable)
+            })
+    }
+
     pub(crate) async fn command(&self, command: Command, root: PathBuf) -> Result<Value, Decline> {
         let _permit = self.commands.lock().await;
         command.answer(root).await
@@ -226,6 +306,69 @@ impl Reader {
         *memory = Some((Instant::now(), value.clone()));
         Ok(value)
     }
+}
+
+fn analytics_status(observation: &Value) -> Value {
+    let mut status = json!({
+        "state": observation["state"], "checkedAt": observation["checkedAt"],
+        "readAt": observation["readAt"], "unmeasured": observation["unmeasured"],
+        "accountTokens": 0, "matchedTokens": 0, "outsideTokens": 0, "localUnmatchedTokens": 0,
+    });
+    for field in ["eventCounts", "coverageFrom", "coverageUntil", "cause"] {
+        if let Some(value) = observation.get(field) {
+            status[field] = value.clone();
+        }
+    }
+    if let Some(last) = observation["key"]["last4"].as_str() {
+        status["last4"] = json!(last);
+    }
+    if matches!(
+        observation["cause"].as_str(),
+        Some("signin_needed" | "events_not_visible" | "events_unverified")
+    ) {
+        let hostname = aac_files::process::hostname().unwrap_or_default();
+        let computer = crate::reset_source_route::local_computer(&hostname);
+        status["computer"] = aac_status::computers::registry()[computer]["label"].clone();
+    }
+    status
+}
+
+fn local_cursor_cells(
+    engine: &aac_store::engine::Engine,
+    since: i64,
+    until: i64,
+) -> Option<Vec<Value>> {
+    if until < since {
+        return Some(Vec::new());
+    }
+    let range = aac_store::activity::range(
+        engine,
+        &aac_store::activity::RangeQuery {
+            from_ms: since.try_into().ok()?,
+            to_ms: until.try_into().ok()?,
+            session_sample: Some(0),
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let tools = range["tools"].as_array()?;
+    let Some(cursor) = tools.iter().position(|tool| tool == "cursor") else {
+        return Some(Vec::new());
+    };
+    let models = range["models"].as_array()?;
+    let rows = range["rows"].as_array()?;
+    Some(
+        rows.iter()
+            .filter(|row| row[2].as_u64() == Some(cursor as u64))
+            .filter_map(|row| {
+                let time = aac_num::ecma::to_iso_string(row[0].as_i64()?)?;
+                let h = format!("{} {}:00", time.get(..10)?, time.get(11..13)?);
+                let model = row[4].as_u64()?;
+                Some(json!({"h":h,"m":models.get(model as usize)?.as_str()?,
+            "i":row[5],"o":row[6],"cw":row[7],"cr":row[8]}))
+            })
+            .collect(),
+    )
 }
 
 fn save_read(root: &Path, store: OwnedStore, value: &Value) {
