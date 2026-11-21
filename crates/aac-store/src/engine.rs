@@ -111,6 +111,10 @@ pub trait Projector: Send + Sync {
     ) -> Result<Vec<Finding>> {
         self.apply(txn, log, event)
     }
+    /// Completes projection work that depends on the final state of both logs.
+    fn finish_replay(&self, _db: &Database) -> Result<()> {
+        Ok(())
+    }
     /// Drops this projector's tables before a rebuild.
     fn reset(&self, txn: &WriteTransaction) -> Result<()>;
 }
@@ -634,6 +638,9 @@ impl Engine {
                     Ok(())
                 })?;
                 flush(&mut pending, &mut checkpoints, &mut findings)?;
+            }
+            for projector in &self.projectors {
+                projector.finish_replay(db)?;
             }
             Ok(findings)
         })

@@ -329,6 +329,30 @@ fn a_rebuild_recounts_late_rows_without_reopening_the_day() {
 }
 
 #[test]
+fn an_upgrade_keeps_the_rollup_for_a_split_discarded_by_a_later_close() {
+    let dir = version_one_fixture(
+        "closed-period-retired-v1",
+        include_bytes!("fixtures/closed-period-retired-v1.json.zst"),
+    );
+    let engine = open(&dir);
+    let hour = 1_793_059_200_000 / HOUR;
+    let key = db::Key::new().u32(1).u32(1).u32((hour / 24) as u32);
+    let row = dump(&engine, &["rollup_hours"])
+        .into_iter()
+        .find(|(_, k, _)| k == key.as_slice())
+        .unwrap();
+    let rollups = aac_store::pack::decode_hours(&row.2).unwrap();
+    let actual = &rollups.iter().find(|(h, _)| i64::from(*h) == hour % 24).unwrap().1;
+    assert_eq!(
+        actual.resets, 0,
+        "the later close restored the partially retired interval"
+    );
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn an_upgrade_corrects_a_closed_day_when_the_split_period_was_open_at_close() {
     let dir = version_one_fixture(
         "closed-day-open-v1",

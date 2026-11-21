@@ -888,6 +888,9 @@ impl Projector for UsageProjector {
         }
         self.apply(txn, log, event)
     }
+    fn finish_replay(&self, db: &redb::Database) -> Result<()> {
+        finish_closed_rollups(db)
+    }
     fn reset(&self, txn: &WriteTransaction) -> Result<()> {
         for def in [
             db::ACCOUNT,
@@ -900,6 +903,7 @@ impl Projector for UsageProjector {
             db::PERIOD,
             db::ROLLUP_HOURS,
             db::ROLLUP_DAY,
+            CLOSED_ROLLUP_CORRECTIONS,
         ] {
             txn.delete_table(def)?;
         }
@@ -1413,16 +1417,24 @@ fn same_rollup_input(saved: &Rollup, rebuilt: &Rollup) -> bool {
             }
 }
 
-/// Reconstruct just the usage fields affected by the reset rule, from the retained prefix
-/// of an hour. The snapshot's row count is the cut: later rows do not enter the closed rollup.
-fn correct_retained_hour<'a>(
-    txn: &WriteTransaction,
-    (a, w): (u32, u32),
+// These rows survive a restart between a ledger checkpoint and the final reconciliation.
+const CLOSED_ROLLUP_CORRECTIONS: Bytes = Bytes::new("closed_rollup_corrections");
+
+#[derive(Serialize, Deserialize)]
+struct ResetCorrection {
+    deltas: Vec<(u64, f64)>,
+    consumed_if_all_kept: Option<f64>,
+}
+
+/// Verify the retained prefix of an archived hour against both reset rules. The archived row
+/// count excludes readings that arrived after the close.
+fn retained_hour_correction<'a>(
     mut previous: Option<&'a Row>,
     spans: &'a [(u64, Row)],
-    saved: &mut Rollup,
-) -> Result<bool> {
+    saved: &Rollup,
+) -> Option<ResetCorrection> {
     let mut by_rule = [Rollup::default(), Rollup::default()];
+    let mut deltas = Vec::new();
     for (t, row) in spans.iter().take(saved.rows as usize) {
         if let Some(prev) = previous
             && let (Some(up), Some(u)) = (prev.vals.used_pct, row.vals.used_pct)
@@ -1431,10 +1443,12 @@ fn correct_retained_hour<'a>(
         {
             let corrected = is_reset(prev.last_seen as i64, &prev.vals, *t as i64, &row.vals);
             let legacy = is_reset_with_shift(prev.last_seen as i64, &prev.vals, *t as i64, &row.vals, false);
-            if corrected && (prev.vals.same(&row.vals) || (!legacy && read_period(txn, a, w, *t)?.is_none())) {
-                // An unchanged gap can be a sighting rather than a measurement. A replay
-                // split that was discarded in favor of an archived period cannot fix a rollup.
-                return Ok(false);
+            if corrected && prev.vals.same(&row.vals) {
+                // An unchanged gap can be a sighting rather than a measurement.
+                return None;
+            }
+            if corrected && !legacy {
+                deltas.push((*t, u.max(0.0) - (u - up).max(0.0)));
             }
             for (rollup, reset) in by_rule.iter_mut().zip([legacy, corrected]) {
                 let added = if reset { u.max(0.0) } else { (u - up).max(0.0) };
@@ -1451,22 +1465,77 @@ fn correct_retained_hour<'a>(
     let matches =
         |r: &Rollup| (r.resets, r.last_reset_ms, r.consumed) == (saved.resets, saved.last_reset_ms, saved.consumed);
     if matches(&corrected) {
-        return Ok(true);
+        return Some(ResetCorrection {
+            deltas: Vec::new(),
+            consumed_if_all_kept: None,
+        });
     }
-    if matches(&legacy) {
-        saved.consumed = corrected.consumed;
-        saved.resets = corrected.resets;
-        saved.last_reset_ms = corrected.last_reset_ms;
-        return Ok(true);
+    matches(&legacy).then_some(ResetCorrection {
+        deltas,
+        consumed_if_all_kept: Some(corrected.consumed),
+    })
+}
+
+/// Apply corrections only after every close has reconciled its periods. A later close can
+/// restore a partially retired period over a split observed in an earlier day's readings.
+fn finish_closed_rollups(db: &redb::Database) -> Result<()> {
+    let read = db.begin_read()?;
+    let corrections = match read.open_table(CLOSED_ROLLUP_CORRECTIONS) {
+        Ok(table) => table,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let txn = begin(db)?;
+    for entry in corrections.iter()? {
+        let (key, value) = entry?;
+        let key = key.value();
+        let a = db::be_u32(key, 0);
+        let w = db::be_u32(key, 4);
+        let Some(hours) = get(&txn, db::ROLLUP_HOURS, key)? else {
+            fail!("corrupt", "pending correction has no archived hours");
+        };
+        let Some(day) = get(&txn, db::ROLLUP_DAY, key)? else {
+            fail!("corrupt", "pending correction has no archived day");
+        };
+        let mut hours = pack::decode_hours(&hours)?;
+        let mut day = Rollup::decode(&day)?;
+        let values: Vec<(u8, ResetCorrection)> = db::unpack(value.value())?;
+        for (hour, correction) in values {
+            let Ok(index) = hours.binary_search_by_key(&hour, |(h, _)| *h) else {
+                fail!("corrupt", "pending correction is outside the archived hours");
+            };
+            let saved = &mut hours[index].1;
+            let old = (saved.consumed, saved.resets);
+            let mut all_kept = true;
+            for (at, extra) in correction.deltas {
+                if read_period(&txn, a, w, at)?.is_some() {
+                    saved.consumed += extra;
+                    saved.resets += 1;
+                    saved.last_reset_ms = saved.last_reset_ms.max(Some(at as i64));
+                } else {
+                    all_kept = false;
+                }
+            }
+            if all_kept && let Some(consumed) = correction.consumed_if_all_kept {
+                saved.consumed = consumed;
+            }
+            day.consumed += saved.consumed - old.0;
+            day.resets += saved.resets - old.1;
+            day.last_reset_ms = day.last_reset_ms.max(saved.last_reset_ms);
+        }
+        put(&txn, db::ROLLUP_HOURS, key, &pack::encode_hours(&hours))?;
+        put(&txn, db::ROLLUP_DAY, key, &day.encode())?;
     }
-    Ok(false)
+    txn.delete_table(CLOSED_ROLLUP_CORRECTIONS)?;
+    txn.commit()?;
+    Ok(())
 }
 
 fn restore_closed_rollups(
     txn: &WriteTransaction,
     series @ (a, w): (u32, u32),
     day: u32,
-    mut saved_hours: Vec<(u8, Rollup)>,
+    saved_hours: Vec<(u8, Rollup)>,
     mut saved_day: Rollup,
     recovered_resets: &[(u64, f64)],
     replay: Option<ReplayReadings>,
@@ -1494,7 +1563,7 @@ fn restore_closed_rollups(
     let complete_day =
         replay == ReplayReadings::Complete || (replay == ReplayReadings::RetiredPrefix && before_day.is_some());
 
-    if complete_day
+    if replay == ReplayReadings::Complete
         && rebuilt_day.as_ref().is_some_and(|r| same_rollup_input(&saved_day, r))
         && rebuilt_hours.len() == saved_hours.len()
         && rebuilt_hours
@@ -1518,8 +1587,8 @@ fn restore_closed_rollups(
         spans.push((t, row));
         Ok(true)
     })?;
-    for (hour, saved) in &mut saved_hours {
-        let old = (saved.consumed, saved.resets);
+    let mut corrections = Vec::new();
+    for (hour, saved) in &saved_hours {
         let start = from + u64::from(*hour) * HOUR_MS;
         let lo = spans.partition_point(|(t, _)| *t < start);
         let hi = spans.partition_point(|(t, _)| *t < start + HOUR_MS);
@@ -1531,20 +1600,25 @@ fn restore_closed_rollups(
         let complete_hour = complete_day || (replay == ReplayReadings::RetiredPrefix && previous.is_some());
         let rebuilt_rows = rebuilt_hours.iter().find(|(h, _)| h == hour).map_or(0, |(_, r)| r.rows);
         let exact_spans = hi - lo == rebuilt_rows as usize && rebuilt_rows >= saved.rows;
-        if !(complete_hour && exact_spans && correct_retained_hour(txn, series, previous, &spans[lo..hi], saved)?) {
-            // A complete archived period still proves its own reset deltas when the whole
-            // hour cannot be reconstructed, including hours with retired readings.
-            for &(at, extra) in recovered_resets {
-                if at >= start && at < start + HOUR_MS {
-                    saved.consumed += extra;
-                    saved.resets += 1;
-                    saved.last_reset_ms = saved.last_reset_ms.max(Some(at as i64));
-                }
-            }
+        let verified = (complete_hour && exact_spans)
+            .then(|| retained_hour_correction(previous, &spans[lo..hi], saved))
+            .flatten();
+        let correction = verified.unwrap_or_else(|| ResetCorrection {
+            // A complete archived period can also prove its resets when only part of an
+            // hour survives.
+            deltas: recovered_resets
+                .iter()
+                .copied()
+                .filter(|(at, _)| *at >= start && *at < start + HOUR_MS)
+                .collect(),
+            consumed_if_all_kept: None,
+        });
+        if !correction.deltas.is_empty() {
+            corrections.push((*hour, correction));
         }
-        saved_day.consumed += saved.consumed - old.0;
-        saved_day.resets += saved.resets - old.1;
-        saved_day.last_reset_ms = saved_day.last_reset_ms.max(saved.last_reset_ms);
+    }
+    if !corrections.is_empty() {
+        put(txn, CLOSED_ROLLUP_CORRECTIONS, key, &db::pack(&corrections)?)?;
     }
     if saved_hours.is_empty() {
         txn.open_table(db::ROLLUP_HOURS)?.remove(key)?;
