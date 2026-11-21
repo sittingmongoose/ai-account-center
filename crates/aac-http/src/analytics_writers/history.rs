@@ -592,6 +592,7 @@ mod tests {
         let first = read(&store);
         assert_eq!(first["rows"][0][5], 70);
         assert_eq!(first["rows"][0][6], 30);
+        activity::close_days(&store, now as u64).expect("settle the published mirror hour");
         store.close().expect("close between scanners");
         drop(store);
 
@@ -606,21 +607,13 @@ mod tests {
             )
             .expect("publish after the original returns");
         let once = read(&store);
-
-        let total: u64 = once["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| r[5].as_u64().unwrap())
-            .sum();
-        assert_eq!(total, 70, "one log counted once: {once}");
-        let output: u64 = once["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| r[6].as_u64().unwrap())
-            .sum();
-        assert_eq!(output, 30, "one log counted once: {once}");
+        let rows = once["rows"].as_array().expect("historical rows");
+        let totals: [u64; 3] = [5, 6, 12].map(|index| {
+            rows.iter()
+                .map(|row| row[index].as_u64().expect("historical count"))
+                .sum()
+        });
+        assert_eq!(totals, [70, 30, 1], "one log counted once: {once}");
     }
 
     #[test]
