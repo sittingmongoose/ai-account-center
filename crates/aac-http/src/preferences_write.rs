@@ -19,9 +19,32 @@ use std::{
 const PRIMARY: &str = "dashboard-preferences";
 const COMPANION: &str = "dashboard-preferences-extra-sources";
 pub(crate) const TRANSACTION: &str = "dashboard-preferences-transaction";
-const LEASE_WAIT: Duration = Duration::from_millis(250);
+pub(crate) const LEASE_WAIT: Duration = Duration::from_millis(250);
 const DOC_CAP: usize = 64 * 1024;
 pub(crate) const INPUT_CAP: usize = 512 * 1024;
+
+/// Retry only an active lease. A claim that took some leases before failing releases them
+/// before another attempt. The initial attempt also serves callers with a zero wait.
+pub(crate) fn retry_busy_lease<T>(
+    deadline: Instant,
+    mut claim: impl FnMut() -> Result<T, Decline>,
+) -> Result<T, Decline> {
+    loop {
+        match claim() {
+            Err(Decline::Busy) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(Decline::Busy);
+                }
+                std::thread::sleep(remaining.min(Duration::from_millis(5)));
+                if Instant::now() >= deadline {
+                    return Err(Decline::Busy);
+                }
+            }
+            result => return result,
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -139,16 +162,7 @@ impl WriteLease {
                 transaction: claim(TRANSACTION)?,
             })
         };
-        // Only retry lease acquisition. A failed claim drops any leases already taken.
-        let started = Instant::now();
-        let lease = loop {
-            match claim_all() {
-                Err(Decline::Busy) if started.elapsed() < wait => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                result => break result?,
-            }
-        };
+        let lease = retry_busy_lease(Instant::now() + wait, claim_all)?;
         // Resume an earlier committed intent before reading or comparing the current files.
         if let Some(pending) = stored(root, TRANSACTION)? {
             let old: Documents =

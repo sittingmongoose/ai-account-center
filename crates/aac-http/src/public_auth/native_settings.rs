@@ -8,8 +8,14 @@
 use super::{
     DashboardAccess, DashboardEvent, DashboardEvents, DashboardPrincipal, Reply, set_header,
 };
-use crate::registered;
+use crate::{
+    preferences_write::{LEASE_WAIT, retry_busy_lease},
+    registered,
+    table::Pool,
+};
+use aac_core::Cause;
 use aac_files::registry::{self, Owners, Role};
+use aac_views::decline::Decline;
 use axum::{
     body::{Body, Bytes},
     extract::Request,
@@ -17,7 +23,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 const SETTINGS_CAP: usize = 4096;
 const VISIBILITY_CAP: usize = 8 * 1024;
@@ -130,13 +136,25 @@ impl Settings {
             Ok(body) => body,
             Err(reply) => return reply,
         };
-        match settings_write(&self.root, &self.owners, &body) {
-            Ok(value) => no_store(super::response(200, value)),
-            Err(SettingsError::Shape) => no_store(super::plain(
-                400,
-                "Choose a whole number of seconds from 30 to 3600.",
-            )),
-            Err(SettingsError::Save) => no_store(super::plain(
+        let Some(seconds) = settings_interval(&body) else {
+            return no_store(body_refusal(Family::Settings));
+        };
+        let root = self.root.clone();
+        let owners = self.owners.clone();
+        let saved = self
+            .limits
+            .blocking(Pool::Reads, move || {
+                Ok(settings_write(&root, &owners, seconds))
+            })
+            .await;
+        match saved {
+            Ok(Ok(value)) => no_store(super::response(200, value)),
+            Ok(Err(Decline::Busy)) => super::error(
+                409,
+                "settings_busy",
+                "Another settings save is in progress. Try again.",
+            ),
+            _ => no_store(super::plain(
                 500,
                 "Usage refresh settings could not be saved.",
             )),
@@ -251,7 +269,9 @@ impl Settings {
         let saved = self
             .limits
             .blocking(crate::table::Pool::Reads, move || {
-                Ok(crate::visibility_write::save(&root, &owners, patch, &body))
+                Ok(crate::visibility_write::save_public(
+                    &root, &owners, patch, &body,
+                ))
             })
             .await;
         let reply = match saved {
@@ -259,10 +279,15 @@ impl Settings {
                 super::response(200, value["visibility"].clone())
             }
             // A file that cannot be read back safely cannot take a partial update.
-            Ok(Err(aac_views::decline::Decline::Shape)) | Ok(Ok(_)) => super::error(
+            Ok(Err(Decline::Shape)) | Ok(Ok(_)) => super::error(
                 500,
                 "visibility_unavailable",
                 "Account visibility could not be read safely.",
+            ),
+            Ok(Err(Decline::Busy)) => super::error(
+                409,
+                "visibility_busy",
+                "Another visibility save is in progress. Try again.",
             ),
             Ok(Err(_)) | Err(_) => super::error(
                 500,
@@ -378,33 +403,33 @@ pub(crate) fn refresh_interval_seconds(root: &Path) -> u64 {
     read(root).unwrap_or(60)
 }
 
-enum SettingsError {
-    Shape,
-    Save,
+fn settings_interval(body: &[u8]) -> Option<i64> {
+    let value: Value = crate::json_object::from_slice(body, &["refreshIntervalSeconds"]).ok()?;
+    value["refreshIntervalSeconds"]
+        .as_i64()
+        .filter(|seconds| (30..=3600).contains(seconds))
 }
 
-fn settings_write(root: &Path, owners: &Owners, body: &[u8]) -> Result<Value, SettingsError> {
-    let value: Value = crate::json_object::from_slice(body, &["refreshIntervalSeconds"])
-        .map_err(|_| SettingsError::Shape)?;
-    let field = &value["refreshIntervalSeconds"];
-    if !field.is_i64() {
-        return Err(SettingsError::Shape);
-    }
-    let seconds = field.as_i64().ok_or(SettingsError::Shape)?;
-    if !(30..=3600).contains(&seconds) {
-        return Err(SettingsError::Shape);
-    }
-    let rows = registry::rows().map_err(|_| SettingsError::Save)?;
-    let file = owners
-        .claim(rows, "account-refresh-settings", root, None)
-        .map_err(|_| SettingsError::Save)?;
-    let mut bytes = serde_json::to_vec(&json!({"refreshIntervalSeconds": seconds}))
-        .map_err(|_| SettingsError::Save)?;
+fn settings_write(root: &Path, owners: &Owners, seconds: i64) -> Result<Value, Decline> {
+    let rows = registry::rows().map_err(|_| Decline::Internal)?;
+    let file = retry_busy_lease(Instant::now() + LEASE_WAIT, || {
+        owners
+            .claim(rows, "account-refresh-settings", root, None)
+            .map_err(|error| {
+                if error.cause == Cause::Busy {
+                    Decline::Busy
+                } else {
+                    Decline::Unsupported
+                }
+            })
+    })?;
+    let value = json!({"refreshIntervalSeconds": seconds});
+    let mut bytes = serde_json::to_vec(&value).map_err(|_| Decline::Internal)?;
     bytes.push(b'\n');
     file.replace_settings(&bytes)
-        .map_err(|_| SettingsError::Save)?;
+        .map_err(|_| Decline::Internal)?;
     file.clean_settings_temporaries();
-    Ok(json!({"refreshIntervalSeconds": seconds}))
+    Ok(value)
 }
 
 fn json_content(request: &Request) -> bool {

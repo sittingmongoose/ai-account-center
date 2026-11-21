@@ -1,9 +1,11 @@
 //! PUT replacements and PATCH deltas for the four visibility lists.
 use crate::account_reads::{id_list, known_providers, store_folder, visibility};
+use crate::preferences_write::{LEASE_WAIT, retry_busy_lease};
+use aac_core::Cause;
 use aac_files::registry::{self, Owners};
 use aac_views::decline::Decline;
 use serde_json::{Map, Value, json};
-use std::path::Path;
+use std::{path::Path, time::Instant};
 
 const LISTS: [&str; 4] = [
     "hiddenProviders",
@@ -86,6 +88,28 @@ pub(crate) fn save(
     patch: bool,
     bytes: &[u8],
 ) -> Result<Value, Decline> {
+    save_until(root, owners, patch, bytes, Instant::now()).map_err(|error| match error {
+        Decline::Busy => Decline::Unsupported,
+        error => error,
+    })
+}
+
+pub(crate) fn save_public(
+    root: &Path,
+    owners: &Owners,
+    patch: bool,
+    bytes: &[u8],
+) -> Result<Value, Decline> {
+    save_until(root, owners, patch, bytes, Instant::now() + LEASE_WAIT)
+}
+
+fn save_until(
+    root: &Path,
+    owners: &Owners,
+    patch: bool,
+    bytes: &[u8],
+    deadline: Instant,
+) -> Result<Value, Decline> {
     let input = parse(patch, bytes).ok_or(Decline::Shape)?;
     let changes = input
         .iter()
@@ -94,9 +118,17 @@ pub(crate) fn save(
         .ok_or(Decline::Shape)?;
 
     let rows = registry::rows().map_err(|_| Decline::Internal)?;
-    let store = owners
-        .claim(rows, "account-visibility", root, None)
-        .map_err(|_| Decline::Unsupported)?;
+    let store = retry_busy_lease(deadline, || {
+        owners
+            .claim(rows, "account-visibility", root, None)
+            .map_err(|error| {
+                if error.cause == Cause::Busy {
+                    Decline::Busy
+                } else {
+                    Decline::Unsupported
+                }
+            })
+    })?;
     let full = !patch && input.len() == LISTS.len();
     let current = if full {
         let warnings = store_folder(root).ok_or(Decline::Unsupported)?;

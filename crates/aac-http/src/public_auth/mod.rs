@@ -2486,6 +2486,138 @@ mod tests {
         let _ = handle.await;
     }
 
+    async fn settings_write_headers(addr: SocketAddr) -> String {
+        format!(
+            "Origin: http://{addr}\r\nContent-Type: application/json\r\nCookie: {}\r\n",
+            login(addr).await
+        )
+    }
+
+    fn assert_settings_busy(reply: &str, code: &str, message: &str) {
+        let (headers, body) = reply.split_once("\r\n\r\n").unwrap();
+        let status = headers.lines().next().unwrap();
+        assert!(status.starts_with("HTTP/1.1 409"), "{status} {body}");
+        assert!(
+            headers.contains("cache-control: no-store"),
+            "{status} {body}"
+        );
+        let error: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(error, json!({"code": code, "error": message}));
+    }
+
+    #[tokio::test]
+    async fn settings_refresh_write_conflict_leaves_the_previous_save_on_disk() {
+        let (home, addr, handle) = settings_server().await;
+        let first = settings_write_headers(addr).await;
+        let second = settings_write_headers(addr).await;
+        let path = "/api/accounts/settings";
+        let saved = request(
+            addr,
+            path,
+            "PUT",
+            &first,
+            r#"{"refreshIntervalSeconds":120}"#,
+        )
+        .await;
+        assert!(
+            saved.starts_with("HTTP/1.1 200"),
+            "{:?}",
+            saved.lines().next()
+        );
+
+        let file = home.path().join("account-refresh-settings.json");
+        let previous = std::fs::read(&file).unwrap();
+        let held = native_settings::owners()
+            .claim(
+                aac_files::registry::rows().unwrap(),
+                "account-refresh-settings",
+                home.path(),
+                None,
+            )
+            .unwrap();
+        let body = r#"{"refreshIntervalSeconds":180}"#;
+        let started = std::time::Instant::now();
+        let refused = request(addr, path, "PUT", &second, body).await;
+        assert_settings_busy(
+            &refused,
+            "settings_busy",
+            "Another settings save is in progress. Try again.",
+        );
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert_eq!(std::fs::read(&file).unwrap(), previous);
+        drop(held);
+
+        // This resource contains a single value. A successful PUT replaces it.
+        let retried = request(addr, path, "PUT", &second, body).await;
+        assert!(
+            retried.starts_with("HTTP/1.1 200"),
+            "{:?}",
+            retried.lines().next()
+        );
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            format!("{body}\n").as_bytes()
+        );
+
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn settings_visibility_write_conflict_preserves_both_clients() {
+        let (home, addr, handle) = settings_server().await;
+        let first = settings_write_headers(addr).await;
+        let second = settings_write_headers(addr).await;
+        let path = "/api/accounts/visibility";
+        let saved = request(
+            addr,
+            path,
+            "PATCH",
+            &first,
+            r#"{"hiddenProviders":{"hide":["claude"],"show":[]}}"#,
+        )
+        .await;
+        assert!(
+            saved.starts_with("HTTP/1.1 200"),
+            "{:?}",
+            saved.lines().next()
+        );
+
+        let file = home.path().join("account-visibility.json");
+        let previous = std::fs::read(&file).unwrap();
+        let held = native_settings::owners()
+            .claim(
+                aac_files::registry::rows().unwrap(),
+                "account-visibility",
+                home.path(),
+                None,
+            )
+            .unwrap();
+        let body = r#"{"hiddenProviders":{"hide":["codex"],"show":[]}}"#;
+        let started = std::time::Instant::now();
+        let refused = request(addr, path, "PATCH", &second, body).await;
+        assert_settings_busy(
+            &refused,
+            "visibility_busy",
+            "Another visibility save is in progress. Try again.",
+        );
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert_eq!(std::fs::read(&file).unwrap(), previous);
+        drop(held);
+
+        let retried = request(addr, path, "PATCH", &second, body).await;
+        assert!(
+            retried.starts_with("HTTP/1.1 200"),
+            "{:?}",
+            retried.lines().next()
+        );
+        let disk: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(disk["hiddenProviders"], json!(["claude", "codex"]));
+
+        handle.abort();
+        let _ = handle.await;
+    }
+
     /// The cut's own settings, preferences and visibility routes: the TS admission sentences
     /// and the files the existing owners write.
     #[tokio::test]
