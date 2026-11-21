@@ -854,7 +854,9 @@ impl Projector for UsageProjector {
                     project_seen(txn, seen)?;
                 }
             }
-            "usage.day_closed" => project_day_closed(txn, &msgpack::to_json(&event.payload), None)?,
+            "usage.day_closed" => {
+                project_day_closed(txn, &msgpack::to_json(&event.payload), None)?;
+            }
             // Disclosed findings come back with a rebuild (2.6).
             "store.integrity_detected" => {
                 return Ok(vec![crate::engine::finding_from_json(&msgpack::to_json(
@@ -873,8 +875,16 @@ impl Projector for UsageProjector {
         readings: ReplayReadings,
     ) -> Result<Vec<Finding>> {
         if event.event_type == "usage.day_closed" {
-            project_day_closed(txn, &msgpack::to_json(&event.payload), Some(readings))?;
-            return Ok(Vec::new());
+            let complete = project_day_closed(txn, &msgpack::to_json(&event.payload), Some(readings))?;
+            return Ok(if complete {
+                Vec::new()
+            } else {
+                vec![crate::engine::finding(
+                    "readings",
+                    "late_rows_unavailable",
+                    "Some archived late-reading counts could not be reconstructed from the retained readings",
+                )]
+            });
         }
         self.apply(txn, log, event)
     }
@@ -1460,12 +1470,12 @@ fn restore_closed_rollups(
     mut saved_day: Rollup,
     recovered_resets: &[(u64, f64)],
     replay: Option<ReplayReadings>,
-) -> Result<()> {
+) -> Result<bool> {
     let key = Key::new().u32(a).u32(w).u32(day);
     let key = key.as_slice();
     let Some(replay) = replay else {
         // A normal close snapshots the very rollups already in redb.
-        return Ok(());
+        return Ok(true);
     };
     let rebuilt_day = get(txn, db::ROLLUP_DAY, key)?.map(|b| Rollup::decode(&b)).transpose()?;
     let rebuilt_hours = get(txn, db::ROLLUP_HOURS, key)?
@@ -1492,7 +1502,15 @@ fn restore_closed_rollups(
             .zip(&saved_hours)
             .all(|((hour, rebuilt), (saved_hour, saved))| hour == saved_hour && same_rollup_input(saved, rebuilt))
     {
-        return Ok(());
+        return Ok(true);
+    }
+
+    // During replay, all retained readings are seen before the close. The difference between
+    // that count and the archived count is exact when the day's readings are all present.
+    let late_rows = rebuilt_day.as_ref().map_or(0, |r| r.rows).checked_sub(saved_day.rows);
+    let late_rows = late_rows.filter(|_| complete_day);
+    if let Some(count) = late_rows {
+        saved_day.late_rows = saved_day.late_rows.max(count);
     }
 
     let mut spans = Vec::new();
@@ -1533,7 +1551,8 @@ fn restore_closed_rollups(
     } else {
         put(txn, db::ROLLUP_HOURS, key, &pack::encode_hours(&saved_hours))?;
     }
-    put(txn, db::ROLLUP_DAY, key, &saved_day.encode())
+    put(txn, db::ROLLUP_DAY, key, &saved_day.encode())?;
+    Ok(late_rows.is_some())
 }
 
 fn restore_closed_period(
@@ -1629,11 +1648,12 @@ fn restore_closed_period(
     Ok(Vec::new())
 }
 
-fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<ReplayReadings>) -> Result<()> {
+fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<ReplayReadings>) -> Result<bool> {
     let day = payload["day"].as_u64().unwrap_or(u64::MAX) as u32;
     if day == u32::MAX {
         fail!("corrupt", "day_closed without a day");
     }
+    let mut complete = true;
     for series in payload["series"].as_array().into_iter().flatten() {
         let account: AccountObs = serde_json::from_value(series["account"].clone())?;
         let window: WindowObs = serde_json::from_value(series["window"].clone())?;
@@ -1662,7 +1682,7 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<Rep
             let value = serde_json::from_value(period["period"].clone())?;
             recovered_resets.extend(restore_closed_period(txn, (a, w), start, value)?);
         }
-        restore_closed_rollups(
+        complete &= restore_closed_rollups(
             txn,
             (a, w),
             day,
@@ -1677,7 +1697,7 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<Rep
     if through.map(|d| day > d).unwrap_or(true) {
         db::set_meta(txn, "closed_through_day", &day.to_string())?;
     }
-    Ok(())
+    Ok(complete)
 }
 
 // ----------------------------------------------------------------------------- engine operations

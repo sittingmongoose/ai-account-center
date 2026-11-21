@@ -380,6 +380,10 @@ present, then their rollups in order.
 | `runs` | `run.recorded`, plus `attribution` checkpoints | run tables; recomputes `run_cost` for runs whose time overlaps newly projected account-hours (found through `run_by_time`) |
 | `answers`, `ops` | their events | their tables |
 
+A close snapshot records the row counts at close time. Replay can recover the late-reading
+count when the readings for that day are complete. If those readings have retired or are
+missing, replay keeps the archived count and records a `late_rows_unavailable` finding.
+
 Consumption rules used by every rollup are in 7.1. Each projector's tables can be dropped and rebuilt from
 its checkpoint at zero; that is the migration path (4.8).
 

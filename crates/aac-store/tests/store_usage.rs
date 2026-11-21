@@ -300,6 +300,35 @@ fn an_upgrade_keeps_the_closed_archive_when_a_period_is_only_partly_retained() {
 }
 
 #[test]
+fn a_rebuild_recounts_late_rows_without_reopening_the_day() {
+    let dir = temp_dir("late-counter-rebuild");
+    let t = CLOSED_DAY_START;
+    let w = |used| vec![window("five_hour", Some(used), Some(t + 5 * HOUR))];
+    let engine = open(&dir);
+    record(&engine, vec![obs(1, t, w(3.0)), obs(1, t + MIN, w(5.0))]);
+    aac_store::usage::close_days(&engine, (t + DAY) as u64).unwrap();
+    record(&engine, vec![obs(1, t + 2 * MIN, w(8.0)), obs(1, t + 3 * MIN, w(10.0))]);
+    let tables = ["rollup_day", "rollup_hours"];
+    let before = dump(&engine, &tables);
+    assert_eq!(aac_store::usage::Rollup::decode(&before[1].2).unwrap().late_rows, 2);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+
+    let rebuilt = open(&dir);
+    let after = dump(&rebuilt, &tables);
+    assert_eq!(
+        aac_store::usage::Rollup::decode(&after[1].2).unwrap().late_rows,
+        2,
+        "late rows disappeared on rebuild",
+    );
+    assert_eq!(after, before);
+    rebuilt.close().unwrap();
+    drop(rebuilt);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn an_upgrade_corrects_a_closed_day_when_the_split_period_was_open_at_close() {
     let dir = version_one_fixture(
         "closed-day-open-v1",
