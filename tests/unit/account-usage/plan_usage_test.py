@@ -137,6 +137,16 @@ class PlanUsageTests(unittest.TestCase):
         self.assertEqual(client.calls, [])
         self.assertEqual(result["windows"], [])
 
+    def test_expired_kimi_string_expiry_is_still_expired(self):
+        # m0-spec-F1b L1: a credential-file expiry stored as a numeric string is a
+        # timestamp, not a public scalar; it must still read as expired, not "no expiry".
+        self.write_omp([(1, "kimi-code", "oauth", json.dumps({"access": "expired-token", "expires": "1"}), None)])
+        client = FakeClient()
+        result = usage.collect("kimi-code", "ubuntu", self.home, client)
+        self.assertEqual(result["status"], "needs_sign_in")
+        self.assertEqual(client.calls, [])
+        self.assertEqual(result["windows"], [])
+
     def test_kimi_modern_ratios_win_and_invalid_ratios_are_rejected(self):
         plan, windows = usage.parse_kimi({"usage": {"limit": 100, "used": 80},
                                         "limits": [{"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"}, "detail": {"limit": 100, "used": 90}}],

@@ -227,7 +227,7 @@ def _plan_candidates(provider, home, ccs_dir):
         if secret and kind in ("api_key", "oauth"):
             found.append(("omp:" + rowid, ["discover"], {"secret": secret, "source": "OMP",
                 "email": plans.email_address(data.get("email")),
-                "expires": plans.number(data.get("expires")) if provider == "kimi-code" and kind == "oauth" else None}))
+                "expires": plans.api_number(data.get("expires")) if provider == "kimi-code" and kind == "oauth" else None}))
     env_names = {"kimi-code": ("KIMI_CODE_API_KEY", "KIMI_API_KEY"), "qwen": ("BAILIAN_TOKEN_PLAN_API_KEY",),
                  "zai": ("ZAI_API_KEY", "ZHIPU_API_KEY"), "opencode-go": ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY")}
     for name in env_names[provider]:

@@ -481,6 +481,14 @@ class AdditionalFailoverTests(unittest.TestCase):
         client.get.assert_not_called()
         self.assertEqual(result["failureCode"], "needs_sign_in")
 
+    def test_kimi_expired_oauth_string_expiry_never_calls_provider(self):
+        # m0-spec-F1b L1: a numeric-string credential expiry is still a timestamp.
+        self.omp([(1, "kimi-code", "oauth", {"access": "expired-fixture", "expires": "1"}, None)])
+        client = self.fake_client({})
+        result = adapter.collect(self.read("kimi-code")[0], self.home, "ubuntu", ccs_dir=self.ccs)
+        client.get.assert_not_called()
+        self.assertEqual(result["failureCode"], "needs_sign_in")
+
     def test_qwen_identity_uses_quota_sessions_not_inference_key_or_json_order(self):
         one = {"secret": json.dumps({"cookie": "sid=one; csrf=two", "token": "key-one"}), "source": "OMP", "email": None}
         two = {"secret": json.dumps({"token": "key-two", "cookie": "csrf=two; sid=one"}), "source": "OMP", "email": None}

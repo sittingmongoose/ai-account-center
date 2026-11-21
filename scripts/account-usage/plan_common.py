@@ -589,7 +589,7 @@ def credentials(provider, home=None, credential=None):
                     if secret:
                         candidates.append({
                             "secret": secret, "source": "OMP", "email": email_address(data.get("email")),
-                            "expires": number(data.get("expires")) if provider == "kimi-code" and credential_type == "oauth" else None,
+                            "expires": api_number(data.get("expires")) if provider == "kimi-code" and credential_type == "oauth" else None,
                         })
         except (OSError, sqlite3.Error):
             read_failed()
