@@ -1,4 +1,5 @@
-//! G16c: the machine readings the Status feed carries (CPU, memory, system disk).
+//! G16c: the machine readings the Status feed carries (CPU, memory, the disk the home folder
+//! is on).
 //!
 //! A port of `status-collectors.ts`: the one read-only probe each remote host runs, the local
 //! reading's shape (`readLocalMachine`), the parser and the busy percent between two Linux
@@ -40,7 +41,7 @@ impl HostOs {
     }
 }
 
-/// The system disk as one reading.
+/// The disk the home folder is on, as one reading.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Disk {
@@ -59,8 +60,10 @@ pub struct Sample {
     pub busy_pct: Option<i64>,
     pub mem_available_bytes: Option<f64>,
     pub mem_total_bytes: Option<f64>,
+    /// The disk the home folder is on: agent work lives there, so a split layout's system
+    /// disk says nothing about it.
     pub disk: Option<Disk>,
-    /// Why the system disk could not be read this time.
+    /// Why that disk could not be read this time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_error: Option<String>,
     /// Why the CPU was not read this time.
@@ -112,7 +115,7 @@ const DISK_ERROR: &str = "The machine did not report its system disk.";
 const MEMORY_ERROR: &str = "The machine did not report its memory.";
 const CPU_ERROR: &str = "The machine did not report its CPU.";
 
-const LINUX_PROBE: &str = r#"export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk / | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'"#;
+const LINUX_PROBE: &str = r#"export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk "$HOME" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'"#;
 
 /// The Mac memory half of the probe, run alone for a local reading (`readLocalMachine`).
 pub const MAC_MEMORY_PROBE: &str = r#"t=$(sysctl -n hw.memsize 2>/dev/null) || t=; case "$t" in ''|*[!0-9]*) t=;; esac; printf 'memTotalB=%s\n' "$t"; m=$(sysctl -n kern.memorystatus_level 2>/dev/null) || m=; case "$m" in ''|*[!0-9]*) m=;; *) [ "$m" -le 100 ] 2>/dev/null || m=;; esac; if [ -z "$m" ]; then p=$(memory_pressure 2>/dev/null) && m=$(printf '%s\n' "$p" | awk '{sub(/\r+$/, "")} /^System-wide memory free percentage:[[:space:]]+[0-9]+%[[:space:]]*$/ {v=$5+0; if (v<=100) {if (!have) {have=1; val=v} else if (val!=v) bad=1}} END {if (have && !bad) print val}'); fi; printf 'memAvailPct=%s\n' "$m""#;
@@ -376,7 +379,10 @@ pub struct LocalReads<'a> {
     pub load1: Option<f64>,
     /// The file's text, or null as the read fails.
     pub read_file: &'a dyn Fn(&str) -> Option<String>,
-    /// The system disk's `(free bytes, total bytes)`, or null when it cannot be read.
+    /// `os.homedir()`, the folder whose filesystem the reading reports.
+    pub home: &'a dyn Fn() -> Option<String>,
+    /// The `(free bytes, total bytes)` of the filesystem holding the path given, or null when
+    /// it cannot be read.
     pub statfs: &'a dyn Fn(&str) -> Option<(f64, f64)>,
     /// The Mac memory probe's sample, when the caller ran it (its totals and the memory error).
     pub mac_memory: Option<Sample>,
@@ -413,17 +419,21 @@ pub fn local_sample(reads: &LocalReads<'_>) -> Sample {
             cpu_error = Some("The CPU counters could not be read.".to_owned());
         }
     }
-    let disk_read = (reads.statfs)("/");
-    let (disk, disk_error) = match disk_read {
-        Some((free, total)) => (
+    // The disk the home folder is on: agent work lives there, and on a split layout (the
+    // Odroid's eMMC system disk with /home on NVMe) the system disk's free space says nothing
+    // about it.
+    let home = (reads.home)();
+    let disk_read = home.as_deref().and_then(reads.statfs);
+    let (disk, disk_error) = match (disk_read, home) {
+        (Some((free, total)), Some(home)) => (
             Some(Disk {
-                mount: "/".to_owned(),
+                mount: home,
                 free_bytes: free,
                 total_bytes: total,
             }),
             None,
         ),
-        None => (None, Some("The system disk could not be read.".to_owned())),
+        _ => (None, Some("The system disk could not be read.".to_owned())),
     };
     Sample {
         cores: (reads.cpus > 0).then(|| i64::try_from(reads.cpus).unwrap_or(i64::MAX)),
@@ -541,6 +551,8 @@ mod tests {
         assert!(
             probe_command(HostOs::Windows).starts_with("powershell.exe -NoProfile -NonInteractive -EncodedCommand ")
         );
+        assert!(probe_command(HostOs::Linux).contains(r#"df -Pk "$HOME""#));
+        assert!(!probe_command(HostOs::Linux).contains("df -Pk /"));
     }
 
     #[test]
@@ -599,6 +611,7 @@ mod tests {
                 "/proc/stat" => Some("cpu  10 0 5 80 5 0 0 0 0 0\n".into()),
                 _ => None,
             },
+            home: &|| Some("/home/agent".into()),
             statfs: &|_| None,
             mac_memory: None,
         });
@@ -618,6 +631,7 @@ mod tests {
             free_mem: None,
             load1: None,
             read_file: &|_| None,
+            home: &|| Some("/home/agent".into()),
             statfs: &|_| Some((50.0, 100.0)),
             mac_memory: None,
         });
@@ -631,12 +645,48 @@ mod tests {
             free_mem: Some(0.5),
             load1: Some(9.0),
             read_file: &|_| None,
+            home: &|| Some("/home/agent".into()),
             statfs: &|_| Some((1.0, 2.0)),
             mac_memory: None,
         });
         assert_eq!(windows.load1, None);
         assert_eq!(windows.busy_pct, None);
         assert_eq!(windows.cores, Some(32));
+    }
+
+    #[test]
+    fn the_local_reading_is_the_disk_the_home_folder_is_on() {
+        // A split layout: the system disk says 2 bytes while the home folder's filesystem has
+        // 100. The reading must be the home folder's, and say so.
+        let asked = std::cell::RefCell::new(Vec::new());
+        let statfs = |path: &str| {
+            asked.borrow_mut().push(path.to_owned());
+            if path == "/home/agent" {
+                Some((10.0, 100.0))
+            } else {
+                Some((1.0, 2.0))
+            }
+        };
+        let sample = local_sample(&LocalReads {
+            platform: Platform::Linux,
+            cpus: 8,
+            total_mem: None,
+            free_mem: None,
+            load1: None,
+            read_file: &|_| None,
+            home: &|| Some("/home/agent".into()),
+            statfs: &statfs,
+            mac_memory: None,
+        });
+        assert_eq!(asked.borrow().as_slice(), ["/home/agent"]);
+        assert_eq!(
+            sample.disk,
+            Some(Disk {
+                mount: "/home/agent".into(),
+                free_bytes: 10.0,
+                total_bytes: 100.0
+            })
+        );
     }
 
     #[test]
