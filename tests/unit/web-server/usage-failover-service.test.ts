@@ -356,12 +356,35 @@ describe('identity-bound usage source failover', () => {
     const after = await Promise.all(names.map((name) => fs.readFile(path.join(dir, name), 'utf8')));
     expect(after).toEqual(before);
     expect((await fs.readdir(dir)).sort()).toEqual(names);
+    // T1: the peek leaves the in-memory state map empty. `states` is private; the assertion
+    // itself is the check that the field exists and stays empty.
+    const peekStates = (restarted as unknown as { states: Map<string, unknown> }).states;
+    expect(peekStates.size).toBe(0);
     // A reading saved for another identity never answers a pinned target.
     const pinned: UsageFailoverTarget = {
       ...h.target,
       expectedIdentity: { kind: 'muse-team', key: 'b'.repeat(64) },
     };
     expect(restarted.readingIdentity(pinned)).toBeNull();
+    // That None is trivial: no file exists under the pinned key. T1 writes the saved reading
+    // under the pinned target's OWN key with the other identity, so the identity check itself
+    // must refuse it. A writer collect under the pinned identity creates that file.
+    h.inventories.set('mac', [candidate({ identity: pinned.expectedIdentity! })]);
+    const writer = new UsageFailoverService(h.deps);
+    expect((await writer.collect(pinned, template())).status).toBe('ok');
+    const pinnedName = (await fs.readdir(dir)).sort().find((name) => !names.includes(name));
+    expect(pinnedName).toBeDefined();
+    const pinnedFile = path.join(dir, pinnedName!);
+    const saved = JSON.parse(await fs.readFile(pinnedFile, 'utf8'));
+    // Both identities become the OTHER one, so the file is internally consistent and only
+    // the pin check can refuse it (validateSaved would otherwise drop the reading anyway).
+    saved.identity = candidate().identity;
+    saved.saved.candidate.identity = candidate().identity;
+    await fs.writeFile(pinnedFile, JSON.stringify(saved), { mode: 0o600 });
+    const callsAfterWriter = h.calls.length;
+    expect(restarted.readingIdentity(pinned)).toBeNull();
+    expect(h.calls).toHaveLength(callsAfterWriter);
+    expect(peekStates.size).toBe(0);
   });
 
   it('keeps the verified account when the primary could not read its sign-ins', async () => {
