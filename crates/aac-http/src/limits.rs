@@ -128,43 +128,63 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_full_pool_declines_busy_and_never_runs_more_than_its_permits() {
+        use futures_util::FutureExt;
+
         let limits = Limits::new();
         let running = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
         let mut calls = Vec::new();
-        for _ in 0..20 {
-            let (limits, running, peak) = (limits.clone(), running.clone(), peak.clone());
-            calls.push(tokio::spawn(async move {
-                tokio::time::timeout(
-                    Duration::from_millis(100),
-                    limits.blocking(Pool::Reads, move || {
-                        let now = running.fetch_add(1, Ordering::SeqCst) + 1;
-                        peak.fetch_max(now, Ordering::SeqCst);
-                        std::thread::sleep(Duration::from_millis(400));
-                        running.fetch_sub(1, Ordering::SeqCst);
-                        Ok(())
-                    }),
-                )
-                .await
+        let mut releases = Vec::new();
+        for _ in 0..READ_PERMITS {
+            let (running, peak) = (running.clone(), peak.clone());
+            let (started, wait_for_start) = tokio::sync::oneshot::channel();
+            let (release, wait_for_release) = std::sync::mpsc::channel();
+            let mut call = Box::pin(limits.blocking(Pool::Reads, move || {
+                let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                let _ = started.send(());
+                let _ = wait_for_release.recv();
+                running.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
             }));
+            releases.push(release);
+            assert!(call.as_mut().now_or_never().is_none());
+            tokio::time::timeout(Duration::from_secs(10), wait_for_start)
+                .await
+                .expect("admitted work started")
+                .expect("worker signaled its start");
+            calls.push(call);
         }
-        let (mut busy, mut deadline, mut other) = (0, 0, 0);
+
+        for _ in READ_PERMITS..20 {
+            assert_eq!(
+                limits.blocking(Pool::Reads, || Ok(())).await,
+                Err(Decline::Busy),
+                "the rest decline at once"
+            );
+        }
+        // Expire each request after its blocking work has started. The work still holds its
+        // permit until the worker exits, even though the request future has been dropped.
         for call in calls {
-            match call.await {
-                Ok(Ok(Err(Decline::Busy))) => busy += 1,
-                Ok(Err(_elapsed)) => deadline += 1,
-                _ => other += 1,
-            }
+            assert!(
+                tokio::time::timeout(Duration::ZERO, call).await.is_err(),
+                "the admitted requests hit the deadline"
+            );
         }
-        assert_eq!(busy, 20 - READ_PERMITS, "the rest decline at once");
-        assert_eq!(deadline, READ_PERMITS, "the admitted ones hit the deadline");
-        assert_eq!(other, 0);
-        // The timed-out tasks still hold their permits: the pool stays full until they end.
         assert!(matches!(
             limits.blocking(Pool::Reads, || Ok(())).await,
             Err(Decline::Busy)
         ));
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        for release in releases {
+            release.send(()).expect("worker still holds its permit");
+        }
+        let permits = u32::try_from(READ_PERMITS).expect("read permit count");
+        drop(
+            tokio::time::timeout(Duration::from_secs(10), limits.reads.acquire_many(permits))
+                .await
+                .expect("workers returned all permits")
+                .expect("read pool remains open"),
+        );
         assert!(limits.blocking(Pool::Reads, || Ok(())).await.is_ok());
         assert_eq!(peak.load(Ordering::SeqCst), READ_PERMITS);
     }
