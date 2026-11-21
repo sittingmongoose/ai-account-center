@@ -555,6 +555,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/app_updates/helper_tests.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/app_updates/tests.rs",
       "kind": "internal",
       "evidence": [],
@@ -1015,9 +1022,10 @@
     },
     {
       "file": "crates/aac-http/tests/app_updates.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-http/tests/boot_files.rs",

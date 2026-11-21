@@ -526,6 +526,20 @@ scheduled the restart of Nas1's own `t3code.service`, that
 has no AI Account Center package, command or service and no `~/.ccs` content
 beyond `app-updates/`.
 
+**Helper sync in the native dashboard.** Before it asks a computer's agent to
+update, the dashboard sends the package's 18 helper files (the generated Codex
+runtime included) through that agent's own transport and account, the local
+computer too. The fixed script verifies every SHA-256, stages a new
+`helpers-<id>` generation, checks that it answers `--agent-capabilities`, swaps
+only the `app_updates.py` launcher and checks again. The launcher names the
+previous generation (`# aac-helpers-previous:`), which stays on disk. A current
+computer changes nothing. A refused, damaged or incapable set leaves the old
+launcher in force and fills that computer's rows with `failed` /
+`helper_sync_failed`, with the reason in `diagnostics`; no app runs there. To
+select the previous generation again, run
+`crates/aac-http/src/app_updates/helper_rollback.py` with the computer's Python
+as the account that runs the agent.
+
 **Antigravity CLI after switching retirement (2026-11-13).** Update all runs the
 ordinary native `agy update` on every computer, including a VM with a leftover
 `antigravity-switching/runtime-installation.json`. It does not read that marker,

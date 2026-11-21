@@ -66,6 +66,21 @@ pub(super) fn blank(host: Host, app: &str, status: &str, code: &str) -> Value {
     })
 }
 
+/// A row for a computer whose helpers could not be synced: nothing ran there, and the
+/// diagnostics name why. It restores through `normalize` like a helper's own row.
+pub(super) fn sync_failure(host: Host, app: &str, reason: &str, cause: &str) -> Value {
+    normalize(
+        host,
+        app,
+        &json!({
+            "appId": app, "platform": host.os, "status": "failed",
+            "messageCode": "helper_sync_failed", "updateAttempted": false,
+            "diagnostics": {"cause": cause, "reason": reason},
+        }),
+    )
+    .unwrap_or_else(|| blank(host, app, "failed", "helper_sync_failed"))
+}
+
 pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
     if row["appId"] != app || !app_known(app) || row["platform"] != host.os {
         return None;

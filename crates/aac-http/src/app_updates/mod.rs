@@ -1,4 +1,5 @@
 //! App-update job API for the guarded HTTP routes. One job fans out over L5.
+mod helpers;
 mod rows;
 mod storage;
 
@@ -133,6 +134,15 @@ impl Job {
         }
     }
 
+    fn fill_sync_failure(&mut self, host: Host, reason: &str, cause: &str) {
+        for app in rows::app_ids() {
+            if self.has(host, app).is_none() {
+                self.results
+                    .push(rows::sync_failure(host, app, reason, cause));
+            }
+        }
+    }
+
     fn event(&mut self, host: Host, data: &Value) {
         match data["event"].as_str() {
             Some("app") => {
@@ -175,7 +185,8 @@ impl Job {
     fn finish_host(&mut self, host: Host, terminal: Option<&Event>, timeout: bool) {
         match terminal {
             Some(Event::Result { value, .. }) if value["fallback"] == "python" => {
-                self.fill(host, "failed", "helper_sync_failed")
+                // The agent found no capable helper under its own account after the sync.
+                self.fill_sync_failure(host, "helper_capability_missing", "unknown")
             }
             Some(Event::Result { value, .. }) => {
                 for app in rows::app_ids() {
@@ -542,13 +553,30 @@ impl AppUpdates {
     }
 
     async fn execute(self: Arc<Self>, id: String, cancel: CancellationToken) {
+        // One read of the package's helper set serves every computer in this job.
+        let helpers = Arc::new(
+            tokio::task::spawn_blocking(|| {
+                crate::agent_transport::package_root()
+                    .ok_or(helpers::SyncError::Failed {
+                        reason: "helper_set_missing",
+                        cause: "unknown",
+                    })
+                    .and_then(|package| helpers::HelperSet::load(&package))
+            })
+            .await
+            .unwrap_or(Err(helpers::SyncError::Failed {
+                reason: "helper_set_missing",
+                cause: "unknown",
+            })),
+        );
         let mut work = JoinSet::new();
         for host in hosts() {
             let this = self.clone();
             let id = id.clone();
             let cancel = cancel.clone();
+            let helpers = helpers.clone();
             work.spawn(async move {
-                this.host_job(host, id, cancel).await;
+                this.host_job(host, id, cancel, &helpers).await;
             });
         }
         while work.join_next().await.is_some() {}
@@ -572,7 +600,13 @@ impl AppUpdates {
         }
     }
 
-    async fn host_job(&self, host: Host, id: String, cancel: CancellationToken) {
+    async fn host_job(
+        &self,
+        host: Host,
+        id: String,
+        cancel: CancellationToken,
+        helpers: &Result<helpers::HelperSet, helpers::SyncError>,
+    ) {
         if cancel.is_cancelled() {
             self.change(|job| {
                 job.fill(host, "skipped", "skipped_cancelled");
@@ -587,7 +621,29 @@ impl AppUpdates {
             }
             job.refresh_active();
         }).await;
-        let call = self.call_host(host, &id, &cancel, false).await;
+        // The computer's budget covers its helper sync, as Wave 84's did.
+        let started = Instant::now();
+        match self.sync_helpers(host, helpers, &cancel).await {
+            Ok(()) => {}
+            Err(helpers::SyncError::Cancelled) => {
+                self.change(|job| {
+                    job.fill(host, "skipped", "skipped_cancelled");
+                    job.host_done(host);
+                })
+                .await;
+                return;
+            }
+            Err(helpers::SyncError::Failed { reason, cause }) => {
+                tracing::warn!(host = host.id, reason, "app update helper sync failed");
+                self.change(|job| {
+                    job.fill_sync_failure(host, reason, cause);
+                    job.host_done(host);
+                })
+                .await;
+                return;
+            }
+        }
+        let call = self.call_host(host, &id, &cancel, false, started).await;
         if !call.admitted && cancel.is_cancelled() {
             self.change(|job| {
                 job.fill(host, "skipped", "skipped_cancelled");
@@ -615,9 +671,30 @@ impl AppUpdates {
         if follow_up {
             // The saved host boundary releases the restart. The overall job
             // stays active for cancellation and the one final ACP replacement.
-            let call = self.call_host(host, &id, &cancel, true).await;
+            let call = self.call_host(host, &id, &cancel, true, Instant::now())
+                .await;
             self.change(|job| job.finish_acp(host, &call)).await;
         }
+    }
+
+    /// Give an admitted computer the package's helper set before its agent is asked to update.
+    /// A computer without a usable pinned agent is left to the call, which names the setup step.
+    async fn sync_helpers(
+        &self,
+        host: Host,
+        helpers: &Result<helpers::HelperSet, helpers::SyncError>,
+        cancel: &CancellationToken,
+    ) -> Result<(), helpers::SyncError> {
+        let selector = Selector::usage(host.os, host.alias);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        if self.agents.client(&selector, deadline).await.is_none() {
+            return Ok(());
+        }
+        let Some(computer) = self.agents.computer(&selector, deadline).await else {
+            return Ok(());
+        };
+        let set = helpers.as_ref().map_err(Clone::clone)?;
+        helpers::sync(&computer, set, host.os, cancel).await
     }
 
     async fn call_host(
@@ -626,17 +703,17 @@ impl AppUpdates {
         id: &str,
         cancel: &CancellationToken,
         follow_up: bool,
+        started: Instant,
     ) -> HostCall {
         let (progress, mut events) = mpsc::channel(8);
         let (admission, controls) = mpsc::channel(1);
-        let options = CallOptions::new(
-            Duration::from_millis(if follow_up {
+        let mut options = CallOptions::new(Duration::ZERO, MAX_FRAME_BYTES * 2);
+        options.deadline = started
+            + Duration::from_millis(if follow_up {
                 ACP_FOLLOW_UP_HOST_TIMEOUT_MS
             } else {
                 APP_UPDATE_HOST_TIMEOUT_MS
-            }),
-            MAX_FRAME_BYTES * 2,
-        );
+            });
         let until = options.deadline;
         let transport_cancel = options.cancel.clone();
         let work = self.agents.app_call(
