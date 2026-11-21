@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::{
     error::Error,
     fs,
-    io::{self, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     net::Shutdown,
     os::unix::{
         fs::PermissionsExt,
@@ -190,11 +190,31 @@ impl Service {
     }
 }
 
-/// One request/response exchange on the fixture socket. The connect retries within a short
-/// deadline: under load the listener can refuse or reset the first connections after the
-/// health probe. A reply that arrives before the body is written is still read: the service
-/// may answer and close early (the wave-56 BrokenPipe), and the contract assertions apply
-/// to that reply exactly as to any other.
+fn connect_with_retry(
+    socket: &Path,
+    first_failure: impl FnOnce(&io::Error) -> io::Result<()>,
+) -> io::Result<UnixStream> {
+    let connect_deadline = Instant::now() + Duration::from_secs(2);
+    let mut first_failure = Some(first_failure);
+    loop {
+        match UnixStream::connect(socket) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => {
+                if Instant::now() >= connect_deadline {
+                    return Err(error);
+                }
+                if let Some(notify) = first_failure.take() {
+                    notify(&error)?;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+}
+
+/// One request/response exchange on the fixture socket. A reply that arrives before the
+/// body is written is still read: the service may answer and close early (the wave-56
+/// BrokenPipe), and the contract assertions apply to that reply exactly as to any other.
 fn exchange(
     socket: &Path,
     method: &str,
@@ -202,18 +222,17 @@ fn exchange(
     who: &str,
     body: Option<&[u8]>,
 ) -> Result<Reply> {
-    let connect_deadline = Instant::now() + Duration::from_secs(2);
-    let mut stream = loop {
-        match UnixStream::connect(socket) {
-            Ok(stream) => break stream,
-            Err(error) => {
-                if Instant::now() >= connect_deadline {
-                    return Err(error.into());
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-    };
+    let stream = connect_with_retry(socket, |_| Ok(()))?;
+    exchange_on(stream, method, path, who, body)
+}
+
+fn exchange_on(
+    mut stream: UnixStream,
+    method: &str,
+    path: &str,
+    who: &str,
+    body: Option<&[u8]>,
+) -> Result<Reply> {
     stream.set_read_timeout(Some(Duration::from_secs(15)))?;
     let write = (|| -> io::Result<()> {
         write!(
@@ -397,24 +416,46 @@ fn the_first_connect_retries_until_the_listener_answers() -> Result<()> {
     let socket = dir.path().join("late.sock");
     // Bind and drop: the file stays, but connect reads ECONNREFUSED until the real bind.
     drop(UnixListener::bind(&socket)?);
-    let path = socket.clone();
-    let server = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(150));
-        let _ = fs::remove_file(&path);
-        let listener = UnixListener::bind(&path).expect("fixture rebind");
-        let (mut stream, _) = listener.accept().expect("fixture connect");
-        let mut request = [0u8; 4096];
-        let _ = stream.read(&mut request);
-        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}");
-    });
-    let reply = exchange(
-        &socket,
+    let mut server = None;
+    let stream = connect_with_retry(&socket, |error| {
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+        fs::remove_file(&socket)?;
+        let listener = UnixListener::bind(&socket)?;
+        server = Some(std::thread::spawn(move || -> io::Result<()> {
+            let (stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            let mut request = BufReader::new(stream);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                if request.read_until(b'\n', &mut line)? == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "request headers",
+                    ));
+                }
+                if line == b"\r\n" {
+                    break;
+                }
+            }
+            // Closing with unread request bytes can reset the connection before the reply is read.
+            request
+                .into_inner()
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}")
+        }));
+        Ok(())
+    })?;
+    let reply = exchange_on(
+        stream,
         "GET",
         "/api/health",
         &principal("session", "public-health", "public"),
         None,
-    )?;
-    server.join().expect("fixture server");
-    assert_eq!(reply.status, 200);
+    );
+    server
+        .expect("first connect failed")
+        .join()
+        .expect("fixture server")?;
+    assert_eq!(reply?.status, 200);
     Ok(())
 }
