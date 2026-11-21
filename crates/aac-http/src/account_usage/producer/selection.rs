@@ -5,7 +5,48 @@ use crate::account_usage::{
     provider_caches, rows,
     sources::{Credential, Source},
 };
+use crate::account_usage::coordinator::UsageIdentity;
 use serde_json::{Value, json};
+
+/// One extra account's row with what tells two registry entries of one account apart.
+struct Keyed {
+    provider: String,
+    /// The entry discovers its credential instead of naming its own.
+    discovered: bool,
+    /// The credential identity its shown reading came from, when known.
+    identity: Option<UsageIdentity>,
+    row: Value,
+}
+
+/// Two registry entries whose readings came from the same credential identity are one account:
+/// show it once (never two rows of the same account). The row bound to its own credential stays
+/// over a `discover` row, then the first in list order. Rows without a known identity are never
+/// merged and nothing is rebound (the TS `oneRowPerIdentity`).
+fn one_row_per_identity(rows: Vec<Keyed>) -> Vec<Value> {
+    let mut dropped = vec![false; rows.len()];
+    for index in 0..rows.len() {
+        let Some(identity) = rows[index].identity.as_ref().filter(|_| !dropped[index]) else {
+            continue;
+        };
+        for other in index + 1..rows.len() {
+            if dropped[other]
+                || rows[other].provider != rows[index].provider
+                || rows[other].identity.as_ref() != Some(identity)
+            {
+                continue;
+            }
+            if rows[index].discovered && !rows[other].discovered {
+                dropped[index] = true;
+                break;
+            }
+            dropped[other] = true;
+        }
+    }
+    rows.into_iter()
+        .zip(dropped)
+        .filter_map(|(keyed, dropped)| (!dropped).then_some(keyed.row))
+        .collect()
+}
 
 impl Producer {
     pub(super) async fn additional(
@@ -33,10 +74,10 @@ impl Producer {
                 .position(|id| *id == source.provider)
                 .unwrap_or(order.len())
         });
-        let mut result: Vec<_> = stream::iter(sources)
+        let read: Vec<(Source, Value)> = stream::iter(sources)
             .filter(|source| std::future::ready(!antigravity || source.provider != "antigravity"))
             .map(|source| async move {
-                if let Some((status, message)) = problem {
+                let row = if let Some((status, message)) = problem {
                     let (host, name) = source_host(&source.platform, source.ssh_host.as_deref());
                     let mut row = rows::additional(&source, &host, &name, None);
                     row["status"] = json!(status);
@@ -44,11 +85,30 @@ impl Producer {
                     row
                 } else {
                     self.additional_row(&source, legacy, now, force).await
-                }
+                };
+                (source, row)
             })
             .buffered(3)
             .collect()
             .await;
+        let mut result = if problem.is_none() {
+            let failover = self.failover();
+            one_row_per_identity(
+                read.into_iter()
+                    .map(|(source, row)| {
+                        let target = super::failover::additional_target(&self.root, &source, legacy);
+                        Keyed {
+                            provider: source.provider.clone(),
+                            discovered: matches!(source.credential, Credential::Discover),
+                            identity: failover.reading_identity(&target),
+                            row,
+                        }
+                    })
+                    .collect(),
+            )
+        } else {
+            read.into_iter().map(|(_, row)| row).collect()
+        };
         if problem.is_none()
             && let Some(wallet) = self.wallet(now).await
         {
@@ -255,5 +315,61 @@ impl Producer {
             );
         }
         Some(row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Keyed, UsageIdentity, one_row_per_identity};
+    use serde_json::json;
+
+    fn keyed(id: &str, provider: &str, discovered: bool, identity: Option<&str>) -> Keyed {
+        Keyed {
+            provider: provider.to_owned(),
+            discovered,
+            identity: identity.map(|key| UsageIdentity {
+                kind: "opencode-go-key".to_owned(),
+                key: key.repeat(64),
+            }),
+            row: json!({ "id": id }),
+        }
+    }
+
+    fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
+        rows.iter().map(|row| row["id"].as_str().unwrap_or("").to_owned()).collect()
+    }
+
+    #[test]
+    fn two_entries_of_one_credential_identity_show_one_row() {
+        // discover and key 2e034ec2 read the same OpenCode Go account; the Z.ai rows have no
+        // identity yet and a different provider never merges with OpenCode Go.
+        let rows = one_row_per_identity(vec![
+            keyed("opencode-go:usage", "opencode-go", true, Some("a")),
+            keyed("opencode-go:acct:52f3251b", "opencode-go", false, Some("b")),
+            keyed("opencode-go:acct:2e034ec2", "opencode-go", false, Some("a")),
+            keyed("zai:acct:1", "zai", false, None),
+            keyed("zai:acct:2", "zai", false, None),
+            keyed("kimi-code:acct:1", "kimi-code", false, Some("a")),
+        ]);
+        assert_eq!(
+            ids(rows),
+            [
+                "opencode-go:acct:52f3251b",
+                "opencode-go:acct:2e034ec2",
+                "zai:acct:1",
+                "zai:acct:2",
+                "kimi-code:acct:1"
+            ]
+        );
+    }
+
+    #[test]
+    fn two_bound_entries_of_one_identity_keep_the_first() {
+        let rows = one_row_per_identity(vec![
+            keyed("opencode-go:acct:2e034ec2", "opencode-go", false, Some("a")),
+            keyed("opencode-go:usage", "opencode-go", true, Some("a")),
+            keyed("opencode-go:acct:52f3251b", "opencode-go", false, Some("a")),
+        ]);
+        assert_eq!(ids(rows), ["opencode-go:acct:2e034ec2"]);
     }
 }

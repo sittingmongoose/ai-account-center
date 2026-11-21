@@ -958,6 +958,18 @@ impl FailoverCoordinator {
         self.project(target, template, &state, state.fresh != Some(true))
     }
 
+    /// The credential identity the target's shown reading came from, or None before it has one
+    /// (`readingIdentity`). Read-only: never loads, creates or changes state and asks no provider.
+    pub fn reading_identity(&self, target: &UsageFailoverTarget) -> Option<UsageIdentity> {
+        let key = self.key(target);
+        let states = self.states.lock().unwrap_or_else(|e| e.into_inner());
+        states
+            .get(&key)?
+            .saved
+            .as_ref()
+            .map(|saved| saved.candidate.identity.clone())
+    }
+
     /// Collect a reading for the account.
     pub async fn collect(&self, target: &UsageFailoverTarget, template: &Value) -> Value {
         self.run(target, template, false).await

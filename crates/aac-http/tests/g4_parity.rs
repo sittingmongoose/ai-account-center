@@ -445,6 +445,58 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
     );
 }
 
+/// The duplicate-row guard reads which credential identity a row's reading came from. The
+/// accessor names the verified reading's identity and never starts a read.
+#[tokio::test]
+async fn reading_identity_names_the_shown_reading_without_a_read() {
+    let dir = tempfile::tempdir().expect("account root");
+    let target = target(
+        &json!({
+            "accountId":"opencode-go:acct:2e034ec2", "provider":"opencode-go", "binding":"fixture",
+            "primarySources":[{"host":"ubuntu","platform":"ubuntu","selector":"aac-key:2e034ec2"}]
+        }),
+        dir.path().to_owned(),
+    );
+    let template = json!({
+        "id":"opencode-go:acct:2e034ec2", "provider":"opencode-go", "platform":"ubuntu",
+        "status":"unavailable", "email":null, "windows":[]
+    });
+    let candidate = json!({
+        "locator":"1".repeat(64), "selectors":["aac-key:2e034ec2"], "revision":"2".repeat(64),
+        "identity":{"kind":"opencode-go-key","key":"a".repeat(64)}
+    });
+    let now = 1_791_979_200_000_i64;
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    set_step(
+        &mut state.lock().expect("fixture state"),
+        &json!({
+            "now":now, "hosts":[{"host":"ubuntu","platform":"ubuntu","sshHost":null}],
+            "inventories":{"ubuntu":[candidate]},
+            "collections":{"ubuntu":{"failureCode":null,"sample":{
+                "status":"ok", "sampledAt":aac_num::ecma::to_iso_string(now),
+                "fetchedAt":aac_num::ecma::to_iso_string(now),
+                "windows":[{"key":"weekly","label":"Weekly","usedPercent":16}]
+            }}}
+        }),
+    );
+    let coordinator = FailoverCoordinator::new(
+        Arc::new(FakeDeps {
+            state: state.clone(),
+        }),
+        collection_owners(),
+    );
+    assert_eq!(coordinator.reading_identity(&target), None);
+    assert!(state.lock().expect("fixture state").calls.is_empty());
+    let row = coordinator.collect(&target, &template).await;
+    assert_eq!(row["status"], "ok", "{row}");
+    let calls = state.lock().expect("fixture state").calls.len();
+    assert_eq!(
+        coordinator.reading_identity(&target),
+        Some(identity(&json!({"kind":"opencode-go-key","key":"a".repeat(64)})))
+    );
+    assert_eq!(state.lock().expect("fixture state").calls.len(), calls);
+}
+
 #[tokio::test]
 async fn claude_code_covers_a_signed_out_desktop_across_restart() {
     let dir = tempfile::tempdir().expect("account root");
