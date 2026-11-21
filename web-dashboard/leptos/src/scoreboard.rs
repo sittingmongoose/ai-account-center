@@ -581,9 +581,21 @@ struct Board {
     loading: RwSignal<bool>,
     /// The server filters as a query string (Scoreboard v2); empty reads every run.
     query: RwSignal<String>,
+    /// The header's Refresh presses waiting for the read under way (refreshing.rs).
+    refreshed: RwSignal<Vec<crate::refreshing::Done>>,
 }
 
 impl Board {
+    /// The header's Refresh: reads again (or joins the read under way) and tells `done` once it has answered.
+    fn reload_then(self, done: crate::refreshing::Done) {
+        // a page already gone reads nothing: nothing to wait for
+        if self.refreshed.try_update(|all| all.push(done)).is_none() {
+            done.finished();
+            return;
+        }
+        self.reload();
+    }
+
     fn reload(self) {
         // A page the frame has unmounted (at sign-out) reads nothing: its signals are gone.
         if self.loading.try_get_untracked().unwrap_or(true) {
@@ -609,6 +621,13 @@ impl Board {
                 }
                 self.loading.set(false);
             });
+            for done in self
+                .refreshed
+                .try_update(std::mem::take)
+                .unwrap_or_default()
+            {
+                done.finished();
+            }
             // The filters changed while this read ran: read again for the new ones.
             if self.query.try_get_untracked().is_some_and(|q| q != asked) {
                 self.reload();
@@ -630,6 +649,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         now_ms: RwSignal::new(js_sys::Date::now()),
         loading: RwSignal::new(false),
         query: RwSignal::new(String::new()),
+        refreshed: RwSignal::new(Vec::new()),
     };
     board.reload();
     // In the app frame a read the server refused (the session ended) brings the frame's sign-in, as Status does.
@@ -727,7 +747,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             }]
         }),
         strip: None,
-        refresh: Callback::new(move |_| board.reload()),
+        refresh: Callback::new(move |done| board.reload_then(done)),
         lead: None,
     };
     let banner = move || {

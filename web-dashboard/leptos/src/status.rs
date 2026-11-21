@@ -59,7 +59,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                 .with(|v| v.as_ref().map(headline_runs).unwrap_or_default())
         }),
         strip: Some(strip.into()),
-        refresh: Callback::new(move |_| live.reload()),
+        refresh: Callback::new(move |done| live.reload_then(done)),
         lead: None,
     };
     let banner = move || {

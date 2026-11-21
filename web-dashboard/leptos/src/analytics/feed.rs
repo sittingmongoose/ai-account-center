@@ -87,6 +87,24 @@ impl Feed {
             .unwrap_or(false)
     }
 
+    /// The header's Refresh on this tab: `done` is told once its reads have answered or failed (the controller's
+    /// callback), or at once when the controller has not loaded and nothing ran.
+    pub fn refresh_then(&self, done: crate::refreshing::Done) -> bool {
+        let id = self.controller.try_get_untracked().unwrap_or(0);
+        let mut ran = false;
+        crate::refreshing::hand_over(vec![done], |callback| {
+            ran = call_on(
+                id,
+                "act",
+                &["analytics-refresh".into(), "".into(), callback.clone()],
+            )
+            .and_then(|v| v.as_bool())
+                == Some(true);
+            ran
+        });
+        ran
+    }
+
     /// The frame header's line for this tab.
     pub fn chrome_line(&self) -> Memo<ChromeLine> {
         let chrome = self.chrome;

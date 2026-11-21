@@ -496,8 +496,11 @@ export function createFrameAnalytics({
       if (shown && !stopped) enter();
     },
     dashboardChanged,
-    /** One of the page's action kinds; false for one that isn't the page's. */
-    act(kind, value) {
+    /**
+     * One of the page's action kinds; false for one that isn't the page's. `done`, for a refresh, is called once its
+     * reads have answered or failed (the header's Refresh stops spinning then).
+     */
+    act(kind, value, done) {
       if (stopped) return false;
       const text = typeof value === 'string' ? value : '';
       if (kind === 'analytics-layout') {
@@ -511,7 +514,8 @@ export function createFrameAnalytics({
         return true;
       }
       if (kind === 'analytics-refresh') {
-        void refresh(true);
+        const ran = refresh(true);
+        if (typeof done === 'function') ran.then(() => finished(done), () => finished(done));
         return true;
       }
       const known = (id) => !!payload?.accounts?.some((a) => a?.id === id) || !!dashboard?.accounts?.some((a) => a?.id === id);
@@ -534,6 +538,11 @@ export function createFrameAnalytics({
       return { range: page.range, prov: page.prov, shown, stopped, hasPayload: !!payload, intervalSeconds };
     },
   };
+}
+
+/** Calls a caller's completion callback; its own failure is never the command's. */
+function finished(done) {
+  try { done(); } catch {}
 }
 
 let installs = 0;

@@ -8,6 +8,7 @@ use super::parts::runs_view;
 use crate::Page;
 use crate::api::{Run, Strip};
 use crate::frame::FrameCtx;
+use crate::refreshing::Done;
 use leptos::prelude::*;
 
 /// What the chrome says about the page on screen: its age and health, and a one-line summary for the status band.
@@ -20,7 +21,8 @@ pub struct ChromeInfo {
     pub summary: Signal<Vec<Run>>,
     /// The page's summary counts, drawn in the status band in place of `summary` when the page has them (Status).
     pub strip: Option<Signal<Option<Strip>>>,
-    pub refresh: Callback<()>,
+    /// The header's Refresh on this tab: reads again, and tells `Done` once that read has finished (refreshing.rs).
+    pub refresh: Callback<Done>,
     /// The status line's first word when it isn't "Updated" ("Refreshing", "Account data unavailable").
     pub lead: Option<Signal<String>>,
 }
@@ -123,11 +125,31 @@ pub fn apply_theme(mode: &str) {
     crate::set_theme(mode);
 }
 
+/// The header's Refresh (owner report 2026-11-20: feedback on a tap, especially in the installed app, and motion while
+/// it refreshes). A press shows at once (`pressed` from the pointer's down to its up, on touch as with a mouse: no
+/// :hover or :active, which a phone keeps or skips; a drag off, a cancelled touch or a lost focus lets go); while the refresh it started runs the icon turns, the button is
+/// aria-busy and says "Refreshing", and another press starts nothing (refreshing.rs).
 #[component]
-fn IconButton(icon: &'static str, label: &'static str, on_click: Callback<()>) -> impl IntoView {
+fn RefreshButton(ctx: FrameCtx) -> impl IntoView {
+    let pressed = RwSignal::new(false);
+    let busy = move || ctx.is_refreshing();
+    let label = move || refresh_label(busy());
+    let release = move || pressed.set(false);
     view! {
-        <button class="icon-btn" aria-label=label title=label on:click=move |_| on_click.run(())><Icon name=icon/></button>
+        <button class="icon-btn refresh-btn" class:pressed=move || pressed.get() class:refreshing=busy
+            aria-busy=move || busy().then_some("true") aria-label=label title=label
+            on:pointerdown=move |e: web_sys::PointerEvent| if e.is_primary() && e.button() <= 0 { pressed.set(true) }
+            on:pointerup=move |_| release()
+            on:pointercancel=move |_| release()
+            on:pointerleave=move |_| release()
+            on:blur=move |_| release()
+            on:click=move |_| ctx.refresh()><Icon name="refresh"/></button>
     }
+}
+
+/// The Refresh button's name and tip.
+pub(crate) fn refresh_label(busy: bool) -> &'static str {
+    if busy { "Refreshing" } else { "Refresh" }
 }
 
 fn status_words(ctx: FrameCtx) -> impl IntoView {
@@ -174,7 +196,7 @@ fn tab_links(ctx: FrameCtx) -> impl IntoView {
 fn tools(ctx: FrameCtx) -> impl IntoView {
     let pill = update_pill(ctx);
     view! {
-        <IconButton icon="refresh" label="Refresh" on_click=Callback::new(move |_| ctx.refresh())/>
+        <RefreshButton ctx=ctx/>
         <button class="icon-btn" class:upd-run=move || pill.with(|p| p.running)
             aria-label=move || pill.with(|p| p.label()) title=move || pill.with(|p| p.tip())
             on:click=move |_| ctx.update_apps()>{update_icon(pill)}</button>
@@ -267,7 +289,7 @@ pub fn FrameShell(ctx: FrameCtx, children: Children) -> impl IntoView {
                     <nav class="nav">{tab_links(ctx)}</nav>
                     <div class="chrome-right">
                         {status_words(ctx)}
-                        <IconButton icon="refresh" label="Refresh" on_click=Callback::new(move |_| ctx.refresh())/>
+                        <RefreshButton ctx=ctx/>
                         <button class="upd-btn" class:upd-run=move || pill.with(|p| p.running) title=move || pill.with(|p| p.tip())
                             on:click=move |_| ctx.update_apps()>{update_icon(pill)}<span class="tnum">{move || pill.with(|p| p.label())}</span></button>
                         <span class="chrome-sep"></span>
@@ -377,6 +399,12 @@ mod tests {
             ("Apps updated", "check")
         );
         assert_eq!(UpdatePill::read("not json"), UpdatePill::default());
+    }
+
+    #[test]
+    fn refresh_says_refreshing_while_it_runs() {
+        assert_eq!(refresh_label(false), "Refresh");
+        assert_eq!(refresh_label(true), "Refreshing");
     }
 
     #[test]

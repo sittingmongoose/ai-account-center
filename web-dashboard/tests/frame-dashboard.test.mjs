@@ -273,6 +273,51 @@ test('closing Details after a tab change never takes the tab\'s own history entr
   } finally { ctl.stop(); }
 });
 
+test('Refresh calls back once its reads have answered, failed, or were not run (the header stops spinning then)', async () => {
+  let finishRefresh = null;
+  const { server: base } = fixtureServer();
+  let hold = false;
+  const server = async (method, path, body) => {
+    if (hold && method === 'GET' && path.startsWith('/api/accounts/dashboard?')) await new Promise((resolve) => { finishRefresh = resolve; });
+    return base(method, path, body);
+  };
+  const ctl = await loadController(server);
+  try {
+    hold = true;
+    let done = 0;
+    assert.equal(ctl.c.command('refresh', () => done++), true);
+    await flush();
+    assert.ok(finishRefresh, 'the refresh read is in flight');
+    assert.equal(done, 0, 'not finished while it reads');
+    hold = false;
+    finishRefresh();
+    await flush(16);
+    assert.equal(done, 1, 'finished once, when it answered');
+    // a callback that throws is not the controller's failure
+    let thrown = 0;
+    assert.equal(ctl.c.command('refresh', () => { thrown++; throw new Error('caller'); }), true);
+    await flush(16);
+    assert.equal(thrown, 1);
+    assert.equal(ctl.toasts().filter((t) => t.kind === 'err').length, 0);
+  } finally { ctl.c.stop(); }
+  // a failed read finishes too (its words are the page's)
+  const failing = fixtureServer();
+  let down = false;
+  const bad = await loadController((method, path, body) => (down && path.startsWith('/api/accounts/dashboard?') ? { status: 500, payload: { error: 'down' } } : failing.server(method, path, body)));
+  try {
+    down = true;
+    let done = 0;
+    assert.equal(bad.c.command('refresh', () => done++), true);
+    await flush(16);
+    assert.equal(done, 1);
+    assert.equal(bad.toasts().at(-1)?.title, 'Refresh failed', 'the failure is said in the page\'s words');
+  } finally { bad.c.stop(); }
+  // stopped: refused, and the frame finishes it itself
+  const stopped = createFrameDashboard({ fetch: async () => { throw new Error('nothing is read'); } });
+  stopped.stop();
+  assert.equal(stopped.command('refresh', () => assert.fail('a refused command is not run')), false);
+});
+
 test('stop: nothing more is read or sent', async () => {
   const { server } = fixtureServer();
   const ctl = await loadController(server);

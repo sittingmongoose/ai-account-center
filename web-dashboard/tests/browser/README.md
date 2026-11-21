@@ -49,6 +49,7 @@ CSS pixels, including the Duo rail.
 | `checks/claude-signins.check.mjs` | Claude sign-in renewal: the notice once, the header and rows, and Details from the Accounts rows. |
 | `checks/frame.check.mjs` | The frame's tabs, address and Back, the Duo rail and band, the new-build notice, `/` serving the frame and every classic address landing on its tab, and the offline start. |
 | `checks/page-load.check.mjs` | No tab loads or waits on the retired Slint dashboard; `load timing:` records each tab's cold and warm load. |
+| `checks/refresh-button.check.mjs` | The header's Refresh on desktop (mouse) and phone (touch): `.pressed` from the pointer's down to its up; while its refresh runs the icon turns, aria-busy, "Refreshing", one read for two presses; it stops when Status' read or the dashboard controller's answers (at least ~600 ms); reduced motion pulses; light and dark crops. |
 
 The other files cover Home, Accounts & Settings, Analytics, Status, the Scoreboard, sign-in, overlays, reset claims and the pages together; each says what it asserts at its top.
 
