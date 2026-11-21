@@ -3,6 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { stageManifest } = require('./build-dashboard-native');
@@ -10,8 +11,57 @@ const { readSourceBuild, recordBuild } = require('./deploy-lineage');
 const store = require('./build-native');
 const status = require('./build-status-native');
 const { verifyLocalDist } = require('./build-usage-scan');
+const agent = require('./build-agent');
+const cursor = require('./build-cursor-account');
 
 const root = path.resolve(__dirname, '..');
+const releaseTargets = [
+  'x86_64-unknown-linux-gnu',
+  'aarch64-apple-darwin',
+  'x86_64-pc-windows-msvc',
+];
+
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+/** Verify the full release payload in an installed package, against this release checkout. */
+function verifyReleaseArtifacts(installed) {
+  const catalog = 'config/agent-artifacts.json';
+  const pins = readJson(path.join(root, catalog));
+  assert.deepEqual(
+    readJson(path.join(installed, catalog)),
+    pins,
+    'Installed agent catalog differs'
+  );
+
+  const agentDir = path.join(installed, 'dist/agent');
+  const cursorDir = path.join(installed, 'dist/native/aac-cursor-account');
+  const agents = agent.verifyDist(agentDir);
+  const readers = cursor.verifyDist(cursorDir);
+  assert(agents.present, 'Missing installed agent manifest');
+  assert(readers.present, 'Missing installed Cursor reader manifest');
+  assert.deepEqual(agents.missing, [], 'Installed package is missing trusted agent pins');
+  const agentManifest = readJson(path.join(agentDir, 'manifest.json'));
+  const readerManifest = readJson(path.join(cursorDir, 'manifest.json'));
+  assert.equal(agentManifest.sourceSha256, agent.sourceHash(), 'Installed agent source mismatch');
+  assert.equal(
+    readerManifest.sourceSha256,
+    cursor.sourceHash(),
+    'Installed Cursor reader source mismatch'
+  );
+  for (const target of releaseTargets) {
+    assert(agents.targets.includes(target), `Missing installed agent for ${target}`);
+    assert(
+      pins.artifacts.some((entry) => entry.target === target),
+      `Missing agent pin for ${target}`
+    );
+    assert(readers.targets.includes(target), `Missing installed Cursor reader for ${target}`);
+    assert.equal(readerManifest.targets[target].file, `${target}/${cursor.binaryName(target)}`);
+  }
+
+  return releaseTargets;
+}
 
 function verifyAddon(builder, buildCommand) {
   const name = builder.moduleName();
@@ -79,7 +129,9 @@ function stagePackage(destination) {
             relative
           );
         if (match) return Boolean(match[1]) === (process.platform === 'win32');
-        const addon = /^dist\/native\/(aac-(?:store|status)\.[^/]+\.node)(?:\.json)?$/.exec(relative);
+        const addon = /^dist\/native\/(aac-(?:store|status)\.[^/]+\.node)(?:\.json)?$/.exec(
+          relative
+        );
         if (addon) return platformAddons.has(addon[1]);
         // The compiler can leave output for deleted sources in an incremental build.
         const emitted =
@@ -97,8 +149,14 @@ function stagePackage(destination) {
 }
 
 if (require.main === module) {
-  if (process.argv.length !== 3) {
+  if (process.argv.length === 4 && process.argv[2] === '--verify-release-artifacts') {
+    const targets = verifyReleaseArtifacts(path.resolve(process.argv[3]));
+    console.log(`Installed exact pinned agents and Cursor readers: ${targets.join(', ')}`);
+  } else if (process.argv.length !== 3 || process.argv[2] === '--verify-release-artifacts') {
     console.error('Usage: node scripts/stage-dashboard-package.js <new-package-directory>');
+    console.error(
+      '   or: node scripts/stage-dashboard-package.js --verify-release-artifacts <installed-package>'
+    );
     process.exitCode = 1;
   } else {
     console.log(stagePackage(process.argv[2]));

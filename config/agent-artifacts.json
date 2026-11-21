@@ -3,8 +3,20 @@
     {
       "target": "x86_64-unknown-linux-gnu",
       "version": "0.1.0",
-      "sha256": "e4b67c69247a61cb210e13a24284bbd87cdce624d70adec5eb363bab65d41303",
+      "sha256": "c3ec14ebcf6023164ab67c525ece4cd6888116a99c12bde55d0d08655f4ecf2c",
       "file": "dist/agent/x86_64-unknown-linux-gnu/aac-agent"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "version": "0.1.0",
+      "sha256": "e804d2a5e08aaec13122df0f9742ecc66791ba44c45ef466d4e7dfbd686684ff",
+      "file": "dist/agent/aarch64-apple-darwin/aac-agent"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "version": "0.1.0",
+      "sha256": "9c6589d53029056786b97d456b8786a76ac962958a58e89c6533b56093803681",
+      "file": "dist/agent/x86_64-pc-windows-msvc/aac-agent.exe"
     }
   ]
 }

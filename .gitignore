@@ -68,6 +68,8 @@ crates/aac-store/prebuilt/
 # Status readers crate: build output and machine-specific prebuilt modules
 crates/aac-status/target/
 crates/aac-status/prebuilt/
+# Host agent crate: verified machine-specific release binaries
+crates/aac-agent/prebuilt/
 
 # Rust rewrite foundation workspace
 /target/
