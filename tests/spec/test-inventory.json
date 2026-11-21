@@ -4028,12 +4028,6 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/claude-signin-open-path.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/web-server/claude-signin-renewal.test.ts",
       "kind": "internal",
       "evidence": [],

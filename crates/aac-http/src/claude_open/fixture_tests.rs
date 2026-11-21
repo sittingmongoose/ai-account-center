@@ -20,12 +20,18 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct FakeState {
     host_open_results: VecDeque<AgentOpen>,
-    host_open_calls: Vec<Value>,
+    host_open_calls: Vec<HostOpenCall>,
     ssh_results: VecDeque<Result<SshOutput, SshError>>,
     ssh_calls: Vec<(Vec<String>, Option<Vec<u8>>)>,
     helper_responses: HashMap<String, VecDeque<Result<Vec<u8>, ()>>>,
     helper_calls: Vec<Value>,
     host_open_delay_ms: u64,
+}
+
+struct HostOpenCall {
+    platform: String,
+    ssh_host: String,
+    args: Value,
 }
 
 struct FakeRemote(Mutex<FakeState>);
@@ -68,14 +74,18 @@ impl HelperCall for FakeRemote {
 impl Remote for FakeRemote {
     fn host_open<'a>(
         &'a self,
-        _platform: &'a str,
-        _ssh_host: &'a str,
+        platform: &'a str,
+        ssh_host: &'a str,
         args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<AgentOpen, SshError>> + Send + 'a>> {
         Box::pin(async move {
             let delay = {
                 let mut state = self.state();
-                state.host_open_calls.push(args);
+                state.host_open_calls.push(HostOpenCall {
+                    platform: platform.to_owned(),
+                    ssh_host: ssh_host.to_owned(),
+                    args,
+                });
                 state.host_open_delay_ms
             };
             if delay > 0 {
@@ -303,9 +313,9 @@ async fn ordinary_open_uses_the_launcher_verb() {
     );
     let state = remote.state();
     assert_eq!(state.host_open_calls.len(), 1);
-    assert_eq!(state.host_open_calls[0]["op"], json!("open"));
+    assert_eq!(state.host_open_calls[0].args["op"], json!("open"));
     assert_eq!(
-        state.host_open_calls[0]["launcher"]["launcherPath"],
+        state.host_open_calls[0].args["launcher"]["launcherPath"],
         json!("/Applications/Claude (gmail).app")
     );
     assert!(state.helper_calls.is_empty());
@@ -589,23 +599,35 @@ async fn repeated_click_within_a_second_debounces() {
 }
 
 #[tokio::test]
-async fn windows_open_rebuilds_the_account_list() {
+async fn windows_open_selects_the_requested_profile_and_rebuilds_the_account_list() {
     let root = Root::new();
     let mut store = gmail_entry(None);
     store["id"] = json!("store");
     store["email"] = json!("store@example.test");
     store["windows"]["isDefault"] = json!(true);
+    let store_host = "synthetic-windows-alias-B";
+    store["windows"]["sshHost"] = json!(store_host);
     root.write_manifest(json!([store, gmail_entry(None)]));
+    let metadata = crate::profile_reads::desktop_profiles(root.path()).expect("profile metadata");
+    let selected = metadata["profiles"]
+        .as_array()
+        .expect("profiles")
+        .iter()
+        .find(|profile| profile["id"] == "store")
+        .expect("the requested profile");
+    assert_eq!(selected["windows"]["canOpen"], true);
+
     let remote = Arc::new(FakeRemote::new());
     let open = owner(&root, Arc::clone(&remote));
     assert_eq!(open.open("store", "windows", false).await.status, 200);
     let state = remote.state();
     assert_eq!(state.host_open_calls.len(), 1);
-    assert_eq!(state.host_open_calls[0]["profileId"], json!("store"));
-    assert_eq!(
-        state.host_open_calls[0]["accountList"],
-        json!(["store", "gmail"])
-    );
+    let call = &state.host_open_calls[0];
+    assert_eq!(call.platform, "windows");
+    assert_eq!(call.ssh_host, store_host);
+    assert_eq!(call.args["profileId"], "store");
+    assert_eq!(call.args["accountList"], json!(["store", "gmail"]));
+    assert!(state.ssh_calls.is_empty());
 }
 
 #[tokio::test]
