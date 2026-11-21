@@ -46,6 +46,8 @@ export interface CursorAccountRow {
 }
 
 interface CursorBillingCoverage {
+  /** Measured events whose model name required a fallback slug. */
+  unrecognizedModels?: number;
   /** Contiguous UTC window verified by the billing-items endpoint. */
   coverageFrom?: string;
   coverageUntil?: string;
@@ -221,6 +223,9 @@ function loadRead(cacheDir: string): CursorAccountRead | null {
     return {
       state: value.state as CursorAccountState,
       ...billingCoverage(value),
+      ...(count(value.unrecognizedModels) && value.unrecognizedModels
+        ? { unrecognizedModels: value.unrecognizedModels }
+        : {}),
       checkedAt: value.checkedAt,
       readAt: typeof value.readAt === 'string' ? value.readAt : null,
       ...(typeof value.cause === 'string' ? { cause: value.cause } : {}),
@@ -303,6 +308,9 @@ export async function readCursorAccount(
       state,
       checkedAt,
       ...billingCoverage({ coverageFrom: answer.coverageFrom, coverageUntil: answer.coverageUntil }),
+      ...(count(answer.unrecognizedModels) && answer.unrecognizedModels
+        ? { unrecognizedModels: answer.unrecognizedModels as number }
+        : {}),
       readAt: typeof answer.readAt === 'number' ? new Date(answer.readAt).toISOString() : checkedAt,
       account: typeof answer.account === 'string' ? answer.account : null,
       key: answer.coverageFrom ? null : keyInfo,
@@ -319,6 +327,7 @@ export async function readCursorAccount(
       checkedAt,
       readAt: keep?.readAt ?? null,
       ...(keep ? billingCoverage(keep) : {}),
+      ...(keep?.unrecognizedModels ? { unrecognizedModels: keep.unrecognizedModels } : {}),
       ...(state === 'unavailable'
         ? {
             cause:
@@ -358,6 +367,7 @@ export async function cursorAccountOutside(
       ? { computer: HOST_LABELS[localComputer()] }
       : {}),
     ...billingCoverage(read),
+    ...(read.unrecognizedModels ? { unrecognizedModels: read.unrecognizedModels } : {}),
     ...(read.key?.last4 ? { last4: read.key.last4 } : {}),
     unmeasured: read.unmeasured,
   };

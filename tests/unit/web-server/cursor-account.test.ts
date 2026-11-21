@@ -110,7 +110,7 @@ describe('reading the account', () => {
       coverageFrom: '2026-11-13T00:00:00.000Z',
       coverageUntil: new Date(NOW).toISOString(),
     };
-    let answer: unknown = { state: 'read', ...coverage, readAt: NOW, rows: [ROW], events: 2 };
+    let answer: unknown = { state: 'read', ...coverage, readAt: NOW, rows: [ROW], events: 2, unrecognizedModels: 1 };
     const read = () =>
       readCursorAccount(SINCE, NOW, {
         cacheDir: path.join(dir, 'cache'),
@@ -130,11 +130,12 @@ describe('reading the account', () => {
         readAt: new Date(NOW).toISOString(),
         rows: [ROW],
         events: 2,
+        unrecognizedModels: 1,
       });
       const summary = await cursorAccountOutside(last, [], {
         run: async () => ({ rows: [ROW], summary: { accountTokens: 1320 } }),
       });
-      expect(summary).toMatchObject({ ...coverage, accountTokens: 1320 });
+      expect(summary).toMatchObject({ ...coverage, accountTokens: 1320, unrecognizedModels: 1 });
       expect(summary.computer).toBeTruthy();
     }
   });

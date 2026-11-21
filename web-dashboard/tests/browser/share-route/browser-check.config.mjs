@@ -10,7 +10,12 @@ export default (ctx) => ({
   server: (_, s) => ({
     command: ['bun', path.join(ctx.configDir, 'server.ts'), String(s.port), s.home],
     url: `http://127.0.0.1:${s.port}/`,
-    env: { CCS_HOME: path.join(s.home, 'ccs'), CCS_DASHBOARD_AUTH_ENABLED: 'true' },
+    env: {
+      CCS_HOME: path.join(s.home, 'ccs'),
+      CCS_DASHBOARD_AUTH_ENABLED: 'true',
+      AAC_CURSOR_BILLING_ENABLED: '0',
+      AAC_CURSOR_API_BASE: 'http://127.0.0.1:1',
+    },
   }),
   teardown(_, s) { if (s) fs.rmSync(s.home, { recursive: true, force: true }); },
   consoleErrors: { fail: false }, // hostile content is expected to generate CSP refusals

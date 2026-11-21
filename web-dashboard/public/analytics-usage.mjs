@@ -1433,7 +1433,10 @@ export function cursorAccountLine(account, now = Date.now()) {
   const covered = finite(from) && finite(until);
   const utc = stamp => new Date(stamp).toISOString().slice(0, 16).replace('T', ' ');
   const coverage = covered ? ` Coverage from ${utc(from)} to ${utc(until)} UTC.` : '';
-  const saved = finite(at) ? ` Showing usage ${read}.${coverage}` : '';
+  const modelNotice = finite(account.unrecognizedModels) && account.unrecognizedModels > 0
+    ? ' Model name not recognised.'
+    : '';
+  const saved = finite(at) ? ` Showing usage ${read}.${coverage}${modelNotice}` : '';
   const computer = text(account.computer);
   const signin = `Cursor sign-in needed on ${computer || 'the dashboard computer'}.`;
   switch (account.state) {
@@ -1453,10 +1456,10 @@ export function cursorAccountLine(account, now = Date.now()) {
         ? `; ${nf0.format(unlogged)} event${unlogged === 1 ? '' : 's'} not logged (token counts missing)`
         : '';
       if (total <= 0)
-        return `Cursor account ${read}: ${unlogged > 0 ? 'no tokens logged' : covered ? 'no usage in covered hours' : 'no usage in range'}${notLogged}${local}.${coverage}`;
+        return `Cursor account ${read}: ${unlogged > 0 ? 'no tokens logged' : covered ? 'no usage in covered hours' : 'no usage in range'}${notLogged}${local}.${coverage}${modelNotice}`;
       return matched > 0
-        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${notLogged}${local}.${coverage}`
-        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${notLogged}${local}.${coverage}`;
+        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${notLogged}${local}.${coverage}${modelNotice}`
+        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${notLogged}${local}.${coverage}${modelNotice}`;
     }
     case 'no_key':
       return 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.';
@@ -1465,6 +1468,7 @@ export function cursorAccountLine(account, now = Date.now()) {
     case 'no_reader':
       return 'Cursor account: its reader is not built for this computer.';
     case 'unavailable':
+      if (account.cause === 'read_in_progress') return 'Cursor account read in progress.' + saved;
       if (account.cause === 'signin_needed') return signin + saved;
       if (account.cause === 'backfill_pending') return 'Cursor account history is still loading.' + saved;
       // The key's token reads the plan meter but sees no usage events (Cursor answers `{}`): never "no usage",

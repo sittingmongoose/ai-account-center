@@ -602,3 +602,13 @@ test('Cursor billing shows hourly coverage and keeps the read time after sign-in
   assert.equal(cursorAccountLine({ state: 'unavailable', cause: 'signin_needed', computer: 'Ubuntu VM' }, now),
     'Cursor sign-in needed on Ubuntu VM.');
 });
+
+test('a fallback Cursor model keeps its measured totals and names the model issue', () => {
+  const observations = { state: 'read', accountTokens: 123, unrecognizedModels: 1, unmeasured: 0 };
+  const line = cursorAccountLine(observations, now);
+  assert.match(line, /123 tokens on the account/);
+  assert.match(line, /Model name not recognised\./);
+  assert.doesNotMatch(line, /token counts missing/);
+  assert.match(cursorAccountLine({ ...observations, state: 'unavailable', cause: 'read_in_progress' }, now),
+    /^Cursor account read in progress\./);
+});
