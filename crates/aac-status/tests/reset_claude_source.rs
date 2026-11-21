@@ -34,9 +34,12 @@ def decrypt(*args):
  key='acct:'+account+'|'+CLIENT+':'+ORG+':https://api.anthropic.com:user:inference user:profile'
  return account,{key:{'token':'fixture-token-'+account,'refreshToken':'fixture-refresh','expiresAt':4102444800000}}
 scope['decrypt_cache']=decrypt
-if (root/'ambiguous-code').exists():
+if (root/'ambiguous-code').exists() or (root/'no-code').exists():
  def no_desktop(*args):raise scope['UsageUnavailable']('needs_sign_in')
  scope['decrypt_cache']=no_desktop
+if (root/'no-code').exists():
+ scope['code_reset_logins']=lambda *args:[]
+if (root/'ambiguous-code').exists():
  scope['code_reset_logins']=lambda *args:[
   {'account':(root/'login').read_text(),'organization':org,'binding':'a'*64}
   for org in [ORG,CLIENT]
@@ -105,7 +108,18 @@ fn claude_ambiguous_capture_keeps_its_named_refusal() {
     let db = dir.path().join("claims.sqlite");
     assert_eq!(
         reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
-        "identity-unconfirmed"
+        "ambiguous-code-login"
+    );
+    assert!(!dir.path().join("provider-reads").exists());
+}
+#[test]
+fn claude_capture_without_a_matching_code_login_keeps_its_named_refusal() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("no-code"), "").unwrap();
+    let db = dir.path().join("claims.sqlite");
+    assert_eq!(
+        reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
+        "no-matching-code-login"
     );
     assert!(!dir.path().join("provider-reads").exists());
 }

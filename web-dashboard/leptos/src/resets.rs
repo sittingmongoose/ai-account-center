@@ -302,6 +302,8 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         "identity-unconfirmed" | "identity-changed" => {
             "AAC couldn't confirm which account this is, so it won't use this reset.".into()
         }
+        "no-matching-code-login" => "AAC found no matching Claude Code login on Windows for this account.".into(),
+        "ambiguous-code-login" => "AAC found several matching Claude Code logins on Windows and couldn't select one for this reset.".into(),
         "grant-unavailable" => "The provider says this reset can't be used yet.".into(),
         "redeeming" => "OpenAI is using this reset now.".into(),
         "no-fable-usage" => "Fable usage is at 0%. There is no Fable usage to reset.".into(),
@@ -946,6 +948,17 @@ fn inventory_read_note(load: &Load, provider: &str) -> Option<(String, bool)> {
 #[cfg(test)]
 mod inventory_read_note_tests {
     use super::*;
+
+    #[test]
+    fn code_login_refusals_explain_the_saved_login_problem() {
+        assert!(
+            why_not("no-matching-code-login", "claude").contains("no matching Claude Code login")
+        );
+        assert!(
+            why_not("ambiguous-code-login", "claude")
+                .contains("several matching Claude Code logins")
+        );
+    }
 
     #[test]
     fn unconfirmed_web_identity_keeps_public_rows_list_only_and_explains_why() {

@@ -136,6 +136,22 @@
     ]
   },
   {
+    "word": "ambiguous_code_login",
+    "cause": "signin_needed",
+    "sources": [
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS"
+    ]
+  },
+  {
+    "word": "ambiguous-code-login",
+    "cause": "signin_needed",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS",
+      "scripts/account-usage/claude_usage.py:reason"
+    ]
+  },
+  {
     "word": "antigravity",
     "cause": null,
     "sources": [
@@ -1535,6 +1551,7 @@
     "word": "identity_unconfirmed",
     "cause": null,
     "sources": [
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS",
       "scripts/account-usage/claude_usage.py:error.status",
       "scripts/account-usage/claude_usage.py:result['status']"
     ]
@@ -1551,9 +1568,8 @@
     "cause": null,
     "sources": [
       "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
-      "scripts/account-usage/claude_usage.py:reason",
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS",
       "scripts/account-usage/claude_usage.py:resetReason",
-      "scripts/account-usage/claude_usage.py:result.get('resetReason')",
       "scripts/account-usage/claude_usage.py:result['resetReason']"
     ]
   },
@@ -2424,6 +2440,13 @@
     ]
   },
   {
+    "word": "no_matching_code_login",
+    "cause": "signin_needed",
+    "sources": [
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS"
+    ]
+  },
+  {
     "word": "no_node",
     "cause": null,
     "sources": [
@@ -2546,6 +2569,14 @@
     "sources": [
       "src/antigravity/runtime-refresh.ts:status",
       "src/antigravity/terminal-refresh.ts:result.status"
+    ]
+  },
+  {
+    "word": "no-matching-code-login",
+    "cause": "signin_needed",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
+      "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS"
     ]
   },
   {

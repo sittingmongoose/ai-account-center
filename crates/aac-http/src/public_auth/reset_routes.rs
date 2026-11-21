@@ -265,6 +265,8 @@ const SAFE_REASONS: &[&str] = &[
     "grant-changed",
     "identity-changed",
     "identity-unconfirmed",
+    "no-matching-code-login",
+    "ambiguous-code-login",
     "rate-limited",
     "stale-inventory",
     "provider-read-only",
@@ -485,6 +487,13 @@ impl ResetRoutes {
 #[cfg(test)]
 mod tests {
     use super::safe_reason;
+
+    #[test]
+    fn claude_code_login_refusals_keep_their_public_reasons() {
+        for reason in ["no-matching-code-login", "ambiguous-code-login"] {
+            assert_eq!(safe_reason(reason), Some(reason));
+        }
+    }
 
     #[test]
     fn fable_usage_refusals_keep_their_public_reason() {

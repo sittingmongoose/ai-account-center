@@ -95,6 +95,13 @@ fn iso_from_ms(value: Option<&Json>) -> Option<String> {
     aac_num::ecma::to_iso_string(ms as i64)
 }
 
+fn max_running(value: &Json) -> Option<&Json> {
+    value
+        .get("maxRunning")
+        .filter(|v| !v.is_null())
+        .or_else(|| value.get("limit"))
+}
+
 /// `capacityFromWorkers`: the fleet's capacity added up from its workers.
 ///
 /// Every worker reports an iPhone and an Android row, but runs only the platforms its catalog
@@ -143,11 +150,7 @@ fn capacity_from_workers(workers: Option<&Json>) -> Option<Json> {
                     .as_ref()
                     .is_none_or(|catalog| catalog.contains(&platform.as_str()));
             if runs && !drained {
-                add(
-                    row,
-                    "maxRunning",
-                    value.get("maxRunning").or_else(|| value.get("limit")),
-                );
+                add(row, "maxRunning", max_running(value));
             }
         }
     }
@@ -221,7 +224,7 @@ pub fn parse_status(raw: &Json) -> Result<Status, SimlockError> {
             capacity.push(Capacity {
                 platform: platform.clone(),
                 running: int(value.get("running")),
-                max: int(value.get("maxRunning").or_else(|| value.get("limit"))),
+                max: int(max_running(value)),
                 reserved: int(value.get("reserved")),
                 over_limit: value.get("overLimit") == Some(&Json::Bool(true)),
             });
@@ -352,6 +355,31 @@ mod tests {
             parse_status(&json!({ "daemon": { "health": "running" }, "host": {} })),
             Err(SimlockError::Shape)
         );
+    }
+
+    #[test]
+    fn null_max_running_uses_the_legacy_limit() {
+        let capacity = json!({"ios": {"running": 1, "maxRunning": null, "limit": 2}});
+        let mut payload = json!({
+            "daemon": {"health": "running", "mode": "gateway"},
+            "capacity": capacity,
+            "workers": [],
+            "devices": [],
+            "leases": [],
+        });
+        let aggregate = parse_status(&payload).unwrap().capacity[0].max;
+
+        payload["capacity"]["ios"]["limit"] = json!(3);
+        payload["workers"] = json!([{
+            "id": "mac",
+            "label": "Mac",
+            "connection": "connected",
+            "drained": false,
+            "catalog": {"ios": []},
+            "capacity": capacity,
+        }]);
+        let workers = parse_status(&payload).unwrap().capacity[0].max;
+        assert_eq!((aggregate, workers), (Some(2), Some(2)));
     }
 
     #[test]

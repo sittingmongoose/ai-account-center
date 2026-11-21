@@ -235,8 +235,10 @@ Cookies and tokens stay on Windows; exact-grant confirmation and the
 OAuth claim transport are unchanged. A throttled inventory stays unavailable and
 shows a rate-limit explanation, including when no public reset rows are present.
 When reset reads fall back to a Windows Claude Code login, an unpinned capture
-requires a single eligible login for the email. A pinned read or claim selects
-the login matching its target and verifies the identity with Claude before use.
+requires one eligible account and organization for the email. AAC explains
+when there is no matching Claude Code login or when several distinct logins
+match. A pinned read or claim selects the login matching its target and
+verifies the identity with Claude before use.
 Reset verification uses the same normalized usage windows as the dashboard.
 The provider's legacy Fable reset bucket is matched only to the exact unscoped
 Fable quota. A full or Fable grant can be used when some refill limits are
