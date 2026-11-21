@@ -7,6 +7,61 @@ use serde_json::json;
 
 const MIRROR: &str = "legacy/cache/analytics-remote-v1/odroid.json";
 
+#[test]
+fn local_disk_original_prevents_migration_duplication_even_without_an_archive() {
+    for previously_imported in [false, true] {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        let db = root.join("store");
+        let store = aac_store::ops::open_engine(&db.to_string_lossy(), None, None).unwrap();
+        let now = aac_store::engine::now_ms() as i64;
+        let at = hour(now);
+        let local = root.join("local");
+        let original = scan(&local, "original", at, "shared", (70, 30));
+        let mirror = scan(
+            &root.join("remote"),
+            "ssh-12345678-1234-1234-1234-123456789abc",
+            at,
+            "shared",
+            (70, 30),
+        );
+        let mut current = migration(&store, root, now);
+        current.local_originals = crate::analytics_writers::local_inventory::original_names(
+            &local,
+            &aac_usage::discover::Env::default(),
+            &[],
+        );
+        assert_eq!(current.local_originals.len(), 1);
+        let path = stage(root, "odroid", &mirror);
+        if previously_imported {
+            import(&current, "nas1", &original, true);
+            import(&current, "odroid", &mirror, true);
+            activity::close_days(&store, now as u64).unwrap();
+            analytics_cache::archive(&store, &[(MIRROR.into(), fs::read(&path).unwrap())]).unwrap();
+            let index = analytics_cache::archived_index(&store, remote::PREFIX).unwrap();
+            let digest = aac_core::sha256_hex(serde_json::to_vec(&index).unwrap());
+            let epoch = activity::recovery_epoch(&store).unwrap();
+            store
+                .set_meta("analytics_remote_import_v4", &format!("{epoch}:{digest}"))
+                .unwrap();
+            store
+                .set_meta("analytics_files_migrated_v4", &epoch.to_string())
+                .unwrap();
+            assert_eq!(
+                totals(&store),
+                vec![("nas1".into(), 70, 30), ("odroid".into(), 70, 30)]
+            );
+        }
+        assert!(current.run().unwrap());
+        if !previously_imported {
+            assert!(totals(&store).is_empty());
+            import(&current, "nas1", &original, true);
+        }
+        assert_eq!(totals(&store), vec![("nas1".into(), 70, 30)]);
+        assert!(!path.exists());
+    }
+}
+
 fn scan(home: &Path, project: &str, at: i64, session: &str, usage: (u64, u64)) -> Value {
     let folder = home.join(".claude/projects").join(project);
     fs::create_dir_all(&folder).unwrap();
@@ -487,6 +542,7 @@ fn migration<'a>(store: &'a Engine, root: &'a Path, now: i64) -> Migration<'a> {
         store,
         root,
         local: Some("nas1"),
+        local_originals: Default::default(),
         now,
         pricing: super::super::ResolverPricing::new(root),
     }

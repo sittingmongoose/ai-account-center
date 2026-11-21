@@ -96,6 +96,12 @@ impl<'a> Source<'a> {
             // A later computer can reveal the original of a mirror seen in this scan.
             analytics_cache::put(store, &self.checkpoint(), &cache.encode()?)?;
             let mut part = self.claude_part(cache, 0);
+            super::claude_contributions::reconcile(
+                store,
+                std::slice::from_ref(&part),
+                now,
+                pricing,
+            )?;
             claude_mirrors::keep_historical_originals(store, &mut part)?;
             if !part.rows.is_empty() || !part.sessions.is_empty() {
                 self.publish(store, &part.rows, &part.sessions, false, now, pricing)?;
@@ -209,22 +215,21 @@ impl Job {
             let state = if *ready { "ok" } else { "unreadable" };
             states.push(json!({ "tool": "claude", "host": source.computer, "state": state }));
         }
+        super::claude_contributions::reconcile(store, &parts, now, pricing)?;
         let previous = claude_mirrors::load(store, claude_mirrors::HISTORY)?;
-        let mirrors = claude_mirrors::load(store, claude_mirrors::HISTORY_MIRRORS)?;
         let owners = claude_mirrors::choose(
             &mut parts,
             &mut states,
             &claude_mirrors::Owners::new(),
             &previous,
-            &mirrors,
         );
-        claude_mirrors::reserve_history_mirrors(store, mirrors, &parts)?;
         if owners != previous {
             // Persist the choices before publishing. A crash between computers must
             // retry with the same choices, even after a completed checkpoint is removed.
             claude_mirrors::save(store, claude_mirrors::HISTORY, &owners)?;
         }
         for ((source, ready), part) in pending.into_iter().zip(parts) {
+            super::claude_contributions::remember(store, &part, "backfill", now, pricing)?;
             source.publish(store, &part.rows, &part.sessions, ready, now, pricing)?;
             if !ready {
                 self.attempts
@@ -380,8 +385,116 @@ pub(super) fn commit_report(store: &Engine, value: Value) -> Result<()> {
 }
 
 #[cfg(test)]
+mod matrix;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settled_muse_copy_keeps_one_store_session_in_both_path_orders() {
+        for (first, second) in [("a", "b"), ("b", "a")] {
+            for hard_link in [false, true] {
+                let fixture = tempfile::tempdir().expect("fixture home");
+                let home = fixture.path();
+                let db = home.join("store");
+                let open = || {
+                    aac_store::ops::open_engine(&db.to_string_lossy(), None, None)
+                        .expect("open Store")
+                };
+                let now = aac_store::engine::now_ms() as i64;
+                let at = (now - 8 * super::super::DAY).div_euclid(3_600_000) * 3_600_000;
+                let sessions = home.join(".local/share/muse/sessions");
+                let paths = [first, second].map(|name| sessions.join(name).join("session.jsonl"));
+                for path in &paths {
+                    std::fs::create_dir_all(path.parent().expect("session directory"))
+                        .expect("create session directory");
+                }
+                let log = json!({"recorded_at":at / 1000,
+                    "payload":{"event":{"kind":"model_completed","model":"glm-5",
+                    "usage":{"input_tokens":100,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0}}}});
+                std::fs::write(&paths[0], format!("{log}\n")).expect("original Muse log");
+                let age = |path: &Path| {
+                    std::fs::File::options()
+                        .write(true)
+                        .open(path)
+                        .expect("open fixture log")
+                        .set_modified(
+                            std::time::UNIX_EPOCH + std::time::Duration::from_millis(at as u64),
+                        )
+                        .expect("set fixture mtime");
+                };
+                age(&paths[0]);
+                let scan = |cache: &scan_state::Cache| {
+                    let mut prints = cache.fingerprints.clone();
+                    prints.insert(
+                        "_store".into(),
+                        json!({"settledBefore":{"muse":at + super::super::DAY},"settledSlot":1}),
+                    );
+                    aac_usage::protocol::scan(
+                        &aac_usage::protocol::parse_request(
+                            json!({"kinds":["muse"],"minDateMs":0,"fingerprints":prints})
+                                .to_string()
+                                .as_bytes(),
+                        )
+                        .expect("request"),
+                        home,
+                        &aac_usage::discover::Env::default(),
+                    )
+                };
+                let publish = |store: &Engine, cache: &mut scan_state::Cache| {
+                    assert!(cache.apply("muse", &scan(cache), true, 0));
+                    let source = Source {
+                        computer: "nas1",
+                        tool: "muse",
+                        epoch: 0,
+                    };
+                    source
+                        .publish(
+                            store,
+                            &cache.rows,
+                            &cache.srows,
+                            false,
+                            now,
+                            &ResolverPricing::new(home),
+                        )
+                        .expect("publish Muse");
+                };
+                let read = |store: &Engine| {
+                    let body = json!({"fromMs":at,"toMs":at+3_600_000}).to_string();
+                    let result = aac_store::ops::call(store, "activityRange", &body)
+                        .expect("activity report");
+                    assert_eq!(
+                        result["sessions"]["total"], 1,
+                        "{first}/{second}/{hard_link}: {result}"
+                    );
+                    assert_eq!(result["rows"][0][5], 100, "{result}");
+                    assert_eq!(result["rows"][0][6], 10, "{result}");
+                    assert_eq!(result["rows"][0][12], 1, "{result}");
+                };
+                let store = open();
+                let mut cache = scan_state::Cache::default();
+                publish(&store, &mut cache);
+                publish(&store, &mut cache);
+                activity::close_days(&store, now as u64).expect("settle Muse hour");
+                read(&store);
+                let snapshot = cache.encode().expect("scanner checkpoint");
+                store.close().expect("close Store");
+                drop(store);
+                if hard_link {
+                    std::fs::hard_link(&paths[0], &paths[1]).expect("create identical hard link");
+                } else {
+                    std::fs::copy(&paths[0], &paths[1]).expect("copy original");
+                    age(&paths[1]);
+                }
+                let store = open();
+                let mut cache =
+                    serde_json::from_slice(&snapshot).expect("decode scanner checkpoint");
+                publish(&store, &mut cache);
+                read(&store);
+            }
+        }
+    }
 
     #[test]
     fn analytics_historical_scan_recovers_old_log_and_resumes_after_restart() {
@@ -579,6 +692,7 @@ mod tests {
                 store: &store,
                 root,
                 local: Some("nas1"),
+                local_originals: Default::default(),
                 now,
                 pricing: ResolverPricing::new(root),
             };

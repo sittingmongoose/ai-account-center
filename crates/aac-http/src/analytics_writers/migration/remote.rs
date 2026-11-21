@@ -1,5 +1,5 @@
 //! Import independent history per cache. Elect an owner only for proven Claude mirrors.
-use super::super::{claude_mirrors, scan_state};
+use super::super::{claude_contributions, claude_mirrors, scan_state};
 use super::{Failures, Migration};
 use aac_store::error::{Error, Result};
 use aac_store::{activity, analytics_cache, collect, contract};
@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub(super) const PREFIX: &str = scan_state::REMOTE_ARCHIVE;
 const OWNERS: &str = "legacy/cache/analytics-remote-v1/claude-mirror-owners.json";
-const RECEIPT: &str = "analytics_remote_import_v4";
-const PREVIOUS_RECEIPT: &str = "analytics_remote_import_v3";
+const RECEIPT: &str = "analytics_remote_import_v5";
+const PREVIOUS_RECEIPTS: [&str; 2] = ["analytics_remote_import_v4", "analytics_remote_import_v3"];
 const PREVIOUS_SOURCES: &str = "analytics_remote_import_v3_sources";
 
 fn index_digest(index: &[(String, String)]) -> Result<String> {
@@ -19,24 +19,30 @@ fn index_digest(index: &[(String, String)]) -> Result<String> {
 /// Verify the previous group receipt before another source can change the
 /// index. Keep the proven digests across per-file retries and restarts.
 pub(super) fn previous_index(migration: &Migration<'_>) -> Result<BTreeMap<String, String>> {
-    if let Some(sources) = migration.store.get_meta(PREVIOUS_SOURCES)? {
-        return Ok(serde_json::from_str(&sources)?);
-    }
-    let Some(receipt) = migration.store.get_meta(PREVIOUS_RECEIPT)? else {
-        return Ok(BTreeMap::new());
-    };
+    let mut sources: BTreeMap<String, String> = migration
+        .store
+        .get_meta(PREVIOUS_SOURCES)?
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()?
+        .unwrap_or_default();
     let index = analytics_cache::archived_index(migration.store, PREFIX)?;
     let digest = index_digest(&index)?;
-    if receipt
-        .split_once(':')
-        .is_none_or(|(_, previous)| previous != digest)
-    {
-        return Ok(BTreeMap::new());
+    for key in PREVIOUS_RECEIPTS {
+        if migration
+            .store
+            .get_meta(key)?
+            .as_deref()
+            .and_then(|receipt| receipt.split_once(':'))
+            .is_some_and(|(_, previous)| previous == digest)
+        {
+            sources.extend(index);
+            migration
+                .store
+                .set_meta(PREVIOUS_SOURCES, &serde_json::to_string(&sources)?)?;
+            break;
+        }
     }
-    let sources: BTreeMap<_, _> = index.into_iter().collect();
-    migration
-        .store
-        .set_meta(PREVIOUS_SOURCES, &serde_json::to_string(&sources)?)?;
     Ok(sources)
 }
 
@@ -50,7 +56,6 @@ struct Archive<'a> {
 struct Selection {
     owners: claude_mirrors::Owners,
     originals: BTreeSet<String>,
-    history_mirrors: claude_mirrors::Owners,
 }
 
 fn read_cache(migration: &Migration<'_>, archive: Archive<'_>) -> Result<scan_state::LegacyCache> {
@@ -80,11 +85,7 @@ fn legacy_owners(migration: &Migration<'_>) -> Result<claude_mirrors::Owners> {
     Ok(previous)
 }
 
-fn choose_owners(
-    migration: &Migration<'_>,
-    archives: &[Archive<'_>],
-    history_mirrors: claude_mirrors::Owners,
-) -> Result<Selection> {
+fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<Selection> {
     let mut parts = Vec::new();
     let mut states = Vec::new();
     let mut mirrors = BTreeSet::new();
@@ -168,6 +169,14 @@ fn choose_owners(
     committed.retain(|name, host| {
         !originals.contains(name) || !mirrors.contains(&(name.clone(), host.as_str()))
     });
+    if let Some(local) = migration.local {
+        for (name, _) in &mirrors {
+            if migration.local_originals.contains(name) {
+                originals.insert(name.clone());
+                committed.insert(name.clone(), local.to_owned());
+            }
+        }
+    }
     let keys = session_names.keys().cloned().collect();
     for (session, computers) in
         activity::session_computers(migration.store, "claude", &keys, &mirror_days)?
@@ -186,15 +195,7 @@ fn choose_owners(
             committed.insert(name.clone(), computer);
         }
     }
-    let selected = claude_mirrors::choose(
-        &mut parts,
-        &mut states,
-        &previous,
-        &committed,
-        &history_mirrors,
-    );
-    let history_mirrors =
-        claude_mirrors::reserve_history_mirrors(migration.store, history_mirrors, &parts)?;
+    let selected = claude_mirrors::choose(&mut parts, &mut states, &previous, &committed);
     if selected != stored_owners {
         // Keep the same election if the boot stops between reports or before retirement.
         claude_mirrors::save(migration.store, claude_mirrors::HISTORY, &selected)?;
@@ -202,16 +203,14 @@ fn choose_owners(
     Ok(Selection {
         owners: selected,
         originals,
-        history_mirrors,
     })
 }
 
 #[derive(Clone, Copy)]
 enum ClaudeRows<'a> {
     All,
-    Independent(&'a claude_mirrors::Owners),
+    Independent,
     Selected(&'a Selection),
-    Repair(&'a Selection),
 }
 
 fn rows_for(
@@ -227,12 +226,8 @@ fn rows_for(
                 || claude_mirrors::row_identity(row, prints).is_none_or(|(name, mirror)| {
                     match selection {
                         ClaudeRows::All => true,
-                        ClaudeRows::Repair(_) if !mirror => true,
-                        ClaudeRows::Independent(mirrors) => !mirror && !mirrors.contains_key(name),
-                        ClaudeRows::Selected(selection) | ClaudeRows::Repair(selection) => {
-                            if let Some(owner) = selection.history_mirrors.get(name) {
-                                return mirror && owner == computer;
-                            }
+                        ClaudeRows::Independent => !mirror,
+                        ClaudeRows::Selected(selection) => {
                             !mirror
                                 || (!selection.originals.contains(name)
                                     && selection
@@ -286,7 +281,6 @@ pub(super) fn commit(
     };
     let mut valid = Vec::new();
     let mut pending = Vec::new();
-    let history_mirrors = claude_mirrors::load(migration.store, claude_mirrors::HISTORY_MIRRORS)?;
     let prior_epoch = migration.store.get_meta("analytics_files_migrated_v2")?;
     for (path, digest) in &index {
         seen.insert(path.clone());
@@ -321,14 +315,7 @@ pub(super) fn commit(
         let old_receipt = format!("analytics_import:{old_epoch}:{path}:{digest}");
         let imported_before =
             previous.get(path) == Some(digest) || migration.store.get_meta(&old_receipt)?.is_some();
-        if let Err(error) = import_independent(
-            migration,
-            &cache,
-            archive,
-            epoch,
-            imported_before,
-            &history_mirrors,
-        ) {
+        if let Err(error) = import_independent(migration, &cache, archive, epoch, imported_before) {
             let error = Error::new(error.code, "Analytics computer cache projection failed");
             failures.record(path, Some(digest), &error, migration.now);
             result.complete = false;
@@ -353,7 +340,7 @@ pub(super) fn commit(
         return Ok(result);
     }
     if migration.store.get_meta(RECEIPT)?.as_deref() != Some(&receipt) {
-        let owners = choose_owners(migration, &valid, history_mirrors)?;
+        let owners = choose_owners(migration, &valid)?;
         for (archive, imported_before) in &pending {
             import_mirrors(migration, *archive, &owners, *imported_before)?;
         }
@@ -373,7 +360,6 @@ fn import_independent(
     archive: Archive<'_>,
     epoch: &str,
     imported_before: bool,
-    mirrors: &claude_mirrors::Owners,
 ) -> Result<()> {
     let Archive {
         path,
@@ -402,13 +388,28 @@ fn import_independent(
             }
             continue;
         }
-        let selected = rows_for(
-            &cache.scan,
-            tool,
-            computer,
-            ClaudeRows::Independent(mirrors),
-        );
+        let selected = rows_for(&cache.scan, tool, computer, ClaudeRows::Independent);
         if !selected.0.is_empty() || !selected.1.is_empty() {
+            if tool == "claude" {
+                let part = claude_mirrors::Part {
+                    host: computer,
+                    state_index: 0,
+                    rows: selected.0.clone(),
+                    sessions: selected.1.clone(),
+                    fingerprints: cache
+                        .scan
+                        .fingerprints
+                        .get(tool)
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                };
+                claude_contributions::reconcile(
+                    migration.store,
+                    &[part],
+                    migration.now,
+                    &migration.pricing,
+                )?;
+            }
             let worker = worker(migration, computer, tool, &selected);
             migration.import_rows(computer, tool, &[worker])?;
         }
@@ -450,6 +451,24 @@ fn import_mirrors(
     let computer = archive.computer;
     let selected = rows_for(&cache, "claude", computer, ClaudeRows::Selected(owners));
     if !selected.0.is_empty() || !selected.1.is_empty() {
+        let part = claude_mirrors::Part {
+            host: computer,
+            state_index: 0,
+            rows: selected.0.clone(),
+            sessions: selected.1.clone(),
+            fingerprints: cache
+                .fingerprints
+                .get("claude")
+                .cloned()
+                .unwrap_or(Value::Null),
+        };
+        claude_contributions::remember(
+            migration.store,
+            &part,
+            "migration",
+            migration.now,
+            &migration.pricing,
+        )?;
         let worker = worker(migration, computer, "claude", &selected);
         migration.import_rows(computer, "claude", &[worker])?;
     }
@@ -457,7 +476,7 @@ fn import_mirrors(
         return Ok(());
     }
     let raw = rows_for(&cache, "claude", computer, ClaudeRows::All);
-    let repaired = rows_for(&cache, "claude", computer, ClaudeRows::Repair(owners));
+    let repaired = selected;
     if raw.0.len() == repaired.0.len() {
         return Ok(());
     }

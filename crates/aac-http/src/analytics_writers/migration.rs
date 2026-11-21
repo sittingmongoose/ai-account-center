@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 mod mirror_tests;
 mod remote;
 
-const MARKER: &str = "analytics_files_migrated_v4";
+const MARKER: &str = "analytics_files_migrated_v5";
 pub(super) const QUOTA: &str = "legacy/account-analytics/quota-history-v1.json";
 const MAX_FILE: u64 = 256 * 1024 * 1024;
 const BATCH_BYTES: usize = 8 * 1024 * 1024;
@@ -169,6 +169,7 @@ pub(super) struct Migration<'a> {
     pub store: &'a Engine,
     pub root: &'a Path,
     pub local: Option<&'a str>,
+    pub local_originals: std::collections::BTreeSet<String>,
     pub now: i64,
     pub pricing: super::ResolverPricing,
 }
@@ -463,6 +464,7 @@ mod tests {
             store,
             root,
             local: Some("ubuntu"),
+            local_originals: Default::default(),
             now: aac_store::engine::now_ms() as i64,
             pricing: super::super::ResolverPricing::new(root),
         }

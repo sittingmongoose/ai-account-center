@@ -60,56 +60,32 @@ pub(super) fn select_live(
     states: &mut [Value],
 ) -> Result<()> {
     let previous = load(store, LIVE)?;
-    if let Some(owners) = select(parts, states, &previous) {
+    let historical = load(store, HISTORY)?;
+    let owners = choose(parts, states, &previous, &historical);
+    if owners != previous {
         save(store, LIVE, &owners)?;
     }
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn select(
     parts: &mut [Part<'_>],
     states: &mut [Value],
     previous: &Owners,
 ) -> Option<Owners> {
-    let owners = choose(parts, states, previous, &Owners::new(), &Owners::new());
+    let owners = choose(parts, states, previous, &Owners::new());
     (owners != *previous).then_some(owners)
-}
-
-/// Reserve the selected mirrors before publishing raise-only history. Keep
-/// this provenance separate from the owner map, which also lists originals.
-pub(super) fn reserve_history_mirrors(
-    store: &Engine,
-    mut reserved: Owners,
-    parts: &[Part<'_>],
-) -> Result<Owners> {
-    let before = reserved.len();
-    for part in parts {
-        for row in part.rows.iter().chain(&part.sessions) {
-            if let Some((name, true)) = row_identity(row, &part.fingerprints) {
-                reserved
-                    .entry(name.to_owned())
-                    .or_insert_with(|| part.host.to_owned());
-            }
-        }
-    }
-    if reserved.len() != before {
-        save(store, HISTORY_MIRRORS, &reserved)?;
-    }
-    Ok(reserved)
 }
 
 /// Store original readings while evidence from other computers is pending.
 pub(super) fn keep_historical_originals(store: &Engine, part: &mut Part<'_>) -> Result<()> {
     let mut owners = load(store, HISTORY)?;
-    let mirrors = load(store, HISTORY_MIRRORS)?;
     let mut changed = false;
     let mut keep = |row: &Value| {
         let Some((name, false)) = row_identity(row, &part.fingerprints) else {
             return false;
         };
-        if mirrors.contains_key(name) {
-            return false;
-        }
         owners.entry(name.to_owned()).or_insert_with(|| {
             changed = true;
             part.host.to_owned()
@@ -129,7 +105,6 @@ pub(super) fn choose(
     states: &mut [Value],
     previous: &Owners,
     committed: &Owners,
-    history_mirrors: &Owners,
 ) -> Owners {
     let configured: HashSet<&str> = states
         .iter()
@@ -180,30 +155,18 @@ pub(super) fn choose(
         }
     }
     owners.extend(
-        originals
-            .iter()
-            .map(|(name, host)| (name.clone(), host.clone())),
-    );
-
-    owners.extend(
         committed
             .iter()
             .map(|(name, host)| (name.clone(), host.clone())),
     );
     owners.extend(
-        history_mirrors
+        originals
             .iter()
             .map(|(name, host)| (name.clone(), host.clone())),
     );
 
     for part in parts {
         let keep = |row: &Value| match row_identity(row, &part.fingerprints) {
-            Some((name, mirror)) if history_mirrors.contains_key(name) => {
-                mirror
-                    && history_mirrors
-                        .get(name)
-                        .is_some_and(|host| host == part.host)
-            }
             Some((name, true)) => {
                 !originals.contains_key(name)
                     && owners.get(name).is_some_and(|host| host == part.host)

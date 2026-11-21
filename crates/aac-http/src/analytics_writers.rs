@@ -22,11 +22,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 mod analytics_jsonl;
+mod claude_contributions;
 mod claude_mirrors;
 mod experiment_roots;
 mod experiment_signatures;
 mod fixed_scanner;
 mod history;
+mod local_inventory;
 mod migration;
 mod scan_state;
 
@@ -732,7 +734,7 @@ async fn activity_pass(
             );
         }
     }
-    match claude_mirrors::select_live(engine, &mut claude, &mut states) {
+    match claude_contributions::prepare_live(engine, &mut claude, &mut states, now, &pricing) {
         Ok(()) => {
             for part in claude {
                 let worker = collect::worker_from_scan(
@@ -837,10 +839,35 @@ async fn migrate_files(
         });
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
+        let env =
+            aac_usage::discover::env_from(std::env::vars_os().filter_map(|(key, value)| {
+                Some((key.into_string().ok()?, value.into_string().ok()?))
+            }));
+        let local_originals = local.as_deref().zip(aac_usage::home_dir(&env)).map_or_else(
+            std::collections::BTreeSet::new,
+            |(host, home)| {
+                let prefs = crate::account_reads::preferences(&root);
+                let (configured, _, _) = extra_roots(prefs.as_ref(), host);
+                let experiments =
+                    experiment_roots::run_slice(&engine, &home, aac_store::engine::now_ms() as i64)
+                        .scanner_roots();
+                let extras: Vec<_> = [
+                    &configured["claude"],
+                    experiments.get("claude").unwrap_or(&Value::Null),
+                ]
+                .into_iter()
+                .flat_map(|roots| roots.as_array().into_iter().flatten())
+                .filter_map(Value::as_str)
+                .map(std::path::PathBuf::from)
+                .collect();
+                local_inventory::original_names(&home, &env, &extras)
+            },
+        );
         let migration = migration::Migration {
             store: &engine,
             root: &root,
             local: local.as_deref(),
+            local_originals,
             now: aac_store::engine::now_ms() as i64,
             pricing: ResolverPricing::new(&root),
         };
