@@ -1599,8 +1599,12 @@ impl FailoverCoordinator {
             }
             if cooldown.claude_429_streak.is_some_and(|n| n > 0) {
                 let requested = if streak > 0 { state.next_attempt } else { now };
-                let until =
-                    self.hold_cooldown_inner(&target.ccs_dir, cooldown_key, requested, Some(streak));
+                let until = self.hold_cooldown_inner(
+                    &target.ccs_dir,
+                    cooldown_key,
+                    requested,
+                    Some(streak),
+                );
                 self.set_cooldown(&target.ccs_dir, cooldown_key, until, Some(streak));
             }
             if state.fresh == Some(true) {

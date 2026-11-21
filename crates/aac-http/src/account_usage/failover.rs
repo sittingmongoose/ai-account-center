@@ -157,9 +157,7 @@ impl Cooldown {
 
     /// One verified read lowers a 429 streak one level; the next read keeps that level's pace.
     pub fn step_down_streak(self) -> u8 {
-        self.claude_429_streak
-            .unwrap_or(0)
-            .saturating_sub(1)
+        self.claude_429_streak.unwrap_or(0).saturating_sub(1)
     }
 }
 
