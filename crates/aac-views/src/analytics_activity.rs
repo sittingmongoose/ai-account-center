@@ -2405,7 +2405,10 @@ fn project(
         let session = &candidate.session;
         let session_id = text(session.get("sessionId"))?;
         let tool = aac_core::ToolId::new(candidate.tool.clone()).map_err(|_| Decline::Shape)?;
-        let key = aac_core::SessionKey::published(&tool, session_id);
+        // An empty raw id publishes no key; skip the sample row as the TS projection does.
+        let Some(key) = aac_core::SessionKey::published(&tool, session_id) else {
+            continue;
+        };
         let priced = price_breakdowns(session, options.pricing)?;
         let mut values = Accumulator::new();
         values.add_values(&totals(session));

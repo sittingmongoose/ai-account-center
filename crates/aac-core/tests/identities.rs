@@ -11,17 +11,16 @@ fn golden_id_vectors_match_byte_for_byte() {
     for row in table["sessions"].as_array().unwrap() {
         let tool = ToolId::new(row["tool"].as_str().unwrap()).unwrap();
         let raw = row["sessionId"].as_str().unwrap();
-        assert_eq!(
-            SessionKey::derive(&tool, raw).as_str(),
-            row["sessionKey"].as_str().unwrap()
-        );
+        let key = SessionKey::derive(&tool, raw);
+        assert_eq!(key.as_ref().map(|k| k.as_str()), row["sessionKey"].as_str());
         assert_eq!(
             SessionHash::derive(&tool, raw).as_str(),
             row["sessionHash"].as_str().unwrap()
         );
+        let published = SessionKey::published(&tool, raw);
         assert_eq!(
-            SessionKey::published(&tool, raw).as_str(),
-            row["publishedSessionKey"].as_str().unwrap()
+            published.as_ref().map(|k| k.as_str()),
+            row["publishedSessionKey"].as_str()
         );
     }
     for row in table["accounts"].as_array().unwrap() {
@@ -46,4 +45,25 @@ fn golden_id_vectors_match_byte_for_byte() {
             row["eventId"].as_str().unwrap()
         );
     }
+}
+
+#[test]
+fn empty_session_id_has_no_published_key() {
+    // m0-spec-F1c: an empty raw id is no id. TS analyticsSessionKey/publishedSessionKey
+    // return null and the remote helper returns None; the Rust key must agree.
+    let tool = ToolId::new("claude").unwrap();
+    assert!(SessionKey::derive(&tool, "").is_none());
+    assert!(SessionKey::published(&tool, "").is_none());
+    // A non-empty id still publishes a 16-hex digest, and a 16-hex id passes through.
+    let key = SessionKey::derive(&tool, "fixture-session").unwrap();
+    assert_eq!(key.as_str().len(), 16);
+    assert_eq!(
+        SessionKey::published(&tool, "0123456789abcdef")
+            .unwrap()
+            .as_str(),
+        "0123456789abcdef"
+    );
+    // The full session hash is a different function (analyticsSessionHash) and still
+    // derives for an empty id, exactly as the TS golden vector records.
+    assert_eq!(SessionHash::derive(&tool, "").as_str().len(), 64);
 }

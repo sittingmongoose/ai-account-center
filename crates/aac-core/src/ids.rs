@@ -103,14 +103,20 @@ impl SessionHash {
     }
 }
 impl SessionKey {
-    /// Match analyticsSessionKey: the first 16 lowercase hex characters of the session hash.
-    pub fn derive(tool: &ToolId, session_id: &str) -> Self {
-        Self(SessionHash::derive(tool, session_id).0[..16].into())
+    /// Match analyticsSessionKey: the first 16 lowercase hex characters of the session
+    /// hash, or None for an empty raw id (an empty id is no id, as in TS and the remote helper).
+    pub fn derive(tool: &ToolId, session_id: &str) -> Option<Self> {
+        if session_id.is_empty() {
+            return None;
+        }
+        Some(Self(SessionHash::derive(tool, session_id).0[..16].into()))
     }
-    /// Match publishedSessionKey's legacy shape-only pass-through rule.
-    pub fn published(tool: &ToolId, session_id: &str) -> Self {
-        if hex(session_id, 16) {
-            Self(session_id.into())
+    /// Match publishedSessionKey's legacy shape-only pass-through rule; None for an empty id.
+    pub fn published(tool: &ToolId, session_id: &str) -> Option<Self> {
+        if session_id.is_empty() {
+            None
+        } else if hex(session_id, 16) {
+            Some(Self(session_id.into()))
         } else {
             Self::derive(tool, session_id)
         }
