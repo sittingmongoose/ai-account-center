@@ -1299,3 +1299,233 @@ fn a_degraded_segment_rebuild_flags_late_rows_unavailable_instead_of_inventing_c
     }
     fs::remove_dir_all(&dir).unwrap();
 }
+
+fn build_v1_cross_day_split_store(
+    dir: &Path,
+    retention_days: u64,
+    day: u32,
+    retire_first_segment: bool,
+    add_late_reading_on_day_d: bool,
+) {
+    let open_retained = |p: &Path| ops::open_engine(p.to_str().unwrap(), None, Some(retention_days)).unwrap();
+    let t = i64::from(day) * DAY;
+    let engine = open_retained(dir);
+    assert_eq!(engine.config.retention_days, retention_days);
+    record(
+        &engine,
+        vec![obs(1, t, vec![window("five_hour", Some(10.0), Some(t + 5 * HOUR))])],
+    );
+    engine.lock_logs().readings.seal().unwrap();
+    let seg1_end_seq = engine.lock_logs().readings.manifest().segments[0].end_seq;
+    record(
+        &engine,
+        vec![
+            obs(1, t + MIN, vec![window("five_hour", Some(15.0), Some(t + 5 * HOUR))]),
+            obs(1, t + 2 * MIN, vec![window("five_hour", Some(5.0), Some(t - MIN))]),
+            obs(
+                1,
+                t + 3 * MIN,
+                vec![window("five_hour", Some(25.0), Some(t + 5 * HOUR))],
+            ),
+        ],
+    );
+    // Simulate v1 (allow_expired_shift = false) before closing day D so the open period
+    // [t+2m..t+3m] stays unsplit and day D archives consumed = 30.0, resets = 1.
+    engine
+        .with_db(|database| {
+            let txn = aac_store::engine::begin(database)?;
+            let p3_key = db::Key::new().u32(1).u32(1).u64((t + 3 * MIN) as u64);
+            txn.open_table(db::PERIOD)?.remove(p3_key.as_slice())?;
+            let p2_key = db::Key::new().u32(1).u32(1).u64((t + 2 * MIN) as u64);
+            let v1_open = aac_store::usage::Period {
+                reset_at_ms: Some(t + 5 * HOUR),
+                end_ms: t + 3 * MIN,
+                start_used: 5.0,
+                end_used: 25.0,
+                max_used: 25.0,
+                consumed: 25.0,
+                hit_limit_ms: None,
+                rows: 2,
+                is_final: false,
+                emitted: false,
+            };
+            txn.open_table(db::PERIOD)?
+                .insert(p2_key.as_slice(), db::pack(&v1_open)?.as_slice())?;
+            let latest_key = db::Key::new().u32(1).u32(1);
+            let mut latest_bytes = txn
+                .open_table(db::LATEST)?
+                .get(latest_key.as_slice())?
+                .unwrap()
+                .value()
+                .to_vec();
+            latest_bytes[8..16].copy_from_slice(&((t + 2 * MIN) as u64).to_be_bytes());
+            txn.open_table(db::LATEST)?
+                .insert(latest_key.as_slice(), latest_bytes.as_slice())?;
+
+            let day_key = db::Key::new().u32(1).u32(1).u32(day);
+            let mut day_rollup = aac_store::usage::Rollup::decode(
+                txn.open_table(db::ROLLUP_DAY)?
+                    .get(day_key.as_slice())?
+                    .unwrap()
+                    .value(),
+            )?;
+            day_rollup.consumed = 30.0;
+            day_rollup.resets = 1;
+            day_rollup.last_reset_ms = Some(t + 2 * MIN);
+            txn.open_table(db::ROLLUP_DAY)?
+                .insert(day_key.as_slice(), day_rollup.encode().as_slice())?;
+
+            let mut hours = aac_store::pack::decode_hours(
+                txn.open_table(db::ROLLUP_HOURS)?
+                    .get(day_key.as_slice())?
+                    .unwrap()
+                    .value(),
+            )?;
+            assert_eq!(hours.len(), 1);
+            assert_eq!(hours[0].0, 0);
+            hours[0].1.consumed = 30.0;
+            hours[0].1.resets = 1;
+            hours[0].1.last_reset_ms = Some(t + 2 * MIN);
+            txn.open_table(db::ROLLUP_HOURS)?
+                .insert(day_key.as_slice(), aac_store::pack::encode_hours(&hours).as_slice())?;
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    let closed1 = aac_store::usage::close_days(&engine, (t + DAY + 3 * HOUR) as u64).unwrap();
+    assert_eq!(closed1["closed"], json!([day]));
+    if add_late_reading_on_day_d {
+        // Record a late reading in a later hour of day D so day D cannot take the
+        // same_rollup_input fast path and instead reconciles hour 0 via retained_hour_correction.
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + 2 * HOUR,
+                vec![window("five_hour", Some(26.0), Some(t + 5 * HOUR))],
+            )],
+        );
+    }
+    record(
+        &engine,
+        vec![obs(
+            1,
+            t + DAY + MIN,
+            vec![window("five_hour", Some(2.0), Some(t + DAY + 5 * HOUR))],
+        )],
+    );
+    let closed2 = aac_store::usage::close_days(&engine, (t + 2 * DAY + 3 * HOUR) as u64).unwrap();
+    assert_eq!(closed2["closed"], json!([day + 1]));
+    if retire_first_segment {
+        let retired = aac_store::usage::retire_segments(&engine, (t + 100 * DAY) as u64, Some(seg1_end_seq)).unwrap();
+        assert_eq!(retired["retired"], 1, "{retired:#}");
+    }
+    engine.close().unwrap();
+}
+
+#[test]
+fn an_upgrade_applies_cross_day_recovered_resets_to_partly_retired_hour() {
+    let dir = temp_dir("cross-day-partly-retired");
+    let retention_days = 30u64;
+    let open_retained = |p: &Path| ops::open_engine(p.to_str().unwrap(), None, Some(retention_days)).unwrap();
+    let day = (now_ms() / DAY as u64) as u32 + 1;
+    let t = i64::from(day) * DAY;
+    build_v1_cross_day_split_store(&dir, retention_days, day, true, false);
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let rebuilt_tables = {
+        let rebuilt = open_retained(&dir);
+        let series = aac_store::usage::SeriesRef {
+            identity: identity(1),
+            window: "[\"five_hour\",\"rate_limit\",null]".into(),
+        };
+        let periods = aac_store::usage::periods(&rebuilt, &[series], (t - MIN) as u64, (t + 2 * DAY) as u64).unwrap();
+        let summary: Vec<(i64, i64, f64)> = periods[0]["periods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    (p["start"].as_i64().unwrap() - t) / MIN,
+                    (p["end"].as_i64().unwrap() - t) / MIN,
+                    p["consumed"].as_f64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(summary, vec![(0, 1, 5.0), (2, 2, 5.0), (3, 3, 25.0), (1441, 1441, 2.0)]);
+        let (day_rollup, hours) = rollup_for_day(&rebuilt, day);
+        assert_eq!(
+            (
+                day_rollup.consumed,
+                day_rollup.resets,
+                day_rollup.rows,
+                day_rollup.last_reset_ms,
+            ),
+            (35.0, 2, 4, Some(t + 3 * MIN)),
+            "day D rollup must reflect cross-day recovered reset inside partly retired hour"
+        );
+        assert_eq!(hours.len(), 1);
+        assert_eq!(
+            (
+                hours[0].1.consumed,
+                hours[0].1.resets,
+                hours[0].1.rows,
+                hours[0].1.last_reset_ms,
+            ),
+            (35.0, 2, 4, Some(t + 3 * MIN)),
+            "day D hour 0 rollup must reflect cross-day recovered reset inside partly retired hour"
+        );
+        let (next_day, _) = rollup_for_day(&rebuilt, day + 1);
+        assert_eq!((next_day.consumed, next_day.resets, next_day.rows), (2.0, 1, 1));
+        let snapshot = dump(&rebuilt, &["period", "rollup_day", "rollup_hours"]);
+        rebuilt.close().unwrap();
+        snapshot
+    };
+    {
+        let reopened = open_retained(&dir);
+        assert_eq!(
+            dump(&reopened, &["period", "rollup_day", "rollup_hours"]),
+            rebuilt_tables
+        );
+        reopened.close().unwrap();
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn an_upgrade_does_not_double_count_cross_day_resets_on_complete_hours() {
+    let retention_days = 30u64;
+    let open_retained = |p: &Path| ops::open_engine(p.to_str().unwrap(), None, Some(retention_days)).unwrap();
+    let day = (now_ms() / DAY as u64) as u32 + 1;
+    let t = i64::from(day) * DAY;
+    for (name, with_late) in [("cross-day-fast-path", false), ("cross-day-verified-hour", true)] {
+        let dir = temp_dir(name);
+        build_v1_cross_day_split_store(&dir, retention_days, day, false, with_late);
+        fs::remove_file(dir.join("aac.redb")).unwrap();
+        let rebuilt = open_retained(&dir);
+        let (day_rollup, hours) = rollup_for_day(&rebuilt, day);
+        assert_eq!(
+            (
+                day_rollup.consumed,
+                day_rollup.resets,
+                day_rollup.rows,
+                day_rollup.last_reset_ms,
+                day_rollup.late_rows,
+            ),
+            (35.0, 2, 4, Some(t + 3 * MIN), u32::from(with_late)),
+            "{name}: day D rollup must not double-count cross-day reset"
+        );
+        assert_eq!(hours.len(), 1);
+        assert_eq!(
+            (
+                hours[0].1.consumed,
+                hours[0].1.resets,
+                hours[0].1.rows,
+                hours[0].1.last_reset_ms,
+            ),
+            (35.0, 2, 4, Some(t + 3 * MIN)),
+            "{name}: day D hour 0 rollup must not double-count cross-day reset"
+        );
+        rebuilt.close().unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

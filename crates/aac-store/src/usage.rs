@@ -1426,6 +1426,102 @@ struct ResetCorrection {
     consumed_if_all_kept: Option<f64>,
 }
 
+#[derive(Serialize, Deserialize, Default)]
+struct DayCorrections {
+    /// True once that day's `usage.day_closed` restored its archived snapshot rather than
+    /// keeping the rebuilt fast-path rollups or leaving the day open.
+    archived: bool,
+    hours: Vec<(u8, HourCorrection)>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HourCorrection {
+    /// True when `retained_hour_correction` verified the hour's full pre-close prefix.
+    verified: bool,
+    deltas: Vec<(u64, f64)>,
+    consumed_if_all_kept: Option<f64>,
+}
+
+fn merge_period_deltas(day_corr: &mut DayCorrections, hour: u8, deltas: &[(u64, f64)]) -> bool {
+    if deltas.is_empty() {
+        return false;
+    }
+    match day_corr.hours.binary_search_by_key(&hour, |(h, _)| *h) {
+        Ok(index) => {
+            let existing = &mut day_corr.hours[index].1;
+            if existing.verified {
+                return false;
+            }
+            let mut changed = false;
+            for &delta in deltas {
+                if !existing.deltas.iter().any(|(at, _)| *at == delta.0) {
+                    existing.deltas.push(delta);
+                    changed = true;
+                }
+            }
+            changed
+        }
+        Err(index) => {
+            let mut deduped: Vec<(u64, f64)> = Vec::with_capacity(deltas.len());
+            for &delta in deltas {
+                if !deduped.iter().any(|(at, _)| *at == delta.0) {
+                    deduped.push(delta);
+                }
+            }
+            day_corr.hours.insert(
+                index,
+                (
+                    hour,
+                    HourCorrection {
+                        verified: false,
+                        deltas: deduped,
+                        consumed_if_all_kept: None,
+                    },
+                ),
+            );
+            true
+        }
+    }
+}
+
+fn record_cross_day_resets(
+    txn: &WriteTransaction,
+    (a, w): (u32, u32),
+    day: u32,
+    recovered_resets: &[(u64, f64)],
+) -> Result<()> {
+    let mut by_day: std::collections::BTreeMap<u32, Vec<(u8, (u64, f64))>> = std::collections::BTreeMap::new();
+    for &(at, extra) in recovered_resets {
+        let target_day = day_of(at);
+        if target_day != day {
+            by_day
+                .entry(target_day)
+                .or_default()
+                .push(((hour_of(at) % 24) as u8, (at, extra)));
+        }
+    }
+    for (target_day, entries) in by_day {
+        let target_key = Key::new().u32(a).u32(w).u32(target_day);
+        let mut day_corr: DayCorrections = match get(txn, CLOSED_ROLLUP_CORRECTIONS, target_key.as_slice())? {
+            Some(bytes) => db::unpack(&bytes)?,
+            None => DayCorrections::default(),
+        };
+        let mut changed = false;
+        for (hour, delta) in entries {
+            changed |= merge_period_deltas(&mut day_corr, hour, &[delta]);
+        }
+        if changed {
+            put(
+                txn,
+                CLOSED_ROLLUP_CORRECTIONS,
+                target_key.as_slice(),
+                &db::pack(&day_corr)?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Verify the retained prefix of an archived hour against both reset rules. The archived row
 /// count excludes readings that arrived after the close.
 fn retained_hour_correction<'a>(
@@ -1489,23 +1585,36 @@ fn finish_closed_rollups(db: &redb::Database) -> Result<()> {
     for entry in corrections.iter()? {
         let (key, value) = entry?;
         let key = key.value();
+        let day_corr: DayCorrections = db::unpack(value.value())?;
+        if !day_corr.archived || day_corr.hours.iter().all(|(_, c)| c.deltas.is_empty()) {
+            continue;
+        }
         let a = db::be_u32(key, 0);
         let w = db::be_u32(key, 4);
         let Some(hours) = get(&txn, db::ROLLUP_HOURS, key)? else {
-            fail!("corrupt", "pending correction has no archived hours");
+            if day_corr.hours.iter().any(|(_, c)| c.verified && !c.deltas.is_empty()) {
+                fail!("corrupt", "pending correction has no archived hours");
+            }
+            continue;
         };
         let Some(day) = get(&txn, db::ROLLUP_DAY, key)? else {
             fail!("corrupt", "pending correction has no archived day");
         };
         let mut hours = pack::decode_hours(&hours)?;
         let mut day = Rollup::decode(&day)?;
-        let values: Vec<(u8, ResetCorrection)> = db::unpack(value.value())?;
-        for (hour, correction) in values {
+        let mut changed = false;
+        for (hour, correction) in day_corr.hours {
+            if correction.deltas.is_empty() {
+                continue;
+            }
             let Ok(index) = hours.binary_search_by_key(&hour, |(h, _)| *h) else {
-                fail!("corrupt", "pending correction is outside the archived hours");
+                if correction.verified {
+                    fail!("corrupt", "pending correction is outside the archived hours");
+                }
+                continue;
             };
             let saved = &mut hours[index].1;
-            let old = (saved.consumed, saved.resets);
+            let old = (saved.consumed, saved.resets, saved.last_reset_ms);
             let mut all_kept = true;
             for (at, extra) in correction.deltas {
                 if read_period(&txn, a, w, at)?.is_some() {
@@ -1519,12 +1628,17 @@ fn finish_closed_rollups(db: &redb::Database) -> Result<()> {
             if all_kept && let Some(consumed) = correction.consumed_if_all_kept {
                 saved.consumed = consumed;
             }
-            day.consumed += saved.consumed - old.0;
-            day.resets += saved.resets - old.1;
-            day.last_reset_ms = day.last_reset_ms.max(saved.last_reset_ms);
+            if (saved.consumed, saved.resets, saved.last_reset_ms) != old {
+                day.consumed += saved.consumed - old.0;
+                day.resets += saved.resets - old.1;
+                day.last_reset_ms = day.last_reset_ms.max(saved.last_reset_ms);
+                changed = true;
+            }
         }
-        put(&txn, db::ROLLUP_HOURS, key, &pack::encode_hours(&hours))?;
-        put(&txn, db::ROLLUP_DAY, key, &day.encode())?;
+        if changed {
+            put(&txn, db::ROLLUP_HOURS, key, &pack::encode_hours(&hours))?;
+            put(&txn, db::ROLLUP_DAY, key, &day.encode())?;
+        }
     }
     txn.delete_table(CLOSED_ROLLUP_CORRECTIONS)?;
     txn.commit()?;
@@ -1546,6 +1660,7 @@ fn restore_closed_rollups(
         // A normal close snapshots the very rollups already in redb.
         return Ok(true);
     };
+    record_cross_day_resets(txn, series, day, recovered_resets)?;
     let rebuilt_day = get(txn, db::ROLLUP_DAY, key)?.map(|b| Rollup::decode(&b)).transpose()?;
     let rebuilt_hours = get(txn, db::ROLLUP_HOURS, key)?
         .map(|b| pack::decode_hours(&b))
@@ -1587,7 +1702,11 @@ fn restore_closed_rollups(
         spans.push((t, row));
         Ok(true)
     })?;
-    let mut corrections = Vec::new();
+    let mut day_corr: DayCorrections = match get(txn, CLOSED_ROLLUP_CORRECTIONS, key)? {
+        Some(bytes) => db::unpack(&bytes)?,
+        None => DayCorrections::default(),
+    };
+    day_corr.archived = true;
     for (hour, saved) in &saved_hours {
         let start = from + u64::from(*hour) * HOUR_MS;
         let lo = spans.partition_point(|(t, _)| *t < start);
@@ -1603,23 +1722,28 @@ fn restore_closed_rollups(
         let verified = (complete_hour && exact_spans)
             .then(|| retained_hour_correction(previous, &spans[lo..hi], saved))
             .flatten();
-        let correction = verified.unwrap_or_else(|| ResetCorrection {
+        if let Some(correction) = verified {
+            let entry = HourCorrection {
+                verified: true,
+                deltas: correction.deltas,
+                consumed_if_all_kept: correction.consumed_if_all_kept,
+            };
+            match day_corr.hours.binary_search_by_key(hour, |(h, _)| *h) {
+                Ok(index) => day_corr.hours[index].1 = entry,
+                Err(index) => day_corr.hours.insert(index, (*hour, entry)),
+            }
+        } else {
             // A complete archived period can also prove its resets when only part of an
             // hour survives.
-            deltas: recovered_resets
+            let deltas: Vec<_> = recovered_resets
                 .iter()
                 .copied()
                 .filter(|(at, _)| *at >= start && *at < start + HOUR_MS)
-                .collect(),
-            consumed_if_all_kept: None,
-        });
-        if !correction.deltas.is_empty() {
-            corrections.push((*hour, correction));
+                .collect();
+            merge_period_deltas(&mut day_corr, *hour, &deltas);
         }
     }
-    if !corrections.is_empty() {
-        put(txn, CLOSED_ROLLUP_CORRECTIONS, key, &db::pack(&corrections)?)?;
-    }
+    put(txn, CLOSED_ROLLUP_CORRECTIONS, key, &db::pack(&day_corr)?)?;
     if saved_hours.is_empty() {
         txn.open_table(db::ROLLUP_HOURS)?.remove(key)?;
     } else {
