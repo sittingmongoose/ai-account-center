@@ -610,10 +610,15 @@ export function createFrameDashboard({
       void run(kind, typeof value === 'string' ? value : '');
       return true;
     },
-    /** The frame's own commands: Refresh and Update apps (frame.rs). */
-    command(action) {
+    /**
+     * The frame's own commands: Refresh and Update apps (frame.rs). `done`, when given, is called once the command has
+     * finished (a refresh: its reads answered or failed, or it was not run at all), so the header's Refresh can stop
+     * spinning when the work does.
+     */
+    command(action, done) {
       if (gone() || !FRAME_COMMANDS.has(action)) return false;
-      void run(action, '');
+      const ran = run(action, '');
+      if (typeof done === 'function') ran.then(() => finished(done), () => finished(done));
       return true;
     },
     signOut,
@@ -642,6 +647,11 @@ export function createFrameDashboard({
       return { started, stopped, authenticated, busy, currentPage, openDetailsId, refreshIntervalSeconds, hasData: !!data };
     },
   };
+}
+
+/** Calls a caller's completion callback; its own failure is never the command's. */
+function finished(done) {
+  try { done(); } catch {}
 }
 
 let installs = 0;

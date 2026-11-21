@@ -11,6 +11,7 @@
 use crate::Page;
 use crate::dash::{self, DashCtx};
 use crate::home::HomePage;
+use crate::refreshing::{self, Refreshing};
 use crate::session::{self, SessionView};
 use crate::ui::*;
 use crate::{accounts, analytics, details, live, scoreboard, status};
@@ -51,6 +52,8 @@ pub struct FrameCtx {
     /// The tabs whose page has drawn its first data (or its first failure), one bit per `Page`: the whole-page splash
     /// waits for the first tab's (`follow_boot`).
     ready: RwSignal<u8>,
+    /// The header's Refresh while a refresh it started runs (refreshing.rs).
+    refreshing: RwSignal<Refreshing>,
 }
 
 fn push_history(path: &str, replace: bool) {
@@ -135,6 +138,7 @@ impl FrameCtx {
             dash: DashCtx::new(),
             theme: RwSignal::new("auto".into()),
             ready: RwSignal::new(0),
+            refreshing: RwSignal::new(Refreshing::default()),
         }
     }
 
@@ -196,17 +200,30 @@ impl FrameCtx {
         })
     }
 
+    /// The header's Refresh: one refresh of the tab on screen, the button spinning until it has finished. A press
+    /// while one runs starts nothing.
     pub fn refresh(&self) {
+        let Some(done) = refreshing::press(self.refreshing) else {
+            return;
+        };
         if self.route.get_untracked().reads_dashboard() {
-            self.dash.command("refresh");
+            self.dash.command_then("refresh", Some(done));
         } else if let Some(info) = self.infos.with_untracked(|all| {
             let page = self.route.get_untracked();
             all.iter()
                 .find(|(p, _, _)| *p == page)
                 .map(|(_, _, info)| *info)
         }) {
-            info.refresh.run(());
+            info.refresh.run(done);
+        } else {
+            // no page has registered yet: nothing ran
+            done.finished();
         }
+    }
+
+    /// Whether the header's Refresh spins (reactive).
+    pub fn is_refreshing(&self) -> bool {
+        self.refreshing.with(|r| r.on())
     }
 
     /// Update apps runs in the dashboard controller, and its results are listed under Accounts & Settings. The command
@@ -718,7 +735,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
         live: Signal::derive(move || line.with(|l| l.status_more == "live")),
         summary: Signal::derive(Vec::new),
         strip: None,
-        refresh: Callback::new(move |_| ctx.dash.command("refresh")),
+        refresh: Callback::new(move |done| ctx.dash.command_then("refresh", Some(done))),
         lead: Some(Signal::derive(move || {
             let lead = line.with(|l| l.status_lead.clone());
             if lead.is_empty() {
@@ -739,6 +756,12 @@ pub fn Frame(initial: Page) -> impl IntoView {
     let close_menu = window_event_listener(leptos::ev::click, move |_| ctx.menu_open.set(false));
     on_cleanup(move || close_menu.remove());
     let signed_in = Memo::new(move |_| view_signal.with(|v: &SessionView| v.signed_in));
+    // Signed out, a refresh still running is not this session's: the next sign-in starts with Refresh at rest.
+    Effect::new(move |_| {
+        if !signed_in.get() {
+            ctx.refreshing.update(|r| r.cancel());
+        }
+    });
     // While the session is still asking the server, the splash is drawn, never the sign-in form (owner report
     // 2026-11-20). index.html's own splash covers that time; this one only stands in for a page that has none.
     let checking = Memo::new(move |_| view_signal.with(|v: &SessionView| v.state == "loading"));
@@ -863,8 +886,8 @@ fn AnalyticsRoute(ctx: FrameCtx) -> impl IntoView {
                     live: Signal::derive(move || line.with(|l| l.status_more == "live")),
                     summary: Signal::derive(Vec::new),
                     strip: None,
-                    refresh: Callback::new(move |_| {
-                        feed.act("analytics-refresh", "");
+                    refresh: Callback::new(move |done| {
+                        feed.refresh_then(done);
                     }),
                     lead: Some(Signal::derive(move || {
                         let lead = line.with(|l| l.status_lead.clone());
