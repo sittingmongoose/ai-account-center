@@ -2586,8 +2586,9 @@ test("OpenCode Go with three stored keys (the owner's shape): three rows, no sta
     ['remove', 'opencode-go:usage:cccccccc', false],
   ]);
   assert.ok(perKey.actions.every((a) => !/Checking/.test(a.tip || '')), 'every control settles');
-  assert.match(perKey.actions[1].tip, /also stop reading the other stored keys/);
-  assert.equal(perKey.src, 'Key stored on this computer');
+  // N1: only one stored key is unnamed here, so nothing else would stop; the tip names the computer.
+  assert.equal(perKey.actions[1].tip, 'Stored on Ubuntu outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.');
+  assert.equal(perKey.src, 'Key stored on Ubuntu');
   // nothing on the page acts on the bare discover entry, which would read a key unpinned or drop the third key
   assert.ok(!all(vm).flatMap((p) => p.rows).flatMap((r) => r.actions).some((a) => a.value === 'opencode-go:usage'));
   // the named entries keep their own actions
@@ -2596,4 +2597,27 @@ test("OpenCode Go with three stored keys (the owner's shape): three rows, no sta
   // dedupe alone, or every stored key already named: the discover entry has no row and still gets no stand-in
   const named = accountsViewModel(data(accounts.slice(1), { providers: providers() }), { now, registry: r });
   assert.deepEqual(provider(named, 'opencode-go').rows.map((r) => r.id).sort(), ['opencode-go:acct:2e034ec2', 'opencode-go:acct:52f3251b']);
+});
+
+test('OpenCode Go per-key Remove tip names the computer and warns about other unnamed keys only when there are any (N1)', () => {
+  const go = (id, label, extra = {}) =>
+    account({ id, provider: 'opencode-go', providerLabel: 'OpenCode Go', label, email: null, plan: 'Go', platform: 'ubuntu', capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] }, ...extra });
+  const r = registry([
+    reg('opencode-go:usage', 'opencode-go', { label: 'OpenCode Go', credential: { kind: 'discover' }, actions: { recheck: true, remove: true } }),
+    reg('opencode-go:acct:52f3251b', 'opencode-go', { label: 'Account 2', credential: { kind: 'aac-key', last4: '1111', storedOn: 'ubuntu' }, actions: { recheck: true, remove: true, replaceKey: true } }),
+  ]);
+  const tipOf = (vm, id) => row(vm, id).actions.find((a) => a.act === 'remove').tip;
+  // Two stored keys no entry names: removing the discover entry here would stop reading both.
+  const two = accountsViewModel(data([go('opencode-go:usage:cccccccc', 'Key cccccccc'), go('opencode-go:usage:dddddddd', 'Key dddddddd'), go('opencode-go:acct:52f3251b', 'Account 2')], { providers: providers() }), { now, registry: r });
+  for (const id of ['opencode-go:usage:cccccccc', 'opencode-go:usage:dddddddd']) {
+    assert.equal(tipOf(two, id), 'Stored on Ubuntu outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it. Removing it here would stop reading every stored key no account names.');
+    assert.equal(row(two, id).src, 'Key stored on Ubuntu');
+  }
+  // One unnamed key: nothing else would stop, so the tip never mentions other keys.
+  const one = accountsViewModel(data([go('opencode-go:usage:cccccccc', 'Key cccccccc'), go('opencode-go:acct:52f3251b', 'Account 2')], { providers: providers() }), { now, registry: r });
+  assert.equal(tipOf(one, 'opencode-go:usage:cccccccc'), 'Stored on Ubuntu outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.');
+  // A key read on another computer names that computer, never the viewer's.
+  const nas = accountsViewModel(data([go('opencode-go:usage:cccccccc', 'Key cccccccc', { host: 'nas1' })], { providers: providers() }), { now, registry: r });
+  assert.equal(tipOf(nas, 'opencode-go:usage:cccccccc'), 'Stored on Nas1 outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.');
+  assert.equal(row(nas, 'opencode-go:usage:cccccccc').src, 'Key stored on Nas1');
 });

@@ -259,16 +259,20 @@ function rowActions(provider, account, homeRow, ctx) {
           : action({ ...fields, enabled: false, tip: reg ? 'Signing in to the console wallet is not available here.' : 'Checking what this account can do' }),
         removeControl(provider, account, reg, entry)];
       }
-      // A key stored on this computer outside the dashboard (card OCG1): Re-check reads that one key; it has no key of
-      // the dashboard's to replace, and removing it here would also stop reading the other stored keys.
+      // A key stored on the reading computer outside the dashboard (card OCG1): Re-check reads that one key; it has
+      // no key of the dashboard's to replace. Removing the discover entry here stops reading every stored key no
+      // account names, so that clause appears only when the entry covers more than this one key (N1).
       const keyEntry = reg ? null : storedKeyEntry(account, ctx);
       if (keyEntry) {
+        const host = hostLabel(account);
+        const unnamed = (Array.isArray(ctx.data?.accounts) ? ctx.data.accounts : [])
+          .filter(other => storedKeyEntry(other, ctx) === keyEntry).length;
         const check = { act: 'recheck', value: account.id, label: 'Re-check', icon: 'refresh', probe: `recheck:${account.id}` };
         const live = LIVE.recheck && keyEntry.actions?.recheck !== false;
         return [live ? action({ ...check, enabled: true, tip: 'Read this stored key again now.' })
           : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
         action({ kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}`, enabled: false,
-          tip: 'This key is stored on this computer outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it; removing it here would also stop reading the other stored keys.' })];
+          tip: `Stored on ${host} outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.${unnamed > 1 ? ' Removing it here would stop reading every stored key no account names.' : ''}` })];
       }
       // A key the provider's own app or config holds (never AAC-stored): no key action at all, only Re-check.
       if (reg?.credential?.kind && reg.credential.kind !== 'aac-key') {
@@ -1067,7 +1071,7 @@ export function accountsViewModel(data, ctx = {}) {
     const rows = mine.map(account => {
       const homeRow = homeRows.get(account.id);
       const reg = c.registry.get(account.id) || null;
-      const [src, srcSub] = !reg && storedKeyEntry(account, c) ? ['Key stored on this computer', hostLabel(account)] : sourceLines(entry.id, account, reg);
+      const [src, srcSub] = !reg && storedKeyEntry(account, c) ? [`Key stored on ${hostLabel(account)}`, hostLabel(account)] : sourceLines(entry.id, account, reg);
       const { status, sampled: sampledLine, sampledTip: sampledLineTip } = rowStatus(account, now, reg);
       // a Claude Open in progress (claude-open.mjs) takes the "sampled" line while it runs
       const opening = entry.id === 'claude' && c.openProgress instanceof Map ? c.openProgress.get(homeRow?.profile || text(account.capabilities?.claudeProfileId)) : null;
