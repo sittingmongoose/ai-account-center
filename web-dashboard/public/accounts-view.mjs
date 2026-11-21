@@ -163,6 +163,16 @@ export function claudeDefaultProfile(profile) {
   return [profile.mac, profile.windows].some(launcher => launcher && (launcher.isDefault === true || base(launcher.profilePath) === 'claude'));
 }
 
+/**
+ * The discover entry a per-key row comes from (card OCG1): the server reads each stored OpenCode Go key no other entry
+ * names as its own row, id `<discover entry id>:<8 hex digits of the key's identity digest>`. Null for any other row.
+ */
+function storedKeyEntry(account, ctx) {
+  const match = /^(.+):([0-9a-f]{8})$/.exec(text(account?.id));
+  const parent = match ? ctx.registry?.get(match[1]) : null;
+  return parent?.credential?.kind === 'discover' && parent.provider === account.provider ? parent : null;
+}
+
 /** The remove control for a row: live, refused (reason under the row on click), or coming. */
 function removeControl(provider, account, reg, entry, extra = {}) {
   const fields = { kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}` };
@@ -248,6 +258,17 @@ function rowActions(provider, account, homeRow, ctx) {
         return [live ? action({ ...fields, enabled: true, tip: 'Open the OpenCode console in the browser with the extension and sign in there.' })
           : action({ ...fields, enabled: false, tip: reg ? 'Signing in to the console wallet is not available here.' : 'Checking what this account can do' }),
         removeControl(provider, account, reg, entry)];
+      }
+      // A key stored on this computer outside the dashboard (card OCG1): Re-check reads that one key; it has no key of
+      // the dashboard's to replace, and removing it here would also stop reading the other stored keys.
+      const keyEntry = reg ? null : storedKeyEntry(account, ctx);
+      if (keyEntry) {
+        const check = { act: 'recheck', value: account.id, label: 'Re-check', icon: 'refresh', probe: `recheck:${account.id}` };
+        const live = LIVE.recheck && keyEntry.actions?.recheck !== false;
+        return [live ? action({ ...check, enabled: true, tip: 'Read this stored key again now.' })
+          : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
+        action({ kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}`, enabled: false,
+          tip: 'This key is stored on this computer outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it; removing it here would also stop reading the other stored keys.' })];
       }
       // A key the provider's own app or config holds (never AAC-stored): no key action at all, only Re-check.
       if (reg?.credential?.kind && reg.credential.kind !== 'aac-key') {
@@ -1030,15 +1051,17 @@ export function accountsViewModel(data, ctx = {}) {
     const def = ACCOUNT_KINDS[entry.id];
     const server = providerEntry(data, entry.id);
     const mine = accounts.filter(account => account.provider === entry.id);
-    // accounts the registry lists that the dashboard has no row for yet (a profile created a moment ago)
-    for (const reg of registryAccounts) if (reg.provider === entry.id && !mine.some(account => account.id === reg.id)) {
+    // accounts the registry lists that the dashboard has no row for yet (a profile created a moment ago). A discover
+    // entry is never one: the server shows it unless its stored keys already have rows (OpenCode Go reads each
+    // stored key as its own row, card OCG1) or another entry reads the same key, so it never gets a stand-in.
+    for (const reg of registryAccounts) if (reg.provider === entry.id && reg.credential?.kind !== 'discover' && !mine.some(account => account.id === reg.id)) {
       mine.push({ id: reg.id, provider: reg.provider, email: reg.email, label: reg.label, plan: null, platform: reg.platform, status: 'needs_sign_in', windows: [], capabilities: {}, lifecycle: reg.lifecycle });
     }
     const hiddenServer = serverHidden.has(entry.id);
     const rows = mine.map(account => {
       const homeRow = homeRows.get(account.id);
       const reg = c.registry.get(account.id) || null;
-      const [src, srcSub] = sourceLines(entry.id, account, reg);
+      const [src, srcSub] = !reg && storedKeyEntry(account, c) ? ['Key stored on this computer', hostLabel(account)] : sourceLines(entry.id, account, reg);
       const { status, sampled: sampledLine, sampledTip: sampledLineTip } = rowStatus(account, now, reg);
       // a Claude Open in progress (claude-open.mjs) takes the "sampled" line while it runs
       const opening = entry.id === 'claude' && c.openProgress instanceof Map ? c.openProgress.get(homeRow?.profile || text(account.capabilities?.claudeProfileId)) : null;

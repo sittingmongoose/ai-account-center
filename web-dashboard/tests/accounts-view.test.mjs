@@ -2497,3 +2497,38 @@ test('update rows name their cause instead of "Failed" and show which tool ran a
   assert.doesNotMatch(omp.tip, /Cause:/);
   assert.deepEqual([item('ubuntu', 'Muse Code').result, item('ubuntu', 'Muse Code').tip], ['Failed', 'The app update failed; check its supported installer.']);
 });
+
+test("OpenCode Go with three stored keys (Jared's shape): three rows, no stand-in, nothing reads an unpinned key", () => {
+  const go = (id, label, digest) =>
+    account({ id, provider: 'opencode-go', providerLabel: 'OpenCode Go', label, email: null, plan: 'Go', platform: 'ubuntu', capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] }, ...(digest ? {} : {}) });
+  const accounts = [
+    go('opencode-go:usage:cccccccc', 'Key cccccccc', true),
+    go('opencode-go:acct:52f3251b', 'Account 2'),
+    go('opencode-go:acct:2e034ec2', 'Account 3'),
+  ];
+  const r = registry([
+    reg('opencode-go:usage', 'opencode-go', { label: 'OpenCode Go', credential: { kind: 'discover' }, actions: { recheck: true, remove: true } }),
+    reg('opencode-go:acct:52f3251b', 'opencode-go', { label: 'Account 2', credential: { kind: 'aac-key', last4: '1111', storedOn: 'ubuntu' }, actions: { recheck: true, remove: true, replaceKey: true } }),
+    reg('opencode-go:acct:2e034ec2', 'opencode-go', { label: 'Account 3', credential: { kind: 'aac-key', last4: '2222', storedOn: 'ubuntu' }, actions: { recheck: true, remove: true, replaceKey: true } }),
+  ]);
+  const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
+  const rows = provider(vm, 'opencode-go').rows;
+  assert.deepEqual(rows.map((r) => r.id).sort(), accounts.map((a) => a.id).sort());
+  assert.ok(!rows.some((r) => r.id === 'opencode-go:usage'), 'no stand-in for the discover entry');
+  const perKey = row(vm, 'opencode-go:usage:cccccccc');
+  assert.deepEqual(perKey.actions.map((a) => [a.act, a.value, a.enabled]), [
+    ['recheck', 'opencode-go:usage:cccccccc', true],
+    ['remove', 'opencode-go:usage:cccccccc', false],
+  ]);
+  assert.ok(perKey.actions.every((a) => !/Checking/.test(a.tip || '')), 'every control settles');
+  assert.match(perKey.actions[1].tip, /also stop reading the other stored keys/);
+  assert.equal(perKey.src, 'Key stored on this computer');
+  // nothing on the page acts on the bare discover entry, which would read a key unpinned or drop the third key
+  assert.ok(!all(vm).flatMap((p) => p.rows).flatMap((r) => r.actions).some((a) => a.value === 'opencode-go:usage'));
+  // the named entries keep their own actions
+  assert.deepEqual(row(vm, 'opencode-go:acct:2e034ec2').actions.map((a) => [a.act, a.enabled]), [['replace-key', true], ['remove', true]]);
+
+  // dedupe alone, or every stored key already named: the discover entry has no row and still gets no stand-in
+  const named = accountsViewModel(data(accounts.slice(1), { providers: providers() }), { now, registry: r });
+  assert.deepEqual(provider(named, 'opencode-go').rows.map((r) => r.id).sort(), ['opencode-go:acct:2e034ec2', 'opencode-go:acct:52f3251b']);
+});
