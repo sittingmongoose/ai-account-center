@@ -3,7 +3,7 @@
 //! usage projector keeps readings as spans, account states, reset periods and rollups.
 
 use crate::db::{self, Bytes, Index, Key};
-use crate::engine::{Batch, DAY_MS, Engine, LogId, Projector, begin, civil_from_days, now_ms};
+use crate::engine::{Batch, DAY_MS, Engine, LogId, Projector, ReplayReadings, begin, civil_from_days, now_ms};
 use crate::error::Result;
 use crate::event::Event;
 use crate::fail;
@@ -799,6 +799,10 @@ fn upcoming(reset: Option<i64>, at: i64) -> bool {
 
 /// Whether a reset happened between two readings (the rules of agent-usage-history.ts).
 pub fn is_reset(prev_t: i64, prev: &Vals, t: i64, now: &Vals) -> bool {
+    is_reset_with_shift(prev_t, prev, t, now, true)
+}
+
+fn is_reset_with_shift(prev_t: i64, prev: &Vals, t: i64, now: &Vals, allow_expired_shift: bool) -> bool {
     let (Some(up), Some(u)) = (prev.used_pct, now.used_pct) else {
         return false;
     };
@@ -809,13 +813,14 @@ pub fn is_reset(prev_t: i64, prev: &Vals, t: i64, now: &Vals) -> bool {
     {
         return true;
     }
+    let both_upcoming = upcoming(prev.reset_at, prev_t) && upcoming(now.reset_at, t);
     if let (Some(prev_reset), Some(now_reset)) = (prev.reset_at, now.reset_at)
+        && (allow_expired_shift || both_upcoming)
         && prev_reset.abs_diff(now_reset) > RESET_SHIFT_MS
     {
         return true;
     }
-    let same_upcoming = upcoming(prev.reset_at, prev_t) && upcoming(now.reset_at, t);
-    up - u > if same_upcoming { RESET_DROP_POINTS } else { 0.0 }
+    up - u > if both_upcoming { RESET_DROP_POINTS } else { 0.0 }
 }
 
 // ----------------------------------------------------------------------------- the projector
@@ -823,7 +828,7 @@ pub fn is_reset(prev_t: i64, prev: &Vals, t: i64, now: &Vals) -> bool {
 pub struct UsageProjector;
 
 /// Bump when projection rules change: the usage tables are then rebuilt from the logs.
-pub const USAGE_PROJECTOR_VERSION: u32 = 2;
+pub const USAGE_PROJECTOR_VERSION: u32 = 3;
 
 impl Projector for UsageProjector {
     fn name(&self) -> &'static str {
@@ -849,7 +854,7 @@ impl Projector for UsageProjector {
                     project_seen(txn, seen)?;
                 }
             }
-            "usage.day_closed" => project_day_closed(txn, &msgpack::to_json(&event.payload))?,
+            "usage.day_closed" => project_day_closed(txn, &msgpack::to_json(&event.payload), None)?,
             // Disclosed findings come back with a rebuild (2.6).
             "store.integrity_detected" => {
                 return Ok(vec![crate::engine::finding_from_json(&msgpack::to_json(
@@ -859,6 +864,19 @@ impl Projector for UsageProjector {
             _ => {}
         }
         Ok(Vec::new())
+    }
+    fn apply_replay(
+        &self,
+        txn: &WriteTransaction,
+        log: LogId,
+        event: &Event,
+        readings: ReplayReadings,
+    ) -> Result<Vec<Finding>> {
+        if event.event_type == "usage.day_closed" {
+            project_day_closed(txn, &msgpack::to_json(&event.payload), Some(readings))?;
+            return Ok(Vec::new());
+        }
+        self.apply(txn, log, event)
     }
     fn reset(&self, txn: &WriteTransaction) -> Result<()> {
         for def in [
@@ -1385,41 +1403,130 @@ fn same_rollup_input(saved: &Rollup, rebuilt: &Rollup) -> bool {
             }
 }
 
+/// Reconstruct just the usage fields affected by the reset rule, from the retained prefix
+/// of an hour. The snapshot's row count is the cut: later rows do not enter the closed rollup.
+fn correct_retained_hour<'a>(
+    txn: &WriteTransaction,
+    (a, w): (u32, u32),
+    mut previous: Option<&'a Row>,
+    spans: &'a [(u64, Row)],
+    saved: &mut Rollup,
+) -> Result<bool> {
+    let mut by_rule = [Rollup::default(), Rollup::default()];
+    for (t, row) in spans.iter().take(saved.rows as usize) {
+        if let Some(prev) = previous
+            && let (Some(up), Some(u)) = (prev.vals.used_pct, row.vals.used_pct)
+            && !prev.vals.cached
+            && !row.vals.cached
+        {
+            let corrected = is_reset(prev.last_seen as i64, &prev.vals, *t as i64, &row.vals);
+            let legacy = is_reset_with_shift(prev.last_seen as i64, &prev.vals, *t as i64, &row.vals, false);
+            if corrected && (prev.vals.same(&row.vals) || (!legacy && read_period(txn, a, w, *t)?.is_none())) {
+                // An unchanged gap can be a sighting rather than a measurement. A replay
+                // split that was discarded in favor of an archived period cannot fix a rollup.
+                return Ok(false);
+            }
+            for (rollup, reset) in by_rule.iter_mut().zip([legacy, corrected]) {
+                let added = if reset { u.max(0.0) } else { (u - up).max(0.0) };
+                rollup.consumed = (rollup.consumed + added) as f32 as f64;
+                if reset {
+                    rollup.resets += 1;
+                    rollup.last_reset_ms = Some(*t as i64);
+                }
+            }
+        }
+        previous = Some(row);
+    }
+    let [legacy, corrected] = by_rule;
+    let matches =
+        |r: &Rollup| (r.resets, r.last_reset_ms, r.consumed) == (saved.resets, saved.last_reset_ms, saved.consumed);
+    if matches(&corrected) {
+        return Ok(true);
+    }
+    if matches(&legacy) {
+        saved.consumed = corrected.consumed;
+        saved.resets = corrected.resets;
+        saved.last_reset_ms = corrected.last_reset_ms;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn restore_closed_rollups(
     txn: &WriteTransaction,
-    key: &[u8],
+    series @ (a, w): (u32, u32),
     day: u32,
     mut saved_hours: Vec<(u8, Rollup)>,
     mut saved_day: Rollup,
     recovered_resets: &[(u64, f64)],
+    replay: Option<ReplayReadings>,
 ) -> Result<()> {
-    // A complete period emitted by this close proves that its same-day resets were present at
-    // close time. Apply only those deltas if the day also had missing or late replayed readings.
-    for &(at, extra_consumed) in recovered_resets {
-        if day_of(at) != day {
-            continue;
-        }
-        let hour = (hour_of(at) % 24) as u8;
-        if let Ok(i) = saved_hours.binary_search_by_key(&hour, |(h, _)| *h) {
-            for rollup in [&mut saved_hours[i].1, &mut saved_day] {
-                rollup.consumed += extra_consumed;
-                rollup.resets += 1;
-                rollup.last_reset_ms = rollup.last_reset_ms.max(Some(at as i64));
+    let key = Key::new().u32(a).u32(w).u32(day);
+    let key = key.as_slice();
+    let Some(replay) = replay else {
+        // A normal close snapshots the very rollups already in redb.
+        return Ok(());
+    };
+    let rebuilt_day = get(txn, db::ROLLUP_DAY, key)?.map(|b| Rollup::decode(&b)).transpose()?;
+    let rebuilt_hours = get(txn, db::ROLLUP_HOURS, key)?
+        .map(|b| pack::decode_hours(&b))
+        .transpose()?
+        .unwrap_or_default();
+
+    let from = u64::from(day) * DAY_MS;
+    let readings = txn.open_table(db::READING_DAY)?;
+    let open = open_spans_for(&txn.open_table(db::LATEST)?, [series])?;
+    let before_day = if from > 0 {
+        span_at(&readings, &open, series, from - 1)?
+    } else {
+        None
+    };
+    let complete_day =
+        replay == ReplayReadings::Complete || (replay == ReplayReadings::RetiredPrefix && before_day.is_some());
+
+    if complete_day
+        && rebuilt_day.as_ref().is_some_and(|r| same_rollup_input(&saved_day, r))
+        && rebuilt_hours.len() == saved_hours.len()
+        && rebuilt_hours
+            .iter()
+            .zip(&saved_hours)
+            .all(|((hour, rebuilt), (saved_hour, saved))| hour == saved_hour && same_rollup_input(saved, rebuilt))
+    {
+        return Ok(());
+    }
+
+    let mut spans = Vec::new();
+    visit_spans(&readings, &open, series, (from, from + DAY_MS - 1), |t, row| {
+        spans.push((t, row));
+        Ok(true)
+    })?;
+    for (hour, saved) in &mut saved_hours {
+        let old = (saved.consumed, saved.resets);
+        let start = from + u64::from(*hour) * HOUR_MS;
+        let lo = spans.partition_point(|(t, _)| *t < start);
+        let hi = spans.partition_point(|(t, _)| *t < start + HOUR_MS);
+        let previous = if lo > 0 {
+            Some(&spans[lo - 1].1)
+        } else {
+            before_day.as_ref().map(|(_, row)| row)
+        };
+        let complete_hour = complete_day || (replay == ReplayReadings::RetiredPrefix && previous.is_some());
+        let rebuilt_rows = rebuilt_hours.iter().find(|(h, _)| h == hour).map_or(0, |(_, r)| r.rows);
+        let exact_spans = hi - lo == rebuilt_rows as usize && rebuilt_rows >= saved.rows;
+        if !(complete_hour && exact_spans && correct_retained_hour(txn, series, previous, &spans[lo..hi], saved)?) {
+            // A complete archived period still proves its own reset deltas when the whole
+            // hour cannot be reconstructed, including hours with retired readings.
+            for &(at, extra) in recovered_resets {
+                if at >= start && at < start + HOUR_MS {
+                    saved.consumed += extra;
+                    saved.resets += 1;
+                    saved.last_reset_ms = saved.last_reset_ms.max(Some(at as i64));
+                }
             }
         }
-    }
-    // The replay must also account for the resets recovered directly from the snapshot.
-    if let (Some(hours), Some(day)) = (get(txn, db::ROLLUP_HOURS, key)?, get(txn, db::ROLLUP_DAY, key)?) {
-        let hours = pack::decode_hours(&hours)?;
-        if same_rollup_input(&saved_day, &Rollup::decode(&day)?)
-            && hours.len() == saved_hours.len()
-            && hours
-                .iter()
-                .zip(&saved_hours)
-                .all(|((hour, rebuilt), (saved_hour, saved))| hour == saved_hour && same_rollup_input(saved, rebuilt))
-        {
-            return Ok(());
-        }
+        saved_day.consumed += saved.consumed - old.0;
+        saved_day.resets += saved.resets - old.1;
+        saved_day.last_reset_ms = saved_day.last_reset_ms.max(saved.last_reset_ms);
     }
     if saved_hours.is_empty() {
         txn.open_table(db::ROLLUP_HOURS)?.remove(key)?;
@@ -1522,7 +1629,7 @@ fn restore_closed_period(
     Ok(Vec::new())
 }
 
-fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
+fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<ReplayReadings>) -> Result<()> {
     let day = payload["day"].as_u64().unwrap_or(u64::MAX) as u32;
     if day == u32::MAX {
         fail!("corrupt", "day_closed without a day");
@@ -1557,11 +1664,12 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
         }
         restore_closed_rollups(
             txn,
-            Key::new().u32(a).u32(w).u32(day).as_slice(),
+            (a, w),
             day,
             hours,
             rollup_from_json(&series["day_rollup"])?,
             &recovered_resets,
+            replay,
         )?;
     }
     put_index(txn, db::DAY_CLOSED, Key::new().u32(day).as_slice())?;

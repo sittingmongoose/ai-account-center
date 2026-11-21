@@ -166,9 +166,12 @@ const CLOSED_DAY_START: i64 = 1_793_000_000_000;
 /// Created by the version-one Store at 0aa3cd431. A segment seal separates the first two
 /// observations from the last two, so the same fixture can retire only the initial readings.
 fn version_one_closed_day() -> std::path::PathBuf {
-    let dir = temp_dir("closed-day-v1");
-    let fixture = include_bytes!("fixtures/closed-day-v1.json.zst");
-    let decoded = zstd::stream::decode_all(fixture.as_slice()).unwrap();
+    version_one_fixture("closed-day-v1", include_bytes!("fixtures/closed-day-v1.json.zst"))
+}
+
+fn version_one_fixture(name: &str, fixture: &[u8]) -> std::path::PathBuf {
+    let dir = temp_dir(name);
+    let decoded = zstd::stream::decode_all(fixture).unwrap();
     let files: std::collections::BTreeMap<String, Vec<u8>> = serde_json::from_slice(&decoded).unwrap();
     for (name, bytes) in files {
         let path = dir.join(name);
@@ -291,6 +294,27 @@ fn an_upgrade_keeps_the_closed_archive_when_a_period_is_only_partly_retained() {
     let engine = open(&dir);
     assert_eq!(closed_day_periods(&engine), vec![(0, 2, 39.0), (3, 3, 0.0)]);
     assert_closed_day_rollups(&engine, 39.0, 1);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_upgrade_corrects_a_closed_day_when_the_split_period_was_open_at_close() {
+    let dir = version_one_fixture(
+        "closed-day-open-v1",
+        include_bytes!("fixtures/closed-day-open-v1.json.zst"),
+    );
+    let engine = open(&dir);
+    assert_eq!(
+        closed_day_periods(&engine),
+        vec![(0, 1, 5.0), (2, 2, 39.0), (3, 3, 0.0)]
+    );
+    let rows = dump(&engine, &["rollup_day", "rollup_hours"]);
+    let day = aac_store::usage::Rollup::decode(&rows[1].2).unwrap();
+    assert_eq!((day.consumed, day.resets, day.rows), (44.0, 1, 3), "closed day");
+    let hours = aac_store::pack::decode_hours(&rows[0].2).unwrap();
+    assert_eq!((hours[0].1.consumed, hours[0].1.resets, hours[0].1.rows), (44.0, 1, 3));
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(dir).unwrap();

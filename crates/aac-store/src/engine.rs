@@ -86,6 +86,14 @@ impl Default for Config {
     }
 }
 
+/// Which parts of the readings history can be compared with a day-close snapshot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ReplayReadings {
+    Complete,
+    RetiredPrefix,
+    Missing,
+}
+
 /// A projection of one or both logs. Its tables are derived: a version change drops and rebuilds them.
 pub trait Projector: Send + Sync {
     fn name(&self) -> &'static str;
@@ -94,6 +102,15 @@ pub trait Projector: Send + Sync {
     /// Projects one event. What it had to set aside (an event an older build accepted that
     /// today's checks refuse) comes back as findings, and replay goes on.
     fn apply(&self, txn: &WriteTransaction, log: LogId, event: &Event) -> Result<Vec<Finding>>;
+    fn apply_replay(
+        &self,
+        txn: &WriteTransaction,
+        log: LogId,
+        event: &Event,
+        _readings: ReplayReadings,
+    ) -> Result<Vec<Finding>> {
+        self.apply(txn, log, event)
+    }
     /// Drops this projector's tables before a rebuild.
     fn reset(&self, txn: &WriteTransaction) -> Result<()>;
 }
@@ -335,7 +352,7 @@ impl Engine {
             capture_health_cache: Mutex::new(None),
             _lock: lock,
         };
-        let replay_findings = engine.replay()?;
+        let replay_findings = engine.replay(&findings)?;
         merge_findings(&mut findings, replay_findings);
         // What earlier opens disclosed stays disclosed until it is resolved (2.6), whatever the
         // checkpoint: kept in redb, and rebuilt from the ledger's `store.integrity_detected`.
@@ -514,10 +531,21 @@ impl Engine {
 
     /// Brings every projector up to the end of both logs, rebuilding any whose version changed or
     /// whose checkpoint does not match the surviving events.
-    fn replay(&self) -> Result<Vec<Finding>> {
+    fn replay(&self, open_findings: &[Finding]) -> Result<Vec<Finding>> {
         let mut logs = self.lock_logs();
         self.with_db(|db| {
             let (lost, mut findings) = self.check_checkpoints(&mut logs, db)?;
+            let readings = if findings
+                .iter()
+                .chain(open_findings)
+                .any(|f| f.log == LogId::Readings.name() && is_loss(&f.kind))
+            {
+                ReplayReadings::Missing
+            } else if logs.readings.manifest().retired_below > 0 {
+                ReplayReadings::RetiredPrefix
+            } else {
+                ReplayReadings::Complete
+            };
             let txn = begin(db)?;
             // Kept in the same transaction as the rebuild they cause, so a kill before the ledger
             // records them cannot leave a rebuilt store that no longer says why.
@@ -582,7 +610,7 @@ impl Engine {
                         for (i, cp) in checkpoints.iter_mut() {
                             if event.sequence_id > cp.last_sequence_id {
                                 let ledgered = event.event_type == "store.integrity_detected";
-                                for f in self.projectors[*i].apply(&txn, log_id, event)? {
+                                for f in self.projectors[*i].apply_replay(&txn, log_id, event, readings)? {
                                     keep_finding(&txn, &f, ledgered)?;
                                     found.push(f);
                                 }
