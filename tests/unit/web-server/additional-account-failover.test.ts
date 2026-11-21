@@ -185,7 +185,8 @@ describe('additional accounts use verified failover sources', () => {
     function stored(
       accounts: RegistryAccount[],
       found: Array<{ identity: { kind: string; key: string }; bound: boolean }> | null,
-      named: Record<string, { kind: string; key: string }> = {}
+      named: Record<string, { kind: string; key: string }> = {},
+      unread: string[] = []
     ) {
       const asked: string[][] = [];
       const harness = fixture({
@@ -194,7 +195,7 @@ describe('additional accounts use verified failover sources', () => {
       const base = (harness.service as unknown as { failover: Record<string, unknown> }).failover;
       base.discoveredIdentities = async (_target: UsageFailoverTarget, bound: string[]) => {
         asked.push([...bound].sort());
-        return found;
+        return found === null ? null : { found, unread };
       };
       base.readingIdentity = (target: UsageFailoverTarget) =>
         target.expectedIdentity ?? named[target.accountId] ?? null;
@@ -222,7 +223,7 @@ describe('additional accounts use verified failover sources', () => {
         'opencode-go:acct:52f3251b',
         'opencode-go:acct:2e034ec2',
       ]);
-      expect(rows[0].label).toBe('Saved account cccccccc');
+      expect(rows[0].label).toBe('Key cccccccc');
       // One read per stored key: the discovery row reads only the key no entry names.
       expect(calls.map((call) => call.accountId)).toEqual(rows.map((row) => row.id));
       expect(calls[0].expectedIdentity).toEqual(id('c'));
@@ -271,6 +272,68 @@ describe('additional accounts use verified failover sources', () => {
       );
       expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:usage']);
       expect(calls[0].expectedIdentity).toBeUndefined();
+    });
+
+    it('a covered discover entry answers no Re-check and reads nothing unpinned', async () => {
+      const { service, calls } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [
+          { identity: id('a'), bound: true },
+          { identity: id('c'), bound: false },
+        ],
+        { 'opencode-go:acct:2e034ec2': id('a') }
+      );
+      expect(await service.refreshAccount('opencode-go:usage')).toBeNull();
+      expect(await service.refreshAccount('opencode-go:usage:dddddddd')).toBeNull();
+      expect(await service.refreshAccount('opencode-go:usage:aaaaaaaa')).toBeNull();
+      expect(calls).toHaveLength(0);
+      expect((await service.refreshAccount('opencode-go:usage:cccccccc'))?.id).toBe(
+        'opencode-go:usage:cccccccc'
+      );
+      expect(calls.map((call) => call.expectedIdentity)).toEqual([id('c')]);
+    });
+
+    it('a named key that cannot be read stands in with its last known identity', async () => {
+      const { service, calls } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [
+          { identity: id('a'), bound: false },
+          { identity: id('b'), bound: true },
+          { identity: id('c'), bound: false },
+        ],
+        { 'opencode-go:acct:52f3251b': id('b'), 'opencode-go:acct:2e034ec2': id('a') },
+        ['aac-key:2e034ec2']
+      );
+      expect((await service.get()).map((row) => row.id)).toEqual([
+        'opencode-go:usage:cccccccc',
+        'opencode-go:acct:52f3251b',
+        'opencode-go:acct:2e034ec2',
+      ]);
+      expect(calls.filter((call) => call.expectedIdentity)).toHaveLength(1);
+    });
+
+    it('with no known identity for an unreadable named key, discovery waits (no second row)', async () => {
+      const { service, calls } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [
+          { identity: id('a'), bound: false },
+          { identity: id('c'), bound: false },
+        ],
+        {},
+        ['aac-key:2e034ec2']
+      );
+      expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
+      expect(calls.map((call) => call.accountId)).toEqual(['opencode-go:acct:2e034ec2']);
     });
 
     it('two entries that read the same key still show one row', async () => {

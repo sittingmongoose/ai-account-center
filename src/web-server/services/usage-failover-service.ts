@@ -661,18 +661,31 @@ export class UsageFailoverService {
   /**
    * Every distinct credential identity the target's primary computer stores for its selector,
    * in store order, each marked `bound` when a candidate carrying one of `bound` selectors (an
-   * account the registry already names, such as `aac-key:<id>`) holds the same identity. It is
-   * an inventory of local stores only: no provider is asked and no secret leaves the helper.
-   * Null when the computer's stores could not be read.
+   * account the registry already names, such as `aac-key:<id>`) holds the same identity.
+   * `unread` lists the `bound` selectors whose stores could not be read this time: their keys
+   * are unknown, so the caller must not treat them as free. It is an inventory of local stores
+   * only: no provider is asked and no secret leaves the helper. Null when the computer's stores
+   * could not be read at all.
    */
   async discoveredIdentities(
     target: UsageFailoverTarget,
     bound: string[]
-  ): Promise<Array<{ identity: UsageIdentity; bound: boolean }> | null> {
+  ): Promise<{
+    found: Array<{ identity: UsageIdentity; bound: boolean }>;
+    unread: string[];
+  } | null> {
     const source = target.primarySources[0];
     if (!source) return null;
     const candidates = await this.inventory(target, source);
     if (candidates === null) return null;
+    const gaps = this.unreadSelectors.get(this.inventoryKey(target, source));
+    if (gaps?.has('*') || gaps?.has(source.selector)) return null;
+    const unread = bound.filter((selector) => {
+      const family = selector.includes(':')
+        ? `${selector.slice(0, selector.indexOf(':'))}:*`
+        : null;
+      return gaps?.has(selector) === true || (family !== null && gaps?.has(family) === true);
+    });
     const taken = candidates
       .filter((candidate) => candidate.selectors.some((selector) => bound.includes(selector)))
       .map((candidate) => candidate.identity);
@@ -685,7 +698,7 @@ export class UsageFailoverService {
         bound: taken.some((identity) => sameUsageIdentity(identity, candidate.identity)),
       });
     }
-    return found;
+    return { found, unread };
   }
   /**
    * The credential identity the target's shown reading came from, or null when it has none

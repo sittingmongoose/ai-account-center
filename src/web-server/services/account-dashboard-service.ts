@@ -680,13 +680,26 @@ export class AccountDashboardService {
       parts.map(async ([key, pending, fallback]) => {
         // Slow sources can finish after the response deadline. Retain their safe
         // projections without allowing an older cycle to overwrite a newer one.
-        const retained = pending.then((accounts) => {
-          if (state.generation === generation) {
-            state[key] = accounts;
-            if (completed) this.deps.onUsagePublished?.();
+        const retained = pending.then(
+          (accounts) => {
+            if (state.generation === generation) {
+              state[key] = accounts;
+              if (completed) this.deps.onUsagePublished?.();
+            }
+            return accounts;
+          },
+          (error: unknown) => {
+            // A part that fails after the deadline is a real failure: its rows stop reading as
+            // "still running" and read as failed, with their own read times.
+            if (state.generation === generation && !publishedThisCycle.has(key))
+              state[key] = state[key].map((account) =>
+                account.status === 'cached' && account.cacheReason === 'refresh_pending'
+                  ? failedRead({ ...account, status: 'ok' })
+                  : failedRead(account)
+              );
+            throw error;
           }
-          return accounts;
-        });
+        );
         const lastRows = (): DashboardAccount[] => (state[key].length ? state[key] : fallback());
         const result = await this.bounded(
           retained,

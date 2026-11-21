@@ -453,9 +453,12 @@ export class AdditionalAccountService {
   /**
    * Owner, 2026-11-21 (card OCG1): every OpenCode Go key stored on the computer is read, once.
    * A `discover` entry stands for each stored key that no other entry of the provider already
-   * names (`aac-key:<id>`): one row per such key, pinned to that key's identity, with an id and
-   * label from the identity's digest (never the key). When every stored key is already named,
-   * the discover entry adds no row and no read. An unreadable store keeps the entry as it was.
+   * names (`aac-key:<id>`): one row per such key, pinned to that key's identity, with the id
+   * `<entry id>:<digest>` and the label `Key <digest>` (the identity's digest, never the key).
+   * When every stored key is already named, the discover entry adds no row and no read. When a
+   * named entry's key file cannot be read, its last known identity stands in for it; with none
+   * known, the entry adds no row and no read this time, so one account never shows twice. An
+   * unreadable store keeps the entry as it was.
    */
   private async expandDiscovery(
     sources: AdditionalUsageSource[]
@@ -471,34 +474,40 @@ export class AdditionalAccountService {
           account.credential.kind !== 'discover'
         )
           return [source];
-        const bound = sources
-          .filter(
-            (other) =>
-              other !== source &&
-              other.provider === source.provider &&
-              sourceHost(other) === sourceHost(source) &&
-              (other.sshHost ?? null) === (source.sshHost ?? null)
+        const named = new Map<string, AdditionalUsageSource>();
+        for (const other of sources) {
+          const credential = other.account?.credential;
+          if (
+            other !== source &&
+            other.provider === source.provider &&
+            sourceHost(other) === sourceHost(source) &&
+            (other.sshHost ?? null) === (source.sshHost ?? null) &&
+            credential?.kind === 'aac-key'
           )
-          .flatMap((other) => {
-            const credential = other.account?.credential;
-            return credential?.kind === 'aac-key' ? [`aac-key:${credential.keyId}`] : [];
+            named.set(`aac-key:${credential.keyId}`, other);
+        }
+        const discovered = await discover(this.failoverTarget(source), [...named.keys()]).catch(
+          () => null
+        );
+        if (!discovered || discovered.found.length === 0) return [source];
+        const found = discovered.found.map((item) => ({ ...item }));
+        for (const selector of discovered.unread) {
+          const entry = named.get(selector);
+          const known = entry ? this.failover?.readingIdentity?.(this.failoverTarget(entry)) : null;
+          if (!known) return [];
+          for (const item of found) if (sameUsageIdentity(item.identity, known)) item.bound = true;
+        }
+        return found
+          .filter((item) => !item.bound)
+          .map(({ identity }) => {
+            const digest = identity.key.slice(0, 8);
+            const pinned: AdditionalUsageSource = {
+              ...source,
+              account: { ...account, id: `${account.id}:${digest}`, label: `Key ${digest}` },
+            };
+            this.pinned.set(pinned, identity);
+            return pinned;
           });
-        const found = await discover(this.failoverTarget(source), bound).catch(() => null);
-        if (!found || found.length === 0) return [source];
-        const unbound = found.filter((item) => !item.bound);
-        return unbound.map(({ identity }) => {
-          const digest = identity.key.slice(0, 8);
-          const pinned: AdditionalUsageSource = {
-            ...source,
-            account: {
-              ...account,
-              id: `${account.id}:${digest}`,
-              label: `${account.label ?? LABELS[source.provider]} ${digest}`,
-            },
-          };
-          this.pinned.set(pinned, identity);
-          return pinned;
-        });
       })
     );
     return expanded.flat();
@@ -807,13 +816,25 @@ export class AdditionalAccountService {
   ): Promise<DashboardAccount | null> {
     const config = await this.loadManifest();
     if (!config.valid) return null;
-    const known =
-      this.lastSources?.fingerprint === config.fingerprint ? this.lastSources.sources : [];
-    const source = [...config.sources, ...known].find(
-      (candidate) => (candidate.account?.id ?? `${candidate.provider}:usage`) === id
-    );
-    if (!source || (reviewed && sourceKey(reviewed) !== sourceKey(source))) return null;
-    return this.getSource(source, true);
+    const named = (candidate: AdditionalUsageSource) =>
+      (candidate.account?.id ?? `${candidate.provider}:usage`) === id;
+    const entry = config.sources.find(named);
+    // A per-key row, or a discover entry that may now stand for per-key rows: resolve it through
+    // the same expansion and pinning as a whole read, so a Re-check never reads a key unpinned
+    // and never reads a key another entry names. The reviewed source is the entry it comes from.
+    if (
+      !entry ||
+      (entry.account?.credential.kind === 'discover' && EXPANDS_DISCOVERY.has(entry.provider))
+    ) {
+      if (reviewed && !config.sources.some((source) => sourceKey(source) === sourceKey(reviewed)))
+        return null;
+      const all = await this.expandDiscovery(config.sources);
+      this.lastSources = { fingerprint: config.fingerprint, sources: all };
+      const source = all.find(named);
+      return source ? this.getSource(source, true) : null;
+    }
+    if (reviewed && sourceKey(reviewed) !== sourceKey(entry)) return null;
+    return this.getSource(entry, true);
   }
 
   /**

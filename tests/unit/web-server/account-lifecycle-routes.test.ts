@@ -1632,6 +1632,16 @@ describe('registry, re-check, open, label and trash', () => {
     expect(published).toBe(0);
   });
 
+  it('re-checks a per-key OpenCode Go row through its own key (card OCG1)', async () => {
+    const f = await fixture();
+    const perKey = await f.request('POST', '/opencode-go:usage:cccccccc/recheck', {});
+    expect(perKey.status).toBe(200);
+    expect(perKey.body.account).toMatchObject({ id: 'opencode-go:usage:cccccccc' });
+    // Only a digest after the discover entry's own id is a per-key row.
+    expect((await f.request('POST', '/opencode-go:usage:CCCCCCCC/recheck', {})).status).toBe(404);
+    expect((await f.request('POST', '/zai:usage:cccccccc/recheck', {})).status).toBe(404);
+  });
+
   it('opens Cursor on the Mac only, and relabels additional accounts', async () => {
     const f = await fixture();
     expect((await f.request('POST', '/cursor:usage/open', { platform: 'mac' })).body).toEqual({

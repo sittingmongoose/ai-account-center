@@ -93,13 +93,19 @@ function checkRecheckLimit(env: LifecycleEnv, id: string): void {
   }
 }
 
+/** A per-key OpenCode Go row id: its discover entry's id and the stored key's identity digest. */
+const DISCOVERED_KEY_ID = /^opencode-go:usage:[0-9a-f]{8}$/;
+
 /** POST /api/accounts/:id/recheck: one account now, at most once per 10 s. */
 export async function recheck(
   env: LifecycleEnv,
   id: string,
   body: Record<string, unknown>
 ): Promise<LifecycleResult> {
-  const account = await resolveIn(env, id);
+  // A per-key OpenCode Go row (card OCG1) is guarded by the discover entry it comes from; the
+  // expansion resolves it, pinned to its own key.
+  const entryId = DISCOVERED_KEY_ID.test(id) ? id.slice(0, id.lastIndexOf(':')) : id;
+  const account = await resolveIn(env, entryId);
   if (account.kind === 'claude') return recheckClaude(env, account, body);
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
   keys(body, []);
@@ -121,7 +127,7 @@ export async function recheck(
       }
       const { row } = reading;
       if (!row) return false;
-      const current = await resolveIn(env, id);
+      const current = await resolveIn(env, entryId);
       if (current.kind !== 'additional') return false;
       const source = current.entry;
       if (

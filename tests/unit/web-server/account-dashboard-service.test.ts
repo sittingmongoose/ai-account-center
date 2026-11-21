@@ -1679,6 +1679,37 @@ describe('usage freshness between dashboard refreshes', () => {
     expect(next.message).not.toContain('did not finish');
   });
 
+  it('labels a part that fails after the deadline as failed, not still running', async () => {
+    let now = Date.parse('2026-10-01T12:00:00Z');
+    let failing = false;
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        responseBudgetMs: 10,
+        getAdditionalAccounts: async () => {
+          if (!failing) return [additional()];
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          throw new Error('fixture read failed late');
+        },
+      })
+    );
+    const first = (await service.get('windows')).accounts.find((a) => a.id === 'cursor:usage')!;
+    failing = true;
+    now += 121_000;
+    const running = (await service.get('windows', true)).accounts.find(
+      (a) => a.id === 'cursor:usage'
+    )!;
+    expect(running).toMatchObject({ status: 'cached', cacheReason: 'refresh_pending' });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const failed = (await service.peek('windows')).accounts.find((a) => a.id === 'cursor:usage')!;
+    expect(failed).toMatchObject({
+      status: 'cached',
+      cacheReason: 'read_failed',
+      fetchedAt: first.fetchedAt,
+    });
+    expect(failed.message).not.toContain('still running');
+  });
+
   it('keeps a real failure a failure', async () => {
     let now = Date.parse('2026-10-01T12:00:00Z');
     let failing = false;
