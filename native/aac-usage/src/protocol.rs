@@ -486,7 +486,8 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     }
     let mut kinds = Map::new();
     for kind in &request.kinds {
-        let mut prints = collector.settled.remove(kind).unwrap_or_default();
+        // Settled prints stay on the collector: discovery counts and dates them (FINAL-NEON H1).
+        let mut prints = collector.settled.get(kind).cloned().unwrap_or_default();
         let packed = request
             .fingerprints
             .get("_store")
@@ -542,6 +543,7 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             .fresh
             .get(kind)
             .is_some_and(|prints| prints.values().any(|p| p.unread_usage == Some(true)))
+            || discover::settled_flag(&collector, kind, "unreadUsage")
         {
             entry.insert("partial".into(), json!(true));
             entry.insert("unreadUsage".into(), json!(true));
@@ -553,6 +555,7 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                 .fresh
                 .get(kind)
                 .is_some_and(|prints| prints.values().any(|p| p.estimated_clock == Some(true)))
+            || discover::settled_flag(&collector, kind, "estimatedClock")
         {
             entry.insert("estimatedClock".into(), json!(true));
         }

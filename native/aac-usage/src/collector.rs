@@ -146,7 +146,12 @@ pub struct Collector {
     pub store_incremental: bool,
     settled_paths: HashMap<(String, String), String>,
     settled_slot: u64,
+    /// Prints of settled files this scan confirmed without reading them, per kind. They stay
+    /// here through discovery, which counts and dates them like unchanged files (FINAL-NEON H1).
     pub settled: BTreeMap<String, Map<String, Value>>,
+    /// Settled paths of copy-grouped kinds (Codex, Claude, Muse) the walk found: their copy groups
+    /// are ranked with them before they stay settled (FINAL-NEON M1). (kind, path) -> print key.
+    settled_hits: HashMap<(String, PathBuf), String>,
 }
 
 /// The owner and all readers use one ten-minute cadence.
@@ -158,6 +163,14 @@ pub fn settled_print(print: &Value, cutoff: i64) -> bool {
         && print["newestUsageMs"].as_i64().is_some_and(|usage| usage < cutoff)
         && print.get("readThrough").is_none()
         && print["usageSkipped"] != true
+        // Undecodable usage-shaped records are re-checked every scan (FINAL-NEON H1).
+        && print["unreadUsage"] != true
+}
+
+/// Kinds whose files are grouped as copies of one conversation or session before an owner is
+/// read. A settled file of these kinds still takes part in that ranking.
+pub fn copy_grouped(kind: &str) -> bool {
+    matches!(kind, "codex" | "claude" | "muse")
 }
 
 /// Kinds whose reads resume where the deadline cut them (DESIGN 16.1): Codex, whose largest logs
@@ -246,6 +259,7 @@ impl Collector {
             settled_paths,
             settled_slot,
             settled: BTreeMap::new(),
+            settled_hits: HashMap::new(),
         }
     }
 
@@ -293,6 +307,10 @@ impl Collector {
             print.insert("settledCheckedSlot".into(), self.settled_slot.into());
         }
         let mtime = print["mtimeMs"].as_i64().unwrap_or(0);
+        if copy_grouped(kind) {
+            self.settled_hits
+                .insert((kind.to_owned(), path.to_owned()), key.clone());
+        }
         self.settled
             .entry(kind.to_owned())
             .or_default()
@@ -303,6 +321,47 @@ impl Collector {
         true
     }
 
+    /// The print key of a settled path this scan skipped, for copy-group ranking.
+    pub fn settled_key(&self, kind: &str, path: &Path) -> Option<&String> {
+        self.settled_hits.get(&(kind.to_owned(), path.to_owned()))
+    }
+
+    /// The settled print of a path this scan skipped.
+    pub fn settled_print_of(&self, kind: &str, path: &Path) -> Option<&Value> {
+        let key = self.settled_key(kind, path)?;
+        self.settled.get(kind)?.get(key)
+    }
+
+    /// A settled path's (device, inode) from its print, without touching the file; others by stat.
+    pub fn known_identity(&self, kind: &str, path: &Path) -> Option<(u64, u64)> {
+        if let Some(identity) = self
+            .settled_print_of(kind, path)
+            .and_then(|print| print["fileIdentity"].as_str())
+            .and_then(|text| text.split_once(':'))
+            .and_then(|(device, inode)| {
+                Some((
+                    u64::from_str_radix(device, 16).ok()?,
+                    u64::from_str_radix(inode, 16).ok()?,
+                ))
+            })
+        {
+            return Some(identity);
+        }
+        crate::fsx::identity(path)
+    }
+
+    /// A settled path whose copy group must be read again (another copy outranks it, or its group
+    /// holds an unsettled member): it leaves the settled set and is read like any other file.
+    pub fn unsettle(&mut self, kind: &str, path: &Path) {
+        let Some(key) = self.settled_hits.remove(&(kind.to_owned(), path.to_owned())) else {
+            return;
+        };
+        if let Some(prints) = self.settled.get_mut(kind) {
+            prints.remove(&key);
+        }
+        self.settled_paths.remove(&(kind.to_owned(), util::filekey(kind, path)));
+    }
+
     pub fn note_root(&mut self, kind: &str, path: &Path, origin: &str) {
         self.root_origins
             .entry(kind.to_string())
@@ -311,8 +370,13 @@ impl Collector {
     }
 
     pub fn count_root(&mut self, kind: &str, directory: &Path, paths: &[PathBuf]) {
+        // Settled paths were counted when the walk confirmed them.
+        let paths: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|path| self.settled_key(kind, path).is_none())
+            .collect();
         let mut newest = 0i64;
-        for path in paths {
+        for path in &paths {
             if let Ok(meta) = std::fs::metadata(path) {
                 newest = newest.max(util::mtime_ms(&meta));
             }

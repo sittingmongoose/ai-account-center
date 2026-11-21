@@ -220,6 +220,38 @@ fn content_digest(path: &Path) -> Option<String> {
 /// Every copy once, before any owner is elected (RECHECK-BIG-1 M2): first by the file itself
 /// (device and inode, so a hard link under any folder name is the same file), then by content
 /// for plain copies. The first copy by path is kept, so the choice is the same on every scan.
+/// Sessions with a settled copy (FINAL-NEON M1): while that copy still ranks first among its
+/// session's copies it stays settled and none of them is read; otherwise it is read again with
+/// the others. Returns the paths still to read.
+fn settle_sessions(collector: &mut Collector, found: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut by_session: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for path in &found {
+        by_session.entry(session_of(path)).or_default().push(path.clone());
+    }
+    let mut settled_sessions: HashSet<String> = HashSet::new();
+    for (session, members) in by_session {
+        let Some(settled) = members
+            .iter()
+            .find(|p| collector.settled_key("muse", p).is_some())
+            .cloned()
+        else {
+            continue;
+        };
+        let leads = members.len() == 1
+            || super::rank_candidates(members, &|p| std::fs::metadata(p).ok().map(|m| m.len())).first()
+                == Some(&settled);
+        if leads {
+            settled_sessions.insert(session);
+        } else {
+            collector.unsettle("muse", &settled);
+        }
+    }
+    found
+        .into_iter()
+        .filter(|path| !settled_sessions.contains(&session_of(path)))
+        .collect()
+}
+
 fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<PathBuf> {
     found.sort_by_key(|p| path_text(p));
     let mut identities: HashSet<(u64, u64)> = HashSet::new();
@@ -325,6 +357,7 @@ pub fn collect(
             return "ok";
         }
     }
+    let found = settle_sessions(collector, found);
     // Copies of one file count once whatever folder names them (M2), then each session's owner
     // is its longest copy that actually reads (M4): candidates are tried best first.
     let candidates = dedupe_copies(collector, found);

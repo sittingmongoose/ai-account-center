@@ -919,9 +919,12 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     }
     // Each log once: a file that failed is counted as failed, not also as found pending.
     let failed = collector.read_failures.get(kind);
+    // Settled files are found and read like unchanged ones, from their prints (FINAL-NEON H1).
+    let settled: Vec<&Value> = settled_prints(collector, kind).collect();
     let found = collector.pending.get(kind).map_or(0, |m| {
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
-    }) + failed.map_or(0, |s| s.len());
+    }) + failed.map_or(0, |s| s.len())
+        + settled.len();
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
     // Activity is dated only by entries that carry usage: the newest measured usage event. Tool
     // homes, binaries, login rewrites, T3 thread records, token-less Cursor chat stores and logs
@@ -930,7 +933,10 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     let newest_data = collector
         .fresh
         .get(kind)
-        .and_then(|prints| prints.values().filter_map(|p| p.newest_usage_ms).max());
+        .into_iter()
+        .flat_map(|prints| prints.values().filter_map(|p| p.newest_usage_ms))
+        .chain(settled.iter().filter_map(|p| p["newestUsageMs"].as_i64()))
+        .max();
     let activity = newest_data;
     // Coverage is the usage read's own completeness, not a file listing: a chat store the bounded
     // Cursor listing cannot reach, a usage-shaped record the reader could not decode and a
@@ -938,7 +944,8 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     let unread_usage = collector
         .fresh
         .get(kind)
-        .is_some_and(|prints| prints.values().any(|p| p.unread_usage == Some(true)));
+        .is_some_and(|prints| prints.values().any(|p| p.unread_usage == Some(true)))
+        || settled_flag(collector, kind, "unreadUsage");
     let wal_unread = collector.kind_wal_unread.contains(kind) || (kind == "zcode" && collector.wal_unread);
     let mut activity_limited = collector.usage_partial.contains(kind) || unread_usage || wal_unread;
     let mut unmeasured_files = 0usize;
@@ -961,7 +968,7 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         "counts": {
             "roots": roots.len(),
             "filesFound": found,
-            "filesRead": collector.fresh.get(kind).map_or(0, |m| m.len()),
+            "filesRead": collector.fresh.get(kind).map_or(0, |m| m.len()) + settled.len(),
             "filesFailed": collector.read_failures.get(kind).map_or(0, |s| s.len()),
             "newestMtime": newest.map(Value::from).unwrap_or(Value::Null),
         },
@@ -974,12 +981,32 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
             .fresh
             .get(kind)
             .is_some_and(|prints| prints.values().any(|p| p.estimated_clock == Some(true)))
+        || settled_flag(collector, kind, "estimatedClock")
     {
         // Disclosed: the numbers are counted, their date is a file-time estimate and never a
         // measured usage event. The flag on the file's print keeps it across unchanged rescans.
         discovered["estimatedClock"] = Value::Bool(true);
     }
     discovered
+}
+
+/// Prints of this kind's settled files, confirmed unread this scan, that no read replaced.
+fn settled_prints<'a>(collector: &'a Collector, kind: &'a str) -> impl Iterator<Item = &'a Value> + 'a {
+    collector
+        .settled
+        .get(kind)
+        .into_iter()
+        .flat_map(|prints| prints.iter())
+        .filter(move |(key, _)| {
+            !collector.pending.get(kind).is_some_and(|p| p.contains_key(*key))
+                && !collector.read_failures.get(kind).is_some_and(|f| f.contains(*key))
+        })
+        .map(|(_, print)| print)
+}
+
+/// Whether a settled file of this kind carries a disclosure flag (`unreadUsage`, `estimatedClock`).
+pub fn settled_flag(collector: &Collector, kind: &str, flag: &str) -> bool {
+    settled_prints(collector, kind).any(|print| print[flag] == true)
 }
 
 pub const EXPERIMENT_MAX_DEPTH: usize = 4;

@@ -316,6 +316,11 @@ pub fn walk_files(
             }
             let path = directory.join(&name);
             if accept(&name) && collector.skip_settled(kind, &counted_root, &path) {
+                // A copy-grouped settled file is listed, unread, so its copy group is ranked with
+                // it (FINAL-NEON M1).
+                if crate::collector::copy_grouped(kind) {
+                    found.push(path);
+                }
                 continue;
             }
             // Never follow a directory link just to classify it (FIX-ROUND-BIG 9).
@@ -576,6 +581,11 @@ pub fn walk_t3_files(
             }
             let path = directory.join(&name);
             if accept(&name) && !same_or_inside(&path, exclude) && collector.skip_settled(kind, &start, &path) {
+                if crate::collector::copy_grouped(kind)
+                    && let Some(id) = collector.known_identity(kind, &path)
+                {
+                    found.push((path, id));
+                }
                 continue;
             }
             let real = if is_link(&path) {
@@ -590,6 +600,11 @@ pub fn walk_t3_files(
                 continue;
             }
             if real != path && accept(&name) && collector.skip_settled(kind, &start, &real) {
+                if crate::collector::copy_grouped(kind)
+                    && let Some(id) = collector.known_identity(kind, &real)
+                {
+                    found.push((real, id));
+                }
                 continue;
             }
             let Some(meta) = discovery_metadata(collector, kind, &real) else {
