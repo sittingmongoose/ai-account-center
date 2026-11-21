@@ -850,6 +850,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/reset_routes.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/tests/analytics.rs",
       "kind": "safety",
       "evidence": [

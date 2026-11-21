@@ -2534,6 +2534,13 @@
     ]
   },
   {
+    "word": "no-fable-usage",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "no-installation",
     "cause": null,
     "sources": [
