@@ -1,11 +1,11 @@
 //! Select the installed quota, API key and console readers for each configured source.
 use super::{Producer, pick, source_host};
+use crate::account_usage::coordinator::UsageIdentity;
 use crate::account_usage::{
     cursor::Command,
     provider_caches, rows,
     sources::{Credential, Source},
 };
-use crate::account_usage::coordinator::UsageIdentity;
 use serde_json::{Value, json};
 
 /// One extra account's row with what tells two registry entries of one account apart.
@@ -96,7 +96,8 @@ impl Producer {
             one_row_per_identity(
                 read.into_iter()
                     .map(|(source, row)| {
-                        let target = super::failover::additional_target(&self.root, &source, legacy);
+                        let target =
+                            super::failover::additional_target(&self.root, &source, legacy);
                         Keyed {
                             provider: source.provider.clone(),
                             discovered: matches!(source.credential, Credential::Discover),
@@ -336,7 +337,9 @@ mod tests {
     }
 
     fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
-        rows.iter().map(|row| row["id"].as_str().unwrap_or("").to_owned()).collect()
+        rows.iter()
+            .map(|row| row["id"].as_str().unwrap_or("").to_owned())
+            .collect()
     }
 
     #[test]

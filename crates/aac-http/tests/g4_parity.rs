@@ -492,7 +492,9 @@ async fn reading_identity_names_the_shown_reading_without_a_read() {
     let calls = state.lock().expect("fixture state").calls.len();
     assert_eq!(
         coordinator.reading_identity(&target),
-        Some(identity(&json!({"kind":"opencode-go-key","key":"a".repeat(64)})))
+        Some(identity(
+            &json!({"kind":"opencode-go-key","key":"a".repeat(64)})
+        ))
     );
     assert_eq!(state.lock().expect("fixture state").calls.len(), calls);
 }

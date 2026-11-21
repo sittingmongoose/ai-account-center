@@ -443,7 +443,10 @@ fn every_opencode_go_account_is_its_own_card() -> Result<(), String> {
         .filter(|card| card["provider"] == "opencode-go")
         .collect();
     let ids: Vec<&str> = go.iter().filter_map(|c| c["accountId"].as_str()).collect();
-    assert_eq!(ids, ["opencode-go:acct:2e034ec2", "opencode-go:acct:52f3251b"]);
+    assert_eq!(
+        ids,
+        ["opencode-go:acct:2e034ec2", "opencode-go:acct:52f3251b"]
+    );
     assert_eq!(go[0]["identity"], "Account 3");
     assert_eq!(go[1]["identity"], "Account 2");
     assert_eq!(go[0]["meters"].as_array().map(Vec::len), Some(0));

@@ -430,6 +430,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/account_usage/producer/selection.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/account_usage/producer/signin_state.rs",
       "kind": "internal",
       "evidence": [],
