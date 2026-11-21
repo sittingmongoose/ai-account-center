@@ -199,9 +199,15 @@ impl Settings {
             Ok(body) => body,
             Err(reply) => return reply,
         };
-        // Queue the clients before claiming the nonblocking file leases. The blocking writer
-        // owns the turn through completion even if its HTTP client disconnects.
-        let turn = self.preference_writes.clone().lock_owned().await;
+        // Waiting for the turn and retrying the leases share one budget. Once admitted, the
+        // blocking writer owns the turn through completion even if its client disconnects.
+        let deadline = Instant::now() + LEASE_WAIT;
+        let Ok(turn) =
+            tokio::time::timeout_at(deadline.into(), self.preference_writes.clone().lock_owned())
+                .await
+        else {
+            return preferences_busy();
+        };
         let root = self.root.clone();
         let owners = self.owners.clone();
         let saved = self
@@ -209,7 +215,7 @@ impl Settings {
             .blocking(crate::table::Pool::Reads, move || {
                 let _turn = turn;
                 Ok(crate::preferences_write::save_public(
-                    &root, &owners, patch, &body,
+                    &root, &owners, patch, &body, deadline,
                 ))
             })
             .await;
@@ -221,11 +227,7 @@ impl Settings {
             Ok(Err(crate::preferences_write::PublicError::Invalid)) => {
                 no_store(super::plain(400, "Preferences are not valid."))
             }
-            Ok(Err(crate::preferences_write::PublicError::Busy)) => super::error(
-                409,
-                "preferences_busy",
-                "Another preferences save is in progress. Try again.",
-            ),
+            Ok(Err(crate::preferences_write::PublicError::Busy)) => preferences_busy(),
             Err(Decline::Busy) => save_pool_busy("preferences_busy"),
             _ => no_store(super::plain(
                 500,
@@ -332,6 +334,14 @@ impl Settings {
             None => Err(no_store(body_refusal(family))),
         }
     }
+}
+
+fn preferences_busy() -> Reply {
+    super::error(
+        409,
+        "preferences_busy",
+        "Another preferences save is in progress. Try again.",
+    )
 }
 
 fn save_pool_busy(code: &str) -> Reply {

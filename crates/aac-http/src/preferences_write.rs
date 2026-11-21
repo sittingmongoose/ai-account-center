@@ -144,7 +144,7 @@ struct WriteLease {
 }
 
 impl WriteLease {
-    fn acquire(root: &Path, owners: &Owners, wait: Duration) -> Result<Self, Decline> {
+    fn acquire(root: &Path, owners: &Owners, deadline: Instant) -> Result<Self, Decline> {
         let rows = registry::rows().map_err(|_| Decline::Internal)?;
         let claim = |id| {
             owners.claim(rows, id, root, None).map_err(|error| {
@@ -162,7 +162,7 @@ impl WriteLease {
                 transaction: claim(TRANSACTION)?,
             })
         };
-        let lease = retry_busy_lease(Instant::now() + wait, claim_all)?;
+        let lease = retry_busy_lease(deadline, claim_all)?;
         // Resume an earlier committed intent before reading or comparing the current files.
         if let Some(pending) = stored(root, TRANSACTION)? {
             let old: Documents =
@@ -220,7 +220,7 @@ pub(crate) fn save(
         companion: request.companion,
     };
     let saved = response(&documents)?;
-    let lease = WriteLease::acquire(root, owners, Duration::ZERO).map_err(|error| match error {
+    let lease = WriteLease::acquire(root, owners, Instant::now()).map_err(|error| match error {
         Decline::Busy => Decline::Unsupported,
         error => error,
     })?;
@@ -261,6 +261,7 @@ pub(crate) fn save_public(
     owners: &Owners,
     patch: bool,
     body: &[u8],
+    deadline: Instant,
 ) -> Result<Value, PublicError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| PublicError::Invalid)?;
     if !value.is_object() {
@@ -291,7 +292,7 @@ pub(crate) fn save_public(
         if !patch_valid(&value, &hosts) {
             return Err(PublicError::Invalid);
         }
-        let lease = WriteLease::acquire(root, owners, LEASE_WAIT)?;
+        let lease = WriteLease::acquire(root, owners, deadline)?;
         // Refuse unsafe leaves as the revision check did. The reader may otherwise default an
         // unreadable preference, which would let a partial update discard the existing fields.
         stored(root, PRIMARY).map_err(|_| PublicError::Unavailable)?;
@@ -302,7 +303,7 @@ pub(crate) fn save_public(
         (prepare_documents(&current, &hosts)?, lease)
     } else {
         let documents = prepare_documents(&value, &hosts)?;
-        let lease = WriteLease::acquire(root, owners, LEASE_WAIT)?;
+        let lease = WriteLease::acquire(root, owners, deadline)?;
         (documents, lease)
     };
     let saved = response(&documents).map_err(|_| PublicError::Unavailable)?;

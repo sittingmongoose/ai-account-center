@@ -2718,6 +2718,50 @@ mod tests {
         let _ = handle.await;
     }
 
+    #[tokio::test]
+    async fn settings_queued_preference_saves_have_a_bounded_wait() {
+        let (home, addr, handle) = settings_server().await;
+        let headers = settings_write_headers(addr).await;
+        let held = native_settings::owners()
+            .claim(
+                aac_files::registry::rows().unwrap(),
+                "dashboard-preferences-transaction",
+                home.path(),
+                None,
+            )
+            .unwrap();
+        let mut saves = tokio::task::JoinSet::new();
+        for _ in 0..12 {
+            let headers = headers.clone();
+            saves.spawn(async move {
+                request(
+                    addr,
+                    "/api/accounts/preferences",
+                    "PATCH",
+                    &headers,
+                    r#"{"timeZone":"Europe/Paris"}"#,
+                )
+                .await
+            });
+        }
+
+        tokio::time::timeout(Duration::from_millis(1250), async {
+            while let Some(reply) = saves.join_next().await {
+                assert_settings_busy(
+                    &reply.unwrap(),
+                    "preferences_busy",
+                    "Another preferences save is in progress. Try again.",
+                );
+            }
+        })
+        .await
+        .expect("queued preferences saves exceeded the 1250 ms test bound");
+        drop(held);
+
+        handle.abort();
+        let _ = handle.await;
+    }
+
     /// The cut's own settings, preferences and visibility routes: the TS admission sentences
     /// and the files the existing owners write.
     #[tokio::test]
