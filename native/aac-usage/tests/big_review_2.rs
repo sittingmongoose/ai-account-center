@@ -233,6 +233,124 @@ fn a_muse_byte_copy_under_a_renamed_folder_counts_once() {
     assert_eq!(sums(&answer, "muse"), [100, 10, 0, 0, 1], "{answer}");
 }
 
+/// Muse settles from here: the session's file time and usage date are before the settle line.
+const MUSE_FILE_MS: u64 = 1_790_100_000_000;
+const MUSE_SETTLED_BEFORE: u64 = 1_791_000_000_000;
+
+fn settled_scan(home: &Path, prior: Option<&Value>) -> Value {
+    let mut request = ask(&["muse"], prior);
+    request.fingerprints.insert(
+        "_store".into(),
+        json!({"settledBefore": {"muse": MUSE_SETTLED_BEFORE}, "settledSlot": 1}),
+    );
+    protocol::scan(&request, home, &env(home))
+}
+
+fn age(path: &Path) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(MUSE_FILE_MS))
+        .unwrap();
+}
+
+/// What the writer's cache keeps across answers (scan_state::Cache::apply on complete reads):
+/// rows of files that were read again replace theirs, files no longer named drop theirs.
+#[derive(Default)]
+struct Persisted {
+    rows: Map<String, Value>,
+    srows: Map<String, Value>,
+}
+
+impl Persisted {
+    fn apply(&mut self, answer: &Value) {
+        let prints = answer["kinds"]["muse"]["fingerprints"].as_object().unwrap();
+        for (table, field) in [(&mut self.rows, "rows"), (&mut self.srows, "srows")] {
+            table.retain(|key, _| prints.contains_key(key));
+            let mut fresh: Map<String, Value> = Map::new();
+            for row in answer[field].as_array().unwrap().iter().filter(|r| r["k"] == "muse") {
+                let key = row["f"].as_str().unwrap().to_owned();
+                fresh
+                    .entry(key)
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                    .unwrap()
+                    .push(row.clone());
+            }
+            table.extend(fresh);
+        }
+    }
+
+    fn hourly(&self) -> [u64; 3] {
+        let mut out = [0; 3];
+        for row in self.rows.values().flat_map(|rows| rows.as_array().unwrap()) {
+            for (i, key) in ["i", "o", "n"].iter().enumerate() {
+                out[i] += row[*key].as_u64().unwrap();
+            }
+        }
+        out
+    }
+
+    fn sessions(&self) -> usize {
+        self.srows
+            .values()
+            .flat_map(|rows| rows.as_array().unwrap())
+            .map(|row| row["s"].as_str().unwrap().to_owned())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+}
+
+/// RECHECK-FINAL-ASTRA M1: a copy of a settled Muse session added later under a renamed folder,
+/// as a hard link or as bytes, still counts once: one persisted session and one 100/10 hour.
+fn settled_copy_counts_once(link: bool) {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let live = h.join(".local/share/muse/sessions/session-a/session.jsonl");
+    write(&live, &muse_session(100));
+    age(&live);
+    let mut store = Persisted::default();
+    let first = settled_scan(h, None);
+    store.apply(&first);
+    assert_eq!((store.sessions(), store.hourly()), (1, [100, 10, 1]), "{first}");
+    let settled = settled_scan(h, Some(&first));
+    let print = settled["kinds"]["muse"]["fingerprints"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(print["settledCheckedSlot"], 1, "the session settled: {settled}");
+    store.apply(&settled);
+
+    let kept = h.join("lab/retained/run/muse/session-b/session.jsonl");
+    fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    if link {
+        fs::hard_link(&live, &kept).unwrap();
+    } else {
+        write(&kept, &muse_session(100));
+        age(&kept);
+    }
+    let after = settled_scan(h, Some(&settled));
+    store.apply(&after);
+    assert_eq!(sums(&after, "muse"), [0, 0, 0, 0, 0], "{after}");
+    assert_eq!(after["kinds"]["muse"]["fingerprints"].as_object().unwrap().len(), 1);
+    assert_eq!(store.sessions(), 1, "persisted sessions: {after}");
+    assert_eq!(store.hourly(), [100, 10, 1], "persisted hourly totals: {after}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_muse_hard_link_added_after_settling_counts_once() {
+    settled_copy_counts_once(true);
+}
+
+#[test]
+fn a_muse_byte_copy_added_after_settling_counts_once() {
+    settled_copy_counts_once(false);
+}
+
 // ----- M3: enumeration errors are named, never an empty success -----------------------------------
 
 #[cfg(unix)]

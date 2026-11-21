@@ -217,9 +217,6 @@ fn content_digest(path: &Path) -> Option<String> {
     Some(text)
 }
 
-/// Every copy once, before any owner is elected (RECHECK-BIG-1 M2): first by the file itself
-/// (device and inode, so a hard link under any folder name is the same file), then by content
-/// for plain copies. The first copy by path is kept, so the choice is the same on every scan.
 /// Sessions with a settled copy (FINAL-NEON M1): while that copy still ranks first among its
 /// session's copies it stays settled and none of them is read; otherwise it is read again with
 /// the others. Returns the paths still to read.
@@ -252,13 +249,28 @@ fn settle_sessions(collector: &mut Collector, found: Vec<PathBuf>) -> Vec<PathBu
         .collect()
 }
 
+/// Every copy once, before any owner is elected (RECHECK-BIG-1 M2): first by the file itself
+/// (device and inode, so a hard link under any folder name is the same file), then by content
+/// for plain copies. The first copy by path is kept, so the choice is the same on every scan.
+///
+/// Settled copies take part too (RECHECK-FINAL-ASTRA M1): their identity and size come from their
+/// prints, and their content is hashed only when an unsettled copy has the same size. A settled
+/// copy that loses to an earlier copy leaves the settled set, as a full read would drop it.
 fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<PathBuf> {
     found.sort_by_key(|p| path_text(p));
+    let settled: HashSet<PathBuf> = found
+        .iter()
+        .filter(|p| collector.settled_key("muse", p).is_some())
+        .cloned()
+        .collect();
     let mut identities: HashSet<(u64, u64)> = HashSet::new();
     let mut unique: Vec<PathBuf> = Vec::new();
     for path in found {
-        match fsx::identity(&path) {
-            Some(id) if !identities.insert(id) => continue,
+        match collector.known_identity("muse", &path) {
+            Some(id) if !identities.insert(id) => {
+                collector.unsettle("muse", &path);
+                continue;
+            }
             _ => unique.push(path),
         }
     }
@@ -267,9 +279,15 @@ fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<Path
     let mut order: Vec<Option<u64>> = Vec::new();
     let mut no_size: Vec<PathBuf> = Vec::new();
     for path in unique {
-        match std::fs::metadata(&path) {
-            Ok(meta) => {
-                let size = meta.len();
+        let size = match collector
+            .settled_print_of("muse", &path)
+            .and_then(|print| print["size"].as_u64())
+        {
+            Some(size) => Ok(size),
+            None => std::fs::metadata(&path).map(|meta| meta.len()),
+        };
+        match size {
+            Ok(size) => {
                 if !by_size.contains_key(&size) {
                     order.push(Some(size));
                 }
@@ -288,7 +306,8 @@ fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<Path
             None => kept.extend(no_size.next()),
             Some(size) => {
                 let group = by_size.remove(&size).unwrap_or_default();
-                if group.len() == 1 {
+                // Settled copies were told apart when they were read; only a new copy is compared.
+                if group.len() == 1 || group.iter().all(|p| settled.contains(p)) {
                     kept.extend(group);
                     continue;
                 }
@@ -300,7 +319,10 @@ fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<Path
                         continue;
                     }
                     match content_digest(&path) {
-                        Some(digest) if !digests.insert(digest.clone()) => continue,
+                        Some(digest) if !digests.insert(digest.clone()) => {
+                            collector.unsettle("muse", &path);
+                            continue;
+                        }
                         _ => kept.push(path),
                     }
                 }
@@ -357,14 +379,15 @@ pub fn collect(
             return "ok";
         }
     }
-    let found = settle_sessions(collector, found);
-    // Copies of one file count once whatever folder names them (M2), then each session's owner
-    // is its longest copy that actually reads (M4): candidates are tried best first.
+    // Copies of one file count once whatever folder names them (M2), settled copies included,
+    // then each session's owner is its longest copy that actually reads (M4): candidates are
+    // tried best first, and a session whose settled copy still leads is not read.
     let candidates = dedupe_copies(collector, found);
     if collector.expired() {
         collector.truncated = true;
         return "ok";
     }
+    let candidates = settle_sessions(collector, candidates);
     for group in super::ranked_groups(&candidates, &|p| session_of(p), &|p| {
         std::fs::metadata(p).ok().map(|m| m.len())
     }) {
