@@ -274,7 +274,29 @@ pub(super) fn commit(migration: &Migration<'_>, epoch: &str) -> Result<()> {
             value["sessions"] = json!([]);
             Ok(serde_json::from_value(value)?)
         };
-        activity::repair_claude_import(migration.store, &report(None)?, &report(Some(&owners))?)?;
+        let prints = cache.fingerprints.get("claude").unwrap_or(&Value::Null);
+        let mut original_sessions = BTreeMap::<String, (String, u64)>::new();
+        for row in cache.srows.iter().filter(|row| row["k"] == "claude") {
+            if let Some((name, true)) = claude_mirrors::row_identity(row, prints)
+                && owners.originals.contains(name)
+                && let Some(owner) = owners
+                    .owners
+                    .get(name)
+                    .filter(|owner| *owner != archive.computer)
+                && let (Some(session), Some(end)) = (row["s"].as_str(), row["z"].as_u64())
+            {
+                original_sessions
+                    .entry(session.to_owned())
+                    .and_modify(|entry| entry.1 = entry.1.max(end))
+                    .or_insert_with(|| (owner.clone(), end));
+            }
+        }
+        activity::repair_claude_import(
+            migration.store,
+            &report(None)?,
+            &report(Some(&owners))?,
+            &original_sessions,
+        )?;
     }
     migration.store.set_meta(RECEIPT, &receipt)
 }

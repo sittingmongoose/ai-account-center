@@ -450,6 +450,10 @@ struct CellsEv {
     del: Vec<DelEv>,
     #[serde(default)]
     s: Vec<SessEv>,
+    /// Optional correction for a proven duplicate import. Older Store readers
+    /// can still replay the cell changes and read the unchanged session schema.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    session_owners: BTreeMap<String, (String, u64)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -826,6 +830,16 @@ fn project_cells(txn: &WriteTransaction, ev: &CellsEv) -> Result<()> {
     }
     for s in &ev.s {
         merge_session(txn, t, s)?;
+    }
+    for (key, (owner, observed_through)) in &ev.session_owners {
+        let key = session_bytes(Some(key));
+        if let Some(mut row) = load_session(txn, t, &key)?
+            && row.c == c
+            && row.l <= *observed_through
+        {
+            row.c = intern(txn, K_COMPUTER, owner)?;
+            put_bytes(txn, ACT_SESSION, session_key(t, &key).as_slice(), &db::pack(&row)?)?;
+        }
     }
     Ok(())
 }
@@ -1305,18 +1319,22 @@ fn push_cells(
     puts: Vec<CellEv>,
     dels: Vec<DelEv>,
     sessions: Vec<SessEv>,
+    session_owners: BTreeMap<String, (String, u64)>,
 ) -> Result<usize> {
     let mut events = 0;
     let mut puts = puts.into_iter().peekable();
     let mut dels = dels.into_iter().peekable();
     let mut sessions = sessions.into_iter().peekable();
-    while puts.peek().is_some() || dels.peek().is_some() || sessions.peek().is_some() {
+    let mut session_owners = session_owners.into_iter().peekable();
+    while puts.peek().is_some() || dels.peek().is_some() || sessions.peek().is_some() || session_owners.peek().is_some()
+    {
         let ev = CellsEv {
             c: c.to_string(),
             t: t.to_string(),
             del: dels.by_ref().take(CELLS_PER_EVENT).collect(),
             put: puts.by_ref().take(CELLS_PER_EVENT).collect(),
             s: sessions.by_ref().take(SESSIONS_PER_EVENT).collect(),
+            session_owners: session_owners.by_ref().take(SESSIONS_PER_EVENT).collect(),
         };
         let mut event = Event::new(
             "activity.cells",
@@ -1435,7 +1453,7 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
                 del += dels.len();
                 sess += sessions.len();
                 let r = p.checked.report;
-                events += push_cells(batch, &r.computer, &r.tool, puts, dels, sessions)?;
+                events += push_cells(batch, &r.computer, &r.tool, puts, dels, sessions, BTreeMap::new())?;
             }
             Ok((put, del, sess, events))
         })?;
@@ -1518,7 +1536,12 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
 /// Repair a legacy Claude import by comparing the stored cells to the exact original
 /// cache projection. Only cells that still equal that projection may be corrected.
 /// A later read may have written independent data at the same hour and identity.
-pub fn repair_claude_import(engine: &Engine, raw: &Report, selected: &Report) -> Result<()> {
+pub fn repair_claude_import(
+    engine: &Engine,
+    raw: &Report,
+    selected: &Report,
+    original_sessions: &BTreeMap<String, (String, u64)>,
+) -> Result<()> {
     if raw.tool != "claude"
         || selected.tool != raw.tool
         || selected.computer != raw.computer
@@ -1541,6 +1564,7 @@ pub fn repair_claude_import(engine: &Engine, raw: &Report, selected: &Report) ->
             let days: BTreeSet<_> = raw_rows.hours.keys().map(|hour| *hour / 24).collect();
             let mut puts = Vec::new();
             let mut dels = Vec::new();
+            let mut session_owners = BTreeMap::new();
             for day in days {
                 let in_ledger = closed.is_some_and(|last| day <= last);
                 if in_ledger != (log == LogId::Ledger) {
@@ -1564,21 +1588,28 @@ pub fn repair_claude_import(engine: &Engine, raw: &Report, selected: &Report) ->
                         match retained.get(&id) {
                             Some(kept) if *kept != ev => puts.push((*kept).clone()),
                             Some(_) => {}
-                            None => dels.push(DelEv {
-                                h: ev.h,
-                                s: ev.s.clone(),
-                                r: ev.r.clone(),
-                                m: ev.m.clone(),
-                                e: ev.e.clone(),
-                                a: ev.a.clone(),
-                            }),
+                            None => {
+                                if let Some(key) = &ev.s
+                                    && let Some(target) = original_sessions.get(key)
+                                {
+                                    session_owners.insert(key.clone(), target.clone());
+                                }
+                                dels.push(DelEv {
+                                    h: ev.h,
+                                    s: ev.s.clone(),
+                                    r: ev.r.clone(),
+                                    m: ev.m.clone(),
+                                    e: ev.e.clone(),
+                                    a: ev.a.clone(),
+                                });
+                            }
                         }
                     }
                 }
             }
-            // The session index is shared by computer: equal Claude session keys already
-            // occupy one entry. The repair changes only the per-computer cells.
-            push_cells(batch, &raw.computer, &raw.tool, puts, dels, Vec::new()).map(|_| ())
+            // Equal Claude keys already occupy one session entry. Correct its
+            // source with the cells, preserving any later session observation.
+            push_cells(batch, &raw.computer, &raw.tool, puts, dels, Vec::new(), session_owners).map(|_| ())
         })?;
     }
     Ok(())

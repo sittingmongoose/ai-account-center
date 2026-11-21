@@ -135,6 +135,15 @@ fn run_fixture(repair: bool) {
         )
         .unwrap();
         assert_eq!(range["sessions"]["total"], 2);
+        assert_eq!(
+            range["sessions"]["sample"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["sessionKey"] == original["srows"][0]["s"])
+                .unwrap()["computer"],
+            "nas1",
+        );
     };
     let store = open();
     assert!(migration(&store, root, now).run().unwrap());
