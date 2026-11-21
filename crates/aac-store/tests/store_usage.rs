@@ -6,7 +6,7 @@ mod common;
 use aac_store::db;
 use aac_store::engine::{Engine, now_ms};
 use aac_store::ops;
-use common::{copy_dir, temp_dir};
+use common::{copy_dir, find, temp_dir};
 use redb::{ReadableDatabase, ReadableTable};
 use serde_json::{Value as Json, json};
 use std::fs;
@@ -1071,5 +1071,231 @@ fn usage_account_ids_are_exactly_a_provider_and_an_address_or_refused() {
         Vec::<String>::new(),
         "after a rebuild"
     );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+fn corrupt_sealed_readings_frame(dir: &Path, seg_index: usize, frame_index: usize) {
+    let segs = find(&dir.join("log/readings"), ".seglog");
+    let path = &segs[seg_index];
+    let mut bytes = fs::read(path).unwrap();
+    let scan = aac_store::log::scan(&bytes);
+    let target = &scan.frames[frame_index];
+    bytes[target.offset + target.len / 2] ^= 0x40;
+    fs::write(path, &bytes).unwrap();
+}
+
+fn finding_kinds(engine: &Engine) -> Vec<String> {
+    engine.status().unwrap()["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn rollup_for_day(engine: &Engine, day: u32) -> (aac_store::usage::Rollup, Vec<(u8, aac_store::usage::Rollup)>) {
+    let key = db::Key::new().u32(1).u32(1).u32(day);
+    let rows = dump(engine, &["rollup_day", "rollup_hours"]);
+    let day_bytes = rows
+        .iter()
+        .find(|(table, k, _)| table == "rollup_day" && k == key.as_slice())
+        .map(|(_, _, v)| v.as_slice())
+        .expect("rollup_day row");
+    let hours_bytes = rows
+        .iter()
+        .find(|(table, k, _)| table == "rollup_hours" && k == key.as_slice())
+        .map(|(_, _, v)| v.as_slice())
+        .expect("rollup_hours row");
+    (
+        aac_store::usage::Rollup::decode(day_bytes).unwrap(),
+        aac_store::pack::decode_hours(hours_bytes).unwrap(),
+    )
+}
+
+#[test]
+fn a_degraded_segment_rebuild_keeps_closed_day_rollups_and_flags_late_rows() {
+    let dir = temp_dir("degraded-rebuild-usage");
+    let day = 20_753u32;
+    let t = i64::from(day) * DAY;
+    {
+        let engine = open(&dir);
+        record(
+            &engine,
+            vec![obs(1, t, vec![window("five_hour", Some(10.0), Some(t + 5 * HOUR))])],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + 2 * MIN,
+                vec![window("five_hour", Some(15.0), Some(t + 5 * HOUR))],
+            )],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + 4 * MIN,
+                vec![window("five_hour", Some(20.0), Some(t + 5 * HOUR))],
+            )],
+        );
+        aac_store::usage::close_days(&engine, (t + DAY + 3 * HOUR) as u64).unwrap();
+        let (day_before, hours_before) = rollup_for_day(&engine, day);
+        assert_eq!(
+            (
+                day_before.consumed,
+                day_before.resets,
+                day_before.rows,
+                day_before.covered_ms,
+                day_before.late_rows,
+                day_before.last_reset_ms,
+            ),
+            (10.0, 0, 3, 240_000, 0, None)
+        );
+        assert_eq!(hours_before.len(), 1);
+        engine.lock_logs().readings.seal().unwrap();
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + 30 * MIN,
+                vec![window("five_hour", Some(20.0), Some(t + 10 * HOUR))],
+            )],
+        );
+        assert_eq!(rollup_for_day(&engine, day).0.late_rows, 1);
+        engine.close().unwrap();
+    }
+    corrupt_sealed_readings_frame(&dir, 0, 1);
+    {
+        let engine = open(&dir);
+        engine.verify().unwrap();
+        assert_eq!(engine.lock_logs().readings.manifest().segments[0].state, "degraded");
+        engine.close().unwrap();
+    }
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    {
+        let rebuilt = open(&dir);
+        let (day_after, hours_after) = rollup_for_day(&rebuilt, day);
+        assert_eq!(
+            (
+                day_after.consumed,
+                day_after.resets,
+                day_after.rows,
+                day_after.late_rows,
+                day_after.last_reset_ms,
+            ),
+            (10.0, 0, 3, 0, None),
+            "closed day rollup must preserve archived summary on degraded readings rebuild"
+        );
+        assert_eq!(hours_after.len(), 1);
+        assert_eq!(
+            (
+                hours_after[0].1.consumed,
+                hours_after[0].1.resets,
+                hours_after[0].1.rows,
+                hours_after[0].1.last_reset_ms,
+            ),
+            (10.0, 0, 3, None),
+            "closed hour rollup must preserve archived summary on degraded readings rebuild"
+        );
+        let kinds = finding_kinds(&rebuilt);
+        assert!(kinds.iter().any(|k| k == "late_rows_unavailable"), "{kinds:?}");
+        assert_eq!(rebuilt.status().unwrap()["state"], "degraded");
+        rebuilt.close().unwrap();
+    }
+    {
+        let reopened = open(&dir);
+        let (day_after, _) = rollup_for_day(&reopened, day);
+        assert_eq!(
+            (day_after.consumed, day_after.resets, day_after.late_rows),
+            (10.0, 0, 0)
+        );
+        let kinds = finding_kinds(&reopened);
+        assert!(kinds.iter().any(|k| k == "late_rows_unavailable"), "{kinds:?}");
+        reopened.close().unwrap();
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_degraded_segment_rebuild_flags_late_rows_unavailable_instead_of_inventing_count() {
+    let dir = temp_dir("degraded-rebuild-late-rows");
+    let day = 20_753u32;
+    let t = i64::from(day) * DAY;
+    {
+        let engine = open(&dir);
+        record(
+            &engine,
+            vec![obs(1, t, vec![window("five_hour", Some(10.0), Some(t + 5 * HOUR))])],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + MIN,
+                vec![window("five_hour", Some(15.0), Some(t + 5 * HOUR))],
+            )],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + 2 * MIN,
+                vec![window("five_hour", Some(20.0), Some(t + 5 * HOUR))],
+            )],
+        );
+        aac_store::usage::close_days(&engine, (t + DAY + 3 * HOUR) as u64).unwrap();
+        engine.lock_logs().readings.seal().unwrap();
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + 3 * MIN,
+                vec![window("five_hour", Some(25.0), Some(t + 5 * HOUR))],
+            )],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + 4 * MIN,
+                vec![window("five_hour", Some(30.0), Some(t + 5 * HOUR))],
+            )],
+        );
+        assert_eq!(rollup_for_day(&engine, day).0.late_rows, 2);
+        engine.close().unwrap();
+    }
+    corrupt_sealed_readings_frame(&dir, 0, 1);
+    {
+        let engine = open(&dir);
+        engine.verify().unwrap();
+        assert_eq!(engine.lock_logs().readings.manifest().segments[0].state, "degraded");
+        engine.close().unwrap();
+    }
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    {
+        let rebuilt = open(&dir);
+        let (day_after, _) = rollup_for_day(&rebuilt, day);
+        assert_eq!(
+            (
+                day_after.consumed,
+                day_after.resets,
+                day_after.rows,
+                day_after.late_rows
+            ),
+            (10.0, 0, 3, 0),
+            "degraded readings rebuild must not invent a late_rows count"
+        );
+        let kinds = finding_kinds(&rebuilt);
+        assert!(kinds.iter().any(|k| k == "late_rows_unavailable"), "{kinds:?}");
+        rebuilt.close().unwrap();
+    }
+    {
+        let reopened = open(&dir);
+        assert_eq!(rollup_for_day(&reopened, day).0.late_rows, 0);
+        let kinds = finding_kinds(&reopened);
+        assert!(kinds.iter().any(|k| k == "late_rows_unavailable"), "{kinds:?}");
+        reopened.close().unwrap();
+    }
     fs::remove_dir_all(&dir).unwrap();
 }

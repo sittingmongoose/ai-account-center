@@ -543,6 +543,7 @@ impl Engine {
                 .iter()
                 .chain(open_findings)
                 .any(|f| f.log == LogId::Readings.name() && is_loss(&f.kind))
+                || logs.readings.manifest().segments.iter().any(|s| s.state != "sealed")
             {
                 ReplayReadings::Missing
             } else if logs.readings.manifest().retired_below > 0 {
