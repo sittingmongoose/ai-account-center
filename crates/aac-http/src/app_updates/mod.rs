@@ -671,7 +671,8 @@ impl AppUpdates {
         if follow_up {
             // The saved host boundary releases the restart. The overall job
             // stays active for cancellation and the one final ACP replacement.
-            let call = self.call_host(host, &id, &cancel, true, Instant::now())
+            let call = self
+                .call_host(host, &id, &cancel, true, Instant::now())
                 .await;
             self.change(|job| job.finish_acp(host, &call)).await;
         }
