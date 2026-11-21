@@ -11,7 +11,7 @@ use aac_views::{decline::Decline, js::parse_date};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -65,7 +65,7 @@ impl Command {
     /// The credential stays with the packaged reader. Only the fixed status and quota
     /// subcommands are exposed to the private service.
     async fn answer(self, root: PathBuf) -> Result<Value, Decline> {
-        let (binary, os) = tokio::task::spawn_blocking(local_reader)
+        let (binary, os, billing) = tokio::task::spawn_blocking(local_reader)
             .await
             .map_err(|_| Decline::Internal)??;
         let binary = binary.ok_or(Decline::Unsupported)?;
@@ -73,7 +73,7 @@ impl Command {
             Self::KeyStatus => &["key", "status"],
             Self::Quota => &["quota"],
         };
-        Ok(execute(&root, binary, os, args, &[]).await)
+        Ok(execute(&root, binary, os, billing, args, &[]).await)
     }
 }
 
@@ -113,10 +113,29 @@ fn executable(package: &Path, target: &str) -> Option<PathBuf> {
     (bytes.len() == size as usize && entry["sha256"] == sha256_hex(bytes)).then_some(path)
 }
 
-fn local_reader() -> Result<(Option<PathBuf>, OperatingSystem), Decline> {
+/// `cursorBillingEnabled()` in cursor-account-reader.ts, for the native dashboard that runs
+/// without Node: an explicit `0` or `1` wins, any other value or `NODE_ENV=test` is off, and
+/// otherwise only an installed package (`read_packaged_build`) reads Cursor's billing items.
+/// Tests, browser kits and source checkouts therefore never call Cursor.
+fn billing_enabled(explicit: Option<&OsStr>, node_env: Option<&OsStr>, package: &Path) -> bool {
+    if let Some(value) = explicit {
+        return value == "1";
+    }
+    if node_env.is_some_and(|value| value == "test") {
+        return false;
+    }
+    aac_files::deployed_build::read_packaged_build(package).is_some()
+}
+
+fn local_reader() -> Result<(Option<PathBuf>, OperatingSystem, bool), Decline> {
     let package = crate::agent_transport::package_root().ok_or(Decline::Unsupported)?;
     let (target, os) = target().ok_or(Decline::Unsupported)?;
-    Ok((executable(&package, target), os))
+    let billing = billing_enabled(
+        std::env::var_os("AAC_CURSOR_BILLING_ENABLED").as_deref(),
+        std::env::var_os("NODE_ENV").as_deref(),
+        &package,
+    );
+    Ok((executable(&package, target), os, billing))
 }
 
 fn fresh(previous: &Value, now: i64) -> bool {
@@ -130,6 +149,7 @@ async fn execute(
     root: &Path,
     binary: PathBuf,
     os: OperatingSystem,
+    billing: bool,
     command: &[&str],
     input: &[u8],
 ) -> Value {
@@ -154,7 +174,8 @@ async fn execute(
         .chain(command.iter().copied().map(OsString::from))
         .chain([OsString::from("--ccs-dir"), root.as_os_str().to_owned()])
         .collect();
-    let options = CallOptions::new(Duration::from_secs(120), CAP);
+    let mut options = CallOptions::new(Duration::from_secs(120), CAP);
+    options.local_cursor_billing = Some(billing);
     let Ok(result) = computer.execute(&argv, input, &options).await else {
         return failed();
     };
@@ -209,14 +230,14 @@ impl Reader {
             })
             .unwrap_or((since, now));
         let dedupe = async {
-            let (binary, os, local) = tokio::task::spawn_blocking(move || {
-                let (binary, os) = local_reader().ok()?;
-                Some((binary?, os, local_cursor_cells(&engine, since, until)?))
+            let (binary, os, billing, local) = tokio::task::spawn_blocking(move || {
+                let (binary, os, billing) = local_reader().ok()?;
+                Some((binary?, os, billing, local_cursor_cells(&engine, since, until)?))
             })
             .await
             .ok()??;
             let input = json!({"account":rows, "local":local}).to_string();
-            let answer = execute(&root, binary, os, &["dedupe"], input.as_bytes()).await;
+            let answer = execute(&root, binary, os, billing, &["dedupe"], input.as_bytes()).await;
             let mut summary = summary;
             let totals = answer["summary"].as_object()?;
             for field in [
@@ -276,7 +297,7 @@ impl Reader {
             if !request.force && previous.as_ref().is_some_and(|row| fresh(row, now)) {
                 return Ok::<_, Decline>((previous, None));
             }
-            let (binary, os) = local_reader()?;
+            let (binary, os, billing) = local_reader()?;
             let store = owners
                 .claim(
                     registry::rows().map_err(|_| Decline::Internal)?,
@@ -285,18 +306,18 @@ impl Reader {
                     None,
                 )
                 .map_err(|_| Decline::Busy)?;
-            Ok((previous, Some((binary, os, store, request))))
+            Ok((previous, Some((binary, os, billing, store, request))))
         })
         .await
         .map_err(|_| Decline::Internal)??;
-        let Some((binary, os, store, request)) = launch else {
+        let Some((binary, os, billing, store, request)) = launch else {
             return previous.map(Arc::new).ok_or(Decline::Internal);
         };
         let current = match binary {
             Some(binary) => {
                 let input =
                     json!({"sinceMs":request.since_ms, "untilMs":request.until_ms}).to_string();
-                execute(&root, binary, os, &["read"], input.as_bytes()).await
+                execute(&root, binary, os, billing, &["read"], input.as_bytes()).await
             }
             None => json!({"state":"no_reader","cause":"reader_failed"}),
         };
@@ -484,6 +505,63 @@ mod tests {
             for field in ["readAt", "rows", "coverageFrom", "coverageUntil"] {
                 assert_eq!(failed[field], previous[field]);
             }
+        }
+    }
+
+    fn package(installed: bool) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("dist")).unwrap();
+        let info = json!({"version":1,"commit":"a".repeat(40),"branch":"main","dirty":false});
+        std::fs::write(dir.path().join("dist/build-info.json"), info.to_string()).unwrap();
+        if !installed {
+            std::fs::create_dir_all(dir.path().join("src")).unwrap();
+            std::fs::write(dir.path().join("src/ccs.ts"), "").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn billing_switch_is_on_for_an_installed_package_only() {
+        let installed = package(true);
+        let checkout = package(false);
+        let (one, zero, other) = (OsStr::new("1"), OsStr::new("0"), OsStr::new("yes"));
+        let test = OsStr::new("test");
+        assert!(billing_enabled(None, None, installed.path()));
+        assert!(billing_enabled(None, Some(OsStr::new("production")), installed.path()));
+        assert!(!billing_enabled(None, None, checkout.path()));
+        assert!(!billing_enabled(None, Some(test), installed.path()));
+        assert!(!billing_enabled(Some(zero), None, installed.path()));
+        assert!(!billing_enabled(Some(other), None, installed.path()));
+        assert!(billing_enabled(Some(one), None, checkout.path()));
+        assert!(billing_enabled(Some(one), Some(test), checkout.path()));
+        // A package without build-info.json is not an installed build.
+        let bare = tempfile::tempdir().unwrap();
+        assert!(!billing_enabled(None, None, bare.path()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_reader_child_receives_the_switch() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let fake = root.path().join("fake-reader");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf '{\"enabled\":\"%s\"}\\n' \"${AAC_CURSOR_BILLING_ENABLED-unset}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for (billing, seen) in [(true, "1"), (false, "0")] {
+            let answer = execute(
+                root.path(),
+                fake.clone(),
+                OperatingSystem::Linux,
+                billing,
+                &["read"],
+                b"",
+            )
+            .await;
+            assert_eq!(answer["enabled"], seen);
         }
     }
 
