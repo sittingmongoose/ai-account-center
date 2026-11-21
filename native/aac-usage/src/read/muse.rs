@@ -263,8 +263,11 @@ fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<Path
         .collect();
     found.sort_by_cached_key(|path| {
         let key = util::filekey("muse", path);
-        let prior = &collector.prior["muse"][&key];
-        let published = prior.is_object() && prior["readThrough"].is_null();
+        let published = collector
+            .prior
+            .get("muse")
+            .and_then(|prints| prints.get(&key))
+            .is_some_and(|prior| prior.is_object() && prior["readThrough"].is_null());
         (!settled.contains(path), !published, path_text(path))
     });
     let mut identities: HashSet<(u64, u64)> = HashSet::new();
