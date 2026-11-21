@@ -20,6 +20,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import type { DashboardAccount } from './account-dashboard-types';
 import type { AnalyticsRemoteRow } from './analytics-remote-transport';
 import { HOST_LABELS, localComputer } from './dashboard-hosts';
+import { readPackagedBuild } from './deployed-build';
 import { localUsageScanTarget, type UsageScanTarget } from './usage-scan-binary';
 
 export const CURSOR_ACCOUNT_NAME = 'aac-cursor-account';
@@ -129,6 +130,24 @@ export function cursorAccountBinary(
   }
 }
 
+let packagedBuild: boolean | undefined;
+
+/**
+ * `AAC_CURSOR_BILLING_ENABLED` for the reader: whether it may read Cursor's billing items with the
+ * Cursor sign-in on this computer. An explicit `0` or `1` in the server's environment wins (the
+ * browser kits set `0`). Otherwise only an installed package (`dist/build-info.json`, no checkout
+ * markers) turns it on, so tests, kits and source checkouts never call Cursor.
+ */
+export function cursorBillingEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  packaged: () => boolean = () => (packagedBuild ??= readPackagedBuild() !== null)
+): '0' | '1' {
+  const explicit = env.AAC_CURSOR_BILLING_ENABLED;
+  if (explicit === '0' || explicit === '1') return explicit;
+  if (explicit !== undefined || env.NODE_ENV === 'test') return '0';
+  return packaged() ? '1' : '0';
+}
+
 /** Run the packaged reader; its one JSON line, parsed. Throws when there is no usable reader. */
 export function runCursorAccount(args: string[], input: string): Promise<unknown> {
   const file = cursorAccountBinary();
@@ -137,7 +156,13 @@ export function runCursorAccount(args: string[], input: string): Promise<unknown
     const child = execFile(
       file,
       args,
-      { encoding: 'utf8', timeout: READ_TIMEOUT_MS, maxBuffer: MAX_OUTPUT, windowsHide: true },
+      {
+        encoding: 'utf8',
+        timeout: READ_TIMEOUT_MS,
+        maxBuffer: MAX_OUTPUT,
+        windowsHide: true,
+        env: { ...process.env, AAC_CURSOR_BILLING_ENABLED: cursorBillingEnabled() },
+      },
       (error, stdout) => {
         try {
           const line = String(stdout).trim().split('\n').pop() ?? '';

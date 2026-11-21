@@ -17,6 +17,7 @@ import {
   CURSOR_ACCOUNT_TTL_MS,
   cursorAccountBinary,
   cursorAccountOutside,
+  cursorBillingEnabled,
   readCursorAccount,
   type CursorAccountRead,
 } from '../../../src/web-server/services/cursor-account-reader';
@@ -472,6 +473,19 @@ describe('the key and the reader binary', () => {
     ).toBe(130);
     expect(out.join('')).toContain('Cancelled');
     expect(seen).toHaveLength(3);
+  });
+
+  it('turns the billing reader on for an installed package only; an explicit 0 or 1 wins (review L1)', () => {
+    const installed = () => true;
+    const checkout = () => false;
+    expect(cursorBillingEnabled({}, installed)).toBe('1');
+    expect(cursorBillingEnabled({}, checkout)).toBe('0');
+    // This source checkout is never an installed package.
+    expect(cursorBillingEnabled({})).toBe('0');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: '0' }, installed)).toBe('0');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: '1' }, checkout)).toBe('1');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: 'yes' }, installed)).toBe('0');
+    expect(cursorBillingEnabled({ NODE_ENV: 'test' }, installed)).toBe('0');
   });
 
   it('uses the packaged reader only when its digest matches the manifest', () => {
