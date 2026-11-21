@@ -1112,14 +1112,34 @@ export class UsageFailoverService {
       if (target.claudeDesktopCadence && reading.status === 'ok' && response.failureCode === null) {
         const now = this.now();
         const cooldown = readUsageCooldownState(target.ccsDir, cooldownKey, now);
-        if (!cooldown.until && cooldown.claude429Streak)
-          holdUsageCooldown(target.ccsDir, cooldownKey, now, now, 0);
+        // One clean read lowers a 429 streak one level: the next read keeps the
+        // slower pace, so a token shared with other clients stops re-tripping 429.
+        const streak = Math.max(0, (cooldown.claude429Streak ?? 0) - 1);
         const floor = Math.max(
           readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds,
           response.refreshAfterSeconds ?? 0
         );
-        state.nextAttempt = now + claudeDesktopDelayMs(this.key(target), floor);
-        if (state.fresh) state.freshUntil = state.nextAttempt;
+        state.nextAttempt = now + claudeDesktopDelayMs(this.key(target), floor, streak);
+        if (cooldown.claude429Streak)
+          this.cooldowns.set(
+            cooldownKey,
+            holdUsageCooldown(
+              target.ccsDir,
+              cooldownKey,
+              streak ? state.nextAttempt : now,
+              now,
+              streak
+            )
+          );
+        // A stepped-down pace is not a fresh reading: the row goes cached once a
+        // normal refresh interval has passed, whatever the slower hold allows.
+        if (state.fresh)
+          state.freshUntil = cooldown.claude429Streak
+            ? Math.min(
+                state.nextAttempt,
+                now + readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds * 1000
+              )
+            : state.nextAttempt;
         return 'done';
       }
       if (
