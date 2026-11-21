@@ -71,6 +71,21 @@ export const ALLOWLIST = [
       'an lstat (a race the shared read closes). Follow-up l2-cursor-keys: depend on aac-files.',
   },
   {
+    path: 'native/aac-cursor-account/src/billing/mod.rs',
+    reason:
+      "The Cursor billing reader's checkpoint database (cache/cursor-billing-v1.sqlite): it creates " +
+      'the file create_new 0600 and rejects a non-regular path before SQLite opens it. A native crate ' +
+      'with its own build and no aac-files dependency yet. Follow-up l2-cursor-billing-store: move the ' +
+      'checkpoint into aac-files / the redb store (the Rust cut keeps every cache in the store).',
+  },
+  {
+    path: 'native/aac-cursor-account/src/billing/signin.rs',
+    reason:
+      "Reads Cursor's own CLI sign-in file (another tool's data, never written), capped at MAX_AUTH " +
+      'bytes, like the scanner readers. Follow-up l2-cursor-billing-store: route through aac-files ' +
+      'once the crate depends on it.',
+  },
+  {
     path: 'crates/aac-http/src/identity.rs',
     reason:
       "The service hashes its own executable image at start (L1 build check). That is not a " +
