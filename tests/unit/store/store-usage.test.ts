@@ -186,6 +186,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       const store = await openStore(path.join(dir, 'store'));
       const end = (Math.floor(Date.now() / HOUR) + 1) * HOUR;
       const start = end - 90 * 24 * HOUR;
+      const resetAt = new Date(end).toISOString();
       let server: Awaited<ReturnType<typeof startNativeStoreServer>> | undefined;
       try {
         // Keep 23,760 hourly points across 11 series to cross the 20,000-point cap.
@@ -203,7 +204,9 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
                 label: `burn${account}`,
                 fetchedAt: new Date(t).toISOString(),
                 sampledAt: new Date(t).toISOString(),
-                windows: [{ ...first.windows[0], usedPercent: used, remainingPercent: 100 - used }],
+                windows: [
+                  { ...first.windows[0], usedPercent: used, remainingPercent: 100 - used, resetAt },
+                ],
               } as DashboardAccount,
               t,
               90 * 24 * HOUR
