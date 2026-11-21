@@ -368,6 +368,48 @@ fn scan_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>
     }
 }
 
+/// One tool of a valid scanner answer: its source state and the cached rows the writer reports.
+/// `flags` are (settled prints packed, source limited, experiment discovery still running).
+fn scanned_kind(
+    answer: &Value,
+    kind: &str,
+    host: &str,
+    (now, cutoff): (i64, i64),
+    (packed, limited, discovering): (bool, bool, bool),
+    cache: &mut scan_state::Cache,
+) -> (Value, Vec<Value>, Vec<Value>) {
+    let (mut state, mut cause) = source_state(answer, kind);
+    if limited {
+        (state, cause) = ("unreadable", Some("source_limit"));
+    } else if matches!(state, "ok" | "not_installed" | "no_usage") && discovering {
+        (state, cause) = ("scanning", None);
+    }
+    let complete = matches!(state, "ok" | "no_usage");
+    let compatible = !packed || answer["kinds"][kind]["settledPacked"] == true;
+    if !cache.apply(kind, answer, complete && compatible, cutoff) && complete {
+        (state, cause) = ("scanning", None);
+    }
+    let of_kind = |rows: &[Value]| -> Vec<Value> {
+        rows.iter()
+            .filter(|r| r["k"].as_str() == Some(kind))
+            .cloned()
+            .collect()
+    };
+    let kind_rows = of_kind(&cache.rows);
+    let kind_srows = of_kind(&cache.srows);
+    // A complete read that holds no usage is no_usage, as Wave 84 reported it (FINAL-ASTRA H2):
+    // with no usage there is no data clock to verify. Failed reads, incomplete discovery and
+    // unread usage never reach `ok` here, and newer activity still reads as stale in the report.
+    if state == "ok" && kind_rows.is_empty() && kind_srows.is_empty() {
+        state = "no_usage";
+    }
+    (
+        scan_source_state(answer, kind, host, now, state, cause),
+        kind_rows,
+        kind_srows,
+    )
+}
+
 fn scan_source_state(
     answer: &Value,
     kind: &str,
@@ -610,39 +652,23 @@ async fn activity_pass(
                 Ok(answer) if valid_scan_answer(&answer, &batch) => {
                     scanned = true;
                     for kind in &batch {
-                        let (mut state, mut cause) = source_state(&answer, kind);
                         let packed =
                             args["fingerprints"]["_store"]["settledPacked"][kind].is_string();
-                        if overflow.contains(kind.as_str())
-                            || experiments.is_some_and(|snapshot| snapshot.limited(kind))
-                        {
-                            (state, cause) = ("unreadable", Some("source_limit"));
-                        } else if matches!(state, "ok" | "not_installed" | "no_usage")
-                            && local
+                        let limited = overflow.contains(kind.as_str())
+                            || experiments.is_some_and(|snapshot| snapshot.limited(kind));
+                        let discovering = local
                             && experiments.map_or_else(
                                 || experiment_roots::tracks(kind),
                                 |snapshot| snapshot.discovering(kind),
-                            )
-                        {
-                            (state, cause) = ("scanning", None);
-                        }
-                        let complete = matches!(state, "ok" | "no_usage");
-                        let compatible = !packed || answer["kinds"][kind]["settledPacked"] == true;
-                        if !cache.apply(kind, &answer, complete && compatible, cutoff) && complete {
-                            (state, cause) = ("scanning", None);
-                        }
-                        let kind_rows: Vec<Value> = cache
-                            .rows
-                            .iter()
-                            .filter(|r| r["k"].as_str() == Some(kind.as_str()))
-                            .cloned()
-                            .collect();
-                        let kind_srows: Vec<Value> = cache
-                            .srows
-                            .iter()
-                            .filter(|r| r["k"].as_str() == Some(kind.as_str()))
-                            .cloned()
-                            .collect();
+                            );
+                        let (source, kind_rows, kind_srows) = scanned_kind(
+                            &answer,
+                            kind,
+                            host,
+                            (now, cutoff),
+                            (packed, limited, discovering),
+                            &mut cache,
+                        );
                         if kind == "claude" {
                             claude.push(claude_mirrors::Part {
                                 host,
@@ -666,7 +692,7 @@ async fn activity_pass(
                             );
                             remote.push(json!({ "tool": kind, "host": host, "data": worker }));
                         }
-                        states.push(scan_source_state(&answer, kind, host, now, state, cause));
+                        states.push(source);
                     }
                 }
                 Err(aac_core::Cause::AgentMissing) => {
@@ -1337,6 +1363,140 @@ mod tests {
         assert_eq!(source["state"], "unreadable");
         assert_eq!(source["cause"], "agent_missing");
     }
+    /// FINAL-ASTRA H2: complete empty reads are no_usage with a complete read, and unreadable
+    /// reads stay incomplete, through the scanner, the writer's per-tool pass, Claude's mirror
+    /// selection, the reports and the Store.
+    #[cfg(unix)]
+    #[test]
+    fn analytics_empty_and_unreadable_sources_reach_the_store() {
+        use std::os::unix::fs::PermissionsExt;
+        let store_dir = tempfile::tempdir().expect("fixture store");
+        let engine = aac_store::ops::open_engine(
+            store_dir.path().to_str().expect("fixture path"),
+            None,
+            None,
+        )
+        .expect("open activity store");
+        let now = aac_store::engine::now_ms() as i64 - 60_000;
+        let cutoff = now - 31 * DAY;
+        let kinds = ["codex".to_owned(), "claude".to_owned()];
+        let empty = tempfile::tempdir().expect("empty home");
+        let unreadable = tempfile::tempdir().expect("unreadable home");
+        let mut locked = Vec::new();
+        for folder in [".codex/sessions", ".claude/projects"] {
+            std::fs::create_dir_all(empty.path().join(folder)).expect("empty log folder");
+            let inner = unreadable.path().join(folder).join("held");
+            std::fs::create_dir_all(&inner).expect("held log folder");
+            std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o000))
+                .expect("lock folder");
+            locked.push(inner);
+        }
+        let pricing = ResolverPricing::new(store_dir.path());
+        let mut states: Vec<Value> = Vec::new();
+        let mut remote: Vec<Value> = Vec::new();
+        let mut claude = Vec::new();
+        for (host, home) in [("mac", empty.path()), ("nas1", unreadable.path())] {
+            let mut cache = scan_state::Cache::default();
+            let args = scan_request(&kinds, cutoff, json!({}), false, None);
+            let [(batch, request)] =
+                scan_state::requests(args, &kinds, &cache.fingerprints, &HashMap::new(), now)
+                    .try_into()
+                    .expect("one scanner request");
+            let request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
+                .expect("scanner request");
+            let answer =
+                aac_usage::protocol::scan(&request, home, &aac_usage::discover::Env::default());
+            assert!(valid_scan_answer(&answer, &batch));
+            for kind in &batch {
+                let (source, rows, srows) = scanned_kind(
+                    &answer,
+                    kind,
+                    host,
+                    (now, cutoff),
+                    (false, false, false),
+                    &mut cache,
+                );
+                if kind == "claude" {
+                    claude.push(claude_mirrors::Part {
+                        host,
+                        state_index: states.len(),
+                        rows,
+                        sessions: srows,
+                        fingerprints: cache
+                            .fingerprints
+                            .get("claude")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    });
+                } else {
+                    let worker =
+                        collect::worker_from_scan(&rows, &srows, kind, host, now, &pricing);
+                    remote.push(json!({ "tool": kind, "host": host, "data": worker }));
+                }
+                states.push(source);
+            }
+        }
+        for folder in &locked {
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))
+                .expect("unlock folder");
+        }
+        claude_mirrors::select_live(&engine, &mut claude, &mut states).expect("mirror owners");
+        for part in claude {
+            let worker = collect::worker_from_scan(
+                &part.rows,
+                &part.sessions,
+                "claude",
+                part.host,
+                now,
+                &pricing,
+            );
+            remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
+        }
+        let reports = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &remote,
+            states: &states,
+            window_from_ms: cutoff,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &kinds.iter().cloned().collect(),
+        });
+        assert_eq!(
+            ingest_reports(&engine, &reports).expect("ingest")["refused"],
+            json!([])
+        );
+        let sources = aac_store::ops::call(
+            &engine,
+            "activitySources",
+            &json!({ "fromMs": cutoff, "toMs": now }).to_string(),
+        )
+        .expect("activitySources");
+        let source = |host: &str, tool: &str| {
+            sources["sources"]
+                .as_array()
+                .expect("sources")
+                .iter()
+                .find(|s| s["computer"] == host && s["tool"] == tool)
+                .cloned()
+                .unwrap_or_else(|| panic!("no {tool} source on {host}"))
+        };
+        for tool in ["codex", "claude"] {
+            let idle = source("mac", tool);
+            assert_eq!(
+                (&idle["state"], &idle["cause"], &idle["complete"]),
+                (&json!("no_usage"), &Value::Null, &json!(true)),
+                "{tool} idle install"
+            );
+            assert!(idle["lastCompleteMs"].is_number(), "{tool} complete read");
+            assert_eq!(idle["counts"]["freshness"]["activityComplete"], true);
+            let held = source("nas1", tool);
+            assert_eq!(held["state"], "unreadable", "{tool} unreadable folder");
+            assert_eq!(held["cause"], "read_failed", "{tool} unreadable folder");
+            assert_eq!(held["complete"], false, "{tool} unreadable folder");
+            assert!(held["lastCompleteMs"].is_null(), "{tool} unreadable folder");
+        }
+    }
+
     /// The activity source states the last pass produced (the owned read's live grid).
     fn source_states(state: &Mutex<WriterState>) -> Vec<Value> {
         state.lock().map(|s| s.states.clone()).unwrap_or_default()
