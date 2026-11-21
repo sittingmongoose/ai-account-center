@@ -246,6 +246,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -310,6 +323,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -12146,6 +12175,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -12210,6 +12252,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -24046,6 +24104,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -24110,6 +24181,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -35946,6 +36033,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -36010,6 +36110,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -40397,6 +40513,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -40461,6 +40590,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -44848,6 +44993,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -44912,6 +45070,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -49299,6 +49473,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -49363,6 +49550,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -61199,6 +61402,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -61263,6 +61479,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -73099,6 +73331,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -73163,6 +73408,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -84999,6 +85260,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -85063,6 +85337,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -96899,6 +97189,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -96963,6 +97266,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -108799,6 +109118,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -108863,6 +109195,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -120699,6 +121047,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -120763,6 +121124,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -121602,6 +121979,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -121666,6 +122056,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -122505,6 +122911,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -122569,6 +122988,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -123408,6 +123843,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -123472,6 +123920,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -135308,6 +135772,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -135372,6 +135849,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -147208,6 +147701,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -147272,6 +147778,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -159108,6 +159630,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -159172,6 +159707,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -171097,6 +171648,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -171161,6 +171725,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
@@ -183086,6 +183666,19 @@
             "notes": null
           },
           {
+            "model": "google/gemini-4-neon",
+            "label": "Gemini 4 Neon",
+            "family": "Gemini",
+            "runtimes": [
+              "antigravity"
+            ],
+            "efforts": [
+              "high"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "google/gemini-4-argon",
             "label": "Gemini 4 Argon",
             "family": "Gemini",
@@ -183150,6 +183743,22 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "xai/grok-4.6",
+            "label": "Grok 4.6",
+            "family": "Grok",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "prices": null,
+            "notes": "Run through Cursor (provider instance 'cursor'); the owner prefers 4.6 over 4.7 (Nov 20)."
           },
           {
             "model": "opencode-go/hungerg-free",
