@@ -684,6 +684,8 @@ impl Computer {
                     cmd.env("AAC_APP_UPDATE_STATE_DIR", directory);
                 }
                 if let Some(enabled) = options.local_cursor_billing {
+                    #[cfg(windows)]
+                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
                     cmd.env(
                         "AAC_CURSOR_BILLING_ENABLED",
                         if enabled { "1" } else { "0" },

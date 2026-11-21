@@ -496,39 +496,25 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             }
         }
         Handler::CursorAccount => {
-            use crate::account_usage::cursor::{Command, ROW, Request};
+            use crate::account_usage::cursor::{REQUEST_CAP, ROW};
             if shared.owners.owner(ROW) != Some(registry::Role::RustService) {
                 return decline(row.handler, Decline::Unsupported);
             }
-            let Ok(Ok(bytes)) =
-                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
+            let Ok(Ok(bytes)) = tokio::time::timeout(
+                Duration::from_secs(2),
+                to_bytes(req.into_body(), REQUEST_CAP),
+            )
+            .await
             else {
                 return decline(row.handler, Decline::Shape);
             };
-            let root = shared.boot.ccs_dir.clone();
-            if let Ok(command) = Command::parse(&bytes) {
-                return match tokio::time::timeout(
-                    Duration::from_secs(123),
-                    shared.cursor.command(command, root),
-                )
+            match shared
+                .cursor
+                .answer(shared.boot.ccs_dir.clone(), shared.owners.clone(), &bytes)
                 .await
-                {
-                    Ok(Ok(value)) => Json(value).into_response(),
-                    Ok(Err(reason)) => decline(row.handler, reason),
-                    Err(_) => decline(row.handler, Decline::Internal),
-                };
-            }
-            let request = match Request::parse(&bytes) {
-                Ok(request) => request,
-                Err(reason) => return decline(row.handler, reason),
-            };
-            let owners = shared.owners.clone();
-            let reader = shared.cursor.clone();
-            let task = tokio::spawn(async move { reader.read(root, owners, request).await });
-            match tokio::time::timeout(Duration::from_secs(123), task).await {
-                Ok(Ok(Ok(value))) => Json(value.as_ref()).into_response(),
-                Ok(Ok(Err(reason))) => decline(row.handler, reason),
-                _ => decline(row.handler, Decline::Internal),
+            {
+                Ok(value) => Json(value.as_ref()).into_response(),
+                Err(reason) => decline(row.handler, reason),
             }
         }
         Handler::ProviderCache => {

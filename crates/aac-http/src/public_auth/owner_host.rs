@@ -57,6 +57,8 @@ pub(super) struct OwnerHost {
     analytics_live: std::sync::Arc<crate::analytics_live::Live>,
     #[cfg(not(unix))]
     analytics_reads: crate::limits::Limits,
+    #[cfg(not(unix))]
+    cursor: std::sync::Arc<crate::account_usage::cursor::Reader>,
 }
 
 struct PublicOwners {
@@ -110,6 +112,8 @@ impl OwnerHost {
             analytics_live: std::sync::Arc::default(),
             #[cfg(not(unix))]
             analytics_reads: crate::limits::Limits::new(),
+            #[cfg(not(unix))]
+            cursor: std::sync::Arc::default(),
         })
     }
 
@@ -404,6 +408,11 @@ impl OwnerHost {
         }
     }
 
+    #[cfg(not(unix))]
+    pub(super) fn cursor(&self) -> std::sync::Arc<crate::account_usage::cursor::Reader> {
+        self.cursor.clone()
+    }
+
     /// One request a group already admitted: the service's reply, or `None` when no owner is
     /// reachable (the group answers its own decline). A failed hop drops the cached endpoint so
     /// the next request picks up a restarted service's descriptor.
@@ -426,8 +435,58 @@ impl OwnerHost {
         }
         #[cfg(not(unix))]
         {
-            let _ = (method, uri, principal, headers, body);
-            None
+            use aac_views::decline::Decline;
+            use axum::http::{HeaderValue, header::CONTENT_TYPE};
+
+            // This dispatch is in-process only. The public router has no private Cursor route.
+            let _ = headers;
+            let path = uri.split_once('?').map_or(uri, |(path, _)| path);
+            if (method, path) != ("PUT", "/internal/collection-cursor") {
+                return None;
+            }
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            if principal.len() > 512
+                || !crate::json_object::from_slice::<aac_api::VerifiedPrincipal>(
+                    principal.as_bytes(),
+                    &["kind", "id", "role"],
+                )
+                .is_ok_and(|principal| {
+                    principal.valid() && principal.role == aac_api::PrincipalRole::Service
+                })
+            {
+                return Some(ServiceReply {
+                    status: 401,
+                    headers,
+                    body: br#"{"error":"Authentication required"}"#.to_vec(),
+                });
+            }
+            let result = match self
+                .public_owners()
+                .and_then(|native| native.cursor_owners())
+            {
+                Some(owners) => {
+                    self.cursor
+                        .answer(self.root.clone(), owners, body.unwrap_or_default())
+                        .await
+                }
+                None => Err(Decline::Unsupported),
+            };
+            let (status, body) = match result {
+                Ok(value) => (200, serde_json::to_vec(value.as_ref()).ok()?),
+                Err(reason) => {
+                    headers.insert("x-aac-decline", HeaderValue::from_static(reason.as_str()));
+                    (
+                        503,
+                        br#"{"error":"TypeScript read fallback required"}"#.to_vec(),
+                    )
+                }
+            };
+            Some(ServiceReply {
+                status,
+                headers,
+                body,
+            })
         }
     }
 
@@ -445,24 +504,42 @@ impl OwnerHost {
             let query = uri.split_once('?').map(|(_, query)| query.to_owned());
             let root = self.root.clone();
             let live = self.analytics_live.clone();
-            let cache = self.public_owners().and_then(|owner| owner.usage_cache());
-            self.analytics_reads
+            let native = self.public_owners();
+            let cache = native.as_ref().and_then(|owner| owner.usage_cache());
+            let (mut answer, engine, now, query) = self
+                .analytics_reads
                 .blocking(crate::table::Pool::Reads, move || {
                     let now = super::now();
                     let snapshot =
                         cache.and_then(|cache| crate::analytics_route::snapshot(&cache, now));
                     let answer = crate::analytics_route::compose(
-                        engine,
+                        engine.clone(),
                         &root,
                         snapshot.as_ref(),
                         &live,
                         query.as_deref(),
                         now,
                     );
-                    crate::analytics_route::encode(answer, query.as_deref())
+                    Ok((answer, engine, now, query))
                 })
                 .await
-                .ok()
+                .ok()?;
+            if let Some(owners) = native.and_then(|native| native.cursor_owners())
+                && let Ok(value) = &mut answer
+                && let Some(activity) = value["activity"].as_object_mut()
+            {
+                let force =
+                    url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
+                        .any(|(key, value)| key == "refresh" && value == "true");
+                if let Some(status) = self
+                    .cursor()
+                    .analytics(self.root.clone(), owners, engine, now, force)
+                    .await
+                {
+                    activity.insert("cursorAccount".into(), status);
+                }
+            }
+            crate::analytics_route::encode(answer, query.as_deref()).ok()
         }
     }
 
@@ -1203,6 +1280,103 @@ mod windows_tests {
             String::from_utf8_lossy(&child.stdout),
             String::from_utf8_lossy(&child.stderr)
         );
+    }
+
+    fn cursor_fixture(root: &Path, collection: bool) -> std::sync::Arc<OwnerHost> {
+        let host = OwnerHost::new(root.to_path_buf(), true);
+        let mut groups = native_owners::Groups::default();
+        groups.collection = collection;
+        host.start_public(
+            groups,
+            HubCache::for_collection(collection),
+            DashboardEvents(tokio::sync::broadcast::channel(8).0),
+        )
+        .unwrap();
+        host
+    }
+
+    #[tokio::test]
+    async fn windows_cursor_private_route_respects_collection_ownership_and_shape() {
+        let scratch = tempfile::tempdir().unwrap();
+        for (collection, decline) in [(true, "shape"), (false, "unsupported")] {
+            let root = scratch.path().join(decline);
+            std::fs::create_dir(&root).unwrap();
+            let host = cursor_fixture(&root, collection);
+            let reply = host
+                .request(
+                    "PUT",
+                    "/internal/collection-cursor",
+                    r#"{"kind":"session","id":"front-door","role":"service"}"#,
+                    &[("content-type", "application/json")],
+                    Some(br#"{"command":"key-put"}"#),
+                )
+                .await
+                .expect("Windows private Cursor route");
+            assert_eq!(reply.status, 503);
+            assert_eq!(reply.headers["x-aac-decline"], decline);
+            let denied = host
+                .request(
+                    "PUT",
+                    "/internal/collection-cursor",
+                    r#"{"kind":"session","id":"fixture-admin","role":"admin"}"#,
+                    &[],
+                    Some(br#"{"command":"quota"}"#),
+                )
+                .await
+                .expect("Windows private Cursor route");
+            assert_eq!(denied.status, 401);
+            host.stop().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn windows_cursor_observation_reaches_the_private_read_and_analytics() {
+        use serde_json::{Value, json};
+
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        let host = cursor_fixture(root, true);
+        let local = host.local().await.unwrap();
+        let now = super::super::now();
+        let at = aac_num::ecma::to_iso_string(now).unwrap();
+        let observation = json!({"state":"read","checkedAt":at,"readAt":at,"rows":[],
+            "unmeasured":2,"unrecognizedModels":1});
+        let store = local.store.as_ref().unwrap();
+        let engine = store.analytics_engine().unwrap();
+        aac_store::analytics_cache::put(
+            &engine,
+            "live/cursor-account-v1.json",
+            observation.to_string().as_bytes(),
+        )
+        .unwrap();
+        let input = json!({"sinceMs":0,"untilMs":now,"force":false}).to_string();
+        let reply = host
+            .request(
+                "PUT",
+                "/internal/collection-cursor",
+                r#"{"kind":"session","id":"front-door","role":"service"}"#,
+                &[("content-type", "application/json")],
+                Some(input.as_bytes()),
+            )
+            .await
+            .expect("Windows private Cursor read");
+        assert_eq!(reply.status, 200);
+        let read: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(read["checkedAt"], at);
+        assert_eq!(read["unmeasured"], 2);
+        let (status, body) = host
+            .analytics("/api/accounts/analytics?tz=UTC", "fixture")
+            .await
+            .expect("Windows Analytics answer");
+        assert_eq!(status, 200);
+        let analytics: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(analytics["activity"]["cursorAccount"]["state"], "read");
+        assert_eq!(analytics["activity"]["cursorAccount"]["unmeasured"], 2);
+        assert_eq!(
+            analytics["activity"]["cursorAccount"]["unrecognizedModels"],
+            1
+        );
+        host.stop().await;
     }
 
     #[tokio::test]
