@@ -4667,7 +4667,8 @@
     "sources": [
       "scripts/app-updates/app_update_common.py:CAUSES",
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
-      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
+      "src/web-server/services/cursor-account-reader.ts:cause"
     ]
   },
   {
