@@ -1,6 +1,16 @@
 import fs from 'fs';
 import path from 'path';
+import { secretFilter } from '../../../../src/shared/secret-policy';
 import { NOW } from '../status/status-test-helpers';
+
+export function requireStatusSecretFilter(): void {
+  if (!secretFilter()) {
+    throw new Error(
+      'These scoreboard tests require the aac-status native secret filter. ' +
+        'Run bun run status:build or set AAC_STATUS_MODULE to a compatible .node file.'
+    );
+  }
+}
 
 export function runDoc(writer: string, local: string, fields: Record<string, unknown> = {}) {
   const ended = (fields.endedAt as string | undefined) ?? new Date(NOW - 3_600_000).toISOString();

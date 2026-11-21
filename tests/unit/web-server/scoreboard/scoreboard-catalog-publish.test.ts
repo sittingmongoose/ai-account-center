@@ -4,7 +4,7 @@
  * temporary file and a rename, with every byte already on the share kept; a share file that is not
  * valid is left alone and named in the catalog Source.
  */
-import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -17,6 +17,9 @@ import {
   type SeedFailure,
 } from '../../../../src/web-server/scoreboard/catalog';
 import { NOW, tempDirs } from '../status/status-test-helpers';
+import { requireStatusSecretFilter } from './scoreboard-test-helpers';
+
+beforeAll(requireStatusSecretFilter);
 
 const dirs = tempDirs();
 afterEach(() => dirs.cleanup());

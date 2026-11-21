@@ -6,7 +6,7 @@
  * entries, so AAC's reader resolves every spelling the built-in copy accepts to the same catalog id
  * and refuses none of them. It also maps the 35 tally runs the copy cannot, and keeps Qwen's `-max`.
  */
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -16,6 +16,9 @@ import {
 } from '../../../../src/web-server/scoreboard/catalog';
 import { normalizeModel } from '../../../../src/web-server/scoreboard/model-identity';
 import { NOW, tempDirs } from '../status/status-test-helpers';
+import { requireStatusSecretFilter } from './scoreboard-test-helpers';
+
+beforeAll(requireStatusSecretFilter);
 
 const dirs = tempDirs();
 afterEach(() => dirs.cleanup());
