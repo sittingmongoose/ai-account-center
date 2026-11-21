@@ -628,18 +628,32 @@ else:
 #[tokio::test]
 async fn collection_off_answers_accounts_and_recheck_without_the_worker() {
     for env_override in [false, true] {
-        rust_answers_disabled_collection(env_override, false).await;
+        rust_answers_disabled_collection(env_override, false, false).await;
     }
 }
 
 #[tokio::test]
 async fn collection_off_preserves_the_saved_quota_reading() {
-    rust_answers_disabled_collection(true, true).await;
+    rust_answers_disabled_collection(true, true, false).await;
 }
 
-async fn rust_answers_disabled_collection(env_override: bool, check_history: bool) {
+#[tokio::test]
+async fn public_auth_and_store_share_the_resolved_ccs_home() {
+    rust_answers_disabled_collection(true, true, true).await;
+}
+
+async fn rust_answers_disabled_collection(env_override: bool, check_history: bool, linked: bool) {
     let fixture = tempfile::tempdir().unwrap();
-    let root = fixture.path().canonicalize().unwrap();
+    let home = fixture.path().canonicalize().unwrap();
+    let root = if linked {
+        let root = home.join("private");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&root, home.join(".ccs")).unwrap();
+        root
+    } else {
+        home.clone()
+    };
     let password = "fixture-public-password";
     file(
         &root,
@@ -660,9 +674,8 @@ async fn rust_answers_disabled_collection(env_override: bool, check_history: boo
     command
         .args(["dashboard", "--no-open", "--host", "127.0.0.1", "--port"])
         .arg(address.port().to_string())
-        .env("CCS_HOME", &root)
-        .env("CCS_DIR", &root)
-        .env("HOME", &root)
+        .env("CCS_HOME", &home)
+        .env("HOME", &home)
         .env("AAC_STORE_SHARE_BACKUP_DIR", "off")
         .env("AAC_STATUS_DOORBELL", "off")
         .env("AAC_TS_SIDECAR", root.join("worker-must-not-start.js"))
@@ -675,6 +688,11 @@ async fn rust_answers_disabled_collection(env_override: bool, check_history: boo
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .kill_on_drop(true);
+    if linked {
+        command.env_remove("CCS_DIR");
+    } else {
+        command.env("CCS_DIR", &root);
+    }
     if env_override {
         command.env("AAC_RUST_GROUP_COLLECTION", "off");
     }

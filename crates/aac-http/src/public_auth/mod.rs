@@ -441,6 +441,8 @@ pub(crate) async fn run_public_at(
     browser: bool,
     cut: bool,
 ) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let root = storage::resolve_public_root(root)?;
     #[cfg(not(feature = "parity-fixtures"))]
     if cut && std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
         return Err(std::io::Error::other(

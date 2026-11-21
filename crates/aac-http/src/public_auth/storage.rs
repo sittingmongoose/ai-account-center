@@ -776,3 +776,33 @@ pub(super) fn root_from_env() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("CCS_HOME").map(|home| Path::new(&home).join(".ccs")))?;
     path.is_absolute().then_some(path)
 }
+
+/// Resolve a configured root before passing it to the owners that reject links
+/// below their root. First-run directory creation stays with the private stores.
+#[cfg(unix)]
+pub(super) fn resolve_public_root(root: PathBuf) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    use std::os::unix::fs::MetadataExt;
+    let configured = match root.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(root),
+        Err(error) => return Err(error),
+    };
+    let resolved = root.canonicalize()?;
+    let metadata = resolved.symlink_metadata()?;
+    let unsafe_bits = if configured.file_type().is_symlink() {
+        0o022
+    } else {
+        0o002
+    };
+    if !metadata.is_dir()
+        || metadata.uid() != aac_files::path::uid()
+        || metadata.mode() & unsafe_bits != 0
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "unsafe dashboard data root",
+        ));
+    }
+    Ok(resolved)
+}
