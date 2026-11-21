@@ -215,7 +215,10 @@ export function parseCursorAccountRows(value: unknown): CursorAccountRow[] {
     .slice(0, 100_000);
 }
 
-function billingCoverage(value: { coverageFrom?: unknown; coverageUntil?: unknown }): CursorBillingCoverage {
+function billingCoverage(value: {
+  coverageFrom?: unknown;
+  coverageUntil?: unknown;
+}): CursorBillingCoverage {
   const { coverageFrom, coverageUntil } = value;
   const stamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
   return typeof coverageFrom === 'string' &&
@@ -332,7 +335,10 @@ export async function readCursorAccount(
     read = {
       state,
       checkedAt,
-      ...billingCoverage({ coverageFrom: answer.coverageFrom, coverageUntil: answer.coverageUntil }),
+      ...billingCoverage({
+        coverageFrom: answer.coverageFrom,
+        coverageUntil: answer.coverageUntil,
+      }),
       ...(count(answer.unrecognizedModels) && answer.unrecognizedModels
         ? { unrecognizedModels: answer.unrecognizedModels as number }
         : {}),
@@ -388,7 +394,8 @@ export async function cursorAccountOutside(
     checkedAt: read.checkedAt,
     readAt: read.readAt,
     ...(read.cause ? { cause: read.cause } : {}),
-    ...(read.cause && ['signin_needed', 'events_not_visible', 'events_unverified'].includes(read.cause)
+    ...(read.cause &&
+    ['signin_needed', 'events_not_visible', 'events_unverified'].includes(read.cause)
       ? { computer: HOST_LABELS[localComputer()] }
       : {}),
     ...billingCoverage(read),
@@ -407,9 +414,10 @@ export async function cursorAccountOutside(
   if (!read.rows.length) return empty;
   const from = read.coverageFrom?.slice(0, 13).replace('T', ' ');
   const until = read.coverageUntil?.replace('T', ' ');
-  const covered = from && until
-    ? local.filter(({ h }) => h.slice(0, 13) >= from && `${h}:00.000Z` < until)
-    : local;
+  const covered =
+    from && until
+      ? local.filter(({ h }) => h.slice(0, 13) >= from && `${h}:00.000Z` < until)
+      : local;
   let answer: { rows?: unknown; summary?: Record<string, unknown> };
   try {
     answer = (await (deps.run ?? runCursorAccount)(
