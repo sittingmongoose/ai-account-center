@@ -95,6 +95,65 @@ fn iso_from_ms(value: Option<&Json>) -> Option<String> {
     aac_num::ecma::to_iso_string(ms as i64)
 }
 
+/// `capacityFromWorkers`: the fleet's capacity added up from its workers.
+///
+/// Every worker reports an iPhone and an Android row, but runs only the platforms its catalog
+/// lists, and a drained worker takes no new phones. So running and reserved come from every
+/// worker, a platform's cap only from a worker that can run it (any platform when the worker
+/// lists no catalog) and is not drained, and `global` from every worker that is not drained.
+/// `None` when no worker carries capacity: an older gateway's own sum stands.
+fn capacity_from_workers(workers: Option<&Json>) -> Option<Json> {
+    let mut rows = serde_json::Map::new();
+    let mut carried = false;
+    for worker in workers?.as_array()? {
+        let Some(capacity) = worker.get("capacity").filter(|cap| cap.is_object()) else {
+            continue;
+        };
+        carried = true;
+        let catalog: Option<Vec<&str>> = match worker.get("catalog") {
+            Some(catalog) if catalog.is_object() => {
+                catalog.as_object().map(|map| map.keys().map(String::as_str).collect())
+            }
+            _ => None,
+        };
+        let drained = worker.get("drained") == Some(&Json::Bool(true));
+        let Some(capacity) = capacity.as_object() else {
+            continue;
+        };
+        for (platform, value) in capacity {
+            if !value.is_object() {
+                continue;
+            }
+            let row = rows.entry(platform.clone()).or_insert_with(|| {
+                serde_json::json!({
+                    "running": 0, "maxRunning": 0, "reserved": 0, "overLimit": false
+                })
+            });
+            let add = |row: &mut Json, field: &str, from: Option<&Json>| {
+                let total = int(row.get(field)).unwrap_or(0) + int(from).unwrap_or(0);
+                row[field] = Json::from(total);
+            };
+            add(row, "running", value.get("running"));
+            add(row, "reserved", value.get("reserved"));
+            if value.get("overLimit") == Some(&Json::Bool(true)) {
+                row["overLimit"] = Json::Bool(true);
+            }
+            let runs = platform == "global"
+                || catalog
+                    .as_ref()
+                    .is_none_or(|catalog| catalog.contains(&platform.as_str()));
+            if runs && !drained {
+                add(
+                    row,
+                    "maxRunning",
+                    value.get("maxRunning").or_else(|| value.get("limit")),
+                );
+            }
+        }
+    }
+    carried.then(|| Json::Object(rows))
+}
+
 /// `parseSimlockStatus`.
 ///
 /// # Errors
@@ -114,7 +173,9 @@ pub fn parse_status(raw: &Json) -> Result<Status, SimlockError> {
     if rec.contains_key("daemon") && (!rec.contains_key("capacity") || !raw.get("leases").is_some_and(Json::is_array)) {
         return Err(SimlockError::Shape);
     }
-    let capacity_raw = raw.get("capacity").cloned().unwrap_or(Json::Null);
+    let capacity_raw = capacity_from_workers(raw.get("workers"))
+        .or_else(|| raw.get("capacity").cloned())
+        .unwrap_or(Json::Null);
     if !capacity_raw.is_object() {
         return Err(SimlockError::Shape);
     }
@@ -290,6 +351,137 @@ mod tests {
         assert_eq!(
             parse_status(&json!({ "daemon": { "health": "running" }, "host": {} })),
             Err(SimlockError::Shape)
+        );
+    }
+
+    #[test]
+    fn adds_the_fleets_phone_caps_from_the_workers_that_can_run_each_platform() {
+        // The real gateway on 2026-11-20: every worker reports iPhone and Android rows, the
+        // gateway summed 6 iPhones where only the Mac's 2 exist.
+        let worker = |label: &str, catalog: &str, ios: u64, android: u64, drained: bool| {
+            let mut worker = json!({
+                "id": label,
+                "label": label,
+                "connection": "connected",
+                "drained": drained,
+                "catalog": {},
+                "capacity": {
+                    "ios": { "running": 0, "maxRunning": ios, "reserved": 0, "overLimit": false, "limit": ios },
+                    "android": {
+                        "running": if label == "vm" { 1 } else { 0 },
+                        "maxRunning": android,
+                        "reserved": 0,
+                        "overLimit": false
+                    },
+                    "global": {
+                        "running": if label == "vm" { 1 } else { 0 },
+                        "maxRunning": ios.max(android),
+                        "reserved": 0,
+                        "overLimit": false
+                    }
+                }
+            });
+            worker["catalog"][catalog] = json!([]);
+            worker
+        };
+        let status = parse_status(&json!({
+            "daemon": { "health": "running", "mode": "gateway" },
+            "capacity": {
+                "ios": { "running": 0, "maxRunning": 6, "reserved": 0, "overLimit": false },
+                "android": { "running": 1, "maxRunning": 5, "reserved": 0, "overLimit": false },
+                "global": { "running": 1, "maxRunning": 7, "reserved": 0, "overLimit": false }
+            },
+            "devices": [],
+            "leases": [],
+            "workers": [
+                worker("nas1", "android", 1, 1, false),
+                worker("vm", "android", 1, 1, false),
+                worker("mac", "ios", 2, 1, false),
+                worker("1070ti", "android", 2, 2, true)
+            ]
+        }))
+        .unwrap();
+        let mut capacity = status.capacity.clone();
+        capacity.sort_by(|a, b| a.platform.cmp(&b.platform));
+        assert_eq!(
+            capacity,
+            vec![
+                Capacity {
+                    platform: "android".into(),
+                    running: Some(1),
+                    max: Some(2),
+                    reserved: Some(0),
+                    over_limit: false
+                },
+                Capacity {
+                    platform: "global".into(),
+                    running: Some(1),
+                    max: Some(4),
+                    reserved: Some(0),
+                    over_limit: false
+                },
+                Capacity {
+                    platform: "ios".into(),
+                    running: Some(0),
+                    max: Some(2),
+                    reserved: Some(0),
+                    over_limit: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_older_gateway_without_worker_capacity_keeps_its_own_sum() {
+        let status = parse_status(&json!({
+            "daemon": { "health": "running", "mode": "gateway" },
+            "capacity": {
+                "ios": { "running": 0, "maxRunning": 6, "reserved": 0, "overLimit": false },
+                "android": { "running": 1, "maxRunning": 5, "reserved": 0, "overLimit": false }
+            },
+            "devices": [],
+            "leases": [],
+            "workers": [
+                { "id": "mac", "label": "Mac", "connection": "connected" },
+                { "id": "vm", "label": "VM", "connection": "connected" }
+            ]
+        }))
+        .unwrap();
+        let mut capacity = status.capacity.clone();
+        capacity.sort_by(|a, b| a.platform.cmp(&b.platform));
+        assert_eq!(
+            capacity
+                .iter()
+                .map(|row| (row.platform.as_str(), row.max))
+                .collect::<Vec<_>>(),
+            [("android", Some(5)), ("ios", Some(6))]
+        );
+    }
+
+    #[test]
+    fn a_worker_without_a_catalog_runs_every_platform_and_an_over_limit_row_stays_visible() {
+        let status = parse_status(&json!({
+            "daemon": { "health": "running", "mode": "gateway" },
+            "capacity": {},
+            "devices": [],
+            "leases": [],
+            "workers": [{
+                "id": "lone", "label": "Lone", "connection": "connected",
+                "capacity": {
+                    "ios": { "running": 2, "maxRunning": 1, "reserved": 1, "overLimit": true }
+                }
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            status.capacity,
+            vec![Capacity {
+                platform: "ios".into(),
+                running: Some(2),
+                max: Some(1),
+                reserved: Some(1),
+                over_limit: true
+            }]
         );
     }
 

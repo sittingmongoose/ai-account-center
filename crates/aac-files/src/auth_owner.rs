@@ -290,3 +290,73 @@ impl Drop for SessionTakeover {
 fn busy() -> Failure {
     Failure::new(Cause::Busy, "dashboard auth owner occupied or unverified")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static BOOT_READS: AtomicU32 = AtomicU32::new(0);
+
+    /// The claim's boot minute at acquisition, then the next minute: the drift a fresh
+    /// estimate takes when uptime's whole seconds cross a rounding boundary.
+    fn drifting_boot() -> Option<(String, u64)> {
+        let read = BOOT_READS.fetch_add(1, Ordering::SeqCst);
+        Some(("owner-boot-test".into(), 1000 + u64::from(read > 0)))
+    }
+
+    struct RestoreSource;
+
+    impl Drop for RestoreSource {
+        fn drop(&mut self) {
+            process::set_test_boot_source(None);
+        }
+    }
+
+    fn fixture_root() -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("fixture root");
+        let auth = root.path().join("auth");
+        fs::create_dir_all(&auth).expect("auth folder");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // A private group umask must not make the fixture's auth folder look unsafe.
+            fs::set_permissions(&auth, fs::Permissions::from_mode(0o700)).expect("auth mode");
+        }
+        root
+    }
+
+    #[test]
+    fn samples_the_boot_identity_once_so_a_later_minute_never_makes_the_owner_stale() {
+        let _restore = RestoreSource;
+        BOOT_READS.store(0, Ordering::SeqCst);
+        process::set_test_boot_source(Some(drifting_boot));
+        let root = fixture_root();
+        let marker = root.path().join(SESSION_OWNER);
+        let owner = SessionOwner::take(root.path()).expect("claim taken");
+        let claim = fs::read(&marker).expect("claim written");
+        let written: serde_json::Value = serde_json::from_slice(&claim).expect("claim json");
+        assert_eq!(
+            written.get("boot").and_then(serde_json::Value::as_u64),
+            Some(1000)
+        );
+        assert_eq!(
+            BOOT_READS.load(Ordering::SeqCst),
+            1,
+            "the identity is sampled once, at acquisition"
+        );
+        // A fresh estimate now rounds to the next minute. The reference store took its own
+        // claim for another process's and dropped every sign-in; the stored bytes must stand.
+        for _ in 0..3 {
+            owner.verify().expect("the claim is still ours");
+        }
+        assert_eq!(
+            BOOT_READS.load(Ordering::SeqCst),
+            1,
+            "verification never re-measures the boot identity"
+        );
+        assert_eq!(fs::read(&marker).expect("claim intact"), claim);
+        drop(owner);
+        assert!(!marker.exists(), "the owner removes its own claim");
+    }
+}

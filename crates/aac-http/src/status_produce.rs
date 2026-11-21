@@ -760,12 +760,12 @@ fn read_file(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// `statfs('/')`: `(free bytes, total bytes)` as Node's `bavail*bsize` and `blocks*bsize`,
-/// from `df -Pk /` (the same 1 KiB blocks and the same filesystem the probe reads).
+/// `statfs(home)`: `(free bytes, total bytes)` as Node's `bavail*bsize` and `blocks*bsize`,
+/// from `df -Pk <home>` (the same 1 KiB blocks and the same filesystem the probe reads).
 #[cfg(not(windows))]
-fn statfs_root(_path: &str) -> Option<(f64, f64)> {
+fn statfs_at(path: &str) -> Option<(f64, f64)> {
     let output = std::process::Command::new("df")
-        .args(["-Pk", "/"])
+        .args(["-Pk", path])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -777,6 +777,12 @@ fn statfs_root(_path: &str) -> Option<(f64, f64)> {
     let total: f64 = fields.get(1)?.parse().ok()?;
     let available: f64 = fields.get(3)?.parse().ok()?;
     Some((available * 1024.0, total * 1024.0))
+}
+
+/// `os.homedir()`.
+#[cfg(not(windows))]
+fn home_dir() -> Option<String> {
+    std::env::home_dir().map(|home| home.to_string_lossy().into_owned())
 }
 
 #[cfg(not(windows))]
@@ -880,17 +886,28 @@ fn windows_sample() -> Sample {
         free_mem: has_memory.then_some(memory.ullAvailPhys as f64),
         load1: None,
         read_file: &|_| None,
-        statfs: &|_| {
-            let root = [u16::from(b'\\'), 0];
+        home: &home_dir,
+        statfs: &|path| {
+            use std::os::windows::ffi::OsStrExt;
+            let wide: Vec<u16> = std::ffi::OsStr::new(path)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
             let (mut free, mut total) = (0u64, 0u64);
-            // SAFETY: root is NUL-terminated and the two requested outputs are live u64s.
+            // SAFETY: wide is NUL-terminated and the two requested outputs are live u64s.
             let ok = unsafe {
-                GetDiskFreeSpaceExW(root.as_ptr(), &mut free, &mut total, std::ptr::null_mut())
+                GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, std::ptr::null_mut())
             };
             (ok != 0).then_some((free as f64, total as f64))
         },
         mac_memory: None,
     })
+}
+
+/// `os.homedir()`.
+#[cfg(windows)]
+fn home_dir() -> Option<String> {
+    std::env::home_dir().map(|home| home.to_string_lossy().into_owned())
 }
 
 #[cfg(not(windows))]
@@ -916,7 +933,8 @@ fn unix_sample() -> Result<Sample, String> {
                 free_mem: None,
                 load1,
                 read_file: &read_file,
-                statfs: &statfs_root,
+                home: &home_dir,
+                statfs: &statfs_at,
                 mac_memory: probe,
             },
         ));
@@ -932,7 +950,8 @@ fn unix_sample() -> Result<Sample, String> {
             free_mem: available,
             load1,
             read_file: &read_file,
-            statfs: &statfs_root,
+            home: &home_dir,
+            statfs: &statfs_at,
             mac_memory: None,
         },
     ))
