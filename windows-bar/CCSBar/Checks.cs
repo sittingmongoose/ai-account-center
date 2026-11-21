@@ -402,6 +402,11 @@ public static partial class Checks
         report.Checks["opencode_go_row_names_its_account_and_status"] = Formatting.AccountRowMeta(goAccounts[0]) == ("Account 2", "Live 1m ago")
             && Formatting.AccountRowMeta(goAccounts[1]) == ("go-b", "Cached 3m ago")
             && Formatting.AccountRowMeta(goAccounts[2]) == ("Account 4", "Unavailable");
+        // A long name is cut in the middle so the end that tells two accounts apart stays; a short one stays whole.
+        var fitted = Formatting.FitMiddle("opencode-go-account-number-1", Formatting.TextWidth("opencode-go-1", 11.5));
+        report.Checks["opencode_go_row_name_is_cut_in_the_middle"] = fitted.Contains('…') && fitted.EndsWith("1", StringComparison.Ordinal)
+            && fitted.StartsWith("op", StringComparison.Ordinal) && Formatting.TextWidth(fitted, 11.5) <= Formatting.TextWidth("opencode-go-1", 11.5)
+            && Formatting.FitMiddle("Account 2", 170) == "Account 2";
         report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
         // The trays honour only "Show in tray" (providers[].trayVisible, settings.trayHiddenProviders); "Show on
         // dashboard" (providers[].visible, settings.hiddenProviders) never hides anything here.

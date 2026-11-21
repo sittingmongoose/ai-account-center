@@ -184,11 +184,12 @@ public static class FixtureRender
             SavePng(window, Path.Combine(directory, $"panel-{name}-opencode-rows.png"));
             window.ContentScroll.ScrollToHome();
             var goCards = new[] { "opencode-go:example-1", "opencode-go:example-2" }.Select(id => FindUid(window.ContentPanel, "provider:opencode-go:" + id)).ToArray();
-            string Meta(string id) => FindUid(window.ContentPanel, "meta:" + id) is { } meta ? string.Concat(All(meta).OfType<TextBlock>().Reverse().Select(text => text.Text)) : ""; // who, then its state (docked first)
+            string Meta(string id) => FindUid(window.ContentPanel, "meta:" + id) is { } meta ? string.Concat(All(meta).OfType<TextBlock>().Select(text => text.Text)) : "";
             report.Checks[$"{name}_opencode_go_one_row_per_account"] = goCards.All(card => card is not null)
                 && FindUid(window.ContentPanel, "provider:opencode-go") is null
                 && FindMetersIn(goCards[0]!).Any() && !FindMetersIn(goCards[1]!).Any()
-                && Meta("opencode-go:example-1").StartsWith("opencode-go-1 · Cached ", StringComparison.Ordinal)
+                && Meta("opencode-go:example-1") is var goFirstMeta && goFirstMeta.Contains(" · Cached ", StringComparison.Ordinal)
+                && goFirstMeta.Split(" · ")[0] is var goFirstName && goFirstName.StartsWith("op", StringComparison.Ordinal) && goFirstName.EndsWith("-1", StringComparison.Ordinal)
                 && Meta("opencode-go:example-2") == "opencode-go-2 · Unavailable"
                 && !All(window.ContentPanel).OfType<TextBlock>().Any(text => text.Text.Contains(" · 1 of 2", StringComparison.Ordinal));
             window.ToggleDetailsForCheck("prov:opencode-go:opencode-go:example-1");

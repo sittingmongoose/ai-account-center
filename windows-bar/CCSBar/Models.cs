@@ -597,6 +597,25 @@ public static class Formatting
         return (who, state);
     }
 
+    /// <summary>The laid-out width of a line of tray text in the panel's sans face.</summary>
+    public static double TextWidth(string text, double size) =>
+        new System.Windows.Media.FormattedText(text, CultureInfo.CurrentCulture, System.Windows.FlowDirection.LeftToRight,
+            new System.Windows.Media.Typeface(Theme.Sans, System.Windows.FontStyles.Normal, System.Windows.FontWeights.Normal, System.Windows.FontStretches.Normal),
+            size, System.Windows.Media.Brushes.Black, 1.0).WidthIncludingTrailingWhitespace;
+
+    /// <summary>The text as it fits <paramref name="width"/>: whole, or cut in the middle ("opencode…go-1") so both ends
+    /// stay readable. WPF trims only at the end, which would cut the part that tells two accounts apart.</summary>
+    public static string FitMiddle(string text, double width, double size = 11.5)
+    {
+        if (text.Length == 0 || TextWidth(text, size) <= width) return text;
+        for (var keep = text.Length - 1; keep > 1; keep--)
+        {
+            var cut = text[..((keep + 1) / 2)] + "…" + text[^(keep / 2)..];
+            if (TextWidth(cut, size) <= width) return cut;
+        }
+        return "…";
+    }
+
     public static string[] ProviderOrder(IEnumerable<DashboardAccount> accounts)
     {
         var seen = accounts.Select(account => account.Provider).Where(provider => !string.IsNullOrWhiteSpace(provider)).Distinct(StringComparer.Ordinal).ToList();

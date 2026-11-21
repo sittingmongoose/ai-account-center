@@ -412,10 +412,14 @@ fn every_opencode_go_account_is_its_own_card() -> Result<(), String> {
         .as_array_mut()
         .ok_or("accounts")?;
     let template = accounts[0].clone();
-    for (id, label, live) in [
-        ("opencode-go:acct:52f3251b", "Account 2", true),
+    // Listed with ranks in the browser's collation order (the case's ranks must agree with it).
+    for (rank, (id, label, live)) in [
         ("opencode-go:acct:2e034ec2", "Account 3", false),
-    ] {
+        ("opencode-go:acct:52f3251b", "Account 2", true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut go = template.clone();
         go["id"] = id.into();
         go["provider"] = "opencode-go".into();
@@ -428,7 +432,7 @@ fn every_opencode_go_account_is_its_own_card() -> Result<(), String> {
             go["windows"] = serde_json::json!([]);
         }
         accounts.push(go);
-        case.presentation["order"][id] = (accounts.len() as u64).into();
+        case.presentation["order"][id] = (1000 + rank as u64).into();
     }
     let view = serde_json::to_value(build(envelope_of(&case)?).map_err(|d| format!("{d:?}"))?)
         .map_err(|e| e.to_string())?;

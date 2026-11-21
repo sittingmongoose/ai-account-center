@@ -1063,13 +1063,12 @@ public partial class MainWindow : Window
         identity.Children.Add(Ui.Text(Formatting.ProviderName(provider, representative.ProviderLabel), 13, "Ink", FontWeights.SemiBold, trim: true));
         if (accountRow)
         {
-            // The status and reading time stay whole; only a long name is cut short.
+            // The status and reading time stay whole; a long name is cut in the middle so its distinguishing end stays.
             var (who, state) = Formatting.AccountRowMeta(representative);
-            var line = new DockPanel { LastChildFill = true };
-            var stateText = Ui.Text((who.Length > 0 ? " · " : "") + state, 11.5, "Ink3");
-            DockPanel.SetDock(stateText, Dock.Right);
-            line.Children.Add(stateText);
-            line.Children.Add(Ui.Text(who, 11.5, "Ink3", trim: true));
+            var stateText = (who.Length > 0 ? " · " : "") + state;
+            var line = new StackPanel { Orientation = Orientation.Horizontal };
+            line.Children.Add(Ui.Text(Formatting.FitMiddle(who, 170 - Formatting.TextWidth(stateText, 11.5)), 11.5, "Ink3"));
+            line.Children.Add(Ui.Text(stateText, 11.5, "Ink3"));
             var plan = string.IsNullOrWhiteSpace(representative.Plan) ? "" : $" ({representative.Plan})";
             line.ToolTip = Ui.Tip($"{Formatting.ProviderName(provider)} {representative.Email ?? representative.Label}{plan}: {StatusWord(representative).ToLowerInvariant()} {Formatting.Relative(representative.SampledAt ?? representative.FetchedAt)}.");
             line.Uid = "meta:" + representative.Id;
