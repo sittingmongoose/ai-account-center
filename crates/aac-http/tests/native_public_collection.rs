@@ -166,8 +166,13 @@ elif command.startswith('/usr/bin/python3 -c '):
     (root / "host-session").write_text(host)
     print('{"signedIn":false}')
 elif "aac-desktop-history" in command or "[IO.File]::ReadAllText($history)" in command:
+    reader = "route"
     if host == mac:
-        path = shlex.split(command)[-1]
+        _, _, script, _, path = shlex.split(command)
+        # The background collector receives a directory and appends the filename itself.
+        # It can run concurrently with the route, which receives the full file path.
+        if '$1/plan-usage-history.json' in script:
+            reader = "collector"
         expected = "/Users/fixture/Library/Application Support/Claude-fixture/plan-usage-history.json"
     else:
         if "$history = '" in command:
@@ -175,7 +180,7 @@ elif "aac-desktop-history" in command or "[IO.File]::ReadAllText($history)" in c
         else:
             path = base64.b64decode(sys.stdin.buffer.read(), validate=True).decode()
         expected = r"C:\Users\fixture\AppData\Roaming\Claude-fixture\plan-usage-history.json"
-    (root / (host + "-history")).write_text(path)
+    (root / f"{host}-{reader}-history").write_text(path)
     # The fake models a populated file at the exact path, and no file at the directory.
     if path == expected:
         print(json.dumps({"version":2,"samples":[{"t":1795123200000,"u":{"fh":25 if host == mac else 42}}]}))
@@ -426,10 +431,10 @@ else:
                 .unwrap();
             assert_eq!(profile["status"], "cached", "populated {platform} history");
             assert_eq!(profile["utilization"]["fiveHour"], percent);
-            assert_eq!(
-                fs::read_to_string(root.join(format!("{host}-history"))).unwrap(),
-                expected_path
-            );
+            let receipt = root.join(format!("{host}-route-history"));
+            let recorded = fs::read_to_string(&receipt)
+                .unwrap_or_else(|error| panic!("history receipt for {host}: {error}"));
+            assert_eq!(recorded, expected_path, "{platform} route history path");
         }
         child.kill().await.unwrap();
         return;
@@ -467,7 +472,7 @@ else:
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(root.join(format!("{host}-history")).is_file());
+        assert!(root.join(format!("{host}-route-history")).is_file());
     }
     let invalid = client
         .get(format!("{base}/api/accounts/dashboard?fixture=invalid"))
