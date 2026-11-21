@@ -205,6 +205,29 @@ public static class FixtureRender
             window.ToggleDetailsForCheck("prov:opencode-go:opencode-go:example-1");
             await Settle(window);
 
+            // Card OCG1, Jared's shape: Account 2, Account 3 and one stored key's row, each its own row with its own name.
+            var three = Clone(fixture);
+            var goTemplate = three.Accounts.First(account => account.Provider == "opencode-go");
+            three.Accounts.RemoveAll(account => account.Provider == "opencode-go");
+            foreach (var (id, label, used) in new[] { ("opencode-go:usage:beadcafe", "OpenCode Go beadcafe", 12.0), ("opencode-go:acct:52f3251b", "Account 2", 16.0), ("opencode-go:acct:2e034ec2", "Account 3", 8.0) })
+            {
+                var copy = Clone(new AccountDashboard { Accounts = { goTemplate } }).Accounts[0];
+                copy.Id = id; copy.Label = label; copy.Email = null; copy.Plan = "Go";
+                foreach (var meter in copy.Windows.Where(meter => meter.UsedPercent is not null)) meter.UsedPercent = used;
+                three.Accounts.Add(copy);
+            }
+            window.ApplyDashboardSample(three);
+            await Settle(window);
+            window.ContentScroll.ScrollToEnd();
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"panel-{name}-opencode-three.png"));
+            window.ContentScroll.ScrollToHome();
+            report.Checks[$"{name}_opencode_go_three_key_rows"] = new[] { "opencode-go:usage:beadcafe", "opencode-go:acct:52f3251b", "opencode-go:acct:2e034ec2" }
+                    .All(id => FindUid(window.ContentPanel, "provider:opencode-go:" + id) is not null)
+                && Meta("opencode-go:usage:beadcafe").StartsWith("beadcafe · ", StringComparison.Ordinal)
+                && Meta("opencode-go:acct:52f3251b").StartsWith("Account 2 · ", StringComparison.Ordinal)
+                && Meta("opencode-go:acct:2e034ec2").StartsWith("Account 3 · ", StringComparison.Ordinal);
+
             // Details: full-row expansion under Claude 1.
             window.ApplyDashboardSample(Clone(fixture));
             window.ToggleDetailsForCheck("claude:example-1");

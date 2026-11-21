@@ -402,6 +402,11 @@ public static partial class Checks
         report.Checks["opencode_go_row_names_its_account_and_status"] = Formatting.AccountRowMeta(goAccounts[0]) == ("Account 2", "Live 1m ago")
             && Formatting.AccountRowMeta(goAccounts[1]) == ("go-b", "Cached 3m ago")
             && Formatting.AccountRowMeta(goAccounts[2]) == ("Account 4", "Unavailable");
+        // Card OCG1: a stored key's row is named by its digest; a name that repeats the title keeps the digest.
+        report.Checks["opencode_go_key_row_never_repeats_the_title"] =
+            Formatting.AccountRowMeta(new DashboardAccount { Provider = "opencode-go", Label = "OpenCode Go beadcafe", Status = "unavailable" }).Who == "beadcafe"
+            && Formatting.AccountRowMeta(new DashboardAccount { Provider = "opencode-go", Label = "Key beadcafe", Status = "unavailable" }).Who == "beadcafe"
+            && Formatting.AccountRowMeta(new DashboardAccount { Provider = "opencode-go", Label = "Key ring", Status = "unavailable" }).Who == "Key ring";
         // A long name is cut in the middle so the end that tells two accounts apart stays; a short one stays whole.
         var fitted = Formatting.FitMiddle("opencode-go-account-number-1", Formatting.TextWidth("opencode-go-1", 11.5));
         report.Checks["opencode_go_row_name_is_cut_in_the_middle"] = fitted.Contains('…') && fitted.EndsWith("1", StringComparison.Ordinal)

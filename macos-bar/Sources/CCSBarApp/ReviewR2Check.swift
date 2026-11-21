@@ -79,8 +79,35 @@ enum ReviewR2Check {
       check(disconnectedText.contains("saved password") && !disconnectedText.contains("forgot its device key") && !disconnectedText.contains("revoked it"), "password Disconnect uses password wording")
     } catch { failures.append("view check error: \(error)") }
     do { try AntigravityTrayCheck.run(check) } catch { failures.append("Antigravity view check error: \(error)") }
+    do { try openCodeKeyRows(check) } catch { failures.append("OpenCode Go rows check error: \(error)") }
     if failures.isEmpty { print("PASS native review row, tooltip and sign-out checks") }
     else { for failure in failures { print("FAIL \(failure)") } }
     exit(failures.isEmpty ? 0 : 1)
+  }
+
+  /// Card OCG1, Jared's shape (`Tests/Fixtures/opencode-three-keys.json`): Account 2, Account 3 and one stored key's
+  /// row, each its own row. Rendered offscreen and read back: every row's distinguishing name shows in full, also when
+  /// an older dashboard names the key row "OpenCode Go <digest>", and nothing folds them into "1 of N".
+  static func openCodeKeyRows(_ check: (Bool, String) -> Void) throws {
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().appendingPathComponent("Tests/Fixtures/opencode-three-keys.json")
+    for label in ["Key beadcafe", "OpenCode Go beadcafe"] {
+      var object = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as! [String: Any]
+      var accounts = object["accounts"] as! [[String: Any]]
+      for index in accounts.indices where accounts[index]["id"] as? String == "opencode-go:usage:beadcafe" {
+        accounts[index]["label"] = label
+      }
+      object["accounts"] = accounts
+      let sample = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+      AlignmentProbe.frames = [:]
+      let (host, _, window) = PreviewRenderer.host(sample, options: PreviewRenderer.Options([]))
+      defer { window.orderOut(nil) }
+      let text = try PreviewRenderer.recognizedText(host).joined(separator: " ")
+      let rows = ["opencode-go:usage:beadcafe", "opencode-go:acct:52f3251b", "opencode-go:acct:2e034ec2"]
+      check(rows.allSatisfy { AlignmentProbe.frames["row|provider|opencode-go|\($0)"] != nil }
+        && AlignmentProbe.frames["row|provider|opencode-go"] == nil, "three OpenCode Go rows render (\(label))")
+      check(text.contains("beadcafe") && text.contains("Account 2") && text.contains("Account 3") && !text.contains(" of 3"),
+        "each OpenCode Go row shows its whole name (\(label)): \(text)")
+    }
   }
 }

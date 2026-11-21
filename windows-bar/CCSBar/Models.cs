@@ -588,6 +588,12 @@ public static class Formatting
     public static (string Who, string State) AccountRowMeta(DashboardAccount account)
     {
         var who = (account.Email ?? account.Label ?? "").Split('@')[0];
+        // The title already names the provider: a name that repeats it ("OpenCode Go 3d794f2c") keeps only the part
+        // that tells the rows apart.
+        var title = ProviderName(account.Provider) + " ";
+        if (who.Length > title.Length && who.StartsWith(title, StringComparison.Ordinal)) who = who[title.Length..];
+        // A stored key's row ("Key 3d794f2c", card OCG1) shows its digest alone, as the Mac tray does.
+        if (who.Length == 12 && who.StartsWith("Key ", StringComparison.Ordinal) && who[4..].All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')) who = who[4..];
         var word = account.Status switch
         {
             "ok" => "Live", "cached" => "Cached", "needs_sign_in" => "Sign-in needed", "error" => "Refresh failed", _ => "Unavailable"

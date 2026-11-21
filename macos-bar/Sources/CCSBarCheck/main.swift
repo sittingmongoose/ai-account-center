@@ -730,6 +730,18 @@ private func checkVisibleUsageWindows() throws {
     && goRows[2].meta(now: at) == "Account 4 · Unavailable"
     && goRows[0].accountHelp.hasPrefix("OpenCode Go Account 2 (Go) usage details"),
     "An OpenCode Go row must name its account, plan and own status, never \"1 of N\": \(goRows.map { $0.meta(now: at) })")
+  // Card OCG1: a stored key's row is named by its identity digest; a name that repeats the title keeps the digest.
+  var keyRow = goOneNamed
+  keyRow["id"] = "opencode-go:usage:beadcafe"; keyRow["label"] = "OpenCode Go beadcafe"
+  var named = goTwoNamed
+  named["label"] = "Key beadcafe"
+  goDashboardObject["accounts"] = [keyRow, named]
+  let keyRows = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: goDashboardObject)).providerGroups.flatMap(\.trayRows)
+  try expect(keyRows.map { $0.accountMeta(now: at)?.who } == ["beadcafe", "beadcafe"]
+    && keyRows[1].accountHelp.hasPrefix("OpenCode Go Key beadcafe"),
+    "A per-key row's line keeps the digest and never repeats the title: \(keyRows.map { $0.accountMeta(now: at)?.who ?? "" })")
+  goDashboardObject["accounts"] = [goOneNamed, goTwoNamed, goUnavailable]
   try expect(!goRows.contains { $0.meta(now: at).contains(" of ") },
     "No OpenCode Go row may collapse the other accounts into \"1 of N\"")
   try expect(rowsDashboard.providerGroups.map(\.id) == ["opencode-go"],

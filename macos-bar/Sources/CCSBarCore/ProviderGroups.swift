@@ -26,7 +26,14 @@ public struct ProviderGroup: Identifiable, Sendable {
   public func accountMeta(now: Date = TrayFormat.now) -> (who: String, state: String)? {
     guard isAccountRow else { return nil }
     let rep = representative
-    let short = rep.identity.split(separator: "@").first.map(String.init) ?? rep.identity
+    var short = rep.identity.split(separator: "@").first.map(String.init) ?? rep.identity
+    // The title already names the provider: a name that repeats it ("OpenCode Go 3d794f2c") keeps only the part
+    // that tells the rows apart, so the line never spends its width on the title again.
+    if short.count > label.count + 1, short.hasPrefix(label + " ") { short = String(short.dropFirst(label.count + 1)) }
+    // A stored key's row ("Key 3d794f2c", card OCG1) shows its digest alone: "Key" would cut it on the 158 pt line.
+    if short.count == 12, short.hasPrefix("Key "), short.dropFirst(4).allSatisfy({ $0.isHexDigit && !$0.isUppercase }) {
+      short = String(short.dropFirst(4))
+    }
     let read = TrayFormat.relative(AccountFormatting.date(rep.sampledAt ?? rep.fetchedAt), now: now)
     let state = rep.status == "ok" || rep.status == "cached" ? "\(TrayFormat.statusWord(rep.status)) \(read)"
       : TrayFormat.statusWord(rep.status)
