@@ -155,13 +155,11 @@ impl Cooldown {
         Ok(self.hold(now, now + delay, Some(streak)))
     }
 
-    /// Clear a streak only after a verified, current successful read and an open gate.
-    pub fn verified_success(self, now: f64) -> Self {
-        if self.until <= now && self.claude_429_streak.is_some_and(|n| n > 0) {
-            self.hold(now, now, Some(0))
-        } else {
-            self
-        }
+    /// One verified read lowers a 429 streak one level; the next read keeps that level's pace.
+    pub fn step_down_streak(self) -> u8 {
+        self.claude_429_streak
+            .unwrap_or(0)
+            .saturating_sub(1)
     }
 }
 
@@ -189,7 +187,7 @@ mod tests {
     const KEY: &str = "000186a000000000000000000000000000000000000000000000000000000000";
 
     #[test]
-    fn wave_67_floor_offset_and_restart_are_preserved() {
+    fn wave_67_floor_offset_restart_and_streak_step_down_are_preserved() {
         let now = 1_800_000_000_000.0;
         let hold = Cooldown::default()
             .claude_rate_limited(KEY, now, Some(300.5))
@@ -202,11 +200,10 @@ mod tests {
             .claude_rate_limited(KEY, hold.until + 1.0, None)
             .expect("delay");
         assert_eq!(second.until, hold.until + 340_001.0);
-        assert_eq!(second.verified_success(now), second);
-        assert_eq!(
-            second.verified_success(second.until).claude_429_streak,
-            Some(0)
-        );
+        assert_eq!(second.step_down_streak(), 1);
+        assert_eq!(expired.step_down_streak(), 0);
+        assert_eq!(Cooldown::default().step_down_streak(), 0);
+        assert_eq!(claude_delay_ms(KEY, 0.0, 1), Ok(220_000.0));
         assert_eq!(claude_delay_ms(KEY, 86_400.0, 5), Ok(DAY_MS));
         assert_eq!(claude_delay_ms(KEY, 0.0, 5), Ok(1_900_000.0));
     }

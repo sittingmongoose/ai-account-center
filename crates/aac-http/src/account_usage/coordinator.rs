@@ -791,6 +791,29 @@ impl FailoverCoordinator {
         true
     }
 
+    /// A spent 429 interval schedules the next read at the same step, not sooner.
+    fn hold_streak_interval(
+        &self,
+        target: &UsageFailoverTarget,
+        state: &mut State,
+        cooldown_key: &str,
+    ) {
+        let Some(streak) = self
+            .cooldown_state(&target.ccs_dir, cooldown_key)
+            .claude_429_streak
+            .filter(|n| *n > 0)
+        else {
+            return;
+        };
+        if let Ok(delay) = failover::claude_delay_ms(
+            &self.key(target),
+            read_refresh_seconds(&target.ccs_dir),
+            streak,
+        ) {
+            state.next_attempt = state.next_attempt.max(self.now() + delay);
+        }
+    }
+
     async fn cursor_session(
         &self,
         target: &UsageFailoverTarget,
@@ -1246,18 +1269,26 @@ impl FailoverCoordinator {
                 .and_then(Value::as_str)
                 .unwrap_or("");
             if rate_limit_message(message) {
-                let until = self.hold_cooldown_inner(
-                    &target.ccs_dir,
-                    &cooldown_key,
-                    self.now() + 60_000.0,
-                    None,
-                );
+                let streak = target
+                    .claude_desktop_cadence
+                    .then(|| self.cooldown_state(&target.ccs_dir, &cooldown_key))
+                    .and_then(|hold| hold.claude_429_streak)
+                    .filter(|n| *n > 0);
+                let requested = match streak {
+                    Some(streak) => self.now()
+                        + failover::claude_delay_ms(&self.key(target), 60.0, streak)
+                            .unwrap_or(60_000.0),
+                    None => self.now() + 60_000.0,
+                };
+                let until =
+                    self.hold_cooldown_inner(&target.ccs_dir, &cooldown_key, requested, streak);
                 state.next_attempt = until;
-                self.set_cooldown(&target.ccs_dir, &cooldown_key, until, None);
+                self.set_cooldown(&target.ccs_dir, &cooldown_key, until, streak);
                 return Ok(());
             }
         }
         let mut tried: Vec<String> = Vec::new();
+        let mut streak_spent = false;
         for (host, candidate) in &primaries {
             if !primary_already_read {
                 if self
@@ -1268,6 +1299,7 @@ impl FailoverCoordinator {
                         candidate,
                         false,
                         &mut tried,
+                        &mut streak_spent,
                         &cooldown_key,
                         &primaries,
                     )
@@ -1294,6 +1326,7 @@ impl FailoverCoordinator {
                         &candidate,
                         true,
                         &mut tried,
+                        &mut streak_spent,
                         &cooldown_key,
                         &primaries,
                     )
@@ -1305,6 +1338,7 @@ impl FailoverCoordinator {
             }
         }
         state.next_attempt = self.now() + 30_000.0;
+        self.hold_streak_interval(target, state, &cooldown_key);
         Ok(())
     }
 
@@ -1317,6 +1351,7 @@ impl FailoverCoordinator {
         candidate: &UsageCandidate,
         fallback: bool,
         tried: &mut Vec<String>,
+        streak_spent: &mut bool,
         cooldown_key: &str,
         primaries: &[(UsageHost, UsageCandidate)],
     ) -> &'static str {
@@ -1357,6 +1392,19 @@ impl FailoverCoordinator {
             } else {
                 "next"
             };
+        }
+        // A rate-limited token gets one usage call per interval even when several of
+        // its computers are candidates; the rest wait for the next step-down.
+        if self
+            .cooldown_state(&target.ccs_dir, cooldown_key)
+            .claude_429_streak
+            .is_some_and(|n| n > 0)
+        {
+            if *streak_spent {
+                self.hold_streak_interval(target, state, cooldown_key);
+                return "done";
+            }
+            *streak_spent = true;
         }
         let mut request = json!({"version":1,"action":"collect","provider":target.provider,"candidate":candidate.value()});
         if let Some(profile) = self.claude_profile(target, host) {
@@ -1585,17 +1633,23 @@ impl FailoverCoordinator {
         if target.claude_desktop_cadence && reading.status == "ok" && failure_code.is_none() {
             let now = self.now();
             let cooldown = self.cooldown_state(&target.ccs_dir, cooldown_key);
-            if cooldown.until == 0.0 && cooldown.claude_429_streak.is_some_and(|n| n > 0) {
-                self.hold_cooldown_inner(&target.ccs_dir, cooldown_key, now, Some(0));
-            }
+            // One clean read lowers a 429 streak one level: the next read keeps the
+            // slower pace, so a token shared with other clients stops re-tripping 429.
+            let streak = cooldown.step_down_streak();
             let floor = read_refresh_seconds(&target.ccs_dir).max(
                 response
                     .get("refreshAfterSeconds")
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0),
             );
-            if let Ok(delay) = failover::claude_delay_ms(&self.key(target), floor, 0) {
+            if let Ok(delay) = failover::claude_delay_ms(&self.key(target), floor, streak) {
                 state.next_attempt = now + delay;
+            }
+            if cooldown.claude_429_streak.is_some_and(|n| n > 0) {
+                let requested = if streak > 0 { state.next_attempt } else { now };
+                let until =
+                    self.hold_cooldown_inner(&target.ccs_dir, cooldown_key, requested, Some(streak));
+                self.set_cooldown(&target.ccs_dir, cooldown_key, until, Some(streak));
             }
             if state.fresh == Some(true) {
                 state.fresh_until = state.next_attempt;
