@@ -100,11 +100,21 @@ impl Producer {
     }
 
     pub(crate) async fn lookup_recheck(&self, id: &str) -> Result<Option<Resolved>, Decline> {
-        if let Some(found) = lookup(self.root.clone(), id).await? {
-            return Ok(Some(found));
-        }
-        let Some(base) = discovered_key_id(id) else {
-            return Ok(None);
+        let base = match lookup(self.root.clone(), id).await? {
+            // A discover entry that may now stand for per-key rows resolves through the expansion
+            // below: once its stored keys have rows (or are all named) it is not read unpinned.
+            Some(found)
+                if !found.legacy
+                    && found.source.provider == "opencode-go"
+                    && matches!(found.source.credential, sources::Credential::Discover) =>
+            {
+                found.source.id
+            }
+            Some(found) => return Ok(Some(found)),
+            None => match discovered_key_id(id) {
+                Some(base) => base.to_owned(),
+                None => return Ok(None),
+            },
         };
         let root = self.root.clone();
         let registry = tokio::task::spawn_blocking(move || sources::read_registry(&root))
@@ -122,7 +132,7 @@ impl Producer {
             .expand_discovery(rows, false)
             .await
             .into_iter()
-            .find(|(source, pin)| pin.is_some() && source.id == id)
+            .find(|(source, _)| source.id == id)
             .map(|(source, pin)| Resolved {
                 source,
                 legacy: false,
@@ -688,6 +698,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .clear();
         for unknown in [
+            "opencode-go:usage",
             "opencode-go:usage:dddddddd",
             "opencode-go:usage:aaaaaaaa",
             "opencode-go:acct:99999999",

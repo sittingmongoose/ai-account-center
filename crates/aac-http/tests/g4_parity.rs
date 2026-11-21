@@ -487,9 +487,35 @@ async fn discovered_identities_list_each_stored_key_once() {
         .expect("readable stores");
     let id = |key: &str| identity(&json!({"kind":"opencode-go-credential","key":key.repeat(64)}));
     assert_eq!(
-        found,
+        found.found,
         vec![(id("a"), true), (id("b"), false), (id("c"), false)]
     );
+    assert!(found.unread.is_empty());
+    // A named key slot the helper could not read is reported, never treated as free; an
+    // unreadable store gives no answer at all.
+    {
+        let mut fixture = state.lock().expect("fixture state");
+        fixture.now += 31_000.0;
+        fixture
+            .incomplete
+            .insert("ubuntu".to_owned(), vec!["aac-key:2e034ec2".to_owned()]);
+    }
+    let partial = coordinator
+        .discovered_identities(
+            &target,
+            &["aac-key:2e034ec2".to_owned(), "aac-key:52f3251b".to_owned()],
+        )
+        .await
+        .expect("readable stores");
+    assert_eq!(partial.unread, ["aac-key:2e034ec2"]);
+    {
+        let mut fixture = state.lock().expect("fixture state");
+        fixture.now += 31_000.0;
+        fixture
+            .incomplete
+            .insert("ubuntu".to_owned(), vec!["*".to_owned()]);
+    }
+    assert_eq!(coordinator.discovered_identities(&target, &[]).await, None);
     assert!(
         state
             .lock()

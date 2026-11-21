@@ -1,6 +1,6 @@
 //! Select the installed quota, API key and console readers for each configured source.
 use super::{Producer, pick, source_host};
-use crate::account_usage::coordinator::UsageIdentity;
+use crate::account_usage::coordinator::{Discovered, UsageIdentity};
 use crate::account_usage::{
     cursor::Command,
     provider_caches, rows,
@@ -35,8 +35,28 @@ fn bound_selectors(sources: &[Source], source: &Source) -> Vec<String> {
         .collect()
 }
 
+/// The stored identities once the named entries whose key files could not be read are settled:
+/// each such entry's last known identity counts as named. None when one has no known identity,
+/// so the discover entry waits (no row, no read) rather than show one account twice.
+fn settle_unread(
+    discovered: Discovered,
+    known: impl Fn(&str) -> Option<UsageIdentity>,
+) -> Option<Vec<(UsageIdentity, bool)>> {
+    let mut found = discovered.found;
+    for selector in &discovered.unread {
+        let identity = known(selector)?;
+        for (stored, bound) in &mut found {
+            if *stored == identity {
+                *bound = true;
+            }
+        }
+    }
+    Some(found)
+}
+
 /// A discover entry's rows from the stored identities: one per identity no other entry names,
-/// with an id and label from the identity's digest (never the key). None (unreadable) or an
+/// with the id `<entry id>:<digest>` and the label `Key <digest>` (the identity's digest, never
+/// the key). None (unreadable) or an
 /// empty store keeps the entry as it was; only named identities means no row.
 fn pinned_sources(
     source: &Source,
@@ -52,10 +72,7 @@ fn pinned_sources(
             let digest = identity.key.get(..8).unwrap_or(&identity.key).to_owned();
             let mut pinned = source.clone();
             pinned.id = format!("{}:{digest}", source.id);
-            pinned.label = Some(format!(
-                "{} {digest}",
-                source.label.as_deref().unwrap_or("OpenCode Go")
-            ));
+            pinned.label = Some(format!("Key {digest}"));
             (pinned, Some(identity))
         })
         .collect()
@@ -199,10 +216,35 @@ impl Producer {
                 continue;
             }
             let target = super::failover::additional_target(&self.root, source, legacy);
-            let found = self
-                .failover()
+            let failover = self.failover();
+            let found = match failover
                 .discovered_identities(&target, &bound_selectors(&sources, source))
-                .await;
+                .await
+            {
+                None => None,
+                Some(discovered) => {
+                    // A named entry whose key file could not be read stands in with its last known
+                    // identity; with none known the entry adds no row and no read this time.
+                    let known = |selector: &str| {
+                        sources
+                            .iter()
+                            .find(|other| {
+                                *other != source
+                                    && other.provider == source.provider
+                                    && matches!(&other.credential, Credential::AacKey { key_id } if format!("aac-key:{key_id}") == selector)
+                            })
+                            .and_then(|other| {
+                                failover.reading_identity(&super::failover::additional_target(
+                                    &self.root, other, legacy,
+                                ))
+                            })
+                    };
+                    match settle_unread(discovered, known) {
+                        Some(found) => Some(found),
+                        None => continue,
+                    }
+                }
+            };
             out.extend(pinned_sources(source, found));
         }
         out
@@ -414,7 +456,10 @@ impl Producer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Keyed, UsageIdentity, bound_selectors, one_row_per_identity, pinned_sources};
+    use super::{
+        Discovered, Keyed, UsageIdentity, bound_selectors, one_row_per_identity, pinned_sources,
+        settle_unread,
+    };
     use crate::account_usage::sources::{Credential, Source};
     use serde_json::json;
 
@@ -466,7 +511,7 @@ mod tests {
         );
         assert_eq!(pinned.len(), 1);
         assert_eq!(pinned[0].0.id, "opencode-go:usage:cccccccc");
-        assert_eq!(pinned[0].0.label.as_deref(), Some("OpenCode Go cccccccc"));
+        assert_eq!(pinned[0].0.label.as_deref(), Some("Key cccccccc"));
         assert_eq!(pinned[0].1, Some(identity("c")));
         let rows = one_row_per_identity(
             [
@@ -577,5 +622,28 @@ mod tests {
             keyed("opencode-go:acct:52f3251b", "opencode-go", false, Some("a")),
         ]);
         assert_eq!(ids(rows), ["opencode-go:acct:2e034ec2"]);
+    }
+
+    #[test]
+    fn an_unreadable_named_key_stands_in_with_its_last_identity_or_discovery_waits() {
+        let discovered = || Discovered {
+            found: vec![
+                (identity("a"), false),
+                (identity("b"), true),
+                (identity("c"), false),
+            ],
+            unread: vec!["aac-key:2e034ec2".to_owned()],
+        };
+        let settled = settle_unread(discovered(), |selector| {
+            (selector == "aac-key:2e034ec2").then(|| identity("a"))
+        })
+        .expect("known identity");
+        let entry = source("opencode-go:usage", Credential::Discover);
+        let ids: Vec<String> = pinned_sources(&entry, Some(settled))
+            .into_iter()
+            .map(|(s, _)| s.id)
+            .collect();
+        assert_eq!(ids, ["opencode-go:usage:cccccccc"]);
+        assert_eq!(settle_unread(discovered(), |_| None), None);
     }
 }

@@ -127,6 +127,15 @@ struct State {
     observed_plan_peer: Option<contract::MuseUsagePeer>,
 }
 
+/// What a discover entry's stores hold (`discovered_identities`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Discovered {
+    /// Each stored identity once, in store order, and whether another entry names it.
+    pub found: Vec<(UsageIdentity, bool)>,
+    /// The named entries' selectors whose stores could not be read this time.
+    pub unread: Vec<String>,
+}
+
 /// The native failover coordinator.
 pub struct FailoverCoordinator {
     deps: Arc<dyn FailoverDeps>,
@@ -961,15 +970,38 @@ impl FailoverCoordinator {
     /// Every distinct credential identity the target's primary computer stores for its selector,
     /// in store order, each marked bound when a candidate carrying one of `bound` selectors (an
     /// account the registry already names, such as `aac-key:<id>`) holds the same identity
-    /// (`discoveredIdentities`). An inventory of local stores only: no provider is asked and no
-    /// secret leaves the helper. None when the computer's stores could not be read.
+    /// (`discoveredIdentities`). `unread` lists the `bound` selectors whose stores could not be
+    /// read this time: their keys are unknown, so they are never treated as free. An inventory of
+    /// local stores only: no provider is asked and no secret leaves the helper. None when the
+    /// computer's stores could not be read at all.
     pub async fn discovered_identities(
         &self,
         target: &UsageFailoverTarget,
         bound: &[String],
-    ) -> Option<Vec<(UsageIdentity, bool)>> {
+    ) -> Option<Discovered> {
         let source = target.primary_sources.first()?;
         let candidates = self.inventory(target, &source.host).await?;
+        let gaps = self
+            .unread_selectors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&self.inventory_key(target, &source.host))
+            .cloned()
+            .unwrap_or_default();
+        if gaps.iter().any(|gap| gap == "*" || *gap == source.selector) {
+            return None;
+        }
+        let unread = bound
+            .iter()
+            .filter(|selector| {
+                let family = selector
+                    .split_once(':')
+                    .map(|(head, _)| format!("{head}:*"));
+                gaps.iter()
+                    .any(|gap| gap == *selector || Some(gap) == family.as_ref())
+            })
+            .cloned()
+            .collect();
         let taken: Vec<&UsageIdentity> = candidates
             .iter()
             .filter(|candidate| candidate.selectors.iter().any(|s| bound.contains(s)))
@@ -987,7 +1019,7 @@ impl FailoverCoordinator {
             let is_bound = taken.contains(&&candidate.identity);
             found.push((candidate.identity.clone(), is_bound));
         }
-        Some(found)
+        Some(Discovered { found, unread })
     }
 
     /// The credential identity the target's shown reading came from, or None before it has one
