@@ -24,6 +24,7 @@ use axum::{
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::{sync::Arc, time::Instant};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 const SETTINGS_CAP: usize = 4096;
 const VISIBILITY_CAP: usize = 8 * 1024;
@@ -63,7 +64,7 @@ pub(super) struct Settings {
     events: DashboardEvents,
     owners: Owners,
     limits: crate::limits::Limits,
-    preference_writes: Arc<tokio::sync::Mutex<()>>,
+    write_turns: [Arc<Mutex<()>>; 3],
 }
 
 impl Settings {
@@ -73,8 +74,19 @@ impl Settings {
             events,
             owners: owners(),
             limits: crate::limits::Limits::new(),
-            preference_writes: Arc::default(),
+            write_turns: Default::default(),
         }
+    }
+
+    async fn write_turn(&self, family: Family) -> Result<(OwnedMutexGuard<()>, Instant), Reply> {
+        // Queue before taking a read permit. Both waits use the same budget. Move the turn
+        // into the blocking writer so it stays held until the save finishes.
+        let deadline = Instant::now() + LEASE_WAIT;
+        let lock = self.write_turns[family as usize].clone();
+        let turn = tokio::time::timeout_at(deadline.into(), lock.lock_owned())
+            .await
+            .map_err(|_| writer_busy(family))?;
+        Ok((turn, deadline))
     }
 
     #[cfg(test)]
@@ -144,21 +156,22 @@ impl Settings {
         let Some(seconds) = settings_interval(&body) else {
             return no_store(body_refusal(Family::Settings));
         };
+        let (turn, deadline) = match self.write_turn(Family::Settings).await {
+            Ok(admitted) => admitted,
+            Err(reply) => return reply,
+        };
         let root = self.root.clone();
         let owners = self.owners.clone();
         let saved = self
             .limits
             .blocking(Pool::Reads, move || {
-                Ok(settings_write(&root, &owners, seconds))
+                let _turn = turn;
+                Ok(settings_write(&root, &owners, seconds, deadline))
             })
             .await;
         match saved {
             Ok(Ok(value)) => no_store(super::response(200, value)),
-            Ok(Err(Decline::Busy)) => super::error(
-                409,
-                "settings_busy",
-                "Another settings save is in progress. Try again.",
-            ),
+            Ok(Err(Decline::Busy)) => writer_busy(Family::Settings),
             Err(Decline::Busy) => save_pool_busy("settings_busy"),
             _ => no_store(super::plain(
                 500,
@@ -199,14 +212,9 @@ impl Settings {
             Ok(body) => body,
             Err(reply) => return reply,
         };
-        // Waiting for the turn and retrying the leases share one budget. Once admitted, the
-        // blocking writer owns the turn through completion even if its client disconnects.
-        let deadline = Instant::now() + LEASE_WAIT;
-        let Ok(turn) =
-            tokio::time::timeout_at(deadline.into(), self.preference_writes.clone().lock_owned())
-                .await
-        else {
-            return preferences_busy();
+        let (turn, deadline) = match self.write_turn(Family::Preferences).await {
+            Ok(admitted) => admitted,
+            Err(reply) => return reply,
         };
         let root = self.root.clone();
         let owners = self.owners.clone();
@@ -227,7 +235,9 @@ impl Settings {
             Ok(Err(crate::preferences_write::PublicError::Invalid)) => {
                 no_store(super::plain(400, "Preferences are not valid."))
             }
-            Ok(Err(crate::preferences_write::PublicError::Busy)) => preferences_busy(),
+            Ok(Err(crate::preferences_write::PublicError::Busy)) => {
+                writer_busy(Family::Preferences)
+            }
             Err(Decline::Busy) => save_pool_busy("preferences_busy"),
             _ => no_store(super::plain(
                 500,
@@ -273,13 +283,18 @@ impl Settings {
         if !crate::visibility_write::body_valid(patch, &body) {
             return no_store(body_refusal(Family::Visibility));
         }
+        let (turn, deadline) = match self.write_turn(Family::Visibility).await {
+            Ok(admitted) => admitted,
+            Err(reply) => return reply,
+        };
         let root = self.root.clone();
         let owners = self.owners.clone();
         let saved = self
             .limits
             .blocking(crate::table::Pool::Reads, move || {
+                let _turn = turn;
                 Ok(crate::visibility_write::save_public(
-                    &root, &owners, patch, &body,
+                    &root, &owners, patch, &body, deadline,
                 ))
             })
             .await;
@@ -293,11 +308,7 @@ impl Settings {
                 "visibility_unavailable",
                 "Account visibility could not be read safely.",
             ),
-            Ok(Err(Decline::Busy)) => super::error(
-                409,
-                "visibility_busy",
-                "Another visibility save is in progress. Try again.",
-            ),
+            Ok(Err(Decline::Busy)) => writer_busy(Family::Visibility),
             Err(Decline::Busy) => save_pool_busy("visibility_busy"),
             Ok(Err(_)) | Err(_) => super::error(
                 500,
@@ -336,12 +347,22 @@ impl Settings {
     }
 }
 
-fn preferences_busy() -> Reply {
-    super::error(
-        409,
-        "preferences_busy",
-        "Another preferences save is in progress. Try again.",
-    )
+fn writer_busy(family: Family) -> Reply {
+    let (code, message) = match family {
+        Family::Settings => (
+            "settings_busy",
+            "Another settings save is in progress. Try again.",
+        ),
+        Family::Preferences => (
+            "preferences_busy",
+            "Another preferences save is in progress. Try again.",
+        ),
+        Family::Visibility => (
+            "visibility_busy",
+            "Another visibility save is in progress. Try again.",
+        ),
+    };
+    super::error(409, code, message)
 }
 
 fn save_pool_busy(code: &str) -> Reply {
@@ -432,9 +453,14 @@ fn settings_interval(body: &[u8]) -> Option<i64> {
         .filter(|seconds| (30..=3600).contains(seconds))
 }
 
-fn settings_write(root: &Path, owners: &Owners, seconds: i64) -> Result<Value, Decline> {
+fn settings_write(
+    root: &Path,
+    owners: &Owners,
+    seconds: i64,
+    deadline: Instant,
+) -> Result<Value, Decline> {
     let rows = registry::rows().map_err(|_| Decline::Internal)?;
-    let file = retry_busy_lease(Instant::now() + LEASE_WAIT, || {
+    let file = retry_busy_lease(deadline, || {
         owners
             .claim(rows, "account-refresh-settings", root, None)
             .map_err(|error| {

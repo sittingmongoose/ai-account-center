@@ -2738,6 +2738,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_busy_saves_leave_room_for_reads() {
+        let mut failures = Vec::new();
+        for (owner, path, method, body, code, message) in [
+            (
+                "account-refresh-settings",
+                "/api/accounts/settings",
+                "PUT",
+                r#"{"refreshIntervalSeconds":120}"#,
+                "settings_busy",
+                "Another settings save is in progress. Try again.",
+            ),
+            (
+                "account-visibility",
+                "/api/accounts/visibility",
+                "PATCH",
+                r#"{"hiddenProviders":{"hide":["codex"],"show":[]}}"#,
+                "visibility_busy",
+                "Another visibility save is in progress. Try again.",
+            ),
+        ] {
+            let (home, addr, handle) = settings_server().await;
+            let headers = settings_write_headers(addr).await;
+            let held = native_settings::owners()
+                .claim(
+                    aac_files::registry::rows().unwrap(),
+                    owner,
+                    home.path(),
+                    None,
+                )
+                .unwrap();
+            let mut saves = tokio::task::JoinSet::new();
+            for _ in 0..crate::limits::READ_PERMITS {
+                let headers = headers.clone();
+                saves.spawn(async move { request(addr, path, method, &headers, body).await });
+            }
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                let read = request(addr, "/api/accounts/preferences", "GET", &headers, "").await;
+                if !read.starts_with("HTTP/1.1 200") {
+                    failures.push(format!("{method} {path}: {}", read.lines().next().unwrap()));
+                }
+            }
+            assert!(
+                saves.try_join_next().is_none(),
+                "{path}: saves finished before the read probe"
+            );
+            while let Some(reply) = saves.join_next().await {
+                assert_settings_busy(&reply.unwrap(), code, message);
+            }
+            drop(held);
+            handle.abort();
+            let _ = handle.await;
+        }
+        assert!(
+            failures.is_empty(),
+            "dashboard reads failed during busy saves: {failures:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn settings_queued_preference_saves_have_a_bounded_wait() {
         let (home, addr, handle) = settings_server().await;
         let headers = settings_write_headers(addr).await;

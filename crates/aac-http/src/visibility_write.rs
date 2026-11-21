@@ -1,6 +1,6 @@
 //! PUT replacements and PATCH deltas for the four visibility lists.
 use crate::account_reads::{id_list, known_providers, store_folder, visibility};
-use crate::preferences_write::{LEASE_WAIT, retry_busy_lease};
+use crate::preferences_write::retry_busy_lease;
 use aac_core::Cause;
 use aac_files::registry::{self, Owners};
 use aac_views::decline::Decline;
@@ -99,8 +99,9 @@ pub(crate) fn save_public(
     owners: &Owners,
     patch: bool,
     bytes: &[u8],
+    deadline: Instant,
 ) -> Result<Value, Decline> {
-    save_until(root, owners, patch, bytes, Instant::now() + LEASE_WAIT)
+    save_until(root, owners, patch, bytes, deadline)
 }
 
 fn save_until(
