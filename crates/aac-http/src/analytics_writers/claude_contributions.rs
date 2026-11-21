@@ -112,15 +112,12 @@ pub(super) fn remember(
             }
         }
     }
-    for (hour, snapshot) in snapshots {
-        if !snapshot.mirrors.is_empty() {
-            analytics_cache::put(
-                store,
-                &key(part.host, hour, phase),
-                &serde_json::to_vec(&snapshot)?,
-            )?;
-        }
-    }
+    let checkpoints = snapshots
+        .into_iter()
+        .filter(|(_, snapshot)| !snapshot.mirrors.is_empty())
+        .map(|(hour, snapshot)| Ok((key(part.host, hour, phase), serde_json::to_vec(&snapshot)?)))
+        .collect::<Result<Vec<_>>>()?;
+    analytics_cache::put_many(store, &checkpoints)?;
     claude_mirrors::save(store, claude_mirrors::HISTORY_MIRRORS, &owners)?;
     if history.len() != previous {
         claude_mirrors::save(store, claude_mirrors::HISTORY, &history)?;
@@ -131,6 +128,9 @@ pub(super) fn remember(
 fn covered(mirror: &Value, original: &Value) -> bool {
     mirror["modelRaw"] == original["modelRaw"]
         && mirror["route"] == original["route"]
+        && (mirror["sessionKey"].is_null()
+            || original["sessionKey"].is_null()
+            || mirror["sessionKey"] == original["sessionKey"])
         && [
             "inputTokens",
             "outputTokens",

@@ -17,14 +17,19 @@ fn local_disk_original_prevents_migration_duplication_even_without_an_archive() 
         let now = aac_store::engine::now_ms() as i64;
         let at = hour(now);
         let local = root.join("local");
-        let original = scan(&local, "original", at, "shared", (70, 30));
-        let mirror = scan(
+        let mut original = scan(&local, "original", at, "shared", (70, 30));
+        let mut mirror = scan(
             &root.join("remote"),
             "ssh-12345678-1234-1234-1234-123456789abc",
             at,
             "shared",
             (70, 30),
         );
+        if previously_imported {
+            // The older cache may have no session ID even though it has an hourly cell.
+            original["srows"] = json!([]);
+            mirror["srows"] = json!([]);
+        }
         let mut current = migration(&store, root, now);
         current.local_originals = crate::analytics_writers::local_inventory::original_names(
             &local,

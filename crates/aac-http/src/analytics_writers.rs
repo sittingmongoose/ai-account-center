@@ -839,6 +839,9 @@ async fn migrate_files(
         });
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
+        if matches!(migration::Migration::needed(&engine), Ok(false)) {
+            return true;
+        }
         let env =
             aac_usage::discover::env_from(std::env::vars_os().filter_map(|(key, value)| {
                 Some((key.into_string().ok()?, value.into_string().ok()?))

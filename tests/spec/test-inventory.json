@@ -496,6 +496,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers/history/matrix.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/analytics_writers/migration.rs",
       "kind": "internal",
       "evidence": [],

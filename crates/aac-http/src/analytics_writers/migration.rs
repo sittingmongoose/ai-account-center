@@ -175,6 +175,11 @@ pub(super) struct Migration<'a> {
 }
 
 impl Migration<'_> {
+    pub(super) fn needed(store: &Engine) -> Result<bool> {
+        let epoch = activity::recovery_epoch(store)?.to_string();
+        Ok(store.get_meta(MARKER)?.as_deref() != Some(&epoch))
+    }
+
     fn project(&self, key: &str, digest: &str, bytes: Option<&[u8]>, epoch: &str) -> Result<bool> {
         let kind = projection(key);
         if matches!(kind, Projection::Archive) {

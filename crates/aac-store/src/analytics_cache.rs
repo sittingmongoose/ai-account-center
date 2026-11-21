@@ -23,6 +23,24 @@ pub fn put(engine: &Engine, key: &str, bytes: &[u8]) -> Result<()> {
     })
 }
 
+/// Save one complete checkpoint before its corresponding usage is published.
+pub fn put_many(engine: &Engine, values: &[(String, Vec<u8>)]) -> Result<()> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    engine.with_db(|db| {
+        let txn = engine::begin(db)?;
+        {
+            let mut table = txn.open_table(TABLE)?;
+            for (key, bytes) in values {
+                table.insert(key.as_str(), bytes.as_slice())?;
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    })
+}
+
 /// Drop a consumed scanner checkpoint after its completion receipt commits.
 pub fn remove(engine: &Engine, key: &str) -> Result<()> {
     engine.with_db(|db| {
