@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::{
     error::Error,
     fs,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::{fs::PermissionsExt, net::UnixStream},
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -202,6 +202,44 @@ fn settings_writes_require_the_session_and_the_registry_lease() -> Result<()> {
         0o600
     );
     assert!(!temporary.exists());
+    Ok(())
+}
+
+#[test]
+fn signed_in_settings_write_accepts_headers_before_the_body() -> Result<()> {
+    let service = Service::start_with_settings_owner(true)?;
+    let stream = UnixStream::connect(&service.socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let mut connection = BufReader::new(stream);
+    let body = r#"{"refreshIntervalSeconds":120}"#;
+    let secret = "b".repeat(64);
+    let session = principal("session", "admin");
+    let headers = format!(
+        "PUT /api/accounts/settings HTTP/1.1\r\nHost: private\r\nConnection: close\r\n\
+         x-aac-boot-secret: {secret}\r\nx-aac-principal: {session}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nExpect: 100-continue\r\n\r\n",
+        body.len()
+    );
+    connection.get_mut().write_all(headers.as_bytes())?;
+
+    // The interim reply proves the server handled the headers before we sent the body.
+    let mut interim = String::new();
+    connection.read_line(&mut interim)?;
+    assert_eq!(interim, "HTTP/1.1 100 Continue\r\n");
+    interim.clear();
+    connection.read_line(&mut interim)?;
+    assert_eq!(interim, "\r\n");
+    connection.get_mut().write_all(body.as_bytes())?;
+
+    let mut reply = String::new();
+    connection.read_to_string(&mut reply)?;
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    let returned: Value = serde_json::from_str(reply.split_once("\r\n\r\n").ok_or("no body")?.1)?;
+    assert_eq!(returned, json!({"refreshIntervalSeconds": 120}));
+    assert_eq!(
+        fs::read_to_string(service.root.path().join("account-refresh-settings.json"))?,
+        format!("{body}\n")
+    );
     Ok(())
 }
 
