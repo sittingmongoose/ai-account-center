@@ -11,6 +11,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+mod mirror_tests;
+
 const MARKER: &str = "analytics_files_migrated_v2";
 pub(super) const QUOTA: &str = "legacy/account-analytics/quota-history-v1.json";
 const MAX_FILE: u64 = 256 * 1024 * 1024;
