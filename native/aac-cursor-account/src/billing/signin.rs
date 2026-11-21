@@ -1,10 +1,9 @@
 //! Read Cursor-owned credentials in place. The token lives only for this process's read.
 use crate::{api, util};
+use aac_files::read::{Read, ReadPolicy};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::env;
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -91,12 +90,12 @@ fn desktop(path: &Path) -> Option<String> {
     .ok()?
 }
 
+/// Cursor CLI's own sign-in file (another tool's data): a regular file of at most 64 KiB, read
+/// through the shared reader, which refuses a link at the name and a FIFO swapped in.
 fn cli(path: &Path) -> Option<String> {
-    let mut bytes = Vec::new();
-    File::open(path).ok()?.take(MAX_AUTH + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > MAX_AUTH {
+    let Read::Bytes(bytes, _) = aac_files::read::read(path, &ReadPolicy::capped(MAX_AUTH)) else {
         return None;
-    }
+    };
     let auth: Value = serde_json::from_slice(&bytes).ok()?;
     auth.get("accessToken")?.as_str().map(str::to_owned)
 }

@@ -300,6 +300,17 @@ impl StoreHost {
         self.engine()
     }
 
+    /// Why [`Self::analytics_engine`] has no engine, as a reader's fixed cause: still opening or
+    /// closed for a restore is a read in progress; a failed boot open is an unsafe store.
+    pub(crate) fn engine_unavailable_cause(&self) -> &'static str {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.ready && state.boot_error.is_some() {
+            "store_unsafe"
+        } else {
+            "read_in_progress"
+        }
+    }
+
     fn engine(&self) -> Option<Arc<Engine>> {
         self.slot
             .lock()

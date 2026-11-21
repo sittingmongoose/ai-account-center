@@ -48,6 +48,8 @@ export default (ctx) => {
         AAC_AGENT_REPORTS_DIR: path.join(s.home, 'agent-reports'),
         AAC_PM_MAIL_REGISTRY_DIR: path.join(s.home, 'registry'),
         SSH_AUTH_SOCK: '',
+        AAC_CURSOR_BILLING_ENABLED: '0',
+        AAC_CURSOR_API_BASE: 'http://127.0.0.1:1',
       },
     }),
     teardown(_, s) {

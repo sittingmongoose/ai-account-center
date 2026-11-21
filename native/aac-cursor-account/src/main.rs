@@ -4,7 +4,8 @@
 //!   aac-cursor-account key put    --ccs-dir <dir>   (the key on stdin)
 //!   aac-cursor-account key status --ccs-dir <dir>
 //!   aac-cursor-account key delete --ccs-dir <dir>
-//!   aac-cursor-account read       --ccs-dir <dir>   (stdin: {"sinceMs": n, "untilMs": n})
+//!   aac-cursor-account read       --ccs-dir <dir>   (stdin: {"sinceMs": n, "untilMs": n,
+//!                                                    "billingState"?: the store's document})
 //!   aac-cursor-account dedupe                       (stdin: {"account": rows, "local": rows})
 //!   aac-cursor-account quota      --ccs-dir <dir>
 //!   aac-cursor-account --version
@@ -15,7 +16,8 @@ use std::io::Read;
 use std::path::PathBuf;
 
 const MAX_KEY_INPUT: u64 = 4096;
-const MAX_REQUEST: u64 = 16 * 1024 * 1024;
+// The dedupe rows, or the store's billing document (capped at 16 MiB) with the read window.
+const MAX_REQUEST: u64 = 17 * 1024 * 1024;
 
 fn stdin(limit: u64) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -119,7 +121,8 @@ fn main() {
             ) else {
                 usage()
             };
-            if let Some(answer) = aac_cursor_account::billing::read(&ccs, since, until, now_ms()) {
+            let saved = request.get("billingState").filter(|state| state.is_object());
+            if let Some(answer) = aac_cursor_account::billing::read(&ccs, since, until, now_ms(), saved) {
                 return print(answer);
             }
             let stored = match keys::load(&ccs) {

@@ -1,16 +1,17 @@
-//! Incremental account-wide Cursor Usage-tab reads. Only completed windows enter the cache.
+//! Incremental account-wide Cursor Usage-tab reads. Only completed windows enter the saved state.
+//!
+//! The reader keeps no file of its own. The dashboard's store owns the checkpoint: the caller
+//! passes the saved document (`billingState`, `{"version":1,"accounts":{<hash>:<checkpoint>}}`)
+//! on stdin and saves the `billingState` this pass returns, `{"account":..,"checkpoint":..}`,
+//! as its one writer. Without a saved document the pass starts fresh and nothing persists.
 mod api;
 mod signin;
 
 use api::{Client, HOUR, Window, iso};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::ErrorKind;
 use std::path::Path;
-use std::time::Duration;
 
 const DAY: i64 = 24 * HOUR;
 const HISTORY: i64 = 31 * DAY;
@@ -123,7 +124,8 @@ fn test_base() -> Option<String> {
 }
 
 /// None delegates to the legacy API-key path. The loopback fixture can only read a synthetic root.
-pub fn read(root: &Path, since: i64, until: i64, now: i64) -> Option<Value> {
+/// `saved` is the store's billing document, if the caller has a store.
+pub fn read(root: &Path, since: i64, until: i64, now: i64, saved: Option<&Value>) -> Option<Value> {
     // Off unless the server opts in: it passes 1 for an installed package only (cursorBillingEnabled);
     // tests, kits and source checkouts pass 0 or leave it unset.
     if std::env::var("AAC_CURSOR_BILLING_ENABLED").as_deref() != Ok("1") {
@@ -153,90 +155,49 @@ pub fn read(root: &Path, since: i64, until: i64, now: i64) -> Option<Value> {
         return Some(unavailable("bad_response"));
     }
     let mut client = Client::new(base.as_deref(), &session.cookie);
-    Some(collect(root, &session.account, since, until, now, &mut client).unwrap_or_else(unavailable))
+    Some(collect(saved, &session.account, since, until, now, &mut client).unwrap_or_else(unavailable))
 }
 
-fn store_error(error: rusqlite::Error) -> &'static str {
-    match error.sqlite_error_code() {
-        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => "read_in_progress",
-        _ => "store_unsafe",
+/// This account's checkpoint from the store's document, if it is one this build can read.
+fn saved_checkpoint(saved: Option<&Value>, account: &str) -> Option<Checkpoint> {
+    let document = saved?;
+    if document["version"] != 1 {
+        return None;
     }
-}
-
-fn open_store(root: &Path) -> Result<Connection, &'static str> {
-    let cache = root.join("cache");
-    fs::create_dir_all(&cache).map_err(|_| "store_unsafe")?;
-    let file = cache.join("cursor-billing-v1.sqlite");
-    let mut create = OpenOptions::new();
-    create.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        create.mode(0o600);
-    }
-    match create.open(&file) {
-        Ok(_) => {}
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {}
-        Err(_) => return Err("store_unsafe"),
-    }
-    if !fs::symlink_metadata(&file).is_ok_and(|meta| meta.is_file()) {
-        return Err("store_unsafe");
-    }
-    let db = Connection::open(file).map_err(store_error)?;
-    db.busy_timeout(Duration::from_secs(2)).map_err(store_error)?;
-    db.execute_batch("CREATE TABLE IF NOT EXISTS observations (account TEXT PRIMARY KEY, state TEXT NOT NULL);")
-        .map_err(store_error)?;
-    Ok(db)
+    let checkpoint = document["accounts"].get(account)?;
+    serde_json::from_value(checkpoint.clone()).ok()
 }
 
 fn collect(
-    root: &Path,
+    saved: Option<&Value>,
     account: &str,
     since: i64,
     until: i64,
     now: i64,
     client: &mut Client<'_>,
 ) -> Result<Value, &'static str> {
-    let mut db = open_store(root)?;
-    // One writer, including the request, so two observations cannot regress the watermark.
-    let tx = db
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(store_error)?;
-    let saved: Option<String> = tx
-        .query_row(
-            "SELECT state FROM observations WHERE account = ?1 AND length(CAST(state AS BLOB)) <= ?2",
-            params![account, MAX_SAVED],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(store_error)?;
     let oldest = ceil_hour(until.saturating_sub(HISTORY).max(0));
-    let mut state = saved
-        .as_deref()
-        .and_then(|data| serde_json::from_str::<Checkpoint>(data).ok())
+    let mut state = saved_checkpoint(saved, account)
         .filter(|state| state.through > oldest)
         .unwrap_or_else(|| Checkpoint::new(until));
 
     if state.read_at.is_some() && until < state.through {
         state.rewind(until);
     }
+    // A failed request returns before any state is handed back, so the store keeps the last one.
     let result = advance(&mut state, oldest, until, now, client)?;
-    let encoded = serde_json::to_string(&state).map_err(|_| "store_unsafe")?;
-    if encoded.len() > MAX_SAVED {
+    let checkpoint = serde_json::to_value(&state).map_err(|_| "store_unsafe")?;
+    if serde_json::to_vec(&checkpoint).map_or(usize::MAX, |bytes| bytes.len()) > MAX_SAVED {
         return Err("store_unsafe");
     }
-    tx.execute(
-        "INSERT INTO observations VALUES (?1, ?2)
-         ON CONFLICT(account) DO UPDATE SET state = excluded.state",
-        params![account, encoded],
-    )
-    .map_err(store_error)?;
-    tx.commit().map_err(store_error)?;
-    if result {
-        Ok(state.answer(since, until, client.pages))
+    let mut answer = if result {
+        state.answer(since, until, client.pages)
     } else {
-        Err("backfill_pending")
-    }
+        unavailable("backfill_pending")
+    };
+    // The caller saves this; a caller without a store drops it.
+    answer["billingState"] = json!({"account": account, "checkpoint": checkpoint});
+    Ok(answer)
 }
 
 fn advance(

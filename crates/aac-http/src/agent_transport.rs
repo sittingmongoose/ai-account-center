@@ -153,13 +153,24 @@ pub(crate) fn package_root() -> Option<PathBuf> {
         let root = PathBuf::from(root);
         return root.is_absolute().then_some(root);
     }
-    let exe = crate::identity::executable_path_for_assets().ok()?;
-    let native = exe.parent()?;
-    let dist = native.parent()?;
-    if native.file_name()? != "native" || dist.file_name()? != "dist" {
-        return None;
+    package_root_for(&std::env::current_exe().ok()?)
+}
+
+/// The package that holds `exe` at `<package>/dist/native/<bin>`. The direct path comes first:
+/// it keeps a Linux binary replaced in place (`/proc/self/exe` ends in " (deleted)") and a
+/// Windows path without the `\\?\` prefix. Only then is a link resolved: a global npm or bun
+/// install runs `<prefix>/bin/ai-account-center`, a link into the package, and macOS
+/// `current_exe()` returns that link itself.
+pub(crate) fn package_root_for(exe: &Path) -> Option<PathBuf> {
+    fn direct(exe: &Path) -> Option<PathBuf> {
+        let native = exe.parent()?;
+        let dist = native.parent()?;
+        if native.file_name()? != "native" || dist.file_name()? != "dist" {
+            return None;
+        }
+        Some(dist.parent()?.to_owned())
     }
-    Some(dist.parent()?.to_owned())
+    direct(exe).or_else(|| direct(&crate::identity::resolve_asset_path(exe.to_owned())))
 }
 
 impl Registry {
@@ -1011,6 +1022,48 @@ impl Drop for AbortOnDrop {
 #[cfg(test)]
 mod tests {
     use super::{Entry, Registry, control_line};
+
+    /// Recheck M1: a global npm/bun install runs the binary through `<prefix>/bin`, a link
+    /// to `.../dist/native/ai-account-center`; macOS `current_exe()` returns the link itself.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_global_install_finds_its_package_through_the_bin_link() {
+        let prefix = tempfile::tempdir().unwrap();
+        let package = prefix
+            .path()
+            .join("lib/node_modules/@sittingmongoose/ai-account-center");
+        let native = package.join("dist/native");
+        std::fs::create_dir_all(&native).unwrap();
+        std::fs::write(native.join("ai-account-center"), b"binary").unwrap();
+        std::fs::create_dir_all(prefix.path().join("bin")).unwrap();
+        let link = prefix.path().join("bin/ai-account-center");
+        std::os::unix::fs::symlink(
+            "../lib/node_modules/@sittingmongoose/ai-account-center/dist/native/ai-account-center",
+            &link,
+        )
+        .unwrap();
+        let canonical = package.canonicalize().unwrap();
+        assert_eq!(super::package_root_for(&link), Some(canonical));
+        // The direct path still wins: no resolution where the binary already sits in place.
+        assert_eq!(
+            super::package_root_for(&native.join("ai-account-center")),
+            Some(package.clone())
+        );
+        // A binary that is not in a package is still no package.
+        assert_eq!(
+            super::package_root_for(&prefix.path().join("bin/other")),
+            None
+        );
+        // An installed package found through the link turns the Cursor billing switch on.
+        std::fs::write(
+            package.join("dist/build-info.json"),
+            br#"{"version":1,"commit":"0123456789abcdef0123456789abcdef01234567","dirty":false}"#,
+        )
+        .unwrap();
+        let found = super::package_root_for(&link).unwrap();
+        assert!(aac_files::deployed_build::read_packaged_build(&found).is_some());
+    }
     use aac_protocol::Control;
     use serde_json::json;
 

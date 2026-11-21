@@ -504,6 +504,8 @@ pub struct CallOptions {
     pub scan: bool,
     /// Trusted dashboard scope for a local app-update agent. SSH never inherits it.
     pub local_app_update_state_dir: Option<PathBuf>,
+    /// `AAC_CURSOR_BILLING_ENABLED` for a local Cursor account reader. SSH never inherits it.
+    pub local_cursor_billing: Option<bool>,
 }
 
 impl CallOptions {
@@ -515,6 +517,7 @@ impl CallOptions {
             output_cap,
             scan: false,
             local_app_update_state_dir: None,
+            local_cursor_billing: None,
         }
     }
 }
@@ -679,6 +682,12 @@ impl Computer {
                         ));
                     }
                     cmd.env("AAC_APP_UPDATE_STATE_DIR", directory);
+                }
+                if let Some(enabled) = options.local_cursor_billing {
+                    cmd.env(
+                        "AAC_CURSOR_BILLING_ENABLED",
+                        if enabled { "1" } else { "0" },
+                    );
                 }
                 (cmd, None)
             }

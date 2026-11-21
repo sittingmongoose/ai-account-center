@@ -4,7 +4,7 @@
  * through stdin only, and the reader binary used only when its digest matches. Fixtures only: no
  * key exists, and the reader binary is replaced by a fake.
  */
-import { afterEach,beforeEach,describe,expect,it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -12,11 +12,12 @@ import * as path from 'path';
 import { handleCursorKeyCommand } from '../../../src/commands/cursor-key-command';
 import { analyticsRowsResult } from '../../../src/web-server/services/analytics-remote-sources';
 import {
-CURSOR_ACCOUNT_TTL_MS,
-cursorAccountBinary,
-cursorAccountOutside,
-readCursorAccount,
-type CursorAccountRead,
+  CURSOR_ACCOUNT_TTL_MS,
+  cursorAccountBinary,
+  cursorAccountOutside,
+  cursorBillingEnabled,
+  readCursorAccount,
+  type CursorAccountRead,
 } from '../../../src/web-server/services/cursor-account-reader';
 
 const NOW = Date.parse('2026-11-13T16:30:00Z');
@@ -71,7 +72,12 @@ describe('reading the account', () => {
         },
       });
     const first = await read();
-    expect(first).toMatchObject({ state: 'read', events: 2, unmeasured: 2, key: { last4: 'WXYZ' } });
+    expect(first).toMatchObject({
+      state: 'read',
+      events: 2,
+      unmeasured: 2,
+      key: { last4: 'WXYZ' },
+    });
     expect(calls[0]).toEqual(['read', '--ccs-dir', path.join(dir, 'ccs')]);
     now += CURSOR_ACCOUNT_TTL_MS - 1;
     await read();
@@ -100,6 +106,48 @@ describe('reading the account', () => {
     now += CURSOR_ACCOUNT_TTL_MS;
     answer = { state: 'no_key' };
     expect(await read()).toMatchObject({ state: 'no_key', rows: [], key: null });
+  });
+
+  it('keeps measured billing rows and coverage when the Cursor sign-in expires or disappears', async () => {
+    const coverage = {
+      coverageFrom: '2026-11-13T00:00:00.000Z',
+      coverageUntil: new Date(NOW).toISOString(),
+    };
+    let answer: unknown = {
+      state: 'read',
+      ...coverage,
+      readAt: NOW,
+      rows: [ROW],
+      events: 2,
+      unrecognizedModels: 1,
+    };
+    const read = () =>
+      readCursorAccount(SINCE, NOW, {
+        cacheDir: path.join(dir, 'cache'),
+        ccsDir: dir,
+        now: () => NOW,
+        force: true,
+        run: async () => answer,
+      });
+    await read();
+    for (const failure of [{ state: 'unavailable', cause: 'signin_needed' }, { state: 'no_key' }]) {
+      answer = failure;
+      const last = await read();
+      expect(last).toMatchObject({
+        ...coverage,
+        state: 'unavailable',
+        cause: 'signin_needed',
+        readAt: new Date(NOW).toISOString(),
+        rows: [ROW],
+        events: 2,
+        unrecognizedModels: 1,
+      });
+      const summary = await cursorAccountOutside(last, [], {
+        run: async () => ({ rows: [ROW], summary: { accountTokens: 1320 } }),
+      });
+      expect(summary).toMatchObject({ ...coverage, accountTokens: 1320, unrecognizedModels: 1 });
+      expect(summary.computer).toBeTruthy();
+    }
   });
 
   it('says when no reader is built for this computer', async () => {
@@ -206,21 +254,17 @@ describe('only the usage outside the scanned computers is added', () => {
         cents: 0,
         uncosted,
       };
-      const outside = await cursorAccountOutside(
-        { ...read, rows: [row] },
-        [],
-        {
-          run: async () => ({
-            rows: [row],
-            summary: {
-              accountTokens: 1_000_000,
-              matchedTokens: 0,
-              outsideTokens: 1_000_000,
-              localUnmatchedTokens: 0,
-            },
-          }),
-        }
-      );
+      const outside = await cursorAccountOutside({ ...read, rows: [row] }, [], {
+        run: async () => ({
+          rows: [row],
+          summary: {
+            accountTokens: 1_000_000,
+            matchedTokens: 0,
+            outsideTokens: 1_000_000,
+            localUnmatchedTokens: 0,
+          },
+        }),
+      });
       expect(outside.rows[0].c).toBe(0);
       expect(outside.rows[0].costBasis).toBe(uncosted === 0 ? 'reported' : 'unknown');
       expect(outside.costPartial).toBe(uncosted === 0 ? undefined : true);
@@ -232,7 +276,7 @@ describe('only the usage outside the scanned computers is added', () => {
     }
   });
 
-  it("an all-unmeasured read carries its count, never an absence of usage (recheck R1)", async () => {
+  it('an all-unmeasured read carries its count, never an absence of usage (recheck R1)', async () => {
     // The recheck's loopback case: one in-range event with tokenUsage {} — the reader answers
     // state read, no rows, unmeasured 1. The server must keep that count, so the page can say
     // the events were not logged instead of "no usage in range".
@@ -253,16 +297,17 @@ describe('only the usage outside the scanned computers is added', () => {
     });
     expect(outside).toMatchObject({ state: 'read', accountTokens: 0, unmeasured: 1 });
     // And a mixed read: measured tokens beside unmeasured events.
-    const outside2 = await cursorAccountOutside(
-      { ...read, unmeasured: 2 },
-      [],
-      {
-        run: async () => ({
-          rows: read.rows,
-          summary: { accountTokens: 2640, matchedTokens: 0, outsideTokens: 2640, localUnmatchedTokens: 0 },
-        }),
-      }
-    );
+    const outside2 = await cursorAccountOutside({ ...read, unmeasured: 2 }, [], {
+      run: async () => ({
+        rows: read.rows,
+        summary: {
+          accountTokens: 2640,
+          matchedTokens: 0,
+          outsideTokens: 2640,
+          localUnmatchedTokens: 0,
+        },
+      }),
+    });
     expect(outside2).toMatchObject({ state: 'read', accountTokens: 2640, unmeasured: 2 });
   });
 
@@ -327,6 +372,19 @@ describe('the key and the reader binary', () => {
     ).toBe(130);
     expect(out.join('')).toContain('Cancelled');
     expect(seen).toHaveLength(3);
+  });
+
+  it('turns the billing reader on for an installed package only; an explicit 0 or 1 wins (review L1)', () => {
+    const installed = () => true;
+    const checkout = () => false;
+    expect(cursorBillingEnabled({}, installed)).toBe('1');
+    expect(cursorBillingEnabled({}, checkout)).toBe('0');
+    // This source checkout is never an installed package.
+    expect(cursorBillingEnabled({})).toBe('0');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: '0' }, installed)).toBe('0');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: '1' }, checkout)).toBe('1');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: 'yes' }, installed)).toBe('0');
+    expect(cursorBillingEnabled({ NODE_ENV: 'test' }, installed)).toBe('0');
   });
 
   it('uses the packaged reader only when its digest matches the manifest', () => {

@@ -25,7 +25,7 @@
   "src/web-server/routes/index.ts": "eb25416af98da897c77c53d589795a064c5532c96b50652819655617bff61817",
   "src/web-server/routes/revalidated-view.ts": "58d7382a0314411bb4e6b5cb079b0a8c73de2d9026521679b270e98b21b7923a",
   "src/web-server/rust-service-health.ts": "05a67c876dea55b6f9a17e9d9132d9b954f02ec748a3334ce42798a030d21c39",
-  "src/web-server/rust-service-lifecycle.ts": "029672e951e14c701e9c75fc180e8dade2573cb5e9f0455d52f33d01450c2562",
+  "src/web-server/rust-service-lifecycle.ts": "de93537f0d09a7488b9f0ae9af0613baf891cd3acc2c337165177ed1bbee25f8",
   "src/web-server/rust-service-supervisor.ts": "8a4458260d82c7b8bbe9205e432f1ae2f8e458e74cb88fecea2d05959b74bea2",
   "src/web-server/rust-service-transport.ts": "80a190f2e9a60a9d66e65bd3ae349ca03b96d578ddf0d635109a792e1afdad6d",
   "src/web-server/rust-service.ts": "9c42049eb2d78894d2b75ef20a1b328053b8fb15531026cf759a91a37eb83d62",

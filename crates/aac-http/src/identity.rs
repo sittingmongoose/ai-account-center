@@ -31,16 +31,14 @@ fn executable() -> io::Result<PathBuf> {
 /// The installed binary's location for finding assets next to it. Some Unix
 /// launchers report the path of the package-manager symlink.
 pub(crate) fn executable_path_for_assets() -> io::Result<PathBuf> {
-    let path = std::env::current_exe()?;
-    #[cfg(unix)]
-    let path = resolve_asset_path(path);
-    Ok(path)
+    std::env::current_exe().map(resolve_asset_path)
 }
 
-#[cfg(unix)]
-fn resolve_asset_path(path: PathBuf) -> PathBuf {
+pub(crate) fn resolve_asset_path(path: PathBuf) -> PathBuf {
     // A running executable can lose its directory entry during an upgrade.
-    path.canonicalize().unwrap_or(path)
+    #[cfg(unix)]
+    let path = path.canonicalize().unwrap_or(path);
+    path
 }
 
 fn sha256_hex(path: &PathBuf) -> io::Result<String> {

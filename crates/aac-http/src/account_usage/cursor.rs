@@ -11,7 +11,7 @@ use aac_views::{decline::Decline, js::parse_date};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -65,7 +65,7 @@ impl Command {
     /// The credential stays with the packaged reader. Only the fixed status and quota
     /// subcommands are exposed to the private service.
     async fn answer(self, root: PathBuf) -> Result<Value, Decline> {
-        let (binary, os) = tokio::task::spawn_blocking(local_reader)
+        let (binary, os, billing) = tokio::task::spawn_blocking(local_reader)
             .await
             .map_err(|_| Decline::Internal)??;
         let binary = binary.ok_or(Decline::Unsupported)?;
@@ -73,7 +73,7 @@ impl Command {
             Self::KeyStatus => &["key", "status"],
             Self::Quota => &["quota"],
         };
-        Ok(execute(&root, binary, os, args, &[]).await)
+        Ok(execute(&root, binary, os, billing, args, &[]).await)
     }
 }
 
@@ -113,10 +113,29 @@ fn executable(package: &Path, target: &str) -> Option<PathBuf> {
     (bytes.len() == size as usize && entry["sha256"] == sha256_hex(bytes)).then_some(path)
 }
 
-fn local_reader() -> Result<(Option<PathBuf>, OperatingSystem), Decline> {
+/// `cursorBillingEnabled()` in cursor-account-reader.ts, for the native dashboard that runs
+/// without Node: an explicit `0` or `1` wins, any other value or `NODE_ENV=test` is off, and
+/// otherwise only an installed package (`read_packaged_build`) reads Cursor's billing items.
+/// Tests, browser kits and source checkouts therefore never call Cursor.
+fn billing_enabled(explicit: Option<&OsStr>, node_env: Option<&OsStr>, package: &Path) -> bool {
+    if let Some(value) = explicit {
+        return value == "1";
+    }
+    if node_env.is_some_and(|value| value == "test") {
+        return false;
+    }
+    aac_files::deployed_build::read_packaged_build(package).is_some()
+}
+
+fn local_reader() -> Result<(Option<PathBuf>, OperatingSystem, bool), Decline> {
     let package = crate::agent_transport::package_root().ok_or(Decline::Unsupported)?;
     let (target, os) = target().ok_or(Decline::Unsupported)?;
-    Ok((executable(&package, target), os))
+    let billing = billing_enabled(
+        std::env::var_os("AAC_CURSOR_BILLING_ENABLED").as_deref(),
+        std::env::var_os("NODE_ENV").as_deref(),
+        &package,
+    );
+    Ok((executable(&package, target), os, billing))
 }
 
 fn fresh(previous: &Value, now: i64) -> bool {
@@ -130,6 +149,7 @@ async fn execute(
     root: &Path,
     binary: PathBuf,
     os: OperatingSystem,
+    billing: bool,
     command: &[&str],
     input: &[u8],
 ) -> Value {
@@ -154,7 +174,8 @@ async fn execute(
         .chain(command.iter().copied().map(OsString::from))
         .chain([OsString::from("--ccs-dir"), root.as_os_str().to_owned()])
         .collect();
-    let options = CallOptions::new(Duration::from_secs(120), CAP);
+    let mut options = CallOptions::new(Duration::from_secs(120), CAP);
+    options.local_cursor_billing = Some(billing);
     let Ok(result) = computer.execute(&argv, input, &options).await else {
         return failed();
     };
@@ -167,6 +188,91 @@ async fn execute(
 }
 
 impl Reader {
+    /// Keep Analytics responsive while a signed-in account walk is still running.
+    pub(crate) async fn analytics(
+        self: Arc<Self>,
+        root: PathBuf,
+        owners: Owners,
+        engine: Arc<aac_store::engine::Engine>,
+        now: i64,
+        force: bool,
+    ) -> Option<Value> {
+        let since = now.saturating_sub(31 * 86_400_000).max(0);
+        let request = Request {
+            since_ms: since,
+            until_ms: now,
+            force,
+        };
+        let read_root = root.clone();
+        let task = tokio::spawn(async move { self.read(read_root, owners, request).await });
+        let observation = match tokio::time::timeout(Duration::from_millis(200), task).await {
+            Ok(Ok(Ok(value))) => value,
+            _ => {
+                let cached_root = root.clone();
+                Arc::new(
+                    tokio::task::spawn_blocking(move || cursor_account(&cached_root))
+                        .await
+                        .ok()?
+                        .ok()??,
+                )
+            }
+        };
+        let summary = analytics_status(&observation);
+        let rows = observation["rows"].as_array()?;
+        if rows.is_empty() {
+            return Some(summary);
+        }
+        let (since, until) = super::provider_caches::cursor_coverage(&observation)
+            .and_then(|(from, through)| {
+                let from = parse_date(from).ok().flatten()?;
+                let through = parse_date(through).ok().flatten()?;
+                Some((since.max(from), now.min(through.saturating_sub(1))))
+            })
+            .unwrap_or((since, now));
+        let dedupe = async {
+            let (binary, os, billing, local) = tokio::task::spawn_blocking(move || {
+                let (binary, os, billing) = local_reader().ok()?;
+                Some((
+                    binary?,
+                    os,
+                    billing,
+                    local_cursor_cells(&engine, since, until)?,
+                ))
+            })
+            .await
+            .ok()??;
+            let input = json!({"account":rows, "local":local}).to_string();
+            let answer = execute(&root, binary, os, billing, &["dedupe"], input.as_bytes()).await;
+            let mut summary = summary;
+            let totals = answer["summary"].as_object()?;
+            for field in [
+                "accountTokens",
+                "matchedTokens",
+                "outsideTokens",
+                "localUnmatchedTokens",
+            ] {
+                summary[field] = json!(totals.get(field)?.as_u64()?);
+            }
+            if rows
+                .iter()
+                .any(|row| row["uncosted"].as_u64().unwrap_or(0) > 0)
+            {
+                summary["costPartial"] = json!(true);
+            }
+            Some(summary)
+        };
+        tokio::time::timeout(Duration::from_secs(2), dedupe)
+            .await
+            .ok()
+            .flatten()
+            .or_else(|| {
+                let mut unavailable = analytics_status(&observation);
+                unavailable["state"] = json!("unavailable");
+                unavailable["cause"] = json!("dedupe_failed");
+                Some(unavailable)
+            })
+    }
+
     pub(crate) async fn command(&self, command: Command, root: PathBuf) -> Result<Value, Decline> {
         let _permit = self.commands.lock().await;
         command.answer(root).await
@@ -196,7 +302,7 @@ impl Reader {
             if !request.force && previous.as_ref().is_some_and(|row| fresh(row, now)) {
                 return Ok::<_, Decline>((previous, None));
             }
-            let (binary, os) = local_reader()?;
+            let (binary, os, billing) = local_reader()?;
             let store = owners
                 .claim(
                     registry::rows().map_err(|_| Decline::Internal)?,
@@ -205,27 +311,134 @@ impl Reader {
                     None,
                 )
                 .map_err(|_| Decline::Busy)?;
-            Ok((previous, Some((binary, os, store, request))))
+            // Loaded under the claim and saved before this read lock is released: one writer.
+            let billing_store = super::cursor_billing::open(&read_root);
+            Ok((
+                previous,
+                Some((binary, os, billing, store, request, billing_store)),
+            ))
         })
         .await
         .map_err(|_| Decline::Internal)??;
-        let Some((binary, os, store, request)) = launch else {
+        let Some((binary, os, billing, store, request, billing_store)) = launch else {
             return previous.map(Arc::new).ok_or(Decline::Internal);
         };
-        let current = match binary {
-            Some(binary) => {
-                let input =
-                    json!({"sinceMs":request.since_ms, "untilMs":request.until_ms}).to_string();
-                execute(&root, binary, os, &["read"], input.as_bytes()).await
-            }
-            None => json!({"state":"no_reader","cause":"reader_failed"}),
-        };
+        let current = read_billing(&root, binary, os, billing, &request, billing_store).await;
         let value = Arc::new(project(&current, previous.as_ref(), now)?);
         let save = value.clone();
         let _ = tokio::task::spawn_blocking(move || save_read(&root, store, &save)).await;
         *memory = Some((Instant::now(), value.clone()));
         Ok(value)
     }
+}
+
+/// One reader pass with the store's billing checkpoint: the child gets the saved document and
+/// its new checkpoint is saved before the answer is projected. A store that cannot be used now
+/// answers its fixed cause (`read_in_progress`, `store_unsafe`) without calling Cursor; the
+/// API-key path needs no store and still runs when billing is off.
+async fn read_billing(
+    root: &Path,
+    binary: Option<PathBuf>,
+    os: OperatingSystem,
+    billing: bool,
+    request: &Request,
+    store: super::cursor_billing::BillingStore,
+) -> Value {
+    use super::cursor_billing::BillingStore;
+    let Some(binary) = binary else {
+        return json!({"state":"no_reader","cause":"reader_failed"});
+    };
+    if let (true, BillingStore::Unavailable(cause)) = (billing, &store) {
+        return json!({"state":"unavailable","cause":cause});
+    }
+    let mut input = json!({"sinceMs":request.since_ms, "untilMs":request.until_ms});
+    if let Some(document) = store.document() {
+        input["billingState"] = document.clone();
+    }
+    let mut answer = execute(
+        root,
+        binary,
+        os,
+        billing,
+        &["read"],
+        input.to_string().as_bytes(),
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        super::cursor_billing::settle(&store, &mut answer);
+        answer
+    })
+    .await
+    .unwrap_or_else(|_| json!({"state":"unavailable","cause":"store_unsafe"}))
+}
+
+fn analytics_status(observation: &Value) -> Value {
+    let mut status = json!({
+        "state": observation["state"], "checkedAt": observation["checkedAt"],
+        "readAt": observation["readAt"], "unmeasured": observation["unmeasured"],
+        "accountTokens": 0, "matchedTokens": 0, "outsideTokens": 0, "localUnmatchedTokens": 0,
+    });
+    for field in [
+        "eventCounts",
+        "coverageFrom",
+        "coverageUntil",
+        "unrecognizedModels",
+        "cause",
+    ] {
+        if let Some(value) = observation.get(field) {
+            status[field] = value.clone();
+        }
+    }
+    if let Some(last) = observation["key"]["last4"].as_str() {
+        status["last4"] = json!(last);
+    }
+    if matches!(
+        observation["cause"].as_str(),
+        Some("signin_needed" | "events_not_visible" | "events_unverified")
+    ) {
+        let hostname = aac_files::process::hostname().unwrap_or_default();
+        let computer = crate::reset_source_route::local_computer(&hostname);
+        status["computer"] = aac_status::computers::registry()[computer]["label"].clone();
+    }
+    status
+}
+
+fn local_cursor_cells(
+    engine: &aac_store::engine::Engine,
+    since: i64,
+    until: i64,
+) -> Option<Vec<Value>> {
+    if until < since {
+        return Some(Vec::new());
+    }
+    let range = aac_store::activity::range(
+        engine,
+        &aac_store::activity::RangeQuery {
+            from_ms: since.try_into().ok()?,
+            to_ms: until.try_into().ok()?,
+            session_sample: Some(0),
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let tools = range["tools"].as_array()?;
+    let Some(cursor) = tools.iter().position(|tool| tool == "cursor") else {
+        return Some(Vec::new());
+    };
+    let models = range["models"].as_array()?;
+    let rows = range["rows"].as_array()?;
+    Some(
+        rows.iter()
+            .filter(|row| row[2].as_u64() == Some(cursor as u64))
+            .filter_map(|row| {
+                let time = aac_num::ecma::to_iso_string(row[0].as_i64()?)?;
+                let h = format!("{} {}:00", time.get(..10)?, time.get(11..13)?);
+                let model = row[4].as_u64()?;
+                Some(json!({"h":h,"m":models.get(model as usize)?.as_str()?,
+            "i":row[5],"o":row[6],"cw":row[7],"cr":row[8]}))
+            })
+            .collect(),
+    )
 }
 
 fn save_read(root: &Path, store: OwnedStore, value: &Value) {
@@ -247,7 +460,11 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
     let checked = aac_num::ecma::to_iso_string(now).ok_or(Decline::Date)?;
     let state = super::provider_caches::cursor_state(&current["state"]).unwrap_or("unavailable");
     let previous = previous.unwrap_or(&Value::Null);
-    let key = if state == "no_key" {
+    let sign_in_lost = matches!(state, "no_key" | "key_rejected")
+        && super::provider_caches::cursor_coverage(previous).is_some();
+    let state = if sign_in_lost { "unavailable" } else { state };
+    let coverage = super::provider_caches::cursor_coverage(current);
+    let key = if state == "no_key" || coverage.is_some() {
         Value::Null
     } else {
         key(&current["key"]).unwrap_or_else(|| previous["key"].clone())
@@ -264,8 +481,15 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
             "events":super::provider_caches::counter(&current["events"]).unwrap_or(0),
             "unmeasured":super::provider_caches::counter(&current["unmeasured"]).unwrap_or(0),
         });
+        if let Some((from, until)) = coverage {
+            answer["coverageFrom"] = json!(from);
+            answer["coverageUntil"] = json!(until);
+        }
         if let Some(counts) = super::provider_caches::cursor_event_counts(current) {
             answer["eventCounts"] = counts;
+        }
+        if let Some(count) = super::provider_caches::cursor_unrecognized(current) {
+            answer["unrecognizedModels"] = json!(count);
         }
         return Ok(answer);
     }
@@ -276,10 +500,19 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
         "key":key, "rows":old["rows"].as_array().map(Vec::as_slice).unwrap_or_default(),
         "events":old["events"].as_u64().unwrap_or(0), "unmeasured":old["unmeasured"].as_u64().unwrap_or(0),
     });
+    if let Some((from, until)) = super::provider_caches::cursor_coverage(old) {
+        result["coverageFrom"] = json!(from);
+        result["coverageUntil"] = json!(until);
+    }
     if let Some(counts) = super::provider_caches::cursor_event_counts(old) {
         result["eventCounts"] = counts;
     }
-    if state == "unavailable" {
+    if let Some(count) = super::provider_caches::cursor_unrecognized(old) {
+        result["unrecognizedModels"] = json!(count);
+    }
+    if sign_in_lost {
+        result["cause"] = json!("signin_needed");
+    } else if state == "unavailable" {
         result["cause"] = json!(
             current["cause"]
                 .as_str()
@@ -291,4 +524,179 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
         );
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn billing_coverage_and_rows_survive_sign_in_loss() {
+        let now = 1_794_067_200_000;
+        let fresh = json!({"state":"read","readAt":now,"coverageFrom":"2026-11-07T00:00:00.000Z",
+            "coverageUntil":"2026-11-07T16:00:00.000Z","rows":[{"h":"2026-11-07 08:00",
+                "m":"fixture-model","i":1,"o":2,"cr":3,"cw":4,"n":1,"cents":0,"uncosted":1}]});
+        let previous = project(&fresh, None, now).unwrap();
+        for current in [
+            json!({"state":"unavailable","cause":"signin_needed"}),
+            json!({"state":"no_key"}),
+        ] {
+            let failed = project(&current, Some(&previous), now + 60_000).unwrap();
+            assert_eq!(failed["state"], "unavailable");
+            assert_eq!(failed["cause"], "signin_needed");
+            for field in ["readAt", "rows", "coverageFrom", "coverageUntil"] {
+                assert_eq!(failed[field], previous[field]);
+            }
+        }
+    }
+
+    fn package(installed: bool) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("dist")).unwrap();
+        let info = json!({"version":1,"commit":"a".repeat(40),"branch":"main","dirty":false});
+        std::fs::write(dir.path().join("dist/build-info.json"), info.to_string()).unwrap();
+        if !installed {
+            std::fs::create_dir_all(dir.path().join("src")).unwrap();
+            std::fs::write(dir.path().join("src/ccs.ts"), "").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn billing_switch_is_on_for_an_installed_package_only() {
+        let installed = package(true);
+        let checkout = package(false);
+        let (one, zero, other) = (OsStr::new("1"), OsStr::new("0"), OsStr::new("yes"));
+        let test = OsStr::new("test");
+        assert!(billing_enabled(None, None, installed.path()));
+        assert!(billing_enabled(
+            None,
+            Some(OsStr::new("production")),
+            installed.path()
+        ));
+        assert!(!billing_enabled(None, None, checkout.path()));
+        assert!(!billing_enabled(None, Some(test), installed.path()));
+        assert!(!billing_enabled(Some(zero), None, installed.path()));
+        assert!(!billing_enabled(Some(other), None, installed.path()));
+        assert!(billing_enabled(Some(one), None, checkout.path()));
+        assert!(billing_enabled(Some(one), Some(test), checkout.path()));
+        // A package without build-info.json is not an installed build.
+        let bare = tempfile::tempdir().unwrap();
+        assert!(!billing_enabled(None, None, bare.path()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_reader_child_receives_the_switch() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let fake = root.path().join("fake-reader");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf '{\"enabled\":\"%s\"}\\n' \"${AAC_CURSOR_BILLING_ENABLED-unset}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for (billing, seen) in [(true, "1"), (false, "0")] {
+            let answer = execute(
+                root.path(),
+                fake.clone(),
+                OperatingSystem::Linux,
+                billing,
+                &["read"],
+                b"",
+            )
+            .await;
+            assert_eq!(answer["enabled"], seen);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_reader_child_gets_the_saved_checkpoint_and_its_new_one_is_stored() {
+        use super::super::cursor_billing::{self, BillingStore};
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        // The fake reader counts the passes it was handed and returns the next checkpoint.
+        let fake = root.join("fake-reader");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ninput=$(cat)\npasses=$(printf '%s' \"$input\" | sed -n 's/.*\"passes\":\\([0-9]*\\).*/\\1/p')\n\
+             printf '{\"state\":\"read\",\"rows\":[],\"seen\":%s,\"billingState\":{\"account\":\"0123456789abcdef\",\
+             \"checkpoint\":{\"from\":0,\"through\":1,\"hours\":{},\"passes\":%s}}}\\n' \
+             \"${passes:-0}\" \"$(( ${passes:-0} + 1 ))\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let request = Request {
+            since_ms: 0,
+            until_ms: 1_794_067_200_000,
+            force: true,
+        };
+        let open = || {
+            Arc::new(
+                aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None)
+                    .unwrap(),
+            )
+        };
+        for seen in [0, 1, 2] {
+            // Each pass is a restarted service: only the store carries the checkpoint over.
+            let engine = open();
+            let store = cursor_billing::open_with(&engine, root);
+            let answer = read_billing(
+                root,
+                Some(fake.clone()),
+                OperatingSystem::Linux,
+                true,
+                &request,
+                store,
+            )
+            .await;
+            assert_eq!(answer["seen"], seen, "{answer}");
+            assert!(answer.get("billingState").is_none());
+            engine.close().unwrap();
+        }
+        assert!(!root.join("cache").exists());
+        // A store that cannot be used answers its cause without starting the reader.
+        let busy = read_billing(
+            root,
+            Some(root.join("missing-reader")),
+            OperatingSystem::Linux,
+            true,
+            &request,
+            BillingStore::Unavailable("read_in_progress"),
+        )
+        .await;
+        assert_eq!(
+            busy,
+            json!({"state":"unavailable","cause":"read_in_progress"})
+        );
+    }
+
+    #[test]
+    fn unrecognized_models_and_read_in_progress_reach_the_status() {
+        let now = 1_794_067_200_000;
+        let fresh = json!({"state":"read","readAt":now,"coverageFrom":"2026-11-07T00:00:00.000Z",
+            "coverageUntil":"2026-11-07T16:00:00.000Z","unrecognizedModels":2,"rows":[]});
+        let previous = project(&fresh, None, now).unwrap();
+        assert_eq!(previous["unrecognizedModels"], 2);
+        assert_eq!(analytics_status(&previous)["unrecognizedModels"], 2);
+        let busy = json!({"state":"unavailable","cause":"read_in_progress"});
+        let kept = project(&busy, Some(&previous), now + 60_000).unwrap();
+        assert_eq!(kept["cause"], "read_in_progress");
+        assert_eq!(kept["unrecognizedModels"], 2);
+        assert_eq!(kept["readAt"], previous["readAt"]);
+        let status = analytics_status(&kept);
+        assert_eq!(status["cause"], "read_in_progress");
+        assert_eq!(status["unrecognizedModels"], 2);
+        let none = project(
+            &json!({"state":"read","readAt":now,"unrecognizedModels":0,"rows":[]}),
+            None,
+            now,
+        )
+        .unwrap();
+        assert!(none.get("unrecognizedModels").is_none());
+    }
 }

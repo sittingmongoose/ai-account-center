@@ -65,10 +65,12 @@ regex = { workspace = true, features = ["unicode-gencat"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 url = "2"
 tempfile.workspace = true
+# Imports the retired Cursor billing SQLite file from its verified bytes in memory (no file open).
+# aac-status already links the bundled SQLite; `serialize` adds sqlite3_deserialize.
+rusqlite = { version = "0.37", features = ["serialize"] }
 
 [dev-dependencies]
 aac-renewal = { workspace = true, features = ["parity-fixtures"] }
-rusqlite = "0.37"
 tokio-tungstenite = "0.29"
 
 [target.'cfg(windows)'.dependencies]

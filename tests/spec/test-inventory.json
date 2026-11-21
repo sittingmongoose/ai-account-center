@@ -382,6 +382,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/account_usage/cursor.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/account_usage/cursor_billing.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/account_usage/failover.rs",
       "kind": "internal",
       "evidence": [],

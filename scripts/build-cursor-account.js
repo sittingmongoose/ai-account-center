@@ -54,6 +54,11 @@ function sourceHash() {
     }
   };
   walk('src');
+  // The shared file reader and its own path dependencies are build inputs too.
+  for (const dep of ['aac-files', 'aac-core', 'aac-num']) {
+    files.push(`../../crates/${dep}/Cargo.toml`);
+    walk(`../../crates/${dep}/src`);
+  }
   const hash = crypto.createHash('sha256');
   for (const rel of files.sort()) {
     hash.update(rel);
