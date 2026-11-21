@@ -75,7 +75,12 @@ const PNG = Buffer.concat([
 const CARD = 'vm.lead--Q1';
 
 function setup(
-  options: { doorbell?: Doorbell; timing?: Partial<AnswerTiming>; share?: ShareFs } = {}
+  options: {
+    doorbell?: Doorbell;
+    timing?: Partial<AnswerTiming>;
+    share?: ShareFs;
+    shareWriteDeadline?: typeof withDeadline;
+  } = {}
 ) {
   const root = dirs.make('ccs-status-reports-');
   const store = path.join(dirs.make('ccs-status-store-'), 'status');
@@ -96,6 +101,7 @@ function setup(
       now: () => NOW,
       timing: options.timing,
       shareFs: options.share,
+      shareWriteDeadline: options.shareWriteDeadline,
       onChange: extra.onChange,
     });
   fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
@@ -127,7 +133,7 @@ function soon<T>(work: Promise<T>, ms = 3000): Promise<T> {
 function fakeShare() {
   const never = new Promise<never>(() => undefined);
   let hung = false;
-  let gate: { match: string; opened: Promise<void> } | null = null;
+  let gate: { match: string; entered: () => void; released: Promise<void> } | null = null;
   const underV1 = (file: string) => String(file).includes(`${path.sep}v1`);
   const share: ShareFs = {
     mkdir: (dir) => (hung && underV1(dir) ? never : fs.promises.mkdir(dir)),
@@ -135,7 +141,8 @@ function fakeShare() {
       const held = gate;
       if (held && String(file).includes(held.match)) {
         gate = null;
-        await held.opened;
+        held.entered();
+        await held.released;
       }
       return fs.promises.open(file, flags, mode);
     },
@@ -151,13 +158,17 @@ function fakeShare() {
     mount() {
       hung = false;
     },
-    gateOnce(match: string): () => void {
-      let release!: () => void;
+    gateOnce(match: string) {
+      let entered!: () => void;
       const opened = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
         release = resolve;
       });
-      gate = { match, opened };
-      return release;
+      gate = { match, entered, released };
+      return { opened, release };
     },
   };
 }
@@ -452,29 +463,55 @@ describe('an older answer cannot replace a newer one', () => {
   });
 
   it('drops a write that wakes up after its deadline, before its rename', async () => {
-    const share = fakeShare();
-    const { root, make } = setup({ timing: { shareMs: 40 }, share: share.share });
-    const first = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    let current = { doc: cardDoc('vm.lead', 'Q1'), sha256: first };
-    // The card read answers at once: only the gated write spends the 40 ms deadline.
-    const answers = make({ readCard: async () => current as never });
-    // Held past the deadline: the write must expire while its temporary file is open.
-    const release = share.gateOnce(`.${CARD}.json.tmp-`);
-    try {
-      await answers.submitSet([entry(CARD, first)], 'Mac');
-      expect(answers.list()[0].share.state).toBe('failed');
-      const second = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
-      current = { doc: cardDoc('vm.lead', 'Q1', { seq: 2 }), sha256: second };
-      await answers.submitSet([entry(CARD, second, { cardSeq: 2 })], 'Mac');
-      expect(onShare(root)).toBe(2);
-      release();
-      await settle();
-      expect(onShare(root)).toBe(2);
-      expect(
-        fs.readdirSync(path.join(root, 'v1', 'answers')).filter((f) => f.startsWith('.'))
-      ).toEqual([]);
-    } finally {
-      release();
+    // A newer answer also has its own guards. Exercise expiry with and without that protection.
+    for (const publishNewer of [true, false]) {
+      const share = fakeShare();
+      let expire!: () => void;
+      let lateWrite: Promise<unknown> | undefined;
+      const shareWriteDeadline: typeof withDeadline = (work, _ms, onTimeout, label) => {
+        if (lateWrite) return work;
+        lateWrite = work.catch(() => undefined);
+        const deadline = new Promise<never>((_, reject) => {
+          expire = () => {
+            onTimeout?.();
+            reject(new DeadlineExceededError(label));
+          };
+        });
+        return Promise.race([work, deadline]);
+      };
+      const { root, make } = setup({ share: share.share, shareWriteDeadline });
+      const first = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      let current = { doc: cardDoc('vm.lead', 'Q1'), sha256: first };
+      const answers = make({ readCard: async () => current as never });
+      const { opened, release } = share.gateOnce(`.${CARD}.json.tmp-`);
+      const firstSend = answers.submitSet([entry(CARD, first)], 'Mac');
+      try {
+        const reachedGate = await Promise.race([
+          opened.then(() => true),
+          firstSend.then(() => false),
+        ]);
+        expect(reachedGate).toBe(true);
+        expire();
+        await firstSend;
+        expect(answers.list()[0].share.state).toBe('failed');
+        if (publishNewer) {
+          const doc = cardDoc('vm.lead', 'Q1', { seq: 2 });
+          const second = writeCard(root, doc);
+          current = { doc, sha256: second };
+          await answers.submitSet([entry(CARD, second, { cardSeq: 2 })], 'Mac');
+          expect(onShare(root)).toBe(2);
+        }
+        release();
+        await lateWrite;
+        if (publishNewer) expect(onShare(root)).toBe(2);
+        else expect(fs.existsSync(answerFile(root))).toBe(false);
+        expect(
+          fs.readdirSync(path.join(root, 'v1', 'answers')).filter((f) => f.startsWith('.'))
+        ).toEqual([]);
+      } finally {
+        release();
+        await lateWrite;
+      }
     }
   });
 

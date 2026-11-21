@@ -549,6 +549,8 @@ export interface StatusAnswersDeps {
   /** Called after any change the page shows (a new answer, a delivery step). */
   onChange?: () => void;
   timing?: Partial<AnswerTiming>;
+  /** Override the share write deadline in tests that control when an in-flight write expires. */
+  shareWriteDeadline?: typeof withDeadline;
   /**
    * The share's own file calls. Production leaves this out (the real fs). It is one object so a
    * test can hang or gate a single share write without replacing `fs.promises` process-wide:
@@ -1442,7 +1444,7 @@ export class StatusAnswers {
     const check = () => {
       if (!proceed()) throw new ShareWriteDroppedError();
     };
-    await withDeadline(
+    await (this.deps.shareWriteDeadline ?? withDeadline)(
       (async () => {
         const stat = await this.shareFs()
           .stat(v1)
