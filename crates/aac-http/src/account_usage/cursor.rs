@@ -19,6 +19,7 @@ use std::{
 use tokio::{sync::Mutex, time::Instant};
 
 pub(crate) const ROW: &str = "cursor-account-observation";
+pub(crate) const REQUEST_CAP: usize = 4096;
 const CAP: usize = 32 * 1024 * 1024;
 const TTL: i64 = 600_000;
 const BUSY_TTL: i64 = 5_000;
@@ -91,6 +92,7 @@ fn target() -> Option<(&'static str, OperatingSystem)> {
         ("linux", "x86_64") => Some(("x86_64-unknown-linux-gnu", OperatingSystem::Linux)),
         ("macos", "aarch64") => Some(("aarch64-apple-darwin", OperatingSystem::Mac)),
         ("macos", "x86_64") => Some(("x86_64-apple-darwin", OperatingSystem::Mac)),
+        ("windows", "x86_64") => Some(("x86_64-pc-windows-msvc", OperatingSystem::Windows)),
         _ => None,
     }
 }
@@ -102,7 +104,12 @@ fn executable(package: &Path, target: &str) -> Option<PathBuf> {
     )
     .ok()?;
     let entry = &manifest["targets"][target];
-    let file = format!("{target}/aac-cursor-account");
+    let basename = if target.ends_with("-windows-msvc") {
+        "aac-cursor-account.exe"
+    } else {
+        "aac-cursor-account"
+    };
+    let file = format!("{target}/{basename}");
     if manifest["name"] != "aac-cursor-account" || entry["file"] != file {
         return None;
     }
@@ -194,6 +201,34 @@ async fn execute(
 }
 
 impl Reader {
+    /// Answer the private Cursor route on either owner host.
+    pub(crate) async fn answer(
+        self: &Arc<Self>,
+        root: PathBuf,
+        owners: Owners,
+        bytes: &[u8],
+    ) -> Result<Observation, Decline> {
+        if bytes.len() > REQUEST_CAP {
+            return Err(Decline::Shape);
+        }
+        let wait = Duration::from_secs(123);
+        if let Ok(command) = Command::parse(bytes) {
+            return tokio::time::timeout(wait, self.command(command, root))
+                .await
+                .map_err(|_| Decline::Internal)?
+                .map(Arc::new);
+        }
+        let request = Request::parse(bytes)?;
+        // The read holds the write claim until the checkpoint and observation are saved, even
+        // when the transport times out or the caller disconnects.
+        let reader = self.clone();
+        let task = tokio::spawn(async move { reader.read(root, owners, request).await });
+        tokio::time::timeout(wait, task)
+            .await
+            .map_err(|_| Decline::Internal)?
+            .map_err(|_| Decline::Internal)?
+    }
+
     /// Keep Analytics responsive while a signed-in account walk is still running.
     pub(crate) async fn analytics(
         self: Arc<Self>,
@@ -587,6 +622,44 @@ mod tests {
             std::fs::write(dir.path().join("src/ccs.ts"), "").unwrap();
         }
         dir
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn windows_cursor_reader_has_a_package_target() {
+        assert!(matches!(
+            target(),
+            Some(("x86_64-pc-windows-msvc", OperatingSystem::Windows))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cursor_reader_requires_the_manifest_executable_and_digest() {
+        let package = package(true);
+        let target = "x86_64-pc-windows-msvc";
+        let dir = package.path().join("dist/native/aac-cursor-account");
+        let name = format!("{target}/aac-cursor-account.exe");
+        let path = dir.join(&name);
+        std::fs::create_dir_all(dir.join(target)).unwrap();
+        let bytes = b"fixture reader";
+        std::fs::write(&path, bytes).unwrap();
+        let mut manifest = json!({
+            "name": "aac-cursor-account",
+            "targets": { target: { "file": name, "size": bytes.len(), "sha256": sha256_hex(bytes) } }
+        });
+        let save =
+            |value: &Value| std::fs::write(dir.join("manifest.json"), value.to_string()).unwrap();
+        save(&manifest);
+        assert_eq!(executable(package.path(), target), Some(path));
+        manifest["targets"][target]["sha256"] = json!("0".repeat(64));
+        save(&manifest);
+        assert_eq!(executable(package.path(), target), None);
+        manifest["targets"][target]["file"] = json!(format!("{target}/aac-cursor-account"));
+        manifest["targets"][target]["sha256"] = json!(sha256_hex(bytes));
+        std::fs::write(dir.join(format!("{target}/aac-cursor-account")), bytes).unwrap();
+        save(&manifest);
+        assert_eq!(executable(package.path(), target), None);
     }
 
     #[test]

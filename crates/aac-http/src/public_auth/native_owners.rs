@@ -312,13 +312,19 @@ impl NativeOwners {
                 server["views"] = json!(["home"]);
             }
             let collection = Arc::new(Collection::default());
+            #[cfg(unix)]
+            let cursor = Arc::default();
+            #[cfg(not(unix))]
+            let cursor = status
+                .upgrade()
+                .map_or_else(Arc::default, |host| host.cursor());
             let usage = Arc::new(Usage {
                 producer: Arc::new(Producer::shared(
                     root.clone(),
                     owners.clone(),
                     agents.clone(),
                     collection,
-                    Arc::default(),
+                    cursor,
                 )),
                 cache: AccountUsageCache::default(),
                 publication: Publication::Public(hub),
@@ -516,6 +522,12 @@ impl NativeOwners {
 
     pub(super) fn profile_inputs(&self) -> (Arc<Agents>, Option<AccountUsageCache>) {
         (self.agents.clone(), self.usage_cache())
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn cursor_owners(&self) -> Option<Owners> {
+        (self.owners.owner(crate::account_usage::cursor::ROW) == Some(Role::RustService))
+            .then(|| self.owners.clone())
     }
 
     pub(super) fn usage_cache(&self) -> Option<AccountUsageCache> {
