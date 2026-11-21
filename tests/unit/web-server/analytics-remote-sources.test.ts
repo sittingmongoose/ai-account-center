@@ -380,7 +380,7 @@ describe('analytics remote helper integrity', () => {
     // Nas1 streams the same packaged helper as the Mac and Windows; adding the host changed no byte
     // of it. Change this value only together with the helper itself.
     expect(ANALYTICS_HELPER_SHA256).toBe(
-      '2e41eaeb70fcae4cb73cc0b23742f59b5b6205a52a582c407d9f591da3f44646'
+      'dd0ad99c74fa92ed9fa4bbe16d501c5453fb13fea5ccf08991b0bd2c167a17aa'
     );
   });
 });
@@ -1066,6 +1066,35 @@ describe('analytics remote sources', () => {
         (state) => state.state === 'cached' && state.detail?.includes('oversized log lines')
       )
     ).toBe(true);
+  });
+
+  it('names unread OMP usage from the Python fallback without claiming a scan timeout', async () => {
+    const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              kinds: {
+                omp: {
+                  state: 'ok',
+                  partial: true,
+                  unreadUsage: true,
+                  fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20, unreadUsage: true } },
+                },
+              },
+              rows: [row({ k: 'omp' })],
+            })
+          )
+        ),
+    });
+    const cells = answer.states.filter((state) => state.tool === 'omp');
+    expect(cells).toHaveLength(REMOTE_HOSTS.length);
+    for (const cell of cells) {
+      expect(cell.state).toBe('cached');
+      expect(cell.detail).toContain('usage-shaped record could not be read');
+    }
   });
 
   it('inventories current VM filenames without transcript contents and notices pruning', () => {

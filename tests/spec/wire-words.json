@@ -2612,6 +2612,13 @@
     ]
   },
   {
+    "word": "no-fable-usage",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "no-installation",
     "cause": null,
     "sources": [

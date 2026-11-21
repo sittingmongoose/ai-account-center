@@ -23,7 +23,7 @@ Response:
   {"version": 2, "truncated": false, "discoveryTruncated": false,
    "kinds": {"omp": {"state": "ok"|"not_installed"|"error"|"pending",
                      "partial": true?, "fingerprints": {...},
-                     "walUnread": true?}} ,
+                     "walUnread": true?, "unreadUsage": true?}} ,
    "rows": [{"k": "omp", "f": "<filekey>", "m": "<model>", "p": "<provider>",
              "h": "2026-10-01 15:00", "i": 1, "o": 2, "cr": 3, "cw": 4,
              "c": 0.01, "n": 5}],
@@ -395,9 +395,11 @@ class Collector(object):
         pending = self.pending.get(kind, {}).get(key)
         if pending is not None:
             prior = self.prior.get(kind, {}).get(key, {})
-            if _same_fingerprint(prior, pending) and prior.get("usageSkipped"):
-                pending["usageSkipped"] = True
-            if pending.get("usageSkipped"):
+            if _same_fingerprint(prior, pending):
+                for flag in ("usageSkipped", "unreadUsage"):
+                    if prior.get(flag):
+                        pending[flag] = True
+            if pending.get("usageSkipped") or pending.get("unreadUsage"):
                 self.usage_partial.add(kind)
             self.fresh.setdefault(kind, {})[key] = pending
 
@@ -756,14 +758,32 @@ def _sessions_dir_has_marker(directory):
     return False
 
 
+def _joined_omp_record(line):
+    """Return the start and object of a complete record after a torn prefix."""
+    for match in re.finditer(r'\{"type"', line):
+        index = match.start()
+        if index == 0:
+            continue
+        try:
+            record = json.loads(line[index:])
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            return index, record
+    return len(line), None
+
+
 def _parse_omp_line(line, collector, kind, filekey, session=None):
-    # Pre-filter before parsing so conversation content is never decoded.
-    if '"type"' not in line or '"message"' not in line or '"usage"' not in line:
+    if '"type"' not in line or '"message"' not in line:
         return
     try:
         record = json.loads(line)
     except ValueError:
-        return
+        index, record = _joined_omp_record(line)
+        prefix = "".join(line[:index].split())
+        role = re.search(r'"role":"([^"]*)"', prefix)
+        if '"type":"message"' in prefix and (role is None or role.group(1) == "assistant"):
+            collector.pending[kind][filekey]["unreadUsage"] = True
     if not isinstance(record, dict) or record.get("type") != "message":
         return
     message = record.get("message")
@@ -936,10 +956,7 @@ def _collect_omp(collector, home, env, extra=()):
                     while chunk and not chunk.endswith(b"\n"):
                         chunk = handle.readline(MAX_LINE_BYTES + 2)
                     continue
-                try:
-                    line = chunk.decode("utf-8").lstrip("\ufeff")
-                except UnicodeDecodeError:
-                    continue
+                line = chunk.decode("utf-8", errors="replace").lstrip("\ufeff")
                 _parse_omp_line(line, collector, "omp", filekey, session)
                 if collector.row_cap:
                     return "ok"
@@ -3095,6 +3112,8 @@ def main():
         if kind == "codex" and collector.codex_compressed_unread:
             entry["partial"] = True
             entry["compressedUnread"] = len(collector.codex_compressed_unread)
+        if any(fingerprint.get("unreadUsage") for fingerprint in entry["fingerprints"].values()):
+            entry["unreadUsage"] = True
         if kind == "zcode" and collector.wal_unread:
             entry["walUnread"] = True
         if kind == "antigravity" and collector.agy_unreadable:
