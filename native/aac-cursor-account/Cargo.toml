@@ -16,6 +16,8 @@ name = "aac-cursor-account"
 path = "src/main.rs"
 
 [dependencies]
+# The shared file reader (one-file policy); a path dependency on the root workspace's crate.
+aac-files = { path = "../../crates/aac-files" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

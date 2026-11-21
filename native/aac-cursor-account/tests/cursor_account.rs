@@ -732,7 +732,38 @@ fn billing_read(root: &std::path::Path, base: &str, now: i64) -> (Value, String)
     billing_read_enabled(root, base, now, Some("1"))
 }
 
+/// The dashboard's store for these fixtures: one billing document per root, kept and saved the
+/// way the caller (aac-http's Cursor reader) keeps it between passes.
+static STORE: Mutex<std::collections::BTreeMap<std::path::PathBuf, Value>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
 fn billing_read_enabled(root: &std::path::Path, base: &str, now: i64, enabled: Option<&str>) -> (Value, String) {
+    let saved = STORE
+        .lock()
+        .unwrap()
+        .get(root)
+        .cloned()
+        .unwrap_or_else(|| json!({"version": 1, "accounts": {}}));
+    let (mut answer, text) = billing_run(root, base, now, enabled, Some(saved));
+    if let Some(state) = answer.as_object_mut().unwrap().remove("billingState") {
+        let account = state["account"].as_str().unwrap().to_owned();
+        let mut store = STORE.lock().unwrap();
+        let document = store
+            .entry(root.to_owned())
+            .or_insert_with(|| json!({"version": 1, "accounts": {}}));
+        document["accounts"][account] = state["checkpoint"].clone();
+    }
+    (answer, text)
+}
+
+/// One reader process. `saved` is the store's document; None is a caller without a store.
+fn billing_run(
+    root: &std::path::Path,
+    base: &str,
+    now: i64,
+    enabled: Option<&str>,
+    saved: Option<Value>,
+) -> (Value, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_aac-cursor-account"));
     if let Some(enabled) = enabled {
         command.env("AAC_CURSOR_BILLING_ENABLED", enabled);
@@ -751,17 +782,26 @@ fn billing_read_enabled(root: &std::path::Path, base: &str, now: i64, enabled: O
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    write!(
-        child.stdin.take().unwrap(),
-        "{}",
-        json!({"sinceMs": now - 31 * 24 * BILLING_HOUR, "untilMs": now})
-    )
-    .unwrap();
+    let mut request = json!({"sinceMs": now - 31 * 24 * BILLING_HOUR, "untilMs": now});
+    if let Some(saved) = saved {
+        request["billingState"] = saved;
+    }
+    write!(child.stdin.take().unwrap(), "{request}").unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     assert!(out.stderr.is_empty());
     let text = String::from_utf8(out.stdout).unwrap();
     (serde_json::from_str(&text).unwrap(), text)
+}
+
+/// Every file the reader left under the root's cache folder (the sign-in fixture lives outside it).
+fn cache_files(root: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(root.join("cache"))
+        .map(|dir| {
+            dir.map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn billing_item(id: &str) -> Value {
@@ -1062,16 +1102,58 @@ fn billing_review_unmapped_display_model_keeps_its_tokens_and_sets_the_notice() 
 }
 
 #[test]
-fn billing_store_contention_reports_the_existing_read_in_progress() {
+fn billing_creates_no_sqlite_file_and_hands_its_state_to_the_store() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (base, _) = fake(|_, _| billing_page(vec![billing_item("store-item")], None));
+    let (answer, output) = billing_read(root.path(), &base, BILLING_NOW);
+    assert_eq!(answer["state"], "read", "{answer}");
+    assert!(!root.path().join("cache/cursor-billing-v1.sqlite").exists());
+    assert_eq!(cache_files(root.path()), Vec::<String>::new());
+    let store = STORE.lock().unwrap();
+    let accounts = store[root.path()]["accounts"].as_object().unwrap();
+    assert_eq!(accounts.len(), 1);
+    let checkpoint = accounts.values().next().unwrap();
+    assert_eq!(checkpoint["through"], BILLING_NOW);
+    assert_eq!(checkpoint["read_at"], BILLING_NOW);
+    // The saved cells hold aggregated hours only, never an item id, a cookie or an email.
+    let text = checkpoint.to_string();
+    for private in ["store-item", "WorkosCursorSessionToken", "fixture@example.invalid"] {
+        assert!(!text.contains(private) && !output.contains(private));
+    }
+}
+
+#[test]
+fn billing_state_survives_a_restart_from_the_store() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (empty, _) = fake(|_, _| billing_page(vec![], None));
+    let first = billing_read(root.path(), &empty, BILLING_NOW).0;
+    assert_eq!(first["coverageFrom"], "2026-11-06T16:00:00.000Z");
+    // A restart keeps only the store: whatever the reader left in the cache folder is gone.
+    let _ = std::fs::remove_dir_all(root.path().join("cache"));
+    let (base, seen) = fake(|_, _| billing_page(vec![], None));
+    let next = billing_read(root.path(), &base, BILLING_NOW + 600_000).0;
+    assert_eq!(next["state"], "read", "{next}");
+    // The resumed pass re-reads only the 6 h overlap, then extends history one more day.
+    let calls = seen.lock().unwrap();
+    assert!(calls[0].path.contains("startTime=2026-11-07T10"), "{}", calls[0].path);
+    assert_eq!(next["coverageFrom"], "2026-11-05T16:00:00.000Z");
+    assert_eq!(next["coverageUntil"], "2026-11-07T16:10:00.000Z");
+}
+
+#[test]
+fn billing_without_a_store_reads_fresh_each_pass_and_keeps_no_file() {
     let root = tempfile::tempdir().unwrap();
     billing_signin(root.path(), 4_000_000_000);
     let (base, seen) = fake(|_, _| billing_page(vec![], None));
-    assert_eq!(billing_read(root.path(), &base, BILLING_NOW).0["state"], "read");
-    let store = rusqlite::Connection::open(root.path().join("cache/cursor-billing-v1.sqlite")).unwrap();
-    store.execute_batch("BEGIN IMMEDIATE;").unwrap();
-    assert_eq!(
-        billing_read(root.path(), &base, BILLING_NOW + 600_000).0,
-        json!({"state": "unavailable", "cause": "read_in_progress"})
-    );
-    assert_eq!(seen.lock().unwrap().len(), 1);
+    for offset in [0, 600_000] {
+        let (answer, _) = billing_run(root.path(), &base, BILLING_NOW + offset, Some("1"), None);
+        assert_eq!(answer["state"], "read", "{answer}");
+        assert_eq!(answer["coverageFrom"], "2026-11-06T16:00:00.000Z");
+    }
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[1].path.contains("startTime=2026-11-06T16"), "{}", calls[1].path);
+    assert_eq!(cache_files(root.path()), Vec::<String>::new());
 }

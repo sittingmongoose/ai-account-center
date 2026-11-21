@@ -311,27 +311,65 @@ impl Reader {
                     None,
                 )
                 .map_err(|_| Decline::Busy)?;
-            Ok((previous, Some((binary, os, billing, store, request))))
+            // Loaded under the claim and saved before this read lock is released: one writer.
+            let billing_store = super::cursor_billing::open(&read_root);
+            Ok((
+                previous,
+                Some((binary, os, billing, store, request, billing_store)),
+            ))
         })
         .await
         .map_err(|_| Decline::Internal)??;
-        let Some((binary, os, billing, store, request)) = launch else {
+        let Some((binary, os, billing, store, request, billing_store)) = launch else {
             return previous.map(Arc::new).ok_or(Decline::Internal);
         };
-        let current = match binary {
-            Some(binary) => {
-                let input =
-                    json!({"sinceMs":request.since_ms, "untilMs":request.until_ms}).to_string();
-                execute(&root, binary, os, billing, &["read"], input.as_bytes()).await
-            }
-            None => json!({"state":"no_reader","cause":"reader_failed"}),
-        };
+        let current = read_billing(&root, binary, os, billing, &request, billing_store).await;
         let value = Arc::new(project(&current, previous.as_ref(), now)?);
         let save = value.clone();
         let _ = tokio::task::spawn_blocking(move || save_read(&root, store, &save)).await;
         *memory = Some((Instant::now(), value.clone()));
         Ok(value)
     }
+}
+
+/// One reader pass with the store's billing checkpoint: the child gets the saved document and
+/// its new checkpoint is saved before the answer is projected. A store that cannot be used now
+/// answers its fixed cause (`read_in_progress`, `store_unsafe`) without calling Cursor; the
+/// API-key path needs no store and still runs when billing is off.
+async fn read_billing(
+    root: &Path,
+    binary: Option<PathBuf>,
+    os: OperatingSystem,
+    billing: bool,
+    request: &Request,
+    store: super::cursor_billing::BillingStore,
+) -> Value {
+    use super::cursor_billing::BillingStore;
+    let Some(binary) = binary else {
+        return json!({"state":"no_reader","cause":"reader_failed"});
+    };
+    if let (true, BillingStore::Unavailable(cause)) = (billing, &store) {
+        return json!({"state":"unavailable","cause":cause});
+    }
+    let mut input = json!({"sinceMs":request.since_ms, "untilMs":request.until_ms});
+    if let Some(document) = store.document() {
+        input["billingState"] = document.clone();
+    }
+    let mut answer = execute(
+        root,
+        binary,
+        os,
+        billing,
+        &["read"],
+        input.to_string().as_bytes(),
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        super::cursor_billing::settle(&store, &mut answer);
+        answer
+    })
+    .await
+    .unwrap_or_else(|_| json!({"state":"unavailable","cause":"store_unsafe"}))
 }
 
 fn analytics_status(observation: &Value) -> Value {
@@ -572,6 +610,69 @@ mod tests {
             .await;
             assert_eq!(answer["enabled"], seen);
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_reader_child_gets_the_saved_checkpoint_and_its_new_one_is_stored() {
+        use super::super::cursor_billing::{self, BillingStore};
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        // The fake reader counts the passes it was handed and returns the next checkpoint.
+        let fake = root.join("fake-reader");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ninput=$(cat)\npasses=$(printf '%s' \"$input\" | sed -n 's/.*\"passes\":\\([0-9]*\\).*/\\1/p')\n\
+             printf '{\"state\":\"read\",\"rows\":[],\"seen\":%s,\"billingState\":{\"account\":\"0123456789abcdef\",\
+             \"checkpoint\":{\"from\":0,\"through\":1,\"hours\":{},\"passes\":%s}}}\\n' \
+             \"${passes:-0}\" \"$(( ${passes:-0} + 1 ))\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let request = Request {
+            since_ms: 0,
+            until_ms: 1_794_067_200_000,
+            force: true,
+        };
+        let open = || {
+            Arc::new(
+                aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None)
+                    .unwrap(),
+            )
+        };
+        for seen in [0, 1, 2] {
+            // Each pass is a restarted service: only the store carries the checkpoint over.
+            let engine = open();
+            let store = cursor_billing::open_with(&engine, root);
+            let answer = read_billing(
+                root,
+                Some(fake.clone()),
+                OperatingSystem::Linux,
+                true,
+                &request,
+                store,
+            )
+            .await;
+            assert_eq!(answer["seen"], seen, "{answer}");
+            assert!(answer.get("billingState").is_none());
+            engine.close().unwrap();
+        }
+        assert!(!root.join("cache").exists());
+        // A store that cannot be used answers its cause without starting the reader.
+        let busy = read_billing(
+            root,
+            Some(root.join("missing-reader")),
+            OperatingSystem::Linux,
+            true,
+            &request,
+            BillingStore::Unavailable("read_in_progress"),
+        )
+        .await;
+        assert_eq!(
+            busy,
+            json!({"state":"unavailable","cause":"read_in_progress"})
+        );
     }
 
     #[test]
