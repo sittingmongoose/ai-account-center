@@ -360,6 +360,9 @@ try {
       AAC_T3_STATE_DB: path.join(root, 'fixture-pins.sqlite'),
       AAC_AGENT_VERBS: 'off',
       AAC_AGENT_TRANSPORT: 'off',
+      // Status and Home share the full replay's first-sample fixture. Home still
+      // uses its own collection generation.
+      ...(group === 'status-home' ? { AAC_RUST_CUT_FIXTURE_NO_STATUS_USAGE: '1' } : {}),
       ...(group === 'status'
         ? { AAC_RUST_GROUP_COLLECTION: 'off', AAC_STATUS_DOORBELL: 'off' }
         : {}),
