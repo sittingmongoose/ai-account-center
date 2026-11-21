@@ -24,11 +24,23 @@ pub struct Live {
     /// Date.now() of the last read attempt that failed (the banner says since when).
     pub failed_since_ms: RwSignal<Option<f64>>,
     pub loading: RwSignal<bool>,
+    /// The header's Refresh presses waiting for the read under way (refreshing.rs).
+    refreshed: RwSignal<Vec<crate::refreshing::Done>>,
 }
 
 impl Live {
     pub fn elapsed_seconds(&self) -> i64 {
         ((self.now_ms.get() - self.fetched_at_ms.get()) / 1000.0).floor() as i64
+    }
+
+    /// The header's Refresh: reads again (or joins the read under way) and tells `done` once it has answered.
+    pub fn reload_then(&self, done: crate::refreshing::Done) {
+        // a page already gone reads nothing: nothing to wait for
+        if self.refreshed.try_update(|all| all.push(done)).is_none() {
+            done.finished();
+            return;
+        }
+        self.reload();
     }
 
     pub fn reload(&self) {
@@ -62,6 +74,13 @@ impl Live {
                 }
                 live.loading.set(false);
             });
+            for done in live
+                .refreshed
+                .try_update(std::mem::take)
+                .unwrap_or_default()
+            {
+                done.finished();
+            }
         });
     }
 }
@@ -85,6 +104,7 @@ pub fn start() -> Live {
         error: RwSignal::new(None),
         failed_since_ms: RwSignal::new(None),
         loading: RwSignal::new(false),
+        refreshed: RwSignal::new(Vec::new()),
     };
     live.reload();
 

@@ -16,6 +16,7 @@
 //! Bridged, the frame called it for the iframe's views; de-bridged, the views come from here.
 
 use crate::Page;
+use crate::refreshing::Done;
 use leptos::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -50,6 +51,11 @@ pub struct DashCtx {
     pub(crate) live: RwSignal<bool>,
     /// The header's Refresh and Update apps, held while the controller loads (the first click counts).
     waiting: RwSignal<Vec<String>>,
+    /// The held Refresh's presses, told when it has finished (refreshing.rs).
+    held_done: RwSignal<Vec<Done>>,
+    /// The controller could not be loaded (`failed`): nothing held will ever run, so a Refresh finishes at once
+    /// (review L1). Cleared with the session.
+    broken: RwSignal<bool>,
     /// The id of the controller this page installed (0 until then): every call goes to that one only.
     controller: RwSignal<u64>,
 }
@@ -67,6 +73,8 @@ impl DashCtx {
             chrome: RwSignal::new(String::new()),
             live: RwSignal::new(false),
             waiting: RwSignal::new(Vec::new()),
+            held_done: RwSignal::new(Vec::new()),
+            broken: RwSignal::new(false),
             controller: RwSignal::new(0),
         }
     }
@@ -119,12 +127,28 @@ impl DashCtx {
         let _ = self.live.try_set(false);
         let _ = self.waiting.try_set(Vec::new());
         let _ = self.controller.try_set(0);
+        let _ = self.broken.try_set(false);
+        // a held Refresh will not run now: its button stops spinning
+        self.release_held();
+    }
+
+    /// The held Refresh's presses, finished without a refresh (the controller is gone or never loaded).
+    fn release_held(&self) {
+        for done in self
+            .held_done
+            .try_update(std::mem::take)
+            .unwrap_or_default()
+        {
+            done.finished();
+        }
     }
 
     /// The controller could not be loaded: the pages say so instead of waiting.
     fn failed(&self) {
         let _ = self.dashboard.try_set(NO_START.into());
         let _ = self.accounts.try_set(NO_START.into());
+        let _ = self.broken.try_set(true);
+        self.release_held();
     }
 
     /// Runs one of the dashboard's page actions. False, and nothing run, while the controller has not started (the page
@@ -147,9 +171,27 @@ impl DashCtx {
 
     /// The header's Refresh or Update apps. Held until the controller has started, then run once.
     pub fn command(&self, action: &str) {
+        self.command_then(action, None);
+    }
+
+    /// `command`, telling `done` once the command has finished (the header's Refresh spins until then). Held, it is
+    /// told when the held command has run.
+    pub(crate) fn command_then(&self, action: &str, done: Option<Done>) {
         if self.live.get_untracked() {
-            call_on(self.controller.get_untracked(), "command", &[action.into()]);
+            send(
+                self.controller.get_untracked(),
+                action,
+                done.into_iter().collect(),
+            );
             return;
+        }
+        if let Some(done) = done {
+            // no controller will start to run it: it has finished, without a refresh
+            if self.broken.get_untracked() {
+                done.finished();
+                return;
+            }
+            self.held_done.update(|all| all.push(done));
         }
         self.waiting.update(|all| {
             if !all.iter().any(|a| a == action) {
@@ -197,6 +239,19 @@ fn call_on(id: u64, method: &str, args: &[JsValue]) -> Option<JsValue> {
         list.push(a);
     }
     f.apply(&target, &list).ok()
+}
+
+/// Runs one of the frame's commands on the controller with this id. `done` are told once it has finished (the
+/// controller's `done` callback), or at once when it was refused.
+fn send(id: u64, action: &str, done: Vec<Done>) {
+    if done.is_empty() {
+        call_on(id, "command", &[action.into()]);
+        return;
+    }
+    crate::refreshing::hand_over(done, |callback| {
+        call_on(id, "command", &[action.into(), callback.clone()]).and_then(|v| v.as_bool())
+            == Some(true)
+    });
 }
 
 fn read_str(data: &JsValue, key: &str) -> String {
@@ -320,7 +375,14 @@ pub(crate) fn start(dash: DashCtx, route: Signal<Page>, noted: impl Fn(Note) + '
             call_on(id, "start", &[]);
             dash.live.set(true);
             for action in dash.waiting.try_update(std::mem::take).unwrap_or_default() {
-                call_on(id, "command", &[action.as_str().into()]);
+                let done = if action == "refresh" {
+                    dash.held_done
+                        .try_update(std::mem::take)
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                send(id, &action, done);
             }
         }
         true
@@ -421,6 +483,34 @@ mod tests {
             crate::home::HomeState::Refused(_)
         ));
         assert!(crate::accounts::model::parse(&dash.accounts.get_untracked()).is_err());
+    }
+
+    #[test]
+    fn a_refresh_pressed_after_the_controller_failed_to_load_finishes_at_once() {
+        use crate::refreshing::{self, CAP_MS, MIN_MS, Refreshing, test_clock};
+        let owner = Owner::new();
+        owner.set();
+        test_clock::NOW.with(|n| n.set(0.0));
+        // loading: the press is held, and spins until the controller runs it (the cap is all that is armed)
+        let dash = DashCtx::new();
+        let state = RwSignal::new(Refreshing::default());
+        dash.command_then("refresh", refreshing::press(state));
+        assert_eq!(state.get_untracked().ends_at(), Some(CAP_MS));
+        assert_eq!(dash.held_done.get_untracked().len(), 1);
+        // the controller fails to load: the held press finishes (after the minimum)
+        dash.failed();
+        assert_eq!(state.get_untracked().ends_at(), Some(MIN_MS));
+        assert!(dash.held_done.get_untracked().is_empty());
+        // review L1: a press after that finishes at once too, never held for the 60 s cap
+        let later = RwSignal::new(Refreshing::default());
+        dash.command_then("refresh", refreshing::press(later));
+        assert_eq!(later.get_untracked().ends_at(), Some(MIN_MS));
+        assert!(dash.held_done.get_untracked().is_empty());
+        // a new session starts clean: a press is held again while its controller loads
+        dash.clear();
+        let next = RwSignal::new(Refreshing::default());
+        dash.command_then("refresh", refreshing::press(next));
+        assert_eq!(next.get_untracked().ends_at(), Some(CAP_MS));
     }
 
     thread_local! {

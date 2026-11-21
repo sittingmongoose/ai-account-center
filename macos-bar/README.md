@@ -43,9 +43,10 @@ its threshold notch) was removed on 2026-11-14: the tray reads usage and opens C
   Unavailable, never 0 and never the app's number, and Details says T3's quota could not be read. An older dashboard
   that sends only the app's pools reads Unavailable in all four columns, and Details says it does not report T3's
   quota. The account-wide AI credits row stays in Details.
-- **Antigravity plan display.** The section always shows T3's four columns in this order: Gemini 5-hour, Gemini
-  weekly, Claude/GPT 5-hour, Claude/GPT weekly, then one more T3 pool the columns don't name (such as Gemini 4 Argon,
-  captioned "Argon weekly"). "Not reported" for that extra pool comes only from a live reading of T3's own service.
+- **Antigravity plan display.** When any canonical pool is reported, its four columns use Home's order and captions:
+  T3 Gemini 5hr, T3 Gemini wk, T3 Claude GPT 5hr, T3 Claude GPT wk. Extra T3 pools follow in reported order, up to five
+  compact columns total. A reading with only extra pools shows those pools alone. "Not reported" for an extra pool
+  comes only from a live reading of T3's own service.
   The dashboard's optional
   `antigravityPlan` object (class, quotaPolicy, summary, models, thirdPartyModels, creditsOverage) drives the
   honest gaps: a weekly-only plan's 5-hour cell reads "Weekly only", a plan without Claude/GPT models reads

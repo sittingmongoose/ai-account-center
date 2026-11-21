@@ -4987,6 +4987,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "web-dashboard/leptos/src/refreshing.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "web-dashboard/leptos/src/reset_action_tests.rs",
       "kind": "internal",
       "evidence": [],
@@ -5257,6 +5263,13 @@
     },
     {
       "file": "web-dashboard/tests/browser/checks/pages-together.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/refresh-button.check.mjs",
       "kind": "HTTP",
       "evidence": [
         "HTTP"

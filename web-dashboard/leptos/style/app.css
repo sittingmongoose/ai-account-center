@@ -285,6 +285,22 @@ a, .link { color: var(--accent-text); text-decoration: none; font-weight: 560; f
 .icon-btn { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--rule); background: var(--paper); display: inline-grid; place-items: center; color: var(--ink-2); padding: 0; flex: none; }
 .icon-btn .ic { width: 18px; height: 18px; }
 .icon-btn.bare { border-color: transparent; background: transparent; }
+/* The header's Refresh (chrome.rs RefreshButton). A press shows at once on touch and mouse alike: `.pressed` is set
+   from the pointer's down to its up (no :active, which iOS skips, and no hover, which a phone keeps), then eases back.
+   While its refresh runs the icon turns (a transform only), and with reduced motion it pulses gently instead. */
+.refresh-btn { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  transition: transform .18s ease-out, background-color .18s ease-out, border-color .18s ease-out, color .18s ease-out; }
+@media (hover: hover) { .refresh-btn:hover { background: var(--paper-3); } }
+.refresh-btn.pressed { transform: scale(.86); background: var(--accent-soft); border-color: var(--accent); color: var(--accent); transition: none; }
+.refresh-btn.refreshing { color: var(--accent); }
+.refresh-btn.refreshing .ic { animation: ac-refresh-turn .9s linear infinite; transform-origin: 50% 50%; will-change: transform; }
+@keyframes ac-refresh-turn { to { transform: rotate(360deg); } }
+@keyframes ac-refresh-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) {
+  /* beats the page-wide `* { animation: none !important }` below by its weight */
+  .refresh-btn.refreshing .ic { animation: ac-refresh-pulse 1.6s ease-in-out infinite !important; will-change: opacity; }
+}
 .select-btn { height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px 0 9px; border: 1px solid var(--rule); background: var(--paper); border-radius: 9px; color: var(--ink-2); }
 .select-btn .ic { width: 18px; height: 18px; }
 .select-btn .chev { width: 14px; height: 14px; color: var(--ink-3); }
@@ -396,7 +412,7 @@ textarea.note::placeholder { color: var(--ink-4); }
   --ink: #E6ECF2; --ink-2: #B0BCC8; --ink-3: #8794A2; --ink-4: #5B6876;
   --rule: #24313D; --rule-2: #1D2832;
   --row-hover: #18232D; --pressed: #1B2530;
-  --accent: #86ABFF; --accent-ink: #0B1424; --accent-text: #9BBAFF;
+  --accent: #86ABFF; --accent-ink: #0B1424; --accent-text: #9BBAFF; --accent-soft: #1A2742;
   --warn-text: #F5C35D; --crit-text: #FF8469; --good-text: #5AD3BF; --over-text: #FF7AA6;
   color: var(--ink);
 }

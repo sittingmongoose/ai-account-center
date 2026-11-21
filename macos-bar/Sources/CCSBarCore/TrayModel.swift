@@ -262,31 +262,27 @@ public enum TrayColumns {
   /// 5-hour and weekly windows, then the Claude/GPT pool's. Keys stay exactly as the dashboard sends them.
   public static let antigravityKeys = ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"]
 
-  /// T3's four columns, always (a pool T3's service did not report reads as a muted cell, and an older dashboard
-  /// that sends only the app's pools reads Unavailable, never the app's numbers), then one more T3 pool the
-  /// columns don't name (such as Gemini 4 Argon) in reported order, so a reported T3 meter never vanishes.
+  /// Like Home, show the canonical group together when any of its pools is present, followed by extras in
+  /// reported order. For an older dashboard with no T3 meters, keep the canonical placeholders in the tray.
   public static func antigravity(_ accounts: [DashboardAccount]) -> [(key: String, label: String)] {
-    var columns = antigravityKeys.map { (key: $0, label: antigravityLabel($0)) }
     let known = Set(antigravityKeys)
-    for account in accounts {
-      for window in account.visibleWindows where window.isMeter && isAntigravityCLI(window.key) && !known.contains(window.key) {
-        // Same cap as the Windows panel: the spec's four columns plus one
-        // extra pool keep the shared panel width readable.
-        guard columns.count < 5, !columns.contains(where: { $0.key == window.key }) else { continue }
-        columns.append((key: window.key, label: shortLabel(provider: "antigravity", window)))
-      }
+    let meters = accounts.flatMap(\.visibleWindows).filter { $0.isMeter && isAntigravityCLI($0.key) }
+    let showCanonical = meters.isEmpty || meters.contains { known.contains($0.key) }
+    var columns = showCanonical ? antigravityKeys.map { (key: $0, label: antigravityLabel($0)) } : []
+    for window in meters where !columns.contains(where: { $0.key == window.key }) {
+      if columns.count == 5 { break } // Keep meter captions legible in the tray's fixed width.
+      columns.append((key: window.key, label: shortLabel(provider: "antigravity", window)))
     }
     return columns
   }
 
-  /// The exact tray caption for one of T3's four pool columns (the spec's short forms; tooltips and Details keep the
-  /// dashboard's full pool names).
+  /// Home's short caption for one of T3's four pool columns. Tooltips and Details keep the full pool names.
   public static func antigravityLabel(_ key: String) -> String {
     switch key {
-    case "cli-gemini-5h": return "Gemini 5-hour"
-    case "cli-gemini-weekly": return "Gemini weekly"
-    case "cli-3p-5h": return "Claude/GPT 5-hour"
-    case "cli-3p-weekly": return "Claude/GPT weekly"
+    case "cli-gemini-5h": return "T3 Gemini 5hr"
+    case "cli-gemini-weekly": return "T3 Gemini wk"
+    case "cli-3p-5h": return "T3 Claude GPT 5hr"
+    case "cli-3p-weekly": return "T3 Claude GPT wk"
     default: return key
     }
   }
@@ -343,7 +339,7 @@ public enum TrayColumns {
     let periodLabel: String? = [.fiveHour: "5-hour", .week: "Weekly", .month: "Monthly"][window.period]
     switch provider {
     case "antigravity":
-      // T3's four pool windows get the spec's exact tray captions. An extra T3 pool ("Gemini 4 Argon · Weekly ·
+      // T3's four pool windows use Home's short captions. An extra T3 pool ("Gemini 4 Argon · Weekly ·
       // In T3 (Antigravity CLI)") reads as the last word of its pool name and its period ("Argon weekly"), short
       // enough for a fifth column; Details keeps the full name. Anything else falls back to the generic path rather
       // than claiming a pool from a key prefix.
@@ -431,7 +427,8 @@ extension DashboardAccount {
   /// T3's Antigravity CLI service answered this read: a live (not cached, not unavailable) T3 meter.
   public var antigravityCLILive: Bool {
     visibleWindows.contains { window in
-      window.isMeter && TrayColumns.isAntigravityCLI(window.key) && !["unavailable", "cached"].contains(window.status ?? "")
+      window.isMeter && TrayColumns.isAntigravityCLI(window.key) && window.cached != true
+        && !["unavailable", "cached"].contains(window.status ?? "")
     }
   }
 

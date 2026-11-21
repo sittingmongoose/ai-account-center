@@ -240,6 +240,42 @@ test('Refresh asks every provider first, then reads the analytics afresh', async
   assert.ok(dash >= 0 && read > dash, JSON.stringify(calls));
 });
 
+test('Refresh tells the header when its reads have answered, not before (the spinning Refresh stops then)', async () => {
+  let release = null;
+  const { controller } = make(
+    defaultRoutes({
+      '/api/accounts/analytics': (url) =>
+        url.searchParams.get('refresh') === 'true'
+          ? new Promise((resolve) => {
+              release = () =>
+                resolve({ status: 200, body: analyticsFixture({ range: '7d', now: NOW, accounts: dashboard().accounts }) });
+            })
+          : { status: 200, body: analyticsFixture({ range: '7d', now: NOW, accounts: dashboard().accounts }) },
+    })
+  );
+  controller.show();
+  await settle();
+  await settle();
+  let done = 0;
+  assert.equal(controller.act('analytics-refresh', '', () => done++), true);
+  for (let i = 0; i < 6; i++) await settle();
+  assert.ok(release, 'the forced analytics read is in flight');
+  assert.equal(done, 0, 'not finished while the read is out');
+  release();
+  for (let i = 0; i < 4; i++) await settle();
+  assert.equal(done, 1, 'finished once, when it answered');
+  // a failing read finishes too, and a callback that throws is never the page's failure
+  const failing = make(defaultRoutes({ '/api/accounts/analytics': () => 'offline' }));
+  failing.controller.show();
+  await settle();
+  let failed = 0;
+  assert.equal(failing.controller.act('analytics-refresh', '', () => { failed++; throw new Error('caller'); }), true);
+  for (let i = 0; i < 8; i++) await settle();
+  assert.equal(failed, 1);
+  // without a callback it is the same action as before
+  assert.equal(failing.controller.act('analytics-refresh', ''), true);
+});
+
 test('a session that ended stops the page: the frame is told once', async () => {
   const { controller, ended, sent } = make(
     defaultRoutes({

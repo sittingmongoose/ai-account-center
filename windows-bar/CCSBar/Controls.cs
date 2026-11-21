@@ -109,7 +109,7 @@ public static class Ui
 
     /// <summary>The section column grid: mark | identity | meters | action slot | tail. The first meter starts on the
     /// same x in every section (14 px after the identity, as in the concept), the tracks stay uniform across the section. With four meters
-    /// (Antigravity) the gap before the last column widens so the widest caption ("Claude/GPT 5-hour") fits above it.</summary>
+    /// (Antigravity) the gap before the last column widens to fit the Claude and GPT caption above it.</summary>
     public static Grid SectionGrid(int meters, double acts, double identity = 162, double mark = 22)
     {
         meters = Math.Max(1, meters);

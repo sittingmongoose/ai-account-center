@@ -1187,8 +1187,7 @@ private func checkAntigravityPlanDisplay() throws {
   try expect(nonObject.antigravityPlan == nil && missing.antigravityPlan == nil,
     "A non-object or missing antigravityPlan reads as an unknown plan")
 
-  // Column order: the four pool windows in panel order, however the account lists them, with the spec's
-  // exact tray captions; unknown extra windows fall back to the generic path.
+  // Column order and short captions match Home, however the account lists the windows.
   let scrambled = try account("agy-full", windows: [
     window("cli-3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 1]),
     window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 2]),
@@ -1198,18 +1197,17 @@ private func checkAntigravityPlanDisplay() throws {
   let columns = TrayColumns.antigravity([scrambled])
   try expect(columns.map(\.key) == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"],
     "Antigravity columns must be Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly, in that order")
-  try expect(columns.map(\.label) == ["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"],
-    "Tray captions use the spec's exact short forms")
+  try expect(columns.map(\.label) == ["T3 Gemini 5hr", "T3 Gemini wk", "T3 Claude GPT 5hr", "T3 Claude GPT wk"],
+    "Tray captions use Home's short forms")
   let windowsByKey = Dictionary(uniqueKeysWithValues: scrambled.windows.map { ($0.key, $0) })
-  for (key, caption) in [("cli-gemini-5h", "Gemini 5-hour"), ("cli-gemini-weekly", "Gemini weekly"),
-    ("cli-3p-5h", "Claude/GPT 5-hour"), ("cli-3p-weekly", "Claude/GPT weekly")] {
+  for (key, caption) in columns {
     try expect(TrayColumns.shortLabel(provider: "antigravity", windowsByKey[key]!) == caption,
       "The \(key) cell caption must be \(caption)")
   }
   let extra = try account("agy-extra", windows: [window("cli-gemini-flash-8h", "Flash 8h", ["usedPercent": 1, "windowMinutes": 480])])
-  try expect(TrayColumns.antigravity([extra]).map(\.key) == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly", "cli-gemini-flash-8h"]
+  try expect(TrayColumns.antigravity([extra]).map(\.key) == ["cli-gemini-flash-8h"]
     && TrayColumns.antigravity([extra]).last?.label == "Flash 8h",
-    "An extra T3 pool follows T3's four columns under its own label, nothing guessed")
+    "Like Home, an extra-only T3 reading has no canonical columns")
   let unknownApp = try account("agy-unknown-app", windows: [window("gemini-flash-8h", "Flash 8h", ["usedPercent": 1, "windowMinutes": 480])])
   try expect(TrayColumns.antigravity([unknownApp]).map(\.key) == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"],
     "A pool outside T3's service is never a tray column")
@@ -3437,8 +3435,8 @@ private func checkAntigravityCLIOnly() throws {
   scenario("CLI-only rows") {
     try expect(columns.map(\.key) == cliKeys + ["cli-gemini-argon-wtu-weekly"],
       "The Antigravity columns are T3's CLI pools only, in panel order, with T3's Argon pool after them")
-    try expect(Array(columns.prefix(4)).map(\.label) == ["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"],
-      "T3's four columns keep the short captions")
+    try expect(Array(columns.prefix(4)).map(\.label) == ["T3 Gemini 5hr", "T3 Gemini wk", "T3 Claude GPT 5hr", "T3 Claude GPT wk"],
+      "T3's four columns use Home's short captions")
     let (bothDashboard, both) = try only("antigravity:t3-both")
     try expect(cliKeys.map { shown(both, $0) } == [29.68, 8.48, 3.5, 6.25] && shown(both, "cli-gemini-argon-wtu-weekly") == 12.5,
       "Each T3 cell shows T3's own reading, never the app's and never a sum")
@@ -3505,6 +3503,15 @@ private func checkAntigravityCLIOnly() throws {
     try expect(free.antigravityMissingCell("cli-gemini-5h") == .weeklyOnly && free.antigravityMissingCell("cli-3p-weekly") == .notOnPlan
       && free.antigravityMissingCell("cli-gemini-weekly") == .unavailable,
       "Weekly only and Not on plan apply to T3's columns")
+  }
+  scenario("legacy cached flag") {
+    var object = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as! [String: Any]
+    var account = (object["accounts"] as! [[String: Any]])[0]
+    account["status"] = "ok"
+    account["windows"] = [["key": "cli-gemini-weekly", "label": "Gemini Models · Weekly", "usedPercent": 0, "cached": true]]
+    let cached = try JSONDecoder().decode(DashboardAccount.self, from: JSONSerialization.data(withJSONObject: account))
+    try expect(cached.antigravityMissingCell("cli-gemini-argon-wtu-weekly") == .unavailable,
+      "A cached reading cannot say that a missing extra pool is Not reported")
   }
   if !failed.isEmpty { throw CheckFailure(description: failed.joined(separator: "; ")) }
 }

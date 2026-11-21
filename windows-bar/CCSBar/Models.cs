@@ -272,6 +272,7 @@ public sealed class QuotaWindow
     public string? Unit { get; set; }
     public string? Kind { get; set; }
     public string? Status { get; set; }
+    public bool? Cached { get; set; }
     public string? SampledAt { get; set; }
     public double? Remaining { get; set; }
     public string? ExpiresAt { get; set; }
