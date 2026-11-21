@@ -26,13 +26,13 @@ namespace CCSBar;
 /// </summary>
 public partial class MainWindow : Window
 {
-    private sealed record Column(string Key, string Caption, Func<DashboardAccount, QuotaWindow?> Pick);
+    internal sealed record Column(string Key, string Caption, Func<DashboardAccount, QuotaWindow?> Pick);
 
     private const string AntigravityCliLabel = "In T3 (Antigravity CLI)";
     private static readonly (string Key, string Caption)[] AntigravityKeys =
     [
-        ("cli-gemini-5h", "Gemini 5-hour"), ("cli-gemini-weekly", "Gemini weekly"),
-        ("cli-3p-5h", "Claude/GPT 5-hour"), ("cli-3p-weekly", "Claude/GPT weekly"),
+        ("cli-gemini-5h", "T3 Gemini 5hr"), ("cli-gemini-weekly", "T3 Gemini wk"),
+        ("cli-3p-5h", "T3 Claude GPT 5hr"), ("cli-3p-weekly", "T3 Claude GPT wk"),
     ];
 
     private DashboardClient? client;
@@ -634,7 +634,7 @@ public partial class MainWindow : Window
         return Meters(account).FirstOrDefault(window => window.Key == key);
     }
 
-    private List<Column> Columns(string provider, DashboardAccount[] accounts)
+    internal static List<Column> Columns(string provider, DashboardAccount[] accounts)
     {
         if (provider == "claude")
         {
@@ -650,7 +650,8 @@ public partial class MainWindow : Window
         var keys = windows.Select(window => window.Key).ToHashSet(StringComparer.Ordinal);
         bool noCli = keys.Count == 0 && accounts.Any(account =>
             account.Status != "needs_sign_in" && account.AntigravityPlan?.QuotaPolicy != "none");
-        var result = AntigravityKeys.Where(item => noCli || keys.Contains(item.Key))
+        bool showCanonical = noCli || AntigravityKeys.Any(item => keys.Contains(item.Key));
+        var result = AntigravityKeys.Where(_ => showCanonical)
             .Select(item => new Column(item.Key, item.Caption, a => Meters(a).FirstOrDefault(w => w.Key == item.Key))).ToList();
         foreach (var sample in windows)
         {
@@ -818,14 +819,9 @@ public partial class MainWindow : Window
         if (window is null)
         {
             if (provider != "antigravity") return null;
-            if (Meters(account).Any(w => w.Status != "unavailable") && account.AntigravityPlan is { } plan)
-            {
-                if (column.Key is "cli-3p-5h" or "cli-3p-weekly" && plan.ThirdPartyModels == false)
-                    return MutedMeter(key, plan.Summary, "Not on plan");
-                if (plan.QuotaPolicy == "weekly" && IsFiveHourKey(column.Key))
-                    return MutedMeter(key, plan.Summary, "Weekly only");
-            }
-            return MutedMeter(key, AntigravityCliLabel, "Unavailable");
+            var label = AntigravityMissingLabel(account, column.Key);
+            var tooltip = label is "Not on plan" or "Weekly only" ? account.AntigravityPlan!.Summary : AntigravityCliLabel;
+            return MutedMeter(key, tooltip, label);
         }
         if (provider == "antigravity" && window.Status == "unavailable")
             return MutedMeter(key, Formatting.WindowLabel(account, window), "Unavailable");
@@ -834,8 +830,19 @@ public partial class MainWindow : Window
         return meter;
     }
 
-    /// <summary>The compact cells name a 5-hour window by its key ("gemini-5h", "3p-5h", or a label form).</summary>
-    private static bool IsFiveHourKey(string key) => key.EndsWith("-5h", StringComparison.Ordinal) || key.EndsWith("5-hour", StringComparison.Ordinal);
+    /// <summary>Use Home's plan reasons and require a live T3 reading before calling an extra pool unreported.</summary>
+    internal static string AntigravityMissingLabel(DashboardAccount account, string key)
+    {
+        if (account.AntigravityPlan is { } plan)
+        {
+            if (key is "cli-3p-5h" or "cli-3p-weekly" && plan.ThirdPartyModels == false) return "Not on plan";
+            if (key is "cli-gemini-5h" or "cli-3p-5h" && plan.QuotaPolicy == "weekly") return "Weekly only";
+        }
+        if (account.Status == "ok" && !AntigravityKeys.Any(item => item.Key == key)
+            && Meters(account).Any(window => window.Cached != true && window.Status is not ("cached" or "unavailable")))
+            return "Not reported";
+        return "Unavailable";
+    }
 
     /// <summary>A muted plan cell draws no track, so it skips the meter's 8 px overage gutter and its text keeps the
     /// whole column. The margin is stated on every placement (meters are reused by key across samples).</summary>

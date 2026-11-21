@@ -14,9 +14,7 @@ enum TrayMetrics {
   static let sectionHeaderTop: CGFloat = 6
   static let markColumn: CGFloat = 22
   static let identityColumn: CGFloat = 168
-  /// Antigravity's identity column and gap give its four quota columns 93 pt cells at the panel's
-  /// 760 pt: the "Claude/GPT weekly" caption (103.9 pt at 11 pt) fits a cell at the captions' 0.85
-  /// minimum scale, so no caption truncates.
+  /// Antigravity's identity column and gap leave room for its quota captions at the 760 pt panel width.
   static let antigravityIdentityColumn: CGFloat = 158
   static let columnGap: CGFloat = 13
   static let antigravityColumnGap: CGFloat = 8

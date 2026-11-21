@@ -30,6 +30,7 @@ public static partial class Checks
     {
         var report = new CheckReport();
         await ReviewR2Checks(report);
+        AntigravityHomeParityChecks(report);
         AntigravityServiceChecks(report);
         report.Checks["cursor_plan_names_are_provider_scoped"] = Formatting.PlanLabel("plus", "cursor") == "X Plus" && Formatting.PlanLabel("plus", "codex") == "Plus";
         report.Checks["new_and_legacy_cursor_ultra_remain_distinct"] = Formatting.PlanLabel("unified_ultra", "cursor") == "X Ultra" && Formatting.PlanLabel("ultra", "cursor") == "Cursor Ultra" && Formatting.PlanLabel("ultra", "antigravity") == "Ultra";
@@ -1036,6 +1037,39 @@ public static partial class Checks
         var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
         var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
         return $"http://127.0.0.1:{port}";
+    }
+
+    // This group can also run in a console harness without constructing a WPF window.
+    internal static void AntigravityHomeParityChecks(CheckReport report)
+    {
+        var account = new DashboardAccount { Provider = "antigravity", Status = "ok" };
+        var weekly = new QuotaWindow { Key = "cli-gemini-weekly", UsedPercent = 0 };
+        var extra = new QuotaWindow { Key = "cli-argon-5h", Label = "Argon 5-hour", UsedPercent = 8 };
+        account.Windows.AddRange([extra, weekly]);
+        var columns = MainWindow.Columns("antigravity", [account]);
+        report.Checks["antigravity_partial_reading_keeps_home_column_order"] = columns.Select(c => c.Key).SequenceEqual(
+            new[] { "cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly", extra.Key });
+        report.Checks["antigravity_canonical_columns_use_home_short_captions"] = columns.Take(4).Select(c => c.Caption).SequenceEqual(
+            new[] { "T3 Gemini 5hr", "T3 Gemini wk", "T3 Claude GPT 5hr", "T3 Claude GPT wk" });
+
+        account.Windows = [weekly];
+        report.Checks["antigravity_live_t3_reading_explains_missing_extra_pool"] =
+            MainWindow.AntigravityMissingLabel(account, extra.Key) == "Not reported";
+        weekly.Status = "cached";
+        report.Checks["antigravity_cached_t3_reading_cannot_explain_missing_extra_pool"] =
+            MainWindow.AntigravityMissingLabel(account, extra.Key) == "Unavailable";
+        weekly.Status = null;
+        weekly.Cached = true;
+        report.Checks["antigravity_cached_flag_cannot_explain_missing_extra_pool"] =
+            MainWindow.AntigravityMissingLabel(account, extra.Key) == "Unavailable";
+        account.Windows = [new() { Key = "gemini-weekly", UsedPercent = 29 }];
+        account.AntigravityPlan = new AntigravityPlan { QuotaPolicy = "weekly", ThirdPartyModels = false };
+        report.Checks["antigravity_plan_explains_missing_canonical_t3_cells"] =
+            MainWindow.AntigravityMissingLabel(account, "cli-3p-5h") == "Not on plan"
+            && MainWindow.AntigravityMissingLabel(account, "cli-gemini-5h") == "Weekly only"
+            && MainWindow.AntigravityMissingLabel(account, "cli-gemini-weekly") == "Unavailable";
+        report.Checks["antigravity_app_reading_cannot_explain_missing_extra_pool"] =
+            MainWindow.AntigravityMissingLabel(account, extra.Key) == "Unavailable";
     }
 
     private static void AntigravityServiceChecks(CheckReport report)
