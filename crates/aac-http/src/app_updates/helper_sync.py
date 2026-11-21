@@ -128,6 +128,8 @@ def publish(root, platform, expected, payload):
         previous = 'helpers-' + uuid.uuid4().hex
         keep = pathlib.Path(tempfile.mkdtemp(prefix='.helpers-stage-', dir=root))
         try:
+            if os.name == 'nt':
+                grant(keep)
             for name in FILES:
                 if (root / name).is_file():
                     shutil.copy2(root / name, keep / name)

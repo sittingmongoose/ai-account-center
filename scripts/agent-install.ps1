@@ -6,7 +6,7 @@
 #
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\agent-install.ps1 -Binary <path> -Sha256 <hash>
 #   -Binary   the packaged aac-agent.exe for this computer (dist\agent\x86_64-pc-windows-msvc\)
-#   -Sha256   its pinned digest from src\web-server\services\agent-artifacts.json
+#   -Sha256   its pinned digest from config\agent-artifacts.json
 #
 # Verifies the source digest, stages a .part copy, verifies it again, renames atomically, then
 # requires the --version handshake {name, version, protocol, target} for Windows.

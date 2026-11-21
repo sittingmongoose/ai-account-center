@@ -646,6 +646,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/cli.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/cli/admin.rs",
       "kind": "internal",
       "evidence": [],

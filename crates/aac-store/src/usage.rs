@@ -18,7 +18,7 @@ pub const HOUR_MS: u64 = 3_600_000;
 const BUCKET_MS: u64 = 5 * 60_000;
 /// Readings further apart than this are a gap, not coverage.
 const COVER_GAP_MS: u64 = 10 * 60_000;
-const RESET_SHIFT_MS: i64 = 10 * 60_000;
+const RESET_SHIFT_MS: u64 = 10 * 60_000;
 const RESET_DROP_POINTS: f64 = 1.0;
 const MAX_WINDOWS: usize = 256;
 /// A day closes this long after it ends, so late samples of that day still count.
@@ -809,10 +809,12 @@ pub fn is_reset(prev_t: i64, prev: &Vals, t: i64, now: &Vals) -> bool {
     {
         return true;
     }
-    let same_upcoming = upcoming(prev.reset_at, prev_t) && upcoming(now.reset_at, t);
-    if same_upcoming && (prev.reset_at.unwrap() - now.reset_at.unwrap()).abs() > RESET_SHIFT_MS {
+    if let (Some(prev_reset), Some(now_reset)) = (prev.reset_at, now.reset_at)
+        && prev_reset.abs_diff(now_reset) > RESET_SHIFT_MS
+    {
         return true;
     }
+    let same_upcoming = upcoming(prev.reset_at, prev_t) && upcoming(now.reset_at, t);
     up - u > if same_upcoming { RESET_DROP_POINTS } else { 0.0 }
 }
 
@@ -821,7 +823,7 @@ pub fn is_reset(prev_t: i64, prev: &Vals, t: i64, now: &Vals) -> bool {
 pub struct UsageProjector;
 
 /// Bump when projection rules change: the usage tables are then rebuilt from the logs.
-pub const USAGE_PROJECTOR_VERSION: u32 = 1;
+pub const USAGE_PROJECTOR_VERSION: u32 = 2;
 
 impl Projector for UsageProjector {
     fn name(&self) -> &'static str {

@@ -162,6 +162,27 @@ fn a_second_writer_is_refused() {
 }
 
 #[test]
+fn a_shift_from_an_expired_reset_starts_a_new_period() {
+    let dir = temp_dir("reset-shift");
+    let engine = open(&dir);
+    let t = 1_793_000_000_000;
+    let w = |used, reset| vec![window("five_hour", Some(used), Some(reset))];
+    record(
+        &engine,
+        vec![
+            obs(1, t, w(0.0, t - MIN)),
+            obs(1, t + MIN, w(5.0, t - 2 * MIN)),
+            obs(1, t + 2 * MIN, w(39.0, t + 5 * HOUR)),
+        ],
+    );
+    let periods = dump(&engine, &["period"]);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(periods.len(), 2);
+}
+
+#[test]
 fn decisions_follow_the_json_history_rules() {
     let dir = temp_dir("decide");
     let engine = open(&dir);

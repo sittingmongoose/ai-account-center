@@ -99,6 +99,63 @@ fn replies_map_to_honest_causes() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn windows_flat_helper_backup_gets_access_before_publication() {
+    let dir = tempfile::tempdir().expect("fixture");
+    let harness = r#"
+import pathlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+launcher = root / 'app_updates.py'
+launcher.write_bytes(b'# flat helper\n')
+
+def check_output(args, **kwargs):
+    assert args[0] == 'powershell.exe'
+    return 'S-1-5-21-1-2-3-1001'
+
+def run(args, **kwargs):
+    assert args[0] == 'icacls.exe'
+    folder = pathlib.Path(args[1])
+    assert launcher.read_bytes() == b'# flat helper\n'
+    (folder / 'acl-granted').touch()
+
+subprocess.check_output = check_output
+subprocess.run = run
+source = sys.stdin.read().removesuffix('\nmain()\n')
+namespace = {}
+exec(source.replace("if os.name == 'nt':", 'if True:'), namespace)
+namespace['capable'] = lambda script, platform: True
+data = b'# new helper\n'
+result = namespace['publish'](root, 'windows', {'app_updates.py': namespace['digest'](data)},
+                              {'app_updates.py': data})
+backup = root / result['previous']
+assert (backup / 'app_updates.py').read_bytes() == b'# flat helper\n'
+assert (root / result['generation'] / 'acl-granted').is_file(), 'new helper ACL missing'
+assert (backup / 'acl-granted').is_file(), 'rollback helper ACL missing'
+"#;
+    let mut child = std::process::Command::new("/usr/bin/python3")
+        .args(["-B", "-c", harness])
+        .arg(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run helper ACL fixture");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("helper stdin")
+        .write_all(SCRIPT.as_bytes())
+        .expect("helper script");
+    let result = child.wait_with_output().expect("helper ACL result");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 /// The real script on this computer in an isolated home, through the local transport the
 /// dashboard uses for its own computer. A child process owns the isolated HOME.
 #[cfg(unix)]

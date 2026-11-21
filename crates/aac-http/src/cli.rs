@@ -200,13 +200,42 @@ fn version(root: Option<PathBuf>) -> Result<(), String> {
     let bin = env::current_exe().map_err(|error| error.to_string())?;
     let root =
         root.ok_or("Set CCS_HOME or CCS_DIR to select an account configuration directory.")?;
-    println!("AI Account Center v{}", env!("AAC_VERSION"));
-    println!("Installation: {}", bin.display());
-    println!("Account configuration: {}", root.display());
-    println!("Config: {}", root.join("config.json").display());
-    println!("License: MIT; derived from CCS by Tam Nhu Tran (Kai).");
-    println!("Run 'ai-account-center --help' for usage information.");
+    print!("{}", version_text(bin, &root));
     Ok(())
+}
+
+fn version_text(bin: PathBuf, root: &Path) -> String {
+    let bin = crate::identity::resolve_asset_path(bin);
+    format!(
+        "AI Account Center v{}\nInstallation: {}\nAccount configuration: {}\nConfig: {}\n\
+         License: MIT; derived from CCS by Tam Nhu Tran (Kai).\n\
+         Run 'ai-account-center --help' for usage information.\n",
+        env!("AAC_VERSION"),
+        bin.display(),
+        root.display(),
+        root.join("config.json").display(),
+    )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::version_text;
+
+    #[test]
+    fn version_reports_the_installed_binary_for_a_symlinked_launcher() {
+        let dir = tempfile::tempdir().expect("fixture");
+        let installed = dir.path().join("installed");
+        let launcher = dir.path().join("ai-account-center");
+        std::fs::write(&installed, b"fixture binary").expect("installed binary");
+        std::os::unix::fs::symlink(&installed, &launcher).expect("launcher symlink");
+
+        let text = version_text(launcher, dir.path());
+        let installed = installed.canonicalize().expect("installed path");
+        assert_eq!(
+            text.lines().nth(1).expect("installation line"),
+            format!("Installation: {}", installed.display())
+        );
+    }
 }
 
 fn retired(command: &str) -> i32 {
