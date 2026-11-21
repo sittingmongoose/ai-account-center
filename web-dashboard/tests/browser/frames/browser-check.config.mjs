@@ -21,6 +21,8 @@ export default async (ctx) => {
       timeoutMs: 30000,
       env: {
         CCS_HOME: s.home,
+        AAC_CURSOR_BILLING_ENABLED: '0',
+        AAC_CURSOR_API_BASE: 'http://127.0.0.1:1',
         HOME: s.home,
         CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'),
         CODEX_HOME: path.join(s.home, '.codex'),

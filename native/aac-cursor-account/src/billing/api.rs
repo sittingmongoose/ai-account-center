@@ -18,6 +18,7 @@ pub(super) fn iso(ms: i64) -> Option<String> {
 pub(super) struct Window {
     pub events: Vec<Event>,
     pub unmeasured: BTreeMap<i64, u64>,
+    pub unrecognized_models: BTreeMap<i64, u64>,
     pub newest: Option<i64>,
 }
 
@@ -50,6 +51,7 @@ impl<'a> Client<'a> {
         let mut window = Window {
             events: Vec::new(),
             unmeasured: BTreeMap::new(),
+            unrecognized_models: BTreeMap::new(),
             newest: None,
         };
         let mut ids = HashSet::new();
@@ -122,10 +124,14 @@ impl<'a> Client<'a> {
                     continue;
                 }
                 window.newest = window.newest.max(Some(at));
-                if let Some(event) = measured(item, at) {
+                let hour = at.div_euclid(HOUR) * HOUR;
+                if let Some((event, recognized)) = measured(item, at) {
+                    if !recognized {
+                        *window.unrecognized_models.entry(hour).or_default() += 1;
+                    }
                     window.events.push(event);
                 } else {
-                    *window.unmeasured.entry(at.div_euclid(HOUR) * HOUR).or_default() += 1;
+                    *window.unmeasured.entry(hour).or_default() += 1;
                 }
             }
             let next = paging
@@ -145,21 +151,35 @@ impl<'a> Client<'a> {
     }
 }
 
-fn model(value: &Value) -> Option<String> {
-    let model = value.as_str()?;
+fn model(value: &Value) -> (String, bool) {
+    let model = value.as_str().unwrap_or_default();
     if model == "Claude 4.5 Sonnet (Thinking)" {
-        return Some("claude-sonnet-4-5".into());
+        return ("claude-sonnet-4-5".into(), true);
     }
     // Keep provider ids intact for the existing model matcher, including effort.
-    (model.len() <= 200
+    if model.len() <= 200
         && model.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
         && model
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-._:/".contains(&b)))
-    .then(|| model.to_owned())
+            .all(|b| b.is_ascii_alphanumeric() || b"-._:/".contains(&b))
+    {
+        return (model.to_owned(), true);
+    }
+    if model.len() <= 200 && !model.contains('@') {
+        let slug = model
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("-")
+            .to_ascii_lowercase();
+        if !slug.is_empty() {
+            return (slug, false);
+        }
+    }
+    ("cursor-unknown-model".into(), false)
 }
 
-fn measured(item: &Value, at_ms: i64) -> Option<Event> {
+fn measured(item: &Value, at_ms: i64) -> Option<(Event, bool)> {
     let usage = item.get("usage")?.as_object()?;
     let mut tokens = [0; 4];
     for (count, key) in tokens.iter_mut().zip([
@@ -176,11 +196,15 @@ fn measured(item: &Value, at_ms: i64) -> Option<Event> {
             return None;
         }
     }
-    Some(Event {
-        at_ms,
-        model: model(&item["displayExtras"]["model"])?,
-        session: None,
-        tokens,
-        cents: None,
-    })
+    let (model, recognized) = model(&item["displayExtras"]["model"]);
+    Some((
+        Event {
+            at_ms,
+            model,
+            session: None,
+            tokens,
+            cents: None,
+        },
+        recognized,
+    ))
 }

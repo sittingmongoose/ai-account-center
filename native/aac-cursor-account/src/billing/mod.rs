@@ -14,6 +14,7 @@ use std::time::Duration;
 
 const DAY: i64 = 24 * HOUR;
 const HISTORY: i64 = 31 * DAY;
+const RECENT_OVERLAP: i64 = 6 * HOUR;
 const HISTORY_PAGES: usize = 20;
 const PASS_PAGES: usize = 40;
 const MAX_SAVED: usize = 16 * 1024 * 1024;
@@ -33,6 +34,8 @@ struct Checkpoint {
 struct Cell {
     rows: Vec<Value>,
     unmeasured: u64,
+    #[serde(default)]
+    unrecognized_models: u64,
 }
 
 impl Checkpoint {
@@ -48,6 +51,19 @@ impl Checkpoint {
         }
     }
 
+    fn rewind(&mut self, until: i64) {
+        // The hour containing the new end may contain rows from after it.
+        let hour = until.div_euclid(HOUR) * HOUR;
+        if hour <= self.from {
+            *self = Self::new(until);
+            return;
+        }
+        self.through = hour;
+        self.hours.retain(|at, _| *at < hour);
+        self.newest = self.newest.filter(|at| *at < hour);
+        self.read_at = self.read_at.map(|at| at.min(until));
+    }
+
     fn replace(&mut self, start: i64, end: i64, window: Window) {
         self.hours.retain(|hour, _| *hour < start || *hour >= end);
         for row in crate::api::hourly(&window.events) {
@@ -58,6 +74,9 @@ impl Checkpoint {
         for (hour, count) in window.unmeasured {
             self.hours.entry(hour).or_default().unmeasured = count;
         }
+        for (hour, count) in window.unrecognized_models {
+            self.hours.entry(hour).or_default().unrecognized_models = count;
+        }
         self.newest = self.newest.max(window.newest);
     }
 
@@ -65,8 +84,10 @@ impl Checkpoint {
         let mut rows = Vec::new();
         let mut events = 0;
         let mut unmeasured = 0;
+        let mut unrecognized_models = 0;
         for cell in self.hours.range(ceil_hour(since)..until).map(|(_, cell)| cell) {
             unmeasured += cell.unmeasured;
+            unrecognized_models += cell.unrecognized_models;
             for row in &cell.rows {
                 events += row["n"].as_u64().unwrap_or_default();
                 rows.push(row);
@@ -81,6 +102,7 @@ impl Checkpoint {
             "pages": pages,
             "events": events,
             "unmeasured": unmeasured,
+            "unrecognizedModels": unrecognized_models,
             "rows": rows,
         })
     }
@@ -102,15 +124,21 @@ fn test_base() -> Option<String> {
 
 /// None delegates to the legacy API-key path. The loopback fixture can only read a synthetic root.
 pub fn read(root: &Path, since: i64, until: i64, now: i64) -> Option<Value> {
+    // The service explicitly opts in. Kits override this to 0 before launching the server.
+    if std::env::var("AAC_CURSOR_BILLING_ENABLED").as_deref() != Ok("1") {
+        return None;
+    }
+    let fixture_root = std::env::var_os("AAC_CURSOR_TEST_SIGNIN_DIR");
     let base = test_base();
-    let test = if base.is_some() {
-        let test = std::path::PathBuf::from(std::env::var_os("AAC_CURSOR_TEST_SIGNIN_DIR")?);
+    let test = if std::env::var_os("AAC_CURSOR_BILLING_BASE").is_some() || fixture_root.is_some() {
+        base.as_ref()?;
+        let test = std::path::PathBuf::from(fixture_root?);
         if test != root {
             return None;
         }
         Some(test)
     } else {
-        if std::env::var_os("AAC_CURSOR_API_BASE").is_some() {
+        if std::env::var_os("AAC_CURSOR_API_BASE").is_some() || std::env::var("NODE_ENV").as_deref() == Ok("test") {
             return None;
         }
         None
@@ -125,6 +153,13 @@ pub fn read(root: &Path, since: i64, until: i64, now: i64) -> Option<Value> {
     }
     let mut client = Client::new(base.as_deref(), &session.cookie);
     Some(collect(root, &session.account, since, until, now, &mut client).unwrap_or_else(unavailable))
+}
+
+fn store_error(error: rusqlite::Error) -> &'static str {
+    match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => "read_in_progress",
+        _ => "store_unsafe",
+    }
 }
 
 fn open_store(root: &Path) -> Result<Connection, &'static str> {
@@ -146,10 +181,10 @@ fn open_store(root: &Path) -> Result<Connection, &'static str> {
     if !fs::symlink_metadata(&file).is_ok_and(|meta| meta.is_file()) {
         return Err("store_unsafe");
     }
-    let db = Connection::open(file).map_err(|_| "store_unsafe")?;
-    db.busy_timeout(Duration::from_secs(2)).map_err(|_| "store_unsafe")?;
+    let db = Connection::open(file).map_err(store_error)?;
+    db.busy_timeout(Duration::from_secs(2)).map_err(store_error)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS observations (account TEXT PRIMARY KEY, state TEXT NOT NULL);")
-        .map_err(|_| "store_unsafe")?;
+        .map_err(store_error)?;
     Ok(db)
 }
 
@@ -165,7 +200,7 @@ fn collect(
     // One writer, including the request, so two observations cannot regress the watermark.
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| "store_unsafe")?;
+        .map_err(store_error)?;
     let saved: Option<String> = tx
         .query_row(
             "SELECT state FROM observations WHERE account = ?1 AND length(CAST(state AS BLOB)) <= ?2",
@@ -173,7 +208,7 @@ fn collect(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|_| "store_unsafe")?;
+        .map_err(store_error)?;
     let oldest = ceil_hour(until.saturating_sub(HISTORY).max(0));
     let mut state = saved
         .as_deref()
@@ -182,7 +217,7 @@ fn collect(
         .unwrap_or_else(|| Checkpoint::new(until));
 
     if state.read_at.is_some() && until < state.through {
-        return Ok(state.answer(since, until, 0));
+        state.rewind(until);
     }
     let result = advance(&mut state, oldest, until, now, client)?;
     let encoded = serde_json::to_string(&state).map_err(|_| "store_unsafe")?;
@@ -194,8 +229,8 @@ fn collect(
          ON CONFLICT(account) DO UPDATE SET state = excluded.state",
         params![account, encoded],
     )
-    .map_err(|_| "store_unsafe")?;
-    tx.commit().map_err(|_| "store_unsafe")?;
+    .map_err(store_error)?;
+    tx.commit().map_err(store_error)?;
     if result {
         Ok(state.answer(since, until, client.pages))
     } else {
@@ -219,7 +254,7 @@ fn advance(
         )
     } else {
         let hour = state.through.div_euclid(HOUR) * HOUR;
-        let start = (hour - 2 * HOUR).max(state.from).max(oldest);
+        let start = (hour - RECENT_OVERLAP).max(state.from).max(oldest);
         (start, until.min(hour + state.forward_span), PASS_PAGES)
     };
     let Some(window) = client.window(start, end, page_limit)? else {
@@ -233,7 +268,7 @@ fn advance(
     state.from = if first { start } else { state.from.max(oldest) };
     state.hours.retain(|hour, _| *hour >= oldest);
     state.newest = state.newest.filter(|at| *at >= oldest);
-    state.read_at = Some(now);
+    state.read_at = Some(now.min(until));
     if !first && end == until && state.from > oldest && client.pages < PASS_PAGES {
         let backfill_start = (state.from - state.history_span).max(oldest);
         let limit = (client.pages + HISTORY_PAGES).min(PASS_PAGES);

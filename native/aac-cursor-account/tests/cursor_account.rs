@@ -729,7 +729,17 @@ fn billing_signin(root: &std::path::Path, exp: u64) -> String {
 }
 
 fn billing_read(root: &std::path::Path, base: &str, now: i64) -> (Value, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_aac-cursor-account"))
+    billing_read_enabled(root, base, now, Some("1"))
+}
+
+fn billing_read_enabled(root: &std::path::Path, base: &str, now: i64, enabled: Option<&str>) -> (Value, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aac-cursor-account"));
+    if let Some(enabled) = enabled {
+        command.env("AAC_CURSOR_BILLING_ENABLED", enabled);
+    } else {
+        command.env_remove("AAC_CURSOR_BILLING_ENABLED");
+    }
+    let mut child = command
         .args(["read", "--ccs-dir"])
         .arg(root)
         .env("CCS_HOME", root)
@@ -882,7 +892,7 @@ fn billing_resumes_history_and_replaces_recent_hours_wholesale() {
     let (base, seen) = fake(|path, _| {
         let mut item = billing_item("fixture-late");
         item["eventTime"] = json!("2026-11-07T15:30:00.123Z");
-        if path.contains("startTime=2026-11-07T14") {
+        if path.contains("startTime=2026-11-07T10") {
             item["usage"]["prompt-text-tokens"] = json!(30);
         }
         if path.contains("endTime=2026-11-07T16") {
@@ -901,7 +911,7 @@ fn billing_resumes_history_and_replaces_recent_hours_wholesale() {
     assert!(
         seen.lock().unwrap()[first_calls]
             .path
-            .contains("startTime=2026-11-07T14")
+            .contains("startTime=2026-11-07T10")
     );
 }
 
@@ -957,4 +967,111 @@ fn billing_uses_the_latest_signin_and_leaves_the_desktop_database_untouched() {
     );
     assert_eq!(std::fs::read(&db_path).unwrap(), original);
     assert!(!output.contains(&cli) && !output.contains(&desktop));
+}
+
+#[test]
+fn billing_review_clock_ahead_then_corrected_does_not_skip_hours() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (empty, _) = fake(|_, _| billing_page(vec![], None));
+    assert_eq!(billing_read(root.path(), &empty, BILLING_NOW).0["state"], "read");
+
+    // While the clock is six hours ahead, Cursor agrees that the future hours are empty.
+    let ahead = BILLING_NOW + 6 * BILLING_HOUR;
+    assert_eq!(
+        billing_read(root.path(), &empty, ahead).0["coverageUntil"],
+        "2026-11-07T22:00:00.000Z"
+    );
+
+    let (corrected, seen) = fake(|_, _| billing_page(vec![], None));
+    let until = BILLING_NOW + 600_000;
+    let read = billing_read(root.path(), &corrected, until).0;
+    let calls_after_correction = seen.lock().unwrap().len();
+
+    // 17:30 happened only after the clock was corrected; at 23:00 it must still be found.
+    let (later, _) = fake(|_, _| {
+        let mut item = billing_item("review-1730");
+        item["eventTime"] = json!("2026-11-07T17:30:00.000Z");
+        billing_page(vec![item], None)
+    });
+    let resumed = billing_read(root.path(), &later, BILLING_NOW + 7 * BILLING_HOUR).0;
+    assert_eq!(resumed["events"], 1);
+    assert_eq!(resumed["rows"][0]["h"], "2026-11-07 17:00");
+    assert!(calls_after_correction > 0);
+    assert_eq!(read["coverageUntil"], "2026-11-07T16:10:00.000Z");
+    assert!(read["readAt"].as_i64().unwrap() <= until);
+}
+
+#[test]
+fn billing_review_disabled_or_absent_enable_never_contacts_cursor() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (base, seen) = fake(|_, _| billing_page(vec![], None));
+    for enable in [None, Some("0")] {
+        assert_eq!(
+            billing_read_enabled(root.path(), &base, BILLING_NOW, enable).0,
+            json!({"state": "no_key"})
+        );
+    }
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(!root.path().join("cache/cursor-billing-v1.sqlite").exists());
+}
+
+#[test]
+fn billing_review_a_late_item_five_hours_old_counts_once_across_pages_and_passes() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (empty, _) = fake(|_, _| billing_page(vec![], None));
+    assert_eq!(billing_read(root.path(), &empty, BILLING_NOW).0["events"], 0);
+    let (late, seen) = fake(|path, _| {
+        if !path.contains("endTime=2026-11-07T16") {
+            return billing_page(vec![], None);
+        }
+        let mut item = billing_item("five-hours-late");
+        item["eventTime"] = json!("2026-11-07T11:15:00.000Z");
+        let next = (!path.contains("cursor=repeat-page")).then_some("repeat-page");
+        billing_page(vec![item], next)
+    });
+    for offset in [600_000, 1_200_000] {
+        let read = billing_read(root.path(), &late, BILLING_NOW + offset).0;
+        assert_eq!(read["events"], 1);
+        assert_eq!(read["rows"][0]["h"], "2026-11-07 11:00");
+    }
+    assert!(seen.lock().unwrap()[0].path.contains("startTime=2026-11-07T10"));
+}
+
+#[test]
+fn billing_review_unmapped_display_model_keeps_its_tokens_and_sets_the_notice() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (base, _) = fake(|_, _| {
+        let mut item = billing_item("display-model");
+        item["displayExtras"]["model"] = json!("Example Model 5.2 (Extended Thinking)");
+        billing_page(vec![item], None)
+    });
+    let first = billing_read(root.path(), &base, BILLING_NOW).0;
+    assert_eq!(first["events"], 1);
+    assert_eq!(first["unmeasured"], 0);
+    assert_eq!(first["unrecognizedModels"], 1);
+    assert_eq!(first["rows"][0]["m"], "example-model-5-2-extended-thinking");
+    assert_eq!(first["rows"][0]["i"], 17);
+    assert_eq!(first["rows"][0]["cr"], 90);
+    let (empty, _) = fake(|_, _| billing_page(vec![], None));
+    let cached = billing_read(root.path(), &empty, BILLING_NOW + 600_000).0;
+    assert_eq!(cached["unrecognizedModels"], 1); // Stored 08:30 lies outside the 6 h replay.
+}
+
+#[test]
+fn billing_store_contention_reports_the_existing_read_in_progress() {
+    let root = tempfile::tempdir().unwrap();
+    billing_signin(root.path(), 4_000_000_000);
+    let (base, seen) = fake(|_, _| billing_page(vec![], None));
+    assert_eq!(billing_read(root.path(), &base, BILLING_NOW).0["state"], "read");
+    let store = rusqlite::Connection::open(root.path().join("cache/cursor-billing-v1.sqlite")).unwrap();
+    store.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    assert_eq!(
+        billing_read(root.path(), &base, BILLING_NOW + 600_000).0,
+        json!({"state": "unavailable", "cause": "read_in_progress"})
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
 }
