@@ -124,7 +124,8 @@ fn test_base() -> Option<String> {
 
 /// None delegates to the legacy API-key path. The loopback fixture can only read a synthetic root.
 pub fn read(root: &Path, since: i64, until: i64, now: i64) -> Option<Value> {
-    // The service explicitly opts in. Kits override this to 0 before launching the server.
+    // Off unless the server opts in: it passes 1 for an installed package only (cursorBillingEnabled);
+    // tests, kits and source checkouts pass 0 or leave it unset.
     if std::env::var("AAC_CURSOR_BILLING_ENABLED").as_deref() != Ok("1") {
         return None;
     }
