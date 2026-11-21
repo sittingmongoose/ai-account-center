@@ -269,6 +269,7 @@ const SAFE_REASONS: &[&str] = &[
     "stale-inventory",
     "provider-read-only",
     "unknown-grant-kind",
+    "no-fable-usage",
     "exact-grant-unavailable",
     "unsupported-grant-id",
     "credential-host-unavailable",
@@ -477,5 +478,15 @@ impl ResetRoutes {
             }
             _ => Err("shape"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_reason;
+
+    #[test]
+    fn fable_usage_refusals_keep_their_public_reason() {
+        assert_eq!(safe_reason("no-fable-usage"), Some("no-fable-usage"));
     }
 }
