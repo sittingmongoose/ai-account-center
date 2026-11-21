@@ -432,27 +432,32 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
     let record = match serde_json::from_str::<Value>(line) {
         Ok(record) => record,
         Err(_) => {
-            if is_assistant_envelope(line) {
+            let joined = joined_record(line);
+            let prefix = joined.as_ref().map_or(line, |(index, _)| &line[..*index]);
+            if may_have_unread_usage(prefix) {
                 collector.note_unread_usage(kind, filekey);
             }
-            let Some(joined) = joined_record(line) else {
+            let Some((_, record)) = joined else {
                 return;
             };
-            joined
+            record
         }
     };
     parse_record(&record, collector, kind, filekey, line_box);
 }
 
-/// The envelope OMP writes first: `"type":"message"` and `"role":"assistant"`, whatever the
-/// whitespace. It precedes `content`, so it survives a tear inside the text.
-fn is_assistant_envelope(line: &str) -> bool {
-    let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-    compact.contains("\"type\":\"message\"") && compact.contains("\"role\":\"assistant\"")
+/// An incomplete message may carry usage until a complete non-assistant role is known.
+fn may_have_unread_usage(prefix: &str) -> bool {
+    let compact: String = prefix.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("\"type\":\"message\"")
+        && compact
+            .split_once("\"role\":\"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .is_none_or(|(role, _)| role == "assistant")
 }
 
 /// A complete JSON record after a torn prefix on the same line, if the writer left one.
-fn joined_record(line: &str) -> Option<Value> {
+fn joined_record(line: &str) -> Option<(usize, Value)> {
     for (index, _) in line.match_indices("{\"type\"") {
         if index == 0 {
             continue;
@@ -460,7 +465,7 @@ fn joined_record(line: &str) -> Option<Value> {
         if let Ok(record) = serde_json::from_str::<Value>(&line[index..])
             && record.is_object()
         {
-            return Some(record);
+            return Some((index, record));
         }
     }
     None

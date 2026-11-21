@@ -89,6 +89,27 @@ def run(binary, helper):
         for key in ("rows", "srows"):
             assert native[key] == python[key], (key, native[key], python[key])
         assert (zcode.read_bytes(), wal.read_bytes()) == original, "Read-only scans must preserve DB and WAL bytes"
+        joined = json.dumps({
+            "type": "message", "timestamp": "2026-11-11T21:02:00Z",
+            "message": {"role": "assistant", "model": "fixture-model", "provider": "fixture-provider",
+                        "usage": {"input": 330, "output": 40, "cacheRead": 0, "cacheWrite": 0}},
+        }, separators=(",", ":")).encode()
+        tear = b'{"type":"message","message":{"role":"assistant","content":"text '
+        with session.open("ab") as handle:
+            handle.write(tear + b"\xf0\x9f" + joined + b"\n")
+        for command in ([binary], [sys.executable, helper]):
+            answer = request(command, ["omp"])
+            assert sum(row["i"] for row in answer["rows"]) == 530, answer["rows"]
+            assert answer["kinds"]["omp"].get("unreadUsage") is True, answer["kinds"]["omp"]
+            assert answer["kinds"]["omp"].get("partial") is True, answer["kinds"]["omp"]
+            replay = request(command, ["omp"], {"omp": answer["kinds"]["omp"]["fingerprints"]})
+            assert replay["rows"] == [] and replay["kinds"]["omp"].get("unreadUsage") is True
+            if command == [binary]:
+                native = answer
+                assert answer["discovery"]["kinds"]["omp"]["freshness"]["state"] == "unknown"
+            else:
+                for key in ("rows", "srows"):
+                    assert native[key] == answer[key], (key, native[key], answer[key])
         # Review M2: identical SDK data with a CLI store just beyond the activity depth cap.
         chat.unlink()
         old = 1794430860
@@ -108,7 +129,7 @@ def run(binary, helper):
         assert check["state"] == "current" and check["activityComplete"] is True, check
         assert check["newestDataMs"] == old * 1000 and check["newestActivityMs"] == old * 1000, check
         print(json.dumps({"result": "PASS", "os": sys.platform,
-                          "checks": ["sdk tokens", "cli unmeasured", "usage-only activity", "OMP unchanged clocks", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity", "deep unverified/shallow current"]}))
+                          "checks": ["sdk tokens", "cli unmeasured", "usage-only activity", "OMP unchanged clocks", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity", "torn OMP parity", "deep unverified/shallow current"]}))
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ const MAX_HELPER_BYTES = 128 * 1024;
  * covers the helper's LF text (`readPackagedSource`), so a package built from a CRLF checkout still passes.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  '2e41eaeb70fcae4cb73cc0b23742f59b5b6205a52a582c407d9f591da3f44646';
+  'dd0ad99c74fa92ed9fa4bbe16d501c5453fb13fea5ccf08991b0bd2c167a17aa';
 
 /** The packaged helper is missing, oversized or fails its pin: no host can be scanned. */
 export class AnalyticsHelperIntegrityError extends ValidationError {

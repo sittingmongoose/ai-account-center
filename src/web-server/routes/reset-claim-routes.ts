@@ -46,6 +46,7 @@ const SAFE_REASONS = new Set([
   'redeeming',
   'refill-windows-unconfirmed',
   'no-weekly-usage',
+  'no-fable-usage',
   'signed-out',
 ]);
 /** A native rejection reads `<code>: <message>`; only an allowlisted code is passed on. */

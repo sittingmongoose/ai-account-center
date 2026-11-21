@@ -304,6 +304,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         }
         "grant-unavailable" => "The provider says this reset can't be used yet.".into(),
         "redeeming" => "OpenAI is using this reset now.".into(),
+        "no-fable-usage" => "Fable usage is at 0%. There is no Fable usage to reset.".into(),
         "no-weekly-usage" => "Overall weekly usage is at 0%. AAC needs weekly usage to verify this reset.".into(),
         "refill-windows-unconfirmed" if provider == "codex" => {
             "AAC can't read this account's Codex limits right now, so it won't use this reset.".into()

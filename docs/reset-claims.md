@@ -227,11 +227,15 @@ last selected another organization; reset reads and claims fail closed instead.
 Cookies and tokens stay on Windows; exact-grant confirmation and the
 OAuth claim transport are unchanged. A throttled inventory stays unavailable and
 shows a rate-limit explanation, including when no public reset rows are present.
+When reset reads fall back to a Windows Claude Code login, an unpinned capture
+requires a single eligible login for the email. A pinned read or claim selects
+the login matching its target and verifies the identity with Claude before use.
 Reset verification uses the same normalized usage windows as the dashboard.
 The provider's legacy Fable reset bucket is matched only to the exact unscoped
 Fable quota. A full or Fable grant can be used when some refill limits are
 unavailable. Both need a positive overall weekly reading before Use reset
-appears. A weekly grant also needs positive weekly usage. AAC checks this again
+appears. A weekly grant also needs positive weekly usage. If Claude reports Fable
+usage at 0%, there is no Fable usage to reset. AAC checks these conditions again
 on the fresh reading immediately before reserving the claim.
 
 A web inventory read still requires an eligible saved OAuth token and a successful

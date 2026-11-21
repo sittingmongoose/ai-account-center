@@ -271,6 +271,7 @@ test('a refusal passes on only an allowlisted native code, and says whether the 
       false,
     ],
     [{ op: 'begin', message: 'no-weekly-usage: private detail' }, 'no-weekly-usage', false],
+    [{ op: 'begin', message: 'no-fable-usage: private detail' }, 'no-fable-usage', false],
     [{ op: 'begin', message: 'private-account-name: leaked words' }, null, false],
     [{ op: 'finish', message: 'storage-unavailable: Reset operation refused.' }, null, true],
   ] as const) {

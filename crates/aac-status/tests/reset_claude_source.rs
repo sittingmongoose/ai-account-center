@@ -25,6 +25,7 @@ exec(compile(AAC_SOURCE_JSON,'managed-claude','exec'),scope)
 root=Path(AAC_ROOT_JSON)
 request=json.load(sys.stdin)
 scope['sys'].platform='win32'
+scope['_code_home']=lambda: root
 scope['resolve_profile_path']=lambda *args,**kwargs: root/'profile'
 ORG='33333333-3333-3333-3333-333333333333'
 CLIENT='22222222-2222-2222-2222-222222222222'
@@ -33,6 +34,13 @@ def decrypt(*args):
  key='acct:'+account+'|'+CLIENT+':'+ORG+':https://api.anthropic.com:user:inference user:profile'
  return account,{key:{'token':'fixture-token-'+account,'refreshToken':'fixture-refresh','expiresAt':4102444800000}}
 scope['decrypt_cache']=decrypt
+if (root/'ambiguous-code').exists():
+ def no_desktop(*args):raise scope['UsageUnavailable']('needs_sign_in')
+ scope['decrypt_cache']=no_desktop
+ scope['code_reset_logins']=lambda *args:[
+  {'account':(root/'login').read_text(),'organization':org,'binding':'a'*64}
+  for org in [ORG,CLIENT]
+ ]
 original_web=scope['verified_web_client']
 def no_web(*args,**kwargs):
  if (root/'web-usage').exists():return original_web(*args,**kwargs)
@@ -89,6 +97,17 @@ fn now() -> i64 {
 }
 fn nonce(n: u64) -> String {
     format!("{n:064x}")
+}
+#[test]
+fn claude_ambiguous_capture_keeps_its_named_refusal() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("ambiguous-code"), "").unwrap();
+    let db = dir.path().join("claims.sqlite");
+    assert_eq!(
+        reset_claude_source::read(&db, "claude:reused", &command).unwrap_err(),
+        "identity-unconfirmed"
+    );
+    assert!(!dir.path().join("provider-reads").exists());
 }
 #[test]
 fn native_claude_capture_order_survives_both_response_delivery_orders() {

@@ -2356,6 +2356,30 @@ class ResetCodeLoginTests(unittest.TestCase):
         self.assertEqual(result["raw"]["grants"][0]["id"], "code_grant")
         self.assertNotIn(self.CODE_TOKEN, json.dumps(result))
 
+    def test_code_login_selects_the_target_organization_before_live_verification(self):
+        target_token = "fixture-target-token"
+        self.write_code_login("second", org=OTHER, token=target_token)
+        request = dict(self.request, expectedSavedOrganization=OTHER)
+        with mock.patch.object(usage, "Client") as client:
+            captured = usage.reset_host(dict(request, action="capture"))
+        client.assert_not_called()
+        self.assertEqual(captured.get("organization"), OTHER)
+        fake = self.client(profile(organization={"uuid": OTHER}), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            result = usage.reset_host(dict(request, expectedSavedBinding=captured["savedLoginBinding"]))
+        self.assertEqual(result["identity"]["organization"], OTHER)
+        self.assertEqual([call[1] for call in fake.calls], [target_token, target_token])
+
+    def test_ambiguous_and_missing_code_login_targets_report_identity_unconfirmed(self):
+        self.write_code_login("second", org=OTHER)
+        unavailable = {"unavailable": True, "reason": "identity-unconfirmed"}
+        with mock.patch.object(usage, "Client") as client:
+            self.assertEqual(usage.reset_host(dict(self.request, action="capture")), unavailable)
+            self.assertEqual(usage.reset_host(dict(self.request, expectedSavedOrganization=ACCOUNT)), unavailable)
+            self.write_code_login("duplicate", org=OTHER)
+            self.assertEqual(usage.reset_host(dict(self.request, expectedSavedOrganization=OTHER)), unavailable)
+        client.assert_not_called()
+
     def test_a_signed_out_desktop_with_tokens_rejected_also_falls_back(self):
         self.desktop = (ACCOUNT, cache())
         desktop_token_rejected = usage.UsageUnavailable("needs_sign_in")
