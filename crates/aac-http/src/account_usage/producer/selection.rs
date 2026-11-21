@@ -18,6 +18,49 @@ struct Keyed {
     row: Value,
 }
 
+/// The `aac-key:<id>` selectors other entries of the provider on the same computer already name.
+fn bound_selectors(sources: &[Source], source: &Source) -> Vec<String> {
+    sources
+        .iter()
+        .filter(|other| {
+            *other != source
+                && other.provider == source.provider
+                && other.platform == source.platform
+                && other.ssh_host == source.ssh_host
+        })
+        .filter_map(|other| match &other.credential {
+            Credential::AacKey { key_id } => Some(format!("aac-key:{key_id}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A discover entry's rows from the stored identities: one per identity no other entry names,
+/// with an id and label from the identity's digest (never the key). None (unreadable) or an
+/// empty store keeps the entry as it was; only named identities means no row.
+fn pinned_sources(
+    source: &Source,
+    found: Option<Vec<(UsageIdentity, bool)>>,
+) -> Vec<(Source, Option<UsageIdentity>)> {
+    let Some(found) = found.filter(|found| !found.is_empty()) else {
+        return vec![(source.clone(), None)];
+    };
+    found
+        .into_iter()
+        .filter(|(_, bound)| !bound)
+        .map(|(identity, _)| {
+            let digest = identity.key.get(..8).unwrap_or(&identity.key).to_owned();
+            let mut pinned = source.clone();
+            pinned.id = format!("{}:{digest}", source.id);
+            pinned.label = Some(format!(
+                "{} {digest}",
+                source.label.as_deref().unwrap_or("OpenCode Go")
+            ));
+            (pinned, Some(identity))
+        })
+        .collect()
+}
+
 /// Two registry entries whose readings came from the same credential identity are one account:
 /// show it once (never two rows of the same account). The row bound to its own credential stays
 /// over a `discover` row, then the first in list order. Rows without a known identity are never
@@ -74,9 +117,16 @@ impl Producer {
                 .position(|id| *id == source.provider)
                 .unwrap_or(order.len())
         });
-        let read: Vec<(Source, Value)> = stream::iter(sources)
-            .filter(|source| std::future::ready(!antigravity || source.provider != "antigravity"))
-            .map(|source| async move {
+        let sources = if problem.is_none() && !legacy {
+            self.expand_discovery(sources, legacy).await
+        } else {
+            sources.into_iter().map(|source| (source, None)).collect()
+        };
+        let read: Vec<(Source, Option<UsageIdentity>, Value)> = stream::iter(sources)
+            .filter(|(source, _)| {
+                std::future::ready(!antigravity || source.provider != "antigravity")
+            })
+            .map(|(source, pin)| async move {
                 let row = if let Some((status, message)) = problem {
                     let (host, name) = source_host(&source.platform, source.ssh_host.as_deref());
                     let mut row = rows::additional(&source, &host, &name, None);
@@ -84,9 +134,10 @@ impl Producer {
                     row["message"] = json!(message);
                     row
                 } else {
-                    self.additional_row(&source, legacy, now, force).await
+                    self.pinned_row(&source, pin.as_ref(), legacy, now, force)
+                        .await
                 };
-                (source, row)
+                (source, pin, row)
             })
             .buffered(3)
             .collect()
@@ -95,9 +146,10 @@ impl Producer {
             let failover = self.failover();
             one_row_per_identity(
                 read.into_iter()
-                    .map(|(source, row)| {
-                        let target =
+                    .map(|(source, pin, row)| {
+                        let mut target =
                             super::failover::additional_target(&self.root, &source, legacy);
+                        target.expected_identity = pin;
                         Keyed {
                             provider: source.provider.clone(),
                             discovered: matches!(source.credential, Credential::Discover),
@@ -108,7 +160,7 @@ impl Producer {
                     .collect(),
             )
         } else {
-            read.into_iter().map(|(_, row)| row).collect()
+            read.into_iter().map(|(_, _, row)| row).collect()
         };
         if problem.is_none()
             && let Some(wallet) = self.wallet(now).await
@@ -121,6 +173,46 @@ impl Producer {
     pub(super) async fn additional_row(
         &self,
         source: &Source,
+        legacy: bool,
+        now: i64,
+        force: bool,
+    ) -> Value {
+        self.pinned_row(source, None, legacy, now, force).await
+    }
+
+    /// Owner, 2026-11-21 (card OCG1): every OpenCode Go key stored on the computer is read,
+    /// once (the TS `expandDiscovery`). A `discover` entry stands for each stored key no other
+    /// entry of the provider already names (`aac-key:<id>`): one row per such key, pinned to
+    /// that key's identity. When every stored key is already named, the entry adds no row and
+    /// no read; an unreadable store keeps the entry as it was.
+    async fn expand_discovery(
+        &self,
+        sources: Vec<Source>,
+        legacy: bool,
+    ) -> Vec<(Source, Option<UsageIdentity>)> {
+        let mut out = Vec::with_capacity(sources.len());
+        for source in &sources {
+            if source.provider != "opencode-go"
+                || !matches!(source.credential, Credential::Discover)
+            {
+                out.push((source.clone(), None));
+                continue;
+            }
+            let target = super::failover::additional_target(&self.root, source, legacy);
+            let found = self
+                .failover()
+                .discovered_identities(&target, &bound_selectors(&sources, source))
+                .await;
+            out.extend(pinned_sources(source, found));
+        }
+        out
+    }
+
+    /// One source's row, its read pinned to one stored key's identity when it has one.
+    async fn pinned_row(
+        &self,
+        source: &Source,
+        pin: Option<&UsageIdentity>,
         legacy: bool,
         now: i64,
         force: bool,
@@ -144,7 +236,8 @@ impl Producer {
         }
         // The coordinator owns the read, the peer fallback and the display projection; the
         // template is the same `rows::additional` row TS handed the failover service.
-        let target = super::failover::additional_target(&self.root, source, legacy);
+        let mut target = super::failover::additional_target(&self.root, source, legacy);
+        target.expected_identity = pin.cloned();
         self.failover().collect(&target, &template()).await
     }
 
@@ -321,8 +414,118 @@ impl Producer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Keyed, UsageIdentity, one_row_per_identity};
+    use super::{Keyed, UsageIdentity, bound_selectors, one_row_per_identity, pinned_sources};
+    use crate::account_usage::sources::{Credential, Source};
     use serde_json::json;
+
+    fn source(id: &str, credential: Credential) -> Source {
+        Source {
+            id: id.to_owned(),
+            provider: "opencode-go".to_owned(),
+            platform: "ubuntu".to_owned(),
+            ssh_host: None,
+            label: Some("OpenCode Go".to_owned()),
+            credential,
+            created_at: None,
+            created_by: None,
+        }
+    }
+
+    fn identity(letter: &str) -> UsageIdentity {
+        UsageIdentity {
+            kind: "opencode-go-credential".to_owned(),
+            key: letter.repeat(64),
+        }
+    }
+
+    fn key(id: &str) -> Credential {
+        Credential::AacKey {
+            key_id: id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn three_distinct_stored_keys_give_three_rows_each_read_once() {
+        let sources = [
+            source("opencode-go:usage", Credential::Discover),
+            source("opencode-go:acct:52f3251b", key("52f3251b")),
+            source("opencode-go:acct:2e034ec2", key("2e034ec2")),
+        ];
+        assert_eq!(
+            bound_selectors(&sources, &sources[0]),
+            ["aac-key:52f3251b", "aac-key:2e034ec2"]
+        );
+        // Two stored keys are the two named entries' keys; the third is read by the discover entry.
+        let pinned = pinned_sources(
+            &sources[0],
+            Some(vec![
+                (identity("a"), true),
+                (identity("b"), true),
+                (identity("c"), false),
+            ]),
+        );
+        assert_eq!(pinned.len(), 1);
+        assert_eq!(pinned[0].0.id, "opencode-go:usage:cccccccc");
+        assert_eq!(pinned[0].0.label.as_deref(), Some("OpenCode Go cccccccc"));
+        assert_eq!(pinned[0].1, Some(identity("c")));
+        let rows = one_row_per_identity(
+            [
+                (pinned[0].0.id.as_str(), true, "c"),
+                ("opencode-go:acct:52f3251b", false, "b"),
+                ("opencode-go:acct:2e034ec2", false, "a"),
+            ]
+            .into_iter()
+            .map(|(id, discovered, letter)| Keyed {
+                provider: "opencode-go".to_owned(),
+                discovered,
+                identity: Some(identity(letter)),
+                row: json!({ "id": id }),
+            })
+            .collect(),
+        );
+        assert_eq!(
+            ids(rows),
+            [
+                "opencode-go:usage:cccccccc",
+                "opencode-go:acct:52f3251b",
+                "opencode-go:acct:2e034ec2"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_discovery_entry_alone_gives_one_row_per_stored_key() {
+        let alone = source("opencode-go:usage", Credential::Discover);
+        let pinned = pinned_sources(
+            &alone,
+            Some(vec![
+                (identity("a"), false),
+                (identity("b"), false),
+                (identity("c"), false),
+            ]),
+        );
+        let ids: Vec<&str> = pinned.iter().map(|(s, _)| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "opencode-go:usage:aaaaaaaa",
+                "opencode-go:usage:bbbbbbbb",
+                "opencode-go:usage:cccccccc"
+            ]
+        );
+    }
+
+    #[test]
+    fn named_keys_add_no_row_and_an_unreadable_store_keeps_the_entry() {
+        let entry = source("opencode-go:usage", Credential::Discover);
+        assert!(pinned_sources(&entry, Some(vec![(identity("a"), true)])).is_empty());
+        for found in [None, Some(Vec::new())] {
+            let kept = pinned_sources(&entry, found);
+            assert_eq!(kept.len(), 1);
+            assert_eq!(kept[0].0, entry);
+            assert_eq!(kept[0].1, None);
+        }
+    }
 
     fn keyed(id: &str, provider: &str, discovered: bool, identity: Option<&str>) -> Keyed {
         Keyed {

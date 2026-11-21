@@ -445,6 +445,61 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
     );
 }
 
+/// Card OCG1: the discover entry lists every stored key's identity once, marking those another
+/// entry already names, from the inventory alone (no collect request).
+#[tokio::test]
+async fn discovered_identities_list_each_stored_key_once() {
+    let dir = tempfile::tempdir().expect("account root");
+    let target = target(
+        &json!({
+            "accountId":"opencode-go:usage", "provider":"opencode-go", "binding":"fixture",
+            "primarySources":[{"host":"ubuntu","platform":"ubuntu","selector":"discover"}]
+        }),
+        dir.path().to_owned(),
+    );
+    let stored = |locator: &str, selector: &str, key: &str| {
+        json!({
+            "locator":locator.repeat(64), "selectors":[selector], "revision":"2".repeat(64),
+            "identity":{"kind":"opencode-go-credential","key":key.repeat(64)}
+        })
+    };
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    set_step(
+        &mut state.lock().expect("fixture state"),
+        &json!({
+            "now":1_791_979_200_000_i64, "hosts":[{"host":"ubuntu","platform":"ubuntu","sshHost":null}],
+            "inventories":{"ubuntu":[
+                stored("1", "discover", "a"), stored("3", "discover", "b"),
+                stored("5", "discover", "c"), stored("7", "discover", "a"),
+                stored("9", "aac-key:2e034ec2", "a")
+            ]}
+        }),
+    );
+    let coordinator = FailoverCoordinator::new(
+        Arc::new(FakeDeps {
+            state: state.clone(),
+        }),
+        collection_owners(),
+    );
+    let found = coordinator
+        .discovered_identities(&target, &["aac-key:2e034ec2".to_owned()])
+        .await
+        .expect("readable stores");
+    let id = |key: &str| identity(&json!({"kind":"opencode-go-credential","key":key.repeat(64)}));
+    assert_eq!(
+        found,
+        vec![(id("a"), true), (id("b"), false), (id("c"), false)]
+    );
+    assert!(
+        state
+            .lock()
+            .expect("fixture state")
+            .calls
+            .iter()
+            .all(|(_, request)| request["action"] == "inventory")
+    );
+}
+
 /// The duplicate-row guard reads which credential identity a row's reading came from. The
 /// accessor names the verified reading's identity and never starts a read.
 #[tokio::test]

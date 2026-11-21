@@ -958,6 +958,38 @@ impl FailoverCoordinator {
         self.project(target, template, &state, state.fresh != Some(true))
     }
 
+    /// Every distinct credential identity the target's primary computer stores for its selector,
+    /// in store order, each marked bound when a candidate carrying one of `bound` selectors (an
+    /// account the registry already names, such as `aac-key:<id>`) holds the same identity
+    /// (`discoveredIdentities`). An inventory of local stores only: no provider is asked and no
+    /// secret leaves the helper. None when the computer's stores could not be read.
+    pub async fn discovered_identities(
+        &self,
+        target: &UsageFailoverTarget,
+        bound: &[String],
+    ) -> Option<Vec<(UsageIdentity, bool)>> {
+        let source = target.primary_sources.first()?;
+        let candidates = self.inventory(target, &source.host).await?;
+        let taken: Vec<&UsageIdentity> = candidates
+            .iter()
+            .filter(|candidate| candidate.selectors.iter().any(|s| bound.contains(s)))
+            .map(|candidate| &candidate.identity)
+            .collect();
+        let mut found: Vec<(UsageIdentity, bool)> = Vec::new();
+        for candidate in &candidates {
+            if !candidate.selectors.contains(&source.selector)
+                || found
+                    .iter()
+                    .any(|(identity, _)| *identity == candidate.identity)
+            {
+                continue;
+            }
+            let is_bound = taken.contains(&&candidate.identity);
+            found.push((candidate.identity.clone(), is_bound));
+        }
+        Some(found)
+    }
+
     /// The credential identity the target's shown reading came from, or None before it has one
     /// (`readingIdentity`). Read-only: never loads, creates or changes state and asks no provider.
     pub fn reading_identity(&self, target: &UsageFailoverTarget) -> Option<UsageIdentity> {
