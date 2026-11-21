@@ -91,27 +91,30 @@ impl Service {
     ) -> Result<String> {
         let mut stream = UnixStream::connect(&self.socket)?;
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut wire = Vec::new();
         write!(
-            stream,
+            wire,
             "{method} {path} HTTP/1.1\r\nHost: private\r\nConnection: close\r\n"
         )?;
         if let Some(s) = secret {
-            write!(stream, "x-aac-boot-secret: {s}\r\n")?;
+            write!(wire, "x-aac-boot-secret: {s}\r\n")?;
         }
         if let Some(p) = principal {
-            write!(stream, "x-aac-principal: {p}\r\n")?;
+            write!(wire, "x-aac-principal: {p}\r\n")?;
         }
         if let Some(input) = input {
             let body = serde_json::to_vec(input)?;
             write!(
-                stream,
+                wire,
                 "content-type: application/json\r\ncontent-length: {}\r\n\r\n",
                 body.len()
             )?;
-            stream.write_all(&body)?;
+            wire.extend_from_slice(&body);
         } else {
-            write!(stream, "\r\n")?;
+            wire.extend_from_slice(b"\r\n");
         }
+        // Admission can send a refusal and close as soon as it has the headers.
+        stream.write_all(&wire)?;
         let mut result = String::new();
         stream.read_to_string(&mut result)?;
         Ok(result)

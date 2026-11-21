@@ -1,5 +1,6 @@
 //! The guarded preferences writer: the TS-validated documents, and the public route's own
 //! validation of a full document or a patch (zone, sources, path overlap) before them.
+use aac_core::Cause;
 use aac_files::{
     OwnedStore,
     read::{Read, read},
@@ -10,11 +11,15 @@ use aac_views::decline::Decline;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 const PRIMARY: &str = "dashboard-preferences";
 const COMPANION: &str = "dashboard-preferences-extra-sources";
 pub(crate) const TRANSACTION: &str = "dashboard-preferences-transaction";
+const LEASE_WAIT: Duration = Duration::from_millis(250);
 const DOC_CAP: usize = 64 * 1024;
 pub(crate) const INPUT_CAP: usize = 512 * 1024;
 
@@ -116,17 +121,33 @@ struct WriteLease {
 }
 
 impl WriteLease {
-    fn acquire(root: &Path, owners: &Owners) -> Result<Self, Decline> {
+    fn acquire(root: &Path, owners: &Owners, wait: Duration) -> Result<Self, Decline> {
         let rows = registry::rows().map_err(|_| Decline::Internal)?;
         let claim = |id| {
-            owners
-                .claim(rows, id, root, None)
-                .map_err(|_| Decline::Unsupported)
+            owners.claim(rows, id, root, None).map_err(|error| {
+                if error.cause == Cause::Busy {
+                    Decline::Busy
+                } else {
+                    Decline::Unsupported
+                }
+            })
         };
-        let lease = Self {
-            primary: claim(PRIMARY)?,
-            companion: claim(COMPANION)?,
-            transaction: claim(TRANSACTION)?,
+        let claim_all = || {
+            Ok(Self {
+                primary: claim(PRIMARY)?,
+                companion: claim(COMPANION)?,
+                transaction: claim(TRANSACTION)?,
+            })
+        };
+        // Only retry lease acquisition. A failed claim drops any leases already taken.
+        let started = Instant::now();
+        let lease = loop {
+            match claim_all() {
+                Err(Decline::Busy) if started.elapsed() < wait => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                result => break result?,
+            }
         };
         // Resume an earlier committed intent before reading or comparing the current files.
         if let Some(pending) = stored(root, TRANSACTION)? {
@@ -185,7 +206,10 @@ pub(crate) fn save(
         companion: request.companion,
     };
     let saved = response(&documents)?;
-    let lease = WriteLease::acquire(root, owners)?;
+    let lease = WriteLease::acquire(root, owners, Duration::ZERO).map_err(|error| match error {
+        Decline::Busy => Decline::Unsupported,
+        error => error,
+    })?;
     if let Some(expected) = request.previous
         && revision(root)? != expected
     {
@@ -201,8 +225,19 @@ pub(crate) enum PublicError {
     Invalid,
     /// A rule sentence the TS route answered verbatim (`ConfigError`).
     Refused(String),
+    /// Another writer still holds a registry lease.
+    Busy,
     /// The documents, or the files that hold them, could not be read or written safely.
     Unavailable,
+}
+
+impl From<Decline> for PublicError {
+    fn from(error: Decline) -> Self {
+        match error {
+            Decline::Busy => Self::Busy,
+            _ => Self::Unavailable,
+        }
+    }
 }
 
 /// The public route's write: validate one whole document or patch exactly as the TS route
@@ -242,7 +277,7 @@ pub(crate) fn save_public(
         if !patch_valid(&value, &hosts) {
             return Err(PublicError::Invalid);
         }
-        let lease = WriteLease::acquire(root, owners).map_err(|_| PublicError::Unavailable)?;
+        let lease = WriteLease::acquire(root, owners, LEASE_WAIT)?;
         // Refuse unsafe leaves as the revision check did. The reader may otherwise default an
         // unreadable preference, which would let a partial update discard the existing fields.
         stored(root, PRIMARY).map_err(|_| PublicError::Unavailable)?;
@@ -253,7 +288,7 @@ pub(crate) fn save_public(
         (prepare_documents(&current, &hosts)?, lease)
     } else {
         let documents = prepare_documents(&value, &hosts)?;
-        let lease = WriteLease::acquire(root, owners).map_err(|_| PublicError::Unavailable)?;
+        let lease = WriteLease::acquire(root, owners, LEASE_WAIT)?;
         (documents, lease)
     };
     let saved = response(&documents).map_err(|_| PublicError::Unavailable)?;

@@ -197,6 +197,11 @@ impl Settings {
             Ok(Err(crate::preferences_write::PublicError::Invalid)) => {
                 no_store(super::plain(400, "Preferences are not valid."))
             }
+            Ok(Err(crate::preferences_write::PublicError::Busy)) => super::error(
+                409,
+                "preferences_busy",
+                "Another preferences save is in progress. Try again.",
+            ),
             _ => no_store(super::plain(
                 500,
                 "Dashboard preferences could not be saved.",
