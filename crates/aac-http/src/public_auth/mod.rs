@@ -2285,6 +2285,16 @@ mod tests {
     }
 
     async fn settings_server() -> (tempfile::TempDir, SocketAddr, tokio::task::JoinHandle<()>) {
+        let (home, addr, handle, _) = settings_server_with_limits().await;
+        (home, addr, handle)
+    }
+
+    async fn settings_server_with_limits() -> (
+        tempfile::TempDir,
+        SocketAddr,
+        tokio::task::JoinHandle<()>,
+        crate::limits::Limits,
+    ) {
         let home = tempfile::tempdir().unwrap();
         let root = home.path().to_path_buf();
         let hash = bcrypt::hash("fixture-password", 4).unwrap();
@@ -2295,6 +2305,7 @@ mod tests {
         .unwrap();
         let auth = DashboardAuth::open_with(root.clone(), Overrides::default(), 4, false).unwrap();
         let settings = native_settings::Settings::new(root.clone(), auth.events());
+        let limits = settings.read_limits();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = auth.protect(auth.edges(
@@ -2321,7 +2332,7 @@ mod tests {
             .await
             .unwrap();
         });
-        (home, addr, handle)
+        (home, addr, handle, limits)
     }
 
     #[tokio::test]
@@ -2614,6 +2625,95 @@ mod tests {
         let disk: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(disk["hiddenProviders"], json!(["claude", "codex"]));
 
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn settings_all_writers_conflict_when_the_read_pool_is_full() {
+        use crate::{limits::READ_PERMITS, table::Pool};
+
+        let (home, addr, handle, limits) = settings_server_with_limits().await;
+        let headers = settings_write_headers(addr).await;
+        let (entered, mut starts) = tokio::sync::mpsc::unbounded_channel();
+        let mut release = Vec::new();
+        let mut holders = Vec::new();
+        for _ in 0..READ_PERMITS {
+            let (done, held) = tokio::sync::oneshot::channel::<()>();
+            let entered = entered.clone();
+            let limits = limits.clone();
+            release.push(done);
+            holders.push(tokio::spawn(async move {
+                limits
+                    .blocking(Pool::Reads, move || {
+                        entered.send(()).unwrap();
+                        let _ = held.blocking_recv();
+                        Ok(())
+                    })
+                    .await
+            }));
+        }
+        drop(entered);
+        for _ in 0..READ_PERMITS {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), starts.recv())
+                    .await
+                    .unwrap(),
+                Some(())
+            );
+        }
+
+        let (settings, preferences, visibility) = tokio::join!(
+            request(
+                addr,
+                "/api/accounts/settings",
+                "PUT",
+                &headers,
+                r#"{"refreshIntervalSeconds":120}"#
+            ),
+            request(
+                addr,
+                "/api/accounts/preferences",
+                "PATCH",
+                &headers,
+                r#"{"timeZone":"Europe/Paris"}"#
+            ),
+            request(
+                addr,
+                "/api/accounts/visibility",
+                "PATCH",
+                &headers,
+                r#"{"hiddenProviders":{"hide":["codex"],"show":[]}}"#
+            ),
+        );
+        assert!(
+            [&settings, &preferences, &visibility]
+                .iter()
+                .all(|reply| reply.starts_with("HTTP/1.1 409")),
+            "settings: {:?}, preferences: {:?}, visibility: {:?}",
+            settings.lines().next(),
+            preferences.lines().next(),
+            visibility.lines().next()
+        );
+        for (reply, code) in [
+            (&settings, "settings_busy"),
+            (&preferences, "preferences_busy"),
+            (&visibility, "visibility_busy"),
+        ] {
+            assert_settings_busy(reply, code, "The dashboard is busy. Try again.");
+        }
+        for file in [
+            "account-refresh-settings.json",
+            "dashboard-preferences.json",
+            "account-visibility.json",
+        ] {
+            assert!(!home.path().join(file).exists(), "{file}");
+        }
+
+        drop(release);
+        for holder in holders {
+            holder.await.unwrap().unwrap();
+        }
         handle.abort();
         let _ = handle.await;
     }

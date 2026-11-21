@@ -77,6 +77,11 @@ impl Settings {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn read_limits(&self) -> crate::limits::Limits {
+        self.limits.clone()
+    }
+
     /// The group's own router for the owner host: the six routes, their admission and the
     /// exact encoding, registered instead of copying an owner. The host merges it before the
     /// dashboard guard, so the handler sees the verified `DashboardAccess`.
@@ -154,6 +159,7 @@ impl Settings {
                 "settings_busy",
                 "Another settings save is in progress. Try again.",
             ),
+            Err(Decline::Busy) => save_pool_busy("settings_busy"),
             _ => no_store(super::plain(
                 500,
                 "Usage refresh settings could not be saved.",
@@ -220,6 +226,7 @@ impl Settings {
                 "preferences_busy",
                 "Another preferences save is in progress. Try again.",
             ),
+            Err(Decline::Busy) => save_pool_busy("preferences_busy"),
             _ => no_store(super::plain(
                 500,
                 "Dashboard preferences could not be saved.",
@@ -289,6 +296,7 @@ impl Settings {
                 "visibility_busy",
                 "Another visibility save is in progress. Try again.",
             ),
+            Err(Decline::Busy) => save_pool_busy("visibility_busy"),
             Ok(Err(_)) | Err(_) => super::error(
                 500,
                 "visibility_write_failed",
@@ -324,6 +332,10 @@ impl Settings {
             None => Err(no_store(body_refusal(family))),
         }
     }
+}
+
+fn save_pool_busy(code: &str) -> Reply {
+    super::error(409, code, "The dashboard is busy. Try again.")
 }
 
 fn origin_refusal(family: Family) -> Reply {
