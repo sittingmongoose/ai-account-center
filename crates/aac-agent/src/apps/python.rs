@@ -102,7 +102,7 @@ impl Python {
         budget: Duration,
         t3_restart_pending: bool,
         cancelled: impl Fn() -> Result<bool, Failure>,
-        mut progress: impl FnMut(String) -> F,
+        progress: impl FnMut(String) -> F,
     ) -> Result<Value, Failure> {
         let seconds = budget.as_secs().clamp(1, 1800);
         let mut command = self.command(platform);
@@ -122,6 +122,57 @@ impl Python {
         if t3_restart_pending && app == "antigravity-acp" {
             command.arg("--t3-restart-pending");
         }
+        Self::worker(command, app, platform, budget, cancelled, progress, true).await
+    }
+
+    pub(super) async fn follow_up(
+        &self,
+        state: &Path,
+        expected: &str,
+        budget: Duration,
+        cancelled: impl Fn() -> Result<bool, Failure>,
+    ) -> Result<Value, Failure> {
+        let platform = Platform::Ubuntu;
+        let app = "antigravity-acp";
+        let seconds = budget
+            .as_secs()
+            .clamp(1, aac_protocol::ACP_FOLLOW_UP_DEADLINE_MS / 1_000);
+        let mut command = self.command(platform);
+        command.kill_on_drop(false);
+        command
+            .args([
+                "--apply",
+                "--agent-managed",
+                "--app",
+                app,
+                "--worker-seconds",
+                &seconds.to_string(),
+                "--acp-after-t3-restart",
+                expected,
+            ])
+            .env("AAC_UPDATE_STATE_DIR", state)
+            .stdin(Stdio::piped());
+        Self::worker(
+            command,
+            app,
+            platform,
+            budget,
+            cancelled,
+            |_| async {},
+            false,
+        )
+        .await
+    }
+
+    async fn worker<F: Future<Output = ()>>(
+        mut command: Command,
+        app: &str,
+        platform: Platform,
+        budget: Duration,
+        cancelled: impl Fn() -> Result<bool, Failure>,
+        mut progress: impl FnMut(String) -> F,
+        stop_on_cancel: bool,
+    ) -> Result<Value, Failure> {
         let mut child = command.spawn()?;
         let mut control = child.stdin.take();
         let mut stream = BufReader::new(child.stdout.take().ok_or_else(invalid)?);
@@ -150,7 +201,9 @@ impl Python {
                             if let Some(mut stdin) = control.take() {
                                 let _ = stdin.write_all(b"cancel\n").await;
                             }
-                            drain_until = hard_deadline.min(tokio::time::Instant::now() + Duration::from_secs(10));
+                            if stop_on_cancel {
+                                drain_until = hard_deadline.min(tokio::time::Instant::now() + Duration::from_secs(10));
+                            }
                         }
                     }
                     message = replies.recv() => {
@@ -175,7 +228,7 @@ impl Python {
                     }
                 }
             }
-            if !tokio::time::timeout_at(drain_until, child.wait()).await.map_err(|_| invalid())??.success() {
+            if !tokio::time::timeout_at(drain_until, child.wait()).await.map_err(|_| Failure::new(Cause::Timeout, "app installer deadline"))??.success() {
                 return Err(invalid());
             }
             final_row.ok_or_else(invalid)

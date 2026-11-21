@@ -70,7 +70,7 @@ class AgentWorkerTest(unittest.TestCase):
             app = "codex-desktop"
             platform = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"
             args = types.SimpleNamespace(app=app, platform=platform, worker_seconds=8,
-                                         t3_restart_pending=False)
+                                         t3_restart_pending=False, acp_after_t3_restart=None)
 
             def cancel():
                 nonlocal stopping

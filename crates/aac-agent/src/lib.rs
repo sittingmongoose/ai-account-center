@@ -159,7 +159,12 @@ async fn run_request(
     use tokio::time::Instant;
 
     let deadline = Instant::now() + Duration::from_millis(request.deadline_ms);
-    if request.verb == "apps" && request.args["action"] == "prepare-update" {
+    let prepared = match (request.verb.as_str(), request.args["action"].as_str()) {
+        ("apps", Some("prepare-update")) => Some("update"),
+        ("apps", Some("prepare-acp-follow-up")) => Some("acp-follow-up"),
+        _ => None,
+    };
+    if let Some(action) = prepared {
         // No journal, installer or host lease is opened until the dashboard grants this
         // connected request. An older agent refuses the preparation action.
         let ready = Event::Progress {
@@ -183,7 +188,10 @@ async fn run_request(
                 "app update was not admitted",
             ));
         }
-        request.args["action"] = serde_json::json!("update");
+        request.args["action"] = serde_json::json!(action);
+    }
+    if request.verb == "apps" && request.args["action"] == "acp-follow-up" && prepared.is_none() {
+        return Err(Failure::new(Cause::Refused, "app update was not prepared"));
     }
     let control = async {
         loop {
@@ -203,7 +211,10 @@ async fn run_request(
     };
     let work = async {
         if request.verb == "apps"
-            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+            && matches!(
+                request.args["action"].as_str(),
+                Some("update" | "cancel" | "acp-follow-up")
+            )
         {
             return apps::update::run(&request, writer).await;
         }

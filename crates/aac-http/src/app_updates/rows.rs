@@ -33,6 +33,9 @@ pub(super) fn app_ids() -> impl Iterator<Item = &'static str> {
 pub(super) fn app_known(app: &str) -> bool {
     CONTRACT["labels"].get(app).is_some()
 }
+pub(super) fn is_acp_deferred(row: &Value) -> bool {
+    row["message"] == CONTRACT["messages"]["t3_restart_pending"]
+}
 pub(super) fn legacy(app: &str) -> bool {
     listed(&CONTRACT["legacyApps"], app)
 }

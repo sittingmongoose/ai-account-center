@@ -2566,6 +2566,13 @@
     ]
   },
   {
+    "word": "no-weekly-usage",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "node_launch_failed",
     "cause": "provider_error",
     "sources": [

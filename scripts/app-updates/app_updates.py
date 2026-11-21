@@ -1146,6 +1146,8 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
 ACP_FOLLOW_UP_SECONDS = 20 * 60
 FOLLOW_UP_POLL_SECONDS = 10
 FOLLOW_UP_LOCK_SECONDS = 2
+ACP_FOLLOW_UP_WORKER_SECONDS = 36 * 60
+ACP_APP = "antigravity-acp"
 
 
 def follow_up_antigravity_acp(platform, expected, emit=None, cancelled=None, seconds=ACP_FOLLOW_UP_SECONDS,
@@ -1160,7 +1162,7 @@ def follow_up_antigravity_acp(platform, expected, emit=None, cancelled=None, sec
     does. AAC never restarts T3 or stops a T3-owned process here."""
     emit = emit or (lambda event: None)
     cancelled = cancelled or (lambda: False)
-    app_id = "antigravity-acp"
+    app_id = ACP_APP
     end = clock() + seconds
 
     def skipped():
@@ -1200,6 +1202,8 @@ def follow_up_antigravity_acp(platform, expected, emit=None, cancelled=None, sec
             try:
                 with execution_lock():
                     current = detect_antigravity_acp(platform) or install
+                    if cancelled():
+                        return with_diagnostics(skipped(), record)
                     emit({"event": "app", "appId": app_id, "phase": "updating"})
                     # The install keeps its own bound (15 minutes) from here, past the wait's.
                     row = update_antigravity_acp(current, None, lambda name: emit({"event": "app", "appId": app_id, "phase": name}),
@@ -1462,11 +1466,15 @@ def supervised_app(args, emit, cancelled):
             "--agent-worker-child", "--worker-seconds", str(args.worker_seconds)]
     if args.t3_restart_pending:
         argv.append("--t3-restart-pending")
+    follow_up = args.acp_after_t3_restart
+    if follow_up is not None:
+        argv.extend(("--acp-after-t3-restart", follow_up))
     flags = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
-    budget = time.monotonic() + min(args.worker_seconds, HOST_DEADLINE_SECONDS)
+    budget = time.monotonic() + args.worker_seconds
     code = "host_timeout"
     with worker_stage(args.app) as stage, subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            argv, stdin=subprocess.PIPE if follow_up is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             env=environment({"AAC_UPDATE_PROGRESS": "1", "AAC_UPDATE_WORKER_STAGING": str(stage)}),
             **flags) as child:
         # The child emits only small JSON frames. The queue lets the parent check
@@ -1489,11 +1497,19 @@ def supervised_app(args, emit, cancelled):
 
         threading.Thread(target=read, daemon=True).start()
         final = None
+        cancel_sent = False
         try:
             while time.monotonic() < budget:
-                if cancelled():
-                    code = "skipped_cancelled"
-                    break
+                if not cancel_sent and cancelled():
+                    if follow_up is None:
+                        code = "skipped_cancelled"
+                        break
+                    # The follow-up checks for cancel until the guarded operation starts.
+                    # If T3 is already installing, keep its confirmed result.
+                    with contextlib.suppress(OSError):
+                        child.stdin.write(b"cancel\n")
+                        child.stdin.close()
+                    cancel_sent = True
                 try:
                     line = output.get(timeout=0.05)
                 except Empty:
@@ -1552,19 +1568,24 @@ def main():
     # packaged release file); without it a packaged release file next to this
     # helper is read, and without either a managed Antigravity update runs idle-only.
     parser.add_argument("--agy-reviewed")
-    # Only the dashboard's follow-up after a Linux computer's deferred T3 restart: the T3 version
-    # that must answer, or "any". Checks and installs Antigravity ACP alone.
     parser.add_argument("--acp-after-t3-restart", metavar="T3_VERSION")
     args = parser.parse_args()
     native = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"
     if args.platform != native:
         parser.error("The selected platform must match this computer.")
+    follow_up = args.acp_after_t3_restart
+    if follow_up is not None and (
+            not args.apply or args.platform != "ubuntu" or args.dashboard_job or args.task_child
+            or args.t3_restart_pending or args.app not in (None, ACP_APP)
+            or (follow_up != "any" and exact_version(follow_up) is None)):
+        parser.error("--acp-after-t3-restart needs --apply on Ubuntu and a T3 version or 'any'.")
     if args.agent_capabilities:
         print('{"appWorker":1}')
         return
     if (args.app and not args.apply or args.agent_worker_child and not args.app
             or args.agent_managed and not args.app
-            or not 1 <= args.worker_seconds <= HOST_DEADLINE_SECONDS):
+            or not 1 <= args.worker_seconds <= (
+                ACP_FOLLOW_UP_WORKER_SECONDS if follow_up is not None else HOST_DEADLINE_SECONDS)):
         parser.error("Invalid single-app worker arguments.")
     if args.state_dir is not None:
         if not args.state_dir.is_absolute():
@@ -1574,11 +1595,6 @@ def main():
         if args.state_dir is None or args.platform != "ubuntu":
             parser.error("A dashboard job requires Ubuntu and an explicit state directory.")
         os.environ["AAC_UPDATE_DASHBOARD_JOB"] = "1"
-    follow_up = args.acp_after_t3_restart
-    if follow_up is not None:
-        if not args.apply or args.platform != "ubuntu" or args.dashboard_job or args.task_child or (
-                follow_up != "any" and exact_version(follow_up) is None):
-            parser.error("--acp-after-t3-restart needs --apply on Ubuntu and a T3 version or 'any'.")
     task_nonce = None
     agy_reviewed = parse_reviewed_versions(args.agy_reviewed) if args.agy_reviewed is not None else read_release_versions()
     if args.task_child and args.apply and args.platform == "windows":
@@ -1597,7 +1613,7 @@ def main():
     elif args.apply and os.environ.get("AAC_UPDATE_PROGRESS") == "1":
         # Only a dashboard that reads line-by-line progress sets this; an
         # older one keeps receiving exactly one JSON document.
-        emit, cancelled = stream_progress(cancel_on_eof=bool(args.app and not args.agent_worker_child))
+        emit, cancelled = stream_progress(cancel_on_eof=bool(args.app and (follow_up is not None or not args.agent_worker_child)))
     completed = {}
     progress = emit or (lambda event: None)
     def remember(event):
@@ -1608,11 +1624,11 @@ def main():
         progress(event)
     emit = remember
     def invoke():
-        if follow_up is not None:
-            version = None if follow_up == "any" else follow_up
-            return {"results": [follow_up_antigravity_acp(args.platform, version, emit, cancelled)]}
         if not args.apply:
             return inventory_payload(args.platform)
+        if follow_up is not None and (not args.app or args.agent_worker_child):
+            expected = None if follow_up == "any" else follow_up
+            return {"results": [follow_up_antigravity_acp(args.platform, expected, emit, cancelled)]}
         if args.app and args.agent_worker_child:
             return apply_single_app(args.app, args.platform, emit, args.worker_seconds, args.t3_restart_pending)
         if args.platform == "windows" and not args.task_child:
@@ -1623,19 +1639,20 @@ def main():
             return supervised_app(args, emit, cancelled or (lambda: False))
         return run_apply(args.platform, emit, cancelled, agy_reviewed)
 
+    error_apps = [ACP_APP] if follow_up is not None else ([args.app] if args.app else APP_LABELS)
     try:
         if args.app and not args.agent_worker_child and not args.task_child:
             state = os.environ.get("AAC_UPDATE_STATE_DIR")
             lock = (execution_lock("agent-worker-" + args.app + ".lock", pathlib.Path(state) if state else None)
-                    if args.agent_managed else execution_lock())
+                    if args.agent_managed or follow_up is not None else execution_lock())
             with lock:
                 payload = invoke()
         else:
             payload = invoke()
     except UpdateFailure as error:
-        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "unknown" if error.code == "timeout" else "failed", code="host_timeout" if error.code == "timeout" else error.code) for app_id in ([args.app] if args.app else APP_LABELS)]}
+        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "unknown" if error.code == "timeout" else "failed", code="host_timeout" if error.code == "timeout" else error.code) for app_id in error_apps]}
     except Exception:
-        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "failed", code="update_failed") for app_id in ([args.app] if args.app else APP_LABELS)]}
+        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "failed", code="update_failed") for app_id in error_apps]}
     if args.task_child and args.apply and args.platform == "windows":
         request_path = pathlib.Path.home() / ".ccs/app-updates/windows-task-request.json"
         try:

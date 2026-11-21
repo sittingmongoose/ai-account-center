@@ -235,13 +235,20 @@ ready. A runtime-only update with no desktop restart target uses the ordinary
 RPC frame chunks and handshake lines check the absolute operation deadline before
 every receive; the offer-settle deadline can only shorten it. T3 release, ordinary
 Antigravity manifest and Claude channel lookups also use the killable metadata child.
-On Ubuntu and Nas1 the new server only
-starts after that computer's part of the job, so the run's row is
+On Linux the new server only starts after that computer's part of the job,
+so the run's row is
 `action_required` / `t3_restart_pending` and nothing uses the previous server's
 offer. The dashboard job then runs the helper with `--acp-after-t3-restart
 <T3 version>`: it waits up to 20 minutes, without the helper lock the restart
 worker needs, for that T3 version to answer, then runs the same guarded install
-and the job records its row in place of the deferred one.
+and the job records its row in place of the deferred one. The native job
+admits the follow-up against the completed host journal and uses the T3 version
+saved there. Cancel skips a waiting check. Once T3 starts an install, the
+helper waits for its confirmed result within the deadline.
+
+A running, desktop-managed T3 on Mac or Windows installs and relaunches through
+T3's own updater. The native one-app worker verifies the relaunched server and
+the installed desktop version before reporting the update.
 
 AAC reads the completion record and checks platform filenames, regular files,
 recorded sizes and Unix executable bits. It never downloads, stages, repairs,

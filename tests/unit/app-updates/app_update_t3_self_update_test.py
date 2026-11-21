@@ -19,6 +19,7 @@ import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import app_update_common as common
 import app_update_t3 as t3
 import app_update_t3_rpc as t3_rpc
+import app_updates as updater
 
 OLD = "0.1.12-nightly.20261120.4994"
 NEW = "0.1.12-nightly.20261120.5009"
@@ -114,10 +115,14 @@ class RunningT3SelfUpdate(unittest.TestCase):
         return t3.T3Install("t3-code", "windows", path, OLD, "official-download", publisher=t3.WINDOWS_PUBLISHER,
                             package_root=path.parent, desktop=True)
 
-    def run_update(self, install, fake, offered=None, ready=None):
+    def run_update(self, install, fake, offered=None, ready=None, native_worker=False):
         mock.patch.object(t3_rpc, "environment_descriptor", return_value=offered or descriptor(OLD)).start()
         mock.patch.object(t3_rpc, "Rpc", side_effect=fake.rpc).start()
         wait = mock.patch.object(t3_rpc, "wait_ready", side_effect=ready).start()
+        if native_worker:
+            with mock.patch.object(updater, "detect_one", return_value=install):
+                payload = updater.apply_single_app("t3-code", install.platform, lambda _event: None, 600)
+            return payload["results"][0], wait
         return t3.update_t3(install, time.monotonic() + 600), wait
 
     def assert_self_updated(self, install, row, fake, wait):
@@ -136,14 +141,14 @@ class RunningT3SelfUpdate(unittest.TestCase):
     def test_running_mac_t3_takes_t3s_own_updater_instead_of_restart_context(self):
         install = self.mac()
         fake = FakeT3(install)
-        row, wait = self.run_update(install, fake)
+        row, wait = self.run_update(install, fake, native_worker=True)
         self.assert_self_updated(install, row, fake, wait)
         self.assertEqual(t3.mac_bundle_version(install.path), NEW)
 
     def test_running_windows_t3_takes_t3s_own_updater(self):
         install = self.windows()
         fake = FakeT3(install)
-        row, wait = self.run_update(install, fake)
+        row, wait = self.run_update(install, fake, native_worker=True)
         self.assert_self_updated(install, row, fake, wait)
         self.assertEqual(t3.windows_bundle_version(install.path), NEW)
 

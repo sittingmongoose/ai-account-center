@@ -1,5 +1,5 @@
 {
-  "crates/aac-http/src/public_auth/reset_routes.rs": "70359d88e0621082d940b3332532b358f86b0ee2a7e4d32863105016702039bf",
+  "crates/aac-http/src/public_auth/reset_routes.rs": "6387e3834d9b43ed38ade9feba45e0abad552e3f52f1ce2930ae821cb7d495df",
   "scripts/account-usage/claude_usage.py": "07f2307c161a87411db9f47976c1af0aa589996dc0eb17b4054b5a82a8f20e4e",
   "scripts/account-usage/cursor_usage.py": "7fc27661a8f9a44a67683c7d485366d903e41d732d1a2014aed7fef405cee154",
   "scripts/account-usage/desktop_helpers.py": "86d73d556af2c28855d48258bbd9687c8c55d3070d629c282664aab1a10880d3",
@@ -51,7 +51,7 @@
   "scripts/app-updates/app_update_t3_rpc.py": "f330f53c26925bc658f41c9eff988995cc58b75aad8e1b54ebe1e0bd971e0263",
   "scripts/app-updates/app_update_terminal.py": "754a551da2fbe6fec04f71b7d077c1cc2cbdec9cb910f42cd1e9544593bee456",
   "scripts/app-updates/app_update_zcode.py": "b949dd919c947b524f7fe2a8ab6d375e254c08fe2fc2b47351374b52dac976d9",
-  "scripts/app-updates/app_updates.py": "fa81d1040e4205443b9db626c30b76e3b0e523a1c68f43df194e5a9efb34b9ed",
+  "scripts/app-updates/app_updates.py": "5b13e45509e588b0cd3874f7ad1199a8e157f2d555c703c14c072cb90367e247",
   "scripts/claude-history/history_index_remote_v2.py": "a6e9b16f2cd758e8bc0c8355b536ff2004f847e2d1c9724f1bb0a7e8c6f8e12c",
   "scripts/claude-signin/claude_signin.py": "42e82f9e3f41506b39650f5c3b287f41b6159726b7171c5c9a8d5d978adf89a7",
   "src/antigravity/account-lifecycle.ts": "6372a3e9fb4ac5155ea73b310c650f4c740d3ed8d61cbb7f68a5345c907f262e",
