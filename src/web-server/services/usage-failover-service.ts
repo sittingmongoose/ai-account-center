@@ -658,6 +658,13 @@ export class UsageFailoverService {
   collect(target: UsageFailoverTarget, template: DashboardAccount): Promise<DashboardAccount> {
     return this.run(target, template, false);
   }
+  /**
+   * The credential identity the target's shown reading came from, or null when it has none
+   * yet. Read-only: never loads, creates or changes state and never asks a provider.
+   */
+  readingIdentity(target: UsageFailoverTarget): UsageIdentity | null {
+    return this.states.get(this.key(target))?.saved?.candidate.identity ?? null;
+  }
   recover(target: UsageFailoverTarget, primary: DashboardAccount): Promise<DashboardAccount> {
     return this.run(target, primary, true);
   }

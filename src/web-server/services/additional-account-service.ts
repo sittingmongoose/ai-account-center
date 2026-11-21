@@ -32,7 +32,7 @@ import {
 } from './additional-usage-transport';
 import { HOST_LABELS, sourceComputer, type DashboardHost } from './dashboard-hosts';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
-import type { UsageFailoverTarget } from './usage-failover-contract';
+import { sameUsageIdentity, type UsageFailoverTarget } from './usage-failover-contract';
 
 const CACHE_TTL_MS = 120_000;
 const REFRESH_DEBOUNCE_MS = 5_000;
@@ -66,7 +66,10 @@ export interface AdditionalAccountDeps {
   readRegistry?: () => Promise<AccountRegistryRead>;
   runSource?: (source: AdditionalUsageSource) => Promise<string>;
   /** Shared identity-bound source selection; null keeps the legacy collector path. */
-  failover?: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
+  failover?:
+    | (Pick<UsageFailoverService, 'collect' | 'peek'> &
+        Partial<Pick<UsageFailoverService, 'readingIdentity'>>)
+    | null;
   now?: () => number;
   /** Overrides LOCAL_FILE_DEADLINE_MS for the account list read, so tests need not wait. */
   manifestDeadlineMs?: number;
@@ -377,7 +380,10 @@ const DEFAULT_SOURCES = parseSourceManifest(null).sources;
  */
 export class AdditionalAccountService {
   private readonly ccsDir: string;
-  private readonly failover: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
+  private readonly failover:
+    | (Pick<UsageFailoverService, 'collect' | 'peek'> &
+        Partial<Pick<UsageFailoverService, 'readingIdentity'>>)
+    | null;
   private readonly cursorQuota: CursorQuotaReader | null;
   private fingerprint = '';
   private caches = new Map<string, SourceCache>();
@@ -667,16 +673,53 @@ export class AdditionalAccountService {
     }
     const current = new Set(config.sources.map(sourceKey));
     for (const key of this.caches.keys()) if (!current.has(key)) this.caches.delete(key);
+    const sources = config.sources.filter(
+      (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
+    );
     return {
       registry: config.mode,
-      accounts: await Promise.all(
-        config.sources
-          .filter(
-            (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
-          )
-          .map((source) => this.getSource(source, opts.refresh === true))
+      accounts: this.oneRowPerIdentity(
+        sources,
+        await Promise.all(sources.map((source) => this.getSource(source, opts.refresh === true)))
       ),
     };
+  }
+
+  /**
+   * Two registry entries whose readings came from the same credential identity are one
+   * account: show it once (never two rows of the same account). The row bound to its own
+   * credential stays over a `discover` row, then the first in list order. Rows without a
+   * known identity are never merged. Nothing is rebound and no provider is asked.
+   */
+  private oneRowPerIdentity(
+    sources: AdditionalUsageSource[],
+    rows: DashboardAccount[]
+  ): DashboardAccount[] {
+    const readingIdentity = this.failover?.readingIdentity?.bind(this.failover);
+    if (!readingIdentity) return rows;
+    const identities = sources.map((source) => readingIdentity(this.failoverTarget(source)));
+    const discovered = (index: number) => {
+      const credential = sources[index].account?.credential;
+      return !credential || credential.kind === 'discover';
+    };
+    const dropped = new Set<number>();
+    for (let index = 0; index < rows.length; index++) {
+      if (dropped.has(index) || !identities[index]) continue;
+      for (let other = index + 1; other < rows.length; other++) {
+        if (
+          dropped.has(other) ||
+          sources[other].provider !== sources[index].provider ||
+          !sameUsageIdentity(identities[index], identities[other])
+        )
+          continue;
+        if (discovered(index) && !discovered(other)) {
+          dropped.add(index);
+          break;
+        }
+        dropped.add(other);
+      }
+    }
+    return rows.filter((_, index) => !dropped.has(index));
   }
 
   async get(
@@ -710,29 +753,27 @@ export class AdditionalAccountService {
   configured(opts: { excludeAntigravity?: boolean } = {}): AdditionalAccountsSnapshot | null {
     const config = this.lastManifest;
     if (!config) return null;
+    const sources = config.sources.filter(
+      (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
+    );
+    const rows = sources.map((source) => {
+      const placeholder = unavailable(
+        source,
+        'unavailable',
+        isUnreadableAccountRegistry(config.mode)
+          ? 'Account list could not be read safely.'
+          : 'Account usage is temporarily unavailable.'
+      );
+      const quota =
+        config.valid && source.provider === 'cursor' ? this.cursorQuota?.peek(placeholder) : null;
+      if (quota) return quota;
+      return config.valid && this.failover
+        ? this.failover.peek(this.failoverTarget(source), placeholder)
+        : placeholder;
+    });
     return {
       registry: config.mode,
-      accounts: config.sources
-        .filter(
-          (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
-        )
-        .map((source) => {
-          const placeholder = unavailable(
-            source,
-            'unavailable',
-            isUnreadableAccountRegistry(config.mode)
-              ? 'Account list could not be read safely.'
-              : 'Account usage is temporarily unavailable.'
-          );
-          const quota =
-            config.valid && source.provider === 'cursor'
-              ? this.cursorQuota?.peek(placeholder)
-              : null;
-          if (quota) return quota;
-          return config.valid && this.failover
-            ? this.failover.peek(this.failoverTarget(source), placeholder)
-            : placeholder;
-        }),
+      accounts: config.valid ? this.oneRowPerIdentity(sources, rows) : rows,
     };
   }
 }

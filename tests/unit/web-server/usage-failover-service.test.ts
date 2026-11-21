@@ -273,6 +273,16 @@ describe('identity-bound usage source failover', () => {
     expect(h.collected()).toHaveLength(before);
   });
 
+  it('names the credential identity of the shown reading without starting a read', async () => {
+    const h = await harness();
+    expect(h.service.readingIdentity(h.target)).toBeNull();
+    expect(h.calls).toHaveLength(0);
+    await h.service.collect(h.target, template());
+    const before = h.calls.length;
+    expect(h.service.readingIdentity(h.target)).toEqual(candidate().identity);
+    expect(h.calls).toHaveLength(before);
+  });
+
   it('keeps the verified account when the primary could not read its sign-ins', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());

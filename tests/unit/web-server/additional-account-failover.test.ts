@@ -146,6 +146,53 @@ describe('additional accounts use verified failover sources', () => {
     expect(calls[0].binding).not.toBe(calls[1].binding);
   });
 
+  it('shows one row when two registry entries read the same credential identity', async () => {
+    const accounts = [
+      registryAccount('opencode-go', { kind: 'discover' }),
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+      registryAccount('zai', { kind: 'aac-key', keyId: 'aabbccdd' }, 'aabbccdd'),
+      registryAccount('zai', { kind: 'aac-key', keyId: '11223344' }, '11223344'),
+    ];
+    // discover and key 2e034ec2 resolve to one OpenCode Go account; the Z.ai rows have no
+    // known identity yet and a different provider never merges with OpenCode Go.
+    const identities: Record<string, { kind: string; key: string } | null> = {
+      'opencode-go:usage': { kind: 'opencode-go-key', key: 'identity-a' },
+      'opencode-go:acct:52f3251b': { kind: 'opencode-go-key', key: 'identity-b' },
+      'opencode-go:acct:2e034ec2': { kind: 'opencode-go-key', key: 'identity-a' },
+      'zai:acct:aabbccdd': null,
+      'zai:acct:11223344': null,
+    };
+    const { service, calls } = fixture({
+      readRegistry: async () => ({ state: 'ok', registry: { version: 2, accounts } }),
+    });
+    const base = (service as unknown as { failover: Record<string, unknown> }).failover;
+    base.readingIdentity = (target: UsageFailoverTarget) => identities[target.accountId] ?? null;
+    const rows = await service.get();
+    // The explicitly bound row stays; the discovery row bound to the same key is not shown.
+    expect(rows.map((row) => row.id)).toEqual([
+      'opencode-go:acct:52f3251b',
+      'opencode-go:acct:2e034ec2',
+      'zai:acct:aabbccdd',
+      'zai:acct:11223344',
+    ]);
+    expect(calls).toHaveLength(5);
+    expect(service.configured()?.accounts.map((row) => row.id)).toEqual(rows.map((row) => row.id));
+  });
+
+  it('keeps two discovery-free rows of one identity as the first in list order', async () => {
+    const accounts = [
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+    ];
+    const { service } = fixture({
+      readRegistry: async () => ({ state: 'ok', registry: { version: 2, accounts } }),
+    });
+    const base = (service as unknown as { failover: Record<string, unknown> }).failover;
+    base.readingIdentity = () => ({ kind: 'opencode-go-key', key: 'identity-a' });
+    expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
+  });
+
   it('invalidates the binding when a saved account changes host or credential', async () => {
     let account = registryAccount('zai', { kind: 'aac-key', keyId: 'aabbccdd' });
     const { service, calls } = fixture({
