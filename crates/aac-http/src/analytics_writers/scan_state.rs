@@ -7,6 +7,39 @@ use std::collections::{HashMap, HashSet};
 const REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const CACHE_BYTES: usize = 64 * 1024 * 1024;
 const CACHE_ROWS: usize = 100_000;
+pub(super) const REMOTE_ARCHIVE: &str = "legacy/cache/analytics-remote-v1/";
+
+#[derive(Deserialize)]
+pub(super) struct LegacyCache {
+    version: Option<u64>,
+    #[serde(flatten)]
+    pub scan: Cache,
+    #[serde(rename = "lastScanAt")]
+    pub last_scan_at: Option<String>,
+}
+
+impl LegacyCache {
+    pub fn rebuilds(&self, tool: &str) -> bool {
+        match self.version {
+            Some(3..=5) => matches!(tool, "claude" | "codex" | "muse"),
+            Some(6) => matches!(tool, "codex" | "muse"),
+            Some(7..=8) => false,
+            _ => true,
+        }
+    }
+
+    pub fn read(bytes: &[u8]) -> Result<Self> {
+        Ok(serde_json::from_slice(bytes)?)
+    }
+}
+
+#[derive(Deserialize)]
+struct SavedCache {
+    #[serde(rename = "_nativeRevision")]
+    revision: Option<u8>,
+    #[serde(flatten)]
+    cache: Cache,
+}
 
 pub(super) fn requests(
     mut args: Value,
@@ -84,16 +117,41 @@ pub(super) struct Cache {
 
 impl Cache {
     pub fn load(store: &Engine, host: &str) -> Result<Self> {
-        if let Some(bytes) = analytics_cache::get(store, &format!("live/scanner/{host}"))? {
-            return Ok(serde_json::from_slice(&bytes)?);
+        let saved = analytics_cache::get(store, &format!("live/scanner/{host}"))?
+            .map(|bytes| serde_json::from_slice::<SavedCache>(&bytes))
+            .transpose()?;
+        let mut cache = match saved {
+            Some(SavedCache {
+                revision: Some(1),
+                cache,
+            }) => return Ok(cache),
+            Some(saved) => Some(saved.cache),
+            None => None,
+        };
+        if let Some(legacy) =
+            analytics_cache::archived(store, &format!("{REMOTE_ARCHIVE}{host}.json"))?
+                .and_then(|bytes| LegacyCache::read(&bytes).ok())
+        {
+            let rebuilt: HashSet<_> = aac_providers::scanner_kinds()
+                .filter(|tool| legacy.rebuilds(tool))
+                .collect();
+            let scan = cache.get_or_insert(legacy.scan);
+            scan.rows.retain(|row| {
+                row["k"]
+                    .as_str()
+                    .is_some_and(|kind| !rebuilt.contains(kind))
+            });
+            scan.srows.retain(|row| {
+                row["k"]
+                    .as_str()
+                    .is_some_and(|kind| !rebuilt.contains(kind))
+            });
+            for tool in rebuilt {
+                scan.fingerprints.remove(tool);
+                scan.states.remove(tool);
+            }
         }
-        let archived = analytics_cache::archived(
-            store,
-            &format!("legacy/cache/analytics-remote-v1/{host}.json"),
-        )?;
-        Ok(archived
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default())
+        Ok(cache.unwrap_or_default())
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -109,7 +167,17 @@ impl Cache {
                 "Analytics scanner row limit",
             ));
         }
-        let bytes = serde_json::to_vec(self)?;
+        #[derive(Serialize)]
+        struct Checkpoint<'a> {
+            #[serde(rename = "_nativeRevision")]
+            revision: u8,
+            #[serde(flatten)]
+            cache: &'a Cache,
+        }
+        let bytes = serde_json::to_vec(&Checkpoint {
+            revision: 1,
+            cache: self,
+        })?;
         if bytes.len() > CACHE_BYTES {
             return Err(aac_store::error::Error::new(
                 "source_limit",

@@ -454,6 +454,9 @@ struct CellsEv {
     /// can still replay the cell changes and read the unchanged session schema.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     session_owners: BTreeMap<String, (String, u64)>,
+    /// Exact stale session rows from a legacy cache format, for guarded replay.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    remove_sessions: Vec<SessEv>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -839,6 +842,20 @@ fn project_cells(txn: &WriteTransaction, ev: &CellsEv) -> Result<()> {
         {
             row.c = intern(txn, K_COMPUTER, owner)?;
             put_bytes(txn, ACT_SESSION, session_key(t, &key).as_slice(), &db::pack(&row)?)?;
+        }
+    }
+    for obsolete in &ev.remove_sessions {
+        let key = session_bytes(Some(&obsolete.k));
+        let expected = session_row(txn, obsolete)?;
+        if expected.c == c && load_session(txn, t, &key)?.as_ref() == Some(&expected) {
+            txn.open_table(ACT_SESSION)?.remove(session_key(t, &key).as_slice())?;
+            txn.open_table(ACT_SESSION_BY_LAST)?.remove(
+                Key::new()
+                    .u32((expected.l / HOUR_MS) as u32)
+                    .u32(t)
+                    .bytes(&key)
+                    .as_slice(),
+            )?;
         }
     }
     Ok(())
@@ -1312,6 +1329,12 @@ fn decide(
     Ok((puts, dels, sessions))
 }
 
+#[derive(Default)]
+struct SessionCorrections {
+    owners: BTreeMap<String, (String, u64)>,
+    obsolete: Vec<SessEv>,
+}
+
 fn push_cells(
     batch: &mut engine::Batch<'_>,
     c: &str,
@@ -1319,14 +1342,19 @@ fn push_cells(
     puts: Vec<CellEv>,
     dels: Vec<DelEv>,
     sessions: Vec<SessEv>,
-    session_owners: BTreeMap<String, (String, u64)>,
+    corrections: SessionCorrections,
 ) -> Result<usize> {
     let mut events = 0;
     let mut puts = puts.into_iter().peekable();
     let mut dels = dels.into_iter().peekable();
     let mut sessions = sessions.into_iter().peekable();
-    let mut session_owners = session_owners.into_iter().peekable();
-    while puts.peek().is_some() || dels.peek().is_some() || sessions.peek().is_some() || session_owners.peek().is_some()
+    let mut session_owners = corrections.owners.into_iter().peekable();
+    let mut obsolete = corrections.obsolete.into_iter().peekable();
+    while puts.peek().is_some()
+        || dels.peek().is_some()
+        || sessions.peek().is_some()
+        || session_owners.peek().is_some()
+        || obsolete.peek().is_some()
     {
         let ev = CellsEv {
             c: c.to_string(),
@@ -1335,6 +1363,7 @@ fn push_cells(
             put: puts.by_ref().take(CELLS_PER_EVENT).collect(),
             s: sessions.by_ref().take(SESSIONS_PER_EVENT).collect(),
             session_owners: session_owners.by_ref().take(SESSIONS_PER_EVENT).collect(),
+            remove_sessions: obsolete.by_ref().take(SESSIONS_PER_EVENT).collect(),
         };
         let mut event = Event::new(
             "activity.cells",
@@ -1453,7 +1482,15 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
                 del += dels.len();
                 sess += sessions.len();
                 let r = p.checked.report;
-                events += push_cells(batch, &r.computer, &r.tool, puts, dels, sessions, BTreeMap::new())?;
+                events += push_cells(
+                    batch,
+                    &r.computer,
+                    &r.tool,
+                    puts,
+                    dels,
+                    sessions,
+                    SessionCorrections::default(),
+                )?;
             }
             Ok((put, del, sess, events))
         })?;
@@ -1533,22 +1570,22 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
     Ok(result)
 }
 
-/// Repair a legacy Claude import by comparing the stored cells to the exact original
-/// cache projection. Only cells that still equal that projection may be corrected.
-/// A later read may have written independent data at the same hour and identity.
-pub fn repair_claude_import(
+/// Repair only cells that still equal the original cache projection. An obsolete
+/// tool format can also retire exact session summaries from that projection.
+pub fn repair_remote_import(
     engine: &Engine,
     raw: &Report,
     selected: &Report,
     original_sessions: &BTreeMap<String, (String, u64)>,
+    obsolete_format: bool,
 ) -> Result<()> {
-    if raw.tool != "claude"
+    if (!obsolete_format && raw.tool != "claude")
         || selected.tool != raw.tool
         || selected.computer != raw.computer
         || raw.kind.as_deref() != Some("import")
         || selected.kind != raw.kind
     {
-        fail!("invalid", "Claude import repair must address one source");
+        fail!("invalid", "Analytics import repair must address one source");
     }
     let raw_rows = prepare(raw)?;
     let kept_rows = prepare(selected)?;
@@ -1564,7 +1601,19 @@ pub fn repair_claude_import(
             let days: BTreeSet<_> = raw_rows.hours.keys().map(|hour| *hour / 24).collect();
             let mut puts = Vec::new();
             let mut dels = Vec::new();
-            let mut session_owners = BTreeMap::new();
+            let mut corrections = SessionCorrections::default();
+            if obsolete_format {
+                for (session, span) in raw.sessions.iter().zip(&raw_rows.checked.session_spans) {
+                    let Some(span) = span else { continue };
+                    let ev = sess_ev(session, &raw.computer, *span);
+                    if closed.is_some_and(|last| (ev.l / DAY_MS) as u32 <= last) == (log == LogId::Ledger) {
+                        let key = session_bytes(Some(&ev.k));
+                        if load_session(txn, tool, &key)?.as_ref() == Some(&session_row(txn, &ev)?) {
+                            corrections.obsolete.push(ev);
+                        }
+                    }
+                }
+            }
             for day in days {
                 let in_ledger = closed.is_some_and(|last| day <= last);
                 if in_ledger != (log == LogId::Ledger) {
@@ -1592,7 +1641,7 @@ pub fn repair_claude_import(
                                 if let Some(key) = &ev.s
                                     && let Some(target) = original_sessions.get(key)
                                 {
-                                    session_owners.insert(key.clone(), target.clone());
+                                    corrections.owners.insert(key.clone(), target.clone());
                                 }
                                 dels.push(DelEv {
                                     h: ev.h,
@@ -1609,7 +1658,7 @@ pub fn repair_claude_import(
             }
             // Equal Claude keys already occupy one session entry. Correct its
             // source with the cells, preserving any later session observation.
-            push_cells(batch, &raw.computer, &raw.tool, puts, dels, Vec::new(), session_owners).map(|_| ())
+            push_cells(batch, &raw.computer, &raw.tool, puts, dels, Vec::new(), corrections).map(|_| ())
         })?;
     }
     Ok(())

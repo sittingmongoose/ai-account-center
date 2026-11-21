@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 mod mirror_tests;
 mod remote;
 
-const MARKER: &str = "analytics_files_migrated_v3";
+const MARKER: &str = "analytics_files_migrated_v4";
 pub(super) const QUOTA: &str = "legacy/account-analytics/quota-history-v1.json";
 const MAX_FILE: u64 = 256 * 1024 * 1024;
 const BATCH_BYTES: usize = 8 * 1024 * 1024;
@@ -353,6 +353,7 @@ impl Migration<'_> {
         if self.store.get_meta(MARKER)?.as_deref() == Some(&epoch) {
             return Ok(true);
         }
+        let previous_remote = remote::previous_index(self)?;
         let previous = self.store.get_meta(FAILURES)?;
         let mut failures: Failures = previous
             .as_deref()
@@ -364,14 +365,16 @@ impl Migration<'_> {
         let mut pending = Vec::new();
         let mut size = 0;
         let mut seen = HashSet::new();
-        let mut remote_ready = true;
+        let mut blocked_remote = HashSet::new();
         let mut staged_remote = Vec::new();
         for path in candidates(self.root)? {
             let relative = path.strip_prefix(self.root)?;
             let key = format!("legacy/{}", relative.to_string_lossy().replace('\\', "/"));
             seen.insert(key.clone());
             if failures.waiting(&key, self.now) {
-                remote_ready &= !key.starts_with(remote::PREFIX);
+                if key.starts_with(remote::PREFIX) {
+                    blocked_remote.insert(key.clone());
+                }
                 complete = false;
                 continue;
             }
@@ -379,7 +382,9 @@ impl Migration<'_> {
                 Ok(Some(bytes)) => bytes,
                 Ok(None) => continue,
                 Err(error) => {
-                    remote_ready &= !key.starts_with(remote::PREFIX);
+                    if key.starts_with(remote::PREFIX) {
+                        blocked_remote.insert(key.clone());
+                    }
                     failures.record(&key, None, &error, self.now);
                     complete = false;
                     continue;
@@ -416,21 +421,25 @@ impl Migration<'_> {
                     && self.ready(&key, &digest, None, &epoch, &mut failures);
             }
         }
-        if remote_ready {
-            remote::commit(self, &epoch)?;
-            for (path, key, digest) in staged_remote {
-                failures.0.remove(&key);
-                before_remove()?;
-                match read(self.root, &path)? {
-                    Some(current) if aac_core::sha256_hex(&current) == digest => {
-                        fs::remove_file(path)?
-                    }
-                    Some(_) => return Err(Error::new("io", "Analytics migration source changed")),
-                    None => {}
-                }
+        let remote = remote::commit(
+            self,
+            &epoch,
+            &blocked_remote,
+            &previous_remote,
+            &mut seen,
+            &mut failures,
+        )?;
+        complete &= remote.complete;
+        for (path, key, digest) in staged_remote {
+            if !remote.retire.contains(key.as_str()) {
+                continue;
             }
-        } else {
-            complete = false;
+            before_remove()?;
+            match read(self.root, &path)? {
+                Some(current) if aac_core::sha256_hex(&current) == digest => fs::remove_file(path)?,
+                Some(_) => return Err(Error::new("io", "Analytics migration source changed")),
+                None => {}
+            }
         }
         failures.0.retain(|key, _| seen.contains(key));
         let receipt = serde_json::to_string(&failures)?;

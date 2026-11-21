@@ -34,6 +34,22 @@ struct Source<'a> {
     epoch: u64,
 }
 
+pub(super) fn rescan_legacy_source(
+    store: &Engine,
+    host: &str,
+    tool: &str,
+    epoch: u64,
+) -> Result<()> {
+    let source = Source {
+        computer: host,
+        tool,
+        epoch,
+    };
+    analytics_cache::remove(store, &source.checkpoint())?;
+    store.set_meta(&source.ready_marker(), "")?;
+    store.set_meta(&source.marker(), "")
+}
+
 impl<'a> Source<'a> {
     fn marker(&self) -> String {
         format!("analytics_history_v1:{}:{}", self.computer, self.tool)

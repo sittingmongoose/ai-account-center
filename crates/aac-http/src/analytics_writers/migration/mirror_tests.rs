@@ -86,18 +86,27 @@ fn hour(now: i64) -> i64 {
 }
 
 fn totals(store: &Engine) -> Vec<(String, u64, u64)> {
-    activity::dump_cells(store)
+    let mut cells: Vec<_> = activity::dump_cells(store)
         .unwrap()
         .into_iter()
         .map(|(host, _, cell)| (host, cell.i, cell.o))
-        .collect()
+        .collect();
+    cells.sort_unstable();
+    cells
 }
 
-fn mark_previous_migration(store: &Engine, marker: &str) {
+fn mark_v2_import(store: &Engine, path: &str, bytes: &[u8]) {
+    let epoch = activity::recovery_epoch(store).unwrap().to_string();
+    store
+        .set_meta("analytics_files_migrated_v2", &epoch)
+        .unwrap();
     store
         .set_meta(
-            marker,
-            &activity::recovery_epoch(store).unwrap().to_string(),
+            &format!(
+                "analytics_import:{epoch}:{path}:{}",
+                aac_core::sha256_hex(bytes)
+            ),
+            "1",
         )
         .unwrap();
 }
@@ -132,7 +141,7 @@ fn continued_session(repair: bool) {
     if repair {
         import(&current, "nas1", &original, true);
         import(&current, "odroid", &later, true);
-        mark_previous_migration(&store, "analytics_files_migrated_v2");
+        mark_v2_import(&store, MIRROR, &serde_json::to_vec(&later).unwrap());
         assert!(totals(&store).contains(&("odroid".into(), 130, 40)));
     }
     stage(root, "nas1", &original);
@@ -233,8 +242,9 @@ fn scan_codex_copies(home: &Path, at: i64) -> Value {
 fn obsolete_cache(repair: bool) {
     let home = tempfile::tempdir().unwrap();
     let root = home.path();
-    let store =
-        aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None).unwrap();
+    let dir = root.join("store");
+    let open = || aac_store::ops::open_engine(&dir.to_string_lossy(), None, None).unwrap();
+    let store = open();
     let now = aac_store::engine::now_ms() as i64;
     let at = hour(now);
     let old = legacy_cache(
@@ -260,8 +270,6 @@ fn obsolete_cache(repair: bool) {
             .collect();
         assert_eq!(codex.iter().map(|(_, _, cell)| cell.i).sum::<u64>(), 200);
         assert_eq!(codex.iter().map(|(_, _, cell)| cell.o).sum::<u64>(), 20);
-        mark_previous_migration(&store, "analytics_files_migrated_v2");
-        mark_previous_migration(&store, "analytics_files_migrated_v3");
         analytics_cache::archive(
             &store,
             &[(
@@ -270,6 +278,15 @@ fn obsolete_cache(repair: bool) {
             )],
         )
         .unwrap();
+        let index = analytics_cache::archived_index(&store, remote::PREFIX).unwrap();
+        let digest = aac_core::sha256_hex(&serde_json::to_vec(&index).unwrap());
+        let epoch = activity::recovery_epoch(&store).unwrap().to_string();
+        store
+            .set_meta("analytics_remote_import_v3", &format!("{epoch}:{digest}"))
+            .unwrap();
+        store
+            .set_meta("analytics_files_migrated_v3", &epoch)
+            .unwrap();
         analytics_cache::put(
             &store,
             "live/scanner/nas1",
@@ -302,6 +319,21 @@ fn obsolete_cache(repair: bool) {
     )
     .unwrap();
     assert_eq!(range["sessions"]["total"], 2, "{range}");
+    store.close().unwrap();
+    drop(store);
+    let reopened = open();
+    assert!(migration(&reopened, root, now + RETRY_MS).run().unwrap());
+    assert_eq!(
+        totals(&reopened),
+        vec![("nas1".into(), 70, 10), ("nas1".into(), 100, 10)]
+    );
+    let repeated = aac_store::ops::call(
+        &reopened,
+        "activityRange",
+        &json!({"fromMs":at,"toMs":at+3_600_000}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(repeated["sessions"]["total"], 2, "{repeated}");
 }
 
 #[test]
@@ -359,6 +391,7 @@ fn partial_remote(bad: impl FnOnce(&Path)) {
         vec![cache_row("codex", at, "file", "1111111111111111", 100)],
     );
     let independent = stage(root, "nas1", &codex);
+    scan(&root.join("mirror"), "original", at, "independent", (13, 7));
     let mirror = scan(
         &root.join("mirror"),
         "ssh-12345678-1234-1234-1234-123456789abc",
@@ -371,7 +404,10 @@ fn partial_remote(bad: impl FnOnce(&Path)) {
     bad(&corrupt);
     let current = migration(&store, root, now);
     assert!(!current.run().unwrap());
-    assert_eq!(totals(&store), vec![("nas1".into(), 100, 10)]);
+    assert_eq!(
+        totals(&store),
+        vec![("mac".into(), 13, 7), ("nas1".into(), 100, 10)]
+    );
     assert!(!independent.exists());
     assert!(waiting.exists() && corrupt.exists());
     let health: Value = serde_json::from_str(&store.get_meta(FAILURES).unwrap().unwrap()).unwrap();
@@ -391,7 +427,11 @@ fn partial_remote(bad: impl FnOnce(&Path)) {
     assert!(migration(&store, root, now + RETRY_MS).run().unwrap());
     assert_eq!(
         totals(&store),
-        vec![("mac".into(), 70, 30), ("nas1".into(), 100, 10)]
+        vec![
+            ("mac".into(), 13, 7),
+            ("mac".into(), 70, 30),
+            ("nas1".into(), 100, 10)
+        ]
     );
     assert!(!waiting.exists());
 }
@@ -464,10 +504,7 @@ fn run_fixture(repair: bool) {
                 .unwrap()["computer"],
             "odroid"
         );
-        let epoch = activity::recovery_epoch(&store).unwrap();
-        store
-            .set_meta("analytics_files_migrated_v2", &epoch.to_string())
-            .unwrap();
+        mark_v2_import(&store, MIRROR, &staged[0].1);
     } else {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, &staged[0].1).unwrap();

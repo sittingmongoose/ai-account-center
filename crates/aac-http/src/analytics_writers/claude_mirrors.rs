@@ -74,8 +74,8 @@ pub(super) fn select(
     (owners != *previous).then_some(owners)
 }
 
-/// Historical reports can only raise earlier totals. Once a transcript has a
-/// historical owner, keep that attribution when a previously absent log appears.
+/// Keep committed mirror ownership across incomplete reads. A confirmed original
+/// on any host is independent of that election.
 pub(super) fn select_history(
     parts: &mut [Part<'_>],
     states: &mut [Value],
@@ -93,11 +93,11 @@ pub(super) fn keep_historical_originals(store: &Engine, part: &mut Part<'_>) -> 
         let Some((name, false)) = row_identity(row, &part.fingerprints) else {
             return false;
         };
-        let owner = owners.entry(name.to_owned()).or_insert_with(|| {
+        owners.entry(name.to_owned()).or_insert_with(|| {
             changed = true;
             part.host.to_owned()
         });
-        owner == part.host
+        true
     };
     part.rows.retain(&mut keep);
     part.sessions.retain(keep);
@@ -175,9 +175,6 @@ pub(super) fn choose(
 
     for part in parts {
         let keep = |row: &Value| match row_identity(row, &part.fingerprints) {
-            Some((name, _)) if committed.contains_key(name) => {
-                committed.get(name).is_some_and(|host| host == part.host)
-            }
             Some((name, true)) => {
                 !originals.contains_key(name)
                     && owners.get(name).is_some_and(|host| host == part.host)
