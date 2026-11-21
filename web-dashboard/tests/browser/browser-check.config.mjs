@@ -90,6 +90,7 @@ export default (ctx) => {
 		server: (_, s) => ({
 			command: [process.execPath, cli, 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
 			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'), AAC_AGENT_REPORTS_DIR: s.reports, AAC_PM_MAIL_REGISTRY_DIR: path.join(s.reports, 'pm-mail-registry'), AAC_STATUS_DOORBELL: 'off',
+				AAC_CURSOR_BILLING_ENABLED: '0', AAC_CURSOR_API_BASE: 'http://127.0.0.1:1',
 				// `--set realPins=1`: this machine's real T3 pins, opened read-only by the status module (the other machines'
 				// pins come over ssh, set up above).
 				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),

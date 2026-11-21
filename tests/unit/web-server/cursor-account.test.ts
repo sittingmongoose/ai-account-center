@@ -17,6 +17,7 @@ import {
   CURSOR_ACCOUNT_TTL_MS,
   cursorAccountBinary,
   cursorAccountOutside,
+  cursorBillingEnabled,
   readCursorAccount,
   type CursorAccountRead,
 } from '../../../src/web-server/services/cursor-account-reader';
@@ -103,6 +104,41 @@ describe('reading the account', () => {
     now += CURSOR_ACCOUNT_TTL_MS;
     answer = { state: 'no_key' };
     expect(await read()).toMatchObject({ state: 'no_key', rows: [], key: null });
+  });
+
+  it('keeps measured billing rows and coverage when the Cursor sign-in expires or disappears', async () => {
+    const coverage = {
+      coverageFrom: '2026-11-13T00:00:00.000Z',
+      coverageUntil: new Date(NOW).toISOString(),
+    };
+    let answer: unknown = { state: 'read', ...coverage, readAt: NOW, rows: [ROW], events: 2, unrecognizedModels: 1 };
+    const read = () =>
+      readCursorAccount(SINCE, NOW, {
+        cacheDir: path.join(dir, 'cache'),
+        ccsDir: dir,
+        now: () => NOW,
+        force: true,
+        run: async () => answer,
+      });
+    await read();
+    for (const failure of [{ state: 'unavailable', cause: 'signin_needed' }, { state: 'no_key' }]) {
+      answer = failure;
+      const last = await read();
+      expect(last).toMatchObject({
+        ...coverage,
+        state: 'unavailable',
+        cause: 'signin_needed',
+        readAt: new Date(NOW).toISOString(),
+        rows: [ROW],
+        events: 2,
+        unrecognizedModels: 1,
+      });
+      const summary = await cursorAccountOutside(last, [], {
+        run: async () => ({ rows: [ROW], summary: { accountTokens: 1320 } }),
+      });
+      expect(summary).toMatchObject({ ...coverage, accountTokens: 1320, unrecognizedModels: 1 });
+      expect(summary.computer).toBeTruthy();
+    }
   });
 
   it('says when no reader is built for this computer', async () => {
@@ -437,6 +473,19 @@ describe('the key and the reader binary', () => {
     ).toBe(130);
     expect(out.join('')).toContain('Cancelled');
     expect(seen).toHaveLength(3);
+  });
+
+  it('turns the billing reader on for an installed package only; an explicit 0 or 1 wins (review L1)', () => {
+    const installed = () => true;
+    const checkout = () => false;
+    expect(cursorBillingEnabled({}, installed)).toBe('1');
+    expect(cursorBillingEnabled({}, checkout)).toBe('0');
+    // This source checkout is never an installed package.
+    expect(cursorBillingEnabled({})).toBe('0');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: '0' }, installed)).toBe('0');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: '1' }, checkout)).toBe('1');
+    expect(cursorBillingEnabled({ AAC_CURSOR_BILLING_ENABLED: 'yes' }, installed)).toBe('0');
+    expect(cursorBillingEnabled({ NODE_ENV: 'test' }, installed)).toBe('0');
   });
 
   it('uses the packaged reader only when its digest matches the manifest', () => {
