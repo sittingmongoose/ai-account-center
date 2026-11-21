@@ -464,6 +464,7 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
@@ -502,7 +503,12 @@ mod tests {
         let status = analytics_status(&kept);
         assert_eq!(status["cause"], "read_in_progress");
         assert_eq!(status["unrecognizedModels"], 2);
-        let none = project(&json!({"state":"read","readAt":now,"unrecognizedModels":0,"rows":[]}), None, now).unwrap();
+        let none = project(
+            &json!({"state":"read","readAt":now,"unrecognizedModels":0,"rows":[]}),
+            None,
+            now,
+        )
+        .unwrap();
         assert!(none.get("unrecognizedModels").is_none());
     }
 }
