@@ -863,30 +863,6 @@ export class UsageFailoverService {
       state.nextAttempt = Math.max(state.nextAttempt, until);
       return true;
     };
-    // A rate-limited token gets one usage call per interval even when several of
-    // its computers are candidates; the rest wait for the next step-down.
-    let streakCallSpent = false;
-    const claimStreakCall = (): boolean => {
-      if (streakCallSpent) return false;
-      if (!readUsageCooldownState(target.ccsDir, cooldownKey, this.now()).claude429Streak)
-        return true;
-      streakCallSpent = true;
-      return true;
-    };
-    // A spent streak interval schedules the next read at the same 429 step, not sooner.
-    const holdStreakInterval = (): void => {
-      const streak = readUsageCooldownState(target.ccsDir, cooldownKey, this.now()).claude429Streak;
-      if (!streak) return;
-      state.nextAttempt = Math.max(
-        state.nextAttempt,
-        this.now() +
-          claudeDesktopDelayMs(
-            this.key(target),
-            readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds,
-            streak
-          )
-      );
-    };
     if (primaryAlreadyRead && hasUsage(template) && primaries.length) {
       const reading = parseUsageReading(template, this.now());
       if (hasUsage(reading) && emailMatches(target.expectedEmail, reading.email)) {
@@ -922,16 +898,11 @@ export class UsageFailoverService {
       primaryAlreadyRead &&
       /(?:rate.?limit|\b429\b|too many requests)/i.test(template.message ?? '')
     ) {
-      const now = this.now();
-      const streak = target.claudeDesktopCadence
-        ? readUsageCooldownState(target.ccsDir, cooldownKey, now).claude429Streak
-        : undefined;
       state.nextAttempt = holdUsageCooldown(
         target.ccsDir,
         cooldownKey,
-        streak ? now + claudeDesktopDelayMs(this.key(target), 60, streak) : now + 60_000,
-        now,
-        streak
+        this.now() + 60_000,
+        this.now()
       );
       this.cooldowns.set(cooldownKey, state.nextAttempt);
       return;
@@ -977,7 +948,7 @@ export class UsageFailoverService {
             ...(host.sshHost === null ? { ccsDir: target.ccsDir } : {}),
           },
           // Recheck both holds when a queued request finally starts.
-          () => !applyCooldown() && !peerHeld() && claimStreakCall(),
+          () => !applyCooldown() && !peerHeld(),
           (value) => {
             if (value.action !== 'collect' || !responseIsRateLimited(value)) return;
             const now = this.now();
@@ -1005,12 +976,7 @@ export class UsageFailoverService {
         return 'next';
       }
       // Held account: stop. Held linked peer only: other computers may still answer.
-      if (response === null) {
-        if (applyCooldown()) return 'done';
-        if (!streakCallSpent) return 'next';
-        holdStreakInterval();
-        return 'done';
-      }
+      if (response === null) return applyCooldown() ? 'done' : 'next';
       if (response.action !== 'collect') return 'next';
       // The computer whose Cursor session was adopted is the source for this
       // read, even when it is not the configured host.
@@ -1165,7 +1131,15 @@ export class UsageFailoverService {
               streak
             )
           );
-        if (state.fresh) state.freshUntil = state.nextAttempt;
+        // A stepped-down pace is not a fresh reading: the row goes cached once a
+        // normal refresh interval has passed, whatever the slower hold allows.
+        if (state.fresh)
+          state.freshUntil = cooldown.claude429Streak
+            ? Math.min(
+                state.nextAttempt,
+                now + readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds * 1000
+              )
+            : state.nextAttempt;
         return 'done';
       }
       if (
@@ -1192,7 +1166,6 @@ export class UsageFailoverService {
         if ((await attempt(host, candidate, true)) === 'done') return;
     }
     state.nextAttempt = this.now() + 30_000;
-    holdStreakInterval();
   }
 }
 

@@ -2433,8 +2433,17 @@ describe('Windows Claude quota cadence', () => {
     expect((await service.collect(f.target, f.row)).status).toBe('ok');
     expect(f.streak()).toBe(3);
     const before = f.h.collected().length;
-    f.h.advance(479_999);
-    expect((await service.collect(f.target, f.row)).status).toBe('ok');
+    f.h.advance(61_000);
+    expect(await service.collect(f.target, f.row)).toMatchObject({
+      status: 'cached',
+      cacheReason: 'refresh_pending',
+    });
+    expect(f.h.collected()).toHaveLength(before);
+    f.h.advance(418_999);
+    expect(await service.collect(f.target, f.row)).toMatchObject({
+      status: 'cached',
+      cacheReason: 'refresh_pending',
+    });
     expect(f.h.collected()).toHaveLength(before);
 
     f.h.advance(300_001);
@@ -2498,9 +2507,8 @@ describe('Windows Claude quota cadence', () => {
     expect(hold).toBeLessThan(780_000);
   });
 
-  it('spends one usage call per interval for a rate-limited token across its candidates', async () => {
+  it('reads the healthy computer after the first candidate fails without a 429', async () => {
     const f = await claudeBackoffFixture();
-    const service = await f.build(1);
     f.h.inventories.set('mac', [
       {
         ...candidate(),
@@ -2509,19 +2517,31 @@ describe('Windows Claude quota cadence', () => {
         identity: { kind: 'claude-account-org-v1', key: 'a'.repeat(64) },
       },
     ]);
+    const service = await f.build(1);
     f.toHold(service);
-    f.h.collections.set('windows', new Error('fixture offline'));
-    const before = f.h.collected().length;
-    await service.collect(f.target, f.row);
-    expect(f.h.collected()).toHaveLength(before + 1);
-    expect(f.h.collected().at(-1)!.host).toBe('windows');
+    f.h.collections.set('windows', { sample: null, failureCode: 'unavailable' });
+    f.h.collections.set('mac', { sample: reading(f.h.now()), failureCode: null });
 
-    f.h.advance(119_999);
-    await service.collect(f.target, f.row);
-    expect(f.h.collected()).toHaveLength(before + 1);
-    f.h.advance(300_001);
-    await service.collect(f.target, f.row);
-    expect(f.h.collected()).toHaveLength(before + 2);
+    const before = f.h.collected().length;
+    expect((await service.collect(f.target, f.row)).status).toBe('ok');
+    expect(
+      f.h
+        .collected()
+        .slice(before)
+        .map((call) => call.host)
+    ).toEqual(['windows', 'mac']);
+    expect(f.streak()).toBe(0);
+
+    f.h.advance(420_000);
+    const after = f.h.collected().length;
+    expect((await service.collect(f.target, f.row)).status).toBe('ok');
+    expect(
+      f.h
+        .collected()
+        .slice(after)
+        .map((call) => call.host)
+    ).toEqual(['windows', 'mac']);
+    expect(f.streak()).toBe(0);
   });
 
   it('preserves the sample and growing hold through restart, then steps down after success', async () => {

@@ -121,7 +121,7 @@ export function readUsageCooldownState(ccsDir: string, key: string, now: number)
   const saved = readPersistedUsageCooldown(ccsDir, key, now);
   const until = Math.max(memory?.until ?? 0, saved?.until ?? 0);
   const claude429Streak = memory?.claude429Streak ?? saved?.claude429Streak;
-  // Expiry opens the gate but ends no rate-limit streak. A verified read clears it.
+  // Expiry opens the gate but ends no rate-limit streak. Each verified read lowers it one step.
   if (memory && memory.until <= now && !memory.claude429Streak) inProcessCooldowns.delete(id);
   return { until: until > now ? until : 0, claude429Streak };
 }
