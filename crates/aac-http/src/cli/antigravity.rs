@@ -81,27 +81,19 @@ fn scripts_dir() -> PathBuf {
     if let Some(explicit) = std::env::var_os("AAC_ANTIGRAVITY_SCRIPTS") {
         return PathBuf::from(explicit);
     }
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        for ancestor in exe.ancestors().skip(1) {
-            candidates.push(ancestor.join("scripts"));
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("scripts"));
-    }
-    candidates
+    let executable = crate::identity::executable_path_for_assets().ok();
+    let cwd = std::env::current_dir().ok();
+    find_scripts(executable.as_deref(), cwd.as_deref()).unwrap_or_default()
+}
+
+fn find_scripts(executable: Option<&Path>, cwd: Option<&Path>) -> Option<PathBuf> {
+    executable
         .into_iter()
+        .flat_map(|exe| exe.ancestors().skip(1))
+        .chain(cwd)
+        .map(|ancestor| ancestor.join("scripts"))
         .find(|dir| dir.join("antigravity/runtime/release.json").is_file())
-        .or_else(|| {
-            std::env::current_exe().ok().and_then(|exe| {
-                exe.parent()
-                    .and_then(Path::parent)
-                    .and_then(Path::parent)
-                    .map(|root| root.join("scripts"))
-            })
-        })
-        .unwrap_or_default()
+        .or_else(|| executable.and_then(crate::identity::package_scripts))
 }
 
 pub fn run(args: &[String], ccs: &Path) -> i32 {
@@ -1028,6 +1020,27 @@ fn is_native_version(value: &str) -> bool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn packaged_scripts_are_found_when_the_launcher_is_a_symlink_outside_the_package() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let package = root.join("lib/node_modules/ai-account-center");
+        let executable = package.join("dist/native/ai-account-center");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, []).unwrap();
+        let scripts = package.join("scripts");
+        fs::create_dir_all(scripts.join("antigravity/runtime")).unwrap();
+        fs::write(scripts.join("antigravity/runtime/release.json"), "{}").unwrap();
+        fs::create_dir(root.join("bin")).unwrap();
+        let shim = root.join("bin/ai-account-center");
+        std::os::unix::fs::symlink(executable, &shim).unwrap();
+        assert_eq!(
+            find_scripts(Some(&crate::identity::resolve_asset_path(shim)), Some(root)),
+            Some(scripts.canonicalize().unwrap())
+        );
+    }
 
     #[test]
     fn version_stamps_follow_the_reference_grammar() {

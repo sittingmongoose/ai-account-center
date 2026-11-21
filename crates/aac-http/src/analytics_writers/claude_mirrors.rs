@@ -40,14 +40,14 @@ pub(super) fn save(store: &Engine, key: &str, owners: &Owners) -> Result<()> {
     analytics_cache::put(store, key, &bytes)
 }
 
-fn identity(print: &Value) -> Option<(&str, bool)> {
+pub(super) fn identity(print: &Value) -> Option<(&str, bool)> {
     let name = print["claudeName"]
         .as_str()
         .filter(|name| !name.is_empty())?;
     Some((name, print["claudeMirror"].as_bool()?))
 }
 
-fn row_identity<'a>(row: &Value, fingerprints: &'a Value) -> Option<(&'a str, bool)> {
+pub(super) fn row_identity<'a>(row: &Value, fingerprints: &'a Value) -> Option<(&'a str, bool)> {
     identity(&fingerprints[row["f"].as_str()?])
 }
 
@@ -70,7 +70,8 @@ pub(super) fn select(
     states: &mut [Value],
     previous: &Owners,
 ) -> Option<Owners> {
-    choose(parts, states, previous, &Owners::new())
+    let owners = choose(parts, states, previous, &Owners::new());
+    (owners != *previous).then_some(owners)
 }
 
 /// Historical reports can only raise earlier totals. Once a transcript has a
@@ -80,7 +81,8 @@ pub(super) fn select_history(
     states: &mut [Value],
     committed: &Owners,
 ) -> Option<Owners> {
-    choose(parts, states, &Owners::new(), committed)
+    let owners = choose(parts, states, &Owners::new(), committed);
+    (owners != *committed).then_some(owners)
 }
 
 /// Store original readings while evidence from other computers is pending.
@@ -105,12 +107,12 @@ pub(super) fn keep_historical_originals(store: &Engine, part: &mut Part<'_>) -> 
     Ok(())
 }
 
-fn choose(
+pub(super) fn choose(
     parts: &mut [Part<'_>],
     states: &mut [Value],
     previous: &Owners,
     committed: &Owners,
-) -> Option<Owners> {
+) -> Owners {
     let configured: HashSet<&str> = states
         .iter()
         .filter(|state| state["tool"] == "claude")
@@ -189,12 +191,7 @@ fn choose(
             *state = json!("no_usage");
         }
     }
-    let prior = if committed.is_empty() {
-        previous
-    } else {
-        committed
-    };
-    (owners != *prior).then_some(owners)
+    owners
 }
 
 #[cfg(test)]

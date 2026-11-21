@@ -849,24 +849,6 @@ pub(crate) async fn analytics_jobs(
         }
         tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
     };
-    let migration_store = Arc::clone(&store);
-    let migration_agents = Arc::clone(&agents);
-    let migration_root = ccs_dir.clone();
-    let migration_stop = Arc::clone(&stop);
-    let migration = async move {
-        let mut retry = aac_store::engine::now_ms() + 120_000;
-        while !migrated && !migration_stop.load(Ordering::Acquire) {
-            tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
-            let now = aac_store::engine::now_ms();
-            if now >= retry
-                && !migration_stop.load(Ordering::Acquire)
-                && let Some(engine) = migration_store.analytics_engine()
-            {
-                migrated = migrate_files(engine, &migration_agents, &migration_root).await;
-                retry = now + 120_000;
-            }
-        }
-    };
     let state = Arc::new(Mutex::new(WriterState::default()));
     let quota_store = Arc::clone(&store);
     let quota_stop = Arc::clone(&stop);
@@ -903,9 +885,15 @@ pub(crate) async fn analytics_jobs(
         let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&activity_root));
         let mut folders_cleared = false;
         let mut history = history::Job::default();
+        let mut migration_retry = aac_store::engine::now_ms() + 120_000;
         while !activity_stop.load(Ordering::Acquire) {
             if let Some(engine) = activity_store.analytics_engine() {
-                let now = aac_store::engine::now_ms() as i64;
+                let now = aac_store::engine::now_ms();
+                // Migration and the historical writer share the Claude owner map.
+                if !migrated && now >= migration_retry {
+                    migrated = migrate_files(engine.clone(), &agents, &activity_root).await;
+                    migration_retry = now + 120_000;
+                }
                 if crate::analytics_route::capture_cwd(&activity_root) {
                     folders_cleared = false;
                 } else if !folders_cleared {
@@ -925,7 +913,7 @@ pub(crate) async fn analytics_jobs(
                     &activity_root,
                     &models_dev,
                     &activity_live,
-                    now,
+                    now as i64,
                 )
                 .await;
                 if !activity_stop.load(Ordering::Acquire) {
@@ -983,7 +971,6 @@ pub(crate) async fn analytics_jobs(
         run_writer("quota", quota),
         run_writer("experiment discovery", discovery),
         run_writer("activity", activity),
-        run_writer("migration", migration),
     );
 }
 

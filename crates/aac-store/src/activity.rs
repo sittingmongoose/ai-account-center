@@ -1515,6 +1515,104 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
     Ok(result)
 }
 
+/// Repair a legacy Claude import by comparing the stored cells to the exact original
+/// cache projection. Only cells that still equal that projection may be corrected.
+/// A later read may have written independent data at the same hour and identity.
+pub fn repair_claude_import(engine: &Engine, raw: &Report, selected: &Report) -> Result<()> {
+    if raw.tool != "claude"
+        || selected.tool != raw.tool
+        || selected.computer != raw.computer
+        || raw.kind.as_deref() != Some("import")
+        || selected.kind != raw.kind
+    {
+        fail!("invalid", "Claude import repair must address one source");
+    }
+    let raw_rows = prepare(raw)?;
+    let kept_rows = prepare(selected)?;
+    let mut closed = None;
+    for log in [LogId::Readings, LogId::Ledger] {
+        engine.commit(log, |batch| {
+            let txn = batch.txn;
+            if log == LogId::Readings {
+                closed = closed_through(&txn.open_table(ACT_DAY_CLOSED)?)?;
+            }
+            let computer = intern(txn, K_COMPUTER, &raw.computer)?;
+            let tool = intern(txn, K_TOOL, &raw.tool)?;
+            let days: BTreeSet<_> = raw_rows.hours.keys().map(|hour| *hour / 24).collect();
+            let mut puts = Vec::new();
+            let mut dels = Vec::new();
+            for day in days {
+                let in_ledger = closed.is_some_and(|last| day <= last);
+                if in_ledger != (log == LogId::Ledger) {
+                    continue;
+                }
+                let stored: BTreeMap<_, _> = load_day(txn, day, computer, tool)?
+                    .into_iter()
+                    .map(|cell| (cell.id(), cell))
+                    .collect();
+                for (hour, incoming) in raw_rows.hours.range(day * 24..(day + 1) * 24) {
+                    let mut retained = BTreeMap::new();
+                    for ev in kept_rows.hours.get(hour).into_iter().flatten() {
+                        retained.insert(cell_from_ev(txn, ev)?.1.id(), ev);
+                    }
+                    for ev in incoming {
+                        let (_, cell) = cell_from_ev(txn, ev)?;
+                        let id = cell.id();
+                        if stored.get(&id) != Some(&cell) {
+                            continue;
+                        }
+                        match retained.get(&id) {
+                            Some(kept) if *kept != ev => puts.push((*kept).clone()),
+                            Some(_) => {}
+                            None => dels.push(DelEv {
+                                h: ev.h,
+                                s: ev.s.clone(),
+                                r: ev.r.clone(),
+                                m: ev.m.clone(),
+                                e: ev.e.clone(),
+                                a: ev.a.clone(),
+                            }),
+                        }
+                    }
+                }
+            }
+            // The session index is shared by computer: equal Claude session keys already
+            // occupy one entry. The repair changes only the per-computer cells.
+            push_cells(batch, &raw.computer, &raw.tool, puts, dels, Vec::new()).map(|_| ())
+        })?;
+    }
+    Ok(())
+}
+
+/// Look up selected session keys in the Store, without scanning the rest of history.
+pub fn session_computers(engine: &Engine, tool: &str, keys: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let reversed = read.open_table(ACT_DICT_REV)?;
+        let Some(tool) = reversed.get(Key::new().u8(K_TOOL).bytes(tool.as_bytes()).as_slice())? else {
+            return Ok(BTreeMap::new());
+        };
+        let dict = read.open_table(ACT_DICT)?;
+        let mut names = Names::new(&dict);
+        let sessions = read.open_table(ACT_SESSION)?;
+        let mut computers = BTreeMap::new();
+        for key in keys {
+            let bytes = session_bytes(Some(key));
+            if bytes == NO_SESSION {
+                continue;
+            }
+            let index = session_key(tool.value(), &bytes);
+            if let Some(value) = sessions.get(index.as_slice())? {
+                let row: SessionRow = db::unpack(value.value())?;
+                if row.c != 0 {
+                    computers.insert(key.clone(), names.get(K_COMPUTER, row.c)?);
+                }
+            }
+        }
+        Ok(computers)
+    })
+}
+
 /// Records a backfill's state for one source (ledger, kept for good).
 pub fn backfill_mark(engine: &Engine, computer: &str, tool: &str, row: BackfillRow) -> Result<()> {
     if !contract::ident_ok(computer) || !contract::ident_ok(tool) {

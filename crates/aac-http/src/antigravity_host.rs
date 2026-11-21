@@ -188,11 +188,12 @@ impl Host {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))?;
-        let exe = std::env::current_exe().ok()?;
-        let package = exe.parent()?.parent()?.parent()?;
-        let scripts = std::env::var_os("AAC_ANTIGRAVITY_SCRIPTS")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| package.join("scripts"));
+        let scripts = match std::env::var_os("AAC_ANTIGRAVITY_SCRIPTS") {
+            Some(explicit) => PathBuf::from(explicit),
+            None => crate::identity::package_scripts(
+                &crate::identity::executable_path_for_assets().ok()?,
+            )?,
+        };
         let python = std::env::var_os("AAC_ANTIGRAVITY_PYTHON")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/usr/bin/python3"));

@@ -3,7 +3,7 @@
 use aac_files::read::{Ancestors, Read, ReadPolicy};
 use aac_store::engine::Engine;
 use aac_store::error::{Error, Result};
-use aac_store::{activity, analytics_cache, collect, contract, legacy, report, sampler};
+use aac_store::{activity, analytics_cache, legacy, report, sampler};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod mirror_tests;
+mod remote;
 
-const MARKER: &str = "analytics_files_migrated_v2";
+const MARKER: &str = "analytics_files_migrated_v3";
 pub(super) const QUOTA: &str = "legacy/account-analytics/quota-history-v1.json";
 const MAX_FILE: u64 = 256 * 1024 * 1024;
 const BATCH_BYTES: usize = 8 * 1024 * 1024;
@@ -145,27 +146,20 @@ fn read(root: &Path, file: &Path) -> Result<Option<Vec<u8>>> {
 }
 
 #[derive(Clone, Copy)]
-enum Projection<'a> {
+enum Projection {
     Codex,
     Quota,
     Local,
-    Remote(&'a str),
     Archive,
 }
 
-fn projection(key: &str) -> Projection<'_> {
+fn projection(key: &str) -> Projection {
     if key == "legacy/cache/codex-native-usage-v1.json" {
         Projection::Codex
     } else if key.starts_with(QUOTA) {
         Projection::Quota
     } else if key == "legacy/cache/account-activity-v1/analytics-activity-snapshot-v1.json" {
         Projection::Local
-    } else if let Some(host) = key
-        .strip_prefix("legacy/cache/analytics-remote-v1/")
-        .and_then(|name| name.strip_suffix(".json"))
-        .filter(|host| *host != "claude-mirror-owners" && contract::ident_ok(host))
-    {
-        Projection::Remote(host)
     } else {
         Projection::Archive
     }
@@ -260,34 +254,6 @@ impl Migration<'_> {
                     self.import_rows(computer, tool, &data)?;
                 }
             }
-            Projection::Remote(computer) => {
-                let cache: super::scan_state::Cache = serde_json::from_slice(bytes)?;
-                for tool in aac_providers::scanner_kinds() {
-                    let rows: Vec<_> = cache
-                        .rows
-                        .iter()
-                        .filter(|row| row["k"] == tool)
-                        .cloned()
-                        .collect();
-                    let srows: Vec<_> = cache
-                        .srows
-                        .iter()
-                        .filter(|row| row["k"] == tool)
-                        .cloned()
-                        .collect();
-                    if !rows.is_empty() || !srows.is_empty() {
-                        let worker = collect::worker_from_scan(
-                            &rows,
-                            &srows,
-                            tool,
-                            computer,
-                            self.now,
-                            &self.pricing,
-                        );
-                        self.import_rows(computer, tool, &[worker])?;
-                    }
-                }
-            }
             Projection::Archive => return Ok(true),
         }
         self.store.set_meta(&receipt, "1")?;
@@ -295,7 +261,11 @@ impl Migration<'_> {
     }
 
     fn import_rows(&self, computer: &str, tool: &str, data: &[Value]) -> Result<()> {
-        let value = report::rows_report(&report::RowsReportArgs {
+        super::history::commit_report(self.store, self.rows_report(computer, tool, data))
+    }
+
+    fn rows_report(&self, computer: &str, tool: &str, data: &[Value]) -> Value {
+        report::rows_report(&report::RowsReportArgs {
             computer,
             tool,
             data,
@@ -304,8 +274,7 @@ impl Migration<'_> {
             complete: false,
             cause: Some("retired_cache"),
             now: self.now,
-        });
-        super::history::commit_report(self.store, value)
+        })
     }
 
     fn ready(
@@ -351,6 +320,10 @@ impl Migration<'_> {
             if analytics_cache::archived(self.store, key)?.as_deref() != Some(bytes) {
                 return Err(Error::new("io", "Analytics migration verification failed"));
             }
+            if key.starts_with(remote::PREFIX) {
+                // Claude ownership requires all of the raw computer caches.
+                continue;
+            }
             if !self.ready(
                 key,
                 &aac_core::sha256_hex(bytes),
@@ -391,11 +364,14 @@ impl Migration<'_> {
         let mut pending = Vec::new();
         let mut size = 0;
         let mut seen = HashSet::new();
+        let mut remote_ready = true;
+        let mut staged_remote = Vec::new();
         for path in candidates(self.root)? {
             let relative = path.strip_prefix(self.root)?;
             let key = format!("legacy/{}", relative.to_string_lossy().replace('\\', "/"));
             seen.insert(key.clone());
             if failures.waiting(&key, self.now) {
+                remote_ready &= !key.starts_with(remote::PREFIX);
                 complete = false;
                 continue;
             }
@@ -403,11 +379,15 @@ impl Migration<'_> {
                 Ok(Some(bytes)) => bytes,
                 Ok(None) => continue,
                 Err(error) => {
+                    remote_ready &= !key.starts_with(remote::PREFIX);
                     failures.record(&key, None, &error, self.now);
                     complete = false;
                     continue;
                 }
             };
+            if key.starts_with(remote::PREFIX) {
+                staged_remote.push((path.clone(), key.clone(), aac_core::sha256_hex(&bytes)));
+            }
             if size + bytes.len() > BATCH_BYTES && !batch.is_empty() {
                 complete &=
                     self.flush(&pending, &batch, &epoch, &mut before_remove, &mut failures)?;
@@ -426,7 +406,6 @@ impl Migration<'_> {
         for prefix in [
             "legacy/cache/codex-native-usage-v1.json",
             QUOTA,
-            "legacy/cache/analytics-remote-v1/",
             "legacy/cache/account-activity-v1/analytics-activity-snapshot-v1.json",
         ] {
             for (key, digest) in analytics_cache::archived_index(self.store, prefix)? {
@@ -436,6 +415,22 @@ impl Migration<'_> {
                 complete &= !failures.waiting(&key, self.now)
                     && self.ready(&key, &digest, None, &epoch, &mut failures);
             }
+        }
+        if remote_ready {
+            remote::commit(self, &epoch)?;
+            for (path, key, digest) in staged_remote {
+                failures.0.remove(&key);
+                before_remove()?;
+                match read(self.root, &path)? {
+                    Some(current) if aac_core::sha256_hex(&current) == digest => {
+                        fs::remove_file(path)?
+                    }
+                    Some(_) => return Err(Error::new("io", "Analytics migration source changed")),
+                    None => {}
+                }
+            }
+        } else {
+            complete = false;
         }
         failures.0.retain(|key, _| seen.contains(key));
         let receipt = serde_json::to_string(&failures)?;

@@ -123,7 +123,7 @@ impl ServiceLink {
                 .request("GET", "/api/health", HEALTH_PRINCIPAL, &[], None)
                 .await
         {
-            let binary = std::env::current_exe()?.with_file_name("aac-http");
+            let binary = identity::executable_path_for_assets()?.with_file_name("aac-http");
             let expected =
                 tokio::task::spawn_blocking(move || identity::Identity::for_binary(&binary))
                     .await

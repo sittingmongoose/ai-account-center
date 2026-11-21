@@ -4,7 +4,12 @@
 //! body stays `{"status":"ok"}`.
 use axum::http::HeaderValue;
 use sha2::{Digest, Sha256};
-use std::{fs::File, io, io::Read, path::PathBuf};
+use std::{
+    fs::File,
+    io,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 /// The private socket protocol. 1: M3; 2: L1 (table dispatch, named declines, feeds,
 /// events); 3: R3 (the store host's internal route and boot store config).
@@ -39,6 +44,11 @@ pub(crate) fn resolve_asset_path(path: PathBuf) -> PathBuf {
     #[cfg(unix)]
     let path = path.canonicalize().unwrap_or(path);
     path
+}
+
+/// The packaged scripts sit beside `dist`, above the installed native binaries.
+pub(crate) fn package_scripts(executable: &Path) -> Option<PathBuf> {
+    Some(executable.parent()?.parent()?.parent()?.join("scripts"))
 }
 
 fn sha256_hex(path: &PathBuf) -> io::Result<String> {
@@ -85,7 +95,7 @@ impl Identity {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::resolve_asset_path;
+    use super::{package_scripts, resolve_asset_path};
     use std::os::unix::fs::symlink;
     use std::{fs, path::Path};
 
@@ -102,9 +112,19 @@ mod tests {
         let shim = prefix.join("bin/ai-account-center");
         symlink(Path::new("..").join(installed), &shim).expect("installed bin symlink");
 
+        let resolved = resolve_asset_path(shim);
         assert_eq!(
-            resolve_asset_path(shim),
+            resolved,
             executable.canonicalize().expect("installed binary path")
+        );
+        let package = prefix
+            .join("lib/node_modules/fixture-package")
+            .canonicalize()
+            .expect("package directory");
+        assert_eq!(package_scripts(&resolved), Some(package.join("scripts")));
+        assert_eq!(
+            resolved.with_file_name("aac-http"),
+            package.join("dist/native/aac-http")
         );
         let replaced = prefix.join("dist/native/replaced");
         assert_eq!(resolve_asset_path(replaced.clone()), replaced);

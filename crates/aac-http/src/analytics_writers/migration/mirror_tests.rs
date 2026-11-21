@@ -1,4 +1,5 @@
 use super::*;
+use aac_store::collect;
 use serde_json::json;
 
 const ORIGINAL: &str = "legacy/cache/analytics-remote-v1/nas1.json";
@@ -19,7 +20,8 @@ fn scan(home: &Path, project: &str, at: i64, session: &str, usage: (u64, u64)) -
     )
     .unwrap();
     let request =
-        aac_usage::protocol::parse_request(br#"{"kinds":["claude"],"cwd":false}"#).unwrap();
+        aac_usage::protocol::parse_request(br#"{"kinds":["claude"],"cwd":false,"minDateMs":0}"#)
+            .unwrap();
     let answer = aac_usage::protocol::scan(&request, home, &aac_usage::discover::Env::default());
     json!({
         "version":8, "lastScanAt":aac_num::ecma::to_iso_string(at).unwrap(),
