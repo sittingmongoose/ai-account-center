@@ -1397,6 +1397,14 @@ def code_reset_logins(expected_email, home=None):
     return found
 
 
+RESET_LOGIN_REASONS = {
+    "identity_unconfirmed": "identity-unconfirmed",
+    "no_matching_code_login": "no-matching-code-login",
+    "ambiguous_code_login": "ambiguous-code-login",
+    "signed_out": "signed-out",
+}
+
+
 def reset_logins(request, codes):
     """Which saved login a reset goes through, without any provider call.
 
@@ -1434,7 +1442,7 @@ def reset_logins(request, codes):
     elif len(codes) == 1:
         chosen = codes[0]
     else:
-        raise UsageUnavailable("identity_unconfirmed")
+        raise UsageUnavailable("ambiguous_code_login" if codes else "no_matching_code_login")
     code = codes[0] if len(codes) == 1 else None
     if desktop is not None and code is not None:
         binding = hashlib.sha256(json.dumps(["claude-reset-login-v2", desktop["binding"], code["binding"]],
@@ -1448,7 +1456,17 @@ def reset_logins(request, codes):
 def capture_reset_login(request):
     """Read saved credentials only; no OAuth/provider call belongs in the Store capture section."""
     codes = code_reset_logins(request.get("expectedEmail"))
-    login = reset_logins(request, codes) if codes or request.get("expectedSavedOrganization") else _desktop_reset_login(request)
+    if codes or request.get("expectedSavedOrganization"):
+        login = reset_logins(request, codes)
+    else:
+        try:
+            login = _desktop_reset_login(request)
+        except UsageUnavailable as error:
+            # Nothing is pinned yet, so a signed-out Desktop is the sign-in the user can
+            # perform. A missing Code login is only the refusal for a pinned target.
+            if error.status == "needs_sign_in":
+                raise UsageUnavailable("signed_out") from error
+            raise
     return {"account": login["account"], "organization": login["organization"], "savedLoginBinding": login["binding"],
             "observedAtMs": int(time.time() * 1000)}
 
@@ -1480,6 +1498,8 @@ def collect_code_reset(login, expected_email, private_reset_sink, verify_saved):
     except UsageUnavailable as error:
         if error.status == "rate_limited":
             return {"status": "error", "failureCode": "rate_limited"}
+        if reason := RESET_LOGIN_REASONS.get(error.status):
+            return {"status": "unavailable", "resetReason": reason}
         return {"status": error.status if error.status == "needs_sign_in" else "unavailable"}
     except Exception:
         return {"status": "unavailable"}
@@ -1768,7 +1788,7 @@ def _reset_host(request, dispatch):
                                  expected_saved_organization=login["organization"])
             if result.get("status") == "needs_sign_in" and not captured:
                 if login["codeAmbiguous"]:
-                    return {"unavailable": True, "reason": "identity-unconfirmed"}
+                    return {"unavailable": True, "reason": "ambiguous-code-login"}
                 if login["code"] is not None:
                     result = collect_code_reset(login["code"], request["expectedEmail"], captured.append, verify_saved)
             if len(captured) == 1:
@@ -1780,8 +1800,9 @@ def _reset_host(request, dispatch):
 
                 captured[0].update(verifyLogin=verify_all, savedLoginBinding=login["binding"])
         if result.get("status") != "ok" or len(captured) != 1:
-            if result.get("resetReason") == "identity-unconfirmed":
-                return {"unavailable": True, "reason": "identity-unconfirmed"}
+            reason = result.get("resetReason")
+            if reason in RESET_LOGIN_REASONS.values():
+                return {"unavailable": True, "reason": reason}
             if result.get("failureCode") == "rate_limited":
                 return {"unavailable": True, "reason": "rate-limited"}
             if result.get("status") == "needs_sign_in":
@@ -1846,8 +1867,8 @@ def _reset_host(request, dispatch):
                 return {"outcome": "rate-limited", "retryAfterMs": (retry_after_seconds(error.headers.get("Retry-After")) or 60) * 1000}
             return {"outcome": "signed-out" if error.code in (401, 403) else "ambiguous"}
     except UsageUnavailable as error:
-        if error.status == "identity_unconfirmed":
-            return {"unavailable": True, "reason": "identity-unconfirmed"}
+        if reason := RESET_LOGIN_REASONS.get(error.status):
+            return {"unavailable": True, "reason": reason}
     except Exception:
         # Neither exception text nor provider response bodies cross the helper boundary.
         pass

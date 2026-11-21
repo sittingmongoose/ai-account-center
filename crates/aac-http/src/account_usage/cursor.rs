@@ -21,6 +21,7 @@ use tokio::{sync::Mutex, time::Instant};
 pub(crate) const ROW: &str = "cursor-account-observation";
 const CAP: usize = 32 * 1024 * 1024;
 const TTL: i64 = 600_000;
+const BUSY_TTL: i64 = 5_000;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -139,10 +140,15 @@ fn local_reader() -> Result<(Option<PathBuf>, OperatingSystem, bool), Decline> {
 }
 
 fn fresh(previous: &Value, now: i64) -> bool {
+    let ttl = if previous["cause"] == "read_in_progress" {
+        BUSY_TTL
+    } else {
+        TTL
+    };
     previous["checkedAt"]
         .as_str()
         .and_then(|stamp| parse_date(stamp).ok().flatten())
-        .is_some_and(|checked| (0..TTL).contains(&now.saturating_sub(checked)))
+        .is_some_and(|checked| (0..ttl).contains(&now.saturating_sub(checked)))
 }
 
 async fn execute(
@@ -530,6 +536,26 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn a_busy_billing_store_gets_a_short_retry() {
+        let now = 1_794_067_200_000;
+        let busy = project(
+            &json!({"state":"unavailable","cause":"read_in_progress"}),
+            None,
+            now,
+        )
+        .unwrap();
+        assert!(fresh(&busy, now));
+        assert!(!fresh(&busy, now + 5_000));
+        let signed_out = project(
+            &json!({"state":"unavailable","cause":"signin_needed"}),
+            None,
+            now,
+        )
+        .unwrap();
+        assert!(fresh(&signed_out, now + 5_000));
+    }
 
     #[test]
     fn billing_coverage_and_rows_survive_sign_in_loss() {

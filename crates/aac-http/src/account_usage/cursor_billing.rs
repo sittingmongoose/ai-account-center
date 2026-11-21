@@ -25,6 +25,8 @@ const LEGACY_KEY: &str = "legacy/cache/cursor-billing-v1.sqlite";
 /// A rollback journal the old reader may have left beside its file when it was stopped.
 const LEGACY_JOURNAL: &str = "cursor-billing-v1.sqlite-journal";
 const LEGACY_JOURNAL_KEY: &str = "legacy/cache/cursor-billing-v1.sqlite-journal";
+/// Hashes of the last archived database and journal that could not be imported.
+const REJECTED_KEY: &str = "live/cursor-billing-v1-rejected";
 /// The reader's own cap on one saved checkpoint, and so on the document handed to it.
 const MAX_DOCUMENT: usize = 16 * 1024 * 1024;
 const MAX_LEGACY: u64 = 64 * 1024 * 1024;
@@ -183,6 +185,11 @@ fn read_legacy(root: &Path, file: &Path) -> Result<Option<Vec<u8>>> {
 
 /// Archive a retired file's bytes and check the store returns them unchanged.
 fn archive(engine: &Engine, key: &str, bytes: &[u8]) -> Result<()> {
+    if analytics_cache::archived(engine, key)
+        .is_ok_and(|archived| archived.as_deref() == Some(bytes))
+    {
+        return Ok(());
+    }
     analytics_cache::archive(engine, &[(key.to_owned(), bytes.to_vec())])?;
     if analytics_cache::archived(engine, key)?.as_deref() != Some(bytes) {
         return Err(Error::new(
@@ -214,19 +221,51 @@ pub(crate) enum Legacy {
     Imported(usize),
     /// The file could not be read as checkpoints, but the store has refilled; the file is gone.
     Refilled,
+    /// The archived file is unimportable and the store has yet to refill; this open
+    /// recorded it, so [`open_with`] warns once.
+    Kept,
+    /// The same unimportable bytes were recorded by an earlier store open.
+    AlreadyKept,
 }
 
 /// Import the main-branch reader's SQLite file once, then remove it (and a journal it left).
-/// Checkpoints already in the store are newer and win. Any failure keeps the file.
+/// Checkpoints already in the store are newer and win. Both files are archived before removal.
 pub(crate) fn retire_legacy(engine: &Engine, root: &Path) -> Result<Legacy> {
     let cache = root.join("cache");
     let file = cache.join(LEGACY_FILE);
-    let Some(bytes) = read_legacy(root, &file)? else {
+    let bytes = read_legacy(root, &file)?;
+    let journal = cache.join(LEGACY_JOURNAL);
+    let journal_bytes = read_legacy(root, &journal)?;
+    if let Some(bytes) = &journal_bytes {
+        archive(engine, LEGACY_JOURNAL_KEY, bytes)?;
+    }
+    let Some(bytes) = bytes else {
+        if let Some(journal_bytes) = journal_bytes {
+            remove(root, &journal, &journal_bytes)?;
+        }
         return Ok(Legacy::Absent);
     };
     archive(engine, LEGACY_KEY, &bytes)?;
-    let outcome = match legacy_checkpoints(&bytes) {
-        Ok(found) => {
+
+    // A nonempty rollback journal means the database pages may contain an interrupted commit.
+    // Keep both originals for recovery and let the reader refill rather than import those pages.
+    let rollback_pending = journal_bytes
+        .as_ref()
+        .is_some_and(|bytes| !bytes.is_empty());
+    let fingerprint = format!(
+        "{}:{}",
+        aac_core::sha256_hex(&bytes),
+        aac_core::sha256_hex(journal_bytes.as_deref().unwrap_or_default())
+    );
+    let rejected =
+        analytics_cache::get(engine, REJECTED_KEY)?.as_deref() == Some(fingerprint.as_bytes());
+    let found = if rollback_pending || rejected {
+        None
+    } else {
+        legacy_checkpoints(&bytes).ok()
+    };
+    let outcome = match found {
+        Some(found) => {
             let mut document = load(engine)?;
             let saved = accounts(&mut document);
             let mut added = Vec::new();
@@ -254,24 +293,28 @@ pub(crate) fn retire_legacy(engine: &Engine, root: &Path) -> Result<Legacy> {
         }
         // Unreadable checkpoints: the verified archive keeps the bytes, and the file goes once
         // the store has refilled from Cursor.
-        Err(_)
-            if !load(engine)?["accounts"]
-                .as_object()
-                .is_none_or(Map::is_empty) =>
+        None if !load(engine)?["accounts"]
+            .as_object()
+            .is_none_or(Map::is_empty) =>
         {
             Legacy::Refilled
         }
-        Err(_) => {
-            return Err(Error::new(
-                "invalid",
-                "Cursor billing file kept: not importable and not refilled yet",
-            ));
+        None => {
+            if rejected {
+                return Ok(Legacy::AlreadyKept);
+            }
+            analytics_cache::put(engine, REJECTED_KEY, fingerprint.as_bytes())?;
+            return Ok(Legacy::Kept);
         }
     };
+    if read_legacy(root, &journal)? != journal_bytes {
+        return Err(Error::new(
+            "io",
+            "Cursor billing journal changed during import",
+        ));
+    }
     remove(root, &file, &bytes)?;
-    let journal = cache.join(LEGACY_JOURNAL);
-    if let Some(journal_bytes) = read_legacy(root, &journal)? {
-        archive(engine, LEGACY_JOURNAL_KEY, &journal_bytes)?;
+    if let Some(journal_bytes) = journal_bytes {
         remove(root, &journal, &journal_bytes)?;
     }
     Ok(outcome)
@@ -291,7 +334,8 @@ pub(crate) fn open(root: &Path) -> BillingStore {
 
 pub(crate) fn open_with(engine: &Arc<Engine>, root: &Path) -> BillingStore {
     match retire_legacy(engine, root) {
-        Ok(Legacy::Absent) => {}
+        Ok(Legacy::Absent | Legacy::AlreadyKept) => {}
+        Ok(Legacy::Kept) => tracing::warn!("Cursor billing file kept until the store refills"),
         Ok(outcome) => tracing::info!(?outcome, "Cursor billing file moved into the store"),
         Err(error) => {
             tracing::warn!(code = error.code, "Cursor billing file kept");
@@ -439,11 +483,7 @@ mod tests {
                 (OTHER, checkpoint(1_794_060_000_000)),
             ],
         );
-        std::fs::write(
-            root.join("cache").join(LEGACY_JOURNAL),
-            b"left by a stopped reader",
-        )
-        .unwrap();
+        std::fs::write(root.join("cache").join(LEGACY_JOURNAL), b"").unwrap();
         assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Imported(1));
         let document = load(&engine).unwrap();
         assert_eq!(document["accounts"][ACCOUNT], checkpoint(1_794_067_200_000));
@@ -466,7 +506,7 @@ mod tests {
         let file = root.join("cache").join(LEGACY_FILE);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, b"not a database").unwrap();
-        assert!(retire_legacy(&engine, root).is_err());
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Kept);
         assert!(file.is_file());
         // The pass still reads: the store opens empty and the reader refills from Cursor.
         let store = open_with(&engine, root);
@@ -486,6 +526,90 @@ mod tests {
             Some(&b"not a database"[..])
         );
         engine.close().unwrap();
+    }
+
+    #[test]
+    fn an_orphaned_legacy_journal_is_archived_and_removed() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let engine = open_store(root);
+        let journal = root.join("cache").join(LEGACY_JOURNAL);
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        let bytes = b"orphaned rollback data";
+        std::fs::write(&journal, bytes).unwrap();
+
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Absent);
+        assert!(!journal.exists());
+        assert_eq!(
+            analytics_cache::archived(&engine, LEGACY_JOURNAL_KEY)
+                .unwrap()
+                .as_deref(),
+            Some(&bytes[..])
+        );
+    }
+
+    #[test]
+    fn a_nonempty_legacy_journal_prevents_import_until_refill() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let engine = open_store(root);
+        let bytes = legacy_file(root, &[(ACCOUNT, checkpoint(1_000))]);
+        let journal = root.join("cache").join(LEGACY_JOURNAL);
+        let journal_bytes = b"interrupted rollback journal";
+        std::fs::write(&journal, journal_bytes).unwrap();
+
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Kept);
+        assert_eq!(load(&engine).unwrap(), empty());
+        assert!(journal.exists());
+        assert!(root.join("cache").join(LEGACY_FILE).exists());
+        assert_eq!(
+            analytics_cache::archived(&engine, LEGACY_KEY).unwrap(),
+            Some(bytes)
+        );
+        assert_eq!(
+            analytics_cache::archived(&engine, LEGACY_JOURNAL_KEY)
+                .unwrap()
+                .as_deref(),
+            Some(&journal_bytes[..])
+        );
+
+        save(
+            &engine,
+            &json!({"account": ACCOUNT, "checkpoint": checkpoint(2_000)}),
+        )
+        .unwrap();
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Refilled);
+        assert_eq!(
+            load(&engine).unwrap()["accounts"][ACCOUNT],
+            checkpoint(2_000)
+        );
+        assert!(!journal.exists());
+        assert!(!root.join("cache").join(LEGACY_FILE).exists());
+    }
+
+    #[test]
+    fn an_unchanged_unimportable_file_is_remembered_across_store_opens() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let file = root.join("cache").join(LEGACY_FILE);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"not a database").unwrap();
+
+        let engine = open_store(root);
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Kept);
+        engine.close().unwrap();
+        drop(engine);
+
+        // A second store open finds the same bytes already remembered and keeps them quietly.
+        let engine = open_store(root);
+        open_with(&engine, root);
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::AlreadyKept);
+        assert!(file.exists());
+        // A changed source must be considered again.
+        let other = tempfile::tempdir().unwrap();
+        let good = legacy_file(other.path(), &[]);
+        std::fs::write(&file, good).unwrap();
+        assert_eq!(retire_legacy(&engine, root).unwrap(), Legacy::Imported(0));
     }
 
     #[test]

@@ -2370,12 +2370,31 @@ class ResetCodeLoginTests(unittest.TestCase):
         self.assertEqual(result["identity"]["organization"], OTHER)
         self.assertEqual([call[1] for call in fake.calls], [target_token, target_token])
 
-    def test_ambiguous_and_missing_code_login_targets_report_identity_unconfirmed(self):
+    def test_ambiguous_code_login_targets_get_their_own_reason(self):
         self.write_code_login("second", org=OTHER)
-        unavailable = {"unavailable": True, "reason": "identity-unconfirmed"}
         with mock.patch.object(usage, "Client") as client:
-            self.assertEqual(usage.reset_host(dict(self.request, action="capture")), unavailable)
-            self.assertEqual(usage.reset_host(dict(self.request, expectedSavedOrganization=ACCOUNT)), unavailable)
+            self.assertEqual(usage.reset_host(dict(self.request, action="capture")),
+                             {"unavailable": True, "reason": "ambiguous-code-login"})
+        client.assert_not_called()
+
+    def test_missing_code_login_targets_get_their_own_reason(self):
+        with mock.patch.object(usage, "Client") as client:
+            self.assertEqual(usage.reset_host(dict(self.request, expectedSavedOrganization=ACCOUNT)),
+                             {"unavailable": True, "reason": "no-matching-code-login"})
+        client.assert_not_called()
+
+    def test_signed_out_desktop_capture_names_the_signin_instead_of_a_missing_code_login(self):
+        __import__("shutil").rmtree(self.home / ".claude-t3")
+        with mock.patch.object(usage, "Client") as client:
+            self.assertEqual(usage.reset_host(dict(self.request, action="capture")),
+                             {"unavailable": True, "reason": "signed-out"})
+        client.assert_not_called()
+
+    def test_pinned_capture_without_a_matching_code_login_keeps_its_named_refusal(self):
+        with mock.patch.object(usage, "Client") as client:
+            self.assertEqual(usage.reset_host(dict(self.request, action="capture",
+                                                    expectedSavedOrganization=ACCOUNT)),
+                             {"unavailable": True, "reason": "no-matching-code-login"})
         client.assert_not_called()
 
     def test_one_identity_signed_in_twice_is_one_code_login_not_ambiguous(self):

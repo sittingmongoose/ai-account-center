@@ -119,6 +119,19 @@ struct Capture {
     observed_at_ms: i64,
 }
 
+fn login_reason(raw: &Value) -> Option<&'static str> {
+    if raw["unavailable"] != true {
+        return None;
+    }
+    match raw["reason"].as_str()? {
+        "identity-unconfirmed" => Some("identity-unconfirmed"),
+        "no-matching-code-login" => Some("no-matching-code-login"),
+        "ambiguous-code-login" => Some("ambiguous-code-login"),
+        "signed-out" => Some("signed-out"),
+        _ => None,
+    }
+}
+
 pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Value> {
     let request = command.payload["request"].clone();
     if !request.is_object() {
@@ -137,8 +150,8 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
             .ok_or("shape")?
             .remove("expectedSavedOrganization");
         let raw = helper(command, capture_request, Duration::from_secs(4))?;
-        if raw["unavailable"] == true && raw["reason"] == "identity-unconfirmed" {
-            return Err("identity-unconfirmed");
+        if let Some(reason) = login_reason(&raw) {
+            return Err(reason);
         }
         let captured: Capture = serde_json::from_value(raw).map_err(|_| "credential-host-unavailable")?;
         if captured.account.is_empty()
@@ -166,13 +179,11 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
     read_request["expectedSavedBinding"] = json!(capture.saved_login_binding);
     read_request["expectedSavedOrganization"] = json!(capture.organization);
     let mut raw = helper(command, read_request, Duration::from_secs(12))?;
-    if raw["unavailable"] == true {
-        match raw["reason"].as_str() {
-            Some("rate-limited") => return Err("rate-limited"),
-            Some("signed-out") => return Err("signed-out"),
-            Some("identity-unconfirmed") => return Err("identity-unconfirmed"),
-            _ => {}
-        }
+    if let Some(reason) = login_reason(&raw) {
+        return Err(reason);
+    }
+    if raw["unavailable"] == true && raw["reason"].as_str() == Some("rate-limited") {
+        return Err("rate-limited");
     }
     if raw["savedLoginBinding"] != capture.saved_login_binding
         || raw["identity"]["account"] != capture.account

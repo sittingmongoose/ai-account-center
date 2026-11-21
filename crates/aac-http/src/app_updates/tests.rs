@@ -192,6 +192,33 @@ fn effective_and_rollback_journals_keep_their_own_bounds_and_recover() {
 }
 
 #[test]
+fn older_agents_that_refuse_acp_follow_up_are_reported_as_needing_an_update() {
+    let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    let mut job = Job::new("acp-follow-up-fixture".into(), clock());
+    job.results.push(rows::blank(
+        host,
+        ACP,
+        "action_required",
+        "t3_restart_pending",
+    ));
+    let call = HostCall {
+        admitted: false,
+        terminal: Ok(vec![Event::Failure {
+            protocol: 1,
+            id: job.id.clone(),
+            failure: aac_core::Failure::new(aac_core::Cause::Refused, "invalid apps action"),
+        }]),
+        until: Instant::now() + Duration::from_secs(30),
+    };
+
+    job.finish_acp(host, &call);
+    assert_eq!(
+        job.results[0],
+        rows::blank(host, ACP, "failed", "agent_update_required")
+    );
+}
+
+#[test]
 fn saved_acp_deferral_restores_with_current_words() {
     let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
     let old = "T3 was updated in this run and its server restarts after the job, so Antigravity ACP is checked against the new T3 on the next Update apps.";

@@ -235,6 +235,7 @@ impl Job {
         let Some(index) = self.pending_acp(host) else {
             return;
         };
+        let setup_message = terminal.setup_message();
         self.results[index] = match terminal.event() {
             Some(Event::Result { value, .. })
                 if terminal.admitted && value["fallback"] != "python" =>
@@ -249,16 +250,19 @@ impl Job {
             _ if !terminal.admitted && self.cancel_requested => {
                 rows::blank(host, ACP, "skipped", "skipped_cancelled")
             }
-            _ => rows::blank(
-                host,
-                ACP,
-                "unknown",
-                if terminal.timed_out() {
-                    "host_timeout"
-                } else {
-                    "host_unknown"
-                },
-            ),
+            _ => match setup_message {
+                Some(message) => rows::blank(host, ACP, "failed", message),
+                None => rows::blank(
+                    host,
+                    ACP,
+                    "unknown",
+                    if terminal.timed_out() {
+                        "host_timeout"
+                    } else {
+                        "host_unknown"
+                    },
+                ),
+            },
         };
     }
 
@@ -336,6 +340,28 @@ struct HostCall {
 impl HostCall {
     fn event(&self) -> Option<&Event> {
         self.terminal.as_ref().ok()?.last()
+    }
+
+    fn setup_message(&self) -> Option<&'static str> {
+        if self.admitted {
+            None
+        } else if self.terminal.as_ref().is_err_and(|error| {
+            matches!(
+                error.cause,
+                aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch
+            )
+        }) {
+            Some("agent_setup_required")
+        } else if matches!(
+            self.event(),
+            Some(Event::Failure { failure, .. })
+                if failure.cause == aac_core::Cause::Refused
+                    && failure.detail.as_str() == "invalid apps action"
+        ) {
+            Some("agent_update_required")
+        } else {
+            None
+        }
     }
 
     fn timed_out(&self) -> bool {
@@ -575,28 +601,9 @@ impl AppUpdates {
         }
         let event = call.event();
         let timed_out = call.timed_out();
-        let setup_message = if call.admitted {
-            None
-        } else if call.terminal.as_ref().is_err_and(|error| {
-            matches!(
-                error.cause,
-                aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch
-            )
-        }) {
-            Some("agent_setup_required")
-        } else if matches!(
-            event,
-            Some(Event::Failure { failure, .. })
-                if failure.cause == aac_core::Cause::Refused
-                    && failure.detail.as_str() == "invalid apps action"
-        ) {
-            Some("agent_update_required")
-        } else {
-            None
-        };
         let mut follow_up = false;
         self.change(|job| {
-            if let Some(message) = setup_message {
+            if let Some(message) = call.setup_message() {
                 job.fill(host, "failed", message);
                 job.host_done(host);
             } else {
