@@ -160,7 +160,19 @@ assert(!text.includes(box), 'a scan or request names the temporary root');
 const vectors = { passes, storedIds: (stored as { runs?: unknown[] }).runs?.length ?? null };
 const file = path.join(import.meta.dir, 'runs-ingest-vectors.json');
 if (process.argv.includes('--write')) {
-  fs.writeFileSync(file, JSON.stringify(vectors, null, 1) + '\n');
+  const sortedThreads = (key: string, value: unknown) => {
+    // The scan and record thread maps can follow the order of a directory listing.
+    if (key !== 'threads' || !value || typeof value !== 'object' || Array.isArray(value)) {
+      return value;
+    }
+    const entries = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(entries)
+        .sort()
+        .map((writer) => [writer, entries[writer]])
+    );
+  };
+  fs.writeFileSync(file, JSON.stringify(vectors, sortedThreads, 1) + '\n');
 } else {
   assert.deepEqual(
     JSON.parse(fs.readFileSync(file, 'utf8')),
