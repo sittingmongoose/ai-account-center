@@ -332,6 +332,9 @@ function comparable(value: unknown): unknown {
 }
 
 async function directSends() {
+  const { createResetSourceAdapter } = await import(
+    '../fixtures/reset-adapter/reset-source-adapter'
+  );
   const write = (routeAccount: string) => ({
     method: 'x',
     body: {},
