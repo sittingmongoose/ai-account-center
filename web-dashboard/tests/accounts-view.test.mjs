@@ -2588,7 +2588,8 @@ test("OpenCode Go with three stored keys (the owner's shape): three rows, no sta
   assert.ok(perKey.actions.every((a) => !/Checking/.test(a.tip || '')), 'every control settles');
   // N1: only one stored key is unnamed here, so nothing else would stop; the tip names the computer.
   assert.equal(perKey.actions[1].tip, 'Stored on Ubuntu outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.');
-  assert.equal(perKey.src, 'Key stored on Ubuntu');
+  assert.deepEqual([perKey.src, perKey.srcSub], ['Key stored on Ubuntu', '']);
+  assert.equal(perKey.email, 'Key cccccccc');
   // nothing on the page acts on the bare discover entry, which would read a key unpinned or drop the third key
   assert.ok(!all(vm).flatMap((p) => p.rows).flatMap((r) => r.actions).some((a) => a.value === 'opencode-go:usage'));
   // the named entries keep their own actions
@@ -2611,7 +2612,7 @@ test('OpenCode Go per-key Remove tip names the computer and warns about other un
   const two = accountsViewModel(data([go('opencode-go:usage:cccccccc', 'Key cccccccc'), go('opencode-go:usage:dddddddd', 'Key dddddddd'), go('opencode-go:acct:52f3251b', 'Account 2')], { providers: providers() }), { now, registry: r });
   for (const id of ['opencode-go:usage:cccccccc', 'opencode-go:usage:dddddddd']) {
     assert.equal(tipOf(two, id), 'Stored on Ubuntu outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it. Removing it here would stop reading every stored key no account names.');
-    assert.equal(row(two, id).src, 'Key stored on Ubuntu');
+    assert.deepEqual([row(two, id).src, row(two, id).srcSub], ['Key stored on Ubuntu', '']);
   }
   // One unnamed key: nothing else would stop, so the tip never mentions other keys.
   const one = accountsViewModel(data([go('opencode-go:usage:cccccccc', 'Key cccccccc'), go('opencode-go:acct:52f3251b', 'Account 2')], { providers: providers() }), { now, registry: r });
@@ -2619,7 +2620,8 @@ test('OpenCode Go per-key Remove tip names the computer and warns about other un
   // A key read on another computer names that computer, never the viewer's.
   const nas = accountsViewModel(data([go('opencode-go:usage:cccccccc', 'Key cccccccc', { host: 'nas1' })], { providers: providers() }), { now, registry: r });
   assert.equal(tipOf(nas, 'opencode-go:usage:cccccccc'), 'Stored on Nas1 outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.');
-  assert.equal(row(nas, 'opencode-go:usage:cccccccc').src, 'Key stored on Nas1');
+  const nasKey = row(nas, 'opencode-go:usage:cccccccc');
+  assert.deepEqual([nasKey.src, nasKey.srcSub], ['Key stored on Nas1', '']);
 });
 
 test('OpenCode Go discover row in the unreadable-store state: Remove says it stops reading unnamed keys, deletes none (N2)', () => {

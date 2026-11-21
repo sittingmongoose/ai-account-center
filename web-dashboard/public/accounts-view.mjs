@@ -1083,7 +1083,8 @@ export function accountsViewModel(data, ctx = {}) {
     const rows = mine.map(account => {
       const homeRow = homeRows.get(account.id);
       const reg = c.registry.get(account.id) || null;
-      const [src, srcSub] = !reg && storedKeyEntry(account, c) ? [`Key stored on ${hostLabel(account)}`, hostLabel(account)] : sourceLines(entry.id, account, reg);
+      // L3: name the computer once; the key digest in the email line tells the rows apart.
+      const [src, srcSub] = !reg && storedKeyEntry(account, c) ? [`Key stored on ${hostLabel(account)}`, ''] : sourceLines(entry.id, account, reg);
       const { status, sampled: sampledLine, sampledTip: sampledLineTip } = rowStatus(account, now, reg);
       // a Claude Open in progress (claude-open.mjs) takes the "sampled" line while it runs
       const opening = entry.id === 'claude' && c.openProgress instanceof Map ? c.openProgress.get(homeRow?.profile || text(account.capabilities?.claudeProfileId)) : null;
