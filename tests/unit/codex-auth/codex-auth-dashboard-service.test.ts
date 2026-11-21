@@ -347,6 +347,52 @@ describe('getCodexAuthProfilesSummary', () => {
     expect(result.active?.codexHome).toBe(externalHome);
   });
 
+  it('live login identity honours CODEX_HOME, not the real home (m0-spec-F1)', async () => {
+    // Fresh dynamic import matches this file's per-test module isolation convention
+    // (importService above); the module-level summary cache is reset below.
+    const { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache } = await import(
+      '../../../src/codex-auth/codex-auth-dashboard-service'
+    );
+    invalidateCodexAuthProfilesCache();
+
+    // CODEX_HOME holds the fixture login; the decoy home holds a different login.
+    // The reader must take the identity from CODEX_HOME, never the decoy/real home.
+    const codexHome = path.join(tmpDir, 'codex-home-fixture');
+    const decoyHome = path.join(tmpDir, 'decoy-home');
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.mkdirSync(path.join(decoyHome, '.codex'), { recursive: true });
+    writeAuthJson(codexHome, {
+      email: 'fixture@example.com',
+      'https://api.openai.com/auth': {
+        chatgpt_plan_type: 'pro',
+        chatgpt_account_id: 'acct-fixture',
+      },
+    });
+    writeAuthJson(path.join(decoyHome, '.codex'), {
+      email: 'decoy@example.com',
+      'https://api.openai.com/auth': {
+        chatgpt_plan_type: 'free',
+        chatgpt_account_id: 'acct-decoy',
+      },
+    });
+
+    const originalHome = process.env.HOME;
+    process.env.CODEX_HOME = codexHome;
+    process.env.HOME = decoyHome;
+    const homedirSpy = spyOn(os, 'homedir').mockReturnValue(decoyHome);
+    try {
+      const result = await getCodexAuthProfilesSummary();
+      expect(result.activated).not.toBeNull();
+      expect(result.activated?.email).toBe('fixture@example.com');
+      expect(result.activated?.plan).toBe('pro');
+      expect(result.activated?.codexHome).toBe(codexHome);
+    } finally {
+      homedirSpy.mockRestore();
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
   it('active resolution: CCS_CODEX_PROFILE set -> source=env, name=that profile', async () => {
     const { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache } = await importService();
     invalidateCodexAuthProfilesCache();

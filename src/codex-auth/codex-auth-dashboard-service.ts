@@ -17,6 +17,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { expandPath } from '../utils/helpers';
 import { createLogger } from '../services/logging';
 import { ConfigError } from '../errors/error-types';
 import { decodeAccountIdentity } from './codex-account-identity';
@@ -343,7 +344,11 @@ export function composeCodexAuthProfilesSummary(
  * Tokens are never included in the returned object.
  */
 export async function getCodexAuthProfilesSummary(
-  codexHome: string = path.join(os.homedir(), '.codex'),
+  // Honour CODEX_HOME like the other Codex readers (resolveCodexConfigPaths); the
+  // live login's display identity must come from the configured home, not the real one.
+  codexHome: string = process.env.CODEX_HOME
+    ? path.resolve(expandPath(process.env.CODEX_HOME))
+    : path.join(os.homedir(), '.codex'),
   compose: (
     facts: CodexAuthProfilesFacts
   ) =>
