@@ -12,16 +12,35 @@
 // Fixture-only storage latency injection; never changes syscall results or permissions.
 static atomic_int delayed = 0;
 static void slow_read(int fd);
+// The marker holds the delay's start and end times (CLOCK_REALTIME ms) and whether it ran on
+// the process's first thread, which is also the event loop. A delay paid there cannot let a
+// timer fire; a delay paid by a worker or the Rust child can.
+static double realtime_ms(void) {
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
+}
+static void write_marker(double start, double end) {
+  const char *mark = getenv("AAC_SLOW_MARKER");
+  if (!mark) return;
+  FILE *f = fopen(mark, "w");
+  if (!f) return;
+  fprintf(
+    f, "%.0f %.0f %d %d\n", start, end, (int)gettid() == (int)getpid(), (int)getpid()
+  );
+  fclose(f);
+}
+static void inject(long seconds, long nanoseconds) {
+  double start = realtime_ms();
+  write_marker(start, start);
+  struct timespec wait = {seconds, nanoseconds};
+  nanosleep(&wait, 0);
+  write_marker(start, realtime_ms());
+}
 static void delay_for(const char *path) {
   const char *target = getenv("AAC_SLOW_STAT_PATH");
   if (!target || !path || strcmp(target, path) || atomic_exchange(&delayed, 1)) return;
-  const char *mark = getenv("AAC_SLOW_MARKER");
-  if (mark) {
-    FILE *f = fopen(mark, "w");
-    if (f) { fputs("delayed", f); fclose(f); }
-  }
-  struct timespec wait = {6, 200000000};
-  nanosleep(&wait, 0);
+  inject(6, 200000000);
 }
 int statx(int dirfd, const char *pathname, int flags, unsigned int mask, struct statx *buf) {
   static int (*real)(int,const char*,int,unsigned int,struct statx*);
@@ -50,13 +69,7 @@ static void slow_read(int fd) {
   if (size < 0) return;
   name[size] = 0;
   if (strcmp(target, name) || atomic_exchange(&delayed, 1)) return;
-  const char *mark = getenv("AAC_SLOW_MARKER");
-  if (mark) {
-    FILE *f = fopen(mark, "w");
-    if (f) { fputs("delayed", f); fclose(f); }
-  }
-  struct timespec wait = {1, 300000000};
-  nanosleep(&wait, 0);
+  inject(3, 0);
 }
 ssize_t read(int fd, void *buf, size_t count) {
   static ssize_t (*real)(int,void*,size_t);
