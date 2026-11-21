@@ -210,7 +210,16 @@ impl Job {
             states.push(json!({ "tool": "claude", "host": source.computer, "state": state }));
         }
         let previous = claude_mirrors::load(store, claude_mirrors::HISTORY)?;
-        if let Some(owners) = claude_mirrors::select_history(&mut parts, &mut states, &previous) {
+        let mirrors = claude_mirrors::load(store, claude_mirrors::HISTORY_MIRRORS)?;
+        let owners = claude_mirrors::choose(
+            &mut parts,
+            &mut states,
+            &claude_mirrors::Owners::new(),
+            &previous,
+            &mirrors,
+        );
+        claude_mirrors::reserve_history_mirrors(store, mirrors, &parts)?;
+        if owners != previous {
             // Persist the choices before publishing. A crash between computers must
             // retry with the same choices, even after a completed checkpoint is removed.
             claude_mirrors::save(store, claude_mirrors::HISTORY, &owners)?;
