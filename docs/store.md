@@ -375,7 +375,7 @@ present, then their rollups in order.
 
 | Projector | Reads | Maintains |
 |---|---|---|
-| `usage` | `usage.sampled`, `usage.seen`, `usage.day_closed` | `account` to `rollup_day`. A reading updates its hour and day rollup and its period at once. At 02:00 UTC it appends `usage.day_closed` for the previous day; readings for a closed day still enter `reading_day` but leave its rollups alone (counted in `late_rows`). Replaying a `day_closed` replaces that day's hourly value and day rollup for each listed series, so rollups survive the readings' expiry and a rebuild answers as the live store did |
+| `usage` | `usage.sampled`, `usage.seen`, `usage.day_closed` | `account` to `rollup_day`. A reading updates its hour and day rollup and its period at once. At 02:00 UTC it appends `usage.day_closed` for the previous day; readings for a closed day still enter `reading_day` but leave its rollups alone (counted in `late_rows`). Replaying a `day_closed` keeps its durable summaries when retained readings cannot account for the closed interval. When the retained readings confirm a reset-rule change, replay keeps the corrected periods and rollups while excluding late readings from the closed rollups |
 | `attribution` | `attribution.*`, `activity.hour` | session, token, share and model-effort tables; appends `attribution.day_closed` the same way |
 | `runs` | `run.recorded`, plus `attribution` checkpoints | run tables; recomputes `run_cost` for runs whose time overlaps newly projected account-hours (found through `run_by_time`) |
 | `answers`, `ops` | their events | their tables |

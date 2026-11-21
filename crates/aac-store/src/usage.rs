@@ -1370,6 +1370,158 @@ fn rollup_from_json(v: &Json) -> Result<Rollup> {
     })
 }
 
+/// A reset-rule change only adds consumption and resets. The rest of the day and every hourly
+/// rollup must agree before reusing the replay. Late and retired readings leave the snapshot in force.
+fn same_rollup_input(saved: &Rollup, rebuilt: &Rollup) -> bool {
+    rebuilt.consumed >= saved.consumed
+        && rebuilt.resets >= saved.resets
+        && rebuilt.last_reset_ms >= saved.last_reset_ms
+        && *saved
+            == Rollup {
+                consumed: saved.consumed,
+                resets: saved.resets,
+                last_reset_ms: saved.last_reset_ms,
+                ..rebuilt.clone()
+            }
+}
+
+fn restore_closed_rollups(
+    txn: &WriteTransaction,
+    key: &[u8],
+    day: u32,
+    mut saved_hours: Vec<(u8, Rollup)>,
+    mut saved_day: Rollup,
+    recovered_resets: &[(u64, f64)],
+) -> Result<()> {
+    // A complete period emitted by this close proves that its same-day resets were present at
+    // close time. Apply only those deltas if the day also had missing or late replayed readings.
+    for &(at, extra_consumed) in recovered_resets {
+        if day_of(at) != day {
+            continue;
+        }
+        let hour = (hour_of(at) % 24) as u8;
+        if let Ok(i) = saved_hours.binary_search_by_key(&hour, |(h, _)| *h) {
+            for rollup in [&mut saved_hours[i].1, &mut saved_day] {
+                rollup.consumed += extra_consumed;
+                rollup.resets += 1;
+                rollup.last_reset_ms = rollup.last_reset_ms.max(Some(at as i64));
+            }
+        }
+    }
+    // The replay must also account for the resets recovered directly from the snapshot.
+    if let (Some(hours), Some(day)) = (get(txn, db::ROLLUP_HOURS, key)?, get(txn, db::ROLLUP_DAY, key)?) {
+        let hours = pack::decode_hours(&hours)?;
+        if same_rollup_input(&saved_day, &Rollup::decode(&day)?)
+            && hours.len() == saved_hours.len()
+            && hours
+                .iter()
+                .zip(&saved_hours)
+                .all(|((hour, rebuilt), (saved_hour, saved))| hour == saved_hour && same_rollup_input(saved, rebuilt))
+        {
+            return Ok(());
+        }
+    }
+    if saved_hours.is_empty() {
+        txn.open_table(db::ROLLUP_HOURS)?.remove(key)?;
+    } else {
+        put(txn, db::ROLLUP_HOURS, key, &pack::encode_hours(&saved_hours))?;
+    }
+    put(txn, db::ROLLUP_DAY, key, &saved_day.encode())
+}
+
+fn restore_closed_period(
+    txn: &WriteTransaction,
+    (a, w): (u32, u32),
+    start: u64,
+    mut saved: Period,
+) -> Result<Vec<(u64, f64)>> {
+    if saved.end_ms < 0 || (saved.end_ms as u64) < start {
+        fail!("corrupt", "day_closed period ends before it starts");
+    }
+    // The normal day close already has this exact row. It only needs the emitted marker.
+    if read_period(txn, a, w, start)?.as_ref() == Some(&saved) {
+        saved.emitted = true;
+        write_period(txn, a, w, start, &saved)?;
+        return Ok(Vec::new());
+    }
+    let prefix = Key::new().u32(a).u32(w);
+    let first = prefix.clone().u64(start);
+    let past_end = prefix.clone().u64(saved.end_ms as u64 + 1);
+    let mut overlaps = Vec::<(u64, Period)>::new();
+    {
+        let table = txn.open_table(db::PERIOD)?;
+        if let Some(item) = table.range(prefix.as_slice()..first.as_slice())?.next_back() {
+            let (key, value) = item?;
+            let period: Period = db::unpack(value.value())?;
+            if period.end_ms > start as i64 {
+                overlaps.push((db::be_u64(key.value(), 8), period));
+            }
+        }
+        for item in table.range(first.as_slice()..past_end.as_slice())? {
+            let (key, value) = item?;
+            let other_start = db::be_u64(key.value(), 8);
+            let period: Period = db::unpack(value.value())?;
+            // Two distinct observations can have the same timestamp. A following period that
+            // continues beyond the saved interval can share its endpoint.
+            if other_start == saved.end_ms as u64 && other_start != start && period.end_ms > saved.end_ms {
+                continue;
+            }
+            overlaps.push((other_start, period));
+        }
+    }
+    let reset_deltas: Vec<_> = overlaps
+        .windows(2)
+        .map(|pair| (pair[1].0, pair[0].1.end_used))
+        .collect();
+    let combined = overlaps.iter().map(|(_, period)| period.consumed).sum::<f64>();
+    let old_consumed = combined - reset_deltas.iter().map(|(_, extra)| extra).sum::<f64>();
+    // A split adds the previous reading's used points to consumption. Verify that undoing all
+    // splits recovers the saved interval as well as its sample count and measured values.
+    if let (Some((first_start, first)), Some((_, last))) = (overlaps.first(), overlaps.last())
+        && overlaps.len() > 1
+        && *first_start == start
+        && last.end_ms == saved.end_ms
+        && first.start_used == saved.start_used
+        && last.end_used == saved.end_used
+        && last.reset_at_ms == saved.reset_at_ms
+        && overlaps.windows(2).all(|pair| pair[0].1.end_ms < pair[1].0 as i64)
+        && overlaps.iter().all(|(_, period)| period.is_final)
+        && overlaps.iter().map(|(_, period)| u64::from(period.rows)).sum::<u64>() == u64::from(saved.rows)
+        && overlaps
+            .iter()
+            .map(|(_, period)| period.max_used)
+            .fold(f64::NEG_INFINITY, f64::max)
+            == saved.max_used
+        && overlaps.iter().filter_map(|(_, period)| period.hit_limit_ms).min() == saved.hit_limit_ms
+        && (old_consumed - saved.consumed).abs() <= 1e-9 * saved.consumed.abs().max(1.0)
+    {
+        for (start, mut period) in overlaps {
+            period.emitted = true;
+            write_period(txn, a, w, start, &period)?;
+        }
+        return Ok(reset_deltas);
+    }
+    // The snapshot owns this interval. Remove partial replay rows before restoring it so the
+    // same sample never appears twice.
+    if overlaps.iter().any(|(other, _)| *other != start) {
+        if let Some(mut latest) = read_latest(txn, a, w)?
+            && latest.period_start != start
+            && overlaps.iter().any(|(other, _)| *other == latest.period_start)
+        {
+            latest.period_start = start;
+            write_latest(txn, a, w, &latest)?;
+        }
+        let mut table = txn.open_table(db::PERIOD)?;
+        for (other, _) in overlaps.into_iter().filter(|(other, _)| *other != start) {
+            table.remove(prefix.clone().u64(other).as_slice())?;
+        }
+    }
+    saved.is_final = true;
+    saved.emitted = true;
+    write_period(txn, a, w, start, &saved)?;
+    Ok(Vec::new())
+}
+
 fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
     let day = payload["day"].as_u64().unwrap_or(u64::MAX) as u32;
     if day == u32::MAX {
@@ -1387,8 +1539,7 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
         if get(txn, db::SERIES, Key::new().u32(a).u32(w).as_slice())?.is_none() {
             put_series(txn, a, w, &meta)?;
         }
-        // The close replaces the whole day: an hour it does not list has no rollup, even if a
-        // late reading reached it during a rebuild.
+        // Compare the whole day so it cannot acquire hours from late readings on replay.
         let mut hours = Vec::new();
         for hour in series["hours"].as_array().into_iter().flatten() {
             let h = hour["hour"].as_u64().unwrap_or(u64::MAX);
@@ -1398,25 +1549,20 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
             hours.push(((h % 24) as u8, rollup_from_json(&hour["rollup"])?));
         }
         hours.sort_by_key(|(h, _)| *h);
-        let key = Key::new().u32(a).u32(w).u32(day);
-        if hours.is_empty() {
-            txn.open_table(db::ROLLUP_HOURS)?.remove(key.as_slice())?;
-        } else {
-            put(txn, db::ROLLUP_HOURS, key.as_slice(), &pack::encode_hours(&hours))?;
-        }
-        put(
-            txn,
-            db::ROLLUP_DAY,
-            key.as_slice(),
-            &rollup_from_json(&series["day_rollup"])?.encode(),
-        )?;
+        let mut recovered_resets = Vec::new();
         for period in series["periods"].as_array().into_iter().flatten() {
             let start = period["start_ms"].as_u64().unwrap_or(0);
-            let mut value: Period = serde_json::from_value(period["period"].clone())?;
-            value.is_final = true;
-            value.emitted = true;
-            write_period(txn, a, w, start, &value)?;
+            let value = serde_json::from_value(period["period"].clone())?;
+            recovered_resets.extend(restore_closed_period(txn, (a, w), start, value)?);
         }
+        restore_closed_rollups(
+            txn,
+            Key::new().u32(a).u32(w).u32(day).as_slice(),
+            day,
+            hours,
+            rollup_from_json(&series["day_rollup"])?,
+            &recovered_resets,
+        )?;
     }
     put_index(txn, db::DAY_CLOSED, Key::new().u32(day).as_slice())?;
     let through: Option<u32> = db::get_meta(txn, "closed_through_day")?.and_then(|v| v.parse().ok());

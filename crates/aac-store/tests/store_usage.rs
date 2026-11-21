@@ -161,6 +161,141 @@ fn a_second_writer_is_refused() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+const CLOSED_DAY_START: i64 = 1_793_000_000_000;
+
+/// Created by the version-one Store at 0aa3cd431. A segment seal separates the first two
+/// observations from the last two, so the same fixture can retire only the initial readings.
+fn version_one_closed_day() -> std::path::PathBuf {
+    let dir = temp_dir("closed-day-v1");
+    let fixture = include_bytes!("fixtures/closed-day-v1.json.zst");
+    let decoded = zstd::stream::decode_all(fixture.as_slice()).unwrap();
+    let files: std::collections::BTreeMap<String, Vec<u8>> = serde_json::from_slice(&decoded).unwrap();
+    for (name, bytes) in files {
+        let path = dir.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    // Check that this opens through the upgrade path on both logs.
+    let database = redb::Database::open(dir.join("aac.redb")).unwrap();
+    let txn = database.begin_read().unwrap();
+    let checkpoints = txn.open_table(db::CHECKPOINT).unwrap();
+    for name in ["usage/readings", "usage/ledger"] {
+        assert_eq!(
+            db::read_checkpoint(&checkpoints, name)
+                .unwrap()
+                .unwrap()
+                .projector_schema_version,
+            1
+        );
+    }
+    dir
+}
+
+fn closed_day_periods(engine: &Engine) -> Vec<(i64, i64, f64)> {
+    let t = CLOSED_DAY_START;
+    let series = aac_store::usage::SeriesRef {
+        identity: identity(1),
+        window: "[\"five_hour\",\"rate_limit\",null]".into(),
+    };
+    let result = aac_store::usage::periods(engine, &[series], (t - MIN) as u64, (t + HOUR) as u64).unwrap();
+    result[0]["periods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|period| {
+            (
+                (period["start"].as_i64().unwrap() - t) / MIN,
+                (period["end"].as_i64().unwrap() - t) / MIN,
+                period["consumed"].as_f64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn assert_closed_day_rollups(engine: &Engine, consumed: f64, resets: u32) {
+    let rows = dump(engine, &["rollup_day", "rollup_hours"]);
+    assert_eq!(rows.len(), 2);
+    for (table, _, value) in rows {
+        let rollup = if table == "rollup_day" {
+            aac_store::usage::Rollup::decode(&value).unwrap()
+        } else {
+            let hours = aac_store::pack::decode_hours(&value).unwrap();
+            assert_eq!(hours.len(), 1);
+            hours.into_iter().next().unwrap().1
+        };
+        assert_eq!(
+            (rollup.consumed, rollup.resets, rollup.rows),
+            (consumed, resets, 4),
+            "{table}"
+        );
+    }
+}
+
+#[test]
+fn an_upgrade_replays_closed_periods_and_rollups_from_retained_readings() {
+    let dir = version_one_closed_day();
+    let engine = open(&dir);
+    assert_eq!(
+        closed_day_periods(&engine),
+        vec![(0, 1, 5.0), (2, 2, 39.0), (3, 3, 0.0)]
+    );
+    assert_closed_day_rollups(&engine, 44.0, 2);
+    engine.close().unwrap();
+    drop(engine);
+    let engine = open(&dir);
+    assert_eq!(
+        closed_day_periods(&engine),
+        vec![(0, 1, 5.0), (2, 2, 39.0), (3, 3, 0.0)]
+    );
+    assert_closed_day_rollups(&engine, 44.0, 2);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_upgrade_corrects_closed_rollups_without_including_late_readings() {
+    let dir = version_one_closed_day();
+    let (mut log, _) = aac_store::log::Log::open(&dir.join("log/readings"), "readings", "r").unwrap();
+    let t = CLOSED_DAY_START;
+    let payload = json!({"observations": [obs(1, t + 4 * MIN,
+        vec![window("five_hour", Some(61.0), Some(t + 5 * HOUR))]) ]});
+    let mut event = aac_store::event::Event::new(
+        "usage.sampled",
+        now_ms(),
+        aac_store::msgpack::from_json(&payload).unwrap(),
+    );
+    log.assign(&mut event).unwrap();
+    log.write(&[event]).unwrap();
+    drop(log);
+
+    let engine = open(&dir);
+    assert_eq!(
+        closed_day_periods(&engine),
+        vec![(0, 1, 5.0), (2, 2, 39.0), (3, 4, 61.0)]
+    );
+    assert_closed_day_rollups(&engine, 44.0, 2);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_upgrade_keeps_the_closed_archive_when_a_period_is_only_partly_retained() {
+    let dir = version_one_closed_day();
+    let (mut log, _) = aac_store::log::Log::open(&dir.join("log/readings"), "readings", "r").unwrap();
+    let first_segment = log.manifest().segments[0].start_seq;
+    assert_eq!(log.retire_through(first_segment).unwrap().len(), 1);
+    drop(log);
+
+    let engine = open(&dir);
+    assert_eq!(closed_day_periods(&engine), vec![(0, 2, 39.0), (3, 3, 0.0)]);
+    assert_closed_day_rollups(&engine, 39.0, 1);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn a_shift_from_an_expired_reset_starts_a_new_period() {
     let dir = temp_dir("reset-shift");
