@@ -314,7 +314,13 @@ fn analytics_status(observation: &Value) -> Value {
         "readAt": observation["readAt"], "unmeasured": observation["unmeasured"],
         "accountTokens": 0, "matchedTokens": 0, "outsideTokens": 0, "localUnmatchedTokens": 0,
     });
-    for field in ["eventCounts", "coverageFrom", "coverageUntil", "cause"] {
+    for field in [
+        "eventCounts",
+        "coverageFrom",
+        "coverageUntil",
+        "unrecognizedModels",
+        "cause",
+    ] {
         if let Some(value) = observation.get(field) {
             status[field] = value.clone();
         }
@@ -418,6 +424,9 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
         if let Some(counts) = super::provider_caches::cursor_event_counts(current) {
             answer["eventCounts"] = counts;
         }
+        if let Some(count) = super::provider_caches::cursor_unrecognized(current) {
+            answer["unrecognizedModels"] = json!(count);
+        }
         return Ok(answer);
     }
     let keep = state == "unavailable" && previous["readAt"].as_str().is_some_and(|s| !s.is_empty());
@@ -433,6 +442,9 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
     }
     if let Some(counts) = super::provider_caches::cursor_event_counts(old) {
         result["eventCounts"] = counts;
+    }
+    if let Some(count) = super::provider_caches::cursor_unrecognized(old) {
+        result["unrecognizedModels"] = json!(count);
     }
     if sign_in_lost {
         result["cause"] = json!("signin_needed");
@@ -472,5 +484,25 @@ mod tests {
                 assert_eq!(failed[field], previous[field]);
             }
         }
+    }
+
+    #[test]
+    fn unrecognized_models_and_read_in_progress_reach_the_status() {
+        let now = 1_794_067_200_000;
+        let fresh = json!({"state":"read","readAt":now,"coverageFrom":"2026-11-07T00:00:00.000Z",
+            "coverageUntil":"2026-11-07T16:00:00.000Z","unrecognizedModels":2,"rows":[]});
+        let previous = project(&fresh, None, now).unwrap();
+        assert_eq!(previous["unrecognizedModels"], 2);
+        assert_eq!(analytics_status(&previous)["unrecognizedModels"], 2);
+        let busy = json!({"state":"unavailable","cause":"read_in_progress"});
+        let kept = project(&busy, Some(&previous), now + 60_000).unwrap();
+        assert_eq!(kept["cause"], "read_in_progress");
+        assert_eq!(kept["unrecognizedModels"], 2);
+        assert_eq!(kept["readAt"], previous["readAt"]);
+        let status = analytics_status(&kept);
+        assert_eq!(status["cause"], "read_in_progress");
+        assert_eq!(status["unrecognizedModels"], 2);
+        let none = project(&json!({"state":"read","readAt":now,"unrecognizedModels":0,"rows":[]}), None, now).unwrap();
+        assert!(none.get("unrecognizedModels").is_none());
     }
 }

@@ -19,6 +19,7 @@ import {
 import { privateFileOwners, type PrivateFileRole } from '../shared/private-files';
 import { rustServiceEnvironment } from './rust-service-env';
 import { agentTransport } from './services/agent-verbs';
+import { cursorBillingEnabled } from './services/cursor-account-reader';
 
 /** The private socket protocol this front door speaks (aac-http `identity::PROTOCOL`). */
 export const RUST_SERVICE_PROTOCOL = 3;
@@ -656,6 +657,8 @@ async function acquireWithinBudget(
         AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,
         AAC_AGENT_IDENTITY_FILE: process.env.AAC_AGENT_IDENTITY_FILE,
         AAC_AGENT_KNOWN_HOSTS_FILE: process.env.AAC_AGENT_KNOWN_HOSTS_FILE,
+        // The Rust-owned Cursor reader inherits this: on for an installed package only.
+        AAC_CURSOR_BILLING_ENABLED: cursorBillingEnabled(),
       },
     });
     let failed = false;
