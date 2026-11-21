@@ -311,13 +311,36 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
             prior_groups.entry(group.to_string()).or_default().insert(key.clone());
         }
     }
-    let mut aliases: HashMap<GroupKey, usize> = HashMap::new();
-    for (index, path) in paths.iter().enumerate() {
-        // Each print below opens the file; the budget holds in this pass too.
+    // Settled files (FINAL-NEON M1) are grouped unread: by name and earlier group, and by bytes
+    // only where an unsettled file has their size, so an unsettled copy joins their group.
+    let mut stamps: Vec<Option<util::Print>> = Vec::with_capacity(paths.len());
+    for path in &paths {
         if collector.expired() {
             collector.truncated = true;
             return true;
         }
+        stamps.push(if collector.settled_key("claude", path).is_some() {
+            None
+        } else {
+            util::fingerprint(path)
+        });
+    }
+    let unsettled_sizes: HashSet<u64> = stamps.iter().flatten().map(|stamp| stamp.size).collect();
+    for (index, path) in paths.iter().enumerate() {
+        if collector.expired() {
+            collector.truncated = true;
+            return true;
+        }
+        if collector
+            .settled_print_of("claude", path)
+            .and_then(|print| print["size"].as_u64())
+            .is_some_and(|size| unsettled_sizes.contains(&size))
+        {
+            stamps[index] = util::fingerprint(path);
+        }
+    }
+    let mut aliases: HashMap<GroupKey, usize> = HashMap::new();
+    for (index, path) in paths.iter().enumerate() {
         let mirror = is_mirror(path);
         let name = path
             .file_name()
@@ -332,7 +355,7 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
         {
             keys.push(GroupKey::Prior(mirror, previous.to_string()));
         }
-        if let Some(stamp) = util::fingerprint(path) {
+        if let Some(stamp) = stamps[index].take() {
             keys.push(GroupKey::Bytes(mirror, stamp.size, stamp.head, stamp.tail));
         }
         for key in keys {
@@ -351,12 +374,22 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
         });
         groups[slot].1.push(path.clone());
     }
-    let order: HashMap<PathBuf, usize> = newest_first(&paths)
+    // A group whose members are all settled stays settled, unread. A group with any unsettled
+    // member is read whole, its settled members with it (FINAL-NEON M1).
+    let mut groups: Vec<Vec<PathBuf>> = groups
+        .into_iter()
+        .map(|(_, g)| g)
+        .filter(|group| !group.iter().all(|p| collector.settled_key("claude", p).is_some()))
+        .collect();
+    for path in groups.iter().flatten() {
+        collector.unsettle("claude", path);
+    }
+    let reading: Vec<PathBuf> = groups.iter().flatten().cloned().collect();
+    let order: HashMap<PathBuf, usize> = newest_first(&reading)
         .into_iter()
         .enumerate()
         .map(|(i, p)| (p, i))
         .collect();
-    let mut groups: Vec<Vec<PathBuf>> = groups.into_iter().map(|(_, g)| g).collect();
     groups.sort_by_key(|group| {
         group
             .iter()

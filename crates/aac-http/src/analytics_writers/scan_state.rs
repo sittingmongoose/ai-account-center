@@ -493,4 +493,111 @@ mod tests {
         }
         panic!("the writer never reached the tail of the rollout");
     }
+
+    #[test]
+    fn analytics_settled_scan_reports_current_complete_coverage() {
+        use crate::analytics_writers::{ResolverPricing, report, scan_source_state, source_state};
+        use std::time::{Duration, UNIX_EPOCH};
+        const DAY: i64 = 86_400_000;
+        let now: i64 = 1_795_212_000_000;
+        let used: i64 = 1_794_657_600_000; // 2026-11-14T12:00:00Z
+        let home = tempfile::tempdir().expect("fixture home");
+        let path = home.path().join(
+            ".codex/sessions/2026/11/14/rollout-2026-11-14T12-00-00-3e43c7f5-744b-4790-9d0b-06042ecf0a20.jsonl",
+        );
+        std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture folder");
+        let mut file = std::fs::File::create(&path).expect("fixture rollout");
+        for line in [
+            json!({"type":"session_meta","payload":{"id":"quiet","model_provider":"openai"}}),
+            json!({"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}),
+            json!({"timestamp":"2026-11-14T12:00:00Z","type":"event_msg","payload":{
+                "type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":1}}}}),
+        ] {
+            writeln!(file, "{line}").expect("fixture record");
+        }
+        file.set_modified(UNIX_EPOCH + Duration::from_millis((now - 5 * DAY) as u64))
+            .expect("fixture time");
+        drop(file);
+        let kinds = ["codex".to_owned()];
+        let settled_before: HashMap<String, u64> = [("codex".to_owned(), (now - 3 * DAY) as u64)]
+            .into_iter()
+            .collect();
+        let cutoff = now - 31 * DAY;
+        let pass = |cache: &mut Cache| {
+            let args = super::super::scan_request(&kinds, cutoff, json!({}), false, None);
+            let [(batch, request)] =
+                requests(args, &kinds, &cache.fingerprints, &settled_before, now)
+                    .try_into()
+                    .expect("one scanner request");
+            let request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
+                .expect("parse writer request");
+            let answer = aac_usage::protocol::scan(
+                &request,
+                home.path(),
+                &aac_usage::discover::Env::default(),
+            );
+            assert!(super::super::valid_scan_answer(&answer, &batch));
+            let (state, cause) = source_state(&answer, "codex");
+            assert!(cache.apply("codex", &answer, state == "ok", cutoff));
+            let source = scan_source_state(&answer, "codex", "mac", now, state, cause);
+            let worker = aac_store::collect::worker_from_scan(
+                &cache.rows,
+                &cache.srows,
+                "codex",
+                "mac",
+                now,
+                &ResolverPricing::new(home.path()),
+            );
+            let reports = report::build_activity_reports(&report::ReportArgs {
+                local: &HashMap::new(),
+                remote: &[json!({"tool":"codex","host":"mac","data":worker})],
+                states: &[source],
+                window_from_ms: cutoff,
+                now,
+                local_complete: &HashSet::new(),
+                scanner_owned: &HashSet::new(),
+            });
+            (answer, reports.into_iter().next().expect("codex report"))
+        };
+        let mut cache = Cache::default();
+        let (full, full_report) = pass(&mut cache);
+        assert_eq!(full_report["state"], "ok");
+        // An older print disclosed an estimated clock: settling must carry the disclosure.
+        for print in cache.fingerprints["codex"]
+            .as_object_mut()
+            .expect("codex prints")
+            .values_mut()
+        {
+            print["estimatedClock"] = json!(true);
+        }
+        let (settled, report) = pass(&mut cache);
+        let print = settled["kinds"]["codex"]["fingerprints"]
+            .as_object()
+            .expect("settled prints")
+            .values()
+            .next()
+            .expect("settled print");
+        assert!(print["settledCheckedSlot"].is_u64(), "the rollout settled");
+        let discovered = &settled["discovery"]["kinds"]["codex"];
+        let before = &full["discovery"]["kinds"]["codex"];
+        assert_eq!(discovered["freshness"]["state"], "current");
+        assert_eq!(discovered["freshness"]["newestDataMs"], used);
+        assert_eq!(
+            discovered["counts"]["filesFound"],
+            before["counts"]["filesFound"]
+        );
+        assert_eq!(
+            discovered["counts"]["filesRead"],
+            before["counts"]["filesRead"]
+        );
+        assert_eq!(discovered["counts"]["filesRead"], 1);
+        assert_eq!(report["state"], "ok");
+        assert_eq!(report["complete"], true);
+        assert_eq!(report["cause"], Value::Null);
+        assert!(report["coverFrom"].is_string());
+        assert_eq!(report["counts"]["freshness"]["state"], "current");
+        assert_eq!(report["counts"]["freshness"]["newestDataMs"], used);
+        assert_eq!(report["counts"]["estimatedClock"], true);
+        assert_eq!(report["cells"], full_report["cells"]);
+    }
 }

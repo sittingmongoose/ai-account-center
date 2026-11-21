@@ -734,7 +734,10 @@ pub fn other_files(
         .filter(|d| fsx::discovery_metadata(collector, kind, d).is_some_and(|meta| meta.is_dir()))
         .map(|d| util::realpath(d))
         .collect();
-    let mut identities: HashSet<(u64, u64)> = default_paths.iter().filter_map(|p| fsx::identity(p)).collect();
+    let mut identities: HashSet<(u64, u64)> = default_paths
+        .iter()
+        .filter_map(|p| collector.known_identity(kind, p))
+        .collect();
     let mut found = Vec::new();
     for root in other_dirs {
         let start = found.len();
@@ -923,6 +926,7 @@ pub fn scan_kind_files(
 /// can never count separately. Of each conversation only one copy is read: the longest that
 /// actually opens and decodes, trying the next candidate when one fails. True when cut short.
 fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, flush: Option<Flush>) -> bool {
+    // Groups by conversation key. A settled log is grouped by its print's key, unread.
     let mut order: Vec<String> = Vec::new();
     let mut groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
     for path in paths {
@@ -930,12 +934,20 @@ fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse,
             collector.truncated = true;
             return true;
         }
+        if let Some(key) = collector.settled_key("codex", path).cloned() {
+            if !groups.contains_key(&key) {
+                order.push(key.clone());
+            }
+            groups.entry(key).or_default().push(path.clone());
+            continue;
+        }
         match codex::session_id_of(path) {
             codex::SessionPeek::Found(id) => {
-                if !groups.contains_key(&id) {
-                    order.push(id.clone());
+                let key = codex::file_key_for(&id);
+                if !groups.contains_key(&key) {
+                    order.push(key.clone());
                 }
-                groups.entry(id).or_default().push(path.clone());
+                groups.entry(key).or_default().push(path.clone());
             }
             codex::SessionPeek::NoHeader => {
                 if gone(path) {
@@ -966,10 +978,18 @@ fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse,
     }
     let cutoff = (collector.min_date_ms - 86_400_000) as f64;
     let mut work: Vec<(i128, String, String, Vec<PathBuf>)> = Vec::new();
-    for id in order {
-        let recent: Vec<PathBuf> = groups
-            .remove(&id)
-            .unwrap_or_default()
+    for filekey in order {
+        let members = groups.remove(&filekey).unwrap_or_default();
+        let settled: Vec<PathBuf> = members
+            .iter()
+            .filter(|p| collector.settled_key("codex", p).is_some())
+            .cloned()
+            .collect();
+        // A settled conversation with no other copy stays settled, untouched.
+        if !settled.is_empty() && members.len() == 1 {
+            continue;
+        }
+        let recent: Vec<PathBuf> = members
             .into_iter()
             .filter(|p| match std::fs::metadata(p) {
                 Ok(meta) => util::mtime_seconds(&meta) * 1000.0 >= cutoff,
@@ -980,13 +1000,24 @@ fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse,
             continue;
         }
         let candidates = rank_candidates(recent, &content_length);
+        // Its settled owner still ranks first: confirmed unread, as an unchanged owner would be.
+        // Otherwise another copy outranks it and the conversation is read again (FINAL-NEON M1).
+        if candidates
+            .first()
+            .is_some_and(|p| collector.settled_key("codex", p).is_some())
+        {
+            continue;
+        }
+        for path in &settled {
+            collector.unsettle("codex", path);
+        }
         let newest = candidates
             .iter()
             .filter_map(|p| std::fs::metadata(p).ok().map(|m| util::mtime_ns(&m)))
             .max()
             .unwrap_or(i128::MIN);
         let tie = candidates.first().map(|p| path_text(p)).unwrap_or_default();
-        work.push((newest, tie, codex::file_key_for(&id), candidates));
+        work.push((newest, tie, filekey, candidates));
     }
     work.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     for (_, _, filekey, candidates) in work {
