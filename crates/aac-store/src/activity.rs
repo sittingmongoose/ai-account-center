@@ -1579,6 +1579,27 @@ pub fn repair_remote_import(
     original_sessions: &BTreeMap<String, (String, u64)>,
     obsolete_format: bool,
 ) -> Result<()> {
+    repair_projection(engine, raw, selected, original_sessions, obsolete_format).map(|_| ())
+}
+
+/// True once every changed Claude cell equals the retained projection. A
+/// receipt can advance after an earlier attempt already applied its changes.
+pub fn reconcile_claude_projection(
+    engine: &Engine,
+    raw: &Report,
+    selected: &Report,
+    original_sessions: &BTreeMap<String, (String, u64)>,
+) -> Result<bool> {
+    repair_projection(engine, raw, selected, original_sessions, false)
+}
+
+fn repair_projection(
+    engine: &Engine,
+    raw: &Report,
+    selected: &Report,
+    original_sessions: &BTreeMap<String, (String, u64)>,
+    obsolete_format: bool,
+) -> Result<bool> {
     if (!obsolete_format && raw.tool != "claude")
         || selected.tool != raw.tool
         || selected.computer != raw.computer
@@ -1590,6 +1611,7 @@ pub fn repair_remote_import(
     let raw_rows = prepare(raw)?;
     let kept_rows = prepare(selected)?;
     let mut closed = None;
+    let mut converged = true;
     for log in [LogId::Readings, LogId::Ledger] {
         engine.commit(log, |batch| {
             let txn = batch.txn;
@@ -1631,12 +1653,19 @@ pub fn repair_remote_import(
                     for ev in incoming {
                         let (_, cell) = cell_from_ev(txn, ev)?;
                         let id = cell.id();
-                        if stored.get(&id) != Some(&cell) {
+                        let target = retained.get(&id).copied();
+                        if target == Some(ev) {
                             continue;
                         }
-                        match retained.get(&id) {
-                            Some(kept) if *kept != ev => puts.push((*kept).clone()),
-                            Some(_) => {}
+                        if stored.get(&id) != Some(&cell) {
+                            let target_cell = target
+                                .map(|ev| cell_from_ev(txn, ev).map(|(_, cell)| cell))
+                                .transpose()?;
+                            converged &= stored.get(&id) == target_cell.as_ref();
+                            continue;
+                        }
+                        match target {
+                            Some(kept) => puts.push(kept.clone()),
                             None => {
                                 if let Some(key) = &ev.s
                                     && let Some(target) = original_sessions.get(key)
@@ -1661,7 +1690,7 @@ pub fn repair_remote_import(
             push_cells(batch, &raw.computer, &raw.tool, puts, dels, Vec::new(), corrections).map(|_| ())
         })?;
     }
-    Ok(())
+    Ok(converged)
 }
 
 /// Look up selected sessions and their dated cell sources. The session summary keeps

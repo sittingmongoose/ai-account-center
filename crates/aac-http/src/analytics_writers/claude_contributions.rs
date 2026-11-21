@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 const PHASES: [&str; 3] = ["migration", "backfill", "live"];
+type ScanRows = (Vec<Value>, Vec<Value>);
 
 #[derive(Default, Deserialize, Serialize)]
 struct Hour {
@@ -47,11 +48,8 @@ fn key(host: &str, hour: u64, phase: &str) -> String {
     format!("claude/contributions/{host}/{hour}/{phase}")
 }
 
-fn split<'a>(
-    part: &'a Part<'_>,
-    mirror: bool,
-) -> BTreeMap<Option<&'a str>, (Vec<Value>, Vec<Value>)> {
-    let mut groups: BTreeMap<_, (Vec<Value>, Vec<Value>)> = BTreeMap::new();
+fn split<'a>(part: &'a Part<'_>, mirror: bool) -> BTreeMap<Option<&'a str>, ScanRows> {
+    let mut groups: BTreeMap<_, ScanRows> = BTreeMap::new();
     for (session, rows) in [(false, &part.rows), (true, &part.sessions)] {
         for row in rows {
             let owner = claude_mirrors::row_identity(row, &part.fingerprints);
@@ -87,6 +85,8 @@ pub(super) fn remember(
         return Ok(());
     }
     let mut owners = claude_mirrors::load(store, claude_mirrors::HISTORY_MIRRORS)?;
+    let mut history = claude_mirrors::load(store, claude_mirrors::HISTORY)?;
+    let previous = history.len();
     let mut snapshots = BTreeMap::<u64, Hour>::new();
     for (name, (rows, sessions)) in split(part, true) {
         let worker = collect::worker_from_scan(&rows, &sessions, "claude", part.host, now, pricing);
@@ -97,6 +97,9 @@ pub(super) fn remember(
             let snapshot = snapshots.entry(hour).or_default();
             if let Some(name) = name {
                 owners
+                    .entry(name.to_owned())
+                    .or_insert_with(|| part.host.to_owned());
+                history
                     .entry(name.to_owned())
                     .or_insert_with(|| part.host.to_owned());
                 snapshot
@@ -118,7 +121,11 @@ pub(super) fn remember(
             )?;
         }
     }
-    claude_mirrors::save(store, claude_mirrors::HISTORY_MIRRORS, &owners)
+    claude_mirrors::save(store, claude_mirrors::HISTORY_MIRRORS, &owners)?;
+    if history.len() != previous {
+        claude_mirrors::save(store, claude_mirrors::HISTORY, &history)?;
+    }
+    Ok(())
 }
 
 fn covered(mirror: &Value, original: &Value) -> bool {
@@ -199,8 +206,17 @@ pub(super) fn reconcile(
                         });
                     }
                     let after = snapshot.projection(mirror_host, now)?;
-                    activity::repair_remote_import(store, &before, &after, &originals, false)?;
-                    history.insert(name.to_owned(), part.host.to_owned());
+                    if activity::reconcile_claude_projection(store, &before, &after, &originals)? {
+                        history.insert(name.to_owned(), part.host.to_owned());
+                        claude_mirrors::save(store, claude_mirrors::HISTORY, &history)?;
+                        snapshot.mirrors.retain(|_, cells| !cells.is_empty());
+                        let lookup = key(mirror_host, hour, phase);
+                        if snapshot.mirrors.is_empty() {
+                            analytics_cache::remove(store, &lookup)?;
+                        } else {
+                            analytics_cache::put(store, &lookup, &serde_json::to_vec(&snapshot)?)?;
+                        }
+                    }
                 }
             }
         }

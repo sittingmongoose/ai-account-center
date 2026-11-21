@@ -69,6 +69,18 @@ fn scan(
     at: i64,
     responses: Responses,
 ) -> Observation {
+    scan_named(home, host, mirrored, at, responses, "shared", true)
+}
+
+fn scan_named(
+    home: &Path,
+    host: &'static str,
+    mirrored: bool,
+    at: i64,
+    responses: Responses,
+    transcript: &str,
+    keyed: bool,
+) -> Observation {
     let subdir = if mirrored {
         "ssh-12345678-1234-1234-1234-123456789abc"
     } else {
@@ -78,8 +90,8 @@ fn scan(
     fs::create_dir_all(&folder).expect("fixture projects");
     let event = |id: &str, time: i64, input: u64, output: u64| {
         json!({"type":"assistant","timestamp":aac_num::ecma::to_iso_string(time),
-            "sessionId":"shared-claude-history",
-            "message":{"id":id,"model":"claude-opus-4-5","usage":{"input_tokens":input,"output_tokens":output}}})
+            "sessionId":keyed.then_some(transcript),
+            "message":{"id":format!("{transcript}-{id}"),"model":"claude-opus-4-5","usage":{"input_tokens":input,"output_tokens":output}}})
     };
     let mut log = format!("{}\n", event("response-one", at, 70, 30));
     if !mirrored && responses != Responses::Identical {
@@ -90,7 +102,7 @@ fn scan(
         };
         log.push_str(&format!("{}\n", event("response-two", next, 130, 40)));
     }
-    fs::write(folder.join("shared.jsonl"), log).expect("fixture transcript");
+    fs::write(folder.join(format!("{transcript}.jsonl")), log).expect("fixture transcript");
     let request =
         aac_usage::protocol::parse_request(br#"{"kinds":["claude"],"minDateMs":0,"cwd":false}"#)
             .expect("scanner request");
@@ -401,4 +413,116 @@ fn claude_contribution_matrix() {
     }
     assert_eq!(cases, 240);
     eprintln!("Claude contribution matrix: {cases}/{cases}");
+}
+
+#[test]
+fn separate_unkeyed_mirrors_in_one_cell_are_reconciled_across_restarts() {
+    let tmp = tempfile::tempdir().expect("fixture");
+    let home = tmp.path();
+    let db = home.join("store");
+    let open = || aac_store::ops::open_engine(&db.to_string_lossy(), None, None).expect("Store");
+    let now = aac_store::engine::now_ms() as i64;
+    let at = (now - 8 * super::super::DAY).div_euclid(3_600_000) * 3_600_000;
+    let case = Case {
+        phase: Phase::Live,
+        local: true,
+        availability: Availability::Returning,
+        original_first: false,
+        responses: Responses::SameHour,
+        settled: true,
+        repair: false,
+    };
+    let fixture = Fixture { home, now, case };
+    let mut mirror = scan_named(
+        &home.join("mirror-a"),
+        "odroid",
+        true,
+        at,
+        Responses::Identical,
+        "a",
+        false,
+    );
+    let second = scan_named(
+        &home.join("mirror-b"),
+        "odroid",
+        true,
+        at,
+        Responses::Identical,
+        "b",
+        false,
+    );
+    for key in ["rows", "srows"] {
+        mirror.answer[key]
+            .as_array_mut()
+            .expect("scanner rows")
+            .extend(
+                second.answer[key]
+                    .as_array()
+                    .expect("scanner rows")
+                    .iter()
+                    .cloned(),
+            );
+    }
+    let prints = |observation: &Observation| {
+        observation.answer["kinds"]["claude"]["fingerprints"]
+            .as_object()
+            .expect("scanner prints")
+            .clone()
+    };
+    mirror.answer["kinds"]["claude"]["fingerprints"]
+        .as_object_mut()
+        .expect("scanner prints")
+        .extend(prints(&second));
+    let a = scan_named(
+        &home.join("original-a"),
+        "nas1",
+        false,
+        at,
+        Responses::SameHour,
+        "a",
+        false,
+    );
+    let b = scan_named(
+        &home.join("original-b"),
+        "mac",
+        false,
+        at,
+        Responses::Identical,
+        "b",
+        false,
+    );
+    let check = |store: &Engine, expected: [u64; 3]| {
+        let result = aac_store::ops::call(
+            store,
+            "activityRange",
+            &json!({"fromMs":at,"toMs":at+3_600_000}).to_string(),
+        )
+        .expect("Store report");
+        assert_eq!(
+            result["rows"].as_array().expect("hour rows").len(),
+            1,
+            "{result}"
+        );
+        let totals = [5, 6, 12].map(|col| result["rows"][0][col].as_u64().expect("usage count"));
+        assert_eq!(totals, expected, "{result}");
+    };
+    let store = open();
+    fixture.publish(&store, Phase::Live, &[&mirror]);
+    check(&store, [140, 60, 2]);
+    activity::close_days(&store, now as u64).expect("settle the mirror hour");
+    store.close().expect("close Store");
+    drop(store);
+    let store = open();
+    fixture.publish(&store, Phase::Backfill, &[&a]);
+    check(&store, [270, 100, 3]);
+    store.close().expect("close Store");
+    drop(store);
+    let store = open();
+    fixture.publish(&store, Phase::Live, &[&b]);
+    check(&store, [270, 100, 3]);
+    let cells = activity::dump_cells(&store).expect("read cell sources");
+    assert!(
+        cells.iter().all(|(host, _, _)| host != "odroid"),
+        "{cells:?}"
+    );
 }
