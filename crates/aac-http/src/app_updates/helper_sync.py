@@ -208,11 +208,12 @@ def publish(root, platform, expected, payload):
         restore(root, launcher)
         raise Refused('helper_capability_missing')
     if platform == 'windows':
-        # Registration runs after the swap, so it is part of the publication: a refused
-        # registration must not leave a replacement launcher active while its task is missing.
+        # Registration runs after the swap, so it is part of the publication: a refused,
+        # timed-out or unstartable registration must not leave a replacement launcher active
+        # while its task is missing.
         try:
             ensure_windows_task()
-        except Refused:
+        except (Refused, OSError, subprocess.SubprocessError):
             restore(root, launcher)
             raise
     return {'ok': True, 'changed': True, 'generation': generation, 'previous': previous}
