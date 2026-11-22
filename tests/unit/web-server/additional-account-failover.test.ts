@@ -477,6 +477,144 @@ describe('additional accounts use verified failover sources', () => {
       );
       expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
     });
+
+    it('expands the same three-key inventory to three rows and three pinned reads for default, v1 and v2', async () => {
+      const readings: Record<string, number> = {
+        [id('a').key]: 11,
+        [id('b').key]: 22,
+        [id('c').key]: 33,
+      };
+      const modes: Array<{ name: string; overrides: AdditionalAccountDeps }> = [
+        {
+          name: 'default',
+          overrides: {
+            readRegistry: async () => ({ state: 'absent' }),
+            readManifest: async () => null,
+          },
+        },
+        {
+          name: 'v1',
+          overrides: {
+            readRegistry: async () => ({ state: 'absent' }),
+            readManifest: async () =>
+              JSON.stringify({
+                version: 1,
+                sources: [{ provider: 'opencode-go', platform: 'ubuntu' }],
+              }),
+          },
+        },
+        {
+          name: 'v2',
+          overrides: {
+            readRegistry: async () => ({
+              state: 'ok',
+              registry: {
+                version: 2,
+                accounts: [
+                  {
+                    ...registryAccount('opencode-go', { kind: 'discover' }),
+                    platform: 'ubuntu',
+                    sshHost: null,
+                  },
+                ],
+              },
+            }),
+          },
+        },
+      ];
+      for (const mode of modes) {
+        const calls: UsageFailoverTarget[] = [];
+        let now = 0;
+        let unreadable = false;
+        const service = new AdditionalAccountService({
+          ccsDir: '/tmp/additional-failover-fixture',
+          now: () => now,
+          failover: {
+            collect: async (target, template) => {
+              calls.push(target);
+              const used = target.expectedIdentity
+                ? (readings[target.expectedIdentity.key] ?? 99)
+                : 11;
+              return {
+                ...reading(template),
+                windows: [{ ...reading(template).windows[0], usedPercent: used }],
+              };
+            },
+            peek: (_target, template) => reading(template),
+            discoveredIdentities: async () =>
+              unreadable
+                ? null
+                : {
+                    found: [
+                      { identity: id('a'), bound: false },
+                      { identity: id('b'), bound: false },
+                      { identity: id('c'), bound: false },
+                    ],
+                    unread: [],
+                  },
+            readingIdentity: (target) => target.expectedIdentity ?? null,
+          },
+          ...mode.overrides,
+        });
+        const goRows = (await service.get()).filter((row) => row.provider === 'opencode-go');
+        expect(
+          goRows.map((row) => [row.id, row.label, row.windows[0]?.usedPercent]),
+          mode.name
+        ).toEqual([
+          ['opencode-go:usage:aaaaaaaa', 'Key aaaaaaaa', 11],
+          ['opencode-go:usage:bbbbbbbb', 'Key bbbbbbbb', 22],
+          ['opencode-go:usage:cccccccc', 'Key cccccccc', 33],
+        ]);
+        const goCalls = calls.filter((call) => call.provider === 'opencode-go');
+        expect(
+          goCalls.map((call) => call.expectedIdentity),
+          mode.name
+        ).toEqual([id('a'), id('b'), id('c')]);
+        expect(
+          service
+            .configured()
+            ?.accounts.filter((row) => row.provider === 'opencode-go')
+            .map((row) => row.id),
+          mode.name
+        ).toEqual([
+          'opencode-go:usage:aaaaaaaa',
+          'opencode-go:usage:bbbbbbbb',
+          'opencode-go:usage:cccccccc',
+        ]);
+
+        // Single-row recheck resolves each digest pinned, and rejects bare or unknown ids.
+        now = 10_000;
+        for (const [digestId, key, used] of [
+          ['opencode-go:usage:aaaaaaaa', id('a'), 11],
+          ['opencode-go:usage:bbbbbbbb', id('b'), 22],
+          ['opencode-go:usage:cccccccc', id('c'), 33],
+        ] as const) {
+          calls.length = 0;
+          const refreshed = await service.refreshAccount(digestId);
+          expect(refreshed?.id, `${mode.name}:${digestId}`).toBe(digestId);
+          expect(refreshed?.windows[0]?.usedPercent, `${mode.name}:${digestId}`).toBe(used);
+          expect(
+            calls.map((call) => call.expectedIdentity),
+            `${mode.name}:${digestId}`
+          ).toEqual([key]);
+        }
+        calls.length = 0;
+        expect(await service.refreshAccount('opencode-go:usage'), mode.name).toBeNull();
+        expect(await service.refreshAccount('opencode-go:usage:dddddddd'), mode.name).toBeNull();
+        expect(calls, mode.name).toHaveLength(0);
+
+        // Unreadable store keeps the bare discover entry as it was.
+        unreadable = true;
+        now = 200_000;
+        const fallback = (await service.get({ refresh: true })).filter(
+          (row) => row.provider === 'opencode-go'
+        );
+        expect(
+          fallback.map((row) => row.id),
+          `${mode.name}:unreadable`
+        ).toEqual(['opencode-go:usage']);
+      }
+    });
   });
 
   it('keeps two discovery-free rows of one identity as the first in list order', async () => {

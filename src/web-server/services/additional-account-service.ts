@@ -363,13 +363,13 @@ function observationTime(account: DashboardAccount): number {
 }
 
 /** One cache per account and source: a changed host, credential or id never inherits a sample. */
-function sourceKey(source: AdditionalUsageSource): string {
+function sourceKey(source: AdditionalUsageSource, legacy = false): string {
   return JSON.stringify([
     source.account?.id ?? `${source.provider}:usage`,
     source.provider,
     source.platform,
     source.sshHost ?? null,
-    source.account?.credential ?? null,
+    legacy ? null : (source.account?.credential ?? null),
   ]);
 }
 
@@ -398,6 +398,8 @@ export class AdditionalAccountService {
   private lastManifest: Manifest | null = null;
   /** Sources a discover entry expanded into, pinned to one stored key's identity. */
   private pinned = new WeakMap<AdditionalUsageSource, UsageIdentity>();
+  /** Expanded sources that came from an implicit v1/default discover source. */
+  private legacyPinned = new WeakSet<AdditionalUsageSource>();
   /** The last snapshot's sources after discovery expanded, for placeholders and Re-check. */
   private lastSources: { fingerprint: string; sources: AdditionalUsageSource[] } | null = null;
 
@@ -437,7 +439,7 @@ export class AdditionalAccountService {
       ccsDir: this.ccsDir,
       // The registry row names the account and its owned credential. Labels
       // do not establish identity and changing a label does not rebind it.
-      binding: sourceKey(source),
+      binding: sourceKey(source, this.legacyPinned.has(source)),
       primarySources: [
         {
           host: sourceHost(source),
@@ -470,8 +472,7 @@ export class AdditionalAccountService {
         const account = source.account;
         if (
           !EXPANDS_DISCOVERY.has(source.provider) ||
-          !account ||
-          account.credential.kind !== 'discover'
+          (account && account.credential.kind !== 'discover')
         )
           return [source];
         const named = new Map<string, AdditionalUsageSource>();
@@ -501,11 +502,17 @@ export class AdditionalAccountService {
           .filter((item) => !item.bound)
           .map(({ identity }) => {
             const digest = identity.key.slice(0, 8);
+            const baseId = account?.id ?? `${source.provider}:usage`;
             const pinned: AdditionalUsageSource = {
               ...source,
-              account: { ...account, id: `${account.id}:${digest}`, label: `Key ${digest}` },
+              account: {
+                id: `${baseId}:${digest}`,
+                label: `Key ${digest}`,
+                credential: account?.credential ?? { kind: 'discover' },
+              },
             };
             this.pinned.set(pinned, identity);
+            if (!account) this.legacyPinned.add(pinned);
             return pinned;
           });
       })
@@ -694,7 +701,7 @@ export class AdditionalAccountService {
         'This account type is not read by the usage helper yet.'
       );
     }
-    const key = sourceKey(source);
+    const key = sourceKey(source, this.legacyPinned.has(source));
     let cache = this.caches.get(key);
     if (!cache) {
       cache = {
@@ -748,7 +755,7 @@ export class AdditionalAccountService {
     }
     const all = await this.expandDiscovery(config.sources);
     this.lastSources = { fingerprint: config.fingerprint, sources: all };
-    const current = new Set(all.map(sourceKey));
+    const current = new Set(all.map((source) => sourceKey(source, this.legacyPinned.has(source))));
     for (const key of this.caches.keys()) if (!current.has(key)) this.caches.delete(key);
     const sources = all.filter(
       (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
@@ -824,7 +831,8 @@ export class AdditionalAccountService {
     // and never reads a key another entry names. The reviewed source is the entry it comes from.
     if (
       !entry ||
-      (entry.account?.credential.kind === 'discover' && EXPANDS_DISCOVERY.has(entry.provider))
+      (EXPANDS_DISCOVERY.has(entry.provider) &&
+        (!entry.account || entry.account.credential.kind === 'discover'))
     ) {
       if (reviewed && !config.sources.some((source) => sourceKey(source) === sourceKey(reviewed)))
         return null;

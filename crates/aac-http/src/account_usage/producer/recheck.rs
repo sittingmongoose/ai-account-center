@@ -104,8 +104,7 @@ impl Producer {
             // A discover entry that may now stand for per-key rows resolves through the expansion
             // below: once its stored keys have rows (or are all named) it is not read unpinned.
             Some(found)
-                if !found.legacy
-                    && found.source.provider == "opencode-go"
+                if found.source.provider == "opencode-go"
                     && matches!(found.source.credential, sources::Credential::Discover) =>
             {
                 found.source.id
@@ -117,25 +116,33 @@ impl Producer {
             },
         };
         let root = self.root.clone();
-        let registry = tokio::task::spawn_blocking(move || sources::read_registry(&root))
+        let (rows, legacy) =
+            tokio::task::spawn_blocking(move || match sources::read_registry(&root) {
+                Ok(sources::Sources::V2(rows)) => Ok((rows, false)),
+                Ok(sources::Sources::Legacy) => {
+                    let (rows, valid) = sources::legacy(Some(&root));
+                    if !valid {
+                        return Err(Decline::Shape);
+                    }
+                    Ok((rows, true))
+                }
+                Err(reason) => Err(reason),
+            })
             .await
             .map_err(|_| Decline::Internal)??;
-        let sources::Sources::V2(rows) = registry else {
-            return Ok(None);
-        };
         if !rows.iter().any(|source| source.id == base) {
             return Ok(None);
         }
         // The same expansion and pinning as sampling: only a stored key that no other entry
         // names has a row, so a digest of a named key (a duplicate) stays unknown.
         Ok(self
-            .expand_discovery(rows, false)
+            .expand_discovery(rows, legacy)
             .await
             .into_iter()
             .find(|(source, _)| source.id == id)
             .map(|(source, pin)| Resolved {
                 source,
-                legacy: false,
+                legacy,
                 pin,
             }))
     }
@@ -737,5 +744,322 @@ mod tests {
         ] {
             assert_eq!(discovered_key_id(other), None, "{other}");
         }
+    }
+
+    /// Three-key inventory without named registry entries: each key returns its own reading.
+    struct ThreeStoredKeys {
+        now: std::sync::atomic::AtomicI64,
+        unreadable: std::sync::atomic::AtomicBool,
+        collected: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::account_usage::coordinator::FailoverDeps for ThreeStoredKeys {
+        fn transport<'a>(
+            &'a self,
+            _host: &'a crate::account_usage::coordinator::UsageHost,
+            request: &'a Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, ()>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                if request["provider"] != "opencode-go" {
+                    return Ok(json!({"version":1,"action":"inventory","candidates":[]}));
+                }
+                let stored = |locator: &str, key: &str| {
+                    json!({
+                        "locator":locator.repeat(64), "selectors":["discover"], "revision":"2".repeat(64),
+                        "identity":{"kind":"opencode-go-credential","key":key.repeat(64)}
+                    })
+                };
+                if request["action"] == "inventory" {
+                    if self.unreadable.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Ok(json!({
+                            "version":1,"action":"inventory","candidates":[],
+                            "incompleteSelectors":["*"]
+                        }));
+                    }
+                    return Ok(json!({"version":1,"action":"inventory","candidates":[
+                        stored("1", "a"), stored("3", "b"), stored("5", "c")
+                    ]}));
+                }
+                let key = request["candidate"]["identity"]["key"]
+                    .as_str()
+                    .unwrap_or("")
+                    .get(..1)
+                    .unwrap_or("")
+                    .to_owned();
+                self.collected
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(key.clone());
+                let used = match key.as_str() {
+                    "a" => 11,
+                    "b" => 22,
+                    "c" => 33,
+                    _ => 99,
+                };
+                let at = aac_num::ecma::to_iso_string(
+                    self.now.load(std::sync::atomic::Ordering::Relaxed),
+                )
+                .unwrap_or_else(|| "2026-11-21T17:00:00.000Z".into());
+                Ok(json!({
+                    "version":1,"action":"collect","candidate":request["candidate"],"failureCode":null,
+                    "sample":{"status":"ok","sampledAt":at,"fetchedAt":at,
+                        "windows":[{"key":"weekly","label":"Weekly","usedPercent":used}]}
+                }))
+            })
+        }
+
+        fn hosts<'a>(
+            &'a self,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Vec<crate::account_usage::coordinator::UsageHost>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Vec::new() })
+        }
+
+        fn now(&self) -> f64 {
+            self.now.load(std::sync::atomic::Ordering::Relaxed) as f64
+        }
+    }
+
+    /// Astra Medium 1: the same three-key inventory expands to three pinned requests and three
+    /// rows for sampling and single-row Re-check under default, version 1 and version 2.
+    #[tokio::test]
+    async fn three_stored_opencode_go_keys_expand_for_default_v1_and_v2() {
+        let expected = [
+            ("opencode-go:usage:aaaaaaaa", "Key aaaaaaaa", "a", 11.0),
+            ("opencode-go:usage:bbbbbbbb", "Key bbbbbbbb", "b", 22.0),
+            ("opencode-go:usage:cccccccc", "Key cccccccc", "c", 33.0),
+        ];
+        for mode in ["default", "v1", "v2"] {
+            let dir = tempfile::tempdir().expect("fixture root");
+            let root = fs::canonicalize(dir.path()).expect("canonical root");
+            set_mode(&root, 0o700);
+            match mode {
+                "default" => {}
+                "v1" => {
+                    let manifest = root.join("account-usage-sources.json");
+                    fs::write(
+                        &manifest,
+                        serde_json::to_vec(&json!({
+                            "version": 1,
+                            "sources": [{"provider": "opencode-go", "platform": "ubuntu"}]
+                        }))
+                        .expect("manifest"),
+                    )
+                    .expect("write manifest");
+                    set_mode(&manifest, 0o600);
+                }
+                "v2" => {
+                    registry(
+                        &root,
+                        json!([{
+                            "id":"opencode-go:usage","provider":"opencode-go","platform":"ubuntu",
+                            "sshHost":null,"label":"OpenCode Go","credential":{"kind":"discover"},
+                            "createdAt":null,"createdBy":"migration"
+                        }]),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let owners =
+                Owners::defaults(aac_files::registry::rows().expect("bundled private files"));
+            let deps = std::sync::Arc::new(ThreeStoredKeys {
+                now: std::sync::atomic::AtomicI64::new(1_795_280_400_000),
+                unreadable: std::sync::atomic::AtomicBool::new(false),
+                collected: std::sync::Mutex::default(),
+            });
+            let mut producer = Producer::new(root.clone(), owners.clone());
+            producer.failover = std::sync::Arc::new(
+                crate::account_usage::coordinator::FailoverCoordinator::new(deps.clone(), owners),
+            );
+            let disk = super::super::Disk::load(&root).expect("load disk");
+            let sources: Vec<Source> = disk
+                .sources
+                .into_iter()
+                .filter(|source| source.provider == "opencode-go")
+                .collect();
+            assert_eq!(
+                sources.len(),
+                1,
+                "{mode}: one implicit or v2 discover entry"
+            );
+            let rows = producer
+                .additional(
+                    sources,
+                    disk.legacy,
+                    disk.source_problem,
+                    false,
+                    1_795_280_400_000,
+                    false,
+                )
+                .await;
+            let got: Vec<(String, String, Option<f64>)> = rows
+                .iter()
+                .map(|row| {
+                    (
+                        row["id"].as_str().unwrap_or("").to_owned(),
+                        row["label"].as_str().unwrap_or("").to_owned(),
+                        row["windows"][0]["usedPercent"].as_f64(),
+                    )
+                })
+                .collect();
+            let want: Vec<(String, String, Option<f64>)> = expected
+                .iter()
+                .map(|(id, label, _, used)| ((*id).to_owned(), (*label).to_owned(), Some(*used)))
+                .collect();
+            assert_eq!(got, want, "{mode}: sampling rows");
+            let mut sampled = deps
+                .collected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            sampled.sort();
+            assert_eq!(sampled, ["a", "b", "c"], "{mode}: three pinned requests");
+
+            let cache = AccountUsageCache::default();
+            publish(&cache, rows);
+            let companions = CompanionInputs::default();
+            deps.now
+                .fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+            for (id, _, key, used) in expected {
+                deps.collected
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clear();
+                let answer = producer
+                    .recheck(&cache, &companions, id)
+                    .await
+                    .expect("recheck")
+                    .unwrap_or_else(|| panic!("{mode}: {id} must resolve"));
+                assert_eq!(answer["id"], id, "{mode}");
+                assert_eq!(answer["status"], "ok", "{mode}: {answer}");
+                assert_eq!(
+                    answer["windows"][0]["usedPercent"].as_f64(),
+                    Some(used),
+                    "{mode}: {id}"
+                );
+                assert_eq!(
+                    *deps.collected.lock().unwrap_or_else(|e| e.into_inner()),
+                    [key],
+                    "{mode}: {id} reads only its own key"
+                );
+            }
+            // Bare discover id and unknown digests stay 404 and read nothing once expanded.
+            deps.collected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            for unknown in ["opencode-go:usage", "opencode-go:usage:dddddddd"] {
+                assert!(
+                    producer
+                        .recheck(&cache, &companions, unknown)
+                        .await
+                        .expect("recheck")
+                        .is_none(),
+                    "{mode}: {unknown}"
+                );
+            }
+            assert!(
+                deps.collected
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_empty(),
+                "{mode}: unknown ids must not collect"
+            );
+
+            // Unreadable store keeps the bare discover entry as it was.
+            deps.unreadable
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            deps.now
+                .fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+            let fallback_disk = super::super::Disk::load(&root).expect("load disk");
+            let fallback_sources: Vec<Source> = fallback_disk
+                .sources
+                .into_iter()
+                .filter(|source| source.provider == "opencode-go")
+                .collect();
+            let fallback_rows = producer
+                .additional(
+                    fallback_sources,
+                    fallback_disk.legacy,
+                    fallback_disk.source_problem,
+                    false,
+                    deps.now.load(std::sync::atomic::Ordering::Relaxed),
+                    false,
+                )
+                .await;
+            assert_eq!(
+                fallback_rows
+                    .iter()
+                    .filter_map(|row| row["id"].as_str())
+                    .collect::<Vec<_>>(),
+                ["opencode-go:usage"],
+                "{mode}: unreadable store keeps bare entry"
+            );
+            assert!(
+                producer
+                    .resolve_recheck("opencode-go:usage")
+                    .await
+                    .is_some(),
+                "{mode}: unreadable store keeps bare recheck"
+            );
+        }
+
+        // An invalid v1 manifest still refuses expansion and single-row recheck.
+        let dir = tempfile::tempdir().expect("invalid v1 root");
+        let root = fs::canonicalize(dir.path()).expect("canonical root");
+        set_mode(&root, 0o700);
+        let manifest = root.join("account-usage-sources.json");
+        fs::write(
+            &manifest,
+            br#"{"version":1,"sources":[{"provider":"bogus","platform":"ubuntu"}]}"#,
+        )
+        .expect("write invalid manifest");
+        set_mode(&manifest, 0o600);
+        let owners = Owners::defaults(aac_files::registry::rows().expect("bundled private files"));
+        let deps = std::sync::Arc::new(ThreeStoredKeys {
+            now: std::sync::atomic::AtomicI64::new(1_795_280_400_000),
+            unreadable: std::sync::atomic::AtomicBool::new(false),
+            collected: std::sync::Mutex::default(),
+        });
+        let mut producer = Producer::new(root.clone(), owners.clone());
+        producer.failover = std::sync::Arc::new(
+            crate::account_usage::coordinator::FailoverCoordinator::new(deps.clone(), owners),
+        );
+        let disk = super::super::Disk::load(&root).expect("load invalid v1");
+        assert!(disk.source_problem.is_some());
+        let rows = producer
+            .additional(
+                disk.sources
+                    .into_iter()
+                    .filter(|s| s.provider == "opencode-go")
+                    .collect(),
+                disk.legacy,
+                disk.source_problem,
+                false,
+                1_795_280_400_000,
+                false,
+            )
+            .await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], "opencode-go:usage");
+        assert_eq!(rows[0]["status"], "error");
+        assert!(
+            producer
+                .resolve_recheck("opencode-go:usage:aaaaaaaa")
+                .await
+                .is_none()
+        );
+        assert!(
+            deps.collected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
     }
 }

@@ -134,7 +134,7 @@ impl Producer {
                 .position(|id| *id == source.provider)
                 .unwrap_or(order.len())
         });
-        let sources = if problem.is_none() && !legacy {
+        let sources = if problem.is_none() {
             self.expand_discovery(sources, legacy).await
         } else {
             sources.into_iter().map(|source| (source, None)).collect()
