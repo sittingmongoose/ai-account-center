@@ -335,12 +335,59 @@ fn traced_run_problem(files: &[&str], problems: &[V], now: i64, ctx: &Context) -
     }
     matched.then(|| (ctx.iso(earliest), age(now, earliest)))
 }
+/// The rows a retained blind-review file was applied to: a review whose file this scan could not
+/// read still joins its target (the review runs keep their last good copy), so the target's row
+/// carries the failure. A review that no longer joins, or a file never read, names no row.
+fn review_problems(
+    docs: &[&V],
+    facts: &[&RowFacts],
+    problems: &[V],
+    index: &Index,
+    ctx: &Context,
+) -> HashMap<String, Option<i64>> {
+    let mut out: HashMap<String, Option<i64>> = HashMap::new();
+    for (at, doc) in docs.iter().enumerate() {
+        if doc["review"].is_null() {
+            continue;
+        }
+        let file = facts[at].file.as_str();
+        if !file.starts_with("writers/") {
+            continue;
+        }
+        let Some(problem) = problems.iter().find(|p| s(&p["file"]) == file) else {
+            continue;
+        };
+        let target = s(&doc["review"]["of"]);
+        if target.is_empty() || !index.of(target).iter().any(|r| r["id"] == doc["id"]) {
+            continue;
+        }
+        let since = ctx.epoch(&problem["since"]);
+        let slot = out.entry(target.to_owned()).or_insert(None);
+        if let Some(since) = since
+            && slot.is_none_or(|prev| since < prev)
+        {
+            *slot = Some(since);
+        }
+    }
+    out
+}
+/// A ranked verdict rests on the retained catalog definitions. When this pass could not list the
+/// catalog, the verdict says so, with the last good read's time (never an invented failure time).
+fn catalog_verdict_health(catalog: &V, now: i64, ctx: &Context) -> Option<(V, V, V)> {
+    if catalog["state"] != "error" {
+        return None;
+    }
+    let at = ctx.epoch(&catalog["scannedAt"]);
+    Some((json!("error"), ctx.iso(at), age(now, at)))
+}
+#[allow(clippy::too_many_arguments)]
 fn base_rows(
     task: &V,
     entries: &[(V, &str)],
     catalog: &V,
     index: &Index,
     problems: &[V],
+    review_health: &HashMap<String, Option<i64>>,
     now: i64,
     ctx: &Context,
 ) -> Option<Vec<V>> {
@@ -395,6 +442,22 @@ fn base_rows(
         }
         let mut row = json!({"key":key,"model":model(&first),"runtime":first["model"]["harness"],"effort":first["model"]["effort"],"process":if task["byProcess"]==true&&first["process"].is_object(){json!({"id":first["process"]["id"],"version":first["process"]["version"]})}else{V::Null},"observed":if observed.is_empty(){V::Null}else{column(&observed,"observed",&V::Null,task,catalog,index,ctx)?},"benchmarks":benchmarks});
         if let Some((as_of, age_seconds)) = traced_run_problem(&files, problems, now, ctx)
+            .or_else(|| {
+                let mut earliest: Option<i64> = None;
+                let mut matched = false;
+                for run in &runs {
+                    let Some(since) = review_health.get(s(&run["id"])) else {
+                        continue;
+                    };
+                    matched = true;
+                    if let Some(since) = *since
+                        && earliest.is_none_or(|prev| since < prev)
+                    {
+                        earliest = Some(since);
+                    }
+                }
+                matched.then(|| (ctx.iso(earliest), age(now, earliest)))
+            })
             && let Some(obj) = row.as_object_mut()
         {
             obj.insert("sourceState".to_owned(), json!("unreadable"));
@@ -1062,6 +1125,8 @@ fn compose_core(
         Index::new(docs, &join, &known_models, &known_types, ctx)?
     };
     let problems = array(&input["runs"]["problems"]);
+    let review_health = review_problems(docs, facts, &problems, &index, ctx);
+    let catalog_health = catalog_verdict_health(catalog, now, ctx);
     let mut bases = HashMap::new();
     for task in types {
         bases.insert(
@@ -1072,6 +1137,7 @@ fn compose_core(
                 catalog,
                 &index,
                 &problems,
+                &review_health,
                 now,
                 ctx,
             )?,
@@ -1090,7 +1156,22 @@ fn compose_core(
         };
         let mut task_types = Vec::new();
         for task in wanted {
-            task_types.push(json!({"id":task["id"],"label":task["label"],"description":task["description"],"unit":task["unit"],"measures":task["measures"],"byProcess":task["byProcess"],"rows":judged_rows(bases.get(s(&task["id"]))?,task,usage,catalog,ctx)?}));
+            let mut rows = judged_rows(bases.get(s(&task["id"]))?, task, usage, catalog, ctx)?;
+            // Every ranked verdict compared the retained catalog definitions with the runs; a
+            // listing that failed this pass is disclosed on each of them. A row's own failure is
+            // already named and stays the row's (a rarer case than the one this covers).
+            if let Some((state, as_of, age_seconds)) = &catalog_health {
+                for row in &mut rows {
+                    if row["ranked"] == true && row.get("sourceState").is_none()
+                        && let Some(obj) = row.as_object_mut()
+                    {
+                        obj.insert("sourceState".to_owned(), state.clone());
+                        obj.insert("asOf".to_owned(), as_of.clone());
+                        obj.insert("ageSeconds".to_owned(), age_seconds.clone());
+                    }
+                }
+            }
+            task_types.push(json!({"id":task["id"],"label":task["label"],"description":task["description"],"unit":task["unit"],"measures":task["measures"],"byProcess":task["byProcess"],"rows":rows}));
         }
         uses.push(
             json!({"id":usage["id"],"label":usage["label"],"description":usage["description"],"taskTypes":task_types}),

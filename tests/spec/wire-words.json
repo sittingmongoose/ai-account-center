@@ -1082,6 +1082,8 @@
       "src/web-server/scoreboard/scoreboard-sources.ts:catalog.state",
       "src/web-server/scoreboard/scoreboard-sources.ts:runs.state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/scoreboard/scoreboard-view.ts:catalog.state",
+      "src/web-server/scoreboard/scoreboard-view.ts:sourceState",
       "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
       "src/web-server/services/account-dashboard-projection.ts:row?.quotaStatus",
       "src/web-server/services/account-dashboard-projection.ts:status",

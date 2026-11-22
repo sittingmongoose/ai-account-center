@@ -100,6 +100,10 @@ interface Shared {
   labels: ReadonlyMap<string, string>;
   benchmarkLabels: ReadonlyMap<string, string>;
   minRuns: number;
+  /** A retained blind-review file this scan could not read, by the run it reviews: its since. */
+  reviewHealth: ReadonlyMap<string, number | null>;
+  /** The catalog listing failed this scan: ranked verdicts still rest on the retained catalog. */
+  catalogHealth: RowSourceHealth | null;
 }
 
 function columnOf(
@@ -171,6 +175,47 @@ function tracedRunProblem(
   };
 }
 
+/**
+ * The health a retained blind-review file leaves on the run it reviews: the review still joins
+ * (its last good copy is scored), so the target's row carries the failure. A review that no
+ * longer joins, or a file never read, names no row. The age is since the file first failed.
+ */
+function reviewProblem(
+  runIds: readonly string[],
+  health: ReadonlyMap<string, number | null>,
+  now: number
+): RowSourceHealth | null {
+  let matched = false;
+  let earliest: number | null = null;
+  for (const id of runIds) {
+    if (!health.has(id)) continue;
+    matched = true;
+    const since = health.get(id);
+    if (
+      typeof since === 'number' &&
+      Number.isFinite(since) &&
+      (earliest === null || since < earliest)
+    )
+      earliest = since;
+  }
+  if (!matched) return null;
+  return {
+    sourceState: 'unreadable',
+    asOf: iso(earliest),
+    ageSeconds: ageSeconds(now, earliest),
+  };
+}
+
+/** A ranked verdict rests on the retained catalog; a failed listing is its own known failure. */
+function catalogVerdictHealth(
+  catalog: ScoreboardInputs['catalog'],
+  now: number
+): RowSourceHealth | null {
+  if (catalog.state !== 'error') return null;
+  const at = typeof catalog.scannedAt === 'number' ? catalog.scannedAt : null;
+  return { sourceState: 'error', asOf: iso(at), ageSeconds: ageSeconds(now, at) };
+}
+
 interface BaseRow {
   key: string;
   model: string;
@@ -237,7 +282,13 @@ function baseRows(
           shared
         )
       ),
-      sourceHealth: tracedRunProblem(files, problems, now),
+      sourceHealth:
+        tracedRunProblem(files, problems, now) ??
+        reviewProblem(
+          rowRuns.map((run) => run.id),
+          shared.reviewHealth,
+          now
+        ),
     };
   });
 }
@@ -253,6 +304,9 @@ function rowOf(row: BaseRow, observed: Column | null, benchmarks: Column[], shar
     headline && headline.source === 'benchmark'
       ? `In the benchmark ${headline.benchmarkLabel ?? 'with no id'}: ${headline.why}`
       : shown.why;
+  // A ranked verdict compared the retained catalog with the runs: a listing that failed this
+  // scan is disclosed on it. A row's own failure is already named and stays the row's.
+  const health = row.sourceHealth ?? (headline !== null ? shared.catalogHealth : null);
   const out: ScoreboardRow = {
     key: row.key,
     model: row.model,
@@ -274,7 +328,7 @@ function rowOf(row: BaseRow, observed: Column | null, benchmarks: Column[], shar
     why: labelled,
     observed,
     benchmarks,
-    ...(row.sourceHealth ? row.sourceHealth : {}),
+    ...(health ? health : {}),
   };
   return out;
 }
@@ -446,12 +500,31 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
     return labels.has(id);
   };
   const index = buildReviewIndex(docs, inputs.joinReviews ?? [], scoredReviewer);
+  // A retained blind-review file this scan could not read still joins its target (its last good
+  // copy is scored): the target's row carries the failure and when the file first failed.
+  const reviewHealth = new Map<string, number | null>();
+  for (const [i, doc] of docs.entries()) {
+    if (!doc.review) continue;
+    const file = runs.runs[i]?.file;
+    if (!file || !file.startsWith('writers/')) continue;
+    const problem = runs.problems.find((entry) => entry.file === file);
+    if (!problem) continue;
+    if (!index.of(doc.review.of).some((review) => review.id === doc.id)) continue;
+    const since =
+      typeof problem.since === 'number' && Number.isFinite(problem.since) ? problem.since : null;
+    const previous = reviewHealth.get(doc.review.of);
+    const earliest =
+      typeof previous === 'number' && (since === null || previous < since) ? previous : since;
+    reviewHealth.set(doc.review.of, earliest);
+  }
   const shared: Shared = {
     index,
     defs: new Map(catalog.measures.map((measure) => [measure.id, measure])),
     labels,
     benchmarkLabels: new Map(catalog.benchmarks.map((item) => [item.id, item.label])),
     minRuns: catalog.minRuns,
+    reviewHealth,
+    catalogHealth: catalogVerdictHealth(catalog, now),
   };
   const base = new Map(
     catalog.taskTypes.map((type) => [

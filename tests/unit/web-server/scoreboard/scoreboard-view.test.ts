@@ -1188,3 +1188,163 @@ describe('what the Sources name', () => {
     expect(sol?.ageSeconds).toBeUndefined();
   });
 });
+
+describe('a failed input behind a ranked verdict (M1, 2026-11-22)', () => {
+  const at = NOW - 3_600_000;
+  const failAt = NOW - 300_000;
+  const earlier = NOW - 600_000;
+  const targetRun = projectRun(
+    runDoc('vm.lead', 'WN-1', {
+      endedAt: new Date(at).toISOString(),
+      task: { id: 'WN-1', type: 'worknode-build', title: 'WN-1', size: { tasks: 1 } },
+      model: {
+        provider: 'anthropic',
+        id: 'claude-opus-5-5',
+        harness: 'claude-code',
+        effort: 'xhigh',
+        account: null,
+      },
+    }) as unknown as Record<string, unknown>,
+    'vm.lead'
+  );
+  const targetFile = 'writers/vm.lead/runs/2026-11-06/vm.lead--WN-1.json';
+  const reviewFile = 'writers/mac.reviews/runs/2026-11-06/mac.reviews--R1.json';
+  const reviewRun = projectRun(
+    runDoc('mac.reviews', 'R1', {
+      endedAt: new Date(at + 1_800_000).toISOString(),
+      task: { id: 'R1', type: 'review', title: 'R1', size: { tasks: 1 } },
+      model: {
+        provider: 'openai',
+        id: 'gpt-6.1-sol',
+        harness: 'codex',
+        effort: 'high',
+        account: null,
+      },
+      review: {
+        of: 'vm.lead--WN-1',
+        verdict: 'pass',
+        findings: { high: 0, medium: 0, low: 0 },
+        overturned: false,
+        disputed: false,
+        by: null,
+      },
+    }) as unknown as Record<string, unknown>,
+    'mac.reviews'
+  );
+  const base = (): Record<string, unknown> => ({
+    state: 'ok',
+    scannedAt: NOW,
+    missingFiles: [],
+    problems: [],
+    minRuns: 1,
+    models: [
+      {
+        model: 'anthropic/claude-opus-5-5',
+        label: 'Opus 5.5',
+        family: 'Claude',
+        runtimes: ['claude-code'],
+        efforts: ['xhigh'],
+        prices: null,
+        notes: null,
+      },
+      {
+        model: 'openai/gpt-6.1-sol',
+        label: 'Sol 6.1',
+        family: 'GPT-6',
+        runtimes: ['codex'],
+        efforts: ['high'],
+        prices: null,
+        notes: null,
+      },
+    ],
+    aliases: {},
+    effortSuffixes: [],
+    taskTypes: [
+      {
+        id: 'worknode-build',
+        label: 'WorkNode build',
+        description: null,
+        unit: 'task',
+        measures: ['reliability'],
+        byProcess: false,
+      },
+      {
+        id: 'review',
+        label: 'Review',
+        description: null,
+        unit: 'task',
+        measures: ['reliability'],
+        byProcess: false,
+      },
+    ],
+    measures: [
+      {
+        id: 'reliability',
+        label: 'Reliability',
+        description: 'Done',
+        unit: 'share',
+        better: 'higher',
+        kind: 'outcome',
+      },
+    ],
+    uses: [
+      {
+        id: 'pipeline',
+        label: 'Our pipeline',
+        description: null,
+        taskTypes: ['worknode-build'],
+        weights: { reliability: 3 },
+      },
+    ],
+    benchmarks: [],
+  });
+  const runs = (problems: Array<{ file: string; reason: string; since: number }>) => ({
+    state: 'ok' as const,
+    scannedAt: NOW,
+    runs: [
+      { file: targetFile, firstSeenAt: earlier, sha256: 'a', doc: targetRun },
+      { file: reviewFile, firstSeenAt: earlier, sha256: 'b', doc: reviewRun },
+    ],
+    writers: 2,
+    skipped: { runFiles: 0, writerFolders: 0 },
+    problems,
+  });
+  const view = (catalog: Record<string, unknown>, problems: Array<{ file: string; reason: string; since: number }>) =>
+    buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root: '/reports',
+      catalog: catalog as unknown as CatalogState,
+      runs: runs(problems),
+    });
+  const ranked = (built: ScoreboardView) => {
+    const row = built.uses[0]?.taskTypes[0]?.rows.find(
+      (r) => r.model === 'anthropic/claude-opus-5-5'
+    );
+    expect(row?.ranked).toBe(true);
+    return row;
+  };
+
+  it('a failed catalog listing is disclosed on the ranked verdict that used it', () => {
+    const row = ranked(view({ ...base(), state: 'error', scannedAt: failAt }, []));
+    expect(row?.sourceState).toBe('error');
+    expect(row?.asOf).toBe(new Date(failAt).toISOString());
+    expect(row?.ageSeconds).toBe(300);
+  });
+
+  it('a failed retained review file is disclosed on the row it reviewed, and a never-read file on none', () => {
+    const row = ranked(
+      view(base(), [
+        { file: reviewFile, reason: 'contains NUL bytes from a damaged write', since: failAt },
+        {
+          file: 'writers/mac.reviews/runs/2026-11-06/mac.reviews--never.json',
+          reason: 'contains NUL bytes from a damaged write',
+          since: earlier,
+        },
+      ])
+    );
+    expect(row?.sourceState).toBe('unreadable');
+    expect(row?.asOf).toBe(new Date(failAt).toISOString());
+    expect(row?.ageSeconds).toBe(300);
+  });
+});

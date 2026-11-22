@@ -1301,3 +1301,154 @@ fn read_scoreboard_traces_failed_run_file_only_to_its_row_using_failure_since() 
     assert!(sol.get("asOf").is_none());
     assert!(sol.get("ageSeconds").is_none());
 }
+
+// ---------------------------------------------------------------------------------------------
+// M1 (2026-11-22): a ranked verdict discloses the failed inputs its ranking used.
+
+const M1_NOW: i64 = 1_793_982_600_000; // 2026-11-06T16:30:00.000Z
+const M1_FAILED: i64 = 1_793_982_300_000; // 2026-11-06T16:25:00.000Z
+const M1_EARLIER: i64 = 1_793_982_000_000; // 2026-11-06T16:20:00.000Z
+
+/// One observed build run on Opus and its blind review by Sol, with the catalog and scan state a
+/// caller sets: enough to rank one row (minRuns 1, one decisive review).
+fn m1_envelope(catalog: Value, problems: Value) -> (Value, aac_status::read_context::Presentation) {
+    let run = |id: &str, writer: &str, kind: &str, model: &str, ended: &str, review: Value| {
+        json!({
+            "schema": "agent-reports/run@1", "id": id, "writer": writer, "seq": 1,
+            "writtenAt": ended, "source": "observed", "project": "example", "stream": "S",
+            "task": { "id": id, "type": kind, "title": id, "size": { "tasks": 1 } },
+            "model": { "provider": null, "id": model, "harness": "claude-code", "effort": "xhigh", "account": null },
+            "startedAt": null, "endedAt": ended, "wallSeconds": 600, "outcome": "done",
+            "flags": [], "evidence": [], "review": review, "process": null, "benchmark": null,
+            "imported": null
+        })
+    };
+    let target = run(
+        "vm.lead--WN-1",
+        "vm.lead",
+        "worknode-build",
+        "anthropic/claude-opus-5-5",
+        "2026-11-06T15:00:00.000Z",
+        json!(null),
+    );
+    let review = run(
+        "mac.reviews--R1",
+        "mac.reviews",
+        "review",
+        "openai/gpt-6.1-sol",
+        "2026-11-06T15:30:00.000Z",
+        json!({"of": "vm.lead--WN-1", "verdict": "pass", "findings": {"high": 0, "medium": 0, "low": 0}, "overturned": false, "disputed": false, "by": null}),
+    );
+    let target_file = "writers/vm.lead/runs/2026-11-06/vm.lead--WN-1.json";
+    let review_file = "writers/mac.reviews/runs/2026-11-06/mac.reviews--R1.json";
+    let data = json!({
+        "now": M1_NOW,
+        "timeZone": "UTC",
+        "root": "/fixture",
+        "catalog": {
+            "state": catalog["state"], "scannedAt": catalog["scannedAt"],
+            "missingFiles": [], "problems": catalog["problems"], "minRuns": 1,
+            "models": [
+                { "model": "anthropic/claude-opus-5-5", "label": "Opus 5.5", "family": "Claude", "runtimes": ["claude-code"], "efforts": ["xhigh"], "prices": null, "notes": null },
+                { "model": "openai/gpt-6.1-sol", "label": "Sol 6.1", "family": "GPT-6", "runtimes": ["claude-code"], "efforts": ["xhigh"], "prices": null, "notes": null }
+            ],
+            "taskTypes": [
+                { "id": "worknode-build", "label": "WorkNode build", "description": null, "unit": "task", "measures": ["reliability"], "byProcess": false },
+                { "id": "review", "label": "Review", "description": null, "unit": "task", "measures": ["reliability"], "byProcess": false }
+            ],
+            "measures": [
+                { "id": "reliability", "label": "Reliability", "description": "Done", "unit": "share", "better": "higher", "kind": "outcome" }
+            ],
+            "uses": [
+                { "id": "pipeline", "label": "Our pipeline", "description": null, "taskTypes": ["worknode-build"], "weights": { "reliability": 3 } }
+            ],
+            "benchmarks": []
+        },
+        "runs": {
+            "correctionsResolved": true, "state": "ok", "scannedAt": M1_NOW,
+            "runs": [
+                { "file": target_file, "firstSeenAt": M1_EARLIER, "sha256": "a", "doc": target },
+                { "file": review_file, "firstSeenAt": M1_EARLIER, "sha256": "b", "doc": review }
+            ],
+            "writers": 2, "skipped": { "runFiles": 0, "writerFolders": 0 }, "problems": problems
+        },
+        "docs": [target, review],
+        "joinReviews": [],
+        "seedFailures": []
+    });
+    let facts: aac_status::read_context::Presentation = serde_json::from_value(json!({
+        "dates": {
+            M1_NOW.to_string(): { "iso": "2026-11-06T16:30:00.000Z", "clock": "4:30 PM", "day": "Nov 6" },
+            M1_FAILED.to_string(): { "iso": "2026-11-06T16:25:00.000Z", "clock": "4:25 PM", "day": "Nov 6" },
+            M1_EARLIER.to_string(): { "iso": "2026-11-06T16:20:00.000Z", "clock": "4:20 PM", "day": "Nov 6" }
+        },
+        "epochs": {
+            "2026-11-06T15:00:00.000Z": 1_793_977_200_000_i64,
+            "2026-11-06T15:30:00.000Z": 1_793_979_000_000_i64,
+            "2026-11-06T16:30:00.000Z": M1_NOW,
+            "2026-11-06T16:25:00.000Z": M1_FAILED,
+            "2026-11-06T16:20:00.000Z": M1_EARLIER
+        },
+        "order": {
+            "anthropic/claude-opus-5-5|claude-code|xhigh": 0,
+            "openai/gpt-6.1-sol|claude-code|xhigh": 1,
+            "vm.lead--WN-1": 2,
+            "mac.reviews--R1": 3
+        }
+    }))
+    .unwrap();
+    (data, facts)
+}
+
+fn m1_view(data: Value, facts: aac_status::read_context::Presentation) -> Value {
+    aac_status::read_scoreboard::compose(aac_status::read_context::Envelope {
+        data,
+        presentation: facts,
+    })
+    .expect("view composes")
+}
+
+fn m1_row(view: &Value) -> &Value {
+    let rows = view["uses"][0]["taskTypes"][0]["rows"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r["model"] == "anthropic/claude-opus-5-5")
+        .expect("the Opus row");
+    assert_eq!(row["ranked"], json!(true), "the row ranks; it is what carries the verdict");
+    assert_eq!(row["verdict"], json!("fine"));
+    row
+}
+
+#[test]
+fn a_failed_catalog_listing_is_disclosed_on_every_ranked_verdict() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "error", "scannedAt": M1_FAILED, "problems": []}),
+        json!([]),
+    );
+    let view = m1_view(data, facts);
+    assert_eq!(view["sources"][1]["state"], json!("error"));
+    let row = m1_row(&view);
+    assert_eq!(row["sourceState"], json!("error"), "the retained catalog's failure: {row}");
+    assert_eq!(row["asOf"], json!("2026-11-06T16:25:00.000Z"));
+    assert_eq!(row["ageSeconds"].as_f64(), Some(300.0));
+}
+
+#[test]
+fn a_failed_retained_review_file_is_disclosed_on_the_row_it_reviewed() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "ok", "scannedAt": M1_NOW, "problems": []}),
+        json!([
+            { "file": "writers/mac.reviews/runs/2026-11-06/mac.reviews--R1.json", "reason": "contains NUL bytes from a damaged write", "since": M1_FAILED },
+            { "file": "writers/mac.reviews/runs/2026-11-06/mac.reviews--never.json", "reason": "contains NUL bytes from a damaged write", "since": M1_EARLIER }
+        ]),
+    );
+    let view = m1_view(data, facts);
+    let row = m1_row(&view);
+    assert_eq!(row["sourceState"], json!("unreadable"), "the review still ranked it: {row}");
+    assert_eq!(row["asOf"], json!("2026-11-06T16:25:00.000Z"));
+    assert_eq!(
+        row["ageSeconds"].as_f64(),
+        Some(300.0),
+        "a never-read damaged file adds no attribution (the earlier 16:20 problem must not win)"
+    );
+}

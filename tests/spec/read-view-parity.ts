@@ -131,7 +131,37 @@ try {
       reviewRow('sb3-join-unscored', 120, { model: UNSCORED_MODEL }).doc,
     ];
   }
-  const scoreCases = [scoreBase, filtered, missing, stale, empty, unknown, unscoredReviews];
+  // M1 (2026-11-22): a failed catalog listing and a failed retained review file are disclosed on
+  // the ranked verdicts whose ranking used them, on both readers.
+  const catalogFailed = structuredClone(scoreBase);
+  catalogFailed.catalog.state = 'error';
+  catalogFailed.catalog.scannedAt = now - 300_000;
+  const reviewFailed = structuredClone(scoreBase);
+  {
+    const review = reviewFailed.runs.runs.find(
+      (row: {
+        file: string;
+        doc: { task: { type: string }; review: { of: string } | null };
+      }) => row.doc.task.type === 'review' && Boolean(row.doc.review?.of)
+    );
+    assert.ok(review, 'a review run with a target to fail');
+    reviewFailed.runs.problems.push({
+      file: review.file,
+      reason: 'contains NUL bytes from a damaged write',
+      since: now - 600_000,
+    });
+  }
+  const scoreCases = [
+    scoreBase,
+    filtered,
+    missing,
+    stale,
+    empty,
+    unknown,
+    unscoredReviews,
+    catalogFailed,
+    reviewFailed,
+  ];
   for (const input of scoreCases)
     for (const zone of ['UTC', 'America/New_York', 'invalid-fixture-zone']) {
       input.timeZone = zone;
