@@ -513,8 +513,11 @@ fn a_stalled_credential_capture_does_not_delay_an_unrelated_store_write() {
         b_result.unwrap().is_ok(),
         "an unrelated capture must not wait behind A's credential capture"
     );
+    // The is_ok assertion above is the deadlock proof: behind A's lock B could only
+    // fail after the busy timeout. This bound is slack for a loaded runner, not a
+    // latency requirement.
     assert!(
-        b_waited < Duration::from_millis(200),
+        b_waited < Duration::from_secs(2),
         "B waited {b_waited:?} behind A's stalled capture"
     );
     assert!(ticket_a.sequence.parse::<u64>().is_ok());

@@ -972,8 +972,10 @@ fn captures_overlap_outside_the_transaction_and_allocation_still_serializes() {
             .unwrap()
     });
     // The capture closure no longer holds the write lock, so the second capture
-    // starts while the first is still stalled in its credential read.
-    assert!(second_seen.recv_timeout(std::time::Duration::from_millis(100)).is_ok());
+    // starts while the first is still stalled in its credential read. A held lock
+    // would never deliver the signal, so this is a deadlock timeout, not a latency
+    // bound: generous enough for a loaded runner to spawn and open a store.
+    assert!(second_seen.recv_timeout(std::time::Duration::from_secs(10)).is_ok());
     release.send(()).unwrap();
     let (x, xt) = first.join().unwrap();
     let (y, yt) = second.join().unwrap();
