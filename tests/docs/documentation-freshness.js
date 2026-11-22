@@ -122,6 +122,12 @@ requireText('docker/README.md', '/home/node/.ccs');
 requireText('docker/README.md', 'CCS_SESSION_SECRET');
 requireText('.github/ISSUE_TEMPLATE/documentation.yml', 'docs/README.md');
 requireText('.github/ISSUE_TEMPLATE/config.yml', 'sittingmongoose/ai-account-center');
+// rw-max-L1: the migration guide names the drive-relative difference and the named refusals.
+requireText('docs/README.md', 'config-migration.md');
+requireText('docs/config-migration.md', 'C:fixture');
+requireText('docs/config-migration.md', "drive's own current directory");
+requireText('docs/config-migration.md', 'relative root requires an absolute base');
+requireText('docs/config-migration.md', 'store root must be absolute');
 
 const practicalGuidanceFiles = [
   path.join(root, 'README.md'),
