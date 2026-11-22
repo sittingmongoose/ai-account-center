@@ -57,6 +57,7 @@ class Process:
     cwd: str = dataclasses.field(default=None, repr=False)
     env: dict = dataclasses.field(default_factory=dict, repr=False)
     session: int = None
+    started: float = dataclasses.field(default=None, repr=False)
 
 
 class ProcessTable(list):
@@ -75,7 +76,8 @@ def linux_processes():
         if not path.name.isdigit():
             continue
         try:
-            if path.stat().st_uid != os.getuid():
+            info = path.stat()
+            if info.st_uid != os.getuid():
                 continue
             stat = (path / "stat").read_text()
             parts = stat[stat.rfind(")") + 2:].split()
@@ -86,7 +88,7 @@ def linux_processes():
             if len(raw) > 65536:
                 continue
             args = [item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item]
-            values.append(Process(int(path.name), int(parts[1]), os.getuid(), exe, parts[19], args))
+            values.append(Process(int(path.name), int(parts[1]), os.getuid(), exe, parts[19], args, started=info.st_ctime))
         except (OSError, ValueError, IndexError):
             continue
     return values
@@ -147,7 +149,11 @@ def mac_processes():
             continue
         exe = path.value.decode("utf-8", "surrogateescape")
         args = mac_arguments(pid) if pathlib.Path(exe).name.lower() in ("node", "bun") else []
-        values.append(Process(pid, ppid, uid, exe, parts[3], args))
+        try:
+            started = time.mktime(time.strptime(" ".join(parts[3].split()), "%a %b %d %H:%M:%S %Y"))
+        except ValueError:
+            started = None
+        values.append(Process(pid, ppid, uid, exe, parts[3], args, started=started))
     return values
 
 
@@ -240,7 +246,16 @@ $rows=@(); $lineage=New-Object Text.StringBuilder; foreach($p in Get-CimInstance
         values = ProcessTable()
         for row in [row for row in rows if int(row["pid"]) in owned][:2048]:
             args = windows_arguments(row.get("args") or "")
-            values.append(Process(int(row["pid"]), int(row["ppid"]), 0, row["exe"], row["identity"], args, session=int(row["session"])))
+            identity = row["identity"]
+            started = None
+            try:
+                ticks = int(identity)
+            except (TypeError, ValueError):
+                ticks = 0
+            if ticks > 0:
+                # Win32 FILETIME (100 ns since 1601-01-01) to unix seconds.
+                started = ticks / 10_000_000 - 11644473600
+            values.append(Process(int(row["pid"]), int(row["ppid"]), 0, row["exe"], identity, args, session=int(row["session"]), started=started))
         values.lineage = {}
         for entry in str(data.get("tree") or "").split(";")[:LINEAGE_LIMIT]:
             parts = entry.split(",")

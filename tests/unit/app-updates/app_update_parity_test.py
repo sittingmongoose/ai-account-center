@@ -1,4 +1,5 @@
 """App-update helper/bridge parity (rows 8, 9, 24, 27). Fixtures and mocks only."""
+import contextlib
 import os
 import pathlib
 import re
@@ -131,3 +132,162 @@ class ParityTests(unittest.TestCase):
         self.assertGreaterEqual(len(scans), 2, "post-install rescan")
         self.assertEqual([item.pid for item in restarted], [42])
         self.assertEqual(value["status"], "updated")
+
+    def _rescan_update(self, install, refreshed, first, second, home, extra=(), check=None):
+        scans, killed, restarted, checks = [], [], [], []
+
+        def fake_scan(platform):
+            scans.append(platform)
+            return first if len(scans) == 1 else second
+
+        def fake_check(platform, contexts):
+            checks.append([item.pid for item in contexts])
+            if check is not None:
+                check(platform, contexts)
+
+        def fake_terminate(ins, targets, **_kwargs):
+            killed.extend(item.pid for item in targets)
+            return 0
+
+        def fake_restart(ins, contexts):
+            restarted.extend(item.pid for item in contexts)
+            return [{"kind": "tmux"} for _ in contexts]
+
+        patches = [
+            mock.patch.object(pathlib.Path, "home", return_value=home),
+            mock.patch.object(processes, "terminal_attached", side_effect=lambda _pl, items: {item.pid for item in items}),
+            mock.patch.object(processes, "cli_context"),
+            mock.patch.object(updater, "scan", side_effect=fake_scan),
+            mock.patch.object(updater, "check_terminal", side_effect=fake_check),
+            mock.patch.object(updater, "perform_cli_update"),
+            mock.patch.object(updater, "detect_cli", return_value=refreshed),
+            mock.patch.object(updater, "terminate_cli", side_effect=fake_terminate),
+            mock.patch.object(updater, "restart_cli", side_effect=fake_restart),
+            *extra,
+        ]
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            row = updater.update_cli(install, time.monotonic() + 60)
+        return row, scans, killed, restarted, checks
+
+    def test_rescan_does_not_stop_a_t3_started_cli(self):
+        # Reviewer probe_rescan_t3: classify the full latest table, then keep newcomers.
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            t3 = home / ".t3/runtime/versions/0.1.10/t3"
+            codex = home / ".local/bin/codex"
+            install = common.Install("codex-cli", "ubuntu", codex, "1.0.0", "native")
+            refreshed = common.Install("codex-cli", "ubuntu", codex, "2.0.0", "native")
+            server = processes.Process(10, 1, 1000, str(t3), "s10", [str(t3), "serve"], cwd="/", env={})
+            child = processes.Process(
+                42, 10, 1000, str(codex), "s42", [str(codex)], cwd=str(home), env={"HOME": str(home)}
+            )
+            with mock.patch.object(pathlib.Path, "home", return_value=home), mock.patch.object(
+                processes, "terminal_attached", side_effect=lambda _pl, items: {item.pid for item in items}
+            ), mock.patch.object(processes, "cli_context"):
+                classified = processes.cli_instances(install, [server, child])
+            self.assertEqual([item.pid for item in classified.contexts], [])
+            self.assertEqual([item.pid for item in classified.targets], [])
+            self.assertEqual([item.pid for item in classified.background], [42])
+            row, scans, killed, restarted, _checks = self._rescan_update(
+                install, refreshed, [server], [server, child], home
+            )
+            self.assertGreaterEqual(len(scans), 2)
+            self.assertEqual(killed, [])
+            self.assertEqual(restarted, [])
+            self.assertEqual(row["status"], "updated")
+
+    def test_rescan_skips_windows_muse(self):
+        # Reviewer probe_rescan_muse: skip the rescan wherever the first scan was skipped.
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            muse = home / "AppData/Local/Programs/muse/muse.cmd"
+            binary = muse.parent / "muse-bin-1.2.exe"
+            install = common.Install("muse-code", "windows", muse, "1.0.0", "native")
+            refreshed = common.Install("muse-code", "windows", muse, "2.0.0", "native")
+            old = processes.Process(30, 1, 0, str(binary), "s30", [str(binary)], cwd=str(home), env={})
+            new = processes.Process(44, 1, 0, str(binary), "s44", [str(binary)], cwd=str(home), env={})
+            extra = (
+                mock.patch.object(processes, "t3_owned", return_value=[]),
+                mock.patch.object(updater, "muse_update_busy", return_value=False),
+                mock.patch.object(updater, "muse_warm_catalog", return_value=True),
+            )
+            row, scans, killed, restarted, _checks = self._rescan_update(
+                install, refreshed, [old], [old, new], home, extra=extra
+            )
+            self.assertGreaterEqual(len(scans), 1)
+            self.assertEqual(killed, [])
+            self.assertEqual(restarted, [])
+            self.assertEqual(row["status"], "updated")
+
+    def test_rescan_treats_a_reused_pid_as_a_new_process(self):
+        # Windows reuses pids: the pre-install identity must not hide a newcomer.
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            codex = home / ".local/bin/codex"
+            install = common.Install("codex-cli", "ubuntu", codex, "1.0.0", "native")
+            refreshed = common.Install("codex-cli", "ubuntu", codex, "2.0.0", "native")
+            old = processes.Process(
+                42, 1, 1000, str(codex), "old", [str(codex)], cwd=str(home), env={"HOME": str(home)}
+            )
+            new = processes.Process(
+                42, 1, 1000, str(codex), "new", [str(codex)], cwd=str(home), env={"HOME": str(home)}
+            )
+            # Only the process that took the reused pid is on a user terminal;
+            # the earlier process with that pid was a background session.
+            extra = (
+                mock.patch.object(
+                    processes, "terminal_attached",
+                    side_effect=lambda _pl, items: {item.pid for item in items if item.identity == "new"},
+                ),
+            )
+            row, scans, killed, restarted, _checks = self._rescan_update(
+                install, refreshed, [old], [new], home, extra=extra
+            )
+            self.assertGreaterEqual(len(scans), 2)
+            self.assertEqual(killed, [42])
+            self.assertEqual(restarted, [42])
+            self.assertEqual(row["status"], "updated")
+
+    def test_rescan_does_not_restart_a_cli_already_on_the_new_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            codex = home / ".local/bin/codex"
+            install = common.Install("codex-cli", "ubuntu", codex, "1.0.0", "native")
+            refreshed = common.Install("codex-cli", "ubuntu", codex, "2.0.0", "native")
+            child = processes.Process(
+                42, 1, 1000, str(codex), "s42", [str(codex)], cwd=str(home), env={"HOME": str(home)}
+            )
+            child.started = time.time() + 3600
+            row, scans, killed, restarted, _checks = self._rescan_update(
+                install, refreshed, [], [child], home
+            )
+            self.assertGreaterEqual(len(scans), 2)
+            self.assertEqual(killed, [])
+            self.assertEqual(restarted, [])
+            self.assertEqual(row["status"], "updated")
+
+    def test_rescan_checks_terminal_before_stopping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            codex = home / ".local/bin/codex"
+            install = common.Install("codex-cli", "ubuntu", codex, "1.0.0", "native")
+            refreshed = common.Install("codex-cli", "ubuntu", codex, "2.0.0", "native")
+            child = processes.Process(
+                99, 1, 1000, str(codex), "s99", [str(codex)], cwd=str(home), env={"HOME": str(home)}
+            )
+
+            def refuse(_platform, contexts):
+                if any(item.pid == 99 for item in contexts):
+                    raise common.UpdateFailure("restart_context")
+
+            row, scans, killed, restarted, checks = self._rescan_update(
+                install, refreshed, [], [child], home, check=refuse
+            )
+            self.assertGreaterEqual(len(scans), 2)
+            self.assertIn([99], checks)
+            self.assertEqual(killed, [])
+            self.assertEqual(restarted, [])
+            self.assertEqual(row["status"], "restart_failed")
+            self.assertEqual(row.get("messageCode"), "restart_failed")

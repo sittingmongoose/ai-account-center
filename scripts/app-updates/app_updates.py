@@ -683,6 +683,27 @@ def perform_cli_update(install, deadline=None):
     command([path, "update"], timeout=180, env={"PATH": str(path.parent) + os.pathsep + os.environ.get("PATH", "")})
 
 
+def _newcomers_on_old_binary(items, known, install_finished):
+    """New processes from the post-install scan that still run the old binary.
+
+    Classification already ran on the full latest table. Drop processes seen
+    before the install (same pid and start identity, so a reused pid is still
+    new), and any process whose start time is after the installer returned (it
+    started on the new version).
+    """
+    return [
+        item for item in items
+        if (item.pid, item.identity) not in known and _started_on_old_binary(item, install_finished)
+    ]
+
+
+def _started_on_old_binary(item, install_finished):
+    started = getattr(item, "started", None)
+    if not isinstance(started, (int, float)):
+        return True
+    return started <= install_finished
+
+
 def update_cli(install, deadline):
     before = install.version
     attempted = False
@@ -797,6 +818,7 @@ def update_cli(install, deadline):
         attempted = True
         install_started = time.time()
         perform_cli_update(install, deadline)
+        install_finished = time.time()
         refreshed = detect_cli(install.app_id, install.platform)
         if refreshed is None or not refreshed.version:
             raise UpdateFailure("version_unknown")
@@ -870,22 +892,31 @@ def update_cli(install, deadline):
             return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True)
         changed = True
         write_private_json(pending, {"version": refreshed.version})
-        try:
-            latest = scan(install.platform)
-        except OSError:
-            return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, "update_failed", True))
-        known = {item.pid for item in processes}
-        newcomers = [item for item in latest if item.pid not in known]
-        if newcomers:
+        late_contexts, late_targets, late_background = [], [], []
+        # Windows Muse is never stopped or restarted: skip the same way as the first scan.
+        if not (install.app_id == "muse-code" and install.platform == "windows"):
             try:
-                late_contexts, late_targets, late_background = cli_instances(install, newcomers)
-            except UpdateFailure as error:
-                return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, error.code, True))
+                latest = scan(install.platform)
             except OSError:
                 return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, "update_failed", True))
-            contexts = [*contexts, *late_contexts]
-            targets = [*targets, *late_targets]
-            background = [*background, *late_background]
+            known = {(item.pid, item.identity) for item in processes}
+            if any((item.pid, item.identity) not in known for item in latest):
+                # Classify on the full table so T3 ancestry and Windows lineage remain,
+                # then keep only processes that appeared after the first scan.
+                try:
+                    late_contexts, late_targets, late_background = cli_instances(install, latest)
+                except UpdateFailure as error:
+                    return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, error.code, True))
+                except OSError:
+                    return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, "update_failed", True))
+                late_contexts = _newcomers_on_old_binary(late_contexts, known, install_finished)
+                late_targets = _newcomers_on_old_binary(late_targets, known, install_finished)
+                late_background = _newcomers_on_old_binary(late_background, known, install_finished)
+                if late_contexts:
+                    check_terminal(install.platform, [*contexts, *late_contexts])
+        contexts = [*contexts, *late_contexts]
+        targets = [*targets, *late_targets]
+        background = [*background, *late_background]
         forced = (terminate_cli(install, targets) if targets else 0) + pre_forced
         try:
             sessions = restart_cli(refreshed, contexts)
