@@ -76,10 +76,10 @@ pub fn start() -> RwSignal<SessionView> {
     });
     let handler =
         Closure::<dyn Fn(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| {
-            if let Some(text) = event.detail().as_string() {
-                if let Ok(next) = serde_json::from_str::<SessionView>(&text) {
-                    view.set(next);
-                }
+            if let Some(text) = event.detail().as_string()
+                && let Ok(next) = serde_json::from_str::<SessionView>(&text)
+            {
+                view.set(next);
             }
         });
     let _ =
@@ -329,10 +329,9 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                 &session_object().unwrap_or(JsValue::UNDEFINED),
                 &"typing".into(),
             ),
-        ) {
-            if let Some(f) = f.dyn_ref::<js_sys::Function>() {
-                let _ = f.call2(&session, &password.into(), &confirm.into());
-            }
+        ) && let Some(f) = f.dyn_ref::<js_sys::Function>()
+        {
+            let _ = f.call2(&session, &password.into(), &confirm.into());
         }
     };
     // The keyboard's Next key: iOS submits a form on return whatever the key says, so Next moves to the next field

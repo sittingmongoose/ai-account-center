@@ -142,7 +142,7 @@ pub fn runs(list: Vec<Run>) -> impl IntoView {
                 .collect_view();
             view! {
                 <span class:nw=whole>{pieces}</span>
-                {(i + 1 < count).then(|| " · ")}
+                {(i + 1 < count).then_some(" · ")}
             }
         })
         .collect_view()

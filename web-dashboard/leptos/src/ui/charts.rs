@@ -290,7 +290,8 @@ pub fn motion_reduced() -> bool {
 /// window's own frames (not an owner's), so a redraw of the surrounding view never cancels it half way.
 pub fn animate(ms: f64, alive: impl Fn() -> bool + 'static, frame: impl Fn(f64) + 'static) {
     let start = Rc::new(RefCell::new(None::<f64>));
-    let step: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
+    type FrameStep = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
+    let step: FrameStep = Rc::new(RefCell::new(None));
     let again = step.clone();
     *step.borrow_mut() = Some(Closure::<dyn FnMut(f64)>::new(move |now: f64| {
         if !alive() {
@@ -433,6 +434,12 @@ pub(crate) fn tip_centre(centre: f64, w: f64, lo: f64, hi: f64) -> f64 {
     centre.clamp(lo + PAD + w / 2.0, hi - PAD - w / 2.0)
 }
 
+/// The tip card's left and right edges after clamping. CSS centres the card on `left` with `translateX(-50%)`.
+pub(crate) fn tip_rendered_box(centre: f64, w: f64, lo: f64, hi: f64) -> (f64, f64) {
+    let x = tip_centre(centre, w, lo, hi);
+    (x - w / 2.0, x + w / 2.0)
+}
+
 /// The anchored panel's max heights (below, above), each cleared of the bottom inset (review N3).
 pub(crate) fn pop_max_heights(vh: f64, top: f64, anchor_top: f64, safe_bottom: f64) -> (f64, f64) {
     (
@@ -542,7 +549,8 @@ pub fn TipLayer(children: Children) -> impl IntoView {
             .unwrap_or(1024.0);
         let (lo, hi) = page_bounds(vw);
         let w = card.get().map(|c| c.offset_width() as f64).unwrap_or(0.0);
-        pos.set((tip_centre(centre_x, w, lo, hi), y, below));
+        let (left, right) = tip_rendered_box(centre_x, w, lo, hi);
+        pos.set(((left + right) / 2.0, y, below));
     });
     let over = move |e: web_sys::PointerEvent| {
         if e.pointer_type() != "mouse" {
@@ -899,6 +907,29 @@ mod tests {
         // no rail (phone 402): the same box clamp holds at the window edge
         let (lo, hi) = content_bounds(402.0, "phone", "", 0.0);
         assert_eq!(tip_centre(100.0, 340.0, lo, hi), 182.0);
+    }
+
+    #[test]
+    fn a_tip_stays_inside_the_card_after_position_and_text_change() {
+        let (lo, hi) = content_bounds(951.0, "rail", "right", 84.0);
+        let inside = |centre: f64, width: f64| {
+            let (left, right) = tip_rendered_box(centre, width, lo, hi);
+            assert!(
+                left >= lo && right <= hi,
+                "tip [{left}, {right}] left the content [{lo}, {hi}] at centre {centre} width {width}"
+            );
+            (left, right)
+        };
+        // short text, mid-card
+        inside(437.0, 120.0);
+        // longer text, moved to the left edge
+        let (left, right) = inside(20.0, 340.0);
+        assert!(left >= lo);
+        assert!(right <= hi);
+        // same long text, moved to the right rail
+        let (left, right) = inside(900.0, 340.0);
+        assert!(left >= lo);
+        assert!(right <= hi);
     }
 
     #[test]

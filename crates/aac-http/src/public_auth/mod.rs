@@ -1717,13 +1717,30 @@ mod tests {
         let root = home.path();
         let first =
             DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).unwrap();
+        // The second writer is refused because this process holds the claim (Busy), not
+        // for any other reason; the isolation above reaps the inherited-fd race.
+        let second = aac_files::auth_owner::SessionOwner::take(root);
+        assert_eq!(
+            second.as_ref().err().map(|e| e.cause),
+            Some(aac_core::Cause::Busy),
+            "{:?}",
+            second.as_ref().err()
+        );
         assert!(
-            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).is_err()
+            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).is_err(),
+            "second DashboardAuth writer"
         );
         drop(first);
         let owner = root.join("auth/sessions.owner");
         // The file is a test stand-in for a legacy dashboard's own owner marker.
         std::fs::write(&owner, b"fixture TS process").unwrap();
+        let occupied = aac_files::auth_owner::SessionOwner::take(root);
+        assert_eq!(
+            occupied.as_ref().err().map(|e| e.cause),
+            Some(aac_core::Cause::Busy),
+            "{:?}",
+            occupied.as_ref().err()
+        );
         assert!(
             DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).is_err()
         );

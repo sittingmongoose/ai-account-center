@@ -75,7 +75,7 @@ pub fn HeatCard() -> impl IntoView {
                     on:pointercancel=move |_| touch.cancel()
                     on:pointermove=move |e: web_sys::PointerEvent| {
                         if e.pointer_type() == "mouse" { if !pinned.get_untracked() { sel.set(cell_at(&e).unwrap_or(-1)) } }
-                        else if touch.moved(&e) { if let Some(i) = cell_at(&e) { sel.set(i); pinned.set(true); } }
+                        else if touch.moved(&e) && let Some(i) = cell_at(&e) { sel.set(i); pinned.set(true); }
                     }
                     on:pointerleave=move |e: web_sys::PointerEvent| if e.pointer_type() == "mouse" && !pinned.get_untracked() { sel.set(-1) }
                     on:pointerup=move |e: web_sys::PointerEvent| {
@@ -202,7 +202,7 @@ pub fn DailyCard() -> impl IntoView {
                         on:pointercancel=move |_| touch.cancel()
                         on:pointermove=move |e: web_sys::PointerEvent| {
                             if e.pointer_type() == "mouse" { if !pinned.get_untracked() { sel.set(bar_at(&e).unwrap_or(-1)) } }
-                            else if touch.moved(&e) { if let Some(i) = bar_at(&e) { sel.set(i); pinned.set(true); } }
+                            else if touch.moved(&e) && let Some(i) = bar_at(&e) { sel.set(i); pinned.set(true); }
                         }
                         on:pointerleave=move |e: web_sys::PointerEvent| if e.pointer_type() == "mouse" && !pinned.get_untracked() { sel.set(-1) }
                         on:pointerup=move |e: web_sys::PointerEvent| {

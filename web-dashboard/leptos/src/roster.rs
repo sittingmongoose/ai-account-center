@@ -285,10 +285,7 @@ pub fn cut(text: &str, max: usize) -> String {
         .rfind(' ')
         .filter(|&i| i > max / 2)
         .unwrap_or(head.len());
-    format!(
-        "{}…",
-        head[..at].trim_end_matches(|c: char| c == ',' || c == ';' || c == ':' || c == ' ')
-    )
+    format!("{}…", head[..at].trim_end_matches([',', ';', ':', ' ']))
 }
 
 /// The first sentence of a text, cut at `max`.
@@ -556,11 +553,11 @@ fn canonical_state(state: &str) -> &str {
 
 /// "Title (state not recognised: queued)", the composer's words for an unknown state, split back into title and state.
 pub fn split_odd(title: &str) -> (String, Option<String>) {
-    if let Some(open) = title.rfind(" (state not recognised: ") {
-        if title.ends_with(')') {
-            let state = &title[open + " (state not recognised: ".len()..title.len() - 1];
-            return (title[..open].to_string(), Some(state.to_string()));
-        }
+    if let Some(open) = title.rfind(" (state not recognised: ")
+        && title.ends_with(')')
+    {
+        let state = &title[open + " (state not recognised: ".len()..title.len() - 1];
+        return (title[..open].to_string(), Some(state.to_string()));
     }
     (title.to_string(), None)
 }

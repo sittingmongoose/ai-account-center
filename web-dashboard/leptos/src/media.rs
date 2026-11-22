@@ -119,12 +119,11 @@ fn LiveMediaItem(media: Memo<Media>, identity: String) -> impl IntoView {
 /// The iPhone only offers its own player for a video (`webkitEnterFullscreen`); elsewhere the standard API.
 fn system_full_screen(video: &web_sys::HtmlVideoElement) {
     let target: &wasm_bindgen::JsValue = video.as_ref();
-    if let Ok(f) = js_sys::Reflect::get(target, &"webkitEnterFullscreen".into()) {
-        if let Some(f) = f.dyn_ref::<js_sys::Function>() {
-            if f.call0(target).is_ok() {
-                return;
-            }
-        }
+    if let Ok(f) = js_sys::Reflect::get(target, &"webkitEnterFullscreen".into())
+        && let Some(f) = f.dyn_ref::<js_sys::Function>()
+        && f.call0(target).is_ok()
+    {
+        return;
     }
     let _ = video.request_fullscreen();
 }

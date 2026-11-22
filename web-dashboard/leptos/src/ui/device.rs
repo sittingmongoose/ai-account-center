@@ -5,16 +5,19 @@
 //! `?safe=t,r,b,l` overrides the measured insets for tests in a desktop browser. It is display-only.
 
 use leptos::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
+
+type ChromeChoice = Option<(f64, &'static str, &'static str)>;
 
 thread_local! {
     /// The last chrome decision: insets, chrome, Duo detected, rail reserve. For the Device info readout only.
     static LAST: RefCell<(Insets, &'static str, bool, f64)> = RefCell::new((Insets::default(), "", false, 0.0));
     /// The most recent chrome decisions, oldest first, so a fold or rotation sequence can be read back.
-    static LOG: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
+    static LOG: RefCell<VecDeque<String>> = const { RefCell::new(VecDeque::new()) };
 }
 
 /// A plain-text readout of what this device reports and which chrome it got (the account menu's "Device info").
@@ -163,7 +166,7 @@ pub fn chrome_for(embed: bool, duo: bool, width: f64, height: f64, insets: Inset
     }
     let content = width - insets.left - insets.right;
     // Open and upright: a band across the top. On a phone the same inset is the Dynamic Island.
-    if content >= 600.0 && content < 1280.0 && insets.top >= 20.0 {
+    if (600.0..1280.0).contains(&content) && insets.top >= 20.0 {
         return "band";
     }
     // The top and tab bars below the width the desktop header fits in.
@@ -341,7 +344,7 @@ pub fn start(embed: bool) {
         .ok()
         .and_then(|e| e.dyn_into().ok());
     if let (Some(probe), Some(body)) = (probe.as_ref(), doc.body()) {
-        let _ = probe.style().set_css_text(
+        probe.style().set_css_text(
             "position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;visibility:hidden;\
              padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);",
         );
@@ -365,8 +368,7 @@ pub fn start(embed: bool) {
         })
         .unwrap_or(false);
     // The width, chrome and rail side last chosen, so typing can keep them (keep_chrome_while_typing).
-    let last: std::rc::Rc<std::cell::Cell<Option<(f64, &'static str, &'static str)>>> =
-        std::rc::Rc::new(std::cell::Cell::new(None));
+    let last: Rc<Cell<ChromeChoice>> = Rc::new(Cell::new(None));
     // The layout width and insets the chrome was last chosen for, so a pinch-zoom can be told from a fold (zoom_only).
     let seen: std::rc::Rc<std::cell::Cell<Option<(f64, Insets)>>> =
         std::rc::Rc::new(std::cell::Cell::new(None));
@@ -463,10 +465,10 @@ pub fn start(embed: bool) {
                 &px(if chrome == "band" { 112.0 } else { 0.0 }),
             );
             let current = (width, height, insets, chrome, side);
-            if geometry.replace(Some(current)) != Some(current) {
-                if let Ok(event) = web_sys::Event::new(LAYOUT_EVENT) {
-                    let _ = window().dispatch_event(&event);
-                }
+            if geometry.replace(Some(current)) != Some(current)
+                && let Ok(event) = web_sys::Event::new(LAYOUT_EVENT)
+            {
+                let _ = window().dispatch_event(&event);
             }
         }
     };

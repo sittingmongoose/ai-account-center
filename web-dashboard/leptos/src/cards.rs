@@ -301,10 +301,10 @@ fn Deck(
     // the very branch that owns it (see NOTES.md).
     let to_top = move || {
         let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
-            if let Some(el) = document().query_selector(".sec-questions").ok().flatten() {
-                if el.get_bounding_client_rect().top() < 0.0 {
-                    el.scroll_into_view();
-                }
+            if let Some(el) = document().query_selector(".sec-questions").ok().flatten()
+                && el.get_bounding_client_rect().top() < 0.0
+            {
+                el.scroll_into_view();
             }
         });
         let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -465,15 +465,13 @@ fn Deck(
             "ArrowLeft" => back(),
             k if k.len() == 1 && k.as_bytes()[0].is_ascii_digit() && k != "0" => {
                 let index = (k.as_bytes()[0] - b'1') as usize;
-                if let Some(card) = current.get_untracked() {
-                    if card.can_answer()
-                        && matches!(card.kind.as_str(), "" | "question" | "judgement")
-                    {
-                        if let Some(option) = card.options.get(index) {
-                            let key = option.key.clone();
-                            drafts.update(|d| drafts::toggle(d, &card, &key));
-                        }
-                    }
+                if let Some(card) = current.get_untracked()
+                    && card.can_answer()
+                    && matches!(card.kind.as_str(), "" | "question" | "judgement")
+                    && let Some(option) = card.options.get(index)
+                {
+                    let key = option.key.clone();
+                    drafts.update(|d| drafts::toggle(d, &card, &key));
                 }
             }
             _ => {}
@@ -1051,10 +1049,10 @@ fn Review(
                         match r.outcome.as_str() {
                             "recorded" => {
                                 summary.recorded += 1;
-                                if let Some(c) = cards.iter().find(|c| c.id == r.card_id) {
-                                    if !summary.askers.contains(&c.asked_by) {
-                                        summary.askers.push(c.asked_by.clone());
-                                    }
+                                if let Some(c) = cards.iter().find(|c| c.id == r.card_id)
+                                    && !summary.askers.contains(&c.asked_by)
+                                {
+                                    summary.askers.push(c.asked_by.clone());
                                 }
                                 // Drop the draft only if it is still the one sent: another tab may have
                                 // edited it while this send was on its way, and that newer draft stays.
@@ -1201,7 +1199,7 @@ fn unsent_row(
 ) -> (String, String, Vec<String>, String) {
     let title = answered
         .iter()
-        .find(|a| &a.card.id == id)
+        .find(|a| a.card.id == id)
         .map(|a| a.card.title.clone())
         .unwrap_or_else(|| id.rsplit("--").next().unwrap_or(id).to_string());
     (
@@ -1259,10 +1257,13 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
                                 {(!choice.is_empty()).then(|| view! { <div>{format!("Chosen, not sent: {}", choice.join(", "))}</div> })}
                                 {(!note.trim().is_empty()).then(|| view! { <blockquote>{note.clone()}</blockquote> })}
                                 <div class="q-unsent-actions">
-                                    {(!words.trim().is_empty()).then(|| view! {
-                                        <button class="btn sm" on:click=move |_| copy_words(words.clone(), copied)>
-                                            {move || match copied.get() { Some(true) => "Copied", Some(false) => "Copy failed: select the words", None => "Copy words" }}
-                                        </button>
+                                    {copy_words_argument(&words).map(|payload| {
+                                        let payload = payload.to_string();
+                                        view! {
+                                            <button class="btn sm" on:click=move |_| copy_words(payload.clone(), copied)>
+                                                {move || match copied.get() { Some(true) => "Copied", Some(false) => "Copy failed: select the words", None => "Copy words" }}
+                                            </button>
+                                        }
                                     })}
                                     <button class="btn sm" on:click=move |_| drafts.update(|d| drafts::discard(d, &id))>"Discard"</button>
                                 </div>
@@ -1275,15 +1276,21 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
     }
 }
 
+/// The exact stored note passed to the clipboard. Visibility trims; this argument does not add whitespace or HTML.
+fn copy_words_argument(note: &str) -> Option<&str> {
+    (!note.trim().is_empty()).then_some(note)
+}
+
 fn copy_words(text: String, done: RwSignal<Option<bool>>) {
     use wasm_bindgen::JsCast;
+    let argument = copy_words_argument(&text).unwrap_or(text.as_str());
     let navigator = window().navigator();
     let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into())
         .unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
     let promise = js_sys::Reflect::get(&clipboard, &"writeText".into())
         .ok()
         .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
-        .and_then(|f| f.call1(&clipboard, &text.into()).ok())
+        .and_then(|f| f.call1(&clipboard, &argument.into()).ok())
         .and_then(|p| p.dyn_into::<js_sys::Promise>().ok());
     match promise {
         Some(p) => spawn_local(async move {
@@ -1427,5 +1434,17 @@ mod tests {
         );
         assert_eq!(problem_sentence(""), "");
         assert_eq!(problem_sentence("   "), "");
+
+    #[test]
+    fn copy_words_passes_the_exact_stored_note() {
+        let note = "  first line\nsecond line\n  ";
+        let argument = copy_words_argument(note).expect("copy button is shown");
+        assert_eq!(argument, note);
+        assert!(
+            !argument.contains('<') && !argument.contains('>'),
+            "clipboard argument must not wrap HTML: {argument:?}"
+        );
+        assert_eq!(copy_words_argument(" \n "), None);
+        assert_eq!(copy_words_argument(""), None);
     }
 }

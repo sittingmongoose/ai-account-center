@@ -3,9 +3,13 @@
 use leptos::portal::Portal;
 use leptos::prelude::*;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+
+type OverlayRepair = BTreeMap<u64, Rc<dyn Fn()>>;
+type OverlayBeforeUpdate = BTreeMap<u64, Rc<dyn Fn(u64)>>;
 
 struct ScrollLock {
     x: f64,
@@ -17,8 +21,8 @@ struct ScrollLock {
 thread_local! {
     static LOCK: RefCell<Option<ScrollLock>> = const { RefCell::new(None) };
     static STACK: RefCell<Vec<(u64, bool)>> = const { RefCell::new(Vec::new()) };
-    static REPAIR: RefCell<std::collections::BTreeMap<u64, Rc<dyn Fn()>>> = const { RefCell::new(std::collections::BTreeMap::new()) };
-    static BEFORE_UPDATE: RefCell<std::collections::BTreeMap<u64, Rc<dyn Fn(u64)>>> = const { RefCell::new(std::collections::BTreeMap::new()) };
+    static REPAIR: RefCell<OverlayRepair> = const { RefCell::new(BTreeMap::new()) };
+    static BEFORE_UPDATE: RefCell<OverlayBeforeUpdate> = const { RefCell::new(BTreeMap::new()) };
     static UPDATE_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -209,18 +213,18 @@ fn tab_rank(el: &web_sys::HtmlElement) -> i32 {
 }
 
 fn place_start_guard(root: &web_sys::Element, elements: &[web_sys::HtmlElement]) {
-    if let Ok(Some(guard)) = root.query_selector("[data-overlay-guard='start']") {
-        if let Ok(guard) = guard.dyn_into::<web_sys::HtmlElement>() {
-            // A positive guard tied with the first positive stop precedes it in DOM order. Reverse Tab from
-            // that stop (including a media/iframe host) reaches the guard before it can leave the document.
-            guard.set_tab_index(
-                elements
-                    .first()
-                    .filter(|el| el.tab_index() > 0)
-                    .map(|el| el.tab_index())
-                    .unwrap_or(0),
-            );
-        }
+    if let Ok(Some(guard)) = root.query_selector("[data-overlay-guard='start']")
+        && let Ok(guard) = guard.dyn_into::<web_sys::HtmlElement>()
+    {
+        // A positive guard tied with the first positive stop precedes it in DOM order. Reverse Tab from
+        // that stop (including a media/iframe host) reaches the guard before it can leave the document.
+        guard.set_tab_index(
+            elements
+                .first()
+                .filter(|el| el.tab_index() > 0)
+                .map(|el| el.tab_index())
+                .unwrap_or(0),
+        );
     }
 }
 
@@ -466,23 +470,21 @@ fn OverlaySurface(
             if let Some(active) = document()
                 .active_element()
                 .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                && root.contains(Some(active.as_ref()))
+                && !active.has_attribute("data-overlay-guard")
             {
-                if root.contains(Some(active.as_ref()))
-                    && !active.has_attribute("data-overlay-guard")
-                {
-                    memory.borrow_mut().remember(root.as_ref(), active);
-                    return;
-                }
+                memory.borrow_mut().remember(root.as_ref(), active);
+                return;
             }
             // Release the borrow before focus(), whose synchronous focusin records the new bookmark.
             let destination = memory.borrow().destination(root.as_ref());
             if let Some(el) = destination {
                 focus(&el);
-            } else if let Ok(Some(dialog)) = root.query_selector("[role='dialog']") {
-                if let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>() {
-                    let _ = dialog.set_attribute("tabindex", "-1");
-                    focus(&dialog);
-                }
+            } else if let Ok(Some(dialog)) = root.query_selector("[role='dialog']")
+                && let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>()
+            {
+                let _ = dialog.set_attribute("tabindex", "-1");
+                focus(&dialog);
             }
         })
     };
@@ -579,11 +581,11 @@ fn OverlaySurface(
                 };
                 if let Some(destination) = update.before.destination(observed_root.as_ref()) {
                     focus(&destination);
-                } else if let Ok(Some(dialog)) = observed_root.query_selector("[role='dialog']") {
-                    if let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = dialog.set_attribute("tabindex", "-1");
-                        focus(&dialog);
-                    }
+                } else if let Ok(Some(dialog)) = observed_root.query_selector("[role='dialog']")
+                    && let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>()
+                {
+                    let _ = dialog.set_attribute("tabindex", "-1");
+                    focus(&dialog);
                 }
             });
         if let Ok(observer_value) =
@@ -641,24 +643,23 @@ fn OverlaySurface(
                 // Move the navigation starting point before the trusted key's default action. Focusing a
                 // media/frame host after navigation has ended cannot enter its last internal Tab stop.
                 // Do not intercept keys inside a browser-owned focus scope: its own reverse order is native.
-                if e.shift_key() {
-                    if let Some(first) = stops.first() {
-                        let at_first = document()
-                            .active_element()
-                            .is_some_and(|el| js_sys::Object::is(el.as_ref(), first.as_ref()));
-                        let scope = first
-                            .matches("video[controls], audio[controls], iframe, object, embed")
-                            .unwrap_or(false);
-                        if at_first && !scope {
-                            if let Ok(Some(end)) = root.query_selector("[data-overlay-guard='end']")
-                            {
-                                if let Ok(end) = end.dyn_into::<web_sys::HtmlElement>() {
-                                    preparing_reverse.set_value(true);
-                                    let _ = end.focus();
-                                    preparing_reverse.set_value(false);
-                                }
-                            }
-                        }
+                if e.shift_key()
+                    && let Some(first) = stops.first()
+                {
+                    let at_first = document()
+                        .active_element()
+                        .is_some_and(|el| js_sys::Object::is(el.as_ref(), first.as_ref()));
+                    let scope = first
+                        .matches("video[controls], audio[controls], iframe, object, embed")
+                        .unwrap_or(false);
+                    if at_first
+                        && !scope
+                        && let Ok(Some(end)) = root.query_selector("[data-overlay-guard='end']")
+                        && let Ok(end) = end.dyn_into::<web_sys::HtmlElement>()
+                    {
+                        preparing_reverse.set_value(true);
+                        let _ = end.focus();
+                        preparing_reverse.set_value(false);
                     }
                 }
             }
@@ -735,11 +736,11 @@ fn OverlaySurface(
         if let Some(el) = destination {
             // Native focus scrolls the destination into its modal scroller; only initial/return focus suppresses scroll.
             let _ = el.focus();
-        } else if let Ok(Some(dialog)) = root.query_selector("[role='dialog']") {
-            if let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>() {
-                let _ = dialog.set_attribute("tabindex", "-1");
-                focus(&dialog);
-            }
+        } else if let Ok(Some(dialog)) = root.query_selector("[role='dialog']")
+            && let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>()
+        {
+            let _ = dialog.set_attribute("tabindex", "-1");
+            focus(&dialog);
         }
     });
     let _ =

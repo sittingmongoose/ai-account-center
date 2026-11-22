@@ -87,10 +87,10 @@ fn scroll_to(selector: &str) {
     let _ = js_sys::Reflect::set(&opts, &"block".into(), &"start".into());
     let behavior = if motion_on() { "smooth" } else { "auto" };
     let _ = js_sys::Reflect::set(&opts, &"behavior".into(), &behavior.into());
-    if let Ok(f) = js_sys::Reflect::get(&el, &"scrollIntoView".into()) {
-        if let Ok(f) = f.dyn_into::<js_sys::Function>() {
-            let _ = f.call1(&el, &opts);
-        }
+    if let Ok(f) = js_sys::Reflect::get(&el, &"scrollIntoView".into())
+        && let Ok(f) = f.dyn_into::<js_sys::Function>()
+    {
+        let _ = f.call1(&el, &opts);
     }
 }
 

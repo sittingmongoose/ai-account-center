@@ -364,20 +364,20 @@ fn listen_to_shell() {
                 if was_hidden != !visible {
                     page_owner_changed();
                 }
-                if visible && was_hidden {
-                    if let Ok(shown) = web_sys::Event::new(SHOWN_EVENT) {
-                        let _ = window().dispatch_event(&shown);
-                    }
+                if visible
+                    && was_hidden
+                    && let Ok(shown) = web_sys::Event::new(SHOWN_EVENT)
+                {
+                    let _ = window().dispatch_event(&shown);
                 }
                 return;
             }
-            if kind.as_deref() == Some("aac-theme") {
-                if let Some(mode) = js_sys::Reflect::get(&data, &"mode".into())
+            if kind.as_deref() == Some("aac-theme")
+                && let Some(mode) = js_sys::Reflect::get(&data, &"mode".into())
                     .ok()
                     .and_then(|v| v.as_string())
-                {
-                    set_theme(&mode);
-                }
+            {
+                set_theme(&mode);
             }
         });
     let _ = window().add_event_listener_with_callback("message", handler.as_ref().unchecked_ref());

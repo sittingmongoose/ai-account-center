@@ -68,14 +68,12 @@ pub fn choose(
     width: f64,
 ) -> Vec<Vec<CardKey>> {
     let best = columns(cards, width);
-    if let (Some(prev), Some(best_h)) = (prev, tallest(&best, cards)) {
-        if prev.len() == best.len() {
-            if let Some(prev_h) = tallest(prev, cards) {
-                if prev_h <= best_h + 60.0 {
-                    return prev.clone();
-                }
-            }
-        }
+    if let (Some(prev), Some(best_h)) = (prev, tallest(&best, cards))
+        && prev.len() == best.len()
+        && let Some(prev_h) = tallest(prev, cards)
+        && prev_h <= best_h + 60.0
+    {
+        return prev.clone();
     }
     best
 }

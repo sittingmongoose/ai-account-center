@@ -354,18 +354,18 @@ fn warm_offline_copies() {
     if workers.is_undefined() {
         return;
     }
-    if let Ok(register) = js_sys::Reflect::get(&workers, &"register".into()) {
-        if let Some(register) = register.dyn_ref::<js_sys::Function>() {
-            // A refusal (no worker on this server) only costs the offline copy.
-            if let Some(promise) = register
-                .call1(&workers, &"/sw.js".into())
-                .ok()
-                .and_then(|p| p.dyn_into::<js_sys::Promise>().ok())
-            {
-                leptos::task::spawn_local(async move {
-                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                });
-            }
+    if let Ok(register) = js_sys::Reflect::get(&workers, &"register".into())
+        && let Some(register) = register.dyn_ref::<js_sys::Function>()
+    {
+        // A refusal (no worker on this server) only costs the offline copy.
+        if let Some(promise) = register
+            .call1(&workers, &"/sw.js".into())
+            .ok()
+            .and_then(|p| p.dyn_into::<js_sys::Promise>().ok())
+        {
+            leptos::task::spawn_local(async move {
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            });
         }
     }
     let warm = Closure::once_into_js(move || {

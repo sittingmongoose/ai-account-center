@@ -871,7 +871,7 @@ mod tests {
         let credits_plan = row(Some(1.0), "credits per word", "Planning wizard");
         let credits_plan_cheap = row(Some(0.1), "credits per word", "Planning wizard");
         let unknown = row(None, "", "");
-        let mut rows = vec![
+        let mut rows = [
             &usd_build,
             &unknown,
             &credits_plan,

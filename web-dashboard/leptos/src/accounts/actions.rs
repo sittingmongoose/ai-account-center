@@ -58,10 +58,12 @@ pub fn ActionControl(
                 e.stop_propagation();
                 if live(&a2, busy.get_untracked()) {
                     page.send(&a2.act, &a2.value);
-                } else if !a2.enabled && !a2.tip.is_empty() && a2.act != "refuse" {
-                    if let Some(r) = reason {
-                        r.run(a2.tip.clone());
-                    }
+                } else if !a2.enabled
+                    && !a2.tip.is_empty()
+                    && a2.act != "refuse"
+                    && let Some(r) = reason
+                {
+                    r.run(a2.tip.clone());
                 }
             };
             let a3 = a.clone();
@@ -92,10 +94,12 @@ pub fn ActionControl(
                 e.stop_propagation();
                 if live(&a2, busy.get_untracked()) {
                     page.send(&a2.act, &a2.value);
-                } else if !a2.enabled && !a2.tip.is_empty() && a2.act != "refuse" {
-                    if let Some(r) = reason {
-                        r.run(a2.tip.clone());
-                    }
+                } else if !a2.enabled
+                    && !a2.tip.is_empty()
+                    && a2.act != "refuse"
+                    && let Some(r) = reason
+                {
+                    r.run(a2.tip.clone());
                 }
             };
             let tip = if a.tip.is_empty() {

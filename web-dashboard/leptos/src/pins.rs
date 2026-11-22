@@ -540,7 +540,8 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     // Waiting on: every wait that is not the owner's, shown beside an owner wait, never behind it.
     let now = js_sys::Date::now();
     // Each wait's head, words and time ("for 20 h", or "was due 1:20 AM" in amber once past due).
-    let mut rows: Vec<(String, String, Option<(String, bool)>)> = Vec::new();
+    type WaitRow = (String, String, Option<(String, bool)>);
+    let mut rows: Vec<WaitRow> = Vec::new();
     let when = |since: Option<&str>, until: Option<&str>| {
         let late = until.and_then(iso_ms).filter(|u| *u < now);
         match (late, since.and_then(iso_ms)) {

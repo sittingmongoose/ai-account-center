@@ -515,12 +515,15 @@ mod tests {
         assert_eq!(both.len(), 2);
         // the answered card closes while the response is lost: the note alone goes again with its id
         d.remove("a");
-        let alone = entries(&d, &[n.clone()]);
+        let alone = entries(&d, std::slice::from_ref(&n));
         assert_eq!(alone[0].entry_id, both[1].entry_id);
         // once recorded the draft goes; the same words typed later are a new entry
         d.remove("n");
         set_note(&mut d, &n, "check the logs".into());
-        assert_ne!(entries(&d, &[n.clone()])[0].entry_id, both[1].entry_id);
+        assert_ne!(
+            entries(&d, std::slice::from_ref(&n))[0].entry_id,
+            both[1].entry_id
+        );
         // an edit is a new entry too
         set_note(&mut d, &n, "check the logs again".into());
         assert_ne!(entries(&d, &[n])[0].entry_id, both[1].entry_id);
@@ -531,22 +534,25 @@ mod tests {
         let n = card("n", 1, None);
         let mut d = Drafts::new();
         set_note(&mut d, &n, "first words".into());
-        let sent = entries(&d, &[n.clone()]).remove(0);
+        let sent = entries(&d, std::slice::from_ref(&n)).remove(0);
         // unchanged: the recorded draft goes
         let mut same = d.clone();
-        forget_sent(&mut same, &[n.clone()], &sent);
+        forget_sent(&mut same, std::slice::from_ref(&n), &sent);
         assert!(!same["n"].has_answer(), "the recorded words go");
         assert_eq!(same["n"].recorded, vec![sent.entry_id.clone()]);
         // another tab edited it while the send was on its way: the newer words stay
         set_note(&mut d, &n, "second thoughts".into());
-        forget_sent(&mut d, &[n.clone()], &sent);
+        forget_sent(&mut d, std::slice::from_ref(&n), &sent);
         assert_eq!(d["n"].note, "second thoughts");
         // the owner later types the recorded words again: a new entry, not a retry of the recorded one
         let mut retyped = d.clone();
         set_note(&mut retyped, &n, "first words".into());
-        assert_ne!(entries(&retyped, &[n.clone()])[0].entry_id, sent.entry_id);
+        assert_ne!(
+            entries(&retyped, std::slice::from_ref(&n))[0].entry_id,
+            sent.entry_id
+        );
         // the other tab sent its words before this tab's reply came back: its own reply still matches and clears it
-        let theirs = entries(&d, &[n.clone()]).remove(0);
+        let theirs = entries(&d, std::slice::from_ref(&n)).remove(0);
         forget_sent(&mut d, &[n], &theirs);
         assert!(
             !d["n"].has_answer(),
@@ -619,9 +625,9 @@ mod tests {
         // ids joined onto a draft that already makes one of them: the send takes a fresh nonce
         let mut d = Drafts::new();
         set_note(&mut d, &x, "W0".into());
-        let made = entries(&d, &[x.clone()]).remove(0).entry_id;
+        let made = entries(&d, std::slice::from_ref(&x)).remove(0).entry_id;
         d.get_mut("x").unwrap().recorded = vec![made.clone()];
-        refresh_recorded(&mut d, &[x.clone()]);
+        refresh_recorded(&mut d, std::slice::from_ref(&x));
         assert_ne!(entries(&d, &[x])[0].entry_id, made);
     }
 
@@ -631,11 +637,11 @@ mod tests {
         // tab A sends W0; tab B, with A's nonce, writes W1 before A's result lands
         let mut base = Drafts::new();
         set_note(&mut base, &x, "W0".into());
-        let sent = entries(&base, &[x.clone()]).remove(0);
+        let sent = entries(&base, std::slice::from_ref(&x)).remove(0);
         let mut stored = base.clone();
         set_note(&mut stored, &x, "W1".into());
         let mut a = base.clone();
-        forget_sent(&mut a, &[x.clone()], &sent);
+        forget_sent(&mut a, std::slice::from_ref(&x), &sent);
         let merged = merge(&stored, &base, &a);
         assert_eq!(merged["x"].note, "W1", "B's newer words stay");
         assert!(merged["x"].recorded.contains(&sent.entry_id));
@@ -651,12 +657,12 @@ mod tests {
         // F2: A's send of W1 is in flight; B retypes the recorded W0 and takes a fresh nonce; A's result lands
         let mut base = Drafts::new();
         set_note(&mut base, &x, "W1".into());
-        let sent = entries(&base, &[x.clone()]).remove(0);
+        let sent = entries(&base, std::slice::from_ref(&x)).remove(0);
         let mut stored = base.clone();
         set_note(&mut stored, &x, "W0".into());
         stored.get_mut("x").unwrap().nonce = "other".into();
         let mut a = base.clone();
-        forget_sent(&mut a, &[x.clone()], &sent);
+        forget_sent(&mut a, std::slice::from_ref(&x), &sent);
         let merged = merge(&stored, &base, &a);
         assert_eq!(merged["x"].note, "W0", "B's unsent words stay");
         assert!(
@@ -672,12 +678,12 @@ mod tests {
         // F3: past the limit a draft starts a fresh nonce instead of forgetting its oldest id
         let mut d = Drafts::new();
         set_note(&mut d, &x, "first".into());
-        let first = entries(&d, &[x.clone()]).remove(0);
-        forget_sent(&mut d, &[x.clone()], &first);
+        let first = entries(&d, std::slice::from_ref(&x)).remove(0);
+        forget_sent(&mut d, std::slice::from_ref(&x), &first);
         for i in 0..RECORDED_KEPT {
             set_note(&mut d, &x, format!("note {i}"));
-            let e = entries(&d, &[x.clone()]).remove(0);
-            forget_sent(&mut d, &[x.clone()], &e);
+            let e = entries(&d, std::slice::from_ref(&x)).remove(0);
+            forget_sent(&mut d, std::slice::from_ref(&x), &e);
         }
         set_note(&mut d, &x, "first".into());
         assert_ne!(entries(&d, &[x])[0].entry_id, first.entry_id);
@@ -689,21 +695,21 @@ mod tests {
         // N3: storage differs from base only in recorded ids; this tab's send empties the draft: it stays empty
         let mut base = Drafts::new();
         set_note(&mut base, &x, "W1".into());
-        let sent = entries(&base, &[x.clone()]).remove(0);
+        let sent = entries(&base, std::slice::from_ref(&x)).remove(0);
         let mut stored = base.clone();
         stored.get_mut("x").unwrap().recorded = vec!["other".into()];
         let mut a = base.clone();
-        forget_sent(&mut a, &[x.clone()], &sent);
+        forget_sent(&mut a, std::slice::from_ref(&x), &sent);
         assert!(!merge(&stored, &base, &a)["x"].has_answer());
         // N2: the 9th id rotates this tab's nonce while another tab wrote newer words on the old one
         let mut full = Drafts::new();
         set_note(&mut full, &x, "W".into());
         full.get_mut("x").unwrap().recorded = (0..RECORDED_KEPT).map(|i| format!("r{i}")).collect();
-        let ninth = entries(&full, &[x.clone()]).remove(0);
+        let ninth = entries(&full, std::slice::from_ref(&x)).remove(0);
         let mut theirs = full.clone();
         set_note(&mut theirs, &x, "newer".into());
         let mut mine = full.clone();
-        forget_sent(&mut mine, &[x.clone()], &ninth);
+        forget_sent(&mut mine, std::slice::from_ref(&x), &ninth);
         assert_ne!(mine["x"].nonce, full["x"].nonce, "the overflow rotated");
         let merged = merge(&theirs, &full, &mine);
         assert_eq!(merged["x"].note, "newer");
@@ -726,10 +732,10 @@ mod tests {
         base.get_mut("x").unwrap().recorded = (0..RECORDED_KEPT).map(|i| format!("r{i}")).collect();
         let older = AnswerEntry {
             entry_id: "w1".into(),
-            ..entries(&base, &[x.clone()]).remove(0)
+            ..entries(&base, std::slice::from_ref(&x)).remove(0)
         };
         let mut mine = base.clone();
-        forget_sent(&mut mine, &[x.clone()], &older);
+        forget_sent(&mut mine, std::slice::from_ref(&x), &older);
         assert_ne!(mine["x"].nonce, base["x"].nonce);
         // another tab wrote W3 meanwhile: it stays, on the new nonce
         let mut theirs = base.clone();
@@ -782,11 +788,11 @@ mod tests {
         let mut d = Drafts::new();
         toggle(&mut d, &old, "A");
         assert_eq!(standing(&d, &new), Standing::Changed);
-        assert!(entries(&d, &[new.clone()]).is_empty());
+        assert!(entries(&d, std::slice::from_ref(&new)).is_empty());
         // Typing a note on the new version must not re-date the old choice.
         set_note(&mut d, &new, "why?".into());
         assert_eq!(standing(&d, &new), Standing::Changed);
-        assert!(entries(&d, &[new.clone()]).is_empty());
+        assert!(entries(&d, std::slice::from_ref(&new)).is_empty());
         // The first tap on the changed card starts the choice afresh, on the new version.
         toggle(&mut d, &new, "B");
         assert_eq!(d["a"].choice, vec!["B"]);
@@ -804,9 +810,9 @@ mod tests {
         let mut d = Drafts::new();
         set_note(&mut d, &old, "keep it small".into());
         assert_eq!(standing(&d, &new), Standing::Changed);
-        assert!(entries(&d, &[new.clone()]).is_empty());
+        assert!(entries(&d, std::slice::from_ref(&new)).is_empty());
         // "Use recommendations" on the new version neither sends nor re-dates the old note.
-        use_recommendations(&mut d, &[new.clone()]);
+        use_recommendations(&mut d, std::slice::from_ref(&new));
         assert_eq!(standing(&d, &new), Standing::Changed);
         set_note(&mut d, &new, "keep it small".into());
         assert_eq!(standing(&d, &new), Standing::Ready);

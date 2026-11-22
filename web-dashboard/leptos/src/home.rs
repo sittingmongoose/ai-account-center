@@ -28,6 +28,7 @@ pub use aac_api::home::{HomeView as DashboardView, RowView, SectionView};
 
 /// What the page can draw from the seam's `dashboard` JSON.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)] // Ready is the full Home view; boxing it would change every match.
 pub enum HomeState {
     /// Nothing pushed yet.
     Waiting,

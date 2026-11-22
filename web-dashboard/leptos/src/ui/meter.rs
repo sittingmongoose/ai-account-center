@@ -14,6 +14,9 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
 
+type MeterRun = (f64, f64, f64, f64);
+type MeterFrame = Closure<dyn FnMut(f64)>;
+
 /// One window's reading as view-model.mjs `meterView` words it (aac-api `MeterView`, shared with the Rust server). `key`
 /// empty is an intentionally empty slot (a Pro account in the Fable column); `has_value` false is a real window with
 /// no reading.
@@ -106,8 +109,8 @@ pub fn motion_on() -> bool {
 struct Mover {
     shown: RwSignal<f64>,
     /// from, to, start time (ms), delay (ms)
-    run: Rc<RefCell<Option<(f64, f64, f64, f64)>>>,
-    frame: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>,
+    run: Rc<RefCell<Option<MeterRun>>>,
+    frame: Rc<RefCell<Option<MeterFrame>>>,
     looping: Rc<Cell<bool>>,
 }
 

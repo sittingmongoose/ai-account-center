@@ -69,6 +69,8 @@ impl Refreshing {
     }
 
     /// A timer of refresh `run` fired: it stops spinning if its time is up. True when it stopped.
+    // Native lib builds do not arm browser timers; wasm and the unit tests call this.
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
     pub fn expire(&mut self, run: u64, now: f64) -> bool {
         if run != self.run || !self.on() {
             return false;
@@ -190,6 +192,8 @@ fn arm(_state: RwSignal<Refreshing>, run: u64, wait_ms: f64) {
 
 /// A timer of refresh `run` fired. The state changes only when it stops: a timer of an earlier refresh redraws
 /// nothing.
+// Native lib builds do not arm browser timers; wasm and the unit tests call this.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub(crate) fn expire_now(state: RwSignal<Refreshing>, run: u64) {
     let now = clock();
     let stopped = state

@@ -470,7 +470,7 @@ fn TrendChart(
                     let (_, sy) = scale.get();
                     let x = bx();
                     bucket.get().map(|b| {
-                        let cost_y = (b.y_cost >= 0.0).then(|| T + b.y_cost * sy);
+                        let cost_y = (b.y_cost >= 0.0).then_some(T + b.y_cost * sy);
                         let left = x + 16.0 + 236.0 <= bw - 6.0;
                         view! {
                             <span class="xh" style=format!("left:{x:.1}px;top:{T}px;height:{ph:.0}px")></span>

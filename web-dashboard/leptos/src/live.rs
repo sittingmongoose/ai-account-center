@@ -96,6 +96,12 @@ pub fn refused(error: &RwSignal<Option<FetchError>>) -> bool {
     error.with_untracked(|e| matches!(e, Some(FetchError::Refused(_))))
 }
 
+/// Automatic Status re-reads (poll, visibility, shown-again, online, socket) after the first load.
+/// A refused answer stays at that one read; events do not add a second.
+pub(crate) fn automatic_reread(on_screen: bool, error: &RwSignal<Option<FetchError>>) -> bool {
+    on_screen && !refused(error)
+}
+
 pub fn start() -> Live {
     let live = Live {
         view: RwSignal::new(None),
@@ -127,7 +133,7 @@ pub fn start() -> Live {
             let ticks = polled.get() + 5;
             if ticks >= every {
                 polled.set(0);
-                if visible() && !refused(&live.error) {
+                if automatic_reread(visible(), &live.error) {
                     live.reload();
                 }
             } else {
@@ -140,7 +146,7 @@ pub fn start() -> Live {
     // Coming back to the page reads at once (a refusal the server explains still doesn't). These, and the hint
     // socket, stop with the page (owned.rs).
     owned::listen(&document(), "visibilitychange", move || {
-        if visible() && !refused(&live.error) {
+        if automatic_reread(visible(), &live.error) {
             live.reload();
         }
     });
@@ -148,7 +154,7 @@ pub fn start() -> Live {
     // Shown again by the shell, or back online: read at once.
     for event in [crate::SHOWN_EVENT, "online"] {
         owned::listen(&window(), event, move || {
-            if visible() && !refused(&live.error) {
+            if automatic_reread(visible(), &live.error) {
                 live.reload();
             }
         });
@@ -188,7 +194,7 @@ fn connect_hints(live: Live, slot: Rc<RefCell<Option<web_sys::WebSocket>>>, dela
                 return;
             };
             // a hidden page ignores hints (its reads would keep the server's collectors busy); returning to it reads
-            if text.contains("\"status-changed\"") && visible() && !refused(&live.error) {
+            if text.contains("\"status-changed\"") && automatic_reread(visible(), &live.error) {
                 live.reload();
             }
         });
@@ -196,7 +202,7 @@ fn connect_hints(live: Live, slot: Rc<RefCell<Option<web_sys::WebSocket>>>, dela
     on_message.forget();
 
     let on_open = Closure::<dyn Fn()>::new(move || {
-        if visible() && !refused(&live.error) {
+        if automatic_reread(visible(), &live.error) {
             live.reload();
         }
     });
@@ -241,5 +247,39 @@ mod tests {
         // a later good read clears it, and the events read again
         error.set(None);
         assert!(!refused(&error));
+    }
+
+    #[test]
+    fn a_refused_answer_rereads_once_and_event_callbacks_stay_quiet() {
+        use std::cell::Cell;
+        let owner = Owner::new();
+        owner.set();
+        let error = RwSignal::new(None::<FetchError>);
+        let reloads = Cell::new(0u32);
+        let maybe_reload = |on_screen: bool| {
+            if automatic_reread(on_screen, &error) {
+                reloads.set(reloads.get() + 1);
+            }
+        };
+        // the first load always reads
+        reloads.set(reloads.get() + 1);
+        error.set(Some(FetchError::Refused(
+            "These tabs need dashboard sign-in turned on.".into(),
+        )));
+        // poll, visibility, shown-again, online, socket hint: no second read
+        for _ in 0..5 {
+            maybe_reload(true);
+        }
+        assert_eq!(
+            reloads.get(),
+            1,
+            "a refused answer must re-read once, not twice"
+        );
+        maybe_reload(false);
+        assert_eq!(reloads.get(), 1);
+        // a later good read lets the next on-screen event read once
+        error.set(None);
+        maybe_reload(true);
+        assert_eq!(reloads.get(), 2);
     }
 }

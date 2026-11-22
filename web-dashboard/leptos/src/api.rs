@@ -1488,16 +1488,15 @@ pub fn answer_error(status: u16, text: &str) -> FetchError {
         error: Option<String>,
         message: Option<String>,
     }
-    if status == 403 {
-        if let Ok(Refusal {
+    if status == 403
+        && let Ok(Refusal {
             error: Some(code),
             message: Some(message),
         }) = serde_json::from_str::<Refusal>(text)
-        {
-            if code == "signin_required" && !message.trim().is_empty() {
-                return FetchError::Refused(message);
-            }
-        }
+        && code == "signin_required"
+        && !message.trim().is_empty()
+    {
+        return FetchError::Refused(message);
     }
     FetchError::Server(status)
 }

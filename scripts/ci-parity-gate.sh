@@ -116,6 +116,17 @@ else
   echo "[!] cargo is not installed: skipping the status readers' Rust checks."
 fi
 
+# The Leptos dashboard crate (web-dashboard/leptos): clippy -D warnings on the
+# pinned toolchain in that folder. AAC_LEPTOS_RUST=off skips it on a machine
+# that may not run Rust builds.
+if [[ "${AAC_LEPTOS_RUST:-on}" == "off" ]]; then
+  echo "[!] AAC_LEPTOS_RUST=off: skipping the Leptos clippy check."
+elif command -v cargo >/dev/null 2>&1; then
+  (cd web-dashboard/leptos && cargo clippy --all-targets --locked -- -D warnings)
+else
+  echo "[!] cargo is not installed: skipping the Leptos clippy check."
+fi
+
 # Child tests and Python imports must start inside a private home with no
 # inherited provider credentials, config overrides, or production executables.
 TEST_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ai-account-center-parity.XXXXXX")"

@@ -414,7 +414,7 @@ pub fn SettingsCard(page: Page) -> impl IntoView {
 pub fn interval_label(seconds: u32) -> String {
     if seconds < 60 {
         format!("{seconds} s")
-    } else if seconds % 60 == 0 {
+    } else if seconds.is_multiple_of(60) {
         format!("{} min", seconds / 60)
     } else {
         format!("{} min {} s", seconds / 60, seconds % 60)
@@ -521,10 +521,11 @@ pub fn CleanupCard(page: Page) -> impl IntoView {
     });
     Effect::new(move |prev: Option<bool>| {
         let now = checked.get();
-        if let Some(prev) = prev {
-            if prev != now && c.with_untracked(|c| c.auto != now) {
-                page.send("cleanup-auto", if now { "true" } else { "false" });
-            }
+        if let Some(prev) = prev
+            && prev != now
+            && c.with_untracked(|c| c.auto != now)
+        {
+            page.send("cleanup-auto", if now { "true" } else { "false" });
         }
         now
     });
