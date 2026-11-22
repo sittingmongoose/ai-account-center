@@ -19,8 +19,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 
-/// The providers the session vocabulary admits (the TS runner's plus Claude's terminal flow).
-const PROVIDERS: [&str; 4] = ["codex", "muse", "antigravity", "claude"];
 /// The longest sign-in window: the CLI's own 15 minutes (`ANTIGRAVITY_SIGNIN_TIMEOUT_MS`).
 pub const MAX_SESSION_TIMEOUT_MS: u64 = 900_000;
 
@@ -90,6 +88,15 @@ fn ascii_text(value: &Value, max: usize) -> Option<String> {
 fn word(value: &Value, allowed: &[&str]) -> Option<String> {
     let text = ascii_text(value, 80)?;
     allowed.contains(&text.as_str()).then_some(text)
+}
+
+/// The providers the session vocabulary admits (the TS runner's plus Claude's terminal flow):
+/// the provider table's `signInSessions`.
+fn sign_in_provider(value: &Value) -> Option<String> {
+    let text = ascii_text(value, 80)?;
+    aac_providers::sign_in_session_providers()
+        .any(|row| row.id.as_str() == text)
+        .then_some(text)
 }
 
 fn optional_id(value: &Value) -> Result<Option<String>, Failure> {
@@ -166,7 +173,7 @@ fn parse_command(value: &Value) -> Result<Command, Failure> {
 
 fn parse_start(args: &Value) -> Result<Action, Failure> {
     let provider =
-        word(&args["provider"], &PROVIDERS).ok_or_else(|| refused("invalid sign-in provider"))?;
+        sign_in_provider(&args["provider"]).ok_or_else(|| refused("invalid sign-in provider"))?;
     let kind = match word(&args["kind"], &["device-code", "supervised-cli"])
         .ok_or_else(|| refused("invalid sign-in kind"))?
         .as_str()

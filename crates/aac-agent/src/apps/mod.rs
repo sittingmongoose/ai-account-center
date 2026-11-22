@@ -18,21 +18,6 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 
-const APPS: [&str; 12] = [
-    "antigravity-cli",
-    "muse-code",
-    "omp",
-    "codex-cli",
-    "codex-desktop",
-    "claude-code",
-    "claude-desktop",
-    "zcode",
-    "t3-acp-adapters",
-    "t3-code",
-    "cursor-cli",
-    "antigravity-acp",
-];
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Platform {
     Ubuntu,
@@ -411,8 +396,10 @@ async fn inventory(host: &Host, probe: &impl Probe) -> Value {
         cli::cursor(host, probe),
         async { packages::antigravity_acp(host) },
     );
-    let apps: Vec<_> = APPS
-        .into_iter()
+    // The probe futures below are positional: the Python parity fixture
+    // (`tests/spec/agent/app-inventory.py`) pins the inventory's ids and order, so a reordered
+    // `appInventory` fails a test rather than mislabelling an app.
+    let apps: Vec<_> = aac_providers::app_inventory()
         .zip([
             agy,
             muse,

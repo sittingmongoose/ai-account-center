@@ -2,6 +2,7 @@
 use super::{python::Python, *};
 use aac_files::{BackupClass, Class, OwnedStore, Registry, StoreSpec};
 use aac_protocol::{Event, Request};
+use aac_providers::APP_INVENTORY;
 use serde::{Deserialize, Serialize};
 use std::{io::ErrorKind, sync::LazyLock, time::Duration};
 use tokio::{io::AsyncWrite, sync::mpsc, task::JoinSet, time::Instant};
@@ -149,7 +150,7 @@ impl Worker {
         let journal_store = claim(&self.root, &self.name("journal.json"))?;
         let saved = self.journal()?;
         if !self.fixture() {
-            for app in APPS {
+            for app in APP_INVENTORY {
                 // An orphaned supervisor still owns this lease while it reaps children.
                 claim(&self.root, &format!("agent-worker-{app}"))?;
             }
@@ -574,7 +575,7 @@ fn resources(platform: Platform, app: &str) -> u8 {
 }
 
 fn ordered(platform: Platform) -> Vec<&'static str> {
-    let mut order: Vec<_> = APPS
+    let mut order: Vec<_> = APP_INVENTORY
         .into_iter()
         .filter(|app| *app != DESKTOP && !TAILED.contains(app))
         .collect();
@@ -611,7 +612,7 @@ fn ready_to_start(app: &str, platform: Platform, journal: &Journal) -> bool {
         DESKTOP => done("codex-cli"),
         "t3-acp-adapters" => done("zcode"),
         "antigravity-acp" => done("t3-code"),
-        "t3-code" => APPS
+        "t3-code" => APP_INVENTORY
             .into_iter()
             .filter(|id| !TAILED.contains(id) && (*id != DESKTOP || platform == Platform::Ubuntu))
             .all(done),
