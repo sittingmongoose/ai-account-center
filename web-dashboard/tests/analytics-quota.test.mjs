@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.TZ = 'UTC';
-const { quotaView, agendaView, focusChart, quotaAccounts, project, historyOf } = await import('../public/analytics-quota.mjs');
+const { quotaView, agendaView, focusChart, quotaAccounts, project, historyOf, sparkRuns } = await import('../public/analytics-quota.mjs');
 
 const now = Date.parse('2026-10-01T12:00:00Z');
 const iso = t => new Date(t).toISOString();
@@ -254,4 +254,30 @@ test('scoped weeklies: model names in rows and agenda, binding considers aggrega
   const scopedOnly = { provider: 'claude', windows: [win('seven_day_opus', 'Weekly Opus usage', 90)] };
   const { mainWindow } = await import('../public/analytics-quota.mjs');
   assert.equal(mainWindow(scopedOnly), null);
+});
+
+test('Antigravity charts its history within its own range offsets, not the shared axis', () => {
+  // Antigravity's clock is its own range: readings before `from` or after `to` stay out of its
+  // charts even when they sit inside the shared 7-day axis; other providers keep them.
+  const range = { from: iso(now - 48 * H), to: iso(now - 6 * H) };
+  const before = point(now - 72 * H, 10);
+  const inside = point(now - 24 * H, 30);
+  const after = point(now - 2 * H, 60);
+  const history = [{ ...cliWeekly, points: [before, inside, after] }];
+  const payload = { range, history: { oldestSampleAt: iso(now - 7 * 24 * H) }, accounts: [agyAccount(history)] };
+  const acc = quotaAccounts(payload, { now, dashboard: { accounts: [agyAccount([cliWeekly])] } })[0];
+  const w = acc.windows.find(x => x.key === 'cli-gemini-weekly');
+  const spark = sparkRuns(acc, w, now - 7 * 24 * H, now, range);
+  assert.equal(spark.points, 1);
+  const chart = focusChart(acc, payload, { now, accounts: [acc] });
+  const observed = chart.stops.filter(s => !s.proj);
+  assert.equal(observed.length, 2);
+  assert.equal(observed[0].rows[0].value, '30%');
+  // The same timestamps on a Codex weekly keep every reading: the offsets are Antigravity's own.
+  const codexRaw = account('codex:offsets', 'codex', 'offsets@example.test', [
+    { ...win('seven_day', 'Weekly usage', 34), points: [before, inside, after] },
+  ]);
+  const codexAcc = quotaAccounts({ accounts: [codexRaw] }, { now, dashboard: { accounts: [codexRaw] } })[0];
+  const codexSpark = sparkRuns(codexAcc, codexAcc.windows[0], now - 7 * 24 * H, now, range);
+  assert.equal(codexSpark.points, 3);
 });

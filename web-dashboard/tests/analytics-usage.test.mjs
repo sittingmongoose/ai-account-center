@@ -438,3 +438,28 @@ test('donut centre (task 9 A5): a short label that fits a small hole, per mode',
   assert.equal(cost.centreShort, 'cost');
   assert.match(cost.centreLabel, /^estimated cost, /);
 });
+
+test('an OMP session clock crossing midnight keeps elapsed time and the previous day\'s clock', () => {
+  // Just after midnight: one session ended 20 minutes ago today, one 45 minutes ago yesterday.
+  const midnightNow = Date.parse('2026-10-01T00:30:00Z');
+  const row = (key, lastMs) => ({
+    key, provider: 'omp', lastActivity: new Date(lastMs).toISOString(), models: ['qwen4-max'], target: 'omp',
+    inputTokens: 1000, outputTokens: 500, cacheCreationTokens: 0, cacheReadTokens: 0,
+    estimatedCostUsd: 0.02, fallbackCostUsd: 0,
+  });
+  const sample = [row('omp-before', Date.parse('2026-09-30T23:45:00Z')), row('omp-after', Date.parse('2026-10-01T00:10:00Z'))];
+  const p = payload({ range: { preset: '7d', from: '2026-09-24T00:30:00Z', to: '2026-10-01T00:30:00Z', bucketMinutes: 60 } }, {
+    fetchedAt: '2026-10-01T00:20:00Z',
+    sessions: { total: 2, sample, truncated: false },
+    providers: [{ provider: 'omp', label: 'OMP logs', totals: { inputTokens: 2000, outputTokens: 1000, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCostUsd: 0.04 }, usageEvents: 8, sessionCount: 2, tools: ['omp'] }],
+  });
+  const view = usageView(p, state(), { now: midnightNow });
+  assert.deepEqual(view.sessions.recent.map(r => r.tool), ['omp', 'omp']);
+  // Elapsed time across the day boundary: 20 and 45 minutes, never a calendar-day count.
+  assert.equal(view.sessions.recent[0].when, '20m ago');
+  assert.equal(view.sessions.recent[1].when, '45m ago');
+  // The tip's clock is the session's own last activity in the display zone, on the previous day.
+  assert.ok(view.sessions.recent[1].tip.endsWith('last activity 11:45 PM'), view.sessions.recent[1].tip);
+  assert.ok(view.sessions.recent[0].tip.endsWith('last activity 12:10 AM'), view.sessions.recent[0].tip);
+  assert.equal(view.sessions.rows.find(r => r.provider === 'omp').sessions, '2');
+});
