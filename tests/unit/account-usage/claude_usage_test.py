@@ -84,6 +84,44 @@ class IdentityTests(unittest.TestCase):
             result = usage.collect("gmail", "windows", expected_email=EMAIL)
         return result, client
 
+    def test_forbidden_usage_row_stays_unavailable_not_a_sign_in(self):
+        # The profile answers and the usage read is forbidden: the row must stay a
+        # generic unavailability, never "sign in again" (claude-reset-Astra-L3).
+        class ForbiddenUsage:
+            def __init__(self):
+                self.calls = []
+
+            def open(self, request, **kwargs):
+                self.calls.append(request.full_url)
+                if request.full_url.endswith("/api/oauth/usage?cedar_ember=1"):
+                    raise urllib.error.HTTPError(request.full_url, 403, "forbidden", {}, None)
+
+                class Response:
+                    def __init__(self, body):
+                        self.body = body
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *args):
+                        pass
+
+                    def read1(self, count):
+                        body, self.body = self.body, b""
+                        return body
+
+                return Response(json.dumps(profile()).encode())
+
+        opener = ForbiddenUsage()
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]), \
+                mock.patch.object(usage.urllib.request, "build_opener", return_value=opener):
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
+        self.assertEqual(result["status"], "unavailable")
+        self.assertNotEqual(result["status"], "needs_sign_in")
+        self.assertNotIn("reason", result)
+
     def test_exact_native_key_and_scope_are_eligible(self):
         entries = usage.eligible_entries(ACCOUNT, cache())
         self.assertEqual(entries[0][1], [ACCOUNT, CLIENT, ORG])
@@ -1422,6 +1460,17 @@ class HttpBoundaryTests(unittest.TestCase):
         self.assertEqual(caught.exception.retry_after, 1800)
         error.fp.read.assert_not_called()
         self.assertNotIn("private", str(caught.exception))
+
+    def test_forbidden_usage_is_not_a_sign_in_demand(self):
+        # A verified profile's 403 is not proof a sign-in is missing (claude-offer-R1-L4).
+        client = usage.Client()
+        error = urllib.error.HTTPError("https://api.anthropic.com/api/oauth/usage", 403,
+                                       "private-upstream-message", {}, mock.Mock())
+        self.addCleanup(error.close)
+        with mock.patch.object(client.opener, "open", side_effect=error):
+            with self.assertRaises(usage.UsageUnavailable) as caught:
+                client.get("/api/oauth/usage", TOKEN)
+        self.assertEqual(caught.exception.status, "forbidden")
 
     def test_redirect_handler_refuses_cross_origin(self):
         self.assertIsNone(usage.NoRedirect().redirect_request(None, None, 302, "", {}, "https://evil.invalid"))
