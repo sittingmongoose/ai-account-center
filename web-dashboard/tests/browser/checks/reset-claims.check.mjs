@@ -55,7 +55,7 @@ const inventory = (spent = false, pending = null) => ({
 });
 
 /** The reset routes, answered in the page. `claim` picks the claim's answer; every request is recorded. */
-function resetServer({ claim = 'claimed', emptyWeekly = false } = {}) {
+function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_000 } = {}) {
 	const server = fakeServer();
 	const r = { spent: false, pending: null, claim };
 	const dashboard = emptyWeekly ? {
@@ -108,7 +108,7 @@ function resetServer({ claim = 'claimed', emptyWeekly = false } = {}) {
 			return json(200, { ...current, canonicalAccountKey, bindingRevision: '1', evidence: evidence() });
 		}],
 		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/prepare$/, (body) => {
-			expiresAtMs = Date.now() + 120_000;
+			expiresAtMs = Date.now() + confirmMs;
 			revision++;
 			return json(200, {
 				account: { label: 'Claude: fresh.label@example.invalid (Pro)' },
@@ -130,7 +130,11 @@ function resetServer({ claim = 'claimed', emptyWeekly = false } = {}) {
 		}],
 		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/check$/, () => json(200, receipt(false, 3))],
 	);
-	return { server, r };
+	const expireToken = () => {
+		expiresAtMs = null;
+		revision++;
+	};
+	return { server, r, expireToken };
 }
 
 /** Serves the fixture, and aborts any reset route it doesn't answer (never the real server). */
@@ -264,6 +268,26 @@ export const tests = {
 		await t.until('Check again settles it', (words) => document.querySelector('.details [data-probe="reset-result"]')?.innerText.includes(words), PARTIAL, { timeout: 5000 });
 		await t.check('Check again sent only a check, never a claim', claims(server).length === before
 			&& resetRequests(server).some((q) => q.path.endsWith('/check') && q.body.attemptKey === KEY('9')));
+	},
+
+	async 'resets: Open it again reads after the confirmation token expired'(t) {
+		const { server, expireToken } = resetServer({ confirmMs: 1_000 });
+		await open(t, server);
+		await openDetails(t, 'claude:one');
+		await t.until('usable', () => !!document.querySelector('.details [data-probe="reset-use"]'), null, { timeout: 10000 });
+		await t.page.click('.details [data-probe="reset-use"]');
+		await t.until('the expired confirmation offers Open it again', () => !!document.querySelector('[data-probe="reset-dialog-reopen"]'), null, { timeout: 5000 });
+		expireToken();
+		const before = resetRequests(server).length;
+		await t.page.click('[data-probe="reset-dialog-reopen"]');
+		await t.until('Open it again started a reset read', () => resetRequests(server).length > before, null, { timeout: 5000 });
+		const after = resetRequests(server).slice(before);
+		await t.check('the recovery read hit inventory or prepare', after.some((q) => q.path.includes('/reset-claims')), JSON.stringify(after));
+		await t.until('the dialog reopened or named that nothing was sent', () => {
+			const dialog = document.querySelector('[data-probe="reset-dialog"]');
+			const said = document.querySelector('.details [data-probe="reset-result"]')?.innerText || '';
+			return !!dialog || said.includes('could not confirm') && said.includes('Nothing was sent');
+		}, null, { timeout: 5000 });
 	},
 
 	async 'resets: Z.ai lists its cards with Use in Z.ai, Qwen has none, neither reads the claim routes'(t) {
