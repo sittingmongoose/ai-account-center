@@ -88,23 +88,28 @@ exact credit redeemed can settle in product
 
 The Details UI keeps two local lifetimes, separate from that durable pending lock.
 Each local send stores its own proof deadline in `unanswered`
-(`web-dashboard/leptos/src/reset_state.rs:400-408`); an admitted inventory read
-started at or after that deadline drops the obligation
-(`reset_state.rs:455-456`). `read_after_ms` is a different freshness threshold:
-`unknown` sets it on a refusal that needs recovery, including
-`check-again-required` (`web-dashboard/leptos/src/resets.rs:1442-1452`,
-`reset_state.rs:409-411`), and an admitted read started at or after it clears it
-(`reset_state.rs:457-459`). A browser that kept its HTTP response can receive a
-pending receipt for an upstream lost reply; that admitted own receipt acknowledges
-the local send (`reset_state.rs:500-506`). When the browser also lost the response,
-a pending attempt plus an inventory read started at the send deadline clears the
-local U1 obligation while the account stays blocked on server pending evidence
-(`reset_state.rs:449-459`). With no current local action, including after reload,
-Details shows `STILL_UNCONFIRMED` (`reset_state.rs:150-151,578-580`), not U1's
-unanswered-send sentence (`reset_state.rs:142-143,528-550`). The native test
-`a_lost_answer_then_redeeming_then_available_keeps_the_u1_lock` asserts `pending`
-and `check-again-required` (`crates/aac-status/tests/reset_any_usage.rs:639-700`);
-it does not exercise the Details projection.
+(`web-dashboard/leptos/src/reset_state.rs:400-408`). Only an `ok` account inventory
+read started at or after that deadline clears the local unanswered-send obligation:
+`take_at` passes the read start time into `observe` only when `inv.status == "ok"`
+(`web-dashboard/leptos/src/resets.rs:1264-1271`, `reset_state.rs:455-456`). An
+inventory that reports usage unavailable is still accepted as evidence, but it
+does not clear the deadline (`resets.rs:1266-1269`). So after a reload with a
+server-pending attempt and an unavailable read, Details keeps the unanswered-send
+state (`reset_state.rs:530-550`) rather than showing `STILL_UNCONFIRMED`
+(`reset_state.rs:578-580`). `read_after_ms` is a different freshness threshold.
+The refusal path sets it for a claim-send refusal or `check-again-required` that
+has no matching ordered evidence (`resets.rs:1424-1452`, `reset_state.rs:409-411`);
+an admitted `ok` read started at or after it clears it (`reset_state.rs:457-459`).
+A browser that kept its HTTP response can receive a pending receipt for an
+upstream lost reply; that admitted own receipt acknowledges the local send
+(`reset_state.rs:500-506`). Details shows `STILL_UNCONFIRMED`
+(`reset_state.rs:150-151,578-580`) when it has current, usable evidence of the
+pending attempt and no higher-priority state: unanswered-send empty, no own
+action, no source failure, and no `read_after_ms` (`reset_state.rs:528-580`).
+The native test `a_lost_answer_then_redeeming_then_available_keeps_the_u1_lock`
+asserts `pending` and `check-again-required`
+(`crates/aac-status/tests/reset_any_usage.rs:639-700`); it does not exercise the
+Details projection.
 
 A fresh same-identity Codex read with the exact credit missing settles as `claimed`
 if OpenAI answered `reset` or `alreadyRedeemed` for that attempt, in that call or
@@ -112,9 +117,11 @@ earlier (`reset.rs:946-955,1173-1184`; fixture `crates/aac-status/tests/reset.rs
 Commit `f6ac26442` and the source comment at `reset.rs:1177-1181` record a 2026-11-16
 live observation: OpenAI answered `reset`, the weekly window refilled, and the
 credit vanished. A missing row alone leaves the lock only when no provider success
-was recorded (`reset.rs:1182-1183`; fixture `tests/reset.rs:628-641`). Whether a
-lost-answer provider body omits the redeemed credit still needs an authorized trace;
-this document does not invent that shape.
+was recorded (`reset.rs:1182-1183`; fixture `tests/reset.rs:628-641`). The open
+question is whether a later provider credit-list read omits the credit after an
+unanswered consume (`reset.rs:1028-1037,1173-1184`), not the lost consume response
+itself; that still needs an authorized trace. This document does not invent that
+shape.
 
 `nothingToReset` trusts the provider's explicit terminal answer (`reset.rs:1336-1352`
 maps it to `Outcome::Nothing`); no contradictory-read reconciliation is performed,
