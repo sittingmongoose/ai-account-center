@@ -966,6 +966,168 @@ fn a_pending_restore_never_touches_a_refused_store() {
     fs::remove_dir_all(&base).unwrap();
 }
 
+/// A markerless interrupted restore into an empty destination (restore intent + staged reading
+/// under `tmp/restore-*`, no top-level `log/` or `aac.redb`, no `release` marker) is refused
+/// before any promotion or release-marker write and keeps all staged data. The same crash layout
+/// with `release = "1"` still finishes recovery, and a truly empty folder is still admitted as new.
+#[test]
+fn a_markerless_interrupted_restore_into_empty_dir_is_refused_untouched() {
+    let base = temp_dir("review-markerless-restore-empty");
+    let seed = base.join("seed");
+    let backups = base.join("backups");
+    let backup_id = {
+        let engine = open(&seed);
+        record(&engine, vec![obs(T0, 10.0)]);
+        assert_eq!(raw_starts(&engine), vec![T0]);
+        let made = call(
+            &engine,
+            "backup",
+            json!({ "roots": [backups.to_str().unwrap()], "withRedb": true }),
+        );
+        let id = made["id"].as_str().unwrap().to_string();
+        engine.close().unwrap();
+        id
+    };
+    let backup_set = backups.join("sets").join(&backup_id);
+
+    // Fresh-destination pre-release crash layout: intent + staged reading, no top-level data,
+    // no release marker.
+    let crash = base.join("crash");
+    let staging = crash.join("tmp/restore-0123456789abcdef");
+    let quarantine = crash.join("quarantine/20261122T000000Z-pre-restore-01");
+    common::copy_dir(&seed.join("log"), &staging.join("log"));
+    fs::copy(seed.join("aac.redb"), staging.join("aac.redb")).unwrap();
+    fs::write(
+        crash.join("restore.intent.json"),
+        json!({
+            "staging": staging.display().to_string(),
+            "quarantine": quarantine.display().to_string(),
+            "backup": backup_id,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert!(!crash.join("release").exists());
+    assert!(!crash.join("log").exists());
+    assert!(!crash.join("aac.redb").exists());
+
+    let before = walk(&crash);
+    let error = ops::open_engine(crash.to_str().unwrap(), None, None)
+        .err()
+        .expect("a markerless interrupted restore must be refused, not admitted as new");
+    assert_eq!(error.code, "unreleased_store");
+    assert!(
+        !crash.join("release").exists(),
+        "release marker must not be written on refusal"
+    );
+    assert!(crash.join("restore.intent.json").exists(), "intent must be kept");
+    assert!(staging.join("log").exists(), "staged reading data must be kept");
+    assert_eq!(
+        walk(&crash),
+        before,
+        "a refused markerless restore is left byte-for-byte untouched"
+    );
+
+    let restore_err =
+        restore(&crash, &backup_set).expect_err("restore into a markerless interrupted restore must be refused");
+    assert!(restore_err.starts_with("unreleased_store: "), "{restore_err}");
+    assert!(
+        !crash.join("release").exists(),
+        "restore refusal must not write release marker"
+    );
+    assert_eq!(walk(&crash), before, "restore refusal leaves staged data untouched");
+
+    // Control 1: the exact same fresh-destination crash layout WITH `release = "1"` still finishes
+    // recovery and exposes the staged reading.
+    let marked = base.join("marked");
+    let marked_staging = marked.join("tmp/restore-0123456789abcdef");
+    let marked_quarantine = marked.join("quarantine/20261122T000000Z-pre-restore-01");
+    common::copy_dir(&seed.join("log"), &marked_staging.join("log"));
+    fs::copy(seed.join("aac.redb"), marked_staging.join("aac.redb")).unwrap();
+    fs::write(marked.join("release"), "1").unwrap();
+    fs::write(
+        marked.join("restore.intent.json"),
+        json!({
+            "staging": marked_staging.display().to_string(),
+            "quarantine": marked_quarantine.display().to_string(),
+            "backup": backup_id,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let engine = ops::open_engine(marked.to_str().unwrap(), None, None).expect("marked store finishes pending restore");
+    assert_eq!(raw_starts(&engine), vec![T0], "staged reading is recovered");
+    assert_eq!(fs::read_to_string(marked.join("release")).unwrap(), "1");
+    assert!(!marked.join("restore.intent.json").exists());
+    assert!(!marked_staging.exists());
+    engine.close().unwrap();
+    drop(engine);
+
+    // Control 2: a truly empty folder is still admitted as new (both open and restore).
+    let empty_open = base.join("empty-open");
+    fs::create_dir_all(&empty_open).unwrap();
+    let engine =
+        ops::open_engine(empty_open.to_str().unwrap(), None, None).expect("a truly empty folder is admitted as new");
+    assert_eq!(fs::read_to_string(empty_open.join("release")).unwrap(), "1");
+    assert!(raw_starts(&engine).is_empty());
+    engine.close().unwrap();
+    drop(engine);
+
+    let empty_restore = base.join("empty-restore");
+    fs::create_dir_all(&empty_restore).unwrap();
+    restore(&empty_restore, &backup_set).expect("a truly empty folder accepts a release-1 restore");
+    assert_eq!(fs::read_to_string(empty_restore.join("release")).unwrap(), "1");
+    let engine = open(&empty_restore);
+    assert_eq!(raw_starts(&engine), vec![T0]);
+    engine.close().unwrap();
+    drop(engine);
+
+    fs::remove_dir_all(&base).unwrap();
+}
+
+/// Staged `tmp/restore-*` data without a release marker (for example a pre-release restore killed
+/// before writing `restore.intent.json`) is also refused untouched and never deleted.
+#[test]
+fn a_markerless_staged_restore_without_intent_is_refused_untouched() {
+    let base = temp_dir("review-markerless-staged-only");
+    let seed = base.join("seed");
+    let backups = base.join("backups");
+    let backup_id = {
+        let engine = open(&seed);
+        record(&engine, vec![obs(T0, 10.0)]);
+        let made = call(
+            &engine,
+            "backup",
+            json!({ "roots": [backups.to_str().unwrap()], "withRedb": false }),
+        );
+        let id = made["id"].as_str().unwrap().to_string();
+        engine.close().unwrap();
+        id
+    };
+    let backup_set = backups.join("sets").join(&backup_id);
+
+    let staged_only = base.join("staged-only");
+    let staging = staged_only.join("tmp/restore-fedcba9876543210");
+    common::copy_dir(&seed.join("log"), &staging.join("log"));
+    let before = walk(&staged_only);
+
+    let error = ops::open_engine(staged_only.to_str().unwrap(), None, None)
+        .err()
+        .expect("markerless staged restore data must be refused");
+    assert_eq!(error.code, "unreleased_store");
+    assert!(!staged_only.join("release").exists());
+    assert!(staging.join("log").exists(), "staged data must not be deleted");
+    assert_eq!(walk(&staged_only), before);
+
+    let restore_err =
+        restore(&staged_only, &backup_set).expect_err("restore into markerless staged data must be refused");
+    assert!(restore_err.starts_with("unreleased_store: "), "{restore_err}");
+    assert!(!staged_only.join("release").exists());
+    assert_eq!(walk(&staged_only), before);
+
+    fs::remove_dir_all(&base).unwrap();
+}
+
 /// A release marker above `u32::MAX` is a newer store, not an unreleased one: the marker is
 /// read as a number first, so any numeric value above this build's release is `newer_store`.
 #[test]

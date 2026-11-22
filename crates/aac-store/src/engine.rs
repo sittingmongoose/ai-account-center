@@ -17,11 +17,39 @@ pub const PROJECTOR_BATCH: usize = 4096;
 pub const DAY_MS: u64 = 86_400_000;
 const REDB_FILE: &str = "aac.redb";
 /// The store's release, written when this build creates a store: `1`. Stores written by the
-/// branch's unreleased test builds have logs or a redb file but no marker.
+/// branch's unreleased test builds have logs, a redb file, or a pending/staged restore without a
+/// marker.
 const RELEASE_FILE: &str = "release";
 pub const STORE_RELEASE: u32 = 1;
 const UNRELEASED: &str =
     "This store was written by an unreleased test build; move it aside and AAC will start a new one.";
+const RESTORE_INTENT: &str = "restore.intent.json";
+const RESTORE_STAGING_PREFIX: &str = "restore-";
+
+fn path_present(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn has_staged_restore(dir: &Path) -> Result<bool> {
+    let tmp = dir.join("tmp");
+    match fs::symlink_metadata(&tmp) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => fail!("unsafe_path", "{} is not a private folder", tmp.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    }
+    for entry in fs::read_dir(&tmp)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(RESTORE_STAGING_PREFIX) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// Admits a store of this release, or creates the marker for a new one; refuses anything else
 /// before it is changed.
@@ -39,7 +67,15 @@ fn admit_release(dir: &Path) -> Result<()> {
             _ => fail!("unreleased_store", "{UNRELEASED}"),
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let has_data = dir.join("log").exists() || dir.join(REDB_FILE).exists();
+            // A pending restore intent or staged `tmp/restore-*` entry is evidence of an existing
+            // store even when top-level `log/` and `aac.redb` are absent (for example an
+            // interrupted pre-release restore into a fresh destination). Refuse before writing the
+            // release marker or running `finish_restore` so nothing is promoted, stamped or
+            // removed.
+            let has_data = path_present(&dir.join("log"))?
+                || path_present(&dir.join(REDB_FILE))?
+                || path_present(&dir.join(RESTORE_INTENT))?
+                || has_staged_restore(dir)?;
             if has_data {
                 fail!("unreleased_store", "{UNRELEASED}");
             }
@@ -48,7 +84,6 @@ fn admit_release(dir: &Path) -> Result<()> {
         Err(e) => Err(e.into()),
     }
 }
-const RESTORE_INTENT: &str = "restore.intent.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogId {
@@ -1612,7 +1647,9 @@ pub fn restore(dir: &Path, backup_dir: &Path) -> Result<Json> {
     finish_restore(dir)?;
     // A fresh staging folder, named here and never from the manifest.
     fsx::private_dir(&dir.join("tmp"))?;
-    let staging = dir.join("tmp").join(format!("restore-{}", fsx::random_hex(8)));
+    let staging = dir
+        .join("tmp")
+        .join(format!("{RESTORE_STAGING_PREFIX}{}", fsx::random_hex(8)));
     fs::create_dir(&staging)?;
     for (source, dest, sha) in &plan.copies {
         let target = staging.join(dest);
@@ -1658,7 +1695,7 @@ fn finish_restore(dir: &Path) -> Result<()> {
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(prefix) && backup_name_ok(n))
     };
-    if !inside(&staging, "tmp", "restore-") || !inside(&quarantine_dir, "quarantine", "") {
+    if !inside(&staging, "tmp", RESTORE_STAGING_PREFIX) || !inside(&quarantine_dir, "quarantine", "") {
         fail!("invalid", "the restore intent names folders outside the store");
     }
     fsx::private_dir(&quarantine_dir)?;
