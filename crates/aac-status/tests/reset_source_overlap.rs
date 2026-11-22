@@ -531,8 +531,10 @@ fn an_older_capture_refuses_instead_of_rolling_back_a_newer_binding() {
     // A's slow capture reads the OLD login; while it runs outside the transaction,
     // B captures and binds the NEW login on the same route.
     let mut b_result: Option<Result<((), ReadTicket)>> = None;
+    let mut bound_key = Value::Null;
     let stalled = a.capture_identity_read("claude:reused", || {
         b_result = Some(b.capture_identity_read("claude:reused", || Ok(((), newer.clone()))));
+        bound_key = b.pending("claude:reused", now()).unwrap()["canonicalAccountKey"].clone();
         std::thread::sleep(Duration::from_millis(50));
         Ok(((), older.clone()))
     });
@@ -541,11 +543,12 @@ fn an_older_capture_refuses_instead_of_rolling_back_a_newer_binding() {
         "the newer capture must bind while the older one runs"
     );
     assert_eq!(stalled.unwrap_err(), "identity-changed");
-    // The newer binding survives and the refused capture allocated no read order.
-    assert_eq!(
-        a.pending("claude:reused", now()).unwrap()["canonicalAccountKey"],
-        b.pending("claude:reused", now()).unwrap()["canonicalAccountKey"]
-    );
+    // The newer binding survives: the stored key must still be the one B bound
+    // while A ran, not the older login a rolled-back refusal would leave behind.
+    // The refused capture allocated no read order.
+    let after = a.pending("claude:reused", now()).unwrap();
+    assert!(!bound_key.is_null(), "B must have bound a canonical key");
+    assert_eq!(after["canonicalAccountKey"], bound_key);
     let (_, ticket) = a
         .capture_identity_read("claude:reused", || Ok(((), newer.clone())))
         .unwrap();
