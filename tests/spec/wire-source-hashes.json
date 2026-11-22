@@ -88,7 +88,7 @@
   "src/commands/antigravity-command.ts": "79d0e0f0c8117db3ab149a3dbf43dd2a858a09c69ac53d311db7d2418a9455a9",
   "src/commands/store-command.ts": "aa5bcafbf4d28b9df9bdbd0d2b4361d0b6cabc7e5c1b8a2ea1538835a1d813b5",
   "src/commands/usage-hub-command.ts": "3b4dd9e78194aae20d3f2a053de18883c0fb1f912511187dffb5c0b56784d59d",
-  "src/config/schemas/unified-config.ts": "8eaed8c18cfd78ff8feaae5f05643d299fc580aeab66faf6ef69361cf31660c5",
+  "src/config/schemas/unified-config.ts": "2390361b93cb2029191d269d2cb6bf53af380dae3c3c9c91bed391ac90f42fc5",
   "src/shared/private-file-lease.ts": "ef605ce46d863b7886112736707f787af0b2bf01b3aab3a48c4574236c9bf1dd",
   "src/status-native/native-loader.ts": "159087a563063a38b56da239b985c5b8dea064ea0efeac13898b279e20e815f4",
   "src/store/activity-answer.ts": "d717424e59cbd28bbe9ce170f2be961b4b3441788b41fc090912a9597f79bcec",
