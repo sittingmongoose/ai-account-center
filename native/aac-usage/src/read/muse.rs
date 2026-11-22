@@ -262,12 +262,18 @@ fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<Path
         .cloned()
         .collect();
     found.sort_by_cached_key(|path| {
-        let key = util::filekey("muse", path);
+        // Muse prints are stored under the session key; the print names its file by `pathKey`.
+        // This file is the published owner only when that print is its own (RECHECK-ROUND3 M1).
+        let path_key = util::filekey("muse", path);
         let published = collector
             .prior
             .get("muse")
-            .and_then(|prints| prints.get(&key))
-            .is_some_and(|prior| prior.is_object() && prior["readThrough"].is_null());
+            .and_then(|prints| prints.get(file_key(path)))
+            .is_some_and(|prior| {
+                prior.is_object()
+                    && prior["readThrough"].is_null()
+                    && prior["pathKey"].as_str() == Some(path_key.as_str())
+            });
         (!settled.contains(path), !published, path_text(path))
     });
     let mut identities: HashSet<(u64, u64)> = HashSet::new();
