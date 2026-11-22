@@ -3,7 +3,7 @@ export function createResetHints(win) {
   const listeners = new Set(), seen = new Set();
   const key = 'aac-reset-claims-changed', type = 'reset-claims-changed';
   let socket, channel, retry, stopped = true, serial = 0;
-  let live = false, opened = false, delay = 1000;
+  let delay = 1000, generation = 0;
   const notify = () => { for (const listener of listeners) listener(); };
   const nextId = () => `${Date.now()}:${++serial}:${Math.random()}`;
   const remember = (id) => {
@@ -29,34 +29,45 @@ export function createResetHints(win) {
     try { receive(JSON.parse(event.newValue)); } catch { notify(); }
   };
   const reconnect = () => {
-    retry = win.setTimeout(connect, delay);
+    win.clearTimeout(retry);
+    retry = win.setTimeout(resume, delay);
     delay = Math.min(delay * 2, 30000);
+  };
+  // Every reconnect asks the server first whether this browser still has a session: a 4001 close
+  // can be a rotation that keeps this browser signed in, and a refused upgrade must not be retried
+  // (and logged) forever. /api/auth/check always answers 200, even signed out, with no console error.
+  const resume = async () => {
+    const mine = generation;
+    let answer = null;
+    try {
+      const response = await win.fetch('/api/auth/check', { credentials: 'same-origin' });
+      if (response.ok) answer = await response.json();
+    } catch { /* Network or unreadable answer: keep backing off. */ }
+    if (stopped || mine !== generation) return;
+    if (answer && (answer.authenticated === true || answer.authRequired === false)) { connect(); return; }
+    if (answer) { stopped = true; return; } // The server says this browser is signed out.
+    reconnect();
   };
   const connect = () => {
     if (stopped) return;
-    opened = false;
     try {
       socket = new win.WebSocket(`${win.location.protocol === 'https:' ? 'wss' : 'ws'}://${win.location.host}/ws`);
-      socket.onopen = () => { opened = true; live = true; delay = 1000; notify(); }; // Reconnect reads through any missed events.
+      socket.onopen = () => { delay = 1000; notify(); }; // Reconnect reads through any missed events.
       socket.onmessage = (event) => {
         try { receive(JSON.parse(event.data), true); } catch { /* Not a reset hint. */ }
       };
-      socket.onclose = (event) => {
+      socket.onclose = () => {
         notify();
-        if (stopped) return;
-        // Signed out (the server's 4001), or an upgrade refused before any live session: the page's
-        // signed-out handling takes over; another attempt would only log one more refusal.
-        if (event?.code === 4001 || (!opened && !live)) { stopped = true; return; }
-        reconnect();
+        if (!stopped) reconnect();
       };
     } catch {
       notify();
-      reconnect();
+      if (!stopped) reconnect();
     }
   };
   const start = () => {
     stopped = false;
-    live = false;
+    generation++;
     delay = 1000;
     try {
       channel = new win.BroadcastChannel(key);
@@ -71,6 +82,7 @@ export function createResetHints(win) {
   };
   const stop = () => {
     stopped = true;
+    generation++;
     win.clearTimeout(retry);
     if (socket) {
       socket.onopen = socket.onmessage = socket.onclose = null;
