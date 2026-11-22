@@ -453,6 +453,23 @@ fn tip_layer_clamped_pos(
     ((left + right) / 2.0, y, below)
 }
 
+/// TipLayer's Effect body: an empty card reads nothing from the page (no layout or style read) and places
+/// nothing; with words in it, it measures once (`measure` = the card's rendered width and the content
+/// bounds) and places the clamped card. `at` is tracked first, as before, so a moved tip re-runs it.
+pub(crate) fn place_tip_if_worded(
+    at: RwSignal<(f64, f64, bool)>,
+    text: RwSignal<String>,
+    pos: RwSignal<(f64, f64, bool)>,
+    measure: impl FnOnce() -> (f64, (f64, f64)),
+) {
+    at.track();
+    if text.with(|t| t.is_empty()) {
+        return;
+    }
+    let (w, bounds) = measure();
+    place_tip_after_layout(at, text, w, bounds, pos);
+}
+
 /// TipLayer's Effect body: with the card's words in it, its measured width (`w`) and the page's content
 /// bounds known, place the clamped centre. The test drives the same body through `at`, `text` and `pos`.
 pub(crate) fn place_tip_after_layout(
@@ -568,13 +585,15 @@ pub fn TipLayer(children: Children) -> impl IntoView {
     // The card is placed once it has rendered its words: its measured width keeps the whole box between the content
     // bounds, so a wide tip at the content edge never draws under the rail.
     Effect::new(move |_| {
-        let vw = window()
-            .inner_width()
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1024.0);
-        let w = card.get().map(|c| c.offset_width() as f64).unwrap_or(0.0);
-        place_tip_after_layout(at, text, w, page_bounds(vw), pos);
+        place_tip_if_worded(at, text, pos, || {
+            let vw = window()
+                .inner_width()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1024.0);
+            let w = card.get().map(|c| c.offset_width() as f64).unwrap_or(0.0);
+            (w, page_bounds(vw))
+        });
     });
     let over = move |e: web_sys::PointerEvent| {
         if e.pointer_type() != "mouse" {
@@ -976,6 +995,42 @@ mod tests {
         let (x, _, _) = pos.get();
         assert_eq!((x - 170.0, x + 170.0), (12.0, 352.0));
         assert!(x - 170.0 >= lo && x + 170.0 <= hi);
+    }
+
+    #[test]
+    fn an_empty_tip_measures_nothing() {
+        use std::cell::Cell;
+        let owner = Owner::new();
+        owner.set();
+        let (lo, hi) = content_bounds(951.0, "rail", "right", 84.0);
+        let at = RwSignal::new((900.0f64, 10.0f64, true));
+        let text = RwSignal::new(String::new());
+        let pos = RwSignal::new((0.0f64, 0.0f64, false));
+        let measures = Cell::new(0u32);
+        // no words: no layout or computed-style read, and nothing placed
+        place_tip_if_worded(at, text, pos, || {
+            measures.set(measures.get() + 1);
+            (340.0, (lo, hi))
+        });
+        assert_eq!(measures.get(), 0, "an empty tip must not measure the page");
+        assert_eq!(pos.get(), (0.0, 0.0, false));
+        // words in the card: measured once, then placed clamped
+        at.set((437.0, 10.0, true));
+        text.set("mid".to_string());
+        place_tip_if_worded(at, text, pos, || {
+            measures.set(measures.get() + 1);
+            (120.0, (lo, hi))
+        });
+        assert_eq!(measures.get(), 1);
+        assert_eq!(pos.get(), (437.0, 10.0, true));
+        // words removed again: back to no measuring
+        text.set(String::new());
+        place_tip_if_worded(at, text, pos, || {
+            measures.set(measures.get() + 1);
+            (120.0, (lo, hi))
+        });
+        assert_eq!(measures.get(), 1);
+        assert_eq!(pos.get(), (437.0, 10.0, true));
     }
 
     #[test]
