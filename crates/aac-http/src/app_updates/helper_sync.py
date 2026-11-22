@@ -149,6 +149,14 @@ def replace(root, data):
         temporary.unlink(missing_ok=True)
 
 
+def restore(root, launcher):
+    """Put the launcher that answered before back; an absent one stays absent."""
+    if launcher is None:
+        (root / 'app_updates.py').unlink(missing_ok=True)
+    else:
+        replace(root, launcher)
+
+
 def publish(root, platform, expected, payload):
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name == 'nt':
@@ -197,13 +205,16 @@ def publish(root, platform, expected, payload):
     ).encode('utf-8'))
     if not capable(root / 'app_updates.py', platform):
         # The launcher that answered before stays in force; an absent one stays absent.
-        if launcher is None:
-            (root / 'app_updates.py').unlink(missing_ok=True)
-        else:
-            replace(root, launcher)
+        restore(root, launcher)
         raise Refused('helper_capability_missing')
     if platform == 'windows':
-        ensure_windows_task()
+        # Registration runs after the swap, so it is part of the publication: a refused
+        # registration must not leave a replacement launcher active while its task is missing.
+        try:
+            ensure_windows_task()
+        except Refused:
+            restore(root, launcher)
+            raise
     return {'ok': True, 'changed': True, 'generation': generation, 'previous': previous}
 
 

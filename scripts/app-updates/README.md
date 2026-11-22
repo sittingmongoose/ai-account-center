@@ -1143,7 +1143,10 @@ available. A Windows helper sync verifies `Get-ScheduledTask -TaskName
 script as the signed-in user, with the InteractiveToken/Limited shape of
 `install-windows-task.ps1`. Registration failure is `helper_sync_failed` with
 `windows_task_missing`; the job does not dispatch rows that would fail because
-the task was never registered. Registration does **not** run an update.
+the task was never registered. Registration is part of the publication's
+rollback: a refused registration puts the launcher that answered before back, or
+leaves a fresh host without one, so the synced generation never runs without its
+task. Registration does **not** run an update.
 `install-windows-task.ps1` still applies the same shape by hand. The helper
 queues that task from SSH session zero, so the user's interactive session must
 be signed in. Existing CCS Bar tasks are untouched.

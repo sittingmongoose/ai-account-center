@@ -115,12 +115,102 @@ fn windows_task_missing_is_an_honest_sync_reason() {
 
 #[cfg(unix)]
 #[test]
-fn windows_sync_registers_the_ccs_app_updates_task_when_missing() {
+fn refused_task_registration_restores_the_launcher_that_answered_before() {
+    // M5: registration runs after the swap, so a refused registration (for example a host with
+    // no pythonw.exe) must put the prior launcher back, or leave a fresh host without one.
     let dir = tempfile::tempdir().expect("fixture");
     let harness = r#"
 import pathlib, subprocess, sys
 
 root = pathlib.Path(sys.argv[1])
+fresh = pathlib.Path(sys.argv[2])
+prior = b'# prior launcher\n'
+(root / 'app_updates.py').write_bytes(prior)
+
+class Done:
+    def __init__(self, code=0, stdout=''):
+        self.returncode = code
+        self.stdout = stdout
+        self.stderr = ''
+
+def run(args, **kwargs):
+    script = args[-1] if args else ''
+    if args and args[0] == 'powershell.exe' and 'Get-ScheduledTask' in script:
+        return Done(1)
+    if args and args[0] == 'powershell.exe' and 'Register-ScheduledTask' in script:
+        return Done(1)
+    return Done(0)
+
+subprocess.run = run
+subprocess.check_output = lambda args, **kwargs: 'S-1-5-21-1-2-3-1001'
+source = sys.stdin.read().removesuffix('\nmain()\n')
+namespace = {}
+exec(source, namespace)
+namespace['capable'] = lambda script, platform: True
+data = b'# new helper\n'
+expected = {'app_updates.py': namespace['digest'](data)}
+payload = {'app_updates.py': data}
+reasons = []
+for folder in (root, fresh):
+    try:
+        namespace['publish'](folder, 'windows', expected, payload)
+        reasons.append('ok')
+    except namespace['Refused'] as error:
+        reasons.append(error.reason)
+print('reasons=%s' % ','.join(reasons))
+print('prior_restored=%s' % ((root / 'app_updates.py').read_bytes() == prior))
+print('fresh_absent=%s' % (not (fresh / 'app_updates.py').exists()))
+"#;
+    let mut child = std::process::Command::new("/usr/bin/python3")
+        .args(["-B", "-c", harness])
+        .arg(dir.path())
+        .arg(dir.path().join("fresh"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run windows task rollback fixture");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("helper stdin")
+        .write_all(SCRIPT.as_bytes())
+        .expect("helper script");
+    let result = child
+        .wait_with_output()
+        .expect("helper task rollback result");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "stdout={stdout} stderr={stderr}");
+    assert!(
+        stdout.contains("reasons=windows_task_missing,windows_task_missing"),
+        "a refused registration is helper_sync_failed for both hosts: {stdout}"
+    );
+    assert!(
+        stdout.contains("prior_restored=True"),
+        "the prior launcher must answer again: {stdout}"
+    );
+    assert!(
+        stdout.contains("fresh_absent=True"),
+        "a fresh host must be left without a launcher: {stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn windows_sync_registers_the_task_the_coordinator_starts() {
+    // The registered task is the one the coordinator's Windows task start dispatches; the row
+    // comes from that dispatch, not from the publication reply.
+    let dir = tempfile::tempdir().expect("fixture");
+    let home = dir.path().join("home");
+    let harness = r#"
+import json, pathlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+home = pathlib.Path(sys.argv[2])
+source_dir = pathlib.Path(sys.argv[3])
+home.mkdir(parents=True, exist_ok=True)
 registers = []
 
 class Done:
@@ -141,24 +231,50 @@ def run(args, **kwargs):
 subprocess.run = run
 subprocess.check_output = lambda args, **kwargs: 'S-1-5-21-1-2-3-1001'
 source = sys.stdin.read().removesuffix('\nmain()\n')
-namespace = {}
-exec(source, namespace)
-namespace['capable'] = lambda script, platform: True
-data = b'# new helper\n'
-result = namespace['publish'](root, 'windows', {'app_updates.py': namespace['digest'](data)},
-                              {'app_updates.py': data})
-print('registers=%d' % len(registers))
+sync = {}
+exec(source, sync)
+sync['capable'] = lambda script, platform: True
+payload = {path.name: path.read_bytes() for path in sorted(source_dir.glob('*.py'))}
+expected = {name: sync['digest'](data) for name, data in payload.items()}
+result = sync['publish'](root, 'windows', expected, payload)
+started = []
+
+def powershell(script, timeout=15):
+    folder = home / '.ccs/app-updates'
+    if 'Start-ScheduledTask' in script:
+        started.append(script)
+        nonce = json.loads((folder / 'windows-task-request.json').read_text())['nonce']
+        row = {'appId': 'codex-cli', 'platform': 'windows', 'status': 'updated', 'before': '1.0.0',
+               'after': '2.0.0', 'restartedProcesses': 0, 'updateAttempted': True}
+        (folder / 'windows-task-result.json').write_text(json.dumps({'nonce': nonce, 'results': [row]}))
+        return ''
+    if 'LastRunTime' in script:
+        return '0'
+    raise AssertionError('unexpected task command: ' + script)
+
+generation = root / result['generation']
+sys.path.insert(0, str(generation))
+updater = {'__name__': 'fixture', '__file__': str(generation / 'app_updates.py')}
+exec(compile((generation / 'app_updates.py').read_text(), 'app_updates.py', 'exec'), updater)
+updater['powershell'] = powershell
+answer = updater['windows_interactive_apply'](lambda event: None, lambda: False, None, 'codex-cli', 60)
+row = answer['results'][0]
 print('ok=%s' % result.get('ok'))
-print('row=%s' % ('helper_sync_failed' if not result.get('ok') else 'updated'))
+print('registers=%d' % len(registers))
+print('started=%d' % len(started))
+print('row=%s' % row['status'])
 "#;
     let mut child = std::process::Command::new("/usr/bin/python3")
         .args(["-B", "-c", harness])
         .arg(dir.path())
+        .arg(&home)
+        .arg(repo().join("scripts/app-updates"))
+        .env("HOME", &home)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("run windows task fixture");
+        .expect("run windows task start fixture");
     use std::io::Write;
     child
         .stdin
@@ -166,21 +282,21 @@ print('row=%s' % ('helper_sync_failed' if not result.get('ok') else 'updated'))
         .expect("helper stdin")
         .write_all(SCRIPT.as_bytes())
         .expect("helper script");
-    let result = child.wait_with_output().expect("helper task result");
+    let result = child.wait_with_output().expect("helper task start result");
     let stdout = String::from_utf8_lossy(&result.stdout);
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(result.status.success(), "stdout={stdout} stderr={stderr}");
     assert!(
         stdout.contains("registers=1"),
-        "expected one registration, got {stdout}"
+        "the sync registers the missing task: {stdout}"
     );
     assert!(
-        stdout.contains("ok=True"),
-        "sync must succeed so the first update row is not helper_sync_failed: {stdout}"
+        stdout.contains("started=1"),
+        "the coordinator starts the registered task: {stdout}"
     );
     assert!(
         stdout.contains("row=updated"),
-        "first update row must not be helper_sync_failed: {stdout}"
+        "the first update row comes from the task start: {stdout}"
     );
 }
 
