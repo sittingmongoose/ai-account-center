@@ -10,18 +10,13 @@ use std::sync::LazyLock;
 /// The snapshot format version.
 pub const AGENT_USAGE_VERSION: u32 = 1;
 
-/// The provider order accounts keep (the TypeScript `PROVIDERS` list).
-pub const PROVIDERS: [&str; 9] = [
-    "codex",
-    "claude",
-    "antigravity",
-    "muse",
-    "cursor",
-    "kimi-code",
-    "qwen",
-    "zai",
-    "opencode-go",
-];
+/// The provider order accounts keep (the TypeScript `PROVIDERS` list): the provider table's
+/// `snapshotOrder`, so the answer and the table cannot drift.
+static PROVIDERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    aac_providers::snapshot_providers()
+        .map(|row| row.id.as_str())
+        .collect()
+});
 const STATUSES: [&str; 5] = ["ok", "cached", "unavailable", "error", "needs_sign_in"];
 const PLATFORMS: [&str; 3] = ["ubuntu", "mac", "windows"];
 const KINDS: [&str; 4] = ["rate_limit", "balance", "spend", "extra_usage"];
@@ -595,6 +590,25 @@ pub fn host_name(account: &ProjectedAccount) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The account order the answer publishes is the hand list it replaced, value for value.
+    #[test]
+    fn account_order_is_the_tables_snapshot_order() {
+        assert_eq!(
+            *PROVIDERS,
+            [
+                "codex",
+                "claude",
+                "antigravity",
+                "muse",
+                "cursor",
+                "kimi-code",
+                "qwen",
+                "zai",
+                "opencode-go"
+            ]
+        );
+    }
 
     fn row() -> Value {
         json!({

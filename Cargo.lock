@@ -209,6 +209,7 @@ dependencies = [
  "aac-core",
  "aac-files",
  "aac-num",
+ "aac-providers",
  "aac-store",
  "aac-views",
  "indexmap",

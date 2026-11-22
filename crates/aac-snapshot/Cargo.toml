@@ -15,6 +15,7 @@ workspace = true
 aac-core.workspace = true
 aac-files.workspace = true
 aac-num.workspace = true
+aac-providers.workspace = true
 aac-store.workspace = true
 aac-views.workspace = true
 indexmap.workspace = true
