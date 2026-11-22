@@ -162,6 +162,9 @@ export interface ScoreboardRow {
   why: string;
   observed: Column | null;
   benchmarks: Column[];
+  sourceState?: SourceState;
+  asOf?: string | null;
+  ageSeconds?: number | null;
 }
 
 export interface ScoreboardTaskType {

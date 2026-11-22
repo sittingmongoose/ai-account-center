@@ -1042,33 +1042,56 @@ fn why_only_fine_names_benchmark_runs_when_that_is_the_ranked_basis() {
     );
 
 #[test]
-fn unreadable_run_file_carries_row_source_state_and_age_without_changing_verdict() {
-    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
-    doc["sources"] = json!([
-        {
-            "id": "scoreboard-runs",
-            "label": "Agent runs",
-            "asOf": "2026-11-06T16:25:00.000Z",
-            "ageSeconds": 300,
-            "staleAfterSeconds": 180,
-            "state": "unreadable",
-            "detail": "1 file unreadable since 4:25 PM: vm.build/runs/2026-11-06/vm.build--eio.json (could not be read). 92 runs from 3 writers read 4:25 PM (68 observed, 24 benchmark)."
-        },
-        {
-            "id": "scoreboard-catalog",
-            "label": "Scoreboard catalog",
-            "asOf": "2026-11-06T16:30:00.000Z",
-            "ageSeconds": 0,
-            "staleAfterSeconds": 180,
-            "state": "ok",
-            "detail": "Catalog read 4:30 PM."
-        }
-    ]);
+fn untraced_damaged_source_leaves_all_rows_unmarked() {
+    let doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    assert_eq!(doc["sources"][0]["state"], json!("unreadable"));
     let parsed: ViewIn = serde_json::from_value(doc).unwrap();
     let actual = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
-    let opus = actual["views"][0]["models"]
-        .as_array()
-        .unwrap()
+    for view in actual["views"].as_array().unwrap() {
+        for model in view["models"].as_array().unwrap() {
+            assert!(
+                model.get("sourceState").is_none(),
+                "untraced page-level unreadable source must not label row {}: {model}",
+                model["key"]
+            );
+            assert!(model.get("asOf").is_none());
+            assert!(model.get("ageSeconds").is_none());
+            for cell in model["cells"].as_object().unwrap().values() {
+                if cell.is_object() {
+                    assert!(cell.get("sourceState").is_none());
+                }
+            }
+            for report in model["report"].as_array().unwrap() {
+                assert!(report.get("sourceState").is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn traced_failing_row_carries_source_state_only_to_that_model_and_job() {
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    let mut marked = 0usize;
+    for use_item in doc["uses"].as_array_mut().unwrap() {
+        for task in use_item["taskTypes"].as_array_mut().unwrap() {
+            if task["id"] != "worknode-build" {
+                continue;
+            }
+            for row in task["rows"].as_array_mut().unwrap() {
+                if row["model"] == "anthropic/claude-opus-5-5" && row["effort"] == "xhigh" {
+                    row["sourceState"] = json!("unreadable");
+                    row["asOf"] = json!("2026-11-06T16:25:00.000Z");
+                    row["ageSeconds"] = json!(300);
+                    marked += 1;
+                }
+            }
+        }
+    }
+    assert!(marked > 0, "fixture has an Opus 5.5 xhigh worknode-build row");
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let actual = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
+    let models = actual["views"][0]["models"].as_array().unwrap();
+    let opus = models
         .iter()
         .find(|m| m["key"] == "anthropic/claude-opus-5-5|claude-code|xhigh")
         .expect("Opus 5.5 xhigh row");
@@ -1077,96 +1100,204 @@ fn unreadable_run_file_carries_row_source_state_and_age_without_changing_verdict
     assert_eq!(opus["sourceState"], json!("unreadable"));
     assert_eq!(opus["asOf"], json!("2026-11-06T16:25:00.000Z"));
     assert_eq!(opus["ageSeconds"], json!(300));
-}
-
-#[test]
-fn catalog_listing_failure_carries_error_source_state_without_inventing_age() {
-    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
-    doc["sources"] = json!([
-        {
-            "id": "scoreboard-runs",
-            "label": "Agent runs",
-            "asOf": "2026-11-06T16:30:00.000Z",
-            "ageSeconds": 10,
-            "staleAfterSeconds": 180,
-            "state": "ok",
-            "detail": "92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark)."
-        },
-        {
-            "id": "scoreboard-catalog",
-            "label": "Scoreboard catalog",
-            "asOf": null,
-            "ageSeconds": null,
-            "staleAfterSeconds": 180,
-            "state": "error",
-            "detail": "The catalog folder could not be listed."
-        }
-    ]);
-    let parsed: ViewIn = serde_json::from_value(doc.clone()).unwrap();
-    let actual = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
-    let opus = actual["views"][0]["models"]
+    assert_eq!(opus["cells"]["worknode-build"]["sourceState"], json!("unreadable"));
+    assert_eq!(opus["cells"]["worknode-build"]["ageSeconds"], json!(300));
+    assert!(
+        opus["cells"]["scout"].get("sourceState").is_none(),
+        "unaffected job cell on the same model must stay unmarked"
+    );
+    let build_report = opus["report"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|m| m["key"] == "anthropic/claude-opus-5-5|claude-code|xhigh")
-        .expect("Opus 5.5 xhigh row");
-    assert_eq!(opus["cells"]["worknode-build"]["verdict"], json!("recommended"));
-    assert_eq!(opus["sourceState"], json!("error"));
-    assert!(
-        opus.get("asOf").is_none(),
-        "must not invent asOf from another source: {opus}"
-    );
-    assert!(
-        opus.get("ageSeconds").is_none(),
-        "must not invent ageSeconds from another source: {opus}"
-    );
-
-    // When the failing catalog still has a last-good timestamp, the row carries that age.
-    doc["sources"][1]["asOf"] = json!("2026-11-06T16:23:00.000Z");
-    doc["sources"][1]["ageSeconds"] = json!(420);
-    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
-    let cached = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
-    let opus = &cached["views"][0]["models"][0];
-    assert_eq!(opus["sourceState"], json!("error"));
-    assert_eq!(opus["asOf"], json!("2026-11-06T16:23:00.000Z"));
-    assert_eq!(opus["ageSeconds"], json!(420));
+        .find(|r| r["job"] == "worknode-build")
+        .expect("worknode-build report");
+    assert_eq!(build_report["sourceState"], json!("unreadable"));
+    assert_eq!(build_report["ageSeconds"], json!(300));
+    for other_report in opus["report"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["job"] != "worknode-build")
+    {
+        assert!(
+            other_report.get("sourceState").is_none(),
+            "unaffected job report must stay unmarked: {other_report}"
+        );
+    }
+    for other in models
+        .iter()
+        .filter(|m| m["key"] != "anthropic/claude-opus-5-5|claude-code|xhigh")
+    {
+        assert!(
+            other.get("sourceState").is_none(),
+            "unrelated model row {} must stay unmarked: {other}",
+            other["key"]
+        );
+    }
 }
 
 #[test]
-fn healthy_sources_carry_ok_source_state_and_empty_sources_omit_it() {
+fn unknown_and_ok_row_states_are_omitted_and_missing_age_is_never_invented() {
     let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
-    doc["sources"] = json!([
-        {
-            "id": "scoreboard-runs",
-            "label": "Agent runs",
-            "asOf": "2026-11-06T16:29:50.000Z",
-            "ageSeconds": 10,
-            "staleAfterSeconds": 180,
-            "state": "ok",
-            "detail": "92 runs from 3 writers read 4:29 PM (68 observed, 24 benchmark)."
-        },
-        {
-            "id": "scoreboard-catalog",
-            "label": "Scoreboard catalog",
-            "asOf": "2026-11-06T16:29:35.000Z",
-            "ageSeconds": 25,
-            "staleAfterSeconds": 180,
-            "state": "ok",
-            "detail": "Catalog read 4:29 PM."
+    for use_item in doc["uses"].as_array_mut().unwrap() {
+        for task in use_item["taskTypes"].as_array_mut().unwrap() {
+            if task["id"] != "worknode-build" {
+                continue;
+            }
+            for row in task["rows"].as_array_mut().unwrap() {
+                if row["model"] == "anthropic/claude-opus-5-5" && row["effort"] == "xhigh" {
+                    row["sourceState"] = json!("unreadable");
+                    row["asOf"] = Value::Null;
+                    row["ageSeconds"] = Value::Null;
+                } else if row["model"] == "openai/gpt-6.1-sol" && row["effort"] == "high" {
+                    row["sourceState"] = json!("ok");
+                    row["asOf"] = json!("2026-11-06T16:30:00.000Z");
+                    row["ageSeconds"] = json!(0);
+                } else if row["model"] == "zai/glm-5.3" && row["effort"] == "max" {
+                    row["sourceState"] = json!("mystery");
+                    row["asOf"] = json!("2026-11-06T16:20:00.000Z");
+                    row["ageSeconds"] = json!(600);
+                }
+            }
         }
-    ]);
-    let parsed: ViewIn = serde_json::from_value(doc.clone()).unwrap();
-    let healthy = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
-    let opus = &healthy["views"][0]["models"][0];
-    assert_eq!(opus["sourceState"], json!("ok"));
-    assert_eq!(opus["asOf"], json!("2026-11-06T16:29:35.000Z"));
-    assert_eq!(opus["ageSeconds"], json!(25));
-
-    doc["sources"] = json!([]);
+    }
     let parsed: ViewIn = serde_json::from_value(doc).unwrap();
-    let bare = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
-    let opus = &bare["views"][0]["models"][0];
-    assert!(opus.get("sourceState").is_none());
-    assert!(opus.get("asOf").is_none());
-    assert!(opus.get("ageSeconds").is_none());
+    let actual = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
+    let models = actual["views"][0]["models"].as_array().unwrap();
+    let opus = models
+        .iter()
+        .find(|m| m["key"] == "anthropic/claude-opus-5-5|claude-code|xhigh")
+        .unwrap();
+    assert_eq!(opus["sourceState"], json!("unreadable"));
+    assert!(opus.get("asOf").is_none(), "missing failure time must not be invented");
+    assert!(
+        opus.get("ageSeconds").is_none(),
+        "missing failure age must not be invented"
+    );
+    let sol = models
+        .iter()
+        .find(|m| m["key"] == "openai/gpt-6.1-sol|codex|high")
+        .unwrap();
+    assert!(sol.get("sourceState").is_none(), "ok state must not be emitted");
+    let glm = models.iter().find(|m| m["key"] == "zai/glm-5.3|zcode|max").unwrap();
+    assert!(
+        glm.get("sourceState").is_none(),
+        "unknown state must not become Unavailable"
+    );
+}
+
+#[test]
+fn read_scoreboard_traces_failed_run_file_only_to_its_row_using_failure_since() {
+    use aac_status::read_context::{Date, Presentation};
+    use aac_status::read_scoreboard::compose_fed;
+    use std::sync::Arc;
+
+    let fail_at: i64 = 1_793_982_300_000; // 2026-11-06T16:25:00.000Z
+    let now: i64 = 1_793_982_600_000; // 2026-11-06T16:30:00.000Z (5m later; scan is fresh)
+    let make_run = |id: &str, model_id: &str, harness: &str, effort: &str| {
+        json!({
+            "schema": "agent-reports/run@1",
+            "id": id,
+            "writer": "vm.lead",
+            "seq": 1,
+            "writtenAt": "2026-11-06T15:00:00.000Z",
+            "source": "observed",
+            "project": "example",
+            "stream": "S",
+            "task": { "id": id, "type": "worknode-build", "title": id, "size": { "tasks": 1 } },
+            "model": { "provider": null, "id": model_id, "harness": harness, "effort": effort, "account": null },
+            "startedAt": "2026-11-06T14:50:00.000Z",
+            "endedAt": "2026-11-06T15:00:00.000Z",
+            "wallSeconds": 600,
+            "outcome": "done",
+            "flags": [],
+            "evidence": [],
+            "review": null,
+            "process": null,
+            "benchmark": null,
+            "imported": null
+        })
+    };
+    let opus_doc = make_run("vm.lead--WN-1", "anthropic/claude-opus-5-5", "claude-code", "xhigh");
+    let sol_doc = make_run("vm.lead--WN-2", "openai/gpt-6.1-sol", "codex", "high");
+    let opus_file = "writers/vm.lead/runs/2026-11-06/vm.lead--WN-1.json";
+    let sol_file = "writers/vm.lead/runs/2026-11-06/vm.lead--WN-2.json";
+    let data = json!({
+        "now": now,
+        "timeZone": "UTC",
+        "root": "/fixture",
+        "catalog": {
+            "state": "ok",
+            "scannedAt": now,
+            "missingFiles": [],
+            "problems": [],
+            "minRuns": 5,
+            "models": [
+                { "model": "anthropic/claude-opus-5-5", "label": "Opus 5.5", "family": "Claude", "runtimes": ["claude-code"], "efforts": ["xhigh"], "prices": null, "notes": null },
+                { "model": "openai/gpt-6.1-sol", "label": "Sol 6.1", "family": "GPT-6", "runtimes": ["codex"], "efforts": ["high"], "prices": null, "notes": null }
+            ],
+            "taskTypes": [
+                { "id": "worknode-build", "label": "WorkNode build", "description": null, "unit": "task", "measures": ["reliability"], "byProcess": false }
+            ],
+            "measures": [
+                { "id": "reliability", "label": "Reliability", "description": "Done", "unit": "share", "better": "higher", "kind": "outcome" }
+            ],
+            "uses": [
+                { "id": "pipeline", "label": "Our pipeline", "description": null, "taskTypes": ["worknode-build"], "weights": { "reliability": 3 } }
+            ],
+            "benchmarks": []
+        },
+        "runs": {
+            "correctionsResolved": true,
+            "state": "ok",
+            "scannedAt": now,
+            "runs": [
+                { "file": opus_file, "firstSeenAt": fail_at - 60_000, "sha256": "a", "doc": opus_doc },
+                { "file": sol_file, "firstSeenAt": fail_at - 60_000, "sha256": "b", "doc": sol_doc }
+            ],
+            "writers": 1,
+            "skipped": { "runFiles": 0, "writerFolders": 0 },
+            "problems": [
+                { "file": opus_file, "reason": "could not be read", "since": fail_at },
+                { "file": "writers/vm.lead/runs/2026-11-06/vm.lead--damaged.json", "reason": "contains NUL bytes from a damaged write", "since": now }
+            ]
+        },
+        "docs": [opus_doc, sol_doc],
+        "joinReviews": [],
+        "seedFailures": []
+    });
+    let facts: Presentation = serde_json::from_value(json!({
+        "dates": {
+            fail_at.to_string(): { "iso": "2026-11-06T16:25:00.000Z", "clock": "4:25 PM", "day": "Nov 6" },
+            now.to_string(): { "iso": "2026-11-06T16:30:00.000Z", "clock": "4:30 PM", "day": "Nov 6" }
+        },
+        "epochs": {
+            "2026-11-06T15:00:00.000Z": 1_793_977_200_000_i64
+        },
+        "order": {
+            "anthropic/claude-opus-5-5|claude-code|xhigh": 0,
+            "openai/gpt-6.1-sol|codex|high": 1,
+            "vm.lead--WN-1": 2,
+            "vm.lead--WN-2": 3
+        }
+    }))
+    .unwrap();
+    let date = Date::of_now(now, "4:30 PM".into(), "Nov 6".into()).unwrap();
+    let view = compose_fed(data, Arc::new(facts), (now, date)).expect("compose_fed view");
+    // Sources shows scan age 0; only the traced Opus row carries failure age 300s (from fail_at).
+    assert_eq!(view["sources"][0]["state"], json!("unreadable"));
+    assert_eq!(view["sources"][0]["ageSeconds"].as_f64(), Some(0.0));
+    let rows = view["uses"][0]["taskTypes"][0]["rows"].as_array().unwrap();
+    let opus = rows.iter().find(|r| r["model"] == "anthropic/claude-opus-5-5").unwrap();
+    let sol = rows.iter().find(|r| r["model"] == "openai/gpt-6.1-sol").unwrap();
+    assert_eq!(opus["sourceState"], json!("unreadable"));
+    assert_eq!(opus["asOf"], json!("2026-11-06T16:25:00.000Z"));
+    assert_eq!(opus["ageSeconds"].as_f64(), Some(300.0));
+    assert!(
+        sol.get("sourceState").is_none(),
+        "healthy row must stay unmarked: {sol}"
+    );
+    assert!(sol.get("asOf").is_none());
+    assert!(sol.get("ageSeconds").is_none());
 }

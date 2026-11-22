@@ -241,6 +241,9 @@ pub struct ModelCell {
     pub word: String,
     #[serde(deserialize_with = "nullable")]
     pub sub: Vec<String>,
+    pub source_state: Option<String>,
+    pub as_of: Option<String>,
+    pub age_seconds: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -258,6 +261,9 @@ pub struct JobReport {
     pub measures: Vec<JobMeasure>,
     #[serde(deserialize_with = "nullable")]
     pub compare: Vec<Run>,
+    pub source_state: Option<String>,
+    pub as_of: Option<String>,
+    pub age_seconds: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -600,12 +606,10 @@ pub(crate) fn row_source_chip_parts(
     elapsed_seconds: i64,
 ) -> Option<RowSourceChip> {
     let state = state.map(str::trim).filter(|s| !s.is_empty())?;
-    if state == "ok" {
-        return None;
-    }
     let (label, tone) = match state {
         "unreadable" | "stale" => ("Cached", "warn"),
-        _ => ("Unavailable", "crit"),
+        "missing" | "error" => ("Unavailable", "crit"),
+        _ => return None,
     };
     let age = fmt::live_age(age_seconds, elapsed_seconds).map(fmt::age);
     Some(RowSourceChip {
@@ -625,33 +629,42 @@ pub(crate) fn row_source_chip(row: &ModelRow, elapsed_seconds: i64) -> Option<Ro
     )
 }
 
+fn source_state_tag_opt(
+    state: Option<String>,
+    as_of: Option<String>,
+    age_seconds: Option<i64>,
+    board: Board,
+) -> Option<AnyView> {
+    let initial = row_source_chip_parts(state.as_deref(), age_seconds, 0)?;
+    let title = as_of
+        .as_deref()
+        .map(fmt::clock)
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("Source {} since {t}", initial.state))
+        .unwrap_or_else(|| format!("Source {}", initial.state));
+    let state_attr = initial.state;
+    let tone = initial.tone;
+    Some(
+        view! {
+            <span class="sb-src-state" data-source-state=state_attr data-tone=tone title=title>
+                {move || {
+                    row_source_chip_parts(state.as_deref(), age_seconds, board.elapsed_seconds())
+                        .map(|c| c.text())
+                        .unwrap_or_default()
+                }}
+            </span>
+        }
+        .into_any(),
+    )
+}
+
 fn source_state_tag(
     state: Option<String>,
     as_of: Option<String>,
     age_seconds: Option<i64>,
     board: Board,
 ) -> AnyView {
-    let Some(initial) = row_source_chip_parts(state.as_deref(), age_seconds, 0) else {
-        return ().into_any();
-    };
-    let title = as_of
-        .as_deref()
-        .map(fmt::clock)
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("Source {}: as of {t}", initial.state))
-        .unwrap_or_else(|| format!("Source {}", initial.state));
-    let state_attr = initial.state;
-    let tone = initial.tone;
-    view! {
-        <span class="sb-src-state" data-source-state=state_attr data-tone=tone title=title>
-            {move || {
-                row_source_chip_parts(state.as_deref(), age_seconds, board.elapsed_seconds())
-                    .map(|c| c.text())
-                    .unwrap_or_default()
-            }}
-        </span>
-    }
-    .into_any()
+    source_state_tag_opt(state, as_of, age_seconds, board).unwrap_or_else(|| ().into_any())
 }
 
 #[derive(Clone, Copy)]
@@ -1016,21 +1029,6 @@ fn pick_card(pick: Pick) -> impl IntoView {
     }
 }
 
-fn model_name(m: &ModelRow, sub: bool, chevron: bool) -> impl IntoView + use<> {
-    let eff = m.effort_text.clone();
-    let runtime = m.runtime.clone();
-    view! {
-        <div class="mname">
-            <Mark name=m.mark.clone()/>
-            <div>
-                <div class="t">{m.label.clone()}<span class="eff">{format!(" · {eff}")}</span></div>
-                {sub.then(|| view! { <div class="r">{runtime}</div> })}
-            </div>
-            {chevron.then(|| view! { <Icon name="chev-right" class="chev"/> })}
-        </div>
-    }
-}
-
 /// A verdict cell's note: each piece stays whole, breaks fall only between them.
 fn sub_chunks(sub: &[String]) -> impl IntoView + use<> {
     let last = sub.len().saturating_sub(1);
@@ -1051,16 +1049,34 @@ fn sub_chunks(sub: &[String]) -> impl IntoView + use<> {
 
 /// A row's name: "Opus 5.5 · xhigh", or only the effort under its model's own line.
 fn row_name(m: &ModelRow, sub: bool, chevron: bool) -> AnyView {
-    if !sub {
-        return model_name(m, true, chevron).into_any();
-    }
+    row_name_with_tag(m, sub, chevron, None)
+}
+
+/// Like [`row_name`], optionally placing a single row-level source-health tag below the runtime
+/// line on desktop so the label renders once per row rather than repeating in every job column.
+fn row_name_with_tag(m: &ModelRow, sub: bool, chevron: bool, row_tag: Option<AnyView>) -> AnyView {
     let eff = m.effort_text.clone();
     let runtime = m.runtime.clone();
+    if !sub {
+        return view! {
+            <div class="mname">
+                <Mark name=m.mark.clone()/>
+                <div>
+                    <div class="t">{m.label.clone()}<span class="eff">{format!(" · {eff}")}</span></div>
+                    <div class="r">{runtime}</div>
+                    {row_tag.map(|tag| view! { <div class="mname-src">{tag}</div> })}
+                </div>
+                {chevron.then(|| view! { <Icon name="chev-right" class="chev"/> })}
+            </div>
+        }
+        .into_any();
+    }
     view! {
         <div class="mname sub">
             <div>
                 <div class="t"><span class="eff-w">{eff}</span></div>
                 <div class="r">{runtime}</div>
+                {row_tag.map(|tag| view! { <div class="mname-src">{tag}</div> })}
             </div>
             {chevron.then(|| view! { <Icon name="chev-right" class="chev"/> })}
         </div>
@@ -1173,27 +1189,22 @@ fn ModelsSections(
                 let k2 = m.key.clone();
                 let k = keys.get(&m.key).cloned();
                 let row_state = m.source_state.clone();
+                let row_tag = source_state_tag_opt(
+                    m.source_state.clone(),
+                    m.as_of.clone(),
+                    m.age_seconds,
+                    board,
+                );
                 let cells = jobs
                     .iter()
                     .map(|j| match m.cells.get(&j.id).cloned().flatten() {
-                        Some(c) => {
-                            let tag = source_state_tag(
-                                m.source_state.clone(),
-                                m.as_of.clone(),
-                                m.age_seconds,
-                                board,
-                            );
-                            view! {
-                                <td>
-                                    <div class="verdict-line">
-                                        <span class=format!("verdict {}", verdict_class(&c.verdict))>{c.word.clone()}</span>
-                                        {tag}
-                                    </div>
-                                    <span class="vsub">{sub_chunks(&c.sub)}</span>
-                                </td>
-                            }
-                            .into_any()
+                        Some(c) => view! {
+                            <td>
+                                <span class=format!("verdict {}", verdict_class(&c.verdict))>{c.word.clone()}</span>
+                                <span class="vsub">{sub_chunks(&c.sub)}</span>
+                            </td>
                         }
+                        .into_any(),
                         None => view! { <td><span class="verdict v-none">"–"</span></td> }.into_any(),
                     })
                     .collect_view();
@@ -1201,7 +1212,7 @@ fn ModelsSections(
                 let last = ago(k.as_ref().and_then(|k| k.last_run_at.as_deref()));
                 view! {
                     <tr data-row="1" data-source-state=row_state class:sub=*sub class:sel=move || selected_key.get().as_ref() == Some(&k2) on:click=move |_| on_row.run(key.clone())>
-                        <td>{row_name(&m, *sub, false)}</td>
+                        <td>{row_name_with_tag(&m, *sub, false, row_tag)}</td>
                         {cells}
                         <td class="num-col">{pass}</td>
                         <td class="num-col last-col">{last}</td>
@@ -1228,25 +1239,47 @@ fn ModelsSections(
                 let open = m.clone();
                 let k = keys.get(&m.key).cloned();
                 let row_state = m.source_state.clone();
-                let job_rows = jobs
+                let any_cell_tagged = jobs.iter().any(|j| {
+                    m.cells
+                        .get(&j.id)
+                        .and_then(|c| c.as_ref())
+                        .is_some_and(|c| {
+                            row_source_chip_parts(c.source_state.as_deref(), c.age_seconds, 0)
+                                .is_some()
+                        })
+                });
+                let shown_jobs: Vec<(Job, ModelCell)> = jobs
                     .iter()
                     .filter_map(|j| {
                         let c = m.cells.get(&j.id).cloned().flatten()?;
-                        let tag = source_state_tag(
-                            m.source_state.clone(),
-                            m.as_of.clone(),
-                            m.age_seconds,
-                            board,
-                        );
-                        Some(view! {
+                        Some((j.clone(), c))
+                    })
+                    .collect();
+                let job_rows = shown_jobs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, (j, c))| {
+                        let tag = if any_cell_tagged {
+                            source_state_tag(c.source_state, c.as_of, c.age_seconds, board)
+                        } else if idx == 0 {
+                            source_state_tag(
+                                m.source_state.clone(),
+                                m.as_of.clone(),
+                                m.age_seconds,
+                                board,
+                            )
+                        } else {
+                            ().into_any()
+                        };
+                        view! {
                             <div class="sbm-job">
-                                <span class="k">{j.label.clone()}</span>
+                                <span class="k">{j.label}</span>
                                 <span class="sbm-v">
-                                    <span class=verdict_class(&c.verdict)>{c.word.clone()}</span>
+                                    <span class=verdict_class(&c.verdict)>{c.word}</span>
                                     {tag}
                                 </span>
                             </div>
-                        })
+                        }
                     })
                     .collect_view();
                 let stats = [
@@ -1441,10 +1474,19 @@ fn DetailGrid(
     age_seconds: Option<i64>,
     board: Board,
 ) -> impl IntoView {
+    let any_job_tagged = report
+        .iter()
+        .any(|j| row_source_chip_parts(j.source_state.as_deref(), j.age_seconds, 0).is_some());
     view! {
         <div class="detail-grid">
-            {report.into_iter().map(|j| {
-                let tag = source_state_tag(source_state.clone(), as_of.clone(), age_seconds, board);
+            {report.into_iter().enumerate().map(|(idx, j)| {
+                let tag = if any_job_tagged {
+                    source_state_tag(j.source_state, j.as_of, j.age_seconds, board)
+                } else if idx == 0 {
+                    source_state_tag(source_state.clone(), as_of.clone(), age_seconds, board)
+                } else {
+                    ().into_any()
+                };
                 view! {
                     <div class="job">
                         <h3>{j.label.clone()}" "<span class=verdict_class(&j.verdict)>{j.word.clone()}</span>{tag}</h3>
@@ -2182,5 +2224,10 @@ mod tests {
         assert_eq!(chip.tone, "crit");
         assert_eq!(chip.age, None);
         assert_eq!(chip.text(), "Unavailable");
+
+        let unknown: ModelRow =
+            serde_json::from_str(r#"{"key":"m|r|e","sourceState":"mystery","ageSeconds":60}"#)
+                .unwrap();
+        assert_eq!(row_source_chip(&unknown, 0), None);
     }
 }

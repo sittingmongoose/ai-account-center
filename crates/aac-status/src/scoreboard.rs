@@ -93,6 +93,7 @@ pub struct TaskIn {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RowIn {
     pub model: String,
     pub label: String,
@@ -114,6 +115,12 @@ pub struct RowIn {
     pub observed: Option<ColumnIn>,
     #[serde(default)]
     pub benchmarks: Vec<ColumnIn>,
+    #[serde(default)]
+    pub source_state: Option<String>,
+    #[serde(default)]
+    pub as_of: Option<String>,
+    #[serde(default)]
+    pub age_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -226,15 +233,8 @@ pub struct CreditsRateIn {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SourceIn {
     pub id: String,
-    #[serde(default)]
-    pub state: Option<String>,
-    #[serde(default)]
-    pub as_of: Option<String>,
-    #[serde(default)]
-    pub age_seconds: Option<i64>,
     #[serde(default)]
     pub detail: String,
 }
@@ -355,14 +355,35 @@ pub struct ModelOut {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CellOut {
     pub verdict: String,
     pub word: String,
     /// Chunks the page keeps whole: it breaks only between them, never mid-phrase.
     pub sub: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_seconds: Option<i64>,
+}
+
+impl CellOut {
+    fn new(verdict: String, word: String, sub: Vec<String>) -> Self {
+        Self {
+            verdict,
+            word,
+            sub,
+            source_state: None,
+            as_of: None,
+            age_seconds: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportOut {
     pub job: String,
     pub label: String,
@@ -371,6 +392,12 @@ pub struct ReportOut {
     pub basis: String,
     pub measures: Vec<MeasureOut>,
     pub compare: Vec<Run>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -601,6 +628,15 @@ fn only_ranked(row: &RowIn) -> bool {
 
 /// A matrix cell. `sub` is a list of chunks the page keeps whole.
 fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<CellOut> {
+    let mut out = cell_body(row, ranked1, tried, min_runs)?;
+    let (source_state, as_of, age_seconds) = row_source_health(&[row]);
+    out.source_state = source_state;
+    out.as_of = as_of;
+    out.age_seconds = age_seconds;
+    Ok(out)
+}
+
+fn cell_body(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<CellOut> {
     let c = column(row).ok_or_else(|| shape("a verdict row with no column to stand on"))?;
     let word = verdict_word(&row.verdict).to_string();
     let quality = c.measures.get("quality");
@@ -611,30 +647,30 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
         if let Some(cheating) = c.measures.get("cheating")
             && cheating.number(&cheating.value).is_some_and(|v| v >= 0.2)
         {
-            return Ok(CellOut {
-                verdict: "avoid".to_string(),
+            return Ok(CellOut::new(
+                "avoid".to_string(),
                 word,
-                sub: vec![format!(
+                vec![format!(
                     "cheated in {} of {} {}",
                     fmt_opt(cheating.of),
                     fmt_opt(cheating.per),
                     if cheating.per == Some(1) { "run" } else { "runs" }
                 )],
-            });
+            ));
         }
-        return Ok(CellOut {
-            verdict: "avoid".to_string(),
+        return Ok(CellOut::new(
+            "avoid".to_string(),
             word,
-            sub: vec![format!("{n} {}", runs_word(n))],
-        });
+            vec![format!("{n} {}", runs_word(n))],
+        ));
     }
     if row.verdict == "not-enough-data" {
         if n < min_runs {
-            return Ok(CellOut {
-                verdict: "not-enough-data".to_string(),
-                word: format!("{n} {}", runs_word(n)),
-                sub: vec![format!("needs {min_runs}")],
-            });
+            return Ok(CellOut::new(
+                "not-enough-data".to_string(),
+                format!("{n} {}", runs_word(n)),
+                vec![format!("needs {min_runs}")],
+            ));
         }
         // A demoted row names how many reviews were read, in the bar's own count
         // (reviewed items where a quality pass rate exists, else review runs); a row
@@ -646,42 +682,42 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
             Some(q) => q.per.unwrap_or(0),
             None => c.reviews,
         };
-        return Ok(CellOut {
-            verdict: "not-enough-data".to_string(),
+        return Ok(CellOut::new(
+            "not-enough-data".to_string(),
             word,
-            sub: vec![if c.reviews == 0 {
+            vec![if c.reviews == 0 {
                 format!("{n} {}, none reviewed yet", runs_word(n))
             } else {
                 format!("{n} {}, {reviewed} reviewed, needs {min_runs}", runs_word(n))
             }],
-        });
+        ));
     }
     if row.basis.as_deref() == Some("benchmark") {
-        return Ok(CellOut {
-            verdict: row.verdict.clone(),
+        return Ok(CellOut::new(
+            row.verdict.clone(),
             word,
-            sub: vec!["benchmark".to_string(), format!("{n} {}", runs_word(n))],
-        });
+            vec!["benchmark".to_string(), format!("{n} {}", runs_word(n))],
+        ));
     }
     if only_ranked(row) {
-        return Ok(CellOut {
-            verdict: row.verdict.clone(),
+        return Ok(CellOut::new(
+            row.verdict.clone(),
             word,
-            sub: if tried == 1 {
+            if tried == 1 {
                 vec![format!("{n} {}", runs_word(n)), "only model tried".to_string()]
             } else {
                 vec![format!("{n} real {}", runs_word(n)), "nothing to compare".to_string()]
             },
-        });
+        ));
     }
     if let Some(q) = quality
         && q.per.is_some_and(|per| per >= 2)
     {
         // The rounds each item took to pass reach the cell: how many needed no fix round.
-        return Ok(CellOut {
-            verdict: row.verdict.clone(),
+        return Ok(CellOut::new(
+            row.verdict.clone(),
             word,
-            sub: vec![
+            vec![
                 format!("{n} {}", runs_word(n)),
                 format!(
                     "{} {} of {}{}",
@@ -694,13 +730,13 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
                     }
                 ),
             ],
-        });
+        ));
     }
-    Ok(CellOut {
-        verdict: row.verdict.clone(),
+    Ok(CellOut::new(
+        row.verdict.clone(),
         word,
-        sub: vec![format!("{n} {}", runs_word(n))],
-    })
+        vec![format!("{n} {}", runs_word(n))],
+    ))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1476,13 +1512,17 @@ fn select_models<'a>(view: &'a ViewIn, use_ids: &[&str]) -> Result<(Vec<&'a Task
 fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str]) -> Result<ViewOut> {
     let min_runs = view.catalog.min_runs;
     let (jobs, shown, grouped) = select_models(view, use_ids)?;
-    let (source_state, as_of, age_seconds) = row_source_health(&view.sources);
 
     let out_models: Vec<ModelOut> = grouped
         .iter()
         .map(|model| {
             let runtime = model.runtime.as_deref().map(runtime_word).unwrap_or("").to_string();
             let runs = model.real + model.bench;
+            let model_rows: Vec<&RowIn> = jobs
+                .iter()
+                .flat_map(|job| job.rows.iter().filter(|row| row_key(row) == model.key))
+                .collect();
+            let (source_state, as_of, age_seconds) = row_source_health(&model_rows);
             let cells: BTreeMap<String, Option<CellOut>> = shown
                 .iter()
                 .map(|job| (job.id.clone(), model.cells.get(&job.id).cloned()))
@@ -1508,6 +1548,7 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                         .find(|(job_id, _)| job_id == &job.id)
                         .expect("filtered to jobs with a row");
                     let row = &job.rows[*row_index];
+                    let (job_source_state, job_as_of, job_age_seconds) = row_source_health(&[row]);
                     let mut others: Vec<usize> = job
                         .rows
                         .iter()
@@ -1524,6 +1565,9 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                         basis: report_basis(row)?,
                         measures: measures(job, row, min_runs)?,
                         compare: compare(job, row, *row_index, &others, min_runs)?,
+                        source_state: job_source_state,
+                        as_of: job_as_of,
+                        age_seconds: job_age_seconds,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1555,8 +1599,8 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                     model.reviews,
                     if model.reviews == 1 { "review" } else { "reviews" }
                 ),
-                source_state: source_state.clone(),
-                as_of: as_of.clone(),
+                source_state,
+                as_of,
                 age_seconds,
                 cells,
                 report,
@@ -1773,42 +1817,43 @@ fn read_note(sources: &[SourceIn]) -> (Vec<Run>, Option<String>) {
     (note, summary)
 }
 
-fn source_severity(state: &str) -> u8 {
+/// Known failing source states in severity order. `"ok"` and unknown states return `None`:
+/// rows never invent `"ok"`, `"cached"` or `"Unavailable"` from unrecognized strings.
+fn failing_source_severity(state: &str) -> Option<u8> {
     match state {
-        "ok" => 0,
-        "stale" => 1,
-        "unreadable" => 2,
-        "missing" => 3,
-        "error" => 4,
-        _ => 4,
+        "stale" => Some(1),
+        "unreadable" => Some(2),
+        "missing" => Some(3),
+        "error" => Some(4),
+        _ => None,
     }
 }
 
-/// Source health carried into each row built from `view.sources`: worst non-ok state wins
-/// (using that failing source's own `asOf` and `ageSeconds`, never borrowing another source's
-/// timestamp); when every stateful source is `ok`, carries `"ok"` with the oldest reading among
-/// them. When no source declares a state, all three stay `None` (never fabricating `"ok"` or 0).
-fn row_source_health(sources: &[SourceIn]) -> (Option<String>, Option<String>, Option<i64>) {
-    let stateful: Vec<(&str, &SourceIn)> = sources
+/// Per-row source health carried only from input rows that themselves trace to a failed source
+/// file (never copied from page-level `view.sources`). Worst known failure wins; ties keep the
+/// oldest failure (`age_seconds`) and its own `as_of`, never borrowing another row's timestamp
+/// or inventing a missing age.
+fn row_source_health(rows: &[&RowIn]) -> (Option<String>, Option<String>, Option<i64>) {
+    let failing: Vec<(&str, &RowIn)> = rows
         .iter()
-        .filter_map(|source| {
-            let state = source.state.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
-            Some((state, source))
+        .filter_map(|row| {
+            let state = row.source_state.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
+            failing_source_severity(state)?;
+            Some((state, *row))
         })
         .collect();
-    if stateful.is_empty() {
-        return (None, None, None);
-    }
-    let worst_sev = stateful
+    let Some(worst_sev) = failing
         .iter()
-        .map(|(state, _)| source_severity(state))
+        .filter_map(|(state, _)| failing_source_severity(state))
         .max()
-        .unwrap_or(0);
-    let picked = stateful
+    else {
+        return (None, None, None);
+    };
+    let picked = failing
         .iter()
-        .filter(|(state, _)| source_severity(state) == worst_sev)
+        .filter(|(state, _)| failing_source_severity(state) == Some(worst_sev))
         .max_by(|(_, a), (_, b)| a.age_seconds.cmp(&b.age_seconds))
-        .expect("stateful is non-empty");
+        .expect("failing is non-empty");
     (Some(picked.0.to_string()), picked.1.as_of.clone(), picked.1.age_seconds)
 }
 

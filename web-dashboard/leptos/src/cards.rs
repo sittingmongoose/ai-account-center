@@ -64,14 +64,41 @@ fn sentence_case(text: &str) -> String {
 
 /// Render a card problem reason as its own sentence without editorializing: uppercase the first
 /// character and append a period unless it already ends with `.`, `?` or `!`.
+fn is_plain_leading_word(trimmed: &str) -> bool {
+    if trimmed.ends_with(" is missing or not valid") {
+        return false;
+    }
+    let Some(word) = trimmed.split_whitespace().next() else {
+        return false;
+    };
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_lowercase() {
+        return false;
+    }
+    !chars.any(|c| c.is_uppercase() || matches!(c, '.' | '[' | ']' | '_' | '/'))
+}
+
+fn needs_terminal_period(text: &str) -> bool {
+    !text.ends_with([
+        '.', '?', '!', '…', '"', '\'', '\u{201D}', '\u{2019}', ')', ']', '}',
+    ])
+}
+
 pub(crate) fn problem_sentence(reason: &str) -> String {
     let trimmed = reason.trim();
     let mut chars = trimmed.chars();
     let Some(first) = chars.next() else {
         return String::new();
     };
-    let mut out: String = first.to_uppercase().chain(chars).collect();
-    if !out.ends_with(['.', '?', '!']) {
+    let mut out: String = if is_plain_leading_word(trimmed) {
+        first.to_uppercase().chain(chars).collect()
+    } else {
+        trimmed.to_string()
+    };
+    if needs_terminal_period(&out) {
         out.push('.');
     }
     out
@@ -1375,6 +1402,29 @@ mod tests {
         assert_eq!(problem_sentence("Could not be read."), "Could not be read.");
         assert_eq!(problem_sentence("could not be read?"), "Could not be read?");
         assert_eq!(problem_sentence("corrupt file!"), "Corrupt file!");
+        assert_eq!(problem_sentence("reading timed out…"), "Reading timed out…");
+        assert_eq!(problem_sentence(r#"saw "ignored""#), r#"Saw "ignored""#);
+        assert_eq!(
+            problem_sentence("ignored (older copy)"),
+            "Ignored (older copy)"
+        );
+        assert_eq!(problem_sentence("fields [a, b]"), "Fields [a, b]");
+        assert_eq!(
+            problem_sentence("askedAt is missing or not valid"),
+            "askedAt is missing or not valid."
+        );
+        assert_eq!(
+            problem_sentence("options[0].key is missing or not valid"),
+            "options[0].key is missing or not valid."
+        );
+        assert_eq!(
+            problem_sentence("written_at is not valid"),
+            "written_at is not valid."
+        );
+        assert_eq!(
+            problem_sentence("title is missing or not valid"),
+            "title is missing or not valid."
+        );
         assert_eq!(problem_sentence(""), "");
         assert_eq!(problem_sentence("   "), "");
     }

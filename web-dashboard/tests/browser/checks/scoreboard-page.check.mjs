@@ -2,11 +2,73 @@
 // fixture runs and catalog (scripts/scoreboard-fixture.mjs) in its temporary home; the `byModel` view comes from the
 // golden fixture until the server sends it. Synthetic data only.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const LEPTOS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../leptos');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const LEPTOS = path.resolve(HERE, '../../../leptos');
+const ROOT = path.resolve(HERE, '../../../..');
+const require = createRequire(import.meta.url);
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(LEPTOS, 'fixtures', name), 'utf8'));
+
+/**
+ * Builds a real server `/api/scoreboard` JSON payload where one previously-read run file
+ * (`vm.scoreboard-lead--WN-1.json`, Opus 5.5 xhigh worknode-build) becomes unreadable 5 minutes
+ * before the latest scan, while `vm.scoreboard-lead--damaged.json` was never readable.
+ * Uses the real RunsReader, CatalogReader, buildScoreboardView and native aac-status composer
+ * with zero client-side mutation of row states.
+ */
+async function buildTracedUnreadableView() {
+	const { writeScoreboardFixture } = await import(pathToFileURL(path.join(ROOT, 'scripts', 'scoreboard-fixture.mjs')).href);
+	const { CatalogReader } = require(path.join(ROOT, 'dist', 'web-server', 'scoreboard', 'catalog.js'));
+	const { RunsReader } = require(path.join(ROOT, 'dist', 'web-server', 'scoreboard', 'runs-reader.js'));
+	const { buildScoreboardView } = require(path.join(ROOT, 'dist', 'web-server', 'scoreboard', 'scoreboard-view.js'));
+	const { openStatusHandle } = require(path.join(ROOT, 'dist', 'status-native', 'pinned.js'));
+	const { composeByModel } = require(path.join(ROOT, 'dist', 'web-server', 'scoreboard', 'by-model.js'));
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-row22-'));
+	try {
+		const failAt = Date.parse('2026-11-06T16:25:00.000Z');
+		const viewNow = failAt + 300_000; // 5m later: folder scan is fresh (0s), failure is 5m old
+		let clock = failAt;
+		writeScoreboardFixture(tmp, { now: failAt });
+		const opts = { root: () => tmp, now: () => clock };
+		const catalog = new CatalogReader(opts);
+		const runs = new RunsReader(opts);
+		await Promise.all([catalog.scan(), runs.scan()]);
+		const wn1 = runs.snapshot().runs.find((r) => r.doc.id === 'vm.scoreboard-lead--WN-1');
+		if (!wn1) throw new Error('expected vm.scoreboard-lead--WN-1 in scoreboard fixture');
+		const wn1Abs = path.join(tmp, 'v1', wn1.file);
+		fs.writeFileSync(wn1Abs, Buffer.from('{"schema":\0\0\0'));
+		const bump = new Date(failAt + 2000);
+		fs.utimesSync(wn1Abs, bump, bump);
+		await runs.scan();
+		clock = viewNow;
+		await Promise.all([catalog.scan(), runs.scan()]);
+		const base = buildScoreboardView({
+			now: clock,
+			timeZone: 'UTC',
+			root: tmp,
+			catalog: catalog.snapshot(),
+			runs: runs.snapshot(),
+		});
+		const mod = path.join(ROOT, 'dist', 'native', `aac-status.${process.platform}-${process.arch}.node`);
+		const handle = openStatusHandle({ file: mod });
+		if ('unavailable' in handle) throw new Error(handle.unavailable);
+		const byModel = await composeByModel(base, { handle });
+		if (!byModel) throw new Error('composeByModel returned null on real scoreboard view');
+		return {
+			...base,
+			byModel,
+			cached: true,
+			cacheAgeSeconds: 0,
+			refreshing: false,
+		};
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+}
 const PHONE = { viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 const FORMATS = [
 	{ name: 'desktop', w: 1440, h: 900, safe: '0,0,0,0', mobile: false },
@@ -138,9 +200,16 @@ export const tests = {
 		await t.audit('scoreboard end to end 1440');
 		const result = await t.page.evaluate(async () => {
 			const response = await fetch('/api/scoreboard', { cache: 'reload' });
-			return { status: response.status, view: response.headers.get('x-aac-view') };
+			const body = await response.json();
+			return {
+				status: response.status,
+				view: response.headers.get('x-aac-view'),
+				runsSourceState: body.sources?.[0]?.state ?? null,
+			};
 		});
 		await t.check('Rust served the Scoreboard view', result.status === 200 && result.view === 'scoreboard@1', JSON.stringify(result));
+		await t.equal('untraced damaged file keeps runs source unreadable', result.runsSourceState, 'unreadable');
+		await t.count('.sb-matrix .sb-src-state', 0);
 	},
 
 	async 'scoreboard desktop'(t) {
@@ -505,64 +574,66 @@ export const tests = {
 		await t.count('.sheet', 0);
 	},
 
-	async 'scoreboard row source-health chip keys off each row without changing rank or verdict'(t) {
-		const mixedRows = (view) => {
-			const next = structuredClone(view);
-			for (const section of next.byModel.views) {
-				for (const m of section.models) {
-					if (m.key === 'anthropic/claude-opus-5-5|claude-code|xhigh') {
-						m.sourceState = 'unreadable';
-						m.asOf = '2026-11-06T16:25:00.000Z';
-						m.ageSeconds = 300;
-					} else if (m.key === 'openai/gpt-6.1-sol|codex|high') {
-						m.sourceState = 'ok';
-						m.asOf = '2026-11-06T16:30:00.000Z';
-						m.ageSeconds = 0;
-					} else if (m.key === 'zai/glm-5.3|zcode|max') {
-						m.sourceState = 'error';
-						m.asOf = null;
-						m.ageSeconds = null;
-					} else {
-						delete m.sourceState;
-						delete m.asOf;
-						delete m.ageSeconds;
-					}
-				}
-			}
-			return next;
+	async 'scoreboard row source-health chip traces only the failing run file using server output'(t) {
+		const view = await buildTracedUnreadableView();
+		await t.equal('runs source shows fresh scan age while unreadable', view.sources[0].state, 'unreadable');
+		await t.equal('runs source age is the scan age (0s)', view.sources[0].ageSeconds, 0);
+		const pipelineModels = view.byModel.views[0].models;
+		const taggedModels = pipelineModels.filter((m) => m.sourceState !== undefined);
+		await t.equal('server output tags only the single traced model row', taggedModels.map((m) => m.key), ['anthropic/claude-opus-5-5|claude-code|xhigh']);
+		await t.equal('traced row carries failure age (5m), not scan age (0s)', taggedModels[0].ageSeconds, 300);
+
+		const serveReal = async () => {
+			await t.app.signIn();
+			await t.page.evaluate(() => {
+				try {
+					localStorage.removeItem('aac.scoreboard.sort.v1');
+					localStorage.removeItem('aac.scoreboard.group.v1');
+				} catch {}
+			});
+			await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => r.fulfill({ json: view }));
 		};
+
 		await t.viewport(1440, 900);
-		await openBoard(t, '', mixedRows);
+		await serveReal();
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.waitForSelector('.picks');
 		await t.page.click('.seg button >> nth=0');
 		await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
 		await t.equal('page is not marked stale when the fetch succeeded', await t.page.locator('.page').getAttribute('data-stale'), null);
-		const opusRow = t.page.locator('.sb-matrix tbody tr[data-row]').nth(0);
-		await t.text(opusRow, /Opus 5\.5/);
+		await t.count('.sb-matrix .sb-src-state', 1);
+		const opusRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'Opus 5.5' }).filter({ hasText: 'xhigh' }).first();
 		await t.text(opusRow.locator('.v-rec').first(), 'Recommended');
+		await t.equal('desktop shows the tag once per traced row, not in every job column', await opusRow.locator('.sb-src-state').count(), 1);
 		await t.text(opusRow.locator('.sb-src-state').first(), /^Cached · 5m ago$/);
 		await t.equal('row chip carries the source state', await opusRow.locator('.sb-src-state').first().getAttribute('data-source-state'), 'unreadable');
+		const opusHighRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'Opus 5.5' }).filter({ hasText: '· high' }).first();
+		await t.equal('sibling effort of the same model renders no source chip', await opusHighRow.locator('.sb-src-state').count(), 0);
 		const solRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'Sol 6.1' }).first();
-		await t.equal('healthy row renders no source chip', await solRow.locator('.sb-src-state').count(), 0);
+		await t.equal('unrelated model row renders no source chip', await solRow.locator('.sb-src-state').count(), 0);
 		const glmRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'GLM 5.3' }).first();
-		await t.text(glmRow.locator('.sb-src-state').first(), /^Unavailable$/);
-		await t.text('.detail-grid .job h3 .sb-src-state >> nth=0', /^Cached · 5m ago$/);
+		await t.equal('second unrelated row renders no source chip', await glmRow.locator('.sb-src-state').count(), 0);
+		await t.count('.detail-grid .sb-src-state', 1);
+		await t.text('.detail-grid .job h3:has-text("WorkNode build") .sb-src-state', /^Cached · 5m ago$/);
 		await t.audit('scoreboard row source health 1440');
+		await t.shot('scoreboard-traced-row-desktop', 'Scoreboard at 1440 px from server output: only the traced Opus 5.5 xhigh row carries Cached · 5m ago');
 
 		for (const f of FORMATS.filter((x) => ['iphone', 'duo-folded', 'duo-open-upright'].includes(x.name))) {
 			await t.newContext({ viewport: { width: f.w, height: f.h }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
-			await openBoard(t, `?safe=${f.safe}`, mixedRows);
+			await serveReal();
+			await t.goto(`/app/scoreboard?safe=${f.safe}`, { settleMs: 300 });
+			await t.page.waitForSelector('.picks');
 			await t.page.click('.seg button >> nth=0');
 			await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
-			const opusCard = t.page.locator('.sb-models .sbm').nth(0);
+			await t.equal(`${f.name}: only one card job carries a source chip`, await t.page.locator('.sb-models .sb-src-state').count(), 1);
+			const opusCard = t.page.locator('.sb-models .sbm').filter({ hasText: 'Opus 5.5' }).filter({ hasText: 'xhigh' }).first();
 			await t.text(opusCard.locator('.v-rec').first(), 'Recommended');
-			await t.text(opusCard.locator('.sb-src-state').first(), /^Cached · 5m ago$/);
+			await t.text(opusCard.locator('.sbm-job:has-text("WorkNode build") .sb-src-state'), /^Cached · 5m ago$/);
 			const solCard = t.page.locator('.sb-models .sbm').filter({ hasText: 'Sol 6.1' }).first();
 			await t.equal(`${f.name}: healthy card renders no source chip`, await solCard.locator('.sb-src-state').count(), 0);
-			const glmCard = t.page.locator('.sb-models .sbm').filter({ hasText: 'GLM 5.3' }).first();
-			await t.text(glmCard.locator('.sb-src-state').first(), /^Unavailable$/);
-			await t.check(`${f.name}: source chips stay single-line and unclipped`, await t.page.evaluate(() => {
+			await t.check(`${f.name}: source chip stays single-line and unclipped`, await t.page.evaluate(() => {
 				const chips = [...document.querySelectorAll('.sb-models .sb-src-state')];
-				return chips.length > 0 && chips.every((el) => {
+				return chips.length === 1 && chips.every((el) => {
 					const r = el.getBoundingClientRect();
 					return el.getClientRects().length === 1 && r.height < 24 && r.right <= innerWidth + 1 && el.scrollWidth <= el.clientWidth + 1;
 				});
@@ -570,13 +641,15 @@ export const tests = {
 			await t.check(`${f.name}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 			await t.audit(`scoreboard row source health ${f.name}`);
 			if (f.name === 'iphone') {
+				await t.shot('scoreboard-traced-row-iphone', 'Scoreboard on 402 px iPhone from server output: only Opus 5.5 xhigh WorkNode build carries Cached · 5m ago');
 				await opusCard.click();
 				await t.page.waitForSelector('.sheet .job');
-				await t.text('.sheet .job h3 .sb-src-state >> nth=0', /^Cached · 5m ago$/);
+				await t.count('.sheet .sb-src-state', 1);
+				await t.text('.sheet .job h3:has-text("WorkNode build") .sb-src-state', /^Cached · 5m ago$/);
 				await t.check('phone sheet source chip stays single-line and inside the sheet', await t.page.evaluate(() => {
 					const sheet = document.querySelector('.sheet').getBoundingClientRect();
 					const chips = [...document.querySelectorAll('.sheet .sb-src-state')];
-					return chips.length > 0 && chips.every((el) => {
+					return chips.length === 1 && chips.every((el) => {
 						const r = el.getBoundingClientRect();
 						return el.getClientRects().length === 1 && r.height < 24 && r.right <= sheet.right + 1 && el.scrollWidth <= el.clientWidth + 1;
 					});

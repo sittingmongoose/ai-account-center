@@ -312,9 +312,40 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
     }
     Some(out)
 }
-fn base_rows(task: &V, runs: &[V], catalog: &V, index: &Index, ctx: &Context) -> Option<Vec<V>> {
-    let mut grouped: Vec<(String, V, Vec<V>)> = Vec::new();
-    for run in runs {
+fn traced_run_problem(files: &[&str], problems: &[V], now: i64, ctx: &Context) -> Option<(V, V)> {
+    let mut matched = false;
+    let mut earliest: Option<i64> = None;
+    for problem in problems {
+        let p_file = s(&problem["file"]);
+        if !p_file.starts_with("writers/") {
+            continue;
+        }
+        let hits = files
+            .iter()
+            .any(|&file| file == p_file || file.strip_prefix(p_file).is_some_and(|rest| rest.starts_with('/')));
+        if !hits {
+            continue;
+        }
+        matched = true;
+        if let Some(since) = ctx.epoch(&problem["since"])
+            && earliest.is_none_or(|prev| since < prev)
+        {
+            earliest = Some(since);
+        }
+    }
+    matched.then(|| (ctx.iso(earliest), age(now, earliest)))
+}
+fn base_rows(
+    task: &V,
+    entries: &[(V, &str)],
+    catalog: &V,
+    index: &Index,
+    problems: &[V],
+    now: i64,
+    ctx: &Context,
+) -> Option<Vec<V>> {
+    let mut grouped: Vec<(String, V, Vec<V>, Vec<&str>)> = Vec::new();
+    for (run, file) in entries {
         let model = model(run);
         if model.is_null() {
             continue;
@@ -329,14 +360,15 @@ fn base_rows(task: &V, runs: &[V], catalog: &V, index: &Index, ctx: &Context) ->
             parts.extend([s(&process["id"]), s(&process["version"])]);
         }
         let key = parts.join("|");
-        let at = grouped.iter().position(|(id, _, _)| id == &key).unwrap_or_else(|| {
-            grouped.push((key.clone(), run.clone(), Vec::new()));
+        let at = grouped.iter().position(|(id, _, _, _)| id == &key).unwrap_or_else(|| {
+            grouped.push((key.clone(), run.clone(), Vec::new(), Vec::new()));
             grouped.len() - 1
         });
         grouped[at].2.push(run.clone());
+        grouped[at].3.push(*file);
     }
     let mut out = Vec::new();
-    for (key, first, runs) in grouped {
+    for (key, first, runs, files) in grouped {
         let observed: Vec<_> = runs.iter().filter(|r| r["source"] == "observed").cloned().collect();
         let mut ids: Vec<V> = Vec::new();
         for run in runs.iter().filter(|r| r["source"] == "benchmark") {
@@ -361,7 +393,15 @@ fn base_rows(task: &V, runs: &[V], catalog: &V, index: &Index, ctx: &Context) ->
                 ctx,
             )?);
         }
-        out.push(json!({"key":key,"model":model(&first),"runtime":first["model"]["harness"],"effort":first["model"]["effort"],"process":if task["byProcess"]==true&&first["process"].is_object(){json!({"id":first["process"]["id"],"version":first["process"]["version"]})}else{V::Null},"observed":if observed.is_empty(){V::Null}else{column(&observed,"observed",&V::Null,task,catalog,index,ctx)?},"benchmarks":benchmarks}));
+        let mut row = json!({"key":key,"model":model(&first),"runtime":first["model"]["harness"],"effort":first["model"]["effort"],"process":if task["byProcess"]==true&&first["process"].is_object(){json!({"id":first["process"]["id"],"version":first["process"]["version"]})}else{V::Null},"observed":if observed.is_empty(){V::Null}else{column(&observed,"observed",&V::Null,task,catalog,index,ctx)?},"benchmarks":benchmarks});
+        if let Some((as_of, age_seconds)) = traced_run_problem(&files, problems, now, ctx)
+            && let Some(obj) = row.as_object_mut()
+        {
+            obj.insert("sourceState".to_owned(), json!("unreadable"));
+            obj.insert("asOf".to_owned(), as_of);
+            obj.insert("ageSeconds".to_owned(), age_seconds);
+        }
+        out.push(row);
     }
     Some(out)
 }
@@ -446,7 +486,18 @@ fn judged_rows(base: &[V], task: &V, usage: &V, catalog: &V, ctx: &Context) -> O
         let catalog_model = array(&catalog["models"])
             .into_iter()
             .find(|m| m["model"] == base["model"]);
-        rows.push(json!({"key":base["key"],"model":base["model"],"label":catalog_model.as_ref().map(|m|m["label"].clone()).unwrap_or(base["model"].clone()),"inCatalog":catalog_model.is_some(),"runtime":base["runtime"],"effort":base["effort"],"process":base["process"],"n":{"observed":observed["n"].as_u64().unwrap_or(0),"benchmark":benchmarks.iter().filter_map(|c|c["n"].as_u64()).sum::<u64>()},"basis":headline.map(|h|h["source"].clone()),"benchmark":headline.map(|h|h["benchmark"].clone()),"ranked":headline.is_some(),"rank":headline.map(|h|h["rank"].clone()),"verdict":shown["verdict"],"verdictLabel":shown["verdictLabel"],"why":why,"observed":observed,"benchmarks":benchmarks}));
+        let mut row = json!({"key":base["key"],"model":base["model"],"label":catalog_model.as_ref().map(|m|m["label"].clone()).unwrap_or(base["model"].clone()),"inCatalog":catalog_model.is_some(),"runtime":base["runtime"],"effort":base["effort"],"process":base["process"],"n":{"observed":observed["n"].as_u64().unwrap_or(0),"benchmark":benchmarks.iter().filter_map(|c|c["n"].as_u64()).sum::<u64>()},"basis":headline.map(|h|h["source"].clone()),"benchmark":headline.map(|h|h["benchmark"].clone()),"ranked":headline.is_some(),"rank":headline.map(|h|h["rank"].clone()),"verdict":shown["verdict"],"verdictLabel":shown["verdictLabel"],"why":why,"observed":observed,"benchmarks":benchmarks});
+        if let Some(source_state) = base.get("sourceState")
+            && let Some(obj) = row.as_object_mut()
+        {
+            obj.insert("sourceState".to_owned(), source_state.clone());
+            obj.insert("asOf".to_owned(), base.get("asOf").cloned().unwrap_or(V::Null));
+            obj.insert(
+                "ageSeconds".to_owned(),
+                base.get("ageSeconds").cloned().unwrap_or(V::Null),
+            );
+        }
+        rows.push(row);
     }
     let order = |r: &V| {
         if r["basis"] == "observed" {
@@ -943,7 +994,7 @@ fn compose_core(
         (Tally::default(), Tally::default(), Tally::default());
     // The unscored runs, as (index into `raw`, reason): only the ten shown are built.
     let mut examples: Vec<(usize, &'static str)> = Vec::new();
-    let mut by_type: HashMap<String, Vec<V>> = HashMap::new();
+    let mut by_type: HashMap<String, Vec<(V, &str)>> = HashMap::new();
     for (at, run) in docs.iter().enumerate() {
         let fact = facts[at];
         let id = fact.model_id.as_str();
@@ -967,7 +1018,10 @@ fn compose_core(
             unknown_type += 1;
             "unknown-task-type"
         } else {
-            by_type.entry(kind.to_owned()).or_default().push((*run).clone());
+            by_type
+                .entry(kind.to_owned())
+                .or_default()
+                .push(((*run).clone(), fact.file.as_str()));
             continue;
         };
         examples.push((at, reason));
@@ -1007,6 +1061,7 @@ fn compose_core(
     } else {
         Index::new(docs, &join, &known_models, &known_types, ctx)?
     };
+    let problems = array(&input["runs"]["problems"]);
     let mut bases = HashMap::new();
     for task in types {
         bases.insert(
@@ -1016,6 +1071,8 @@ fn compose_core(
                 by_type.get(s(&task["id"])).map(Vec::as_slice).unwrap_or(&[]),
                 catalog,
                 &index,
+                &problems,
+                now,
                 ctx,
             )?,
         );

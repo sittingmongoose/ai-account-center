@@ -5,7 +5,10 @@
  * columns and are only ever compared with their own kind (and their own benchmark).
  */
 import { normalizeModel } from './model-identity';
+import type { ReportProblem } from '../status/agent-reports-reader';
 import type { RunDoc } from '../status/report-schema';
+import type { SourceState } from '../status/status-view-types';
+import { ageSeconds, iso } from '../status/status-view-words';
 import { resolveRunsState } from './run-corrections';
 import type { RunsState } from './runs-reader';
 import type { CatalogMeasure, CatalogTaskType, CatalogUse } from './catalog';
@@ -128,6 +131,46 @@ function columnOf(
   };
 }
 
+interface RowSourceHealth {
+  sourceState: SourceState;
+  asOf: string | null;
+  ageSeconds: number | null;
+}
+
+/**
+ * Per-row source health traced strictly from this row's own run files against `runs.problems`.
+ * Only problems under `writers/` (a run file or its parent folder) can match a row's files;
+ * never-read damaged files or scan limits leave every row untouched. The age is since the file
+ * first failed (`problem.since`), never the folder scan time.
+ */
+function tracedRunProblem(
+  files: readonly string[],
+  problems: readonly ReportProblem[],
+  now: number
+): RowSourceHealth | null {
+  let matched = false;
+  let earliest: number | null = null;
+  for (const problem of problems) {
+    if (!problem.file.startsWith('writers/')) continue;
+    const prefix = `${problem.file}/`;
+    if (!files.some((file) => file === problem.file || file.startsWith(prefix))) continue;
+    matched = true;
+    if (
+      typeof problem.since === 'number' &&
+      Number.isFinite(problem.since) &&
+      (earliest === null || problem.since < earliest)
+    ) {
+      earliest = problem.since;
+    }
+  }
+  if (!matched) return null;
+  return {
+    sourceState: 'unreadable',
+    asOf: iso(earliest),
+    ageSeconds: ageSeconds(now, earliest),
+  };
+}
+
 interface BaseRow {
   key: string;
   model: string;
@@ -136,12 +179,19 @@ interface BaseRow {
   process: { id: string; version: string | null } | null;
   observed: Column | null;
   benchmarks: Column[];
+  sourceHealth: RowSourceHealth | null;
 }
 
 /** The rows of one task type: one per identity, with a column per kind of data. */
-function baseRows(type: CatalogTaskType, runs: readonly RunDoc[], shared: Shared): BaseRow[] {
-  const groups = new Map<string, { row: BaseRow; runs: RunDoc[] }>();
-  for (const run of runs) {
+function baseRows(
+  type: CatalogTaskType,
+  entries: ReadonlyArray<{ doc: RunDoc; file: string }>,
+  shared: Shared,
+  problems: readonly ReportProblem[],
+  now: number
+): BaseRow[] {
+  const groups = new Map<string, { row: BaseRow; runs: RunDoc[]; files: string[] }>();
+  for (const { doc: run, file } of entries) {
     const model = modelOf(run);
     if (!model) continue;
     const process = type.byProcess && run.process ? run.process : null;
@@ -159,14 +209,17 @@ function baseRows(type: CatalogTaskType, runs: readonly RunDoc[], shared: Shared
           process: process && { id: process.id, version: process.version },
           observed: null,
           benchmarks: [],
+          sourceHealth: null,
         },
         runs: [],
+        files: [],
       };
       groups.set(id, group);
     }
     group.runs.push(run);
+    group.files.push(file);
   }
-  return [...groups.values()].map(({ row, runs: rowRuns }) => {
+  return [...groups.values()].map(({ row, runs: rowRuns, files }) => {
     const observed = rowRuns.filter((run) => run.source === 'observed');
     const benchmark = rowRuns.filter((run) => run.source === 'benchmark');
     const ids = [...new Set(benchmark.map((run) => run.benchmark))].sort((a, b) =>
@@ -184,6 +237,7 @@ function baseRows(type: CatalogTaskType, runs: readonly RunDoc[], shared: Shared
           shared
         )
       ),
+      sourceHealth: tracedRunProblem(files, problems, now),
     };
   });
 }
@@ -220,6 +274,7 @@ function rowOf(row: BaseRow, observed: Column | null, benchmarks: Column[], shar
     why: labelled,
     observed,
     benchmarks,
+    ...(row.sourceHealth ? row.sourceHealth : {}),
   };
   return out;
 }
@@ -317,7 +372,7 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
   const missingModels = new Map<string, number>();
   // Only runs with a catalog model and a catalog task type form rows and verdicts; every other
   // run is counted under one reason in `unscored` and left out, as the page says.
-  const byType = new Map<string, RunDoc[]>();
+  const byType = new Map<string, Array<{ doc: RunDoc; file: string }>>();
   for (let i = 0; i < rawDocs.length; i++) {
     const raw = rawDocs[i];
     const run = docs[i];
@@ -331,9 +386,10 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
     else if (!model || !labels.has(model)) reason = 'unknown-model';
     else if (!knownTypes.has(type)) reason = 'unknown-task-type';
     if (reason === null && type) {
+      const entry = { doc: run, file: runs.runs[i].file };
       const held = byType.get(type);
-      if (held) held.push(run);
-      else byType.set(type, [run]);
+      if (held) held.push(entry);
+      else byType.set(type, [entry]);
       continue;
     }
     if (reason === 'no-model') counts.noModel += 1;
@@ -398,7 +454,10 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
     minRuns: catalog.minRuns,
   };
   const base = new Map(
-    catalog.taskTypes.map((type) => [type.id, baseRows(type, byType.get(type.id) ?? [], shared)])
+    catalog.taskTypes.map((type) => [
+      type.id,
+      baseRows(type, byType.get(type.id) ?? [], shared, runs.problems, now),
+    ])
   );
   const uses: ScoreboardUse[] = catalog.uses.map((use) => {
     const wanted = use.taskTypes.includes('*')

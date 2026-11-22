@@ -5479,6 +5479,7 @@
       "src/store/activity-reports.ts:state",
       "src/store/usage-report.ts:UsageReportState",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/scoreboard/scoreboard-view.ts:sourceState",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:entry.state",

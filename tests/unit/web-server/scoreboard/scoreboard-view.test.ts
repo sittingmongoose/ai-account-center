@@ -1069,4 +1069,122 @@ describe('what the Sources name', () => {
     expect(view.sources[0].detail).toContain('negative quota move');
     expect(view.sources[0].detail).toContain('vm.lead--A');
   });
+
+  it('traces a failing run file only to its own row using the failure since time, not the scan age', () => {
+    const failAt = NOW - 300_000;
+    const opusRun = projectRun(
+      runDoc('vm.lead', 'WN-1', {
+        task: { id: 'WN-1', type: 'worknode-build', title: 'WN-1', size: { tasks: 1 } },
+        model: {
+          provider: 'anthropic',
+          id: 'claude-opus-5-5',
+          harness: 'claude-code',
+          effort: 'xhigh',
+          account: null,
+        },
+      }) as unknown as Record<string, unknown>,
+      'vm.lead'
+    );
+    const solRun = projectRun(
+      runDoc('vm.lead', 'WN-2', {
+        task: { id: 'WN-2', type: 'worknode-build', title: 'WN-2', size: { tasks: 1 } },
+        model: {
+          provider: 'openai',
+          id: 'gpt-6.1-sol',
+          harness: 'codex',
+          effort: 'high',
+          account: null,
+        },
+      }) as unknown as Record<string, unknown>,
+      'vm.lead'
+    );
+    const opusFile = 'writers/vm.lead/runs/2026-11-06/vm.lead--WN-1.json';
+    const solFile = 'writers/vm.lead/runs/2026-11-06/vm.lead--WN-2.json';
+    const view = buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root: '/reports',
+      catalog: {
+        ...catalog([]),
+        models: [
+          {
+            model: 'anthropic/claude-opus-5-5',
+            label: 'Opus 5.5',
+            family: 'Claude',
+            runtimes: ['claude-code'],
+            efforts: ['xhigh'],
+            prices: null,
+            notes: null,
+          },
+          {
+            model: 'openai/gpt-6.1-sol',
+            label: 'Sol 6.1',
+            family: 'GPT-6',
+            runtimes: ['codex'],
+            efforts: ['high'],
+            prices: null,
+            notes: null,
+          },
+        ],
+        taskTypes: [
+          {
+            id: 'worknode-build',
+            label: 'WorkNode build',
+            description: null,
+            unit: 'task',
+            measures: ['reliability'],
+            byProcess: false,
+          },
+        ],
+        measures: [
+          {
+            id: 'reliability',
+            label: 'Reliability',
+            description: 'Done',
+            unit: 'share',
+            better: 'higher',
+            kind: 'outcome',
+          },
+        ],
+        uses: [
+          {
+            id: 'pipeline',
+            label: 'Our pipeline',
+            description: null,
+            taskTypes: ['worknode-build'],
+            weights: { reliability: 3 },
+          },
+        ],
+      },
+      runs: {
+        state: 'ok',
+        scannedAt: NOW,
+        runs: [
+          { file: opusFile, firstSeenAt: failAt - 60_000, sha256: 'a', doc: opusRun },
+          { file: solFile, firstSeenAt: failAt - 60_000, sha256: 'b', doc: solRun },
+        ],
+        writers: 1,
+        skipped: { runFiles: 0, writerFolders: 0 },
+        problems: [
+          { file: opusFile, reason: 'could not be read', since: failAt },
+          {
+            file: 'writers/vm.lead/runs/2026-11-06/vm.lead--damaged.json',
+            reason: 'contains NUL bytes from a damaged write',
+            since: NOW,
+          },
+        ],
+      },
+    });
+    expect(view.sources[0].state).toBe('unreadable');
+    expect(view.sources[0].ageSeconds).toBe(0);
+    const rows = view.uses[0].taskTypes[0].rows;
+    const opus = rows.find((r) => r.model === 'anthropic/claude-opus-5-5');
+    const sol = rows.find((r) => r.model === 'openai/gpt-6.1-sol');
+    expect(opus?.sourceState).toBe('unreadable');
+    expect(opus?.asOf).toBe(new Date(failAt).toISOString());
+    expect(opus?.ageSeconds).toBe(300);
+    expect(sol?.sourceState).toBeUndefined();
+    expect(sol?.asOf).toBeUndefined();
+    expect(sol?.ageSeconds).toBeUndefined();
+  });
 });
