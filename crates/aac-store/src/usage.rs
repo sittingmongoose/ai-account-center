@@ -928,15 +928,56 @@ impl Projector for UsageProjector {
     }
 }
 
-fn upsert_account(txn: &WriteTransaction, a: u32, obs: &AccountObs, t: i64, only_if_absent: bool) -> Result<()> {
+#[derive(Clone, Copy)]
+struct ArchiveBounds {
+    first_lo: i64,
+    first_hi: i64,
+    last_lo: i64,
+    last_hi: i64,
+}
+
+fn archive_bounds(day: u32, hours: &[(u8, Rollup)], periods: &[(u64, Period)]) -> ArchiveBounds {
+    let day_start = i64::from(day) * DAY_MS as i64;
+    let day_end = (i64::from(day) + 1) * DAY_MS as i64 - 1;
+    let (mut first_lo, mut first_hi) = match hours.first() {
+        Some((h, _)) => {
+            let start = day_start + i64::from(*h) * HOUR_MS as i64;
+            (start, start + HOUR_MS as i64 - 1)
+        }
+        None => (day_start, day_end),
+    };
+    let (mut last_lo, mut last_hi) = match hours.last() {
+        Some((h, _)) => {
+            let start = day_start + i64::from(*h) * HOUR_MS as i64;
+            (start, start + HOUR_MS as i64 - 1)
+        }
+        None => (day_start, day_end),
+    };
+    for &(start, ref period) in periods {
+        let p_start = start as i64;
+        if p_start < first_lo {
+            first_lo = p_start;
+            first_hi = first_hi.min(p_start);
+        }
+        if period.end_ms > last_hi {
+            last_lo = last_lo.max(period.end_ms);
+            last_hi = period.end_ms;
+        }
+    }
+    ArchiveBounds {
+        first_lo,
+        first_hi,
+        last_lo,
+        last_hi,
+    }
+}
+
+fn upsert_account(txn: &WriteTransaction, a: u32, obs: &AccountObs, t: i64) -> Result<()> {
     let key = Key::new().u32(a);
     let existing: Option<AccountMeta> = match get(txn, db::ACCOUNT, key.as_slice())? {
         Some(b) => Some(db::unpack(&b)?),
         None => None,
     };
-    if only_if_absent && existing.is_some() {
-        return Ok(());
-    }
     let first = existing.as_ref().map(|m| m.first_ms.min(t)).unwrap_or(t);
     let last = existing.as_ref().map(|m| m.last_ms.max(t)).unwrap_or(t);
     let meta = AccountMeta {
@@ -954,15 +995,42 @@ fn upsert_account(txn: &WriteTransaction, a: u32, obs: &AccountObs, t: i64, only
     Ok(())
 }
 
-fn upsert_window(
-    txn: &WriteTransaction,
-    a: u32,
-    p: u32,
-    w: u32,
-    obs: &WindowObs,
-    t: i64,
-    only_if_absent: bool,
-) -> Result<SeriesMeta> {
+fn upsert_account_from_close(txn: &WriteTransaction, a: u32, obs: &AccountObs, bounds: ArchiveBounds) -> Result<()> {
+    let key = Key::new().u32(a);
+    let existing: Option<AccountMeta> = match get(txn, db::ACCOUNT, key.as_slice())? {
+        Some(b) => Some(db::unpack(&b)?),
+        None => None,
+    };
+    let meta = match existing.clone() {
+        None => AccountMeta {
+            identity: obs.identity.clone(),
+            provider: obs.provider.clone(),
+            account_id: obs.account_id.clone(),
+            plan: obs.plan.clone(),
+            platform: obs.platform.clone(),
+            first_ms: bounds.first_lo,
+            last_ms: bounds.last_hi,
+        },
+        Some(mut meta) => {
+            if meta.first_ms > bounds.first_hi {
+                meta.first_ms = bounds.first_lo;
+            }
+            if meta.last_ms < bounds.last_lo {
+                meta.last_ms = bounds.last_hi;
+                meta.account_id = obs.account_id.clone();
+                meta.plan = obs.plan.clone();
+                meta.platform = obs.platform.clone();
+            }
+            meta
+        }
+    };
+    if existing.as_ref() != Some(&meta) {
+        put(txn, db::ACCOUNT, key.as_slice(), &db::pack(&meta)?)?;
+    }
+    Ok(())
+}
+
+fn upsert_window(txn: &WriteTransaction, a: u32, p: u32, w: u32, obs: &WindowObs, t: i64) -> Result<SeriesMeta> {
     let wkey = Key::new().u32(w);
     if get(txn, db::WINDOW, wkey.as_slice())?.is_none() {
         let meta = WindowMeta {
@@ -982,9 +1050,6 @@ fn upsert_window(
     if existing.is_none() {
         put_index(txn, db::SERIES_BY_PROVIDER, Key::new().u32(p).u32(a).u32(w).as_slice())?;
     }
-    if let (true, Some(meta)) = (only_if_absent, existing.clone()) {
-        return Ok(meta);
-    }
     let mut meta = existing.unwrap_or(SeriesMeta {
         first_ms: t,
         last_ms: t,
@@ -998,6 +1063,65 @@ fn upsert_window(
     meta.pool_label = obs.pool_label.clone();
     meta.model_ids = obs.model_ids.clone();
     Ok(meta)
+}
+
+fn upsert_window_from_close(
+    txn: &WriteTransaction,
+    a: u32,
+    p: u32,
+    w: u32,
+    obs: &WindowObs,
+    bounds: ArchiveBounds,
+) -> Result<()> {
+    let wkey = Key::new().u32(w);
+    if get(txn, db::WINDOW, wkey.as_slice())?.is_none() {
+        let meta = WindowMeta {
+            identity: obs.identity.clone(),
+            key: obs.key.clone(),
+            kind: obs.kind.clone(),
+            unit: obs.unit.clone(),
+            pool_id: obs.pool_id.clone(),
+        };
+        put(txn, db::WINDOW, wkey.as_slice(), &db::pack(&meta)?)?;
+    }
+    let skey = Key::new().u32(a).u32(w);
+    let existing: Option<SeriesMeta> = match get(txn, db::SERIES, skey.as_slice())? {
+        Some(b) => Some(db::unpack(&b)?),
+        None => None,
+    };
+    if existing.is_none() {
+        put_index(txn, db::SERIES_BY_PROVIDER, Key::new().u32(p).u32(a).u32(w).as_slice())?;
+    }
+    let meta = match existing.clone() {
+        None => SeriesMeta {
+            first_ms: bounds.first_lo,
+            last_ms: bounds.last_hi,
+            rows: 0,
+            label: obs.label.clone(),
+            window_minutes: obs.window_minutes,
+            pool_id_source: obs.pool_id_source.clone(),
+            pool_label: obs.pool_label.clone(),
+            model_ids: obs.model_ids.clone(),
+        },
+        Some(mut meta) => {
+            if meta.first_ms > bounds.first_hi {
+                meta.first_ms = bounds.first_lo;
+            }
+            if meta.last_ms < bounds.last_lo {
+                meta.last_ms = bounds.last_hi;
+                meta.label = obs.label.clone();
+                meta.window_minutes = obs.window_minutes;
+                meta.pool_id_source = obs.pool_id_source.clone();
+                meta.pool_label = obs.pool_label.clone();
+                meta.model_ids = obs.model_ids.clone();
+            }
+            meta
+        }
+    };
+    if existing.as_ref() != Some(&meta) {
+        put_series(txn, a, w, &meta)?;
+    }
+    Ok(())
 }
 
 fn put_series(txn: &WriteTransaction, a: u32, w: u32, meta: &SeriesMeta) -> Result<()> {
@@ -1066,7 +1190,7 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
     let t = s.sampled_at_ms as u64;
     let a = db::intern(txn, db::KIND_ACCOUNT, &s.account.identity)?;
     let p = db::intern(txn, db::KIND_PROVIDER, &s.account.provider)?;
-    upsert_account(txn, a, &s.account, s.sampled_at_ms, false)?;
+    upsert_account(txn, a, &s.account, s.sampled_at_ms)?;
 
     // The account's state span.
     let al_key = Key::new().u32(a);
@@ -1120,7 +1244,7 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
     for win in &s.windows {
         let w = db::intern(txn, db::KIND_WINDOW, &win.identity)?;
         window_ids.push(w);
-        let mut series = upsert_window(txn, a, p, w, win, s.sampled_at_ms, false)?;
+        let mut series = upsert_window(txn, a, p, w, win, s.sampled_at_ms)?;
         let vals = Vals::from_obs(win);
         let latest = read_latest(txn, a, w)?;
         match latest {
@@ -2002,16 +2126,7 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<Rep
     for series in payload["series"].as_array().into_iter().flatten() {
         let account: AccountObs = serde_json::from_value(series["account"].clone())?;
         let window: WindowObs = serde_json::from_value(series["window"].clone())?;
-        let a = db::intern(txn, db::KIND_ACCOUNT, &account.identity)?;
-        let p = db::intern(txn, db::KIND_PROVIDER, &account.provider)?;
-        let w = db::intern(txn, db::KIND_WINDOW, &window.identity)?;
-        archived.push((a, w));
-        let t = day as i64 * DAY_MS as i64;
-        upsert_account(txn, a, &account, t, true)?;
-        let meta = upsert_window(txn, a, p, w, &window, t, true)?;
-        if get(txn, db::SERIES, Key::new().u32(a).u32(w).as_slice())?.is_none() {
-            put_series(txn, a, w, &meta)?;
-        }
+        let day_rollup = rollup_from_json(&series["day_rollup"])?;
         // Compare the whole day so it cannot acquire hours from late readings on replay.
         let mut hours = Vec::new();
         for hour in series["hours"].as_array().into_iter().flatten() {
@@ -2022,21 +2137,27 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<Rep
             hours.push(((h % 24) as u8, rollup_from_json(&hour["rollup"])?));
         }
         hours.sort_by_key(|(h, _)| *h);
-        let mut recovered_resets = Vec::new();
+        let mut periods = Vec::new();
         for period in series["periods"].as_array().into_iter().flatten() {
             let start = period["start_ms"].as_u64().unwrap_or(0);
-            let value = serde_json::from_value(period["period"].clone())?;
+            let value: Period = serde_json::from_value(period["period"].clone())?;
+            if value.end_ms < 0 || (value.end_ms as u64) < start {
+                fail!("corrupt", "day_closed period ends before it starts");
+            }
+            periods.push((start, value));
+        }
+        let bounds = archive_bounds(day, &hours, &periods);
+        let a = db::intern(txn, db::KIND_ACCOUNT, &account.identity)?;
+        let p = db::intern(txn, db::KIND_PROVIDER, &account.provider)?;
+        let w = db::intern(txn, db::KIND_WINDOW, &window.identity)?;
+        archived.push((a, w));
+        upsert_account_from_close(txn, a, &account, bounds)?;
+        upsert_window_from_close(txn, a, p, w, &window, bounds)?;
+        let mut recovered_resets = Vec::new();
+        for (start, value) in periods {
             recovered_resets.extend(restore_closed_period(txn, (a, w), start, value)?);
         }
-        complete &= restore_closed_rollups(
-            txn,
-            (a, w),
-            day,
-            hours,
-            rollup_from_json(&series["day_rollup"])?,
-            &recovered_resets,
-            replay,
-        )?;
+        complete &= restore_closed_rollups(txn, (a, w), day, hours, day_rollup, &recovered_resets, replay)?;
     }
     if replay.is_some() {
         record_closed_replay_part(txn, day, part, parts, &archived)?;

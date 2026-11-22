@@ -1862,3 +1862,191 @@ fn a_rebuild_reconciles_multipart_closed_day_and_resumes_across_checkpoints() {
     fs::remove_dir_all(&dir).unwrap();
     fs::remove_dir_all(&resume_dir).unwrap();
 }
+
+#[test]
+fn an_upgrade_preserves_30_day_burn_series_after_all_readings_retire() {
+    let dir = temp_dir("retired-burn-upgrade");
+    let backups = temp_dir("retired-burn-backups");
+    let open_retained = |p: &Path| ops::open_engine(p.to_str().unwrap(), None, Some(7)).unwrap();
+
+    // Anchor query_now 15 days past wall-clock today so the 7-day retention cutoff exceeds
+    // the sealed readings segment's observed_ms and normal maintain/backup/maintain retires it.
+    let today = (now_ms() as i64 / DAY) * DAY;
+    let query_now = today + 15 * DAY + 12 * HOUR;
+    let t_old = query_now - 60 * DAY + 2 * HOUR; // 60 days before query (outside 30-day window)
+    let t_mid = query_now - 20 * DAY + 2 * HOUR; // 20 days before query (inside 30-day window)
+    let t_recent = query_now - 12 * DAY + 2 * HOUR; // 12 days before query (inside 30-day window)
+
+    let make_obs = |t: i64, plan: &str, label: &str, pool_label: &str, used: f64| {
+        let mut o = obs(
+            1,
+            t,
+            vec![json!({
+                "identity": "[\"five_hour\",\"rate_limit\",null]",
+                "key": "five_hour",
+                "label": label,
+                "kind": "rate_limit",
+                "unit": null,
+                "used_pct": used,
+                "remaining_pct": 100.0 - used,
+                "reset_at_ms": t + 5 * HOUR,
+                "window_minutes": 300.0,
+                "pool_label": pool_label,
+            })],
+        );
+        o["account"]["plan"] = json!(plan);
+        o
+    };
+
+    let series_refs = json!([{ "identity": identity(1), "window": "[\"five_hour\",\"rate_limit\",null]" }]);
+    let list_args = json!({ "fromMs": query_now - 30 * DAY, "toMs": query_now });
+    let burn_args = json!({ "series": series_refs, "spansMs": [30 * DAY], "nowMs": query_now });
+    let points_args = json!({ "fromMs": query_now - 30 * DAY, "toMs": query_now, "resolution": "day" });
+    let periods_args = json!({ "series": series_refs, "fromMs": query_now - 30 * DAY, "toMs": query_now });
+
+    let (before_list, before_burn, before_points, before_periods) = {
+        let engine = open_retained(&dir);
+        record(
+            &engine,
+            vec![
+                make_obs(t_old, "pro", "Five Hour Old", "Pool Old", 10.0),
+                make_obs(t_old + 2 * MIN, "pro", "Five Hour Old", "Pool Old", 25.0),
+            ],
+        );
+        let c1 = aac_store::usage::close_days(&engine, (t_old + 2 * DAY) as u64).unwrap();
+        assert!(!c1["closed"].as_array().unwrap().is_empty(), "{c1:#}");
+        record(
+            &engine,
+            vec![
+                make_obs(t_mid, "plus", "Five Hour Mid", "Pool Mid", 0.0),
+                make_obs(t_mid + 2 * MIN, "plus", "Five Hour Mid", "Pool Mid", 15.0),
+            ],
+        );
+        let c2 = aac_store::usage::close_days(&engine, (t_mid + 2 * DAY) as u64).unwrap();
+        assert!(!c2["closed"].as_array().unwrap().is_empty(), "{c2:#}");
+        record(
+            &engine,
+            vec![
+                make_obs(t_recent, "max", "Five Hour New", "Pool New", 0.0),
+                make_obs(t_recent + 2 * MIN, "max", "Five Hour New", "Pool New", 65.0),
+                make_obs(t_recent + 6 * HOUR, "max", "Five Hour New", "Pool New", 0.0),
+            ],
+        );
+        let m1 = call(&engine, "maintain", json!({ "nowMs": query_now }));
+        assert!(!m1["closed"]["closed"].as_array().unwrap().is_empty(), "{m1:#}");
+        call(
+            &engine,
+            "backup",
+            json!({ "roots": [backups.to_str().unwrap()], "withRedb": false }),
+        );
+        let m2 = call(&engine, "maintain", json!({ "nowMs": query_now }));
+        assert!(m2["retired"]["retired"].as_u64().unwrap() >= 1, "{m2:#}");
+        assert!(
+            engine.lock_logs().readings.manifest().segments.is_empty(),
+            "all readings segments must have retired"
+        );
+
+        let sl = call(&engine, "seriesList", list_args.clone());
+        assert_eq!(sl.as_array().unwrap().len(), 1, "before upgrade: {sl:#}");
+        assert_eq!(sl[0]["plan"], json!("max"));
+        assert_eq!(sl[0]["window"]["label"], json!("Five Hour New"));
+        assert_eq!(sl[0]["window"]["poolLabel"], json!("Pool New"));
+
+        let burn = call(&engine, "burnLong", burn_args.clone());
+        let points = call(&engine, "seriesPoints", points_args.clone());
+        assert_eq!(points["series"][0]["points"].as_array().unwrap().len(), 2);
+        assert_eq!(points["series"][0]["points"][1][1], json!(65.0));
+        let periods: Vec<Json> = call(&engine, "periods", periods_args.clone())[0]["periods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["final"] == json!(true))
+            .cloned()
+            .collect();
+        assert_eq!(periods.len(), 2, "both t_mid and t_recent finalized periods kept");
+        engine.close().unwrap();
+        (sl, burn, points, periods)
+    };
+
+    // Simulate a version-1 store upgrade by setting projector_schema_version = 1 on both usage checkpoints.
+    {
+        let database = redb::Database::open(dir.join("aac.redb")).unwrap();
+        let txn = aac_store::engine::begin(&database).unwrap();
+        for name in ["usage/readings", "usage/ledger"] {
+            let mut cp = {
+                let table = txn.open_table(db::CHECKPOINT).unwrap();
+                db::read_checkpoint(&table, name).unwrap().unwrap()
+            };
+            cp.projector_schema_version = 1;
+            db::write_checkpoint(&txn, name, &cp).unwrap();
+        }
+        txn.commit().unwrap();
+    }
+
+    for mode in ["upgrade", "rebuild"] {
+        if mode == "rebuild" {
+            fs::remove_file(dir.join("aac.redb")).unwrap();
+        }
+        let engine = open_retained(&dir);
+        let sl = call(&engine, "seriesList", list_args.clone());
+        assert_eq!(sl, before_list, "{mode}: 30-day seriesList must match pre-upgrade");
+        let burn = call(&engine, "burnLong", burn_args.clone());
+        assert_eq!(burn, before_burn, "{mode}: 30-day burnLong must match pre-upgrade");
+        let points = call(&engine, "seriesPoints", points_args.clone());
+        assert_eq!(
+            points, before_points,
+            "{mode}: 30-day seriesPoints must match pre-upgrade"
+        );
+        let periods: Vec<Json> = call(&engine, "periods", periods_args.clone())[0]["periods"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            periods, before_periods,
+            "{mode}: 30-day final periods must match pre-upgrade"
+        );
+
+        // Boundary check: a 30-day range whose start lands inside the later closed day (past midnight,
+        // before the archived hour) must still include the retired series.
+        let boundary = call(
+            &engine,
+            "seriesList",
+            json!({ "fromMs": t_recent - 30 * MIN, "toMs": t_recent + 30 * DAY - 30 * MIN }),
+        );
+        assert_eq!(boundary, before_list, "{mode}: intra-day boundary seriesList");
+        engine.close().unwrap();
+    }
+
+    // Adding a newer retained reading after retired closes must keep the newer display metadata
+    // while still extending first_ms back across the retired archive on rebuild.
+    let t_live = query_now - 2 * DAY + 2 * HOUR;
+    {
+        let engine = open_retained(&dir);
+        record(
+            &engine,
+            vec![make_obs(t_live, "team", "Five Hour Live", "Pool Live", 10.0)],
+        );
+        engine.close().unwrap();
+    }
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    {
+        let rebuilt = open_retained(&dir);
+        let old_range = call(
+            &rebuilt,
+            "seriesList",
+            json!({ "fromMs": t_old - HOUR, "toMs": t_old + DAY }),
+        );
+        assert_eq!(
+            old_range.as_array().unwrap().len(),
+            1,
+            "first_ms spans back to retired day"
+        );
+        assert_eq!(old_range[0]["plan"], json!("team"));
+        assert_eq!(old_range[0]["window"]["label"], json!("Five Hour Live"));
+        assert_eq!(old_range[0]["window"]["poolLabel"], json!("Pool Live"));
+        rebuilt.close().unwrap();
+    }
+
+    fs::remove_dir_all(&dir).unwrap();
+    fs::remove_dir_all(&backups).unwrap();
+}
