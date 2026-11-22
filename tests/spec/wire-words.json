@@ -433,6 +433,7 @@
       "src/web-server/services/account-dashboard-projection.ts:status",
       "src/web-server/services/account-dashboard-projection.ts:usage?.status",
       "src/web-server/services/account-dashboard-projection.ts:window.status",
+      "src/web-server/services/account-dashboard-service.ts:account.status",
       "src/web-server/services/account-dashboard-service.ts:accounts[index].status",
       "src/web-server/services/account-dashboard-service.ts:retained?.status",
       "src/web-server/services/account-dashboard-service.ts:status",
@@ -2856,6 +2857,7 @@
       "src/web-server/services/account-dashboard-service.ts:account.status",
       "src/web-server/services/account-dashboard-service.ts:current.status",
       "src/web-server/services/account-dashboard-service.ts:publicAccount.status",
+      "src/web-server/services/account-dashboard-service.ts:status",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
       "src/web-server/services/account-dashboard-types.ts:quotaStatus",
       "src/web-server/services/account-lifecycle-antigravity.ts:native?.status",
@@ -3627,6 +3629,7 @@
     "sources": [
       "src/antigravity/usage-normalization.ts:cacheReason",
       "src/web-server/agent-usage/agent-usage-projection.ts:cacheReason",
+      "src/web-server/services/account-dashboard-service.ts:account.cacheReason",
       "src/web-server/services/account-dashboard-service.ts:cacheReason",
       "src/web-server/services/account-dashboard-types.ts:UsageCacheReason",
       "src/web-server/services/usage-failover-service.ts:cacheReason"
