@@ -53,6 +53,8 @@ const slowTests = [
   'tests/unit/web-server/rust-view-reply.test.ts',
   // Reads package.json at the repo root.
   'tests/unit/foundation/npm-rust-files.test.ts',
+  // Spawns bun build and the PATH node to exercise the Node >= 26 native fetch init.
+  'tests/unit/utils/fetch-proxy-node26.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are

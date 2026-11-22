@@ -167,6 +167,12 @@ export function applyGlobalFetchProxy(): { enabled: boolean; error?: string } {
       return { enabled: false };
     }
 
+    // Node >= 26 installs its native undici lazily on the first native Headers/Request/
+    // Response use, and that one-time install redefines the legacy global dispatcher
+    // symbol npm-undici reads, replacing the routing dispatcher. Trigger the install
+    // here, before routing is written, so it cannot later clobber it. A no-op on Node
+    // versions and Bun whose fetch classes are already initialized.
+    new Headers();
     setGlobalDispatcher(dispatcher);
     globalThis.fetch = undiciFetch as typeof globalThis.fetch;
     return { enabled: true };
