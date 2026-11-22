@@ -7,7 +7,7 @@
  * its projection of the table, so a one-sided edit of either side fails. A synthetic provider
  * and tool added to a copy of the table reach every derived TS consumer.
  */
-import { describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
@@ -18,6 +18,10 @@ import { requirePython3 } from './python3.mjs';
 const root = path.resolve(import.meta.dir, '../..');
 const read = (relative: string) => fs.readFileSync(path.join(root, relative), 'utf8');
 const json = (relative: string) => JSON.parse(read(relative));
+
+// LANE-RULES: the Python children get a temporary HOME and CCS_HOME, never the real ones.
+const childHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-tables-home-'));
+afterAll(() => fs.rmSync(childHome, { recursive: true, force: true }));
 
 interface Row {
   label: string;
@@ -247,7 +251,7 @@ describe('the Python fallback helpers equal the table', () => {
           '-c',
           `import sys,json;sys.path.insert(0,${JSON.stringify(path.join(root, 'scripts/account-usage'))});${code}`,
         ],
-        { encoding: 'utf8' }
+        { encoding: 'utf8', env: { ...process.env, HOME: childHome, CCS_HOME: childHome } }
       )
     );
 

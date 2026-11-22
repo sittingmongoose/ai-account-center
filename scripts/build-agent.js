@@ -61,6 +61,7 @@ const EMBEDDED = [
   'config/tables/providers.json',
   'config/tables/tools.json',
   'config/tables/hosts.json',
+  'config/tables/antigravity-columns.json',
   'web-dashboard/public/computers.json',
   'tests/spec/wire-words.json',
 ];
@@ -74,18 +75,19 @@ function fileSha(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-/** SHA-256 over the agent's build inputs in a fixed order, line endings ignored. */
-function sourceHash() {
+/** SHA-256 over the agent's build inputs in a fixed order, line endings ignored.
+ * `root` defaults to the checkout; tests pass a fixture tree. */
+function sourceHash(root = ROOT) {
   const files = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml'];
   const walk = (rel) => {
-    for (const entry of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
       const child = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(child);
       else files.push(child);
     }
   };
   for (const crate of CRATES) {
-    for (const entry of fs.readdirSync(path.join(ROOT, crate), { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(path.join(root, crate), { withFileTypes: true })) {
       const child = `${crate}/${entry.name}`;
       if (entry.isDirectory()) {
         if (entry.name === 'src') walk(child);
@@ -95,7 +97,7 @@ function sourceHash() {
   files.push(...EMBEDDED);
   const hash = crypto.createHash('sha256');
   for (const rel of files.sort()) {
-    const file = path.join(ROOT, rel);
+    const file = path.join(root, rel);
     if (!fs.existsSync(file)) continue;
     hash.update(rel);
     hash.update('\0');
@@ -307,4 +309,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { sourceHash, verifyDist, binaryName, SUPPORTED, TARGETS };
+module.exports = { sourceHash, verifyDist, binaryName, SUPPORTED, TARGETS, CRATES, EMBEDDED };

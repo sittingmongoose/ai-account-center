@@ -59,7 +59,7 @@ export interface UnifiedConfig {
     frontDoor?: 'ts' | 'rust';
     mode?: 'off' | 'shadow' | 'on';
     groups?: {
-      home?: 'off' | 'shadow' | 'on';
+      home?: 'off' | 'on';
       status?: 'off' | 'on';
       scoreboard?: 'off' | 'on';
       analytics?: 'off' | 'on';

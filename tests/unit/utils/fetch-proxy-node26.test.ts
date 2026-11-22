@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dir, '../../..');
@@ -34,6 +35,9 @@ process.exit(ok ? 0 : 1);
 describe('global fetch proxy under the PATH node', () => {
   it('keeps the routing dispatcher after native Headers/Request init', () => {
     const tmp = fs.mkdtempSync(path.join(root, '.tmp-fetch-proxy-'));
+    // LANE-RULES: every child gets a temporary HOME and CCS_HOME, never the real ones.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-fetch-proxy-home-'));
+    const childEnv = { ...process.env, HOME: home, CCS_HOME: home };
     try {
       const built = spawnSync(
         'bun',
@@ -45,7 +49,7 @@ describe('global fetch proxy under the PATH node', () => {
           '--packages=external',
           `--outfile=${path.join(tmp, 'fetch-proxy.mjs')}`,
         ],
-        { cwd: root, encoding: 'utf8', timeout: 60_000 }
+        { cwd: root, encoding: 'utf8', timeout: 60_000, env: childEnv }
       );
       expect(built.status, `bun build failed: ${built.stderr}`).toBe(0);
       fs.writeFileSync(path.join(tmp, 'child.mjs'), CHILD);
@@ -53,11 +57,13 @@ describe('global fetch proxy under the PATH node', () => {
         cwd: tmp,
         encoding: 'utf8',
         timeout: 60_000,
+        env: childEnv,
       });
       expect(ran.status, `node child failed: ${ran.stdout} ${ran.stderr}`).toBe(0);
       expect(JSON.parse(ran.stdout.trim()).routingSurvives).toBe(true);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });

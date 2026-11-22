@@ -12,7 +12,6 @@ import { isSecureTransport } from '../middleware/secure-transport';
 import { privateFileOwners } from '../../shared/private-files';
 import { RustService } from '../rust-service';
 import { answerDashboardFed } from '../views/dashboard-feed';
-import { homeShadowAnswer } from '../services/home-view-shadow';
 import type {
   AccountDashboard,
   ClaudeDashboardPlatform,
@@ -67,15 +66,6 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
           context
         );
         const dashboard = read.dashboard;
-        homeShadowAnswer({
-          req,
-          service,
-          platform,
-          secure: secureTransport,
-          dashboard,
-          now: read.now,
-          scope: (deps.scope ?? getCcsDir)(),
-        });
         if (
           await answerDashboardFed(req, res, service, {
             platform,

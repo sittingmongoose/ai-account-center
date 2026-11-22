@@ -38,14 +38,7 @@ const DEFAULT: Record<RustGroup, boolean> = {
   'claude-open': false,
 };
 
-export type RustGroupMode = 'off' | 'shadow' | 'on';
-
-/** The group's tri-state switch. `shadow` admits a background comparison without cutting over;
- * an absent setting takes the group's default and an invalid one stays off, as before. */
-export function rustGroupMode(
-  group: RustGroup,
-  env: NodeJS.ProcessEnv = process.env
-): RustGroupMode {
+export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {
   let value: unknown = env[`AAC_RUST_GROUP_${group.toUpperCase().replace(/-/g, '_')}`];
   if (value === undefined) {
     try {
@@ -58,12 +51,7 @@ export function rustGroupMode(
       value = undefined;
     }
   }
-  if (value === undefined) return DEFAULT[group] ? 'on' : 'off';
-  return value === 'on' || value === 'shadow' ? value : 'off';
-}
-
-export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {
-  return rustGroupMode(group, env) === 'on';
+  return value === undefined ? DEFAULT[group] : value === 'on';
 }
 
 /**
