@@ -831,7 +831,7 @@
             "label": "DeepSeek V4.1 Flash",
             "family": "DeepSeek",
             "runtimes": [
-              "omp"
+              "opencode-go"
             ],
             "efforts": [],
             "prices": null,
