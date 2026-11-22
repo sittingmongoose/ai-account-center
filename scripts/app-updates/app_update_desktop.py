@@ -16,11 +16,13 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from app_update_common import (
-    Install, RangeReader, UpdateFailure, command, download, environment, powershell, private_temporary,
-    marker_applies_to, marker_owes_restart, pending_marker, ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
+    Install, RangeReader, UpdateFailure, captured_launch_environment, command, download, powershell,
+    private_temporary, marker_applies_to, marker_owes_restart, pending_marker, ps_quote, remote_fingerprint, result,
+    version_text, version_tuple, write_private_json,
 )
 from app_update_processes import (
-    desktop_arguments, family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops, windows_context,
+    desktop_arguments, desktop_data_folder, family, live_contexts, main_contexts, restart_desktops, scan,
+    terminate_desktops, windows_context,
 )
 
 
@@ -548,15 +550,23 @@ def windows_capture(install):
         for item in contexts:
             if item.session != session.value:
                 raise UpdateFailure("quit_first")
-            name, arguments = process_package(item), desktop_arguments(item, "windows")
+            name = process_package(item)
             # Another package's instance: this start cannot be reproduced, so nothing closes for it.
             if name is not None and not name.startswith(identity + "_"):
                 raise UpdateFailure("quit_first")
+            _, relative = desktop_data_folder(item, "windows")
+            if relative:
+                # A relative data directory only reopens from the folder the app ran in,
+                # so that folder must be read before the arguments are planned.
+                item.cwd, item.env = windows_context(item.pid)
+                if not isinstance(item.cwd, str) or not item.cwd or not pathlib.Path(item.cwd).is_absolute():
+                    raise UpdateFailure("quit_first")
+            arguments = desktop_arguments(item, "windows")
             if arguments or name is None:
                 # By path: the launcher's start for a profile, or a plain start of an unpackaged app.
                 # Its environment is part of that start (a per-launch configuration), so it is
                 # captured before the close and replayed by the direct reopen below.
-                _, launch = windows_context(item.pid)
+                launch = item.env if relative else windows_context(item.pid)[1]
                 plans.append((item, None, arguments, launch))
             elif install.package_family and windows_explorer().is_file():
                 plans.append((item, install.package_family + "!" + application, [], None))
@@ -578,7 +588,8 @@ def reopen_windows(install, plans):
             # The same direct start as AAC's Claude launcher: current exe, its folder, one data
             # directory, and the captured environment so per-launch configuration survives.
             argv, cwd = [str(install.path), *arguments], str(install.path.parent)
-            subprocess.Popen(argv, cwd=cwd, env=environment(launch), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            subprocess.Popen(argv, cwd=cwd, env=captured_launch_environment(launch), stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, creationflags=DETACHED)
     if not plans:
         return 0

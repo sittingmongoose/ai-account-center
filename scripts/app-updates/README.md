@@ -651,6 +651,11 @@ to reopen each the way it was started:
   `--user-data-dir="%APPDATA%\Claude-<id>"` and the environment the instance was
   started with (captured before the close; a per-launch configuration such as a
   profile's own variable would otherwise be lost to the scheduled worker's).
+  That environment is only the captured one, with Windows names compared
+  case-insensitively and one PATH: the worker's own variables never enter the
+  relaunched app. A relative `--user-data-dir` is resolved against the working
+  directory captured from that instance, and an instance whose working directory
+  cannot be read is `quit_first` instead, since its start cannot be reproduced.
   Package identity does not change this; AAC's named profile on the Windows PC
   has it too;
 - an instance without arguments and with package identity (the Start menu, or

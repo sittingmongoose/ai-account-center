@@ -2518,6 +2518,38 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.assertEqual(self.events, ['download', 'close', 'install', 'launch', 'launch'])
         self.assert_reopened(value, 2)
 
+    def test_a_relative_profile_reopens_from_the_working_directory_the_app_had(self):
+        # M5: the folder is the app's own, so it is resolved against the cwd captured from the
+        # running instance, never dropped and never resolved against the helper's folder.
+        self.use('claude-desktop')
+        self.run_main(['--user-data-dir=named-profile'], packaged=False)
+        value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        new_exe = str(self.new_root / self.executable)
+        self.assertEqual(self.launches(), [([new_exe, '--user-data-dir=/fixture/named-profile'], str(self.new_root / 'app'))])
+        self.assert_reopened(value, 1)
+
+    def test_a_relative_profile_whose_working_directory_cannot_be_read_reports_quit_first(self):
+        # The same start cannot be reproduced without that folder: nothing closes for it, and
+        # the packaged instance is not quietly reopened on its default profile.
+        self.use('claude-desktop')
+        self.run_main(['--user-data-dir=named-profile'])
+        with mock.patch.object(desktop, 'windows_context', side_effect=common.UpdateFailure('restart_context')):
+            self.assert_quit_first_untouched(desktop.update_desktop(self.package(self.old_root, self.OLD)))
+
+    def test_a_direct_reopen_uses_only_the_captured_environment(self):
+        # M5: the relaunched app keeps its own settings and gains no worker settings, with one
+        # PATH even when the app's block spells it 'Path' and the worker's uses 'PATH'.
+        self.use('claude-desktop')
+        pid = self.run_main(['--user-data-dir=/fixture/Roaming/Claude-work'], packaged=False)
+        self.environments[pid] = {'Path': '/app/bin', 'APP_ONLY': 'yes', 'XDG_CONFIG_HOME': '/app/config'}
+        with mock.patch.dict(os.environ, {'WORKER_ONLY': 'yes', 'XDG_CONFIG_HOME': '/worker/config', 'PATH': '/worker/bin'}):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        env = self.launched[0][1]['env']
+        self.assertNotIn('WORKER_ONLY', env)
+        self.assertEqual(env.get('XDG_CONFIG_HOME'), '/app/config')
+        self.assertEqual([setting for name, setting in env.items() if name.upper() == 'PATH'], ['/app/bin'])
+        self.assert_reopened(value, 1)
+
     def test_an_instance_that_cannot_be_reopened_reports_quit_first_before_any_download_or_close(self):
         self.use('claude-desktop')
         cases = {

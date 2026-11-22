@@ -417,6 +417,25 @@ def strip_dashboard_secrets(values):
             and not key.upper().startswith("CCS_DASHBOARD_") and not key.upper().endswith("_PASSWORD_HASH")}
 
 
+def captured_launch_environment(captured=None):
+    """The environment for a direct start of a captured app: only what the app itself had.
+
+    The helper's own settings never enter the relaunched process: a worker's
+    XDG_CONFIG_HOME or its PATH would change the app's start. Windows names are
+    case-insensitive, so each name survives once (the app's own spelling first)
+    and PATH appears once.
+    """
+    result, names = {}, set()
+    for key, value in (captured or {}).items():
+        folded = key.upper()
+        if folded in names:
+            continue
+        names.add(folded)
+        result[key] = value
+    result.update(NO_AUTO_UPDATE)
+    return strip_dashboard_secrets(result)
+
+
 def environment(extra=None):
     result = dict(os.environ)
     result.update(NO_AUTO_UPDATE)

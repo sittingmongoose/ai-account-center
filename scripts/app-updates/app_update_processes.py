@@ -799,30 +799,18 @@ def sys_platform_linux():
     return sys.platform.startswith("linux")
 
 
-def desktop_arguments(context, platform):
-    """Only an existing data-directory flag is reapplied; never replay work arguments.
+def desktop_data_folder(context, platform):
+    """The data-directory value the app was given: (value, relative).
 
     The folder is the one Chromium takes, each argument trimmed of whitespace first: the last
     --user-data-dir before a "--" terminator, with any switch prefix the platform accepts, its value
     only after "=". A bare switch or an empty value is the default folder, whatever word follows it,
-    so nothing is replayed. A relative folder is the
-    app's own: it is resolved against the app's working directory, never this helper's, and dropped
-    when that directory is unknown.
+    so nothing is replayed. `relative` says the value names a folder inside the app's own working
+    directory, which only that process's captured cwd can resolve.
     """
     args = context.args[1:]
-    cwd = getattr(context, "cwd", None)
     windows = platform == "windows"
     prefixes = ("--", "-", "/") if windows else ("--", "-")
-
-    def absolute(value):
-        if not value:
-            return None
-        if pathlib.Path(value).is_absolute():
-            return value
-        if isinstance(cwd, str) and cwd and pathlib.Path(cwd).is_absolute():
-            return str(pathlib.Path(cwd) / value)
-        return None
-
     value = None
     for arg in args:
         # Chromium TrimWhitespaceASCII on every platform: space and 0x09-0x0D, never 0x1C-0x1F.
@@ -836,8 +824,26 @@ def desktop_arguments(context, platform):
                 value = rest if separator else ""
     # Chromium on Linux may rewrite argv0 to just its executable. Its existing
     # data directory is still supplied by the preserved process environment.
-    folder = absolute(value)
-    return ["--user-data-dir=" + folder] if folder else []
+    if not value:
+        return None, False
+    return value, not pathlib.Path(value).is_absolute()
+
+
+def desktop_arguments(context, platform):
+    """Only an existing data-directory flag is reapplied; never replay work arguments.
+
+    A relative folder is the app's own: it is resolved against the app's working
+    directory, never this helper's, and dropped when that directory is unknown.
+    """
+    value, relative = desktop_data_folder(context, platform)
+    if value is None:
+        return []
+    if relative:
+        cwd = getattr(context, "cwd", None)
+        if not isinstance(cwd, str) or not cwd or not pathlib.Path(cwd).is_absolute():
+            return []
+        value = str(pathlib.Path(cwd) / value)
+    return ["--user-data-dir=" + value]
 
 
 def terminate_desktops(install, contexts, grace=15, ready=None):
