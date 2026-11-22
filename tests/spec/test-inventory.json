@@ -1499,6 +1499,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/read_status_panels.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "crates/aac-status/src/read_status_trace.rs",
       "kind": "internal",
       "evidence": [],
@@ -2811,6 +2818,13 @@
     },
     {
       "file": "tests/unit/app-updates/app_update_lane_d_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_parity_test.py",
       "kind": "helper",
       "evidence": [
         "helper"
