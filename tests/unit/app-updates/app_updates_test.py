@@ -2789,44 +2789,6 @@ class WindowsTokenOwnerTests(unittest.TestCase):
             processes.windows_owned_pids([1])
 
 
-class LinuxProcessScanTests(unittest.TestCase):
-    @unittest.skipUnless(sys.platform.startswith('linux'), 'linux_processes reads /proc')
-    def test_start_time_is_stat_field_22_not_the_proc_inode_ctime(self):
-        # A /proc/<pid> inode gets its ctime on the first lookup (again after an
-        # eviction), so this fixture folder is created "now" while the real
-        # process started seconds after a fixture boot time.
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            proc = root / 'proc'
-            proc.mkdir()
-            (proc / 'stat').write_text('cpu  1 2 3\nbtime 1000000\n')
-            pid = proc / '4242'
-            pid.mkdir()
-            executable = root / 'codex'
-            executable.write_text('fixture')
-            (pid / 'exe').symlink_to(executable)
-            (pid / 'cmdline').write_bytes(b'/fixture/codex\x00--version\x00')
-            ticks = os.sysconf('SC_CLK_TCK')
-            starttime = 10 * ticks
-            # Fields 3..22 of /proc/<pid>/stat; the command name above has spaces
-            # and parentheses, so only the text after the last ')' may be split.
-            fields = ['S', '1', '4242', '4242', '0', '-1', '0', '0', '0', '0', '0', '0', '0', '0',
-                      '0', '20', '0', '1', '0', str(starttime)]
-            (pid / 'stat').write_text('4242 (odd (name)) %s 0 0 0 0\n' % ' '.join(fields))
-            inode_ctime = pid.stat().st_ctime
-            real = pathlib.Path
-
-            def fixture(value):
-                return proc if value == '/proc' else real(value)
-
-            with mock.patch.object(processes.pathlib, 'Path', side_effect=fixture):
-                table = processes.linux_processes()
-            self.assertEqual([item.pid for item in table], [4242])
-            self.assertEqual(table[0].identity, str(starttime))
-            self.assertEqual(table[0].started, 1000000 + starttime / ticks)
-            self.assertNotEqual(table[0].started, inode_ctime, 'the proc inode ctime was used')
-
-
 class _Pointer:
     """A fixture HTTP response for one official Claude Code channel pointer."""
     def __init__(self, body, url=None, status=200):

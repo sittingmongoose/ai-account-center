@@ -57,7 +57,6 @@ class Process:
     cwd: str = dataclasses.field(default=None, repr=False)
     env: dict = dataclasses.field(default_factory=dict, repr=False)
     session: int = None
-    started: float = dataclasses.field(default=None, repr=False)
 
 
 class ProcessTable(list):
@@ -70,31 +69,13 @@ class ProcessTable(list):
     lineage = None
 
 
-def linux_boot_time(path):
-    """Seconds since the epoch when this kernel booted, from /proc/stat's `btime`."""
-    try:
-        for line in path.read_text().splitlines():
-            if line.startswith("btime "):
-                return float(line.split()[1])
-    except (OSError, ValueError, IndexError):
-        pass
-    return None
-
-
 def linux_processes():
     values = []
-    proc = pathlib.Path("/proc")
-    boot = linux_boot_time(proc / "stat")
-    try:
-        ticks = os.sysconf("SC_CLK_TCK")
-    except (OSError, ValueError):
-        ticks = 0
-    for path in proc.iterdir():
+    for path in pathlib.Path("/proc").iterdir():
         if not path.name.isdigit():
             continue
         try:
-            info = path.stat()
-            if info.st_uid != os.getuid():
+            if path.stat().st_uid != os.getuid():
                 continue
             stat = (path / "stat").read_text()
             parts = stat[stat.rfind(")") + 2:].split()
@@ -105,10 +86,7 @@ def linux_processes():
             if len(raw) > 65536:
                 continue
             args = [item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item]
-            # Field 22 is starttime in clock ticks since boot. The /proc/<pid>
-            # inode's ctime is the first lookup after an eviction, not the start.
-            started = boot + int(parts[19]) / ticks if boot is not None and ticks > 0 else None
-            values.append(Process(int(path.name), int(parts[1]), os.getuid(), exe, parts[19], args, started=started))
+            values.append(Process(int(path.name), int(parts[1]), os.getuid(), exe, parts[19], args))
         except (OSError, ValueError, IndexError):
             continue
     return values
@@ -169,11 +147,7 @@ def mac_processes():
             continue
         exe = path.value.decode("utf-8", "surrogateescape")
         args = mac_arguments(pid) if pathlib.Path(exe).name.lower() in ("node", "bun") else []
-        try:
-            started = time.mktime(time.strptime(" ".join(parts[3].split()), "%a %b %d %H:%M:%S %Y"))
-        except ValueError:
-            started = None
-        values.append(Process(pid, ppid, uid, exe, parts[3], args, started=started))
+        values.append(Process(pid, ppid, uid, exe, parts[3], args))
     return values
 
 
@@ -266,16 +240,7 @@ $rows=@(); $lineage=New-Object Text.StringBuilder; foreach($p in Get-CimInstance
         values = ProcessTable()
         for row in [row for row in rows if int(row["pid"]) in owned][:2048]:
             args = windows_arguments(row.get("args") or "")
-            identity = row["identity"]
-            started = None
-            try:
-                ticks = int(identity)
-            except (TypeError, ValueError):
-                ticks = 0
-            if ticks > 0:
-                # Win32 FILETIME (100 ns since 1601-01-01) to unix seconds.
-                started = ticks / 10_000_000 - 11644473600
-            values.append(Process(int(row["pid"]), int(row["ppid"]), 0, row["exe"], identity, args, session=int(row["session"]), started=started))
+            values.append(Process(int(row["pid"]), int(row["ppid"]), 0, row["exe"], row["identity"], args, session=int(row["session"])))
         values.lineage = {}
         for entry in str(data.get("tree") or "").split(";")[:LINEAGE_LIMIT]:
             parts = entry.split(",")
