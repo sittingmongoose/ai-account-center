@@ -110,7 +110,7 @@
   "src/web-server/routes/account-lifecycle-routes.ts": "b632623eb2c4f30851fbed39060e7af3f3ff837eef27571c10b83594d78b8543",
   "src/web-server/routes/account-visibility-routes.ts": "d61f953e20a0ddab925b918d2e9e80e6618f26fead1b4a95423806bae93ec15a",
   "src/web-server/routes/auth-device-routes.ts": "64b8ee8ca35ad8f53e2bed618b8220c97fbe964941662958debf529a3e0d1f03",
-  "src/web-server/routes/auth-route-helpers.ts": "77d587d270e0fb9e1136135a8ba80a6052b3e98105714d72116e15d66ceb995a",
+  "src/web-server/routes/auth-route-helpers.ts": "e59da1320e57e2c2025ddaaf98868bc1ac215633f5689167b50bb30185c249ff",
   "src/web-server/routes/auth-routes.ts": "1c2edb170a542b36c6b6a23406dc7936bc5c1110959a3b2cd21db08f9991fac6",
   "src/web-server/routes/auth-session-routes.ts": "9087f7b4312dcf028faa52d4e278b33e469b7a82161bc1d95e7c34d60d01d71e",
   "src/web-server/routes/bar-routes.ts": "bdc16629846cc448521898aaac9ab7ff077899984873daadc4d94ab9dcb0fd5d",

@@ -289,6 +289,9 @@ describe('dashboard events', () => {
     closers.push(async () => socket.close());
     const closed = new Promise<number>((resolve) => socket.once('close', resolve));
     await new Promise((resolve) => setTimeout(resolve, 20));
+    // Even an everyone event is neither sent to nor counted for the socket
+    // that this broadcast just closed (Low 1 of the lane review).
+    expect(broadcastDashboardEvent({ type: 'accounts-changed' })).toBe(0);
     expect(broadcastDashboardEvent({ type: 'reset-claims-changed', id: 'x' })).toBe(0);
     expect(await closed).toBe(4001);
     expect(messages).toHaveLength(0);

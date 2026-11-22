@@ -261,6 +261,9 @@ export function broadcastDashboardEvent(source: EventSource): number {
         event = null;
       }
       if (!event) continue;
+      // clientView may have just closed an expired session socket; neither
+      // send to nor count it (the send would be dropped, but counted).
+      if (client.readyState !== WebSocket.OPEN) continue;
       try {
         client.send(JSON.stringify(event));
         sent += 1;

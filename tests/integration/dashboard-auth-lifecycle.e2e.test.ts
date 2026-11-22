@@ -1321,4 +1321,35 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     expect(received).toHaveLength(0);
     expect(socket.readyState).toBe(WebSocket.CLOSED);
   });
+
+  it('case 19: a session rotation closes the old session /ws socket, so logout and later hints miss nothing', async () => {
+    const ctx = await startE2E();
+    const jar = await setupFresh(ctx);
+    // The dashboard opens /ws on load with the browser cookie.
+    const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`, {
+      headers: { Cookie: jar.cookie, Origin: ctx.base },
+    });
+    const received: string[] = [];
+    socket.on('message', (data) => received.push(String(data)));
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+
+    // A second sign-in with the same cookie rotates the session id (same
+    // epoch, so the epoch close does not apply); the browser cookie moves to
+    // the new session and the old one is destroyed.
+    const rotate = await jar.send('POST', '/api/auth/login', {
+      username: USERNAME,
+      password: PASSWORD,
+    });
+    expect(rotate.status).toBe(200);
+    const logout = await jar.send('POST', '/api/auth/logout', {});
+    expect(logout.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    broadcastDashboardEvent({ type: 'reset-claims-changed', id: 'x' });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(received).toHaveLength(0);
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+  });
 });

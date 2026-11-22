@@ -16,7 +16,7 @@ import { AuthError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { credentialTransport, isSecureTransport } from '../middleware/secure-transport';
-import { closeStaleSessionClients } from '../dashboard-events';
+import { closeSessionClients, closeStaleSessionClients } from '../dashboard-events';
 import {
   ensureSessionEpoch,
   forgetSession,
@@ -330,6 +330,10 @@ async function beginSignedInSession(
     const previous = req.sessionID;
     await sessionCall((done) => req.session.regenerate(done));
     forgetSession(previous);
+    // The destroyed session's /ws sockets close with it: without this, a
+    // rotation in the same epoch leaves them bound to the old session id,
+    // which a later logout (on the new id) cannot reach.
+    if (previous) closeSessionClients(previous);
   } else {
     // The session middleware set aside a plain-HTTP session behind the LAN
     // HTTPS proxy: start a fresh one and leave the stored one alone.
