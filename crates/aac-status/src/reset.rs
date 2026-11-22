@@ -392,11 +392,13 @@ impl Store {
         Ok(value)
     }
 
-    /// Capture the saved login first, then allocate its order in one immediate
-    /// transaction that opens only after the callback returns. The callback must do
-    /// only bounded credential capture, never provider I/O, and must not open its own
-    /// store. A stalled helper delays only its own route, never the store's other
-    /// writers. Process exit or unwinding still rolls the transaction back.
+    /// Capture the saved login first, outside any transaction, then allocate its
+    /// read order and bind the identity in one immediate transaction that opens
+    /// only after the callback returns. The callback must do only bounded
+    /// credential capture, never provider I/O, and must not open its own store.
+    /// The helper holds no store lock while it runs, so a stalled capture delays
+    /// neither the store's other writers nor other captures on the same route.
+    /// Process exit or unwinding still rolls an open transaction back.
     pub fn capture_read<T>(&mut self, account: &str, capture: impl FnOnce() -> Result<T>) -> Result<(T, ReadTicket)> {
         self.capture_inner(account, || Ok((capture()?, None)))
     }

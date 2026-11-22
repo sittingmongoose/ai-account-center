@@ -97,13 +97,18 @@ Both private provider readers recheck the saved login after their read finishes
 and immediately before accepting its snapshot. A changed or removed login makes
 the read unavailable. Its observation time belongs to the identity verification
 before the usage RPC, so a slow response cannot acquire a newer observation time.
-Each native reader captures the saved login identity/hash and allocates its
-read ticket inside one SQLite immediate transaction. This short section orders
-identity observations across workers and processes; it commits before provider
-I/O. Codex captures `auth.json` locally. Claude's credential-host helper captures
-saved credentials without OAuth, then pins its separate provider read to that
-account, organization and hash. Capture failures roll back; process exit releases
-the SQLite lock. The bounded Claude capture helper cannot retain it indefinitely.
+Each native reader captures the saved login identity/hash outside any transaction,
+then allocates its read ticket and binds the identity in one SQLite immediate
+transaction that opens only after the capture returns. Ticket order follows commit
+order across workers and processes, and the transaction commits before provider
+I/O. A capture whose route binding changed while it ran is refused instead of
+replacing the newer binding. Codex captures `auth.json` locally. Claude's
+credential-host helper captures saved credentials without OAuth, then pins its
+separate provider read to that account, organization and hash. A failed capture
+allocates no ticket and opens no transaction. The bounded helper never holds the
+store's write lock, so a stalled capture delays neither unrelated writers nor
+other captures on its own route; process exit or unwinding rolls back an open
+commit transaction.
 The private snapshot carries a capture-version marker, decimal sequence and route
 hash; provider-returned metadata cannot override them. A captured canonical
 identity change updates the route binding in this same transaction, even before
