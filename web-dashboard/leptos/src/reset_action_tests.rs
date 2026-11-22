@@ -790,3 +790,56 @@ fn a_live_owner_still_receives_and_shows_the_receipt() {
         assert!(said.text.contains("Reset applied"), "{}", said.text);
     });
 }
+
+/// Spec resets-checking-flag: the busy state belongs to the check's own identity, not the page.
+/// Retiring A's ticket must never set or clear B's, and a stale answer must not clear a newer check.
+#[test]
+fn a_check_ticket_is_scoped_to_its_identity_and_retires_only_itself() {
+    // resets-Astra-L1 .. resets-Sol-7-L2: one shared boolean kept every account busy until reload.
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, canonical) = start(&t);
+        let a = rc.begin_check(&canonical);
+        assert_eq!(rc.check_ticket(), Some((canonical.clone(), a)));
+        // Navigation to B: A's live ticket must not make B busy.
+        rc.show("codex:other", "codex", false);
+        assert_eq!(rc.check_ticket(), None);
+        // A's answer lands after navigation and retires only A's ticket.
+        rc.retire_check(&canonical, a);
+        assert_eq!(rc.check_ticket(), None);
+        assert!(rc.checking.get_untracked().is_none());
+        // B's own check stays live when a stale A answer arrives.
+        let b = rc.begin_check("codex:other");
+        assert_eq!(rc.check_ticket(), Some(("codex:other".into(), b)));
+        rc.retire_check(&canonical, a);
+        assert_eq!(rc.check_ticket(), Some(("codex:other".into(), b)));
+        // Back on A, a newer check is not cleared by the old ticket either.
+        rc.show(ROUTE, "codex", false);
+        let a2 = rc.begin_check(&canonical);
+        assert!(a2 > a, "check ids are monotonic");
+        rc.retire_check(&canonical, a);
+        assert_eq!(rc.check_ticket(), Some((canonical.clone(), a2)));
+        rc.retire_check(&canonical, a2);
+        assert_eq!(rc.check_ticket(), None);
+    });
+}
+
+#[test]
+fn a_check_ticket_retiring_after_owner_cleanup_is_dropped_not_a_panic() {
+    // The owner-liveness guarantee extends to the ticket: a late completion after sign-out
+    // or frame disposal must not touch a disposed signal.
+    let t = trace(false);
+    let (rc, canonical, id) = Owner::new().with(|| {
+        let (rc, canonical) = start(&t);
+        let id = rc.begin_check(&canonical);
+        (rc, canonical, id)
+    });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.retire_check(&canonical, id);
+    }));
+    assert!(
+        outcome.is_ok(),
+        "a disposed owner must not be touched by a late ticket retirement"
+    );
+    assert!(rc.checking.try_get_untracked().is_none());
+}

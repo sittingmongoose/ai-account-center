@@ -21,6 +21,8 @@ const CLAUDE = account('claude:one', 'claude', 'one.claude@example.invalid', [
 	grantWindow(3, 'used', 0, 118, ['seven_day_overage_included']),
 	{ key: 'extra_usage', label: 'Extra usage', kind: 'extra_usage', enabled: false },
 ], { plan: 'pro', capabilities: { claudeProfileId: 'one', claudePlatforms: ['windows'] } });
+// A second Claude account with its own unresolved claim: Check again busy state must stay with its account.
+const CLAUDE_TWO = account('claude:two', 'claude', 'two.claude@example.invalid', CLAUDE.windows, { plan: 'pro', capabilities: { claudeProfileId: 'two', claudePlatforms: ['windows'] } });
 const ZAI = account('zai:z1', 'zai', 'zai.coding.plan@example.invalid', [
 	quota('five_hour', 'Five-hour usage', 27, 300, 120),
 	{ key: 'reset-packs-5h', label: '5-hour reset packs', kind: 'balance', unit: 'packs', remaining: 2, used: 1, limit: 3, expiresAt: at(3 * DAY) },
@@ -55,17 +57,19 @@ const inventory = (spent = false, pending = null) => ({
 });
 
 /** The reset routes, answered in the page. `claim` picks the claim's answer; every request is recorded. */
-function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_000 } = {}) {
+function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_000, two = false, checkGate = null } = {}) {
 	const server = fakeServer();
 	const r = { spent: false, pending: null, claim };
-	const dashboard = emptyWeekly ? {
+	const accounts = two ? [...DASHBOARD.accounts, CLAUDE_TWO] : DASHBOARD.accounts;
+	const dashboard = {
 		...DASHBOARD,
-		accounts: DASHBOARD.accounts.map((account) => account === CLAUDE ? {
+		accounts: emptyWeekly ? accounts.map((account) => account === CLAUDE ? {
 			...account,
 			windows: account.windows.map((window) => window.key === 'seven_day'
 				? { ...window, usedPercent: 0, remainingPercent: 100 } : window),
-		} : account),
-	} : DASHBOARD;
+		} : account) : accounts,
+		providers: DASHBOARD.providers.map((p) => (two && p.id === 'claude' ? { ...p, accountCount: 2 } : p)),
+	};
 	const canonicalAccountKey = KEY('7');
 	const confirmationKey = KEY('2');
 	let expiresAtMs = null;
@@ -95,7 +99,7 @@ function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_0
 		['GET', /^\/api\/accounts\/dashboard$/, () => json(200, dashboard)],
 		['GET', /^\/api\/accounts\/registry$/, () => json(200, {
 			providers: [], jobs: [], trash: [],
-			accounts: DASHBOARD.accounts.map((a) => ({ id: a.id, provider: a.provider, actions: { remove: true, signInAgain: true, replaceKey: true, recheck: true }, removeRefusal: null })),
+			accounts: dashboard.accounts.map((a) => ({ id: a.id, provider: a.provider, actions: { remove: true, signInAgain: true, replaceKey: true, recheck: true }, removeRefusal: null })),
 		})],
 		['GET', /^\/api\/accounts\/preferences$/, () => json(200, {})],
 		['GET', /^\/api\/(?:(?:antigravity|codex)\/profiles|claude\/desktop-profiles)$/, () => json(200, { profiles: [] })],
@@ -128,7 +132,25 @@ function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_0
 			}
 			return json(200, receipt(r.claim === 'unconfirmed'));
 		}],
-		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/check$/, () => json(200, receipt(false, 3))],
+		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/check$/, async () => {
+			if (checkGate) await checkGate;
+			return json(200, receipt(false, 3));
+		}],
+		...(two ? [[
+			'GET', /^\/api\/accounts\/claude%3Atwo\/reset-claims$/, () => json(200, {
+				...inventory(false, KEY('9')),
+				canonicalAccountKey: KEY('8'), bindingRevision: '1',
+				evidence: {
+					canonicalAccountKey: KEY('8'), revision: '1',
+					latestAttempt: {
+						attemptKey: KEY('9'), attemptOrder: '1', pending: true, providerSuccess: true,
+						outcome: 'claimed-unconfirmed', verification: 'unconfirmed', windows: [],
+					},
+					pendingAttempts: [{ attemptKey: KEY('9'), attemptOrder: '1' }],
+					claimTokens: { untilMs: null, tokenKeys: [] },
+				},
+			}),
+		]] : []),
 	);
 	const expireToken = () => {
 		expiresAtMs = null;
@@ -148,7 +170,7 @@ async function serveResets(t, server) {
 				let body = {};
 				try { body = route.request().postData() ? JSON.parse(route.request().postData()) : {}; } catch {}
 				server.s.requests.push({ method, path: url.pathname, body });
-				return route.fulfill(answer(body, m));
+				return route.fulfill(await answer(body, m));
 			}
 		}
 		server.s.requests.push({ method: route.request().method(), path: url.pathname, body: null, aborted: true });
@@ -334,5 +356,44 @@ export const tests = {
 				await t.check(`${pose.name}: nothing was claimed`, claims(server).length === 0);
 			});
 		}
+	},
+
+	async 'resets: Check again busy state stays with its account across navigation'(t) {
+		// resets-Astra-L1 .. resets-Sol-7-L2: one shared checking flag disabled every account's
+		// Check again until reload whenever the answer landed after navigation or a dialog close.
+		let release;
+		const checkGate = new Promise((resolve) => { release = resolve; });
+		const { server } = resetServer({ claim: 'unconfirmed', two: true, checkGate });
+		await open(t, server);
+		await openDetails(t, 'claude:one');
+		await t.until('usable', () => !!document.querySelector('.details [data-probe="reset-use"]'), null, { timeout: 10000 });
+		await t.page.click('.details [data-probe="reset-use"]');
+		await t.until('the dialog shows', () => !!document.querySelector('[data-probe="reset-dialog-use"]'), null, { timeout: 5000 });
+		await t.page.click('[data-probe="reset-dialog-use"]');
+		await t.until('the unconfirmed words', () => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').includes('Reset was applied, but AAC could not confirm the new limits. Check again.'), null, { timeout: 5000 });
+		// Start Check again on A with its read held, then move to B before the answer.
+		await t.page.click('.details [data-probe="resets-check"]');
+		await t.until('A shows Checking while its read is held', () => document.querySelector('.details [data-probe="resets-check"]')?.textContent === 'Checking\u2026', null, { timeout: 5000 });
+		await t.check('A\'s own Check again is disabled while its read is held', await t.page.evaluate(() => document.querySelector('.details [data-probe="resets-check"]').disabled));
+		await t.page.keyboard.press('Escape');
+		await openDetails(t, 'claude:two');
+		await t.until('B offers its own Check again', () => !!document.querySelector('.details [data-probe="resets-check"]'), null, { timeout: 10000 });
+		const b = t.page.locator('.details [data-probe="resets-check"]');
+		await t.check('B\'s Check again is enabled while A\'s read is held', !(await b.isDisabled()), String(await b.isDisabled()));
+		await t.check('B\'s button does not say Checking', (await b.textContent()) === 'Check again', await b.textContent());
+		// Release the read: A's answer lands while B is on show, and retires only A's ticket.
+		release();
+		await t.page.keyboard.press('Escape');
+		await openDetails(t, 'claude:one');
+		await t.until('A shows the confirmed answer', (words) => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').includes(words), PARTIAL, { timeout: 5000 });
+		const a = t.page.locator('.details [data-probe="resets-check"]');
+		await t.check('A shows the answer with no stuck Checking button', (await a.count()) === 0 || !(await a.isDisabled()), `count=${await a.count()}`);
+		await t.page.keyboard.press('Escape');
+		await openDetails(t, 'claude:two');
+		await t.until('B still offers Check again', () => !!document.querySelector('.details [data-probe="resets-check"]'), null, { timeout: 10000 });
+		await t.check('B\'s Check again is still enabled after A settled', !(await b.isDisabled()), String(await b.isDisabled()));
+		await t.check('Check again sent one check and never another claim', claims(server).length === 1
+			&& resetRequests(server).filter((q) => q.path.endsWith('/check')).length === 1, JSON.stringify(resetRequests(server)));
+		await t.shot('resets-check-busy-scope', 'B\'s Check again enabled while A\'s check was in flight and after it settled');
 	},
 };
