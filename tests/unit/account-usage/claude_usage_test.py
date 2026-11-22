@@ -656,6 +656,54 @@ class ResetWindowEvidenceTests(unittest.TestCase):
                                              "limits": [WindowTests().fable()] * 65}), {"five_hour": 101})
 
 
+class ScopeScreeningTests(unittest.TestCase):
+    def test_scoped_session_is_not_the_global_five_hour(self):
+        entry = {"kind": "session", "group": "session", "percent": 42,
+                 "scope": {"model": {"display_name": "Fable"}}}
+        self.assertIsNone(usage._limits_window(entry, 42))
+
+    def test_extra_scope_model_keys_are_not_claimable(self):
+        entry = {"kind": "weekly_scoped", "group": "weekly", "percent": 80,
+                 "scope": {"model": {"display_name": "Fable", "variant": "code"}}}
+        self.assertIsNone(usage._limits_window(entry, 80))
+        self.assertEqual(usage.reset_windows({"limits": [entry]}), {})
+
+    def test_malformed_scope_model_id_is_not_claimable(self):
+        entry = {"kind": "weekly_scoped", "group": "weekly", "percent": 80,
+                 "scope": {"model": {"display_name": "Fable", "id": 1}}}
+        self.assertIsNone(usage._limits_window(entry, 80))
+        self.assertEqual(usage.reset_windows({"limits": [entry]}), {})
+
+    def test_unscoped_session_still_maps_to_five_hour(self):
+        entry = {"kind": "session", "group": "session", "percent": 42}
+        window = usage._limits_window(entry, 42)
+        self.assertEqual(window["key"], "five_hour")
+        self.assertEqual(window["label"], "Five-hour usage")
+        self.assertEqual(usage.reset_windows({"limits": [entry]}), {"five_hour": 42})
+
+    def test_display_name_only_fable_weekly_stays_claimable(self):
+        entry = {"kind": "weekly_scoped", "group": "weekly", "percent": 80,
+                 "scope": {"model": {"display_name": "Fable"}}}
+        window = usage._limits_window(entry, 80)
+        self.assertEqual(window["key"], "seven_day_fable")
+        self.assertEqual(window["label"], "Weekly Fable usage")
+        self.assertEqual(usage.reset_windows({"limits": [entry]}),
+                         {"seven_day_overage_included": 80})
+
+    def test_model_id_string_or_null_is_accepted_and_never_labels(self):
+        for model_id in (None, "claude-fable"):
+            with self.subTest(model_id=model_id):
+                entry = {"kind": "weekly_scoped", "group": "weekly", "percent": 80,
+                         "scope": {"model": {"id": model_id, "display_name": "Fable"}}}
+                window = usage._limits_window(entry, 80)
+                self.assertEqual(window["key"], "seven_day_fable")
+                self.assertEqual(window["label"], "Weekly Fable usage")
+                self.assertNotIn("claude-fable", window["key"])
+                self.assertNotIn("claude-fable", window["label"])
+                self.assertEqual(usage.reset_windows({"limits": [entry]}),
+                                 {"seven_day_overage_included": 80})
+
+
 class WindowTests(unittest.TestCase):
     def fable(self, **overrides):
         return {"kind": "weekly_scoped", "group": "weekly", "percent": 0,

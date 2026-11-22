@@ -471,6 +471,19 @@ def _is_weekly_scoped_allowed(kind, group):
     return isinstance(kind, str) and re.fullmatch(r"[a-z0-9_]+", kind) is not None
 
 
+def _model_scope_ok(scope):
+    """Only id and display_name may appear on a model object; extra keys or a
+    non-string id cannot name or prove a window."""
+    model = scope.get("model") if isinstance(scope, dict) else None
+    if model is None:
+        return True
+    if not isinstance(model, dict):
+        return False
+    if set(model) - {"id", "display_name"}:
+        return False
+    return model.get("id") is None or isinstance(model.get("id"), str)
+
+
 def _limits_window(entry, used):
     """One self-describing limits[] entry as a window, or None when unsafe.
 
@@ -492,11 +505,13 @@ def _limits_window(entry, used):
             "windowMinutes": minutes, "used": None, "limit": None, "unit": None,
         }
 
+    scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else None
+    if not _model_scope_ok(scope):
+        return None
     if kind == "session":
-        return window("five_hour", "Five-hour usage", 300)
+        return window("five_hour", "Five-hour usage", 300) if _reset_unscoped(scope) else None
     if kind == "weekly_all":
         return window("seven_day", "Weekly usage", 10080)
-    scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else None
     model_slug, display = _scoped_model(scope)
     surface_slug, surface_words = _scoped_surface(scope)
     # is_active selects the provider's current limiting bucket. False is still
@@ -1683,7 +1698,8 @@ def _reset_limit_key(entry):
     if (kind == "weekly_scoped" and group == "weekly" and isinstance(scope, dict)
             and set(scope) <= {"model", "surface"} and scope.get("surface") is None
             and isinstance(scope.get("model"), dict)
-            and scope["model"].get("display_name") == "Fable"):
+            and scope["model"].get("display_name") == "Fable"
+            and _model_scope_ok(scope)):
         return "seven_day_overage_included"
     return None
 
