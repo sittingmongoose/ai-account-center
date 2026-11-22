@@ -37,6 +37,8 @@ TTY_DEVICE = re.compile(r"/dev/(?:pts/[0-9]+|tty[A-Za-z0-9]*|console)")
 LINEAGE_LIMIT = 16384
 # Console attachment belongs to this process, not to an update worker thread.
 WINDOWS_CONSOLE_LOCK = threading.Lock()
+# DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, spelled out so fixtures run on any OS.
+WINDOWS_DETACHED = 0x00000008 | 0x00000200
 
 
 class WindowsFileTime(ctypes.Structure):
@@ -823,9 +825,8 @@ def desktop_arguments(context, platform):
 
     value = None
     for arg in args:
-        # As base::CommandLine does: each argument is trimmed first, of any whitespace on Windows
-        # and of ASCII whitespace (0x09-0x0D and space) elsewhere.
-        arg = arg.strip() if windows else arg.strip(" \t\n\v\f\r")
+        # Chromium TrimWhitespaceASCII on every platform: space and 0x09-0x0D, never 0x1C-0x1F.
+        arg = arg.strip(" \t\n\v\f\r")
         if arg == "--":
             break
         prefix = next((item for item in prefixes if arg.startswith(item) and len(arg) > len(item)), None)
@@ -898,10 +899,10 @@ def restart_desktops(install, contexts):
         args = desktop_arguments(item, install.platform)
         if install.platform == "mac":
             command(["/usr/bin/open", "-n", "-a", install.path, "--args", *args], timeout=15, stderr_tail=False,
-                    env=gui_launch_environment(), preserve_env=True)
+                    env=gui_launch_environment(item.env), preserve_env=True)
         elif install.platform == "windows":
             subprocess.Popen([str(install.path), *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+                             env=environment(item.env), creationflags=WINDOWS_DETACHED)
         elif in_service_cgroup():
             # A plain start would stay in the dashboard's cgroup: the app and all it runs would
             # count against the dashboard's memory limit and outlive its restarts there.

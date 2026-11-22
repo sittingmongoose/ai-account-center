@@ -1044,13 +1044,14 @@ def ps_quote(value):
 def version_text(value):
     if not isinstance(value, str) or len(value) > 65536:
         return None
-    match = re.search(r"(?<!\d)(\d+\.\d+(?:\.[0-9]+){0,3}(?:-[A-Za-z0-9.]+)?)(?![0-9])", value)
+    match = re.search(r"(?<!\d)(\d+\.\d+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.+-]+)?)(?![0-9])", value)
     return match.group(1) if match else None
 
 
 def marker_names_version(marker_version, installed):
     """Whether a pending-restart marker is for this install. The Codex bridge writes the numeric
-    part alone (0.50.0), where version_text keeps a prerelease (0.50.0-alpha.1)."""
+    part alone (0.50.0); version_text keeps a prerelease or build metadata the way the bridge's
+    fullVersion does (0.50.0-alpha-1, 0.50.0+build.1)."""
     def numeric(value):
         match = re.search(r"\d+\.\d+(?:\.\d+){0,3}", value) if isinstance(value, str) else None
         return match.group(0) if match else None

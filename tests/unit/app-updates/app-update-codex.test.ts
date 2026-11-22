@@ -595,6 +595,40 @@ describe('Restart obligations', () => {
       expect(result.status).toBe(status);
     });
 
+    it('reports the full prerelease on the row, not the numeric core', async () => {
+      const value = fixture();
+      let installed = '0.50.0-alpha.1';
+      const result = await bridge.execute(
+        cli(value, {
+          readVersion: async () => `codex-cli ${installed}`,
+          update: async () => {
+            installed = '0.50.0-alpha.2';
+          },
+          runtime: () => runtime({ daemon: true }, { daemon: true }),
+        })
+      );
+      expect(result.previousVersion).toBe('0.50.0-alpha.1');
+      expect(result.version).toBe('0.50.0-alpha.2');
+      expect(result.status).toBe('updated');
+    });
+
+    it('says version_unknown when the post-install probe throws', async () => {
+      const value = fixture();
+      let probes = 0;
+      const result = await bridge.execute(
+        cli(value, {
+          readVersion: async () => {
+            if (probes++) throw new Error('probe failed');
+            return 'codex-cli 1.0.0';
+          },
+          runtime: () => runtime({ daemon: true }, { daemon: true }),
+        })
+      );
+      expect(result.version).toBeNull();
+      expect(result.messageCode).toBe('version_unknown');
+      expect(result.previousVersion).toBe('1.0.0');
+    });
+
     it('carries nothing over from a marker an older version left', async () => {
       const value = fixture();
       value.deps.restoreMarker(

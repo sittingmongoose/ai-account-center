@@ -30,8 +30,9 @@ const output = { appId: operation === 'desktop' ? 'codex-desktop' : 'codex-cli',
   messageCode: 'update_failed', updateAttempted: false, restartedProcesses: 0, forcedStops: 0 };
 const cleanEnvironment = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !/^CCS_SESSION_SECRET$|^CCS_DASHBOARD_|_PASSWORD_HASH$/i.test(key)));
 const version = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d+){0,3}/)?.[0] ?? null : null;
-// The whole version, a prerelease or build included: what decides whether an install changed anything,
-// as the Python helper compares it. The numeric part (version()) is for the row and marker matching.
+// The whole version, a prerelease or build metadata included: what the row shows and what decides
+// whether an install changed anything, as the Python helper compares it. The numeric part
+// (version()) is for marker matching and candidate comparisons.
 const fullVersion = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.+-]+)?/)?.[0] ?? null : null;
 // A process in a systemd user service's cgroup (the dashboard) charges whatever it starts to that
 // service: a relaunched Codex and everything it runs would count against the dashboard's MemoryMax,
@@ -136,14 +137,17 @@ function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'u
  * whether any), with no path or profile. `version` is what was installed when it was written, and
  * `target` the version a desktop install was about to put in place. The CLI keeps no marker.
  */
-const markerMatches = (marker, installed) => Boolean(installed) && [marker?.version, marker?.target].some((item) => version(item) === installed);
+const markerMatches = (marker, installed) => {
+  const want = version(installed);
+  return Boolean(want) && [marker?.version, marker?.target].some((item) => version(item) === want);
+};
 function writeMarker(text, file = markerFile()) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = file + '.' + process.pid + '.tmp';
   fs.writeFileSync(temporary, text, { mode: 0o600 });
   fs.renameSync(temporary, file);
 }
-function markPending(closed = {}) { writeMarker(JSON.stringify({ version: output.version, ...closed })); }
+function markPending(closed = {}) { writeMarker(JSON.stringify({ version: version(output.version), ...closed })); }
 // An older runtime can't say what it closed, so it is taken to have closed a daemon and a desktop.
 const UNKNOWN_PLAN = { daemon: true, desktops: 1 };
 const counted = (plan) => ({ daemon: plan.daemon === true,
@@ -196,11 +200,23 @@ async function execute(deps) {
     if (desktops > 0) deps.mark({ desktop: true, desktops, ...(withTarget && target ? { target } : {}) });
     else deps.clear();
   };
+  const takeInstalled = async () => {
+    try {
+      const read = await deps.readVersion();
+      if (!version(read)) { output.version = null; output.messageCode = 'version_unknown'; return false; }
+      output.version = fullNow = fullVersion(read);
+      return true;
+    } catch {
+      output.version = null;
+      output.messageCode = 'version_unknown';
+      return false;
+    }
+  };
   try {
     const first = await deps.readVersion();
-    output.previousVersion = output.version = version(first);
-    fullPrevious = fullNow = fullVersion(first);
-    if (!output.version) { output.messageCode = 'version_unknown'; return output; }
+    output.previousVersion = output.version = fullVersion(first);
+    fullPrevious = fullNow = output.version;
+    if (!version(first)) { output.version = null; output.messageCode = 'version_unknown'; return output; }
     if (mode === 'desktop') {
       // A desktop marker from before these fields counts as one desktop when it is for this install.
       const marker = deps.marked();
@@ -211,11 +227,8 @@ async function execute(deps) {
       updating = true;
       await deps.update();
       updating = false;
-      const read = await deps.readVersion();
-      output.version = version(read);
-      fullNow = fullVersion(read);
-      if (!output.version) { output.messageCode = 'version_unknown'; return output; }
-      if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
+      if (!await takeInstalled()) return output;
+      if (expected && version(output.version) !== version(expected)) throw new Error('Candidate not installed.');
       if (!changed()) { output.status = 'current'; output.messageCode = 'current'; return output; }
     }
     // A desktop run records what stop() is about to close under its lock, before it signals anything,
@@ -236,10 +249,8 @@ async function execute(deps) {
       updating = true;
       if (!restartOnly) await deps.update();
       updating = false;
-      const read = await deps.readVersion();
-      output.version = version(read);
-      fullNow = fullVersion(read);
-      if (!output.version || (!restartOnly && !changed()) || (expected && output.version !== version(expected))) throw new Error('Candidate not installed.');
+      if (!await takeInstalled()) throw new Error('version_unknown');
+      if ((!restartOnly && !changed()) || (expected && version(output.version) !== version(expected))) throw new Error('Candidate not installed.');
       installed = true;
       record(prior + closed.desktops);
     }
@@ -274,8 +285,9 @@ async function execute(deps) {
     if (updating) {
       try {
         const read = await deps.readVersion();
-        if (version(read)) { output.version = version(read); fullNow = fullVersion(read); }
-      } catch { /* The version stays as it was read before the install. */ }
+        if (version(read)) { output.version = fullVersion(read); fullNow = output.version; }
+        else { output.version = null; output.messageCode = 'version_unknown'; }
+      } catch { output.version = null; output.messageCode = 'version_unknown'; }
     }
     if (stopped) {
       try { await runtime.start(); } catch { /* Reported below. */ }
@@ -297,6 +309,8 @@ async function execute(deps) {
     if (busy) {
       // Nothing was stopped. A CLI package may already be new; its daemon restarts on a later click.
       output.status = 'action_required'; output.messageCode = 'codex_busy';
+    } else if (output.messageCode === 'version_unknown' && output.version == null) {
+      output.status = 'failed';
     } else if (mode === 'cli') {
       // Installed but not restarted, or not installed: either way the old daemon keeps running.
       const restartPhase = changed() && (stopFailed || stopped || closed !== null);
@@ -386,5 +400,5 @@ async function main() {
     return await execute(bridgeDeps(createCodexActivationRuntime));
   } finally { await release(); }
 }
-module.exports = { bridgeDeps, cgroupUnit, createUpdateRuntime, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
+module.exports = { bridgeDeps, cgroupUnit, createUpdateRuntime, execute, fullVersion, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

@@ -99,6 +99,91 @@ fn replies_map_to_honest_causes() {
     );
 }
 
+#[test]
+fn windows_task_missing_is_an_honest_sync_reason() {
+    assert_eq!(
+        interpret(&output(
+            0,
+            "{\"ok\":false,\"reason\":\"windows_task_missing\"}\n"
+        )),
+        Err(SyncError::Failed {
+            reason: "windows_task_missing",
+            cause: "unknown",
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn windows_sync_registers_the_ccs_app_updates_task_when_missing() {
+    let dir = tempfile::tempdir().expect("fixture");
+    let harness = r#"
+import pathlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+registers = []
+
+class Done:
+    def __init__(self, code=0, stdout=''):
+        self.returncode = code
+        self.stdout = stdout
+        self.stderr = ''
+
+def run(args, **kwargs):
+    script = args[-1] if args else ''
+    if args and args[0] == 'powershell.exe' and 'Register-ScheduledTask' in script:
+        registers.append(script)
+        return Done(0)
+    if args and args[0] == 'powershell.exe' and 'Get-ScheduledTask' in script:
+        return Done(1)
+    return Done(0)
+
+subprocess.run = run
+subprocess.check_output = lambda args, **kwargs: 'S-1-5-21-1-2-3-1001'
+source = sys.stdin.read().removesuffix('\nmain()\n')
+namespace = {}
+exec(source, namespace)
+namespace['capable'] = lambda script, platform: True
+data = b'# new helper\n'
+result = namespace['publish'](root, 'windows', {'app_updates.py': namespace['digest'](data)},
+                              {'app_updates.py': data})
+print('registers=%d' % len(registers))
+print('ok=%s' % result.get('ok'))
+print('row=%s' % ('helper_sync_failed' if not result.get('ok') else 'updated'))
+"#;
+    let mut child = std::process::Command::new("/usr/bin/python3")
+        .args(["-B", "-c", harness])
+        .arg(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run windows task fixture");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("helper stdin")
+        .write_all(SCRIPT.as_bytes())
+        .expect("helper script");
+    let result = child.wait_with_output().expect("helper task result");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "stdout={stdout} stderr={stderr}");
+    assert!(
+        stdout.contains("registers=1"),
+        "expected one registration, got {stdout}"
+    );
+    assert!(
+        stdout.contains("ok=True"),
+        "sync must succeed so the first update row is not helper_sync_failed: {stdout}"
+    );
+    assert!(
+        stdout.contains("row=updated"),
+        "first update row must not be helper_sync_failed: {stdout}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn windows_flat_helper_backup_gets_access_before_publication() {
@@ -115,6 +200,12 @@ def check_output(args, **kwargs):
     return 'S-1-5-21-1-2-3-1001'
 
 def run(args, **kwargs):
+    if args[0] == 'powershell.exe':
+        class Done:
+            returncode = 0
+            stdout = ''
+            stderr = ''
+        return Done()
     assert args[0] == 'icacls.exe'
     folder = pathlib.Path(args[1])
     assert launcher.read_bytes() == b'# flat helper\n'

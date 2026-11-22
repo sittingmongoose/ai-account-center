@@ -16,6 +16,24 @@ LIMIT = 16 * 1024 * 1024
 GENERATION = re.compile(r'helpers-[a-f0-9]{32}')
 FORMAT = '# aac-helpers-format: 2'
 HIDDEN = {'creationflags': 0x08000000} if os.name == 'nt' else {}
+# Same InteractiveToken/Limited hidden task as scripts/app-updates/install-windows-task.ps1.
+# The sync script is the only file the Windows host runs before helpers exist, so the body lives here.
+WINDOWS_TASK_REGISTER = (
+    "$ErrorActionPreference='Stop';"
+    "$helper=Join-Path $HOME '.ccs\\app-updates\\app_updates.py';"
+    "if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'Updater helper is not deployed.' };"
+    "$python=(Get-Command python.exe -ErrorAction Stop).Source;"
+    "$pythonw=Join-Path (Split-Path -Parent $python) 'pythonw.exe';"
+    "if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) { throw 'pythonw.exe was not found' };"
+    "$arguments='\"'+$helper+'\" --apply --platform windows --task-child';"
+    "$action=New-ScheduledTaskAction -Execute $pythonw -Argument $arguments;"
+    "$principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) "
+    "-LogonType Interactive -RunLevel Limited;"
+    "$settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 35) "
+    "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -Hidden;"
+    "Register-ScheduledTask -TaskName 'CCS App Updates' -Action $action -Principal $principal "
+    "-Settings $settings -Force | Out-Null"
+)
 
 
 class Refused(Exception):
@@ -91,6 +109,23 @@ def capable(script, platform):
         return False
 
 
+def run_powershell(script):
+    return subprocess.run(
+        ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=30, **HIDDEN)
+
+
+def ensure_windows_task():
+    """Register CCS App Updates when a Windows host has helpers but no task."""
+    present = run_powershell("Get-ScheduledTask -TaskName 'CCS App Updates' -ErrorAction Stop")
+    if present.returncode == 0:
+        return
+    done = run_powershell(WINDOWS_TASK_REGISTER)
+    if done.returncode != 0:
+        raise Refused('windows_task_missing')
+
+
 def grant(folder):
     """Python's private Windows folders belong to an elevated owner; admit the real user."""
     sid = subprocess.check_output(
@@ -121,6 +156,8 @@ def publish(root, platform, expected, payload):
     launcher, current, marked = selected(root)
     if (current and (marked or os.name != 'nt') and matches(root / current, expected)
             and capable(root / 'app_updates.py', platform)):
+        if platform == 'windows':
+            ensure_windows_task()
         return {'ok': True, 'changed': False, 'generation': current}
     previous = current
     if launcher is not None and current is None:
@@ -165,6 +202,8 @@ def publish(root, platform, expected, payload):
         else:
             replace(root, launcher)
         raise Refused('helper_capability_missing')
+    if platform == 'windows':
+        ensure_windows_task()
     return {'ok': True, 'changed': True, 'generation': generation, 'previous': previous}
 
 

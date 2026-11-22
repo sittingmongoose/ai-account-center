@@ -870,6 +870,22 @@ def update_cli(install, deadline):
             return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True)
         changed = True
         write_private_json(pending, {"version": refreshed.version})
+        try:
+            latest = scan(install.platform)
+        except OSError:
+            return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, "update_failed", True))
+        known = {item.pid for item in processes}
+        newcomers = [item for item in latest if item.pid not in known]
+        if newcomers:
+            try:
+                late_contexts, late_targets, late_background = cli_instances(install, newcomers)
+            except UpdateFailure as error:
+                return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, error.code, True))
+            except OSError:
+                return outcome(result(install.app_id, install.platform, "failed", before, refreshed.version, install.manager, "update_failed", True))
+            contexts = [*contexts, *late_contexts]
+            targets = [*targets, *late_targets]
+            background = [*background, *late_background]
         forced = (terminate_cli(install, targets) if targets else 0) + pre_forced
         try:
             sessions = restart_cli(refreshed, contexts)

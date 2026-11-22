@@ -157,6 +157,7 @@ pub(super) fn interpret(output: &ProcessOutput) -> Result<(), SyncError> {
             Some("helper_upload_damaged") => "helper_upload_damaged",
             Some("helper_capability_missing") => "helper_capability_missing",
             Some("helper_not_writable") => "helper_not_writable",
+            Some("windows_task_missing") => "windows_task_missing",
             _ => "helper_reply_invalid",
         })),
         _ if matches!(output.code, Some(127 | 9009)) => Err(failed("helper_python_missing")),

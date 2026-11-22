@@ -1135,11 +1135,15 @@ The server syncs every `app_update_*.py`, `app_updates.py`, and
 Mac, Windows and Nas1 before each run, checksum-gated so up-to-date hosts only answer one
 hash query. A sync failure reports `failed` / `helper_sync_failed` for that host
 and never invokes its helper. Python must be
-available. On Windows register `install-windows-task.ps1` once as the signed-in
-user: its fixed `CCS App Updates` InteractiveToken/Limited task runs the private
-helper. Registration does **not** run an update. The helper queues that task
-from SSH session zero, so the user's interactive session must be signed in.
-Existing CCS Bar tasks are untouched.
+available. A Windows helper sync verifies `Get-ScheduledTask -TaskName
+'CCS App Updates'` and, when the task is missing, registers it from that same
+script as the signed-in user, with the InteractiveToken/Limited shape of
+`install-windows-task.ps1`. Registration failure is `helper_sync_failed` with
+`windows_task_missing`; the job does not dispatch rows that would fail because
+the task was never registered. Registration does **not** run an update.
+`install-windows-task.ps1` still applies the same shape by hand. The helper
+queues that task from SSH session zero, so the user's interactive session must
+be signed in. Existing CCS Bar tasks are untouched.
 
 The task runs `pythonw.exe` from the same Python install (registration stops with
 an error if it is missing) and is registered hidden. Helper children, such as
