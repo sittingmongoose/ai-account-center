@@ -78,6 +78,7 @@ fn replies_map_to_honest_causes() {
         ("helper_upload_damaged", "unknown"),
         ("helper_capability_missing", "unknown"),
         ("helper_not_writable", "not_writable"),
+        ("helper_sync_timeout", "timeout"),
     ] {
         let reply = format!("{{\"ok\":false,\"reason\":\"{reason}\"}}\n");
         assert_eq!(
@@ -280,6 +281,111 @@ print('fresh_absent=%s' % (not (fresh / 'app_updates.py').exists()))
     assert!(
         stdout.contains("fresh_absent=True"),
         "a timed-out registration must leave a fresh host without a launcher: {stdout}"
+    );
+}
+
+#[cfg(unix)]
+/// Publish through the real script in a child process, with registration told to behave as `mode`:
+/// "exit" loses the updater process at registration, "timeout" returns PowerShell's timeout.
+fn interrupted_registration(mode: &str) -> String {
+    let dir = tempfile::tempdir().expect("fixture");
+    let harness = r#"
+import base64, json, os, pathlib, subprocess, sys
+
+mode = sys.argv[1]
+prior_home = pathlib.Path(sys.argv[2])
+fresh_home = pathlib.Path(sys.argv[3])
+prior = b'# prior launcher\n'
+root = prior_home / '.ccs' / 'app-updates'
+root.mkdir(parents=True)
+(root / 'app_updates.py').write_bytes(prior)
+script = sys.stdin.buffer.read()
+namespace = {}
+exec(script.decode().removesuffix('\nmain()\n'), namespace)
+files = {name: b'# fixture ' + name.encode() for name in namespace['FILES']}
+header = {'platform': 'windows', 'files': [
+    {'name': name, 'size': len(data), 'sha256': namespace['digest'](data)}
+    for name, data in files.items()]}
+payload = (base64.b64encode(script).decode() + '\n'
+           + json.dumps(header, sort_keys=True) + '\n').encode()
+for data in files.values():
+    payload += data
+action = ('os._exit(3)' if mode == 'exit'
+          else "raise subprocess.TimeoutExpired(args, kwargs.get('timeout'))")
+child = r"""
+import base64, os, subprocess, sys
+
+class Done:
+    def __init__(self, code=0, stdout=''):
+        self.returncode, self.stdout, self.stderr = code, stdout, ''
+
+def run(args, **kwargs):
+    script = args[-1] if args else ''
+    if args and args[0] == 'powershell.exe' and 'Register-ScheduledTask' in script:
+        {action}
+    if args and args[0] == 'powershell.exe' and 'Get-ScheduledTask' in script:
+        return Done(1)
+    return Done(0)
+
+subprocess.run = run
+subprocess.check_output = lambda args, **kwargs: 'S-1-5-21-1-2-3-1001'
+namespace = {}
+exec(base64.b64decode(sys.stdin.buffer.readline()).decode().removesuffix('\nmain()\n'), namespace)
+namespace['capable'] = lambda script, platform: True
+namespace['main']()
+""".replace('{action}', action)
+launcher = pathlib.Path('.ccs/app-updates/app_updates.py')
+for home in (prior_home, fresh_home):
+    done = subprocess.run([sys.executable, '-B', '-c', child], input=payload,
+                          capture_output=True, timeout=60,
+                          env={**os.environ, 'HOME': str(home)})
+    reply = done.stdout.decode().strip().splitlines()
+    print('mode=%s exit=%d reply=%s' % (mode, done.returncode, reply[0] if reply else ''))
+print('prior_selected=%s' % ((prior_home / launcher).read_bytes() == prior))
+print('fresh_absent=%s' % (not (fresh_home / launcher).exists()))
+"#;
+    let mut child = std::process::Command::new("/usr/bin/python3")
+        .args(["-B", "-c", harness, mode])
+        .arg(dir.path())
+        .arg(dir.path().join("fresh"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run registration interruption fixture");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("helper stdin")
+        .write_all(SCRIPT.as_bytes())
+        .expect("helper script");
+    let result = child
+        .wait_with_output()
+        .expect("registration interruption result");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "stdout={stdout} stderr={stderr}");
+    stdout.into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_registration_timeout_answers_the_timeout_reason_and_keeps_the_prior_launcher() {
+    // L2: a timed-out registration is a timeout, not helper_not_writable, and the launcher
+    // bytes are the ones that answered before.
+    let stdout = interrupted_registration("timeout");
+    assert!(
+        stdout.contains(r#"reply={"ok": false, "reason": "helper_sync_timeout"}"#),
+        "the script must answer the timeout reason: {stdout}"
+    );
+    assert!(
+        stdout.contains("prior_selected=True"),
+        "the previous launcher must stay selected: {stdout}"
+    );
+    assert!(
+        stdout.contains("fresh_absent=True"),
+        "a fresh host must stay without a launcher: {stdout}"
     );
 }
 

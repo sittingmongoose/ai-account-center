@@ -157,6 +157,7 @@ pub(super) fn interpret(output: &ProcessOutput) -> Result<(), SyncError> {
             Some("helper_upload_damaged") => "helper_upload_damaged",
             Some("helper_capability_missing") => "helper_capability_missing",
             Some("helper_not_writable") => "helper_not_writable",
+            Some("helper_sync_timeout") => "helper_sync_timeout",
             Some("windows_task_missing") => "windows_task_missing",
             _ => "helper_reply_invalid",
         })),

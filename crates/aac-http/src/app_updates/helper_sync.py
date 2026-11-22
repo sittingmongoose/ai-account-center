@@ -231,6 +231,10 @@ def main():
         answer(**publish(pathlib.Path.home() / '.ccs' / 'app-updates', platform, expected, payload))
     except Refused as error:
         answer(ok=False, reason=error.reason)
+    except subprocess.TimeoutExpired:
+        # A timed-out step (task registration) is not a write-permission problem: the
+        # prior launcher still answers, and the row says why this publication stopped.
+        answer(ok=False, reason='helper_sync_timeout')
     except (OSError, subprocess.SubprocessError):
         answer(ok=False, reason='helper_not_writable')
 
