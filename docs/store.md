@@ -859,8 +859,11 @@ kept hours the close had not listed. The close now replaces the day's whole hour
 
 - A rebuild restores readings past retention while their log segments still exist, until the next maintenance
   prunes them (the one 90-day difference, raw history at the cutoff; the old layout does the same).
-- `late_rows` in a closed day's rollup returns to the closed value after a rebuild. A series whose readings on a
-  day were all late has no entry in that day's close, so a rebuild keeps rollups for it. Neither case changed here.
+- Late readings on a closed day (updated since these packing runs; see section 3.3): a rebuild recovers
+  `late_rows` when that day's readings are still complete, and falls back to the archived close count with a
+  `late_rows_unavailable` finding only when those readings have retired or are missing. A series whose readings
+  on a closed day were all late (or any series absent from an empty close archive) has its provisional rollups
+  removed on replay while keeping its raw late readings in `reading_day`.
 - All of these are synthetic runs; the share of non-round percentages in real history was not measured.
 
 ### 11.5 Linux
