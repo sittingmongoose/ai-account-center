@@ -731,6 +731,15 @@ impl Store {
             &fresh.identity.account,
             &fresh.identity.organization,
         ))?);
+        // Cooldown wins over budgets, pending and outstanding tokens, matching
+        // gate(prepare=true): a held account is refused as "cooldown" before any
+        // confirmation is issued.
+        let hold: Option<i64> = sql(tx
+            .query_row("SELECT until_ms FROM holds WHERE account=?", [&lock_key], |r| r.get(0))
+            .optional())?;
+        if hold.is_some_and(|v| v > now) {
+            return Err("cooldown");
+        }
         let count: i64 = sql(tx.query_row(
             "SELECT count(*) FROM budgets WHERE account=? AND at_ms>?",
             params![lock_key, now - 60_000],
@@ -754,12 +763,6 @@ impl Store {
         ))?;
         if outstanding {
             return Err("claim-token-outstanding");
-        }
-        let hold: Option<i64> = sql(tx
-            .query_row("SELECT until_ms FROM holds WHERE account=?", [&lock_key], |r| r.get(0))
-            .optional())?;
-        if hold.is_some_and(|v| v > now) {
-            return Err("cooldown");
         }
         sql(tx.execute(
             "INSERT INTO confirmations VALUES(?,?,?,?,?,?)",

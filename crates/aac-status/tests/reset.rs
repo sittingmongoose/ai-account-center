@@ -778,6 +778,99 @@ fn a_committed_cooldown_must_refuse_prepare() {
     assert_eq!(n, 0);
 }
 #[test]
+fn begin_refuses_a_pre_hold_token_during_cooldown() {
+    let (d, mut s) = open();
+    let snap = snapshot("claude");
+    let k = inventory(&mut s, &snap);
+    let first = s
+        .prepare("route-account", &k, &caller(), &snap, NOW, &entropy(2))
+        .unwrap();
+    // A legacy multi-token database: a second confirmation issued before the cooldown
+    // hold existed. Single-token prepare now refuses a second issue, so begin's own
+    // hold check is the only guard left for a token that pre-dates the hold.
+    let second_token = entropy(5);
+    let second_key: String = {
+        use sha2::Digest;
+        sha2::Sha256::digest(second_token.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    {
+        let db = rusqlite::Connection::open(d.path().join("reset.sqlite")).unwrap();
+        db.execute("INSERT INTO confirmations SELECT ?,caller,account,target,fingerprint,expires+1 FROM confirmations WHERE token=?", rusqlite::params![second_key, first["confirmationKey"].as_str().unwrap()]).unwrap();
+        db.execute(
+            "INSERT INTO claim_tokens SELECT ?,lock_key,expires+1 FROM claim_tokens WHERE token=?",
+            rusqlite::params![second_key, first["confirmationKey"].as_str().unwrap()],
+        )
+        .unwrap();
+    }
+    let attempt = entropy(3);
+    s.begin(
+        "route-account",
+        &k,
+        &caller(),
+        first["confirmationToken"].as_str().unwrap(),
+        &snap,
+        NOW,
+        &attempt,
+    )
+    .unwrap();
+    s.read_finish("route-account", &attempt, Outcome::Cooldown, None, NOW, Some(60_000))
+        .unwrap();
+    assert_eq!(
+        s.begin("route-account", &k, &caller(), &second_token, &snap, NOW, &entropy(6))
+            .unwrap_err(),
+        "cooldown"
+    );
+    // The pre-hold token still burns, but the refused reservation leaves no pending
+    // attempt and no outstanding confirmation behind.
+    let db = rusqlite::Connection::open(d.path().join("reset.sqlite")).unwrap();
+    for table in ["confirmations", "claim_tokens"] {
+        let n: i64 = db
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "{table} must be burned");
+    }
+    let n: i64 = db
+        .query_row("SELECT count(*) FROM attempts WHERE pending=1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0, "the refused reservation must leave no pending attempt");
+}
+#[test]
+fn prepare_reports_cooldown_before_rate_limit() {
+    let (d, mut s) = open();
+    let snap = snapshot("claude");
+    let (k, a) = begin(&mut s, &snap);
+    s.read_finish("route-account", &a, Outcome::Cooldown, None, NOW, Some(60_000))
+        .unwrap();
+    // Out of budget too: six prepare writes inside the 60 s window. The committed
+    // cooldown must win over the rate limit, exactly as gate(prepare=true) reports it,
+    // and the refusal must still issue no token.
+    {
+        let db = rusqlite::Connection::open(d.path().join("reset.sqlite")).unwrap();
+        let canonical: String = db
+            .query_row("SELECT account FROM budgets LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        for _ in 0..5 {
+            db.execute("INSERT INTO budgets VALUES(?,?)", rusqlite::params![canonical, NOW])
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        s.prepare("route-account", &k, &caller(), &snap, NOW, &entropy(9))
+            .unwrap_err(),
+        "cooldown"
+    );
+    let db = rusqlite::Connection::open(d.path().join("reset.sqlite")).unwrap();
+    for table in ["confirmations", "claim_tokens"] {
+        let n: i64 = db
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "{table} must stay empty after the refusal");
+    }
+}
+#[test]
 fn native_dispatch_never_echoes_provider_bodies() {
     assert!(aac_status::reset::dispatch(&json!({"providerBody":"synthetic-untrusted"}).to_string()).is_err());
 }
