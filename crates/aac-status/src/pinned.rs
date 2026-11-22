@@ -1280,9 +1280,12 @@ fn compose_update(
                     "Its task list says {done} of {of} ({percent}%); the thread estimates {estimate}%."
                 ));
             }
-            if update.percent_note.is_none() && tasks.is_some_and(|board| board.problem.is_some()) {
-                update.percent_note =
-                    Some("Its task list could not be read; these counts are its last good copy.".to_string());
+            if tasks.is_some_and(|board| board.problem.is_some()) {
+                let health = "Its task list could not be read; these counts are its last good copy.";
+                update.percent_note = Some(match update.percent_note.take() {
+                    Some(estimate_note) => format!("{estimate_note} {health}"),
+                    None => health.to_string(),
+                });
             }
         }
         (Some(_), Some(estimate)) => {

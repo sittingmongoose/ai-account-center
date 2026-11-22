@@ -168,7 +168,7 @@ pub(super) fn usage(i: &Inputs, source: &V) -> Option<V> {
             let reset_passed =
                 w["resetPassed"] == true || reset.is_some_and(|r| i.due(r) && sampled.is_none_or(|t| t < r));
             let stale = source["state"] != "ok" || account["status"] != "ok" || w["cached"] == true || reset_passed;
-            let at_limit = number(&w["usedPercent"]).is_some_and(|n| n >= 100.0) && !reset_passed;
+            let at_limit = number(&w["usedPercent"]).is_some_and(|n| n >= 100.0) && !reset_passed && !stale;
             let burn = if reset_passed { &V::Null } else { &w["burn"] };
             let full = i.at(&burn["projectedFullAt"]);
             accounts.push(json!({"id":account["id"],"provider":account["provider"],"label":account["label"],"host":account["host"],"active":account["active"],"window":w["label"],"kind":w["kind"],"usedPct":round1(&w["usedPercent"]),"remaining":w["remaining"],"limit":w["limit"],"unit":w["unit"],"resetsAt":w["resetAt"],"projectedFullAt":burn["projectedFullAt"],"runsOutBeforeReset":burn["runsOutBeforeReset"],"atLimit":at_limit,"stale":stale,"resetPassed":reset_passed}));
@@ -209,4 +209,74 @@ pub(super) fn usage(i: &Inputs, source: &V) -> Option<V> {
     Some(
         json!({"source":"usage","warnings":warnings.into_iter().map(|(_,w)|w).collect::<Vec<_>>(),"accounts":accounts}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn inputs(usage: V) -> Inputs<'static> {
+        let facts = serde_json::from_value(json!({"dates": {}, "epochs": {}, "order": {}})).unwrap();
+        Inputs {
+            data: Data::Whole(json!({ "usage": usage })),
+            ctx: Context::new(facts),
+            now: 1_700_000_000_000,
+            owner_cards: std::cell::OnceCell::new(),
+            trace: RefCell::new(trace::Recorder::default()),
+        }
+    }
+
+    fn account(window: V) -> V {
+        json!({
+            "id": "acct-1",
+            "provider": "claude",
+            "label": "Work",
+            "host": "vm",
+            "active": true,
+            "status": "ok",
+            "sampledAt": null,
+            "windows": [window]
+        })
+    }
+
+    fn usage_of(window: V) -> V {
+        let i = inputs(json!({
+            "sampledAt": 1_700_000_000_000i64,
+            "staleAfterSeconds": 180,
+            "accounts": [account(window)]
+        }));
+        usage(&i, &json!({"state": "ok"})).expect("usage composes")
+    }
+
+    #[test]
+    fn a_cached_window_with_no_reading_time_is_not_at_limit() {
+        let view = usage_of(json!({
+            "kind": "rate_limit",
+            "label": "session",
+            "usedPercent": 100,
+            "cached": true,
+            "sampledAt": null
+        }));
+        let row = &view["accounts"][0];
+        assert_eq!(
+            row["atLimit"], false,
+            "cached 100% with no sampledAt is not an at-limit claim"
+        );
+        assert_eq!(row["stale"], true, "the cached window stays visible as stale");
+    }
+
+    #[test]
+    fn a_fresh_full_window_stays_at_limit() {
+        let view = usage_of(json!({
+            "kind": "rate_limit",
+            "label": "session",
+            "usedPercent": 100,
+            "cached": false,
+            "sampledAt": 1_700_000_000_000i64
+        }));
+        let row = &view["accounts"][0];
+        assert_eq!(row["atLimit"], true);
+        assert_eq!(row["stale"], false);
+    }
 }

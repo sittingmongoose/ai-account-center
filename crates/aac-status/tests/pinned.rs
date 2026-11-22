@@ -874,6 +874,37 @@ fn a_task_board_that_cannot_be_read_says_so_beside_its_counts() {
 }
 
 #[test]
+fn a_task_read_problem_still_warns_when_the_estimate_disagrees() {
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f", "problem": "EIO",
+            "items": [
+                { "id": "F-01", "title": "a", "state": "done" },
+                { "id": "F-02", "title": "b", "state": "todo" }
+            ]
+        })],
+        "statuses": [json!({
+            "writer": "vm.pm7-build", "writtenAt": "2026-11-08T05:00:00Z",
+            "writtenAtMs": NOW - 2_000_000, "seq": 18, "t3Thread": "t1",
+            "summary": "Sweeping.", "percent": 90
+        })]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.percent.as_ref().unwrap().text, "50%");
+    assert_eq!(update.percent.as_ref().unwrap().done, Some(1));
+    assert_eq!(update.percent.as_ref().unwrap().of, Some(2));
+    assert_eq!(
+        update.percent_note.as_deref(),
+        Some(
+            "Its task list says 1 of 2 (50%); the thread estimates 90%. Its task list could not be read; these counts are its last good copy."
+        )
+    );
+}
+
+#[test]
 fn a_thread_waiting_on_a_question_card_is_never_stale() {
     // F4: waiting through an open question card is waiting on the owner. A waiting
     // report three hours past its ttl must not read as stale while its card is open.

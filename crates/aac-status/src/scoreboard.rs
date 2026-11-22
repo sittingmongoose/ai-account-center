@@ -534,6 +534,15 @@ fn row_version(row: &RowIn) -> &str {
     row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
 }
 
+/// Process identity for review totals: the process id, or the version when the id is absent.
+fn process_identity(row: &RowIn) -> &str {
+    match row.process.as_ref() {
+        Some(process) if !process.id.is_empty() => process.id.as_str(),
+        Some(process) => process.version.as_deref().unwrap_or(""),
+        None => "",
+    }
+}
+
 /// Sorts row indexes the way the reference picks one row per model at one effort for a
 /// job: ranked first, then the newest process version, then the most runs.
 fn sort_best(rows: &[RowIn], indexes: &mut [usize]) {
@@ -945,7 +954,7 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
 }
 
 /// The sentence under a job's measures: who else ran this job.
-fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_runs: MinRuns) -> Result<Vec<Run>> {
+fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], _min_runs: MinRuns) -> Result<Vec<Run>> {
     let mut runs: Vec<Run> = Vec::new();
     let c = column(row).ok_or_else(|| shape("a verdict row with no column to stand on"))?;
     let recommended_other = others.iter().find(|i| job.rows[**i].verdict == "recommended").copied();
@@ -983,9 +992,8 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
     if only_ranked(row) && row.verdict == "fine" {
         runs.push(strong("Why only Fine:"));
         runs.push(run(format!(
-            " no other model has {min_runs} real {} {}, so there is nothing to compare.",
-            job.label,
-            runs_word(min_runs)
+            " This is the only model with enough real {} runs to rank here, so there is nothing to compare it with.",
+            job.label
         )));
         let bench = row.benchmarks.iter().find(|b| b.ranked);
         let peer = others
@@ -1420,14 +1428,7 @@ fn select_models<'a>(view: &'a ViewIn, use_ids: &[&str]) -> Result<(Vec<&'a Task
                     if row_key(row) == model.key
                         && let Some(observed) = &row.observed
                     {
-                        review_cols.insert(
-                            format!(
-                                "{}|{}",
-                                task.id,
-                                row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
-                            ),
-                            observed.reviews,
-                        );
+                        review_cols.insert(format!("{}|{}", task.id, process_identity(row)), observed.reviews);
                     }
                 }
             }

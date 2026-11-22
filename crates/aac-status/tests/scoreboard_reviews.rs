@@ -2,7 +2,8 @@
 //! model or task type) count toward no blind-review measure, in view or joining from outside
 //! a filtered view. The fixture's `expected` is the TypeScript view; `envelope` is the same
 //! input as the service receives.
-use serde_json::Value;
+use aac_status::scoreboard::{ViewIn, by_model};
+use serde_json::{Value, json};
 
 #[test]
 fn unscored_run_reviews_move_no_measure() {
@@ -56,5 +57,86 @@ fn unscored_run_reviews_move_no_measure() {
             .is_some_and(|d| d.contains("2 reviews ignored")),
         "the two in-view unscored reviews are named as ignored: {}",
         actual["sources"][0]["detail"]
+    );
+}
+
+fn process_row(id: &str, reviews: i64) -> Value {
+    json!({
+        "model": "x/one", "label": "One", "runtime": "rt", "effort": "e",
+        "process": { "id": id, "version": "1.0" },
+        "n": { "observed": 5, "benchmark": 0 },
+        "basis": "observed", "ranked": true, "rank": 1, "verdict": "fine",
+        "why": "Fine row",
+        "observed": {
+            "n": 5, "reviews": reviews, "ranked": true, "why": "",
+            "measures": {
+                "quality": { "value": 1, "n": 5, "low": 0.5, "high": 1, "of": 5, "per": 5 }
+            }
+        },
+        "benchmarks": []
+    })
+}
+
+fn building_view(rows: Vec<Value>) -> ViewIn {
+    serde_json::from_value(json!({
+        "catalog": {
+            "minRuns": 5,
+            "models": [{ "model": "x/one", "label": "One" }],
+            "taskTypes": [{ "id": "worknode-build", "label": "WorkNode build" }]
+        },
+        "uses": [
+            { "id": "planning", "label": "Planning", "taskTypes": [] },
+            {
+                "id": "building",
+                "label": "Building",
+                "taskTypes": [{
+                    "id": "worknode-build",
+                    "label": "WorkNode build",
+                    "unit": "task",
+                    "rows": rows
+                }]
+            },
+            { "id": "pm-users", "label": "PM users", "taskTypes": [] }
+        ],
+        "sources": []
+    }))
+    .unwrap()
+}
+
+#[test]
+fn two_processes_on_the_same_version_keep_both_review_totals() {
+    // Four rows / 20 runs: scout-a and scout-b, each split across two files, same version.
+    // Runs already key by process id (10). Reviews must too (base keys version only → 5).
+    let view = by_model(&building_view(vec![
+        process_row("scout-a", 5),
+        process_row("scout-a", 5),
+        process_row("scout-b", 5),
+        process_row("scout-b", 5),
+    ]))
+    .unwrap();
+    let model = &view.views[0].models[0];
+    assert_eq!(model.runs, 10);
+    assert!(
+        model.sheet_head.contains("10 blind reviews"),
+        "headline/sheet must keep both processes' reviews: {}",
+        model.sheet_head
+    );
+    let head: String = model.head_runs.iter().map(|run| run.text.as_str()).collect();
+    assert!(head.contains("10 blind reviews"), "head was: {head}");
+}
+
+#[test]
+fn the_same_process_split_across_files_still_totals_reviews_once() {
+    let view = by_model(&building_view(vec![
+        process_row("scout-a", 5),
+        process_row("scout-a", 5),
+    ]))
+    .unwrap();
+    let model = &view.views[0].models[0];
+    assert_eq!(model.runs, 5);
+    assert!(
+        model.sheet_head.contains("5 blind reviews"),
+        "the same process must not double-count: {}",
+        model.sheet_head
     );
 }
