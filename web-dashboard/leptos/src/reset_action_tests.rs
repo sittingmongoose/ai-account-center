@@ -563,3 +563,228 @@ fn expired_confirmation_with_fresh_page_load_suppressed_may_read_for_open() {
         assert_open_again_may_read(rc);
     });
 }
+
+/// Spec resets-owner-liveness: a claim or Check again is in flight, then the
+/// owner is cleaned up (sign-out or frame disposal) and the answer arrives
+/// afterwards. `spawn_local` tasks outlive owner cleanup, so the completion
+/// must drop the answer instead of touching a disposed signal.
+fn started_then_disposed(t: &serde_json::Value) -> (ResetCtx, String, u64) {
+    Owner::new().with(|| {
+        let (rc, canonical) = start(t);
+        let send = rc.begin_send(&canonical, 102.);
+        (rc, canonical, send)
+    })
+}
+
+fn retry_result(t: &serde_json::Value) -> ClaimResult {
+    serde_json::from_value(t["retry"].clone()).unwrap()
+}
+
+#[test]
+fn a_receipt_after_owner_cleanup_is_dropped_not_a_panic() {
+    // resets-Sol-3-L4
+    let t = trace(false);
+    let (rc, canonical, send) = Owner::new().with(|| {
+        let (rc, canonical) = start(&t);
+        let send = rc.begin_send(&canonical, 102.);
+        (rc, canonical, send)
+    }); // owner dropped: ResetCtx signals are disposed
+    let result: ClaimResult = serde_json::from_value(t["retry"].clone()).unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Ok(result), 104.);
+    }));
+    assert!(
+        outcome.is_ok(),
+        "a disposed owner must not be touched by a late receipt"
+    );
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn a_refusal_with_evidence_after_owner_cleanup_is_dropped_not_a_panic() {
+    // resets-Astra-4-L5
+    let t = trace(false);
+    let (rc, canonical, send) = started_then_disposed(&t);
+    let r = refusal(&t);
+    assert!(r.evidence.is_some(), "fixture refusal carries evidence");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Refused(r), 104.);
+    }));
+    assert!(
+        outcome.is_ok(),
+        "a disposed owner must not be touched by a late refusal"
+    );
+    assert!(rc.said.try_get_untracked().is_none());
+    assert!(rc.unresolved.try_get_untracked().is_none());
+}
+
+#[test]
+fn a_claim_ok_after_sign_out_is_dropped_not_a_panic() {
+    // resets-Sol-4-L4: sign-out disposes the frame owner while the claim is in flight.
+    let t = trace(true);
+    let (rc, canonical, send) = started_then_disposed(&t);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Ok(retry_result(&t)), 104.);
+    }));
+    assert!(
+        outcome.is_ok(),
+        "a claim settling after sign-out must not revive the disposed page"
+    );
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn a_check_again_ok_after_owner_cleanup_is_dropped_not_a_panic() {
+    // resets-Sol-5-L4: Check again completes through receive with no send id.
+    let t = trace(false);
+    let (rc, canonical, _send, attempt) = Owner::new().with(|| {
+        let (rc, canonical) = start(&t);
+        let send = rc.begin_send(&canonical, 102.);
+        let attempt = rc.unresolved.get_untracked().key.unwrap();
+        (rc, canonical, send, attempt)
+    });
+    let mut result = retry_result(&t);
+    result.attempt_key = attempt;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.receive(&canonical, &result, None);
+    }));
+    assert!(
+        outcome.is_ok(),
+        "a late Check again answer must not touch the disposed owner"
+    );
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn a_late_receipt_and_history_after_disposed_aliases_are_dropped_not_a_panic() {
+    // resets-Astra-5-L5: the alias lookup and the history read must resolve, not panic.
+    let t = trace(false);
+    let (rc, canonical, send) = started_then_disposed(&t);
+    let late = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Ok(retry_result(&t)), 104.);
+    }));
+    assert!(late.is_ok(), "the late receipt must be dropped");
+    let history =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rc.history_of(&canonical)));
+    assert!(
+        history.is_ok(),
+        "history of a disposed owner must resolve to the route key, not panic"
+    );
+    assert!(history.unwrap().is_empty());
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn claim_and_check_ok_after_owner_cleanup_are_both_dropped_not_a_panic() {
+    // resets-Astra-6-L5: both completion bodies (confirm and check_again).
+    let t = trace(false);
+    let (rc, canonical, send) = started_then_disposed(&t);
+    let claimed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Ok(retry_result(&t)), 104.);
+    }));
+    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.receive(&canonical, &retry_result(&t), None);
+    }));
+    assert!(claimed.is_ok(), "the late claim answer must be dropped");
+    assert!(checked.is_ok(), "the late check answer must be dropped");
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn a_refund_and_refusal_completion_after_owner_cleanup_are_dropped_not_a_panic() {
+    // resets-Sol-6-L4: a not-sent refund and a refusal without evidence.
+    let t = trace(false);
+    let (rc, canonical, send) = started_then_disposed(&t);
+    let mut refund = retry_result(&t);
+    refund.outcome = "not-sent".into();
+    refund.provider_success = false;
+    let latest = refund
+        .evidence
+        .as_mut()
+        .unwrap()
+        .latest_attempt
+        .as_mut()
+        .unwrap();
+    latest.outcome = "not-sent".into();
+    latest.provider_success = false;
+    let refunded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Ok(refund), 104.);
+    }));
+    let mut bare = refusal(&t);
+    bare.evidence = None;
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Refused(bare), 104.);
+    }));
+    assert!(refunded.is_ok(), "the late refund must be dropped");
+    assert!(
+        refused.is_ok(),
+        "the late evidence-less refusal must be dropped"
+    );
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn failed_and_lost_receipt_reconciliation_after_owner_cleanup_is_dropped_not_a_panic() {
+    // resets-Astra-7-L5: the Failed/Lost arms and the evidence reconciliation.
+    let t = trace(false);
+    let (rc, canonical, send) = started_then_disposed(&t);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(
+            &canonical,
+            send,
+            Answer::Failed("dropped connection".into()),
+            104.,
+        );
+    }));
+    let lost = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.claim_answer(&canonical, send, Answer::Lost, 104.);
+    }));
+    assert!(failed.is_ok(), "the late Failed answer must be dropped");
+    assert!(lost.is_ok(), "the late Lost answer must be dropped");
+    let mut mismatched = retry_result(&t);
+    mismatched.evidence.as_mut().unwrap().canonical_account_key = "another-canonical".into();
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.receive(&canonical, &mismatched, Some(send))
+    }));
+    assert!(rejected.is_ok(), "the evidence guard must not panic");
+    assert!(
+        !rejected.unwrap(),
+        "a receipt for another canonical account stays rejected"
+    );
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn update_state_and_project_after_owner_cleanup_are_dropped_not_a_panic() {
+    // resets-Sol-7-L4: the shared state write and the view projection.
+    let t = trace(false);
+    let (rc, canonical, send) = started_then_disposed(&t);
+    let updated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rc.update_state(&canonical, |s| s.action_unanswered(send, None));
+    }));
+    let projected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rc.project()));
+    assert!(updated.is_ok(), "a disposed state write must be dropped");
+    assert!(projected.is_ok(), "a disposed projection must be dropped");
+    assert!(rc.said.try_get_untracked().is_none());
+}
+
+#[test]
+fn a_live_owner_still_receives_and_shows_the_receipt() {
+    // Control for every row above: with the owner alive the receipt is stored and shown.
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, canonical) = start(&t);
+        let send = rc.begin_send(&canonical, 102.);
+        assert!(
+            rc.unresolved.get_untracked().blocks(),
+            "the unanswered send locks spending"
+        );
+        rc.claim_answer(&canonical, send, Answer::Ok(retry_result(&t)), 104.);
+        assert!(
+            !rc.unresolved.get_untracked().blocks(),
+            "the settled receipt releases the lock"
+        );
+        let said = rc.said.get_untracked().unwrap();
+        assert!(said.text.contains("Reset applied"), "{}", said.text);
+    });
+}
