@@ -2646,3 +2646,72 @@ test('OpenCode Go discover row in the unreadable-store state: Remove says it sto
   // A named key's own Remove still deletes that one stored key: its tip stays.
   assert.equal(row(vm, 'opencode-go:acct:52f3251b').actions.find((a) => a.act === 'remove').tip, 'Remove deletes the stored key from the dashboard computer.');
 });
+
+test('OpenCode Go native registry response enables per-key Re-check without a bare discover parent row', () => {
+  const go = (id, label) =>
+    account({ id, provider: 'opencode-go', providerLabel: 'OpenCode Go', label, email: null, plan: 'Go', platform: 'ubuntu', capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] } });
+  const accounts = [
+    go('opencode-go:usage:cccccccc', 'Key cccccccc'),
+    go('opencode-go:acct:52f3251b', 'Account 2'),
+    go('opencode-go:acct:2e034ec2', 'Account 3'),
+  ];
+  // Exact native GET /api/accounts/registry shape: no bare opencode-go:usage row, explicit stored-key descriptor.
+  const r = registry([
+    reg('opencode-go:usage:cccccccc', 'opencode-go', {
+      label: 'Key cccccccc',
+      credential: { kind: 'stored-key' },
+      actions: { signInAgain: false, replaceKey: false, remove: false, open: [], recheck: true },
+      removeRefusal: null,
+    }),
+    reg('opencode-go:acct:52f3251b', 'opencode-go', {
+      label: 'Account 2',
+      credential: { kind: 'aac-key', last4: '1111', storedOn: 'ubuntu' },
+      actions: { signInAgain: false, replaceKey: true, remove: true, open: [], recheck: true },
+      removeRefusal: null,
+    }),
+    reg('opencode-go:acct:2e034ec2', 'opencode-go', {
+      label: 'Account 3',
+      credential: { kind: 'aac-key', last4: '2222', storedOn: 'ubuntu' },
+      actions: { signInAgain: false, replaceKey: true, remove: true, open: [], recheck: true },
+      removeRefusal: null,
+    }),
+  ]);
+  const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
+  const rows = provider(vm, 'opencode-go').rows;
+  assert.deepEqual(rows.map((r) => r.id), [
+    'opencode-go:usage:cccccccc',
+    'opencode-go:acct:52f3251b',
+    'opencode-go:acct:2e034ec2',
+  ]);
+  assert.ok(!rows.some((r) => r.id === 'opencode-go:usage'));
+  const perKey = row(vm, 'opencode-go:usage:cccccccc');
+  assert.equal(perKey.src, 'Key stored on this computer');
+  assert.deepEqual(perKey.actions.map((a) => [a.act, a.value, a.enabled, a.coming]), [
+    ['recheck', 'opencode-go:usage:cccccccc', true, false],
+    ['remove', 'opencode-go:usage:cccccccc', false, false],
+  ]);
+  assert.equal(perKey.actions[0].tip, 'Read this stored key again now.');
+  assert.equal(perKey.actions[1].tip, 'Stored on Ubuntu outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.');
+  assert.ok(perKey.actions.every((a) => !/Checking/.test(a.tip || '')));
+  assert.ok(!perKey.actions.some((a) => a.enabled && a.act !== 'recheck'), 'no destructive action enabled');
+  // Named accounts keep their own Replace key and Remove controls.
+  assert.deepEqual(row(vm, 'opencode-go:acct:52f3251b').actions.map((a) => [a.act, a.enabled]), [['replace-key', true], ['remove', true]]);
+  assert.deepEqual(row(vm, 'opencode-go:acct:2e034ec2').actions.map((a) => [a.act, a.enabled]), [['replace-key', true], ['remove', true]]);
+
+  // When the server disables recheck on a stored-key row, Re-check stays disabled and no stand-in appears if absent.
+  const disabledReg = registry([
+    reg('opencode-go:usage:cccccccc', 'opencode-go', {
+      label: 'Key cccccccc',
+      credential: { kind: 'stored-key' },
+      actions: { signInAgain: false, replaceKey: false, remove: false, open: [], recheck: false },
+      removeRefusal: null,
+    }),
+  ]);
+  const disabledVm = accountsViewModel(data([accounts[0]], { providers: providers() }), { now, registry: disabledReg });
+  assert.deepEqual(row(disabledVm, 'opencode-go:usage:cccccccc').actions.map((a) => [a.act, a.enabled]), [
+    ['recheck', false],
+    ['remove', false],
+  ]);
+  const goneVm = accountsViewModel(data([], { providers: providers() }), { now, registry: disabledReg });
+  assert.deepEqual(provider(goneVm, 'opencode-go').rows, []);
+});

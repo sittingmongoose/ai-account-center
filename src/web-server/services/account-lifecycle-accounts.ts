@@ -157,7 +157,9 @@ export type CredentialView =
       fingerprint: string | null;
       storedOn: DashboardPlatform;
     }
-  | { kind: 'discover' | 'browser-capsule' | 'config-home' | 'antigravity-profile' };
+  | {
+      kind: 'discover' | 'stored-key' | 'browser-capsule' | 'config-home' | 'antigravity-profile';
+    };
 
 export interface AccountActions {
   signInAgain: boolean;

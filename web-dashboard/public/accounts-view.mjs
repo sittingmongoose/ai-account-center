@@ -147,6 +147,9 @@ function sourceLines(provider, account, reg) {
   if (credential?.kind === 'aac-key') {
     return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || (account.host ?? account.platform))}`];
   }
+  if (credential?.kind === 'stored-key') {
+    return ['Key stored on this computer', hostLabel(account)];
+  }
   if (def.kind === 'apikey' && credential?.kind && credential.kind !== 'aac-key') {
     // The OpenCode Go discover entry stands for the stored keys no account names (N2); it is not an app sign-in.
     if (provider === 'opencode-go' && credential.kind === 'discover') return ['Stored keys no account names', hostLabel(account)];
@@ -265,15 +268,19 @@ function rowActions(provider, account, homeRow, ctx) {
         removeControl(provider, account, reg, entry)];
       }
       // A key stored on the reading computer outside the dashboard (card OCG1): Re-check reads that one key; it has
-      // no key of the dashboard's to replace. Removing the discover entry here stops reading every stored key no
-      // account names, so that clause appears only when the entry covers more than this one key (N1).
+      // no key of the dashboard's to replace. Removing a discover entry stops reading every stored key no account
+      // names, so that clause appears only when the entry covers more than this one key (N1). An explicit
+      // stored-key descriptor names this row's key and does not carry that discover-entry warning.
       const keyEntry = reg ? null : storedKeyEntry(account, ctx);
-      if (keyEntry) {
+      const storedKey = reg?.credential?.kind === 'stored-key' ? reg : keyEntry;
+      if (storedKey) {
         const host = hostLabel(account);
-        const unnamed = (Array.isArray(ctx.data?.accounts) ? ctx.data.accounts : [])
-          .filter(other => storedKeyEntry(other, ctx) === keyEntry).length;
+        const unnamed = keyEntry
+          ? (Array.isArray(ctx.data?.accounts) ? ctx.data.accounts : [])
+            .filter(other => storedKeyEntry(other, ctx) === keyEntry).length
+          : 1;
         const check = { act: 'recheck', value: account.id, label: 'Re-check', icon: 'refresh', probe: `recheck:${account.id}` };
-        const live = LIVE.recheck && keyEntry.actions?.recheck !== false;
+        const live = LIVE.recheck && (reg?.credential?.kind === 'stored-key' ? storedKey.actions?.recheck === true : storedKey.actions?.recheck !== false);
         return [live ? action({ ...check, enabled: true, tip: 'Read this stored key again now.' })
           : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
         action({ kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}`, enabled: false,
@@ -1069,7 +1076,7 @@ export function accountsViewModel(data, ctx = {}) {
     // accounts the registry lists that the dashboard has no row for yet (a profile created a moment ago). A discover
     // entry is never one: the server shows it unless its stored keys already have rows (OpenCode Go reads each
     // stored key as its own row, card OCG1) or another entry reads the same key, so it never gets a stand-in.
-    for (const reg of registryAccounts) if (reg.provider === entry.id && reg.credential?.kind !== 'discover' && !mine.some(account => account.id === reg.id)) {
+    for (const reg of registryAccounts) if (reg.provider === entry.id && reg.credential?.kind !== 'discover' && reg.credential?.kind !== 'stored-key' && !mine.some(account => account.id === reg.id)) {
       mine.push({ id: reg.id, provider: reg.provider, email: reg.email, label: reg.label, plan: null, platform: reg.platform, status: 'needs_sign_in', windows: [], capabilities: {}, lifecycle: reg.lifecycle });
     }
     const hiddenServer = serverHidden.has(entry.id);

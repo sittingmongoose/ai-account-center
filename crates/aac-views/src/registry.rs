@@ -257,6 +257,12 @@ fn row_view(fact: &Value, providers: &[Value]) -> Admit<Value> {
             )
         }
         "entry" => entry_view(fact, row_object, providers)?,
+        "stored-key" => account_view(
+            row,
+            json!({ "kind": "stored-key" }),
+            actions(false, false, false, none(), true),
+            Some(Value::Null),
+        ),
         "other" => {
             let id = req(row.get("id").and_then(Value::as_str))?;
             let wallet = id.starts_with("plan-opencode-go-console-");
@@ -293,4 +299,54 @@ pub fn compose(input: &Value) -> Admit<Value> {
         "jobs": list("jobs")?,
         "trash": list("trash")?,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_key_row_gets_explicit_descriptor_and_recheck_only() {
+        let input = json!({
+            "providers": [{"id": "opencode-go", "capabilities": {"replaceKey": true}}],
+            "rows": [{
+                "kind": "stored-key",
+                "row": {
+                    "id": "opencode-go:usage:cccccccc",
+                    "provider": "opencode-go",
+                    "label": "Key cccccccc",
+                    "email": null,
+                    "platform": "ubuntu",
+                    "hidden": false,
+                    "trayHidden": true,
+                    "lifecycle": {"state": "ready", "jobId": null}
+                }
+            }],
+            "jobs": [],
+            "trash": []
+        });
+        let output = compose(&input).expect("compose stored-key");
+        assert_eq!(
+            output["accounts"][0],
+            json!({
+                "id": "opencode-go:usage:cccccccc",
+                "provider": "opencode-go",
+                "label": "Key cccccccc",
+                "email": null,
+                "platform": "ubuntu",
+                "credential": {"kind": "stored-key"},
+                "hidden": false,
+                "trayHidden": true,
+                "lifecycle": {"state": "ready", "jobId": null},
+                "actions": {
+                    "signInAgain": false,
+                    "replaceKey": false,
+                    "remove": false,
+                    "open": [],
+                    "recheck": true
+                },
+                "removeRefusal": null
+            })
+        );
+    }
 }

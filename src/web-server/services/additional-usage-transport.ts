@@ -80,6 +80,18 @@ export function isAdditionalAccountId(provider: AdditionalProvider, value: unkno
   );
 }
 
+/**
+ * A per-key OpenCode Go row id (`<discover entry id>:<8 lowercase hex>`, card OCG1):
+ * returns the parent discover entry id, or null for any other id.
+ */
+export function discoveredOpencodeGoParentId(id: string): string | null {
+  const sep = id.lastIndexOf(':');
+  if (sep <= 0) return null;
+  const base = id.slice(0, sep);
+  const digest = id.slice(sep + 1);
+  return isAdditionalAccountId('opencode-go', base) && HEX8.test(digest) ? base : null;
+}
+
 export function isCollectorCredential(value: unknown): value is CollectorCredential {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const credential = value as Record<string, unknown>;

@@ -1658,6 +1658,27 @@ describe('registry, re-check, open, label and trash', () => {
     expect((await f.request('POST', '/zai:usage:cccccccc/recheck', {})).status).toBe(404);
   });
 
+  it('lists an unnamed OpenCode Go digest row with a stored-key descriptor and per-key Re-check', async () => {
+    const f = await fixture();
+    const dashboard = await f.env.getDashboard({ secureTransport: true });
+    dashboard.accounts = dashboard.accounts.filter((a) => a.provider !== 'opencode-go');
+    dashboard.accounts.push(
+      row('opencode-go:usage:cccccccc', { provider: 'opencode-go', label: 'Key cccccccc' })
+    );
+    f.env.getDashboard = async () => dashboard;
+    const listed = await f.request('GET', '/registry');
+    expect(listed.status).toBe(200);
+    const accounts = listed.body.accounts as Array<Record<string, unknown>>;
+    expect(accounts.find((a) => a.id === 'opencode-go:usage')).toBeUndefined();
+    expect(accounts.find((a) => a.id === 'opencode-go:usage:cccccccc')).toMatchObject({
+      id: 'opencode-go:usage:cccccccc',
+      provider: 'opencode-go',
+      credential: { kind: 'stored-key' },
+      actions: { signInAgain: false, replaceKey: false, remove: false, open: [], recheck: true },
+      removeRefusal: null,
+    });
+  });
+
   it('opens Cursor on the Mac only, and relabels additional accounts', async () => {
     const f = await fixture();
     expect((await f.request('POST', '/cursor:usage/open', { platform: 'mac' })).body).toEqual({

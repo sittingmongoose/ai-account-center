@@ -159,6 +159,16 @@ fn listing(
             return json!({"kind":"entry","row":row,"entry":entry,"credentialKind":entry["credential"]["kind"],
                 "key":key,"museSignIn":muse,"running":running});
         }
+        if row["provider"].as_str() == Some("opencode-go")
+            && let Some(parent_id) = crate::account_usage::producer::recheck::discovered_key_id(id)
+            && entries.iter().any(|source| {
+                source.id == parent_id
+                    && source.provider == "opencode-go"
+                    && matches!(source.credential, sources::Credential::Discover)
+            })
+        {
+            return json!({"kind":"stored-key","row":row});
+        }
         json!({"kind":"other","row":row,"running":running,"walletRemove":id.starts_with("plan-opencode-go-console-")})
     }).collect::<Vec<_>>();
     let trash = crate::claude_account_store::list_trash(root).unwrap_or_default();
@@ -300,4 +310,259 @@ fn codex_refusal(
         return Some("activation_running");
     }
     running.then_some("signin_running")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account_usage::{Desktop, dashboard};
+    use std::fs;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    fn set_mode(path: &Path, mode: u32) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("fixture mode");
+        }
+        #[cfg(not(unix))]
+        let _ = (path, mode);
+    }
+
+    fn opencode_row(id: &str, label: &str) -> Value {
+        json!({
+            "id": id,
+            "provider": "opencode-go",
+            "providerLabel": "OpenCode Go",
+            "label": label,
+            "email": null,
+            "plan": "Go",
+            "platform": "ubuntu",
+            "source": "Verified quota on Ubuntu",
+            "status": "ok",
+            "message": null,
+            "fetchedAt": "2026-11-21T17:00:00.000Z",
+            "sampledAt": "2026-11-21T17:00:00.000Z",
+            "isActive": false,
+            "windows": [{"key":"weekly","label":"Weekly","usedPercent":33.0,"remainingPercent":67.0,"resetAt":null,"windowMinutes":null,"used":null,"limit":null,"unit":null}],
+            "capabilities": {"codexProfile":null,"claudeProfileId":null,"claudePlatforms":[]}
+        })
+    }
+
+    /// Astra Medium 2: the native registry response gives the unnamed OpenCode Go digest row
+    /// an explicit stored-key descriptor with per-key Re-check (Replace and Remove disabled),
+    /// with no bare discover parent row, and the real Accounts view enables Re-check on it
+    /// with no destructive action enabled.
+    #[test]
+    fn native_registry_gives_unnamed_stored_key_recheck_through_accounts_view() {
+        let dir = tempfile::tempdir().expect("fixture root");
+        let root = fs::canonicalize(dir.path()).expect("canonical root");
+        set_mode(&root, 0o700);
+        let reg_file = root.join("account-usage-accounts.json");
+        fs::write(
+            &reg_file,
+            serde_json::to_vec(&json!({
+                "version": 2,
+                "accounts": [
+                    {
+                        "id": "opencode-go:usage", "provider": "opencode-go", "platform": "ubuntu",
+                        "sshHost": null, "label": null, "credential": {"kind": "discover"},
+                        "createdAt": null, "createdBy": "migration"
+                    },
+                    {
+                        "id": "opencode-go:acct:52f3251b", "provider": "opencode-go", "platform": "ubuntu",
+                        "sshHost": null, "label": "Account 2",
+                        "credential": {"kind": "aac-key", "keyId": "52f3251b"},
+                        "createdAt": null, "createdBy": "dashboard"
+                    },
+                    {
+                        "id": "opencode-go:acct:2e034ec2", "provider": "opencode-go", "platform": "ubuntu",
+                        "sshHost": null, "label": "Account 3",
+                        "credential": {"kind": "aac-key", "keyId": "2e034ec2"},
+                        "createdAt": null, "createdBy": "dashboard"
+                    }
+                ]
+            }))
+            .expect("registry"),
+        )
+        .expect("write registry");
+        set_mode(&reg_file, 0o600);
+
+        let visibility = json!({
+            "hiddenProviders": [],
+            "hiddenAccountIds": [],
+            "trayHiddenProviders": [],
+            "trayHiddenAccountIds": []
+        });
+        let lifecycle = dashboard::Lifecycle {
+            mounted: true,
+            ..Default::default()
+        };
+        let sample = dashboard::build(
+            Desktop::Mac,
+            true,
+            dashboard::Input {
+                rows: vec![
+                    opencode_row("opencode-go:usage:cccccccc", "Key cccccccc"),
+                    opencode_row("opencode-go:acct:52f3251b", "Account 2"),
+                    opencode_row("opencode-go:acct:2e034ec2", "Account 3"),
+                ],
+                visibility: &visibility,
+                visibility_available: true,
+                refresh_seconds: 60,
+                lifecycle: &lifecycle,
+                signins: None,
+                server: None,
+            },
+        )
+        .expect("dashboard sample");
+
+        let response = listing(&root, sample.dashboard.clone(), Vec::new()).expect("listing");
+        let accounts = response["accounts"].as_array().expect("accounts");
+        let ids: Vec<&str> = accounts.iter().filter_map(|a| a["id"].as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "opencode-go:usage:cccccccc",
+                "opencode-go:acct:52f3251b",
+                "opencode-go:acct:2e034ec2",
+            ]
+        );
+        assert!(
+            !ids.contains(&"opencode-go:usage"),
+            "no bare discover parent row"
+        );
+        let unnamed = &accounts[0];
+        assert_eq!(unnamed["credential"], json!({"kind": "stored-key"}));
+        assert_eq!(
+            unnamed["actions"],
+            json!({
+                "signInAgain": false,
+                "replaceKey": false,
+                "remove": false,
+                "open": [],
+                "recheck": true,
+            })
+        );
+        assert_eq!(unnamed["removeRefusal"], Value::Null);
+        assert_eq!(accounts[1]["credential"]["kind"], "aac-key");
+        assert_eq!(accounts[1]["actions"]["replaceKey"], true);
+        assert_eq!(accounts[1]["actions"]["remove"], true);
+
+        // Pass the exact native dashboard + native registry response through the real Accounts view.
+        let view_module = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web-dashboard/public/accounts-view.mjs")
+            .canonicalize()
+            .expect("accounts-view.mjs");
+        let script = format!(
+            "import {{ accountsViewModel }} from {:?}; \
+             import fs from 'node:fs'; \
+             const input = JSON.parse(fs.readFileSync(0, 'utf8')); \
+             const vm = accountsViewModel(input.dashboard, {{ now: Date.parse('2026-11-21T17:01:00.000Z'), registry: input.registry }}); \
+             const provider = [...vm.colA, ...vm.colB].find(p => p.id === 'opencode-go'); \
+             process.stdout.write(JSON.stringify(provider.rows));",
+            view_module.display().to_string()
+        );
+        let mut child = Command::new("node")
+            .args(["--input-type=module", "-e", &script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let payload = serde_json::to_vec(&json!({
+            "dashboard": sample.dashboard,
+            "registry": response,
+        }))
+        .expect("payload");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(&payload)
+            .expect("write payload");
+        let output = child.wait_with_output().expect("wait node");
+        assert!(
+            output.status.success(),
+            "accounts-view.mjs failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rows: Vec<Value> = serde_json::from_slice(&output.stdout).expect("parse rows");
+        assert_eq!(rows.len(), 3);
+        let per_key = rows
+            .iter()
+            .find(|r| r["id"] == "opencode-go:usage:cccccccc")
+            .expect("unnamed key row");
+        assert_eq!(per_key["src"], "Key stored on this computer");
+        let acts: Vec<(&str, &str, bool)> = per_key["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .map(|a| {
+                (
+                    a["act"].as_str().unwrap_or(""),
+                    a["value"].as_str().unwrap_or(""),
+                    a["enabled"].as_bool().unwrap_or(false),
+                )
+            })
+            .collect();
+        assert_eq!(
+            acts,
+            [
+                ("recheck", "opencode-go:usage:cccccccc", true),
+                ("remove", "opencode-go:usage:cccccccc", false),
+            ]
+        );
+        assert!(
+            per_key["actions"][1]["tip"]
+                .as_str()
+                .unwrap_or("")
+                .contains("also stop reading the other stored keys")
+        );
+        assert!(
+            !per_key["actions"]
+                .as_array()
+                .expect("actions")
+                .iter()
+                .any(|a| a["enabled"] == true && a["act"] != "recheck"),
+            "no destructive action enabled on unnamed stored key"
+        );
+        let acct2 = rows
+            .iter()
+            .find(|r| r["id"] == "opencode-go:acct:52f3251b")
+            .expect("Account 2");
+        assert_eq!(acct2["actions"][0]["act"], "replace-key");
+        assert_eq!(acct2["actions"][0]["enabled"], true);
+        assert_eq!(acct2["actions"][1]["act"], "remove");
+        assert_eq!(acct2["actions"][1]["enabled"], true);
+
+        // Without a discover parent in the registry, a digest row does not get stored-key actions.
+        fs::write(
+            &reg_file,
+            serde_json::to_vec(&json!({
+                "version": 2,
+                "accounts": [
+                    {
+                        "id": "opencode-go:acct:52f3251b", "provider": "opencode-go", "platform": "ubuntu",
+                        "sshHost": null, "label": "Account 2",
+                        "credential": {"kind": "aac-key", "keyId": "52f3251b"},
+                        "createdAt": null, "createdBy": "dashboard"
+                    }
+                ]
+            }))
+            .expect("registry without discover"),
+        )
+        .expect("write registry without discover");
+        set_mode(&reg_file, 0o600);
+        let orphan = listing(&root, sample.dashboard, Vec::new()).expect("orphan listing");
+        let orphan_row = orphan["accounts"]
+            .as_array()
+            .expect("accounts")
+            .iter()
+            .find(|a| a["id"] == "opencode-go:usage:cccccccc")
+            .expect("orphan row");
+        assert_eq!(orphan_row["credential"], Value::Null);
+        assert_eq!(orphan_row["actions"]["recheck"], false);
+    }
 }

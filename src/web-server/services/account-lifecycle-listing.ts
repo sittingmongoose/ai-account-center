@@ -19,6 +19,7 @@ import {
 } from './account-lifecycle-env';
 import type { RegistryAccount } from './account-registry-v2';
 import { entryView, jobBody, keyInfo } from './account-lifecycle-helpers';
+import { discoveredOpencodeGoParentId } from './additional-usage-transport';
 
 /** One dashboard row of the listing and the owner facts its view needs (read once, in TS). */
 export type RegistryRowFacts =
@@ -45,6 +46,7 @@ export type RegistryRowFacts =
       museSignIn: boolean | null;
       running: boolean;
     }
+  | { kind: 'stored-key'; row: DashboardAccount }
   | { kind: 'other'; row: DashboardAccount; running: boolean; walletRemove: boolean };
 
 export interface RegistryListingFacts {
@@ -124,6 +126,20 @@ export async function registryListingFacts(
             signInState(env, 'muse', context.secure).unavailableReason === null
           : null;
       rows.push({ kind: 'entry', row, entry, key, museSignIn, running });
+      continue;
+    }
+    const discoverParentId =
+      row.provider === 'opencode-go' ? discoveredOpencodeGoParentId(row.id) : null;
+    if (
+      discoverParentId &&
+      entries.some(
+        (candidate) =>
+          candidate.id === discoverParentId &&
+          candidate.provider === 'opencode-go' &&
+          candidate.credential.kind === 'discover'
+      )
+    ) {
+      rows.push({ kind: 'stored-key', row });
       continue;
     }
     // Console wallets: Remove deletes the stored opt-in source (no provider change).
@@ -220,6 +236,19 @@ export function composeRegistryListing(facts: RegistryListingFacts): {
         view.removeRefusal = fact.running ? 'signin_running' : null;
         return view;
       }
+      case 'stored-key':
+        return accountView(
+          row,
+          { kind: 'stored-key' },
+          {
+            signInAgain: false,
+            replaceKey: false,
+            remove: false,
+            open: [],
+            recheck: true,
+          },
+          null
+        );
       case 'other': {
         const isWallet = row.id.startsWith('plan-opencode-go-console-');
         return accountView(

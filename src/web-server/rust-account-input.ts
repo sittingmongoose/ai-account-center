@@ -274,6 +274,8 @@ export function rustRegistryInput(facts: RegistryListingFacts): unknown {
           museSignIn: fact.museSignIn,
           running: fact.running,
         };
+      case 'stored-key':
+        return { kind: fact.kind, row };
       case 'other':
         return { kind: fact.kind, row, running: fact.running, walletRemove: fact.walletRemove };
     }
