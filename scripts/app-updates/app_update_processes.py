@@ -70,9 +70,26 @@ class ProcessTable(list):
     lineage = None
 
 
+def linux_boot_time(path):
+    """Seconds since the epoch when this kernel booted, from /proc/stat's `btime`."""
+    try:
+        for line in path.read_text().splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def linux_processes():
     values = []
-    for path in pathlib.Path("/proc").iterdir():
+    proc = pathlib.Path("/proc")
+    boot = linux_boot_time(proc / "stat")
+    try:
+        ticks = os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError):
+        ticks = 0
+    for path in proc.iterdir():
         if not path.name.isdigit():
             continue
         try:
@@ -88,7 +105,10 @@ def linux_processes():
             if len(raw) > 65536:
                 continue
             args = [item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item]
-            values.append(Process(int(path.name), int(parts[1]), os.getuid(), exe, parts[19], args, started=info.st_ctime))
+            # Field 22 is starttime in clock ticks since boot. The /proc/<pid>
+            # inode's ctime is the first lookup after an eviction, not the start.
+            started = boot + int(parts[19]) / ticks if boot is not None and ticks > 0 else None
+            values.append(Process(int(path.name), int(parts[1]), os.getuid(), exe, parts[19], args, started=started))
         except (OSError, ValueError, IndexError):
             continue
     return values

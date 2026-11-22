@@ -46,7 +46,7 @@
   "scripts/app-updates/app_update_cursor.py": "67acd1534c98f7ea69a074c03ab6f5cc9246dff6e51b31b9fe4a1d30fdcf9120",
   "scripts/app-updates/app_update_desktop.py": "49fac1f8c1804931390a81507bb04faf5e9e06a374bb215071f2340852dcff2a",
   "scripts/app-updates/app_update_macos.py": "d2b67639137078f31034c671d33f118d8d729d967b27653f47eda20cfa77aa01",
-  "scripts/app-updates/app_update_processes.py": "f3566e78e64924db8cb5ede3d142158141f8e5a0d84153525f56c90d43f141b5",
+  "scripts/app-updates/app_update_processes.py": "34f29c3321314207f1e230ecd7d401c26ab6aaa0ce67a995377a9dbb59fe913b",
   "scripts/app-updates/app_update_t3.py": "a2e7020a23e4ae794172f5ecd37d0bf1220833813a6f2cbb30aad86f2e76efd8",
   "scripts/app-updates/app_update_t3_rpc.py": "f330f53c26925bc658f41c9eff988995cc58b75aad8e1b54ebe1e0bd971e0263",
   "scripts/app-updates/app_update_terminal.py": "754a551da2fbe6fec04f71b7d077c1cc2cbdec9cb910f42cd1e9544593bee456",
