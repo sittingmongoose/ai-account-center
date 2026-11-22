@@ -4612,11 +4612,11 @@ mod tests {
         (state, run_kept)
     }
 
-    /// M2 (2026-11-22): a refusal names the retained run's path again after a restart (the
-    /// owner's in-memory path map starts empty), and an exact-byte repair ends the refusal
-    /// instead of leaving a Cached chip on a healthy file.
+    /// M2 (2026-11-22): a refusal names the retained run's path again when the owner restarts
+    /// (its in-memory path map starts empty while the store's refusal persists), and an
+    /// exact-byte repair ends the refusal instead of leaving Cached on a healthy file.
     #[tokio::test]
-    async fn a_refused_run_is_named_after_a_reopen_and_cleared_by_an_exact_repair() {
+    async fn a_refused_run_is_named_after_an_owner_restart_and_cleared_by_an_exact_repair() {
         let root = tempfile::tempdir().expect("reports");
         write_bench(root.path());
         let ccs = tempfile::tempdir().expect("ccs");
@@ -4628,10 +4628,10 @@ mod tests {
         let label = "writers/vm.lead/runs/2026-11-04/vm.lead--bench.json";
         let good = std::fs::read(&path).expect("the good run's bytes");
         let at = 1_790_000_000_000u64;
+        let host = StoreHost::new(boot(store_dir));
+        host.open_at_boot();
         {
-            let host = StoreHost::new(boot(store_dir.clone()));
-            host.open_at_boot();
-            let owner = owner(root.path().to_path_buf(), Some(host));
+            let owner = owner(root.path().to_path_buf(), Some(host.clone()));
             owner.catalog_pass(at);
             owner.ingest_pass_at(true, at).await;
             let (state, kept) = held_state(&owner, at).await;
@@ -4658,10 +4658,9 @@ mod tests {
                 "the refusal names the file this pass: {state}"
             );
         }
-        // Restart: a new store host and a new owner; the owner's path map is empty.
+        // The owner restarts over the store: its in-memory path map is empty, the refusal is
+        // still on record, and the scan skips the unchanged refused file.
         let at = at + 120_000;
-        let host = StoreHost::new(boot(store_dir.clone()));
-        host.open_at_boot();
         let owner = owner(root.path().to_path_buf(), Some(host));
         owner.catalog_pass(at);
         owner.ingest_pass_at(true, at).await;
