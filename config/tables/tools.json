@@ -20,6 +20,41 @@
     "codex": { "label": "Codex" },
     "jsonl": { "label": "Generic JSONL" }
   },
+  "genericUsageLogTool": "jsonl",
+  "activitySources": ["claude", "codex", "omp", "muse", "zcode", "jsonl", "antigravity"],
+  "cliTargets": [
+    "claude",
+    "codex",
+    "droid",
+    "omp",
+    "muse",
+    "zcode",
+    "antigravity",
+    "cursor",
+    "devin"
+  ],
+  "toolProviders": {
+    "claude": "claude",
+    "codex": "codex",
+    "muse": "muse",
+    "antigravity": "antigravity",
+    "cursor": "cursor"
+  },
+  "appInventory": [
+    "antigravity-cli",
+    "muse-code",
+    "omp",
+    "codex-cli",
+    "codex-desktop",
+    "claude-code",
+    "claude-desktop",
+    "zcode",
+    "t3-acp-adapters",
+    "t3-code",
+    "cursor-cli",
+    "antigravity-acp"
+  ],
+  "legacyRebuildThrough": { "claude": 5, "codex": 6, "muse": 6 },
   "usageLogFieldMapping": {
     "timestamp": { "required": true },
     "model": { "required": true },

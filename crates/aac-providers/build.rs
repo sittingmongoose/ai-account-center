@@ -31,7 +31,9 @@ fn main() {
     }
     let mut out = String::new();
     write_providers(&mut out, &providers);
+    write_provider_views(&mut out, &providers);
     write_tools(&mut out, &tools);
+    write_tool_views(&mut out, &tools, &providers);
     write_hosts(&mut out, &hosts);
     writeln!(
         out,
@@ -280,6 +282,234 @@ fn write_providers(out: &mut String, table: &Map<String, Value>) {
         all = all.join(", "),
     )
     .expect("write");
+}
+
+// ------------------------------------------------------- consumer views
+
+/// One ordered id list of a table: names rows it lists, never repeats one.
+fn id_list(table: &Map<String, Value>, key: &str, known: &Map<String, Value>) -> Vec<String> {
+    let list = table[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("{key}: not an array"));
+    assert!(!list.is_empty(), "{key}: empty");
+    let mut seen = BTreeSet::new();
+    let mut ids = Vec::new();
+    for value in list {
+        let id = value
+            .as_str()
+            .unwrap_or_else(|| panic!("{key}: not a string"));
+        assert!(known.contains_key(id), "{key}: {id} is not a listed row");
+        assert!(seen.insert(id), "{key}: {id} repeats");
+        ids.push(id.to_owned());
+    }
+    ids
+}
+
+/// `[(&str, &str)]` pairs of a JSON object, in file order.
+fn pair_literals(map: &Map<String, Value>) -> String {
+    map.iter()
+        .map(|(key, value)| {
+            format!(
+                "({key:?}, {:?})",
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{key}: not a string"))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `providers.json`'s consumer views: provider id orders and the route and pricing maps.
+fn write_provider_views(out: &mut String, table: &Map<String, Value>) {
+    let rows = table["providers"].as_object().expect("providers");
+    for (key, name, doc) in [
+        (
+            "additionalProviders",
+            "ADDITIONAL_PROVIDERS",
+            "The providers whose accounts are standalone usage sources (`additionalProviders`), in their declared order.",
+        ),
+        (
+            "snapshotOrder",
+            "SNAPSHOT_PROVIDERS",
+            "The provider order the agent usage answer publishes (`snapshotOrder`).",
+        ),
+        (
+            "signInSessions",
+            "SIGN_IN_SESSIONS",
+            "The providers the interactive sign-in session verb admits (`signInSessions`).",
+        ),
+    ] {
+        let ids = id_list(table, key, rows);
+        let items: Vec<String> = ids
+            .iter()
+            .map(|id| format!("ProviderId::{}", variant(id)))
+            .collect();
+        writeln!(
+            out,
+            "/// {doc}\npub static {name}: [ProviderId; {}] = [{}];\n",
+            ids.len(),
+            items.join(", ")
+        )
+        .expect("write");
+    }
+    let routes = table["usageRoutes"]
+        .as_object()
+        .expect("usageRoutes: not an object");
+    for (route, provider) in routes {
+        assert!(id_ok(route), "usageRoutes.{route}: not a route word");
+        let provider = provider
+            .as_str()
+            .unwrap_or_else(|| panic!("usageRoutes.{route}: not a string"));
+        assert!(
+            rows.contains_key(provider),
+            "usageRoutes.{route}: {provider} is not a provider"
+        );
+    }
+    writeln!(
+        out,
+        "/// `usageRoutes`: the dashboard provider a usage route word names, in table order.\n\
+         pub static USAGE_ROUTES: [(&str, &str); {}] = [{}];\n",
+        routes.len(),
+        pair_literals(routes)
+    )
+    .expect("write");
+    let aliases = table["pricingAliases"]
+        .as_object()
+        .expect("pricingAliases: not an object");
+    for (alias, models_dev) in aliases {
+        assert!(id_ok(alias), "pricingAliases.{alias}: not a provider word");
+        let models_dev = models_dev
+            .as_str()
+            .unwrap_or_else(|| panic!("pricingAliases.{alias}: not a string"));
+        assert!(
+            id_ok(models_dev),
+            "pricingAliases.{alias}: {models_dev} is not a models.dev id"
+        );
+    }
+    writeln!(
+        out,
+        "/// `pricingAliases`: the models.dev provider a pricing provider word names, in table order.\n\
+         pub static PRICING_ALIASES: [(&str, &str); {}] = [{}];\n",
+        aliases.len(),
+        pair_literals(aliases)
+    )
+    .expect("write");
+}
+
+/// `tools.json`'s consumer views: the activity order, CLI targets, tool providers, the app
+/// inventory and each tool's legacy cache rebuild version.
+fn write_tool_views(out: &mut String, table: &Map<String, Value>, providers: &Map<String, Value>) {
+    let rows = providers["providers"].as_object().expect("providers");
+    let analytics = table["analyticsTools"].as_object().expect("analyticsTools");
+    let scanner = table["scannerOnlyKinds"]
+        .as_object()
+        .expect("scannerOnlyKinds");
+    let logs = table["usageLogTools"].as_object().expect("usageLogTools");
+    let generic = table["genericUsageLogTool"]
+        .as_str()
+        .expect("genericUsageLogTool: not a string");
+    assert!(
+        logs.contains_key(generic),
+        "genericUsageLogTool: {generic} is not a usage-log tool"
+    );
+    let sources = word_list(table, "activitySources");
+    for id in &sources {
+        assert!(
+            analytics.contains_key(id) || logs.contains_key(id),
+            "activitySources.{id}: not an analytics or usage-log tool"
+        );
+    }
+    let targets = word_list(table, "cliTargets");
+    let tool_providers = table["toolProviders"]
+        .as_object()
+        .expect("toolProviders: not an object");
+    for (tool, provider) in tool_providers {
+        assert!(
+            analytics.contains_key(tool) || scanner.contains_key(tool),
+            "toolProviders.{tool}: not a scanner kind"
+        );
+        let provider = provider
+            .as_str()
+            .unwrap_or_else(|| panic!("toolProviders.{tool}: not a string"));
+        assert!(
+            rows.contains_key(provider),
+            "toolProviders.{tool}: {provider} is not a provider"
+        );
+    }
+    let apps = word_list(table, "appInventory");
+    let rebuilds = table["legacyRebuildThrough"]
+        .as_object()
+        .expect("legacyRebuildThrough: not an object");
+    for (tool, version) in rebuilds {
+        assert!(
+            analytics.contains_key(tool),
+            "legacyRebuildThrough.{tool}: not an analytics tool"
+        );
+        let version = version
+            .as_u64()
+            .unwrap_or_else(|| panic!("legacyRebuildThrough.{tool}: not a count"));
+        assert!(
+            (3..=8).contains(&version),
+            "legacyRebuildThrough.{tool}: {version} is not a legacy cache version"
+        );
+    }
+    let strings = |ids: &[String]| -> String {
+        ids.iter()
+            .map(|id| format!("{id:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    writeln!(
+        out,
+        "/// `genericUsageLogTool`: the generic JSONL format's tool id, whose roots are its own.\n\
+         pub static GENERIC_USAGE_LOG_TOOL: &str = {generic:?};\n\n\
+         /// `activitySources`: the tools the activity answer's range reads, in its order.\n\
+         pub static ACTIVITY_SOURCES: [&str; {}] = [{}];\n\n\
+         /// `cliTargets`: the session targets the activity answer accepts, in its order.\n\
+         pub static CLI_TARGETS: [&str; {}] = [{}];\n\n\
+         /// `toolProviders`: the tools whose logs are one provider's usage by construction.\n\
+         pub static TOOL_PROVIDERS: [(&str, &str); {}] = [{}];\n\n\
+         /// `appInventory`: the applications native app discovery reports, in its order.\n\
+         pub static APP_INVENTORY: [&str; {}] = [{}];\n\n\
+         /// `legacyRebuildThrough`: the last legacy cache version whose rows for a tool must be\n\
+         /// rebuilt (an unlisted tool has no legacy rows).\n\
+         pub static LEGACY_REBUILD_THROUGH: [(&str, u32); {}] = [{}];\n",
+        sources.len(),
+        strings(&sources),
+        targets.len(),
+        strings(&targets),
+        tool_providers.len(),
+        pair_literals(tool_providers),
+        apps.len(),
+        strings(&apps),
+        rebuilds.len(),
+        rebuilds
+            .iter()
+            .map(|(tool, version)| format!("({tool:?}, {})", version.as_u64().expect("version")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .expect("write");
+}
+
+/// A list of lowercase word ids that names no table row of its own (`cliTargets`, `appInventory`).
+fn word_list(table: &Map<String, Value>, key: &str) -> Vec<String> {
+    let list = table[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("{key}: not an array"));
+    assert!(!list.is_empty(), "{key}: empty");
+    let mut seen = BTreeSet::new();
+    let mut ids = Vec::new();
+    for value in list {
+        let id = value
+            .as_str()
+            .unwrap_or_else(|| panic!("{key}: not a string"));
+        assert!(id_ok(id), "{key}.{id}: not lowercase words joined by '-'");
+        assert!(seen.insert(id), "{key}.{id}: repeats");
+        ids.push(id.to_owned());
+    }
+    ids
 }
 
 fn write_tools(out: &mut String, table: &Map<String, Value>) {

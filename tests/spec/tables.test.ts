@@ -96,6 +96,45 @@ describe('TS derives its lists from the tables', () => {
     expect(verbs.inventoryKind('retired-provider', 'qwen-session')).toBe(false);
   });
 
+  it('usage routes, tool providers, additional sources, CLI targets and pricing aliases', async () => {
+    const attribution = await load('src/web-server/services/account-analytics-attribution.ts');
+    expect(attribution.USAGE_ROUTE_PROVIDERS).toEqual(providerTable.usageRoutes);
+    for (const tool of [
+      ...analyticsTools,
+      ...Object.keys(toolTable.scannerOnlyKinds),
+      ...Object.keys(toolTable.usageLogTools),
+    ])
+      expect(attribution.usageProviderFor(tool, null, null)).toBe(
+        toolTable.toolProviders[tool] ?? 'other'
+      );
+    expect(attribution.routeProvider('zz-not-a-route')).toBeNull();
+    const transport = await load('src/web-server/services/additional-usage-transport.ts');
+    expect([...transport.ADDITIONAL_PROVIDERS]).toEqual(providerTable.additionalProviders);
+    const projection = await load('src/web-server/services/account-dashboard-projection.ts');
+    expect(projection.ADDITIONAL_PROVIDERS).toEqual(
+      providerTable.additionalProviders.map((id: string) => [
+        id,
+        providerTable.providers[id].analytics.label,
+      ])
+    );
+    // The projection's accepted session targets and the pricing resolver's aliases are the
+    // table's own lists (module-private, so read from the source).
+    expect(
+      literals(
+        read('src/web-server/services/account-analytics-projection.ts'),
+        'const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([',
+        ']'
+      )
+    ).toEqual(toolTable.cliTargets);
+    expect(
+      literals(
+        read('src/web-server/models-dev/pricing-resolver.ts'),
+        'const PROVIDER_ALIASES = new Map<string, string>([',
+        '])'
+      )
+    ).toEqual(Object.entries(providerTable.pricingAliases).flat());
+  });
+
   it('analytics tools, usage-log tools and the legacy storage hosts', async () => {
     const tools = await load('src/web-server/usage/analytics-tools.ts');
     expect([...tools.ANALYTICS_TOOLS]).toEqual(analyticsTools);

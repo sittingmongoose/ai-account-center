@@ -220,6 +220,146 @@ fn list_literals(text: &str, words: &[&str]) -> Vec<String> {
     found
 }
 
+/// `text` without its `#[cfg(test)]` items. A test fixture may name table words: the guard
+/// holds production code to the tables, and a fixture that spells a provider out is data, not a
+/// copy of a table a consumer reads. Nothing else is exempt.
+fn production_source(text: &str) -> String {
+    let marker = "#[cfg(test)]";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(marker) {
+        out.push_str(&rest[..at]);
+        let item = &rest[at + marker.len()..];
+        let Some(open) = item.find('{') else { break };
+        if let Some(semicolon) = item.find(';').filter(|end| *end < open) {
+            rest = &item[semicolon + 1..];
+            continue;
+        }
+        match block_end(item, open) {
+            Some(end) => rest = &item[end..],
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The index just past the `}` that closes the `{` at `open`, skipping strings and comments.
+fn block_end(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                i = text[i..].find('\n').map_or(bytes.len(), |end| i + end);
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                let mut nested = 0usize;
+                while i < bytes.len() {
+                    if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                        nested += 1;
+                        i += 2;
+                    } else if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                        nested -= 1;
+                        i += 2;
+                        if nested == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'"' => i = string_end(text, i),
+            b'\'' => i = char_or_lifetime_end(text, i),
+            b'r' | b'b' => i = raw_string_end(text, i).unwrap_or(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// The index just past the string literal that opens at `at`.
+fn string_end(text: &str, at: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut i = at + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// The index just past a raw string (`r".."`, `r#".."#`, `br#".."#`) at `at`, when one starts
+/// there; `None` for any other `r` or `b`.
+fn raw_string_end(text: &str, at: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
+        return None;
+    }
+    let mut i = at;
+    if bytes[i] == b'b' {
+        i += 1;
+    }
+    if bytes.get(i) != Some(&b'r') {
+        return None;
+    }
+    i += 1;
+    let mut hashes = 0;
+    while bytes.get(i) == Some(&b'#') {
+        hashes += 1;
+        i += 1;
+    }
+    if bytes.get(i) != Some(&b'"') {
+        return None;
+    }
+    i += 1;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            let mut closing = 0;
+            while bytes.get(i + 1 + closing) == Some(&b'#') {
+                closing += 1;
+            }
+            if closing == hashes {
+                return Some(i + 1 + closing);
+            }
+        }
+        i += 1;
+    }
+    Some(bytes.len())
+}
+
+/// The index just past a char literal at `at`; a lifetime (`'a`) skips nothing.
+fn char_or_lifetime_end(text: &str, at: usize) -> usize {
+    let bytes = text.as_bytes();
+    if bytes.get(at + 1) == Some(&b'\\') {
+        let mut i = at + 2;
+        while i < bytes.len() && bytes[i] != b'\'' {
+            i += 1;
+        }
+        return (i + 1).min(bytes.len());
+    }
+    if bytes.get(at + 2) == Some(&b'\'') {
+        return at + 3;
+    }
+    at + 1
+}
+
 #[test]
 fn workspace_crates_hold_no_table_list_literals() {
     let words = table_words();
@@ -241,7 +381,15 @@ fn workspace_crates_hold_no_table_list_literals() {
     assert!(files.len() > 20, "found {} files", files.len());
     let mut offenders = Vec::new();
     for file in files {
-        let text = fs::read_to_string(&file).expect("source");
+        // `*_tests.rs` files are fixtures, like the `#[cfg(test)]` items `production_source`
+        // removes: a fixture may name providers and tools, a consumer may not.
+        if file
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with("_tests.rs"))
+        {
+            continue;
+        }
+        let text = production_source(&fs::read_to_string(&file).expect("source"));
         for list in list_literals(&text, &words) {
             offenders.push(format!("{}: {list}", file.display()));
         }
@@ -251,6 +399,25 @@ fn workspace_crates_hold_no_table_list_literals() {
         "derive these from aac-providers instead:\n{}",
         offenders.join("\n")
     );
+}
+
+/// The guard's own scope: a test fixture may spell a provider list out, production code may not
+/// (and nothing else is exempt).
+#[test]
+fn the_scan_skips_test_fixtures_and_still_catches_production_literals() {
+    let words = table_words();
+    let fixture = "#[cfg(test)]\nmod tests {\n    // \"claude\", \"codex\", \"cursor\"\n    const P: [&str; 3] = [\"claude\", \"codex\", \"cursor\"];\n}\n";
+    assert!(list_literals(&production_source(fixture), &words).is_empty());
+    let production = "const P: [&str; 3] = [\"claude\", \"codex\", \"cursor\"];\n";
+    assert_eq!(
+        list_literals(&production_source(production), &words).len(),
+        1
+    );
+    let after = format!("{fixture}const P: [&str; 3] = [\"claude\", \"codex\", \"cursor\"];\n");
+    assert_eq!(list_literals(&production_source(&after), &words).len(), 1);
+    // Fixtures carry braces in strings, raw strings and chars; the skip must survive them.
+    let tricky = "#[cfg(test)]\nmod tests {\n    fn f() { let s = \"}{ \\\" } {\"; let r = r#\"{ \"#; let c = '{'; }\n}\nconst P: [&str; 3] = [\"claude\", \"codex\", \"cursor\"];\n";
+    assert_eq!(list_literals(&production_source(tricky), &words).len(), 1);
 }
 
 #[test]

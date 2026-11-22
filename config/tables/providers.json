@@ -1,6 +1,47 @@
 {
   "version": 1,
   "planRetryAfter": { "floorS": 30, "ceilingS": 86400, "defaultS": 600 },
+  "additionalProviders": ["antigravity", "muse", "cursor", "kimi-code", "qwen", "zai", "opencode-go"],
+  "snapshotOrder": [
+    "codex",
+    "claude",
+    "antigravity",
+    "muse",
+    "cursor",
+    "kimi-code",
+    "qwen",
+    "zai",
+    "opencode-go"
+  ],
+  "signInSessions": ["codex", "muse", "antigravity", "claude"],
+  "usageRoutes": {
+    "anthropic": "claude",
+    "claude": "claude",
+    "openai": "codex",
+    "codex": "codex",
+    "alibaba-token-plan": "qwen",
+    "zai": "zai",
+    "zai-coding-plan": "zai",
+    "kimi-code": "kimi-code",
+    "opencode-go": "opencode-go",
+    "opencode-zen": "opencode-go",
+    "cursor": "cursor",
+    "muse-code": "muse",
+    "google-antigravity": "antigravity"
+  },
+  "pricingAliases": {
+    "agy": "google",
+    "antigravity": "google",
+    "claude": "anthropic",
+    "codex": "openai",
+    "copilot": "github-copilot",
+    "gemini": "google",
+    "ghcp": "github-copilot",
+    "github": "github-copilot",
+    "kimi": "moonshotai",
+    "moonshot": "moonshotai",
+    "qwen": "alibaba"
+  },
   "providers": {
     "claude": {
       "label": "Claude",
