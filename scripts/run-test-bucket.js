@@ -65,6 +65,7 @@ const isolatedTests = new Set([
   'tests/unit/web-server/agent-default-runner.test.ts',
   'tests/unit/web-server/rust-slow-filesystem.test.ts',
   'tests/unit/store/store-host-deadline.test.ts',
+  'tests/unit/web-server/home-view-shadow.test.ts',
   'tests/unit/commands/bar-command.test.ts',
   'tests/unit/utils/fetch-proxy-setup.test.ts',
   // Strict wall-clock fixtures must not share global mocks or a saturated worker pool.
