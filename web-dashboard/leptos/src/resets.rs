@@ -1109,6 +1109,12 @@ impl ResetCtx {
             .try_with_untracked(|d| *d != Dialog::Closed)
             .unwrap_or(false)
     }
+    /// Whether `open` may start a fresh inventory read. A retained confirmation
+    /// key still blocks spending (`Unresolved::blocks`); only an already-open
+    /// dialog skips the read. The fresh lock after that read is the authority.
+    pub fn may_read_for_open(&self) -> bool {
+        !self.dialog_open()
+    }
     pub fn show(&self, account: &str, provider: &str, fetch: bool) {
         if self.account.get_untracked() == account {
             return;
@@ -1463,7 +1469,7 @@ impl ResetCtx {
         true
     }
     pub fn open(&self, grant_key: String, ready: u32) {
-        if self.unresolved.with_untracked(Unresolved::blocks) || self.dialog_open() {
+        if !self.may_read_for_open() {
             return;
         }
         let me = *self;

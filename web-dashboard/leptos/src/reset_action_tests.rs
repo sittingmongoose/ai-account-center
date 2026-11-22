@@ -406,3 +406,160 @@ fn unavailable_recovery_keeps_the_refusal_current_and_offers_check_again_until_f
         assert!(!rc.unresolved.get_untracked().blocks());
     });
 }
+
+fn start_on(t: &serde_json::Value, provider: &str, fetch: bool) -> (ResetCtx, String) {
+    let rc = ResetCtx::new();
+    rc.show(ROUTE, provider, fetch);
+    let before = inventory(t, "before");
+    let canonical = before.canonical_account_key.clone().unwrap();
+    rc.take(ROUTE, before, 100.);
+    (rc, canonical)
+}
+
+fn expired_token_inventory(t: &serde_json::Value, grant_kind: &str) -> Inventory {
+    let mut inv = inventory(t, "withToken");
+    if let Some(tokens) = inv.evidence.as_mut().and_then(|e| e.claim_tokens.as_mut()) {
+        // Client clock is past expiry; the snapshot still lists the key.
+        tokens.until_ms = Some(1.0);
+    }
+    if grant_kind != "banked" {
+        for grant in &mut inv.grants {
+            grant.kind = grant_kind.into();
+            grant.label = "Weekly reset".into();
+            grant.refills_text = "Refills your weekly allowance.".into();
+        }
+    }
+    inv
+}
+
+/// Spec resets-token-fence: Open it again must be allowed to read while the
+/// retained lock still blocks spending. Client time must not clear tokens.
+fn assert_open_again_may_read(rc: ResetCtx) {
+    assert!(!rc.dialog_open(), "dialog is closed before open()");
+    assert!(
+        rc.unresolved.get_untracked().blocks(),
+        "retained claimTokens still lock spending"
+    );
+    assert!(
+        !use_enabled(true, &rc.unresolved.get_untracked(), &Dialog::Closed),
+        "Use reset stays fenced by the retained lock"
+    );
+    assert!(
+        rc.may_read_for_open(),
+        "read gate must allow a server read while the retained lock still blocks"
+    );
+    rc.dialog.set(Dialog::Opening {
+        grant_key: "held-confirmation".into(),
+    });
+    assert!(rc.dialog_open());
+    assert!(
+        !rc.may_read_for_open(),
+        "an already-open dialog still skips a second read"
+    );
+}
+
+#[test]
+fn expired_claude_weekly_confirmation_may_read_for_open() {
+    // resets-Astra-4-L6
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, _) = start_on(&t, "claude", false);
+        rc.take(ROUTE, expired_token_inventory(&t, "weekly"), 101.);
+        assert_open_again_may_read(rc);
+    });
+}
+
+#[test]
+fn expired_claude_weekly_after_reopening_details_may_read_for_open() {
+    // resets-Sol-5-L6
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, _) = start_on(&t, "claude", false);
+        rc.take(ROUTE, expired_token_inventory(&t, "weekly"), 101.);
+        rc.show("", "claude", false);
+        rc.show(ROUTE, "claude", false);
+        assert_open_again_may_read(rc);
+    });
+}
+
+#[test]
+fn expired_codex_credit_confirmation_may_read_for_open() {
+    // resets-Astra-5-L6 — native state test named in the spec
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, _) = start_on(&t, "codex", false);
+        let held = expired_token_inventory(&t, "banked");
+        assert!(
+            held.evidence
+                .as_ref()
+                .and_then(|e| e.claim_tokens.as_ref())
+                .and_then(|tokens| tokens.until_ms)
+                < Some(100.)
+        );
+        rc.take(ROUTE, held, 101.);
+        assert_open_again_may_read(rc);
+    });
+}
+
+#[test]
+fn expired_confirmation_after_successful_inventory_may_read_for_open() {
+    // resets-Astra-6-L6 — expiry control adapted to fix9: inventory must be ok
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, _) = start_on(&t, "codex", false);
+        let held = expired_token_inventory(&t, "banked");
+        assert_eq!(held.status, "ok");
+        rc.take(ROUTE, held, 101.);
+        assert!(matches!(rc.load.get_untracked(), Load::Ready(_)));
+        assert_open_again_may_read(rc);
+    });
+}
+
+#[test]
+fn expired_confirmation_after_a_hint_may_read_for_open() {
+    // resets-Sol-6-L6
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, _) = start_on(&t, "codex", false);
+        rc.take(ROUTE, expired_token_inventory(&t, "banked"), 101.);
+        rc.invalidate();
+        assert_open_again_may_read(rc);
+    });
+}
+
+#[test]
+fn expired_confirmation_after_navigation_back_may_read_for_open() {
+    // resets-Astra-7-L6
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, _) = start_on(&t, "claude", false);
+        rc.take(ROUTE, expired_token_inventory(&t, "weekly"), 101.);
+        rc.show("other", "claude", false);
+        rc.show(ROUTE, "claude", false);
+        assert_open_again_may_read(rc);
+    });
+}
+
+#[test]
+fn expired_confirmation_with_fresh_page_load_suppressed_may_read_for_open() {
+    // resets-Sol-7-L6
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, _) = start_on(&t, "codex", false);
+        rc.take(ROUTE, expired_token_inventory(&t, "banked"), 101.);
+        assert!(
+            rc.cache
+                .with_value(|cache| cache.iter().any(|(account, _, inv)| {
+                    account == ROUTE
+                        && inv.evidence.as_ref().is_some_and(|e| {
+                            e.claim_tokens.as_ref().is_some_and(|tokens| {
+                                !tokens.token_keys.is_empty() && tokens.until_ms == Some(1.0)
+                            })
+                        })
+                })),
+            "suppressed fresh load still holds the expired snapshot"
+        );
+        rc.show(ROUTE, "codex", false);
+        assert_open_again_may_read(rc);
+    });
+}
