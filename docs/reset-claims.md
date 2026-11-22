@@ -57,32 +57,32 @@ chooses which limits a credit refills, so window movement is evidence, not proof
 Only a `redeemed` credit is a decrement. A `redeeming` credit keeps its count but
 cannot be used or sent; it confirms a claim only when OpenAI itself answered
 `reset` or `alreadyRedeemed` for that attempt
-(`crates/aac-status/src/reset.rs:1186-1192`). After a lost answer it stays
+(`crates/aac-status/src/reset.rs:1250-1256`). After a lost answer it stays
 `claimed-unconfirmed` and pending until a later fresh same-identity read supplies
-qualifying proof (`reset.rs:948-955`).
+qualifying proof (`reset.rs:1001-1008`).
 The confirmation must render prepare's authoritative `account.label`, never a
 cached account card label. Provider `reset` without proof is
 `claimed-unconfirmed`; `providerSuccess` distinguishes this from a timeout.
 Missing spent grants remain unconfirmed rather than inferring a zero count when
-no provider success is recorded (`reset.rs:1182-1183`). A Codex credit OpenAI
+no provider success is recorded (`reset.rs:1246-1247`). A Codex credit OpenAI
 itself answered `reset` or `alreadyRedeemed` for, gone from a newer same-identity
-read, settles as `claimed` (`reset.rs:1177-1184`; commit `f6ac26442`).
+read, settles as `claimed` (`reset.rs:1241-1248`; commit `f6ac26442`).
 
 ### Lost-answer recovery limits
 
 Check again is read-only at the provider and calls `finish` with `Outcome::Ambiguous`
-(`crates/aac-status/src/reset.rs:1028-1037`).
+(`crates/aac-status/src/reset.rs:1083-1092`).
 
 When an ambiguous send has no recorded provider success, a later redeeming read
 and then an available read that leave the exact credit count unchanged do not
 verify, so `finish` keeps `claimed-unconfirmed` with `pending=true`
-(`reset.rs:948-955,1185-1192`). While those reads keep lacking qualifying proof they
+(`reset.rs:1001-1008,1249-1256`). While those reads keep lacking qualifying proof they
 have **no in-product exit**: there is no automatic release from an available
 read, and `finish` has no manual-release outcome for unverified `Ambiguous`
-(`reset.rs:950-955`). Owner-approved manual review is an escalation, not a
+(`reset.rs:1003-1008`). Owner-approved manual review is an escalation, not a
 product control. Repeating Check again cannot tell
 "OpenAI gave the credit back" from "another client used it"
-(`reset.rs:1028-1037,1185-1192`). A later fresh same-identity read that shows the
+(`reset.rs:1083-1092,1249-1256`). A later fresh same-identity read that shows the
 exact credit redeemed can settle in product
 (`crates/aac-status/tests/reset_any_usage.rs:566-573`).
 
@@ -91,14 +91,14 @@ Each local send stores its own proof deadline in `unanswered`
 (`web-dashboard/leptos/src/reset_state.rs:400-408`). Only an `ok` account inventory
 read started at or after that deadline clears the local unanswered-send obligation:
 `take_at` passes the read start time into `observe` only when `inv.status == "ok"`
-(`web-dashboard/leptos/src/resets.rs:1264-1271`, `reset_state.rs:455-456`). An
+(`web-dashboard/leptos/src/resets.rs:1292-1299`, `reset_state.rs:455-456`). An
 inventory that reports usage unavailable is still accepted as evidence, but it
-does not clear the deadline (`resets.rs:1266-1269`). So after a reload with a
+does not clear the deadline (`resets.rs:1294-1297`). So after a reload with a
 server-pending attempt and an unavailable read, Details keeps the unanswered-send
 state (`reset_state.rs:530-550`) rather than showing `STILL_UNCONFIRMED`
 (`reset_state.rs:578-580`). `read_after_ms` is a different freshness threshold.
 The refusal path sets it for a claim-send refusal or `check-again-required` that
-has no matching ordered evidence (`resets.rs:1424-1452`, `reset_state.rs:409-411`);
+has no matching ordered evidence (`resets.rs:1461-1489`, `reset_state.rs:409-411`);
 an admitted `ok` read started at or after it clears it (`reset_state.rs:457-459`).
 A browser that kept its HTTP response can receive a pending receipt for an
 upstream lost reply; that admitted own receipt acknowledges the local send
@@ -113,20 +113,20 @@ Details projection.
 
 A fresh same-identity Codex read with the exact credit missing settles as `claimed`
 if OpenAI answered `reset` or `alreadyRedeemed` for that attempt, in that call or
-earlier (`reset.rs:946-955,1173-1184`; fixture `crates/aac-status/tests/reset.rs:609-626`).
-Commit `f6ac26442` and the source comment at `reset.rs:1177-1181` record a 2026-11-16
+earlier (`reset.rs:999-1008,1237-1248`; fixture `crates/aac-status/tests/reset.rs:609-626`).
+Commit `f6ac26442` and the source comment at `reset.rs:1241-1245` record a 2026-11-16
 live observation: OpenAI answered `reset`, the weekly window refilled, and the
 credit vanished. A missing row alone leaves the lock only when no provider success
-was recorded (`reset.rs:1182-1183`; fixture `tests/reset.rs:628-641`). The open
+was recorded (`reset.rs:1246-1247`; fixture `tests/reset.rs:628-641`). The open
 question is whether a later provider credit-list read omits the credit after an
-unanswered consume (`reset.rs:1028-1037,1173-1184`), not the lost consume response
+unanswered consume (`reset.rs:1083-1092,1237-1248`), not the lost consume response
 itself; that still needs an authorized trace. This document does not invent that
 shape.
 
-`nothingToReset` trusts the provider's explicit terminal answer (`reset.rs:1336-1352`
+`nothingToReset` trusts the provider's explicit terminal answer (`reset.rs:1402-1426`
 maps it to `Outcome::Nothing`); no contradictory-read reconciliation is performed,
-and no spend is inferred from a contradictory read (`reset.rs:946-955,982-989`;
-fixtures `reset_any_usage.rs:255-282`, `tests/reset.rs:850-862`).
+and no spend is inferred from a contradictory read (`reset.rs:999-1008,1035-1045`;
+fixtures `reset_any_usage.rs:255-282`, `tests/reset.rs:966-978`).
 
 An exact-credit proof shows a spend occurred; it does not identify which client
 spent it (the same account may be used elsewhere). The receipt still has
