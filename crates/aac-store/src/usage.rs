@@ -904,10 +904,11 @@ impl Projector for UsageProjector {
             db::ROLLUP_HOURS,
             db::ROLLUP_DAY,
             CLOSED_ROLLUP_CORRECTIONS,
+            CLOSED_REPLAY_DAYS,
         ] {
             txn.delete_table(def)?;
         }
-        for def in [db::SERIES_BY_PROVIDER, db::DAY_CLOSED] {
+        for def in [db::SERIES_BY_PROVIDER, db::DAY_CLOSED, CLOSED_REPLAY_ARCHIVED] {
             txn.delete_table(def)?;
         }
         db::set_meta(txn, "closed_through_day", "")?;
@@ -1419,6 +1420,51 @@ fn same_rollup_input(saved: &Rollup, rebuilt: &Rollup) -> bool {
 
 // These rows survive a restart between a ledger checkpoint and the final reconciliation.
 const CLOSED_ROLLUP_CORRECTIONS: Bytes = Bytes::new("closed_rollup_corrections");
+const CLOSED_REPLAY_DAYS: Bytes = Bytes::new("closed_replay_days");
+const CLOSED_REPLAY_ARCHIVED: Index = Index::new("closed_replay_archived");
+
+#[derive(Serialize, Deserialize, Default)]
+struct ClosedReplayDay {
+    expected_parts: u32,
+    seen_parts: Vec<u32>,
+}
+
+fn record_closed_replay_part(
+    txn: &WriteTransaction,
+    day: u32,
+    part: u32,
+    parts: u32,
+    archived: &[(u32, u32)],
+) -> Result<()> {
+    let day_key = Key::new().u32(day);
+    let mut state: ClosedReplayDay = match get(txn, CLOSED_REPLAY_DAYS, day_key.as_slice())? {
+        Some(bytes) => db::unpack(&bytes)?,
+        None => ClosedReplayDay {
+            expected_parts: parts,
+            seen_parts: Vec::new(),
+        },
+    };
+    if state.expected_parts != parts {
+        fail!("corrupt", "day_closed parts mismatch for day");
+    }
+    if let Err(index) = state.seen_parts.binary_search(&part) {
+        state.seen_parts.insert(index, part);
+    }
+    put(txn, CLOSED_REPLAY_DAYS, day_key.as_slice(), &db::pack(&state)?)?;
+    let mut table = txn.open_table(CLOSED_REPLAY_ARCHIVED)?;
+    for &(a, w) in archived {
+        table.insert(Key::new().u32(day).u32(a).u32(w).as_slice(), ())?;
+    }
+    Ok(())
+}
+
+fn table_exists(read: &redb::ReadTransaction, def: Bytes) -> Result<bool> {
+    match read.open_table(def) {
+        Ok(_) => Ok(true),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct ResetCorrection {
@@ -1572,75 +1618,163 @@ fn retained_hour_correction<'a>(
     })
 }
 
-/// Apply corrections only after every close has reconciled its periods. A later close can
-/// restore a partially retired period over a split observed in an earlier day's readings.
+/// Apply corrections and prune unarchived provisional closed-day rollups only after every close
+/// part has been replayed. A later close can restore a partially retired period over a split
+/// observed in an earlier day's readings, and a multipart close can span replay checkpoints.
 fn finish_closed_rollups(db: &redb::Database) -> Result<()> {
-    let read = db.begin_read()?;
-    let corrections = match read.open_table(CLOSED_ROLLUP_CORRECTIONS) {
-        Ok(table) => table,
-        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(()),
-        Err(error) => return Err(error.into()),
+    let (has_corrections, has_replay_days) = {
+        let read = db.begin_read()?;
+        (
+            table_exists(&read, CLOSED_ROLLUP_CORRECTIONS)?,
+            table_exists(&read, CLOSED_REPLAY_DAYS)?,
+        )
     };
+    if !has_corrections && !has_replay_days {
+        return Ok(());
+    }
     let txn = begin(db)?;
-    for entry in corrections.iter()? {
-        let (key, value) = entry?;
-        let key = key.value();
-        let day_corr: DayCorrections = db::unpack(value.value())?;
-        if !day_corr.archived || day_corr.hours.iter().all(|(_, c)| c.deltas.is_empty()) {
-            continue;
-        }
-        let a = db::be_u32(key, 0);
-        let w = db::be_u32(key, 4);
-        let Some(hours) = get(&txn, db::ROLLUP_HOURS, key)? else {
-            if day_corr.hours.iter().any(|(_, c)| c.verified && !c.deltas.is_empty()) {
-                fail!("corrupt", "pending correction has no archived hours");
+    if has_corrections {
+        let entries: Vec<(Vec<u8>, DayCorrections)> = {
+            let corrections = txn.open_table(CLOSED_ROLLUP_CORRECTIONS)?;
+            let mut out = Vec::new();
+            for entry in corrections.iter()? {
+                let (key, value) = entry?;
+                out.push((key.value().to_vec(), db::unpack(value.value())?));
             }
-            continue;
+            out
         };
-        let Some(day) = get(&txn, db::ROLLUP_DAY, key)? else {
-            fail!("corrupt", "pending correction has no archived day");
-        };
-        let mut hours = pack::decode_hours(&hours)?;
-        let mut day = Rollup::decode(&day)?;
-        let mut changed = false;
-        for (hour, correction) in day_corr.hours {
-            if correction.deltas.is_empty() {
+        for (key, day_corr) in entries {
+            let key = key.as_slice();
+            if !day_corr.archived || day_corr.hours.iter().all(|(_, c)| c.deltas.is_empty()) {
                 continue;
             }
-            let Ok(index) = hours.binary_search_by_key(&hour, |(h, _)| *h) else {
-                if correction.verified {
-                    fail!("corrupt", "pending correction is outside the archived hours");
+            let a = db::be_u32(key, 0);
+            let w = db::be_u32(key, 4);
+            let Some(hours) = get(&txn, db::ROLLUP_HOURS, key)? else {
+                if day_corr.hours.iter().any(|(_, c)| c.verified && !c.deltas.is_empty()) {
+                    fail!("corrupt", "pending correction has no archived hours");
                 }
                 continue;
             };
-            let saved = &mut hours[index].1;
-            let old = (saved.consumed, saved.resets, saved.last_reset_ms);
-            let mut all_kept = true;
-            for (at, extra) in correction.deltas {
-                if read_period(&txn, a, w, at)?.is_some() {
-                    saved.consumed += extra;
-                    saved.resets += 1;
-                    saved.last_reset_ms = saved.last_reset_ms.max(Some(at as i64));
-                } else {
-                    all_kept = false;
+            let Some(day) = get(&txn, db::ROLLUP_DAY, key)? else {
+                fail!("corrupt", "pending correction has no archived day");
+            };
+            let mut hours = pack::decode_hours(&hours)?;
+            let mut day = Rollup::decode(&day)?;
+            let mut changed = false;
+            for (hour, correction) in day_corr.hours {
+                if correction.deltas.is_empty() {
+                    continue;
+                }
+                let Ok(index) = hours.binary_search_by_key(&hour, |(h, _)| *h) else {
+                    if correction.verified {
+                        fail!("corrupt", "pending correction is outside the archived hours");
+                    }
+                    continue;
+                };
+                let saved = &mut hours[index].1;
+                let old = (saved.consumed, saved.resets, saved.last_reset_ms);
+                let mut all_kept = true;
+                for (at, extra) in correction.deltas {
+                    if read_period(&txn, a, w, at)?.is_some() {
+                        saved.consumed += extra;
+                        saved.resets += 1;
+                        saved.last_reset_ms = saved.last_reset_ms.max(Some(at as i64));
+                    } else {
+                        all_kept = false;
+                    }
+                }
+                if all_kept && let Some(consumed) = correction.consumed_if_all_kept {
+                    saved.consumed = consumed;
+                }
+                if (saved.consumed, saved.resets, saved.last_reset_ms) != old {
+                    day.consumed += saved.consumed - old.0;
+                    day.resets += saved.resets - old.1;
+                    day.last_reset_ms = day.last_reset_ms.max(saved.last_reset_ms);
+                    changed = true;
                 }
             }
-            if all_kept && let Some(consumed) = correction.consumed_if_all_kept {
-                saved.consumed = consumed;
-            }
-            if (saved.consumed, saved.resets, saved.last_reset_ms) != old {
-                day.consumed += saved.consumed - old.0;
-                day.resets += saved.resets - old.1;
-                day.last_reset_ms = day.last_reset_ms.max(saved.last_reset_ms);
-                changed = true;
+            if changed {
+                put(&txn, db::ROLLUP_HOURS, key, &pack::encode_hours(&hours))?;
+                put(&txn, db::ROLLUP_DAY, key, &day.encode())?;
             }
         }
-        if changed {
-            put(&txn, db::ROLLUP_HOURS, key, &pack::encode_hours(&hours))?;
-            put(&txn, db::ROLLUP_DAY, key, &day.encode())?;
+        txn.delete_table(CLOSED_ROLLUP_CORRECTIONS)?;
+    }
+
+    if has_replay_days {
+        let mut complete_days = std::collections::HashSet::new();
+        let mut has_incomplete = false;
+        {
+            let days = txn.open_table(CLOSED_REPLAY_DAYS)?;
+            for entry in days.iter()? {
+                let (key, value) = entry?;
+                let day = db::be_u32(key.value(), 0);
+                let state: ClosedReplayDay = db::unpack(value.value())?;
+                if state.expected_parts > 0 && state.seen_parts.len() == state.expected_parts as usize {
+                    complete_days.insert(day);
+                } else {
+                    has_incomplete = true;
+                }
+            }
+        }
+        if !complete_days.is_empty() {
+            let unarchived = |def: Bytes| -> Result<Vec<Vec<u8>>> {
+                let archived = txn.open_table(CLOSED_REPLAY_ARCHIVED)?;
+                let table = txn.open_table(def)?;
+                let mut victims = Vec::new();
+                for entry in table.iter()? {
+                    let (key, _) = entry?;
+                    let raw = key.value();
+                    let day = db::be_u32(raw, 8);
+                    if !complete_days.contains(&day) {
+                        continue;
+                    }
+                    let a = db::be_u32(raw, 0);
+                    let w = db::be_u32(raw, 4);
+                    if archived.get(Key::new().u32(day).u32(a).u32(w).as_slice())?.is_none() {
+                        victims.push(raw.to_vec());
+                    }
+                }
+                Ok(victims)
+            };
+            let day_victims = unarchived(db::ROLLUP_DAY)?;
+            let hour_victims = unarchived(db::ROLLUP_HOURS)?;
+            if !day_victims.is_empty() {
+                let mut table = txn.open_table(db::ROLLUP_DAY)?;
+                for key in &day_victims {
+                    table.remove(key.as_slice())?;
+                }
+            }
+            if !hour_victims.is_empty() {
+                let mut table = txn.open_table(db::ROLLUP_HOURS)?;
+                for key in &hour_victims {
+                    table.remove(key.as_slice())?;
+                }
+            }
+            if has_incomplete {
+                let mut days = txn.open_table(CLOSED_REPLAY_DAYS)?;
+                let mut archived = txn.open_table(CLOSED_REPLAY_ARCHIVED)?;
+                for &day in &complete_days {
+                    let prefix = Key::new().u32(day);
+                    let end = db::prefix_end(prefix.as_slice());
+                    days.remove(prefix.as_slice())?;
+                    let mut keys = Vec::new();
+                    for entry in archived.range(prefix.as_slice()..end.as_slice())? {
+                        keys.push(entry?.0.value().to_vec());
+                    }
+                    for key in keys {
+                        archived.remove(key.as_slice())?;
+                    }
+                }
+            }
+        }
+        if !has_incomplete {
+            txn.delete_table(CLOSED_REPLAY_DAYS)?;
+            txn.delete_table(CLOSED_REPLAY_ARCHIVED)?;
         }
     }
-    txn.delete_table(CLOSED_ROLLUP_CORRECTIONS)?;
+
     txn.commit()?;
     Ok(())
 }
@@ -1851,13 +1985,27 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<Rep
     if day == u32::MAX {
         fail!("corrupt", "day_closed without a day");
     }
+    let (part, parts) = match (payload.get("part"), payload.get("parts")) {
+        (None, None) => (0u32, 1u32),
+        (Some(part), Some(parts)) => {
+            let part = part.as_u64().and_then(|v| u32::try_from(v).ok());
+            let parts = parts.as_u64().and_then(|v| u32::try_from(v).ok());
+            match (part, parts) {
+                (Some(part), Some(parts)) if parts > 0 && part < parts => (part, parts),
+                _ => fail!("corrupt", "day_closed has invalid part bounds"),
+            }
+        }
+        _ => fail!("corrupt", "day_closed has incomplete part bounds"),
+    };
     let mut complete = true;
+    let mut archived = Vec::new();
     for series in payload["series"].as_array().into_iter().flatten() {
         let account: AccountObs = serde_json::from_value(series["account"].clone())?;
         let window: WindowObs = serde_json::from_value(series["window"].clone())?;
         let a = db::intern(txn, db::KIND_ACCOUNT, &account.identity)?;
         let p = db::intern(txn, db::KIND_PROVIDER, &account.provider)?;
         let w = db::intern(txn, db::KIND_WINDOW, &window.identity)?;
+        archived.push((a, w));
         let t = day as i64 * DAY_MS as i64;
         upsert_account(txn, a, &account, t, true)?;
         let meta = upsert_window(txn, a, p, w, &window, t, true)?;
@@ -1889,6 +2037,9 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<Rep
             &recovered_resets,
             replay,
         )?;
+    }
+    if replay.is_some() {
+        record_closed_replay_part(txn, day, part, parts, &archived)?;
     }
     put_index(txn, db::DAY_CLOSED, Key::new().u32(day).as_slice())?;
     let through: Option<u32> = db::get_meta(txn, "closed_through_day")?.and_then(|v| v.parse().ok());

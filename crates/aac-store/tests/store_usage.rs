@@ -1529,3 +1529,336 @@ fn an_upgrade_does_not_double_count_cross_day_resets_on_complete_hours() {
         fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+#[test]
+fn an_upgrade_discards_provisional_rollups_for_a_new_window_seen_after_close() {
+    let dir = version_one_closed_day();
+    let t = CLOSED_DAY_START;
+    {
+        let (mut log, _) = aac_store::log::Log::open(&dir.join("log/readings"), "readings", "r").unwrap();
+        let payload = json!({
+            "observations": [
+                obs(1, t + 10 * MIN, vec![window("seven_day", Some(20.0), Some(t + 7 * DAY))]),
+                obs(1, t + 20 * MIN, vec![window("seven_day", Some(65.0), Some(t + 7 * DAY))]),
+            ]
+        });
+        let mut event = aac_store::event::Event::new(
+            "usage.sampled",
+            now_ms(),
+            aac_store::msgpack::from_json(&payload).unwrap(),
+        );
+        log.assign(&mut event).unwrap();
+        log.write(&[event]).unwrap();
+    }
+
+    for pass in ["upgrade", "reopen"] {
+        let engine = open(&dir);
+        assert_eq!(
+            closed_day_periods(&engine),
+            vec![(0, 1, 5.0), (2, 2, 39.0), (3, 3, 0.0)],
+            "{pass}: five_hour periods"
+        );
+        assert_closed_day_rollups(&engine, 44.0, 2);
+
+        for resolution in ["day", "hour"] {
+            let weekly = call(
+                &engine,
+                "seriesPoints",
+                json!({
+                    "identities": [identity(1)],
+                    "windowKey": "seven_day",
+                    "fromMs": t - HOUR,
+                    "toMs": t + DAY,
+                    "resolution": resolution,
+                }),
+            );
+            assert_eq!(
+                weekly["series"],
+                json!([]),
+                "{pass}: late new window must not gain closed {resolution} rollups: {weekly:#}"
+            );
+        }
+
+        let raw = call(
+            &engine,
+            "seriesPoints",
+            json!({
+                "identities": [identity(1)],
+                "windowKey": "seven_day",
+                "fromMs": t - HOUR,
+                "toMs": t + DAY,
+                "resolution": "raw",
+            }),
+        );
+        let raw_points = raw["series"][0]["points"].as_array().expect("raw late points");
+        assert_eq!(raw_points.len(), 2, "{pass}: raw late readings must remain: {raw:#}");
+        assert_eq!(raw_points[0][2], json!(20.0));
+        assert_eq!(raw_points[1][2], json!(65.0));
+
+        engine.close().unwrap();
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_rebuild_discards_provisional_rollups_for_an_empty_closed_day() {
+    let dir = temp_dir("empty-closed-day-rebuild");
+    let day = 20_753u32;
+    let t = i64::from(day) * DAY;
+    let empty_day_start = t + DAY;
+    let empty_day_end = t + 2 * DAY - 1;
+    let before = {
+        let engine = open(&dir);
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + HOUR,
+                vec![window("five_hour", Some(10.0), Some(t + 5 * HOUR))],
+            )],
+        );
+        // Close both `day` (with five_hour) and `day + 1` (empty archive: series = []).
+        let closed = aac_store::usage::close_days(&engine, (t + 2 * DAY + 3 * HOUR) as u64).unwrap();
+        assert_eq!(closed["closed"], json!([day, day + 1]));
+
+        // Late readings arrive for both the existing window and a brand-new window on the empty closed day.
+        record(
+            &engine,
+            vec![
+                obs(
+                    1,
+                    empty_day_start + 10 * MIN,
+                    vec![
+                        window("five_hour", Some(20.0), Some(empty_day_start + 5 * HOUR)),
+                        window("seven_day", Some(20.0), Some(empty_day_start + 7 * DAY)),
+                    ],
+                ),
+                obs(
+                    1,
+                    empty_day_start + 20 * MIN,
+                    vec![
+                        window("five_hour", Some(65.0), Some(empty_day_start + 5 * HOUR)),
+                        window("seven_day", Some(65.0), Some(empty_day_start + 7 * DAY)),
+                    ],
+                ),
+            ],
+        );
+
+        for resolution in ["day", "hour"] {
+            let points = call(
+                &engine,
+                "seriesPoints",
+                json!({
+                    "identities": [identity(1)],
+                    "fromMs": empty_day_start,
+                    "toMs": empty_day_end,
+                    "resolution": resolution,
+                }),
+            );
+            assert_eq!(points["series"], json!([]), "live empty closed day ({resolution})");
+        }
+        let snapshot = dump(&engine, ALL);
+        engine.close().unwrap();
+        snapshot
+    };
+
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let rebuilt = open(&dir);
+    for resolution in ["day", "hour"] {
+        let points = call(
+            &rebuilt,
+            "seriesPoints",
+            json!({
+                "identities": [identity(1)],
+                "fromMs": empty_day_start,
+                "toMs": empty_day_end,
+                "resolution": resolution,
+            }),
+        );
+        assert_eq!(
+            points["series"],
+            json!([]),
+            "rebuilt empty closed day must not gain {resolution} rollups: {points:#}"
+        );
+    }
+    let raw = call(
+        &rebuilt,
+        "seriesPoints",
+        json!({
+            "identities": [identity(1)],
+            "fromMs": empty_day_start,
+            "toMs": empty_day_end,
+            "resolution": "raw",
+        }),
+    );
+    assert_eq!(raw["series"].as_array().unwrap().len(), 2, "raw late readings kept");
+    for s in raw["series"].as_array().unwrap() {
+        assert_eq!(s["points"].as_array().unwrap().len(), 2);
+    }
+    assert_eq!(dump(&rebuilt, ALL), before, "rebuilt tables match live tables");
+    rebuilt.close().unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_rebuild_reconciles_multipart_closed_day_and_resumes_across_checkpoints() {
+    let dir = temp_dir("multipart-closed-day");
+    let day = 20_753u32;
+    let t = i64::from(day) * DAY;
+    let expected_rollups = {
+        let engine = open(&dir);
+        // 130 series > DAY_CLOSED_SERIES_PER_EVENT (128), producing 2 day_closed parts.
+        let mut initial = Vec::with_capacity(260);
+        for account in 1..=130u32 {
+            initial.push(obs(
+                account,
+                t + HOUR,
+                vec![window("five_hour", Some(10.0), Some(t + 6 * HOUR))],
+            ));
+            initial.push(obs(
+                account,
+                t + HOUR + 2 * MIN,
+                vec![window("five_hour", Some(25.0), Some(t + 6 * HOUR))],
+            ));
+        }
+        record(&engine, initial);
+        let closed = aac_store::usage::close_days(&engine, (t + DAY + 3 * HOUR) as u64).unwrap();
+        assert_eq!(closed["closed"], json!([day]));
+
+        // Late observations on the closed day for a brand-new window and a brand-new account.
+        record(
+            &engine,
+            vec![
+                obs(
+                    1,
+                    t + 2 * HOUR,
+                    vec![window("seven_day", Some(20.0), Some(t + 7 * DAY))],
+                ),
+                obs(
+                    1,
+                    t + 2 * HOUR + 5 * MIN,
+                    vec![window("seven_day", Some(65.0), Some(t + 7 * DAY))],
+                ),
+                obs(
+                    131,
+                    t + 2 * HOUR,
+                    vec![window("five_hour", Some(40.0), Some(t + 6 * HOUR))],
+                ),
+            ],
+        );
+        let rollups = dump(&engine, &["rollup_day", "rollup_hours"]);
+        assert_eq!(rollups.len(), 260, "130 archived series x (rollup_day + rollup_hours)");
+        engine.close().unwrap();
+        rollups
+    };
+
+    // Confirm the ledger actually wrote a 2-part day_closed for `day`.
+    let mut day_closed_events = Vec::new();
+    {
+        let (ledger, _) = aac_store::log::Log::open(&dir.join("log/ledger"), "ledger", "l").unwrap();
+        ledger
+            .read_after(None, |ev| {
+                if ev.event_type == "usage.day_closed" {
+                    day_closed_events.push(ev);
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+    assert_eq!(day_closed_events.len(), 2, "expected 2-part close");
+    assert_eq!(
+        aac_store::msgpack::to_json(&day_closed_events[0].payload)["parts"],
+        json!(2)
+    );
+
+    // 1. Full rebuild keeps all 130 archived series (both parts) and removes late unarchived rollups.
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    {
+        let rebuilt = open(&dir);
+        assert_eq!(dump(&rebuilt, &["rollup_day", "rollup_hours"]), expected_rollups);
+        let late_weekly = call(
+            &rebuilt,
+            "seriesPoints",
+            json!({ "identities": [identity(1)], "windowKey": "seven_day", "fromMs": t, "toMs": t + DAY - 1, "resolution": "day" }),
+        );
+        assert_eq!(late_weekly["series"], json!([]));
+        let late_raw = call(
+            &rebuilt,
+            "seriesPoints",
+            json!({ "identities": [identity(131)], "fromMs": t, "toMs": t + DAY - 1, "resolution": "raw" }),
+        );
+        assert_eq!(late_raw["series"][0]["points"].as_array().unwrap().len(), 1);
+        rebuilt.close().unwrap();
+    }
+
+    // 2. Resumable checkpoint replay: open with only part 0 in ledger (advancing checkpoint past
+    //    part 0 without losing part 1's series), then append part 1 and reopen to finish cleanup.
+    let resume_dir = temp_dir("multipart-resume");
+    {
+        let e = open(&resume_dir);
+        e.close().unwrap();
+    }
+    fs::remove_file(resume_dir.join("aac.redb")).unwrap();
+    fs::remove_dir_all(resume_dir.join("log/readings")).unwrap();
+    copy_dir(&dir.join("log/readings"), &resume_dir.join("log/readings"));
+    fs::remove_dir_all(resume_dir.join("log/ledger")).unwrap();
+    {
+        let (mut ledger, _) = aac_store::log::Log::open(&resume_dir.join("log/ledger"), "ledger", "l").unwrap();
+        let mut part0 =
+            aac_store::event::Event::new("usage.day_closed", now_ms(), day_closed_events[0].payload.clone());
+        part0.idempotency_key = Some(format!("{day}:0"));
+        ledger.assign(&mut part0).unwrap();
+        ledger.write(&[part0]).unwrap();
+    }
+    {
+        // Only part 0 seen so far: checkpoint advances past part 0; incomplete close must not drop
+        // part 1's provisional rollups yet.
+        let partial = open(&resume_dir);
+        let partial_rows = dump(&partial, &["rollup_day"]);
+        assert!(
+            partial_rows.len() >= 130,
+            "part 1 series must survive while close is incomplete: {}",
+            partial_rows.len()
+        );
+        partial.close().unwrap();
+    }
+    {
+        // Now part 1 arrives in the ledger; reopening resumes from the checkpoint and completes cleanup.
+        let (mut ledger, _) = aac_store::log::Log::open(&resume_dir.join("log/ledger"), "ledger", "l").unwrap();
+        let mut part1 =
+            aac_store::event::Event::new("usage.day_closed", now_ms(), day_closed_events[1].payload.clone());
+        part1.idempotency_key = Some(format!("{day}:1"));
+        ledger.assign(&mut part1).unwrap();
+        ledger.write(&[part1]).unwrap();
+    }
+    {
+        let resumed = open(&resume_dir);
+        let day_rows = dump(&resumed, &["rollup_day"]);
+        let hour_rows = dump(&resumed, &["rollup_hours"]);
+        assert_eq!(
+            day_rows.len(),
+            130,
+            "resumed multipart close must keep 130 archived days"
+        );
+        assert_eq!(
+            hour_rows.len(),
+            130,
+            "resumed multipart close must keep 130 archived hours"
+        );
+        let late_weekly = call(
+            &resumed,
+            "seriesPoints",
+            json!({ "identities": [identity(1)], "windowKey": "seven_day", "fromMs": t, "toMs": t + DAY - 1, "resolution": "day" }),
+        );
+        assert_eq!(late_weekly["series"], json!([]));
+        let late_acct = call(
+            &resumed,
+            "seriesPoints",
+            json!({ "identities": [identity(131)], "fromMs": t, "toMs": t + DAY - 1, "resolution": "day" }),
+        );
+        assert_eq!(late_acct["series"], json!([]));
+        resumed.close().unwrap();
+    }
+    fs::remove_dir_all(&dir).unwrap();
+    fs::remove_dir_all(&resume_dir).unwrap();
+}
