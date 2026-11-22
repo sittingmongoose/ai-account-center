@@ -10,7 +10,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 107 |
 | Sync fs occurrences (runtime hotpaths) | 486 |
 | Sync fs files affected (runtime hotpaths) | 54 |
-| Legacy shim markers | 182 |
+| Legacy shim markers | 184 |
 | Legacy shim files affected | 56 |
 
 ## Top Runtime Hotpath Sync fs Files
@@ -56,7 +56,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | hotpath console.error/warn files | 13 |
 | files with createLogger | 39/438 |
 | subdomains with zero createLogger | 8 (antigravity, config, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 65 |
+| files > 400 LOC | 66 |
 | files > 600 LOC | 27 |
 
 ### Top Hotpath console.error/warn Files
@@ -90,10 +90,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/antigravity/registry.ts` | 1206 |
 | `src/web-server/status/status-collectors.ts` | 1203 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
-| `src/web-server/services/account-dashboard-service.ts` | 1048 |
+| `src/web-server/services/account-dashboard-service.ts` | 1091 |
 | `src/web-server/rust-service.ts` | 1035 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
-| `src/web-server/services/additional-account-service.ts` | 930 |
+| `src/web-server/services/additional-account-service.ts` | 938 |
 | `src/web-server/status/status-view.ts` | 903 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
 

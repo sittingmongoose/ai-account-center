@@ -357,7 +357,7 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 182,
+    "totalMarkers": 184,
     "filesAffected": 56,
     "topFiles": [
       {
@@ -726,7 +726,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 65,
+      "countOver400": 66,
       "countOver600": 27,
       "topOver400": [
         {
@@ -767,7 +767,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 1048
+          "loc": 1091
         },
         {
           "file": "src/web-server/rust-service.ts",
@@ -779,7 +779,7 @@
         },
         {
           "file": "src/web-server/services/additional-account-service.ts",
-          "loc": 930
+          "loc": 938
         },
         {
           "file": "src/web-server/status/status-view.ts",
