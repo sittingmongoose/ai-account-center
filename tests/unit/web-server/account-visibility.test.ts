@@ -8,9 +8,7 @@ import path from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   ACCOUNT_VISIBILITY_FILE,
-  migrateAccountVisibilityIds,
   parseVisibilityBody,
-  patchAccountVisibility,
   readAccountVisibility,
   updateAccountVisibility,
   writeAccountVisibility,
@@ -600,74 +598,5 @@ describe('GET and PUT /api/accounts/visibility', () => {
     ]);
     detach();
     expect(broadcastDashboardEvent({ type: 'accounts-changed' })).toBe(0);
-  });
-
-  it('clears a legacy bare opencode-go id in only the patched list when showing its digest id', async () => {
-    const dir = ccsDir();
-    await writeAccountVisibility(dir, {
-      hiddenProviders: [],
-      hiddenAccountIds: ['codex:party', 'opencode-go:usage'],
-      trayHiddenProviders: [],
-      trayHiddenAccountIds: ['opencode-go:usage'],
-    });
-    const afterHomeShow = await patchAccountVisibility(dir, {
-      hiddenAccountIds: { hide: [], show: ['opencode-go:usage:cccccccc'] },
-    });
-    expect(afterHomeShow).toEqual({
-      state: 'saved',
-      visibility: {
-        hiddenProviders: [],
-        hiddenAccountIds: ['codex:party'],
-        trayHiddenProviders: [],
-        trayHiddenAccountIds: ['opencode-go:usage'],
-      },
-    });
-    const afterTrayShow = await patchAccountVisibility(dir, {
-      trayHiddenAccountIds: { hide: [], show: ['opencode-go:usage:cccccccc'] },
-    });
-    expect(afterTrayShow).toEqual({
-      state: 'saved',
-      visibility: {
-        hiddenProviders: [],
-        hiddenAccountIds: ['codex:party'],
-        trayHiddenProviders: [],
-        trayHiddenAccountIds: [],
-      },
-    });
-  });
-
-  it('migrates legacy bare opencode-go ids in place independently and leaves direct digests alone', async () => {
-    const dir = ccsDir();
-    fs.chmodSync(dir, 0o700);
-    await writeAccountVisibility(dir, {
-      hiddenProviders: ['cursor'],
-      hiddenAccountIds: ['codex:party', 'opencode-go:usage', 'opencode-go:usage:aaaaaaaa'],
-      trayHiddenProviders: ['qwen'],
-      trayHiddenAccountIds: ['opencode-go:usage:bbbbbbbb'],
-    });
-    const map = new Map([['opencode-go:usage', 'opencode-go:usage:aaaaaaaa']]);
-    const migrated = await migrateAccountVisibilityIds(dir, map);
-    expect(migrated).toEqual({
-      state: 'saved',
-      visibility: {
-        hiddenProviders: ['cursor'],
-        hiddenAccountIds: ['codex:party', 'opencode-go:usage:aaaaaaaa'],
-        trayHiddenProviders: ['qwen'],
-        trayHiddenAccountIds: ['opencode-go:usage:bbbbbbbb'],
-      },
-    });
-    // No extra file created beside account-visibility.json (only its .lock lease).
-    const entries = fs.readdirSync(dir).sort();
-    expect(entries.every((name) => name === ACCOUNT_VISIBILITY_FILE || name === `${ACCOUNT_VISIBILITY_FILE}.lock`)).toBe(true);
-
-    // Calling again with a different sole digest is a no-op because the bare id is gone.
-    const file = path.join(dir, ACCOUNT_VISIBILITY_FILE);
-    const before = fs.readFileSync(file, 'utf8');
-    const second = await migrateAccountVisibilityIds(
-      dir,
-      new Map([['opencode-go:usage', 'opencode-go:usage:cccccccc']])
-    );
-    expect(second).toEqual(migrated);
-    expect(fs.readFileSync(file, 'utf8')).toBe(before);
   });
 });

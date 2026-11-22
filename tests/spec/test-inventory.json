@@ -405,12 +405,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "crates/aac-http/src/account_usage/dashboard.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "crates/aac-http/src/account_usage/failover.rs",
       "kind": "internal",
       "evidence": [],
@@ -1070,12 +1064,6 @@
     },
     {
       "file": "crates/aac-http/src/view_reply.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "crates/aac-http/src/visibility_write.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

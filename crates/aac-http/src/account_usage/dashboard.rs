@@ -3,7 +3,6 @@ use super::{Desktop, sampler::DashboardSample};
 use aac_providers::{Provider, ProviderId, dashboard_providers};
 use aac_views::decline::Decline;
 use serde_json::{Map, Value, json};
-use std::collections::{HashMap, HashSet};
 
 const VISIBILITY: [&str; 4] = [
     "hiddenProviders",
@@ -225,128 +224,24 @@ pub struct Input<'a> {
     pub server: Option<&'a Value>,
 }
 
-/// Expanded digest row ids observed per bare `opencode-go` discover id (deduplicated),
-/// excluding any bare id that is still present itself in `rows`.
-pub(super) fn discovered_opencode_digests(rows: &[Value]) -> HashMap<String, Vec<String>> {
-    let mut present = HashSet::new();
-    let mut candidates: HashMap<&str, Vec<&str>> = HashMap::new();
-    for row in rows {
-        let Some(id) = row["id"].as_str() else {
-            continue;
-        };
-        present.insert(id);
-        if row["provider"].as_str() != Some("opencode-go") {
-            continue;
-        }
-        if let Some(parent) = crate::account_usage::producer::recheck::discovered_key_id(id) {
-            let group = candidates.entry(parent).or_default();
-            if !group.contains(&id) {
-                group.push(id);
-            }
-        }
-    }
-    candidates
-        .into_iter()
-        .filter_map(|(parent, ids)| {
-            (!present.contains(parent)).then(|| {
-                (
-                    parent.to_owned(),
-                    ids.into_iter().map(str::to_owned).collect(),
-                )
-            })
-        })
-        .collect()
-}
-
-/// Whether either account visibility list contains `target`.
-pub(super) fn visibility_contains_account_id(visibility: &Value, target: &str) -> bool {
-    ["hiddenAccountIds", "trayHiddenAccountIds"]
-        .into_iter()
-        .any(|key| {
-            visibility
-                .get(key)
-                .and_then(Value::as_array)
-                .is_some_and(|list| list.iter().any(|entry| entry.as_str() == Some(target)))
-        })
-}
-
-/// Resolve unambiguous `<bare discover id> -> <digest row id>` migrations for bare ids still
-/// present in `visibility`. Once a bare id has been seen with a digest key, never retarget it to
-/// a different key or after multiple keys appear; entries clear once the bare id leaves
-/// `visibility`.
-pub(super) fn select_opencode_migrations(
-    visibility: &Value,
-    rows: &[Value],
-    observed: &mut HashMap<String, Option<String>>,
-) -> HashMap<String, String> {
-    observed.retain(|parent, _| visibility_contains_account_id(visibility, parent));
-    let mut migrations = HashMap::new();
-    for (parent, digests) in discovered_opencode_digests(rows) {
-        if !visibility_contains_account_id(visibility, &parent) {
-            continue;
-        }
-        match digests.as_slice() {
-            [only] => match observed.get(&parent) {
-                None => {
-                    observed.insert(parent.clone(), Some(only.clone()));
-                    migrations.insert(parent, only.clone());
-                }
-                Some(Some(previous)) if previous == only => {
-                    migrations.insert(parent, only.clone());
-                }
-                Some(_) => {
-                    observed.insert(parent, None);
-                }
-            },
-            many if many.len() > 1 => {
-                observed.insert(parent, None);
-            }
-            _ => {}
-        }
-    }
-    migrations
-}
-
-/// Replace matching account ids in place, preserving order and dropping duplicates.
-pub(crate) fn replace_account_ids(
-    list: &[Value],
-    replacements: &HashMap<String, String>,
-) -> (Vec<Value>, bool) {
-    if list.is_empty() || replacements.is_empty() {
-        return (list.to_vec(), false);
-    }
-    let mut changed = false;
-    let mut next = Vec::with_capacity(list.len());
-    for entry in list {
-        let mapped = match entry.as_str().and_then(|id| replacements.get(id)) {
-            Some(digest) => {
-                changed = true;
-                Value::String(digest.clone())
-            }
-            None => entry.clone(),
-        };
-        if !next.contains(&mapped) {
-            next.push(mapped);
-        }
-    }
-    (next, changed)
-}
-
 /// Produce the requested desktop and transport generation.
 pub fn build(desktop: Desktop, secure: bool, input: Input<'_>) -> Result<DashboardSample, Decline> {
-    let visibility = input.visibility;
     let accounts = input
         .rows
         .into_iter()
-        .map(|row| decorate(row, visibility, input.lifecycle))
+        .map(|row| decorate(row, input.visibility, input.lifecycle))
         .collect::<Result<Vec<_>, _>>()?;
     let providers: Vec<_> = dashboard_providers()
-        .map(|row| provider(row, &accounts, visibility, input.lifecycle, secure))
+        .map(|row| provider(row, &accounts, input.visibility, input.lifecycle, secure))
         .collect();
     let facts = facts(&accounts, input.signins)?;
     let mut settings = json!({"refreshIntervalSeconds":input.refresh_seconds});
     for key in VISIBILITY {
-        settings[key] = visibility.get(key).cloned().unwrap_or_else(|| json!([]));
+        settings[key] = input
+            .visibility
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| json!([]));
     }
     settings["visibilityAvailable"] = json!(input.visibility_available);
     let mut dashboard = json!({
@@ -368,183 +263,4 @@ pub fn build(desktop: Desktop, secure: bool, input: Input<'_>) -> Result<Dashboa
         dashboard,
         facts,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn opencode_row(id: &str, label: &str) -> Value {
-        json!({
-            "id": id,
-            "provider": "opencode-go",
-            "label": label,
-            "email": null,
-            "plan": "go",
-            "platform": "ubuntu",
-            "status": "ok",
-            "isActive": false,
-            "sampledAt": "2026-11-21T12:00:00Z",
-            "fetchedAt": "2026-11-21T12:00:00Z",
-            "windows": [],
-            "capabilities": {}
-        })
-    }
-
-    fn build_dashboard(rows: Vec<Value>, visibility: Value) -> Value {
-        build(
-            Desktop::Mac,
-            true,
-            Input {
-                rows,
-                visibility: &visibility,
-                visibility_available: true,
-                refresh_seconds: 60,
-                lifecycle: &Lifecycle::default(),
-                signins: None,
-                server: None,
-            },
-        )
-        .expect("build dashboard")
-        .dashboard
-    }
-
-    fn row<'a>(dashboard: &'a Value, id: &str) -> &'a Value {
-        dashboard["accounts"]
-            .as_array()
-            .and_then(|rows| rows.iter().find(|row| row["id"] == id))
-            .expect("row present")
-    }
-
-    #[test]
-    fn unsaved_bare_opencode_go_hide_stays_visible_and_migrations_stay_unambiguous() {
-        let sample_rows = || {
-            vec![
-                opencode_row("opencode-go:acct:11111111", "Key 1"),
-                opencode_row("opencode-go:acct:22222222", "Key 2"),
-                opencode_row("opencode-go:usage:cccccccc", "Key cccccccc"),
-            ]
-        };
-
-        // Unsaved bare ID in visibility: build() never remaps it in memory for display.
-        let unsaved_home = build_dashboard(
-            sample_rows(),
-            json!({
-                "hiddenProviders": [],
-                "hiddenAccountIds": ["opencode-go:usage"],
-                "trayHiddenProviders": [],
-                "trayHiddenAccountIds": []
-            }),
-        );
-        assert_eq!(
-            unsaved_home["settings"]["hiddenAccountIds"],
-            json!(["opencode-go:usage"])
-        );
-        assert_eq!(unsaved_home["settings"]["trayHiddenAccountIds"], json!([]));
-        assert_eq!(
-            row(&unsaved_home, "opencode-go:usage:cccccccc")["hidden"],
-            false
-        );
-        assert_eq!(
-            row(&unsaved_home, "opencode-go:usage:cccccccc")["trayHidden"],
-            false
-        );
-
-        let unsaved_tray = build_dashboard(
-            sample_rows(),
-            json!({
-                "hiddenProviders": [],
-                "hiddenAccountIds": [],
-                "trayHiddenProviders": [],
-                "trayHiddenAccountIds": ["opencode-go:usage"]
-            }),
-        );
-        assert_eq!(
-            unsaved_tray["settings"]["trayHiddenAccountIds"],
-            json!(["opencode-go:usage"])
-        );
-        assert_eq!(
-            row(&unsaved_tray, "opencode-go:usage:cccccccc")["hidden"],
-            false
-        );
-        assert_eq!(
-            row(&unsaved_tray, "opencode-go:usage:cccccccc")["trayHidden"],
-            false
-        );
-
-        // Migration selection + replacement keeps Home and tray independent, deduplicates and
-        // preserves order.
-        let mut observed = HashMap::new();
-        let both_vis = json!({
-            "hiddenProviders": [],
-            "hiddenAccountIds": ["codex:party", "opencode-go:usage", "opencode-go:usage:cccccccc"],
-            "trayHiddenProviders": [],
-            "trayHiddenAccountIds": ["opencode-go:usage"]
-        });
-        let migrations = select_opencode_migrations(&both_vis, &sample_rows(), &mut observed);
-        assert_eq!(
-            migrations,
-            HashMap::from([(
-                "opencode-go:usage".to_owned(),
-                "opencode-go:usage:cccccccc".to_owned(),
-            )])
-        );
-        let (next_home, home_changed) = replace_account_ids(
-            both_vis["hiddenAccountIds"].as_array().expect("home"),
-            &migrations,
-        );
-        let (next_tray, tray_changed) = replace_account_ids(
-            both_vis["trayHiddenAccountIds"].as_array().expect("tray"),
-            &migrations,
-        );
-        assert!(home_changed && tray_changed);
-        assert_eq!(
-            next_home,
-            vec![json!("codex:party"), json!("opencode-go:usage:cccccccc")]
-        );
-        assert_eq!(next_tray, vec![json!("opencode-go:usage:cccccccc")]);
-
-        // Ambiguous: two digest rows -> selects nothing and locks out later retargeting to B.
-        let two_rows = vec![
-            opencode_row("opencode-go:usage:aaaaaaaa", "Key aaaaaaaa"),
-            opencode_row("opencode-go:usage:bbbbbbbb", "Key bbbbbbbb"),
-        ];
-        let bare_vis = json!({
-            "hiddenProviders": [],
-            "hiddenAccountIds": ["opencode-go:usage"],
-            "trayHiddenProviders": [],
-            "trayHiddenAccountIds": ["opencode-go:usage"]
-        });
-        let mut seq_observed = HashMap::new();
-        assert!(select_opencode_migrations(&bare_vis, &two_rows, &mut seq_observed).is_empty());
-        assert!(
-            select_opencode_migrations(
-                &bare_vis,
-                &[opencode_row("opencode-go:usage:bbbbbbbb", "Key bbbbbbbb")],
-                &mut seq_observed,
-            )
-            .is_empty()
-        );
-
-        // Bare row still present: keep bare id on bare row, do not migrate to digest row.
-        let bare_present_rows = vec![
-            opencode_row("opencode-go:usage", "OpenCode Go"),
-            opencode_row("opencode-go:usage:cccccccc", "Key cccccccc"),
-        ];
-        let mut bare_observed = HashMap::new();
-        assert!(
-            select_opencode_migrations(&bare_vis, &bare_present_rows, &mut bare_observed)
-                .is_empty()
-        );
-        let bare_present = build_dashboard(bare_present_rows, bare_vis);
-        assert_eq!(
-            bare_present["settings"]["hiddenAccountIds"],
-            json!(["opencode-go:usage"])
-        );
-        assert_eq!(row(&bare_present, "opencode-go:usage")["hidden"], true);
-        assert_eq!(
-            row(&bare_present, "opencode-go:usage:cccccccc")["hidden"],
-            false
-        );
-    }
 }
