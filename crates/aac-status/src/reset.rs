@@ -735,6 +735,12 @@ impl Store {
         if outstanding {
             return Err("claim-token-outstanding");
         }
+        let hold: Option<i64> = sql(tx
+            .query_row("SELECT until_ms FROM holds WHERE account=?", [&lock_key], |r| r.get(0))
+            .optional())?;
+        if hold.is_some_and(|v| v > now) {
+            return Err("cooldown");
+        }
         sql(tx.execute(
             "INSERT INTO confirmations VALUES(?,?,?,?,?,?)",
             params![hash(token), hash(caller), account, key, fp, now + 120_000],

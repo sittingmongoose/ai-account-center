@@ -747,12 +747,35 @@ fn cooldown_persists() {
             .unwrap()["outcome"],
         "cooldown"
     );
-    let t = prepare(&mut s, &k, &snap);
     assert_eq!(
-        s.begin("route-account", &k, &caller(), &t, &snap, NOW, &entropy(9))
+        s.prepare("route-account", &k, &caller(), &snap, NOW, &entropy(2))
             .unwrap_err(),
         "cooldown"
     );
+}
+#[test]
+fn a_committed_cooldown_must_refuse_prepare() {
+    let (d, mut s) = open();
+    let snap = snapshot("claude");
+    let inv = s.read_inventory("route-account", &snap, NOW, &entropy(1)).unwrap();
+    let key_a = inv["grants"][1]["grantKey"].as_str().unwrap().to_owned();
+    let key_b = inv["grants"][0]["grantKey"].as_str().unwrap().to_owned();
+    let token = prepare(&mut s, &key_a, &snap);
+    let attempt = entropy(3);
+    s.begin("route-account", &key_a, &caller(), &token, &snap, NOW, &attempt)
+        .unwrap();
+    s.read_finish("route-account", &attempt, Outcome::Cooldown, None, NOW, Some(60_000))
+        .unwrap();
+    let err = s
+        .prepare("route-account", &key_b, &caller(), &snap, NOW + 1_000, &entropy(4))
+        .expect_err("a committed cooldown must refuse prepare");
+    assert_eq!(err, "cooldown");
+    drop(s);
+    let db = rusqlite::Connection::open(d.path().join("reset.sqlite")).unwrap();
+    let n: i64 = db
+        .query_row("SELECT count(*) FROM claim_tokens", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0);
 }
 #[test]
 fn native_dispatch_never_echoes_provider_bodies() {
