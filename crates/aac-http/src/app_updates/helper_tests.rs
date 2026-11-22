@@ -199,6 +199,92 @@ print('fresh_absent=%s' % (not (fresh / 'app_updates.py').exists()))
 
 #[cfg(unix)]
 #[test]
+fn task_registration_timeout_restores_the_launcher_that_answered_before() {
+    // N1: a registration that times out (TimeoutExpired) or cannot start is as unfinished as a
+    // refused one. The replacement launcher must not stay active with no task behind it.
+    let dir = tempfile::tempdir().expect("fixture");
+    let harness = r#"
+import pathlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+fresh = pathlib.Path(sys.argv[2])
+prior = b'# prior launcher\n'
+(root / 'app_updates.py').write_bytes(prior)
+
+class Done:
+    def __init__(self, code=0, stdout=''):
+        self.returncode = code
+        self.stdout = stdout
+        self.stderr = ''
+
+def run(args, **kwargs):
+    script = args[-1] if args else ''
+    if args and args[0] == 'powershell.exe' and 'Get-ScheduledTask' in script:
+        return Done(1)
+    if args and args[0] == 'powershell.exe' and 'Register-ScheduledTask' in script:
+        raise subprocess.TimeoutExpired(args, kwargs.get('timeout'))
+    return Done(0)
+
+subprocess.run = run
+subprocess.check_output = lambda args, **kwargs: 'S-1-5-21-1-2-3-1001'
+source = sys.stdin.read().removesuffix('\nmain()\n')
+namespace = {}
+exec(source, namespace)
+namespace['capable'] = lambda script, platform: True
+data = b'# new helper\n'
+expected = {'app_updates.py': namespace['digest'](data)}
+payload = {'app_updates.py': data}
+outcomes = []
+for folder in (root, fresh):
+    try:
+        namespace['publish'](folder, 'windows', expected, payload)
+        outcomes.append('ok')
+    except subprocess.TimeoutExpired:
+        outcomes.append('timeout')
+    except namespace['Refused'] as error:
+        outcomes.append(error.reason)
+print('outcomes=%s' % ','.join(outcomes))
+print('prior_restored=%s' % ((root / 'app_updates.py').read_bytes() == prior))
+print('fresh_absent=%s' % (not (fresh / 'app_updates.py').exists()))
+"#;
+    let mut child = std::process::Command::new("/usr/bin/python3")
+        .args(["-B", "-c", harness])
+        .arg(dir.path())
+        .arg(dir.path().join("fresh"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run windows task timeout fixture");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("helper stdin")
+        .write_all(SCRIPT.as_bytes())
+        .expect("helper script");
+    let result = child
+        .wait_with_output()
+        .expect("helper task timeout result");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "stdout={stdout} stderr={stderr}");
+    assert!(
+        stdout.contains("outcomes=timeout,timeout"),
+        "a timed-out registration is reported, not swallowed: {stdout}"
+    );
+    assert!(
+        stdout.contains("prior_restored=True"),
+        "a timed-out registration must leave the prior launcher answering: {stdout}"
+    );
+    assert!(
+        stdout.contains("fresh_absent=True"),
+        "a timed-out registration must leave a fresh host without a launcher: {stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn windows_sync_registers_the_task_the_coordinator_starts() {
     // The registered task is the one the coordinator's Windows task start dispatches; the row
     // comes from that dispatch, not from the publication reply.
