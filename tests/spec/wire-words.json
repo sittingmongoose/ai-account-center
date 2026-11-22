@@ -2857,6 +2857,8 @@
       "src/web-server/services/account-dashboard-service.ts:account.status",
       "src/web-server/services/account-dashboard-service.ts:current.status",
       "src/web-server/services/account-dashboard-service.ts:publicAccount.status",
+      "src/web-server/services/account-dashboard-service.ts:read.state",
+      "src/web-server/services/account-dashboard-service.ts:state",
       "src/web-server/services/account-dashboard-service.ts:status",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
       "src/web-server/services/account-dashboard-types.ts:quotaStatus",
@@ -4381,6 +4383,7 @@
       "src/web-server/routes/account-visibility-routes.ts:body.state",
       "src/web-server/routes/account-visibility-routes.ts:reply.state",
       "src/web-server/routes/account-visibility-routes.ts:result.state",
+      "src/web-server/services/account-dashboard-service.ts:migrated.state",
       "src/web-server/services/account-visibility.ts:state"
     ]
   },
