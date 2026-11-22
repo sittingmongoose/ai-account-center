@@ -280,7 +280,8 @@ export const tests = {
 		expireToken();
 		const before = resetRequests(server).length;
 		await t.page.click('[data-probe="reset-dialog-reopen"]');
-		await t.until('Open it again started a reset read', () => resetRequests(server).length > before, null, { timeout: 5000 });
+		for (let i = 0; i < 50 && resetRequests(server).length <= before; i++) await t.page.waitForTimeout(100);
+		await t.check('Open it again started a reset read', resetRequests(server).length > before, String(resetRequests(server).length - before));
 		const after = resetRequests(server).slice(before);
 		await t.check('the recovery read hit inventory or prepare', after.some((q) => q.path.includes('/reset-claims')), JSON.stringify(after));
 		await t.until('the dialog reopened or named that nothing was sent', () => {
