@@ -2,6 +2,7 @@ import path from 'path';
 import { withTsPrivateFileLeases } from '../../shared/private-files';
 import { ConfigError } from '../../errors/error-types';
 import type { DashboardProvider } from './account-dashboard-types';
+import { discoveredOpencodeGoParentId } from './additional-usage-transport';
 import { isDashboardProviderId } from './dashboard-provider-table';
 import {
   readPrivateJsonFile,
@@ -98,7 +99,15 @@ export async function patchAccountVisibility(
         const operation = delta[key];
         if (operation) {
           const values = new Set<string>(next[key]);
-          operation.show.forEach((id) => values.delete(id));
+          const isIdList = key === 'hiddenAccountIds' || key === 'trayHiddenAccountIds';
+          const hideSet = new Set(operation.hide);
+          operation.show.forEach((id) => {
+            values.delete(id);
+            if (isIdList) {
+              const parent = discoveredOpencodeGoParentId(id);
+              if (parent && !hideSet.has(parent)) values.delete(parent);
+            }
+          });
           operation.hide.forEach((id) => values.add(id));
           Object.assign(next, { [key]: [...values] });
         }

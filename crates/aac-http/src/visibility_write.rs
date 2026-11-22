@@ -151,7 +151,23 @@ fn save_until(
             Some(Change::Replace(values)) => values.clone(),
             Some(Change::Delta { hide, show }) => {
                 let mut next = prior.ok_or(Decline::Shape)?.clone();
-                next.retain(|entry| !show.contains(entry));
+                let show_parents: Vec<&str> = if key.ends_with("AccountIds") {
+                    show.iter()
+                        .filter_map(|entry| {
+                            entry.as_str().and_then(
+                                crate::account_usage::producer::recheck::discovered_key_id,
+                            )
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                next.retain(|entry| {
+                    !show.contains(entry)
+                        && !entry
+                            .as_str()
+                            .is_some_and(|id| show_parents.contains(&id) && !hide.contains(entry))
+                });
                 for entry in hide {
                     if !next.contains(entry) {
                         next.push(entry.clone());
@@ -172,4 +188,74 @@ fn save_until(
     Ok(
         json!({ "state": "saved", "visibility": lists, "folderWarnings": current["folderWarnings"] }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn patch_show_on_digest_id_clears_legacy_bare_id_in_patched_list_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        #[cfg(unix)]
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("chmod dir");
+        let file = dir.path().join("account-visibility.json");
+        fs::write(
+            &file,
+            r#"{"version":1,"hiddenProviders":[],"hiddenAccountIds":["codex:party","opencode-go:usage"],"trayHiddenProviders":[],"trayHiddenAccountIds":["opencode-go:usage"]}"#,
+        )
+        .expect("write visibility");
+        #[cfg(unix)]
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("chmod file");
+
+        let rows = registry::rows().expect("registry rows");
+        let files: std::collections::BTreeMap<String, String> = rows
+            .iter()
+            .map(|row| {
+                let owner = if row.id == "account-visibility" {
+                    "rust-service"
+                } else {
+                    row.owner.word()
+                };
+                (row.id.clone(), owner.to_owned())
+            })
+            .collect();
+        let owners = Owners::from_boot(rows, &files).expect("owners");
+        let after_home = save(
+            dir.path(),
+            &owners,
+            true,
+            br#"{"hiddenAccountIds":{"hide":[],"show":["opencode-go:usage:cccccccc"]}}"#,
+        )
+        .expect("patch home");
+        assert_eq!(
+            after_home["visibility"],
+            json!({
+                "hiddenProviders": [],
+                "hiddenAccountIds": ["codex:party"],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": ["opencode-go:usage"]
+            })
+        );
+
+        let after_tray = save(
+            dir.path(),
+            &owners,
+            true,
+            br#"{"trayHiddenAccountIds":{"hide":[],"show":["opencode-go:usage:cccccccc"]}}"#,
+        )
+        .expect("patch tray");
+        assert_eq!(
+            after_tray["visibility"],
+            json!({
+                "hiddenProviders": [],
+                "hiddenAccountIds": ["codex:party"],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": []
+            })
+        );
+    }
 }

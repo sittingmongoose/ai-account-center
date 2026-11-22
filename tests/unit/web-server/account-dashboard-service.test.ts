@@ -1785,3 +1785,114 @@ it('keeps a timed-out Antigravity collection retained in its synchronous project
     sampledAt: account.sampledAt,
   });
 });
+
+describe('OpenCode Go visibility carryover (Low 1)', () => {
+  function opencodeRow(id: string, label: string): DashboardAccount {
+    return {
+      ...additional('opencode-go'),
+      id,
+      label,
+      platform: 'ubuntu',
+    };
+  }
+
+  it('carries a bare opencode-go hide choice to a unique digest row independently for Home and trays', async () => {
+    const namedOne = opencodeRow('opencode-go:acct:11111111', 'Key 1');
+    const namedTwo = opencodeRow('opencode-go:acct:22222222', 'Key 2');
+    const unnamed = opencodeRow('opencode-go:usage:cccccccc', 'Key cccccccc');
+
+    const homeOnly = await new AccountDashboardService(
+      deps({
+        getAdditionalAccounts: async () => [namedOne, namedTwo, unnamed],
+        readVisibility: async () => ({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: ['opencode-go:usage'],
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: [],
+          },
+        }),
+      })
+    ).get();
+    expect(homeOnly.settings.hiddenAccountIds).toEqual(['opencode-go:usage:cccccccc']);
+    expect(homeOnly.settings.trayHiddenAccountIds).toEqual([]);
+    expect(homeOnly.accounts.find((a) => a.id === 'opencode-go:usage:cccccccc')).toMatchObject({
+      hidden: true,
+      trayHidden: false,
+    });
+    expect(homeOnly.accounts.find((a) => a.id === 'opencode-go:acct:11111111')).toMatchObject({
+      hidden: false,
+      trayHidden: false,
+    });
+
+    const trayOnly = await new AccountDashboardService(
+      deps({
+        getAdditionalAccounts: async () => [namedOne, namedTwo, unnamed],
+        readVisibility: async () => ({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: [],
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: ['opencode-go:usage'],
+          },
+        }),
+      })
+    ).get();
+    expect(trayOnly.settings.hiddenAccountIds).toEqual([]);
+    expect(trayOnly.settings.trayHiddenAccountIds).toEqual(['opencode-go:usage:cccccccc']);
+    expect(trayOnly.accounts.find((a) => a.id === 'opencode-go:usage:cccccccc')).toMatchObject({
+      hidden: false,
+      trayHidden: true,
+    });
+
+    const both = await new AccountDashboardService(
+      deps({
+        getAdditionalAccounts: async () => [namedOne, namedTwo, unnamed],
+        readVisibility: async () => ({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: ['codex:party', 'opencode-go:usage', 'opencode-go:usage:cccccccc'],
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: ['opencode-go:usage'],
+          },
+        }),
+      })
+    ).get();
+    expect(both.settings.hiddenAccountIds).toEqual(['codex:party', 'opencode-go:usage:cccccccc']);
+    expect(both.settings.trayHiddenAccountIds).toEqual(['opencode-go:usage:cccccccc']);
+    expect(both.accounts.find((a) => a.id === 'opencode-go:usage:cccccccc')).toMatchObject({
+      hidden: true,
+      trayHidden: true,
+    });
+  });
+
+  it('does not carry a bare opencode-go hide choice when two digest rows are present', async () => {
+    const first = opencodeRow('opencode-go:usage:aaaaaaaa', 'Key aaaaaaaa');
+    const second = opencodeRow('opencode-go:usage:bbbbbbbb', 'Key bbbbbbbb');
+    const result = await new AccountDashboardService(
+      deps({
+        getAdditionalAccounts: async () => [first, second],
+        readVisibility: async () => ({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: ['opencode-go:usage'],
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: ['opencode-go:usage'],
+          },
+        }),
+      })
+    ).get();
+    expect(result.settings.hiddenAccountIds).toEqual(['opencode-go:usage']);
+    expect(result.settings.trayHiddenAccountIds).toEqual(['opencode-go:usage']);
+    for (const id of ['opencode-go:usage:aaaaaaaa', 'opencode-go:usage:bbbbbbbb']) {
+      expect(result.accounts.find((a) => a.id === id)).toMatchObject({
+        hidden: false,
+        trayHidden: false,
+      });
+    }
+  });
+});

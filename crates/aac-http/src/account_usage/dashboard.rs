@@ -3,6 +3,7 @@ use super::{Desktop, sampler::DashboardSample};
 use aac_providers::{Provider, ProviderId, dashboard_providers};
 use aac_views::decline::Decline;
 use serde_json::{Map, Value, json};
+use std::collections::{HashMap, HashSet};
 
 const VISIBILITY: [&str; 4] = [
     "hiddenProviders",
@@ -224,24 +225,73 @@ pub struct Input<'a> {
     pub server: Option<&'a Value>,
 }
 
+/// Carry a saved bare OpenCode Go discover id (e.g. `opencode-go:usage`) to its expanded digest
+/// row id when that bare id maps to exactly one expanded row and is no longer present itself.
+/// Applied separately to `hiddenAccountIds` and `trayHiddenAccountIds` so Home and tray stay
+/// independent.
+fn carry_visibility(rows: &[Value], visibility: &Value) -> Value {
+    let mut present = HashSet::new();
+    let mut candidates: HashMap<&str, Vec<&str>> = HashMap::new();
+    for row in rows {
+        let Some(id) = row["id"].as_str() else {
+            continue;
+        };
+        present.insert(id);
+        if row["provider"].as_str() != Some("opencode-go") {
+            continue;
+        }
+        if let Some(parent) = crate::account_usage::producer::recheck::discovered_key_id(id) {
+            candidates.entry(parent).or_default().push(id);
+        }
+    }
+    let unique: HashMap<&str, &str> = candidates
+        .into_iter()
+        .filter_map(|(parent, ids)| {
+            (!present.contains(parent) && ids.len() == 1).then_some((parent, ids[0]))
+        })
+        .collect();
+    if unique.is_empty() {
+        return visibility.clone();
+    }
+    let mut carried = visibility.clone();
+    let Some(object) = carried.as_object_mut() else {
+        return carried;
+    };
+    for key in ["hiddenAccountIds", "trayHiddenAccountIds"] {
+        let Some(list) = object.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        let mut next = Vec::with_capacity(list.len());
+        for entry in list {
+            let mapped = entry
+                .as_str()
+                .and_then(|id| unique.get(id).copied())
+                .map(|id| Value::String(id.to_owned()))
+                .unwrap_or_else(|| entry.clone());
+            if !next.contains(&mapped) {
+                next.push(mapped);
+            }
+        }
+        object.insert(key.into(), Value::Array(next));
+    }
+    carried
+}
+
 /// Produce the requested desktop and transport generation.
 pub fn build(desktop: Desktop, secure: bool, input: Input<'_>) -> Result<DashboardSample, Decline> {
+    let visibility = carry_visibility(&input.rows, input.visibility);
     let accounts = input
         .rows
         .into_iter()
-        .map(|row| decorate(row, input.visibility, input.lifecycle))
+        .map(|row| decorate(row, &visibility, input.lifecycle))
         .collect::<Result<Vec<_>, _>>()?;
     let providers: Vec<_> = dashboard_providers()
-        .map(|row| provider(row, &accounts, input.visibility, input.lifecycle, secure))
+        .map(|row| provider(row, &accounts, &visibility, input.lifecycle, secure))
         .collect();
     let facts = facts(&accounts, input.signins)?;
     let mut settings = json!({"refreshIntervalSeconds":input.refresh_seconds});
     for key in VISIBILITY {
-        settings[key] = input
-            .visibility
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| json!([]));
+        settings[key] = visibility.get(key).cloned().unwrap_or_else(|| json!([]));
     }
     settings["visibilityAvailable"] = json!(input.visibility_available);
     let mut dashboard = json!({
@@ -263,4 +313,188 @@ pub fn build(desktop: Desktop, secure: bool, input: Input<'_>) -> Result<Dashboa
         dashboard,
         facts,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opencode_row(id: &str, label: &str) -> Value {
+        json!({
+            "id": id,
+            "provider": "opencode-go",
+            "label": label,
+            "email": null,
+            "plan": "go",
+            "platform": "ubuntu",
+            "status": "ok",
+            "isActive": false,
+            "sampledAt": "2026-11-21T12:00:00Z",
+            "fetchedAt": "2026-11-21T12:00:00Z",
+            "windows": [],
+            "capabilities": {}
+        })
+    }
+
+    fn build_dashboard(rows: Vec<Value>, visibility: Value) -> Value {
+        build(
+            Desktop::Mac,
+            true,
+            Input {
+                rows,
+                visibility: &visibility,
+                visibility_available: true,
+                refresh_seconds: 60,
+                lifecycle: &Lifecycle::default(),
+                signins: None,
+                server: None,
+            },
+        )
+        .expect("build dashboard")
+        .dashboard
+    }
+
+    fn row<'a>(dashboard: &'a Value, id: &str) -> &'a Value {
+        dashboard["accounts"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["id"] == id))
+            .expect("row present")
+    }
+
+    #[test]
+    fn carries_bare_opencode_go_hide_to_unique_digest_row_keeping_home_and_tray_separate() {
+        let jared_rows = || {
+            vec![
+                opencode_row("opencode-go:acct:11111111", "Key 1"),
+                opencode_row("opencode-go:acct:22222222", "Key 2"),
+                opencode_row("opencode-go:usage:cccccccc", "Key cccccccc"),
+            ]
+        };
+
+        // Home only: hidden on Home, visible in trays; named keys stay visible.
+        let home_only = build_dashboard(
+            jared_rows(),
+            json!({
+                "hiddenProviders": [],
+                "hiddenAccountIds": ["opencode-go:usage"],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": []
+            }),
+        );
+        assert_eq!(
+            home_only["settings"]["hiddenAccountIds"],
+            json!(["opencode-go:usage:cccccccc"])
+        );
+        assert_eq!(home_only["settings"]["trayHiddenAccountIds"], json!([]));
+        assert_eq!(
+            row(&home_only, "opencode-go:usage:cccccccc")["hidden"],
+            true
+        );
+        assert_eq!(
+            row(&home_only, "opencode-go:usage:cccccccc")["trayHidden"],
+            false
+        );
+        assert_eq!(
+            row(&home_only, "opencode-go:acct:11111111")["hidden"],
+            false
+        );
+        assert_eq!(
+            row(&home_only, "opencode-go:acct:11111111")["trayHidden"],
+            false
+        );
+
+        // Tray only: visible on Home, hidden in trays.
+        let tray_only = build_dashboard(
+            jared_rows(),
+            json!({
+                "hiddenProviders": [],
+                "hiddenAccountIds": [],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": ["opencode-go:usage"]
+            }),
+        );
+        assert_eq!(tray_only["settings"]["hiddenAccountIds"], json!([]));
+        assert_eq!(
+            tray_only["settings"]["trayHiddenAccountIds"],
+            json!(["opencode-go:usage:cccccccc"])
+        );
+        assert_eq!(
+            row(&tray_only, "opencode-go:usage:cccccccc")["hidden"],
+            false
+        );
+        assert_eq!(
+            row(&tray_only, "opencode-go:usage:cccccccc")["trayHidden"],
+            true
+        );
+
+        // Both lists, with unrelated IDs and duplicate new ID: deduplicates and preserves order.
+        let both = build_dashboard(
+            jared_rows(),
+            json!({
+                "hiddenProviders": [],
+                "hiddenAccountIds": ["codex:party", "opencode-go:usage", "opencode-go:usage:cccccccc"],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": ["opencode-go:usage"]
+            }),
+        );
+        assert_eq!(
+            both["settings"]["hiddenAccountIds"],
+            json!(["codex:party", "opencode-go:usage:cccccccc"])
+        );
+        assert_eq!(
+            both["settings"]["trayHiddenAccountIds"],
+            json!(["opencode-go:usage:cccccccc"])
+        );
+        assert_eq!(row(&both, "opencode-go:usage:cccccccc")["hidden"], true);
+        assert_eq!(row(&both, "opencode-go:usage:cccccccc")["trayHidden"], true);
+
+        // Ambiguous: two digest rows from the same bare id -> neither carries.
+        let ambiguous = build_dashboard(
+            vec![
+                opencode_row("opencode-go:usage:aaaaaaaa", "Key aaaaaaaa"),
+                opencode_row("opencode-go:usage:bbbbbbbb", "Key bbbbbbbb"),
+            ],
+            json!({
+                "hiddenProviders": [],
+                "hiddenAccountIds": ["opencode-go:usage"],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": ["opencode-go:usage"]
+            }),
+        );
+        assert_eq!(
+            ambiguous["settings"]["hiddenAccountIds"],
+            json!(["opencode-go:usage"])
+        );
+        assert_eq!(
+            ambiguous["settings"]["trayHiddenAccountIds"],
+            json!(["opencode-go:usage"])
+        );
+        for id in ["opencode-go:usage:aaaaaaaa", "opencode-go:usage:bbbbbbbb"] {
+            assert_eq!(row(&ambiguous, id)["hidden"], false);
+            assert_eq!(row(&ambiguous, id)["trayHidden"], false);
+        }
+
+        // Bare row still present: keep bare id on bare row, do not carry to digest row.
+        let bare_present = build_dashboard(
+            vec![
+                opencode_row("opencode-go:usage", "OpenCode Go"),
+                opencode_row("opencode-go:usage:cccccccc", "Key cccccccc"),
+            ],
+            json!({
+                "hiddenProviders": [],
+                "hiddenAccountIds": ["opencode-go:usage"],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": ["opencode-go:usage"]
+            }),
+        );
+        assert_eq!(
+            bare_present["settings"]["hiddenAccountIds"],
+            json!(["opencode-go:usage"])
+        );
+        assert_eq!(row(&bare_present, "opencode-go:usage")["hidden"], true);
+        assert_eq!(
+            row(&bare_present, "opencode-go:usage:cccccccc")["hidden"],
+            false
+        );
+    }
 }

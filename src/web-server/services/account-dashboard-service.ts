@@ -28,6 +28,7 @@ import {
   getConfiguredAdditionalAccounts,
   type AdditionalAccountsSnapshot,
 } from './additional-account-service';
+import { discoveredOpencodeGoParentId } from './additional-usage-transport';
 import { usesAccountRegistry } from './account-registry-mode';
 import {
   readAccountVisibility,
@@ -159,6 +160,43 @@ export interface AccountDashboardRequestContext {
 const REFRESH_DEBOUNCE_MS = 5_000;
 const MAX_SCOPES = 16;
 const VISIBILITY_BUDGET_FLOOR_MS = 250;
+
+/**
+ * Carry a saved bare OpenCode Go discover id (e.g. `opencode-go:usage`) to its expanded digest
+ * row id when that bare id maps to exactly one expanded row and is no longer present itself.
+ * Called separately for dashboard and tray lists so those two choices stay independent.
+ */
+function carryDiscoveredHiddenIds(
+  accounts: readonly DashboardAccount[],
+  list: readonly string[]
+): string[] {
+  if (list.length === 0) return [];
+  const present = new Set<string>();
+  const candidates = new Map<string, string[]>();
+  for (const account of accounts) {
+    present.add(account.id);
+    if (account.provider !== 'opencode-go') continue;
+    const parent = discoveredOpencodeGoParentId(account.id);
+    if (!parent) continue;
+    const group = candidates.get(parent);
+    if (group) group.push(account.id);
+    else candidates.set(parent, [account.id]);
+  }
+  const unique = new Map<string, string>();
+  for (const [parent, ids] of candidates) {
+    if (!present.has(parent) && ids.length === 1) unique.set(parent, ids[0]);
+  }
+  if (unique.size === 0) return [...list];
+  const seen = new Set<string>();
+  const carried: string[] = [];
+  for (const id of list) {
+    const mapped = unique.get(id) ?? id;
+    if (seen.has(mapped)) continue;
+    seen.add(mapped);
+    carried.push(mapped);
+  }
+  return carried;
+}
 
 /**
  * A part that failed outright: its last good rows stay, labelled as a failed read.
@@ -867,9 +905,7 @@ export class AccountDashboardService {
       ),
     ]);
     const hiddenProviders = new Set<string>(visibility.hiddenProviders);
-    const hiddenAccountIds = new Set(visibility.hiddenAccountIds);
     const trayHiddenProviders = new Set<string>(visibility.trayHiddenProviders);
-    const trayHiddenAccountIds = new Set(visibility.trayHiddenAccountIds);
     // Validate saved credential revisions on every response, including dashboard
     // cache hits. This synchronous cache projection never starts a provider call.
     if (registeredAntigravity) {
@@ -905,6 +941,13 @@ export class AccountDashboardService {
       ),
       ...(registeredAntigravity ? state.antigravity : []),
     ];
+    const carriedHiddenAccountIds = carryDiscoveredHiddenIds(accounts, visibility.hiddenAccountIds);
+    const carriedTrayHiddenAccountIds = carryDiscoveredHiddenIds(
+      accounts,
+      visibility.trayHiddenAccountIds
+    );
+    const hiddenAccountIds = new Set(carriedHiddenAccountIds);
+    const trayHiddenAccountIds = new Set(carriedTrayHiddenAccountIds);
     const server = (this.deps.serverInfo ?? getDashboardServerInfo)();
     const claudeSignIns = await (
       this.deps.claudeSignIns ?? (() => readClaudeSignInRenewal())
@@ -988,9 +1031,9 @@ export class AccountDashboardService {
       settings: {
         refreshIntervalSeconds,
         hiddenProviders: [...visibility.hiddenProviders],
-        hiddenAccountIds: [...visibility.hiddenAccountIds],
+        hiddenAccountIds: carriedHiddenAccountIds,
         trayHiddenProviders: [...visibility.trayHiddenProviders],
-        trayHiddenAccountIds: [...visibility.trayHiddenAccountIds],
+        trayHiddenAccountIds: carriedTrayHiddenAccountIds,
         visibilityAvailable: visibility.available,
       },
       providers: buildDashboardProviders(

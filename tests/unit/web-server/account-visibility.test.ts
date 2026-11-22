@@ -9,6 +9,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import {
   ACCOUNT_VISIBILITY_FILE,
   parseVisibilityBody,
+  patchAccountVisibility,
   readAccountVisibility,
   updateAccountVisibility,
   writeAccountVisibility,
@@ -598,5 +599,39 @@ describe('GET and PUT /api/accounts/visibility', () => {
     ]);
     detach();
     expect(broadcastDashboardEvent({ type: 'accounts-changed' })).toBe(0);
+  });
+
+  it('clears a legacy bare opencode-go id in only the patched list when showing its digest id', async () => {
+    const dir = ccsDir();
+    await writeAccountVisibility(dir, {
+      hiddenProviders: [],
+      hiddenAccountIds: ['codex:party', 'opencode-go:usage'],
+      trayHiddenProviders: [],
+      trayHiddenAccountIds: ['opencode-go:usage'],
+    });
+    const afterHomeShow = await patchAccountVisibility(dir, {
+      hiddenAccountIds: { hide: [], show: ['opencode-go:usage:cccccccc'] },
+    });
+    expect(afterHomeShow).toEqual({
+      state: 'saved',
+      visibility: {
+        hiddenProviders: [],
+        hiddenAccountIds: ['codex:party'],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: ['opencode-go:usage'],
+      },
+    });
+    const afterTrayShow = await patchAccountVisibility(dir, {
+      trayHiddenAccountIds: { hide: [], show: ['opencode-go:usage:cccccccc'] },
+    });
+    expect(afterTrayShow).toEqual({
+      state: 'saved',
+      visibility: {
+        hiddenProviders: [],
+        hiddenAccountIds: ['codex:party'],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: [],
+      },
+    });
   });
 });
