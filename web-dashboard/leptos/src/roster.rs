@@ -551,7 +551,7 @@ fn canonical_state(state: &str) -> &str {
     }
 }
 
-/// "Title (state not recognised: queued)", the composer's words for an unknown state, split back into title and state.
+/// "Title (state not recognised: shelved)", the composer's words for an unknown state, split back into title and state.
 pub fn split_odd(title: &str) -> (String, Option<String>) {
     if let Some(open) = title.rfind(" (state not recognised: ")
         && title.ends_with(')')
@@ -1321,7 +1321,7 @@ mod tests {
                 },
                 PinnedItem {
                     id: "b".into(),
-                    title: "Second review (state not recognised: queued)".into(),
+                    title: "Second review (state not recognised: shelved)".into(),
                     ..Default::default()
                 },
             ],
@@ -1340,7 +1340,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("Left", 1), ("State not recognised", 1), ("Done", 1)]
         );
-        assert_eq!(plain[1].rows[0].odd_state.as_deref(), Some("queued"));
+        assert_eq!(plain[1].rows[0].odd_state.as_deref(), Some("shelved"));
         // with the board's states each item goes to its own group
         let stream = Stream {
             items: vec![
@@ -1353,7 +1353,7 @@ mod tests {
                 Item {
                     id: "b".into(),
                     title: "Second review".into(),
-                    state: "queued".into(),
+                    state: "shelved".into(),
                     ..Default::default()
                 },
                 Item {

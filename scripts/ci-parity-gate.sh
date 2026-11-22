@@ -125,6 +125,17 @@ elif command -v cargo >/dev/null 2>&1; then
   (cd web-dashboard/leptos && cargo clippy --all-targets --locked -- -D warnings)
 else
   echo "[!] cargo is not installed: skipping the Leptos clippy check."
+
+# The dashboard's own Rust unit tests (roster grouping, scoreboard readings) run on the host with the
+# crate's pinned toolchain. ui:validate checks the crate's formatting and the node tests only, so
+# without this step a stale Leptos expectation lands green. AAC_LEPTOS_RUST=off skips it on a machine
+# that may not run Rust builds; the dashboard still builds from dist/ui.
+if [[ "${AAC_LEPTOS_RUST:-on}" == "off" ]]; then
+  echo "[!] AAC_LEPTOS_RUST=off: skipping the dashboard's Leptos Rust tests."
+elif command -v cargo >/dev/null 2>&1; then
+  ( cd web-dashboard/leptos && cargo test --lib --locked )
+else
+  echo "[!] cargo is not installed: skipping the dashboard's Leptos Rust tests."
 fi
 
 # Child tests and Python imports must start inside a private home with no

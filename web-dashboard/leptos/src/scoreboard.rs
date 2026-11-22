@@ -2139,7 +2139,7 @@ mod tests {
                 .join("|")
         };
         assert_eq!(lines[0].0, "sbu-head");
-        assert_eq!(text(&lines[0]), "48 runs not scored");
+        assert_eq!(text(&lines[0]), "48 runs and run files not scored");
         assert_eq!(
             text(&lines[2]),
             "Unreadable|: 4 runs · the reader refused the run file (each is named under Sources)"
