@@ -32,7 +32,11 @@ import {
 } from './additional-usage-transport';
 import { HOST_LABELS, sourceComputer, type DashboardHost } from './dashboard-hosts';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
-import type { UsageFailoverTarget } from './usage-failover-contract';
+import {
+  sameUsageIdentity,
+  type UsageFailoverTarget,
+  type UsageIdentity,
+} from './usage-failover-contract';
 
 const CACHE_TTL_MS = 120_000;
 const REFRESH_DEBOUNCE_MS = 5_000;
@@ -66,7 +70,10 @@ export interface AdditionalAccountDeps {
   readRegistry?: () => Promise<AccountRegistryRead>;
   runSource?: (source: AdditionalUsageSource) => Promise<string>;
   /** Shared identity-bound source selection; null keeps the legacy collector path. */
-  failover?: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
+  failover?:
+    | (Pick<UsageFailoverService, 'collect' | 'peek'> &
+        Partial<Pick<UsageFailoverService, 'readingIdentity' | 'discoveredIdentities'>>)
+    | null;
   now?: () => number;
   /** Overrides LOCAL_FILE_DEADLINE_MS for the account list read, so tests need not wait. */
   manifestDeadlineMs?: number;
@@ -368,6 +375,9 @@ function sourceKey(source: AdditionalUsageSource): string {
 
 const DEFAULT_SOURCES = parseSourceManifest(null).sources;
 
+/** Providers whose discover entry reads every stored key, one row each (owner, card OCG1). */
+const EXPANDS_DISCOVERY: ReadonlySet<string> = new Set(['opencode-go']);
+
 /**
  * Per-CCS-scope cache, one entry per account (CONTRACT-registry-lifecycle 3.1).
  * Read order: a valid registry v2 is the only source; an invalid v2 file shows
@@ -377,12 +387,19 @@ const DEFAULT_SOURCES = parseSourceManifest(null).sources;
  */
 export class AdditionalAccountService {
   private readonly ccsDir: string;
-  private readonly failover: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
+  private readonly failover:
+    | (Pick<UsageFailoverService, 'collect' | 'peek'> &
+        Partial<Pick<UsageFailoverService, 'readingIdentity' | 'discoveredIdentities'>>)
+    | null;
   private readonly cursorQuota: CursorQuotaReader | null;
   private fingerprint = '';
   private caches = new Map<string, SourceCache>();
   private manifestPending: Promise<Manifest> | null = null;
   private lastManifest: Manifest | null = null;
+  /** Sources a discover entry expanded into, pinned to one stored key's identity. */
+  private pinned = new WeakMap<AdditionalUsageSource, UsageIdentity>();
+  /** The last snapshot's sources after discovery expanded, for placeholders and Re-check. */
+  private lastSources: { fingerprint: string; sources: AdditionalUsageSource[] } | null = null;
 
   constructor(private readonly deps: AdditionalAccountDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
@@ -429,7 +446,71 @@ export class AdditionalAccountService {
           selector,
         },
       ],
+      ...(this.pinned.has(source) ? { expectedIdentity: this.pinned.get(source) } : {}),
     };
+  }
+
+  /**
+   * Owner, 2026-11-21 (card OCG1): every OpenCode Go key stored on the computer is read, once.
+   * A `discover` entry stands for each stored key that no other entry of the provider already
+   * names (`aac-key:<id>`): one row per such key, pinned to that key's identity, with the id
+   * `<entry id>:<digest>` and the label `Key <digest>` (the identity's digest, never the key).
+   * When every stored key is already named, the discover entry adds no row and no read. When a
+   * named entry's key file cannot be read, its last known identity stands in for it; with none
+   * known, the entry adds no row and no read this time, so one account never shows twice. An
+   * unreadable store keeps the entry as it was.
+   */
+  private async expandDiscovery(
+    sources: AdditionalUsageSource[]
+  ): Promise<AdditionalUsageSource[]> {
+    const discover = this.failover?.discoveredIdentities?.bind(this.failover);
+    if (!discover) return sources;
+    const expanded = await Promise.all(
+      sources.map(async (source): Promise<AdditionalUsageSource[]> => {
+        const account = source.account;
+        if (
+          !EXPANDS_DISCOVERY.has(source.provider) ||
+          !account ||
+          account.credential.kind !== 'discover'
+        )
+          return [source];
+        const named = new Map<string, AdditionalUsageSource>();
+        for (const other of sources) {
+          const credential = other.account?.credential;
+          if (
+            other !== source &&
+            other.provider === source.provider &&
+            sourceHost(other) === sourceHost(source) &&
+            (other.sshHost ?? null) === (source.sshHost ?? null) &&
+            credential?.kind === 'aac-key'
+          )
+            named.set(`aac-key:${credential.keyId}`, other);
+        }
+        const discovered = await discover(this.failoverTarget(source), [...named.keys()]).catch(
+          () => null
+        );
+        if (!discovered || discovered.found.length === 0) return [source];
+        const found = discovered.found.map((item) => ({ ...item }));
+        for (const selector of discovered.unread) {
+          const entry = named.get(selector);
+          const known = entry ? this.failover?.readingIdentity?.(this.failoverTarget(entry)) : null;
+          if (!known) return [];
+          for (const item of found) if (sameUsageIdentity(item.identity, known)) item.bound = true;
+        }
+        return found
+          .filter((item) => !item.bound)
+          .map(({ identity }) => {
+            const digest = identity.key.slice(0, 8);
+            const pinned: AdditionalUsageSource = {
+              ...source,
+              account: { ...account, id: `${account.id}:${digest}`, label: `Key ${digest}` },
+            };
+            this.pinned.set(pinned, identity);
+            return pinned;
+          });
+      })
+    );
+    return expanded.flat();
   }
 
   private async readManifest(): Promise<Manifest> {
@@ -665,18 +746,57 @@ export class AdditionalAccountService {
         ),
       };
     }
-    const current = new Set(config.sources.map(sourceKey));
+    const all = await this.expandDiscovery(config.sources);
+    this.lastSources = { fingerprint: config.fingerprint, sources: all };
+    const current = new Set(all.map(sourceKey));
     for (const key of this.caches.keys()) if (!current.has(key)) this.caches.delete(key);
+    const sources = all.filter(
+      (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
+    );
     return {
       registry: config.mode,
-      accounts: await Promise.all(
-        config.sources
-          .filter(
-            (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
-          )
-          .map((source) => this.getSource(source, opts.refresh === true))
+      accounts: this.oneRowPerIdentity(
+        sources,
+        await Promise.all(sources.map((source) => this.getSource(source, opts.refresh === true)))
       ),
     };
+  }
+
+  /**
+   * Two registry entries whose readings came from the same credential identity are one
+   * account: show it once (never two rows of the same account). The row bound to its own
+   * credential stays over a `discover` row, then the first in list order. Rows without a
+   * known identity are never merged. Nothing is rebound and no provider is asked.
+   */
+  private oneRowPerIdentity(
+    sources: AdditionalUsageSource[],
+    rows: DashboardAccount[]
+  ): DashboardAccount[] {
+    const readingIdentity = this.failover?.readingIdentity?.bind(this.failover);
+    if (!readingIdentity) return rows;
+    const identities = sources.map((source) => readingIdentity(this.failoverTarget(source)));
+    const discovered = (index: number) => {
+      const credential = sources[index].account?.credential;
+      return !credential || credential.kind === 'discover';
+    };
+    const dropped = new Set<number>();
+    for (let index = 0; index < rows.length; index++) {
+      if (dropped.has(index) || !identities[index]) continue;
+      for (let other = index + 1; other < rows.length; other++) {
+        if (
+          dropped.has(other) ||
+          sources[other].provider !== sources[index].provider ||
+          !sameUsageIdentity(identities[index], identities[other])
+        )
+          continue;
+        if (discovered(index) && !discovered(other)) {
+          dropped.add(index);
+          break;
+        }
+        dropped.add(other);
+      }
+    }
+    return rows.filter((_, index) => !dropped.has(index));
   }
 
   async get(
@@ -696,11 +816,25 @@ export class AdditionalAccountService {
   ): Promise<DashboardAccount | null> {
     const config = await this.loadManifest();
     if (!config.valid) return null;
-    const source = config.sources.find(
-      (candidate) => (candidate.account?.id ?? `${candidate.provider}:usage`) === id
-    );
-    if (!source || (reviewed && sourceKey(reviewed) !== sourceKey(source))) return null;
-    return this.getSource(source, true);
+    const named = (candidate: AdditionalUsageSource) =>
+      (candidate.account?.id ?? `${candidate.provider}:usage`) === id;
+    const entry = config.sources.find(named);
+    // A per-key row, or a discover entry that may now stand for per-key rows: resolve it through
+    // the same expansion and pinning as a whole read, so a Re-check never reads a key unpinned
+    // and never reads a key another entry names. The reviewed source is the entry it comes from.
+    if (
+      !entry ||
+      (entry.account?.credential.kind === 'discover' && EXPANDS_DISCOVERY.has(entry.provider))
+    ) {
+      if (reviewed && !config.sources.some((source) => sourceKey(source) === sourceKey(reviewed)))
+        return null;
+      const all = await this.expandDiscovery(config.sources);
+      this.lastSources = { fingerprint: config.fingerprint, sources: all };
+      const source = all.find(named);
+      return source ? this.getSource(source, true) : null;
+    }
+    if (reviewed && sourceKey(reviewed) !== sourceKey(entry)) return null;
+    return this.getSource(entry, true);
   }
 
   /**
@@ -710,29 +844,29 @@ export class AdditionalAccountService {
   configured(opts: { excludeAntigravity?: boolean } = {}): AdditionalAccountsSnapshot | null {
     const config = this.lastManifest;
     if (!config) return null;
+    const expanded =
+      this.lastSources?.fingerprint === config.fingerprint ? this.lastSources.sources : null;
+    const sources = (expanded ?? config.sources).filter(
+      (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
+    );
+    const rows = sources.map((source) => {
+      const placeholder = unavailable(
+        source,
+        'unavailable',
+        isUnreadableAccountRegistry(config.mode)
+          ? 'Account list could not be read safely.'
+          : 'Account usage is temporarily unavailable.'
+      );
+      const quota =
+        config.valid && source.provider === 'cursor' ? this.cursorQuota?.peek(placeholder) : null;
+      if (quota) return quota;
+      return config.valid && this.failover
+        ? this.failover.peek(this.failoverTarget(source), placeholder)
+        : placeholder;
+    });
     return {
       registry: config.mode,
-      accounts: config.sources
-        .filter(
-          (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
-        )
-        .map((source) => {
-          const placeholder = unavailable(
-            source,
-            'unavailable',
-            isUnreadableAccountRegistry(config.mode)
-              ? 'Account list could not be read safely.'
-              : 'Account usage is temporarily unavailable.'
-          );
-          const quota =
-            config.valid && source.provider === 'cursor'
-              ? this.cursorQuota?.peek(placeholder)
-              : null;
-          if (quota) return quota;
-          return config.valid && this.failover
-            ? this.failover.peek(this.failoverTarget(source), placeholder)
-            : placeholder;
-        }),
+      accounts: config.valid ? this.oneRowPerIdentity(sources, rows) : rows,
     };
   }
 }

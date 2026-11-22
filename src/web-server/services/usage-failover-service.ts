@@ -658,6 +658,55 @@ export class UsageFailoverService {
   collect(target: UsageFailoverTarget, template: DashboardAccount): Promise<DashboardAccount> {
     return this.run(target, template, false);
   }
+  /**
+   * Every distinct credential identity the target's primary computer stores for its selector,
+   * in store order, each marked `bound` when a candidate carrying one of `bound` selectors (an
+   * account the registry already names, such as `aac-key:<id>`) holds the same identity.
+   * `unread` lists the `bound` selectors whose stores could not be read this time: their keys
+   * are unknown, so the caller must not treat them as free. It is an inventory of local stores
+   * only: no provider is asked and no secret leaves the helper. Null when the computer's stores
+   * could not be read at all.
+   */
+  async discoveredIdentities(
+    target: UsageFailoverTarget,
+    bound: string[]
+  ): Promise<{
+    found: Array<{ identity: UsageIdentity; bound: boolean }>;
+    unread: string[];
+  } | null> {
+    const source = target.primarySources[0];
+    if (!source) return null;
+    const candidates = await this.inventory(target, source);
+    if (candidates === null) return null;
+    const gaps = this.unreadSelectors.get(this.inventoryKey(target, source));
+    if (gaps?.has('*') || gaps?.has(source.selector)) return null;
+    const unread = bound.filter((selector) => {
+      const family = selector.includes(':')
+        ? `${selector.slice(0, selector.indexOf(':'))}:*`
+        : null;
+      return gaps?.has(selector) === true || (family !== null && gaps?.has(family) === true);
+    });
+    const taken = candidates
+      .filter((candidate) => candidate.selectors.some((selector) => bound.includes(selector)))
+      .map((candidate) => candidate.identity);
+    const found: Array<{ identity: UsageIdentity; bound: boolean }> = [];
+    for (const candidate of candidates) {
+      if (!candidate.selectors.includes(source.selector)) continue;
+      if (found.some((item) => sameUsageIdentity(item.identity, candidate.identity))) continue;
+      found.push({
+        identity: candidate.identity,
+        bound: taken.some((identity) => sameUsageIdentity(identity, candidate.identity)),
+      });
+    }
+    return { found, unread };
+  }
+  /**
+   * The credential identity the target's shown reading came from, or null when it has none
+   * yet. Read-only: never loads, creates or changes state and never asks a provider.
+   */
+  readingIdentity(target: UsageFailoverTarget): UsageIdentity | null {
+    return this.states.get(this.key(target))?.saved?.candidate.identity ?? null;
+  }
   recover(target: UsageFailoverTarget, primary: DashboardAccount): Promise<DashboardAccount> {
     return this.run(target, primary, true);
   }

@@ -273,6 +273,75 @@ describe('identity-bound usage source failover', () => {
     expect(h.collected()).toHaveLength(before);
   });
 
+  it('lists each stored identity once, marking those another entry already names', async () => {
+    const h = await harness();
+    const a = { kind: 'muse-team', key: 'a'.repeat(64) };
+    const b = { kind: 'muse-team', key: 'b'.repeat(64) };
+    h.inventories.set('mac', [
+      candidate({ identity: a }),
+      candidate({ locator: '3'.repeat(64), identity: b }),
+      candidate({ locator: '5'.repeat(64), identity: a }),
+      candidate({ locator: '7'.repeat(64), selectors: ['aac-key:11223344'], identity: a }),
+    ]);
+    expect(await h.service.discoveredIdentities(h.target, ['aac-key:11223344'])).toEqual({
+      found: [
+        { identity: a, bound: true },
+        { identity: b, bound: false },
+      ],
+      unread: [],
+    });
+    expect(await h.service.discoveredIdentities(h.target, [])).toEqual({
+      found: [
+        { identity: a, bound: false },
+        { identity: b, bound: false },
+      ],
+      unread: [],
+    });
+    expect(h.collected()).toHaveLength(0);
+    h.inventories.set('mac', new Error('offline'));
+    h.advance();
+    expect(await h.service.discoveredIdentities(h.target, [])).toBeNull();
+  });
+
+  it('names the named key slots it could not read, and gives up on an unreadable store', async () => {
+    const h = await harness();
+    const a = { kind: 'muse-team', key: 'a'.repeat(64) };
+    h.inventories.set('mac', [candidate({ identity: a })]);
+    let gaps: string[] = ['aac-key:11223344'];
+    const inner = h.deps.transport;
+    const service = new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        const response = await inner(host, request);
+        return response.action === 'inventory'
+          ? { ...response, incompleteSelectors: gaps }
+          : response;
+      },
+    });
+    expect(
+      await service.discoveredIdentities(h.target, ['aac-key:11223344', 'aac-key:55667788'])
+    ).toEqual({ found: [{ identity: a, bound: false }], unread: ['aac-key:11223344'] });
+    gaps = ['aac-key:*'];
+    h.advance();
+    expect(
+      (await service.discoveredIdentities(h.target, ['aac-key:11223344', 'aac-key:55667788']))
+        ?.unread
+    ).toEqual(['aac-key:11223344', 'aac-key:55667788']);
+    gaps = ['*'];
+    h.advance();
+    expect(await service.discoveredIdentities(h.target, [])).toBeNull();
+  });
+
+  it('names the credential identity of the shown reading without starting a read', async () => {
+    const h = await harness();
+    expect(h.service.readingIdentity(h.target)).toBeNull();
+    expect(h.calls).toHaveLength(0);
+    await h.service.collect(h.target, template());
+    const before = h.calls.length;
+    expect(h.service.readingIdentity(h.target)).toEqual(candidate().identity);
+    expect(h.calls).toHaveLength(before);
+  });
+
   it('keeps the verified account when the primary could not read its sign-ins', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());

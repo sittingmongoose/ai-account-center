@@ -146,6 +146,222 @@ describe('additional accounts use verified failover sources', () => {
     expect(calls[0].binding).not.toBe(calls[1].binding);
   });
 
+  it('shows one row when two registry entries read the same credential identity', async () => {
+    const accounts = [
+      registryAccount('opencode-go', { kind: 'discover' }),
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+      registryAccount('zai', { kind: 'aac-key', keyId: 'aabbccdd' }, 'aabbccdd'),
+      registryAccount('zai', { kind: 'aac-key', keyId: '11223344' }, '11223344'),
+    ];
+    // discover and key 2e034ec2 resolve to one OpenCode Go account; the Z.ai rows have no
+    // known identity yet and a different provider never merges with OpenCode Go.
+    const identities: Record<string, { kind: string; key: string } | null> = {
+      'opencode-go:usage': { kind: 'opencode-go-key', key: 'identity-a' },
+      'opencode-go:acct:52f3251b': { kind: 'opencode-go-key', key: 'identity-b' },
+      'opencode-go:acct:2e034ec2': { kind: 'opencode-go-key', key: 'identity-a' },
+      'zai:acct:aabbccdd': null,
+      'zai:acct:11223344': null,
+    };
+    const { service, calls } = fixture({
+      readRegistry: async () => ({ state: 'ok', registry: { version: 2, accounts } }),
+    });
+    const base = (service as unknown as { failover: Record<string, unknown> }).failover;
+    base.readingIdentity = (target: UsageFailoverTarget) => identities[target.accountId] ?? null;
+    const rows = await service.get();
+    // The explicitly bound row stays; the discovery row bound to the same key is not shown.
+    expect(rows.map((row) => row.id)).toEqual([
+      'opencode-go:acct:52f3251b',
+      'opencode-go:acct:2e034ec2',
+      'zai:acct:aabbccdd',
+      'zai:acct:11223344',
+    ]);
+    expect(calls).toHaveLength(5);
+    expect(service.configured()?.accounts.map((row) => row.id)).toEqual(rows.map((row) => row.id));
+  });
+
+  describe('every stored OpenCode Go key is read once (card OCG1)', () => {
+    const id = (letter: string) => ({ kind: 'opencode-go-credential', key: letter.repeat(64) });
+    function stored(
+      accounts: RegistryAccount[],
+      found: Array<{ identity: { kind: string; key: string }; bound: boolean }> | null,
+      named: Record<string, { kind: string; key: string }> = {},
+      unread: string[] = []
+    ) {
+      const asked: string[][] = [];
+      const harness = fixture({
+        readRegistry: async () => ({ state: 'ok', registry: { version: 2, accounts } }),
+      });
+      const base = (harness.service as unknown as { failover: Record<string, unknown> }).failover;
+      base.discoveredIdentities = async (_target: UsageFailoverTarget, bound: string[]) => {
+        asked.push([...bound].sort());
+        return found === null ? null : { found, unread };
+      };
+      base.readingIdentity = (target: UsageFailoverTarget) =>
+        target.expectedIdentity ?? named[target.accountId] ?? null;
+      return { ...harness, asked };
+    }
+
+    it('three distinct stored keys give three rows, each key read once', async () => {
+      const { service, calls, asked } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [
+          { identity: id('a'), bound: true },
+          { identity: id('b'), bound: true },
+          { identity: id('c'), bound: false },
+        ],
+        { 'opencode-go:acct:52f3251b': id('b'), 'opencode-go:acct:2e034ec2': id('a') }
+      );
+      const rows = await service.get();
+      expect(asked).toEqual([['aac-key:2e034ec2', 'aac-key:52f3251b']]);
+      expect(rows.map((row) => row.id)).toEqual([
+        'opencode-go:usage:cccccccc',
+        'opencode-go:acct:52f3251b',
+        'opencode-go:acct:2e034ec2',
+      ]);
+      expect(rows[0].label).toBe('Key cccccccc');
+      // One read per stored key: the discovery row reads only the key no entry names.
+      expect(calls.map((call) => call.accountId)).toEqual(rows.map((row) => row.id));
+      expect(calls[0].expectedIdentity).toEqual(id('c'));
+      expect(calls[0].primarySources[0].selector).toBe('discover');
+      expect(service.configured()?.accounts.map((row) => row.id)).toEqual(rows.map((r) => r.id));
+      expect((await service.refreshAccount('opencode-go:usage:cccccccc'))?.id).toBe(
+        'opencode-go:usage:cccccccc'
+      );
+    });
+
+    it('a discovery entry alone gives one row per stored key', async () => {
+      const { service, calls } = stored(
+        [registryAccount('opencode-go', { kind: 'discover' })],
+        [
+          { identity: id('a'), bound: false },
+          { identity: id('b'), bound: false },
+          { identity: id('c'), bound: false },
+        ]
+      );
+      const rows = await service.get();
+      expect(rows.map((row) => row.id)).toEqual([
+        'opencode-go:usage:aaaaaaaa',
+        'opencode-go:usage:bbbbbbbb',
+        'opencode-go:usage:cccccccc',
+      ]);
+      expect(calls.map((call) => call.expectedIdentity)).toEqual([id('a'), id('b'), id('c')]);
+    });
+
+    it('adds no row and no read when every stored key already has its own entry', async () => {
+      const { service, calls } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [{ identity: id('a'), bound: true }],
+        { 'opencode-go:acct:2e034ec2': id('a') }
+      );
+      expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
+      expect(calls.map((call) => call.accountId)).toEqual(['opencode-go:acct:2e034ec2']);
+    });
+
+    it('keeps the discovery entry as it was when the stores cannot be read', async () => {
+      const { service, calls } = stored(
+        [registryAccount('opencode-go', { kind: 'discover' })],
+        null
+      );
+      expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:usage']);
+      expect(calls[0].expectedIdentity).toBeUndefined();
+    });
+
+    it('a covered discover entry answers no Re-check and reads nothing unpinned', async () => {
+      const { service, calls } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [
+          { identity: id('a'), bound: true },
+          { identity: id('c'), bound: false },
+        ],
+        { 'opencode-go:acct:2e034ec2': id('a') }
+      );
+      expect(await service.refreshAccount('opencode-go:usage')).toBeNull();
+      expect(await service.refreshAccount('opencode-go:usage:dddddddd')).toBeNull();
+      expect(await service.refreshAccount('opencode-go:usage:aaaaaaaa')).toBeNull();
+      expect(calls).toHaveLength(0);
+      expect((await service.refreshAccount('opencode-go:usage:cccccccc'))?.id).toBe(
+        'opencode-go:usage:cccccccc'
+      );
+      expect(calls.map((call) => call.expectedIdentity)).toEqual([id('c')]);
+    });
+
+    it('a named key that cannot be read stands in with its last known identity', async () => {
+      const { service, calls } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [
+          { identity: id('a'), bound: false },
+          { identity: id('b'), bound: true },
+          { identity: id('c'), bound: false },
+        ],
+        { 'opencode-go:acct:52f3251b': id('b'), 'opencode-go:acct:2e034ec2': id('a') },
+        ['aac-key:2e034ec2']
+      );
+      expect((await service.get()).map((row) => row.id)).toEqual([
+        'opencode-go:usage:cccccccc',
+        'opencode-go:acct:52f3251b',
+        'opencode-go:acct:2e034ec2',
+      ]);
+      expect(calls.filter((call) => call.expectedIdentity)).toHaveLength(1);
+    });
+
+    it('with no known identity for an unreadable named key, discovery waits (no second row)', async () => {
+      const { service, calls } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'discover' }),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+        ],
+        [
+          { identity: id('a'), bound: false },
+          { identity: id('c'), bound: false },
+        ],
+        {},
+        ['aac-key:2e034ec2']
+      );
+      expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
+      expect(calls.map((call) => call.accountId)).toEqual(['opencode-go:acct:2e034ec2']);
+    });
+
+    it('two entries that read the same key still show one row', async () => {
+      const { service } = stored(
+        [
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+          registryAccount('opencode-go', { kind: 'aac-key', keyId: '9e034ec2' }, '9e034ec2'),
+        ],
+        null,
+        { 'opencode-go:acct:2e034ec2': id('a'), 'opencode-go:acct:9e034ec2': id('a') }
+      );
+      expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
+    });
+  });
+
+  it('keeps two discovery-free rows of one identity as the first in list order', async () => {
+    const accounts = [
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '2e034ec2' }, '2e034ec2'),
+      registryAccount('opencode-go', { kind: 'aac-key', keyId: '52f3251b' }, '52f3251b'),
+    ];
+    const { service } = fixture({
+      readRegistry: async () => ({ state: 'ok', registry: { version: 2, accounts } }),
+    });
+    const base = (service as unknown as { failover: Record<string, unknown> }).failover;
+    base.readingIdentity = () => ({ kind: 'opencode-go-key', key: 'identity-a' });
+    expect((await service.get()).map((row) => row.id)).toEqual(['opencode-go:acct:2e034ec2']);
+  });
+
   it('invalidates the binding when a saved account changes host or credential', async () => {
     let account = registryAccount('zai', { kind: 'aac-key', keyId: 'aabbccdd' });
     const { service, calls } = fixture({

@@ -572,6 +572,56 @@ public static class Formatting
     /// server reports, in the order it first appears. Nothing is filtered out by name.</summary>
     public static readonly string[] PreferredOrder = { "claude", "codex", "antigravity", "cursor", "muse", "kimi-code", "qwen", "zai", "opencode-go" };
 
+    /// <summary>Providers whose accounts are each their own tray row, listed the way Codex and Claude accounts are
+    /// (owner, 2026-11-21): every OpenCode Go account has its own meters, reset times and status.</summary>
+    public static readonly string[] PerAccountProviders = { "opencode-go" };
+
+    /// <summary>The tray rows for one provider's shown accounts: one row per account for a per-account provider with
+    /// more than one account, otherwise one row holding them all (today's representative rule).</summary>
+    public static DashboardAccount[][] TrayRows(string provider, DashboardAccount[] accounts) =>
+        PerAccountProviders.Contains(provider) && accounts.Length > 1
+            ? accounts.Select(account => new[] { account }).ToArray()
+            : new[] { accounts };
+
+    /// <summary>One account's row line in two parts: who (the name before an address's "@") and its state (status and
+    /// reading time, always shown whole). The plan is in the row's tooltip and Details.</summary>
+    public static (string Who, string State) AccountRowMeta(DashboardAccount account)
+    {
+        var who = (account.Email ?? account.Label ?? "").Split('@')[0];
+        // The title already names the provider: a name that repeats it ("OpenCode Go 3d794f2c") keeps only the part
+        // that tells the rows apart.
+        var title = ProviderName(account.Provider) + " ";
+        if (who.Length > title.Length && who.StartsWith(title, StringComparison.Ordinal)) who = who[title.Length..];
+        // A stored key's row ("Key 3d794f2c", card OCG1) shows its digest alone, as the Mac tray does.
+        if (who.Length == 12 && who.StartsWith("Key ", StringComparison.Ordinal) && who[4..].All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')) who = who[4..];
+        var word = account.Status switch
+        {
+            "ok" => "Live", "cached" => "Cached", "needs_sign_in" => "Sign-in needed", "error" => "Refresh failed", _ => "Unavailable"
+        };
+        var read = Relative(account.SampledAt ?? account.FetchedAt);
+        var state = account.Status is "ok" or "cached" ? (word + " " + (read.Length > 0 ? read : "time unavailable")) : word;
+        return (who, state);
+    }
+
+    /// <summary>The laid-out width of a line of tray text in the panel's sans face.</summary>
+    public static double TextWidth(string text, double size) =>
+        new System.Windows.Media.FormattedText(text, CultureInfo.CurrentCulture, System.Windows.FlowDirection.LeftToRight,
+            new System.Windows.Media.Typeface(Theme.Sans, System.Windows.FontStyles.Normal, System.Windows.FontWeights.Normal, System.Windows.FontStretches.Normal),
+            size, System.Windows.Media.Brushes.Black, 1.0).WidthIncludingTrailingWhitespace;
+
+    /// <summary>The text as it fits <paramref name="width"/>: whole, or cut in the middle ("opencode…go-1") so both ends
+    /// stay readable. WPF trims only at the end, which would cut the part that tells two accounts apart.</summary>
+    public static string FitMiddle(string text, double width, double size = 11.5)
+    {
+        if (text.Length == 0 || TextWidth(text, size) <= width) return text;
+        for (var keep = text.Length - 1; keep > 1; keep--)
+        {
+            var cut = text[..((keep + 1) / 2)] + "…" + text[^(keep / 2)..];
+            if (TextWidth(cut, size) <= width) return cut;
+        }
+        return "…";
+    }
+
     public static string[] ProviderOrder(IEnumerable<DashboardAccount> accounts)
     {
         var seen = accounts.Select(account => account.Provider).Where(provider => !string.IsNullOrWhiteSpace(provider)).Distinct(StringComparer.Ordinal).ToList();

@@ -327,7 +327,7 @@ struct AccountsMenuView: View {
               .modifier(Entrance(index: index + 1, context: open))
           }
         }
-        let others = groups.filter { !sectionIDs.contains($0.id) }
+        let others = groups.filter { !sectionIDs.contains($0.id) }.flatMap(\.trayRows)
         if !others.isEmpty {
           VStack(spacing: TrayMetrics.sectionGap) {
             ForEach(Array(others.enumerated()), id: \.element.id) { index, group in

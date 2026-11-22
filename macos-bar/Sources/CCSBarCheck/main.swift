@@ -704,6 +704,56 @@ private func checkVisibleUsageWindows() throws {
     groups[0].accounts[1].visibleWindows[0].usedPercent == 80 &&
     groups[0].accounts[1].visibleWindows[0].resetAt == "2027-01-07T02:00:00Z",
     "OpenCode Go accounts must retain their own windows, usage, and exact reset data after grouping")
+  // Owner, 2026-11-21: each OpenCode Go account is its own tray row, not "1 of N" under one row.
+  var goOneNamed = goOne
+  goOneNamed["label"] = "Account 2"; goOneNamed["email"] = NSNull(); goOneNamed["plan"] = "go"
+  goOneNamed["status"] = "ok"; goOneNamed["sampledAt"] = "2026-12-31T00:00:00Z"
+  var goTwoNamed = goTwo
+  goTwoNamed["label"] = "Account 3"; goTwoNamed["email"] = NSNull(); goTwoNamed["plan"] = "go"
+  goTwoNamed["status"] = "cached"; goTwoNamed["sampledAt"] = "2026-12-30T23:58:00Z"
+  var goUnavailable = accountObject("go-account-off", "opencode-go", [])
+  goUnavailable["label"] = "Account 4"; goUnavailable["email"] = NSNull(); goUnavailable["status"] = "unavailable"
+  goDashboardObject["accounts"] = [goOneNamed, goTwoNamed, goUnavailable]
+  let rowsDashboard = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: goDashboardObject))
+  let goRows = rowsDashboard.providerGroups.flatMap(\.trayRows)
+  try expect(goRows.map(\.id) == ["opencode-go|go-account-one", "opencode-go|go-account-two", "opencode-go|go-account-off"]
+    && goRows.allSatisfy { $0.isAccountRow && $0.provider == "opencode-go" && $0.accounts.count == 1 },
+    "Every OpenCode Go account must be its own tray row")
+  try expect(goRows[0].representative.glanceMeters.map(\.key) == ["go-first-hourly"]
+    && goRows[1].representative.glanceMeters.map(\.key) == ["go-second-weekly"]
+    && goRows[1].representative.glanceMeters[0].resetAt == "2027-01-07T02:00:00Z",
+    "Each OpenCode Go row must show its own meters and exact reset")
+  let at = AccountFormatting.date("2026-12-31T00:01:00Z")!
+  try expect(goRows[0].meta(now: at) == "Account 2 · Live 1m ago"
+    && goRows[1].meta(now: at) == "Account 3 · Cached 3m ago"
+    && goRows[2].meta(now: at) == "Account 4 · Unavailable"
+    && goRows[0].accountHelp.hasPrefix("OpenCode Go Account 2 (Go) usage details"),
+    "An OpenCode Go row must name its account, plan and own status, never \"1 of N\": \(goRows.map { $0.meta(now: at) })")
+  // Card OCG1: a stored key's row is named by its identity digest; a name that repeats the title keeps the digest.
+  var keyRow = goOneNamed
+  keyRow["id"] = "opencode-go:usage:beadcafe"; keyRow["label"] = "OpenCode Go beadcafe"
+  var named = goTwoNamed
+  named["label"] = "Key beadcafe"
+  goDashboardObject["accounts"] = [keyRow, named]
+  let keyRows = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: goDashboardObject)).providerGroups.flatMap(\.trayRows)
+  try expect(keyRows.map { $0.accountMeta(now: at)?.who } == ["beadcafe", "beadcafe"]
+    && keyRows[1].accountHelp.hasPrefix("OpenCode Go Key beadcafe"),
+    "A per-key row's line keeps the digest and never repeats the title: \(keyRows.map { $0.accountMeta(now: at)?.who ?? "" })")
+  goDashboardObject["accounts"] = [goOneNamed, goTwoNamed, goUnavailable]
+  try expect(!goRows.contains { $0.meta(now: at).contains(" of ") },
+    "No OpenCode Go row may collapse the other accounts into \"1 of N\"")
+  try expect(rowsDashboard.providerGroups.map(\.id) == ["opencode-go"],
+    "The provider list (menu-bar picker, hiding) still names OpenCode Go once")
+  // Other providers keep one row: a second Kimi Code account stays in Details.
+  var kimiOne = accountObject("kimi-one", "kimi-code", []), kimiTwo = accountObject("kimi-two", "kimi-code", [])
+  kimiOne["status"] = "ok"; kimiTwo["status"] = "ok"
+  goDashboardObject["accounts"] = [kimiOne, kimiTwo]
+  let kimi = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: goDashboardObject))
+  try expect(kimi.providerGroups.flatMap(\.trayRows).map(\.id) == ["kimi-code"]
+    && kimi.providerGroups[0].trayRows[0].accounts.count == 2,
+    "Providers not listed account by account keep one representative row")
 }
 
 // Decode a complete server DTO rather than reconstructing individual quota windows.

@@ -159,6 +159,47 @@ export interface AccountDashboardRequestContext {
 const REFRESH_DEBOUNCE_MS = 5_000;
 const MAX_SCOPES = 16;
 const VISIBILITY_BUDGET_FLOOR_MS = 250;
+
+/**
+ * A part that failed outright: its last good rows stay, labelled as a failed read.
+ */
+function failedRead(account: DashboardAccount): DashboardAccount {
+  return account.status === 'ok'
+    ? {
+        ...account,
+        status: 'cached',
+        cacheReason: 'read_failed',
+        message: 'The usage read did not finish; showing the last successful reading.',
+      }
+    : account;
+}
+
+/**
+ * A part still reading at the response deadline has not failed: its last rows are returned
+ * as they were read, with their own read times and statuses. Only an `ok` row whose reading
+ * is older than two refresh intervals (the next read was due and is still running) is shown
+ * as a pending refresh, so a hung read never keeps a row "live". A real failure is labelled
+ * by the read itself (or by `failedRead` when the part rejects), never by the deadline.
+ */
+function stillReading(
+  rows: DashboardAccount[],
+  now: number,
+  refreshIntervalSeconds: number
+): DashboardAccount[] {
+  return rows.map((account) => {
+    if (account.status !== 'ok') return account;
+    const readAt = Date.parse(account.sampledAt ?? account.fetchedAt ?? '');
+    if (Number.isFinite(readAt) && now - readAt < 2 * refreshIntervalSeconds * 1000) {
+      return account;
+    }
+    return {
+      ...account,
+      status: 'cached',
+      cacheReason: 'refresh_pending',
+      message: 'A usage read is still running; showing the last successful reading.',
+    };
+  });
+}
 interface DashboardState {
   fetchedAt: number;
   refreshedAt: number;
@@ -269,11 +310,13 @@ export class AccountDashboardService {
   private async bounded<T>(
     pending: Promise<T>,
     fallback: () => T,
-    budgetMs = this.deps.responseBudgetMs ?? 2500
+    budgetMs = this.deps.responseBudgetMs ?? 2500,
+    /** At the deadline, when a still-running read means something else than a failed one. */
+    onTimeout: () => T = fallback
   ): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<T>((resolve) => {
-      timer = setTimeout(() => resolve(fallback()), budgetMs);
+      timer = setTimeout(() => resolve(onTimeout()), budgetMs);
     });
     try {
       return await Promise.race([pending.catch(fallback), timeout]);
@@ -637,27 +680,41 @@ export class AccountDashboardService {
       parts.map(async ([key, pending, fallback]) => {
         // Slow sources can finish after the response deadline. Retain their safe
         // projections without allowing an older cycle to overwrite a newer one.
-        const retained = pending.then((accounts) => {
-          if (state.generation === generation) {
-            state[key] = accounts;
-            if (completed) this.deps.onUsagePublished?.();
+        const retained = pending.then(
+          (accounts) => {
+            if (state.generation === generation) {
+              state[key] = accounts;
+              if (completed) this.deps.onUsagePublished?.();
+            }
+            return accounts;
+          },
+          (error: unknown) => {
+            // A part that fails after the deadline is a real failure: its rows stop reading as
+            // "still running" and read as failed, with their own read times.
+            if (state.generation === generation && !publishedThisCycle.has(key))
+              state[key] = state[key].map((account) =>
+                account.status === 'cached' && account.cacheReason === 'refresh_pending'
+                  ? failedRead({ ...account, status: 'ok' })
+                  : failedRead(account)
+              );
+            throw error;
           }
-          return accounts;
-        });
-        const result = await this.bounded(retained, () =>
-          publishedThisCycle.has(key)
-            ? state[key]
-            : (state[key].length ? state[key] : fallback()).map((account) =>
-                account.status === 'ok'
-                  ? {
-                      ...account,
-                      status: 'cached' as const,
-                      cacheReason: 'read_failed' as const,
-                      message:
-                        'The usage read did not finish; showing the last successful reading.',
-                    }
-                  : account
-              )
+        );
+        const lastRows = (): DashboardAccount[] => (state[key].length ? state[key] : fallback());
+        const result = await this.bounded(
+          retained,
+          // The part rejected: a real failure, so its last good rows are labelled as one.
+          () => (publishedThisCycle.has(key) ? state[key] : lastRows().map(failedRead)),
+          undefined,
+          // Still running at the deadline: the last rows as they were read, not a failure.
+          () =>
+            publishedThisCycle.has(key)
+              ? state[key]
+              : stillReading(
+                  lastRows(),
+                  (this.deps.now ?? Date.now)(),
+                  (this.deps.refreshIntervalSeconds ?? getAccountRefreshIntervalSeconds)()
+                )
         );
         if (state.generation === generation) state[key] = result;
       })

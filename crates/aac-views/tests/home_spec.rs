@@ -397,6 +397,64 @@ fn synthetic_provider_reaches_the_registry_and_cards() -> Result<(), String> {
     Ok(())
 }
 
+/// Owner, 2026-11-21: every OpenCode Go account is its own Home card with its own meters and state, never folded
+/// into one card; an unavailable account keeps its own card and says so.
+#[test]
+fn every_opencode_go_account_is_its_own_card() -> Result<(), String> {
+    let text = std::fs::read_to_string(spec_dir().join("cases.json")).map_err(|e| e.to_string())?;
+    let table: Table = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let mut case = table
+        .cases
+        .into_iter()
+        .find(|c| c.name == "cursor-plans#1")
+        .ok_or("cursor-plans#1 is missing")?;
+    let accounts = case.dashboard["accounts"]
+        .as_array_mut()
+        .ok_or("accounts")?;
+    let template = accounts[0].clone();
+    // Listed with ranks in the browser's collation order (the case's ranks must agree with it).
+    for (rank, (id, label, live)) in [
+        ("opencode-go:acct:2e034ec2", "Account 3", false),
+        ("opencode-go:acct:52f3251b", "Account 2", true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut go = template.clone();
+        go["id"] = id.into();
+        go["provider"] = "opencode-go".into();
+        go["providerLabel"] = "OpenCode Go".into();
+        go["email"] = serde_json::Value::Null;
+        go["label"] = label.into();
+        if !live {
+            go["status"] = "unavailable".into();
+            go["message"] = "Account usage is temporarily unavailable.".into();
+            go["windows"] = serde_json::json!([]);
+        }
+        accounts.push(go);
+        case.presentation["order"][id] = (1000 + rank as u64).into();
+    }
+    let view = serde_json::to_value(build(envelope_of(&case)?).map_err(|d| format!("{d:?}"))?)
+        .map_err(|e| e.to_string())?;
+    let go: Vec<&serde_json::Value> = view["cards"]
+        .as_array()
+        .ok_or("cards")?
+        .iter()
+        .filter(|card| card["provider"] == "opencode-go")
+        .collect();
+    let ids: Vec<&str> = go.iter().filter_map(|c| c["accountId"].as_str()).collect();
+    assert_eq!(
+        ids,
+        ["opencode-go:acct:2e034ec2", "opencode-go:acct:52f3251b"]
+    );
+    assert_eq!(go[0]["identity"], "Account 3");
+    assert_eq!(go[1]["identity"], "Account 2");
+    assert_eq!(go[0]["meters"].as_array().map(Vec::len), Some(0));
+    assert_eq!(go[0]["note"], "Account usage is temporarily unavailable.");
+    assert!(go[1]["meters"].as_array().is_some_and(|m| !m.is_empty()));
+    Ok(())
+}
+
 /// R1b: the memo is used: the first fed build of a case keeps its clock-independent parts, and a second build at
 /// another clock reads them (it adds nothing) and still equals a build without the memo at that clock.
 #[test]
