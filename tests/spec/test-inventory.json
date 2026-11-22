@@ -399,6 +399,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/account_usage/dashboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/account_usage/failover.rs",
       "kind": "internal",
       "evidence": [],
@@ -876,6 +882,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_registry.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_remove.rs",
       "kind": "safety",
       "evidence": [
@@ -1051,6 +1064,12 @@
     },
     {
       "file": "crates/aac-http/src/view_reply.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/visibility_write.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1961,6 +1980,12 @@
     },
     {
       "file": "crates/aac-views/src/pricing/resolver.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/src/registry.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
