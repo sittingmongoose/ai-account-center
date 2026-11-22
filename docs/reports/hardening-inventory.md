@@ -56,7 +56,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | hotpath console.error/warn files | 13 |
 | files with createLogger | 39/438 |
 | subdomains with zero createLogger | 8 (antigravity, config, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 65 |
+| files > 400 LOC | 66 |
 | files > 600 LOC | 27 |
 
 ### Top Hotpath console.error/warn Files
