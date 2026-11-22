@@ -7,16 +7,18 @@ default home's `.ccs`; an empty value is skipped. The TS resolver
 Node's `path.resolve`; the Rust loader (`crates/aac-config/src/lib.rs`,
 `Config::load`) resolves it through `aac_files::path::node::resolve`
 (`crates/aac-files/src/path.rs`). Both collapse dot segments lexically and
-follow no symlink while resolving. They differ on two Windows spellings:
+follow no symlink while resolving. They differ on one Windows spelling:
 Node's `path.resolve` keeps a current directory per drive, so a drive-relative
 root such as `CCS_DIR=C:fixture` resolves against the drive's own current directory
-(drive C's cwd), while Rust's `Path::is_absolute` is false for a drive-relative path,
-so the loader joins it onto the process current directory (on `D:\work` that
-is `D:\work\C:fixture`, not drive C's cwd). A root-relative Windows path without
-a drive (`CCS_DIR=/ccs`) resolves against the current drive's root in TS, but
-the Rust loader refuses it. Until the Rust loader takes these shapes (M6),
-Windows operators should spell the root fully absolute (`C:\ccs`) or plainly
-relative (`team\ccs`); the table lists what each loader does with every shape.
+(drive C's cwd). Rust's `Path::is_absolute` is also false for a drive-relative
+path, but `base.join("C:fixture")` replaces the base because the selection carries
+a drive prefix: with process cwd `D:\work` the result is still-relative `C:fixture`,
+and the loader refuses it with `store root must be absolute`. A root-relative
+Windows path without a drive (`CCS_DIR=/ccs`) keeps the base's drive in Rust
+(`D:\ccs`, accepted), matching TS's current-drive resolution. Until the Rust
+loader takes the drive-relative shape (M6), Windows operators should spell the
+root fully absolute (`C:\ccs`) or plainly relative (`team\ccs`); the table lists
+what each loader does with every shape.
 
 | `CCS_DIR` / `CCS_HOME` shape | TS loader (`path.resolve`) | Rust loader (`node::resolve`) |
 | --- | --- | --- |
@@ -24,8 +26,8 @@ relative (`team\ccs`); the table lists what each loader does with every shape.
 | Absolute Windows `C:\ccs` | `C:\ccs`, dot segments collapsed | same |
 | UNC `\\server\share\ccs` | absolute, kept | same |
 | Relative `team/ccs` | process cwd joined with the selection | same |
-| Drive-relative Windows `C:fixture` | drive C's own current directory joined with `fixture` | process cwd joined with `C:fixture` (different) |
-| Root-relative Windows `/ccs` (no drive) | current drive's root joined with `ccs` | refused: `store root must be absolute` |
+| Drive-relative Windows `C:fixture` | drive C's own current directory joined with `fixture` | join replaces the base; still-relative `C:fixture` refused: `store root must be absolute` |
+| Root-relative Windows `/ccs` (no drive) | current drive's root joined with `ccs` (`D:\ccs` from `D:\work`) | keeps the base's drive: `D:\ccs`, accepted (same) |
 | Tilde `~/ccs` or `~` | not expanded: a literal `~` component under the process cwd | same (neither loader expands `~` here) |
 | Dot segments `a/../b` | collapsed lexically, no symlink followed | same |
 | Empty string | skipped, next source wins | same |
@@ -41,7 +43,8 @@ The Rust loader refuses with `Cause::Refused` and one of these words:
   supplies the process current directory as the base, so this guards direct
   use of the resolve API.
 - `store root must be absolute` — the joined result is still not absolute
-  (the root-relative Windows shape above).
+  (the drive-relative Windows shape above: the join keeps the selection's
+  drive prefix and no root).
 
 ## Unchanged root rules
 
