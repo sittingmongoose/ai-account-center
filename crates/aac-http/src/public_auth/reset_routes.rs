@@ -475,7 +475,11 @@ impl ResetRoutes {
                     account,
                     json!({
                         "key":write["attemptKey"],"outcome":result["outcome"],
-                        "retryAfterMs":result["retryAfterMs"],"snapshot":after
+                        "retryAfterMs":result["retryAfterMs"],
+                        // The proven no-send names one allowlisted cause; the ledger drops
+                        // anything else, so provider text never reaches the receipt.
+                        "reason":result["reason"].as_str().and_then(safe_reason),
+                        "snapshot":after
                     }),
                 )
             }
@@ -493,6 +497,15 @@ mod tests {
         for reason in ["no-matching-code-login", "ambiguous-code-login"] {
             assert_eq!(safe_reason(reason), Some(reason));
         }
+    }
+
+    #[test]
+    fn not_sent_refusals_keep_their_public_reasons() {
+        // The reasons a proven no-send can carry into the finish ledger and receipt.
+        for reason in ["identity-unconfirmed", "signed-out", "rate-limited"] {
+            assert_eq!(safe_reason(reason), Some(reason));
+        }
+        assert_eq!(safe_reason("provider said no"), None);
     }
 
     #[test]

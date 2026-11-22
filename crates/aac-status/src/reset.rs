@@ -937,6 +937,13 @@ impl Store {
         if !unobserved.is_empty() {
             receipt["unobservedWindows"] = json!(unobserved);
         }
+        if stored == "not-sent"
+            && let Some(reason) = details["refusalReason"]
+                .as_str()
+                .filter(|r| REFUSAL_REASONS.contains(r))
+        {
+            receipt["refusalReason"] = json!(reason);
+        }
         Ok(receipt)
     }
     fn committed_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
@@ -956,6 +963,20 @@ impl Store {
         after: Option<&Snapshot>,
         now: i64,
         retry_after_ms: Option<i64>,
+    ) -> Result<Value> {
+        self.finish_refused(account, attempt, outcome, after, now, retry_after_ms, None)
+    }
+    /// `finish` carrying the refusal reason a proven no-send named. Only one fixed
+    /// allowlisted code reaches the receipt; unknown words are dropped, never provider text.
+    pub fn finish_refused(
+        &mut self,
+        account: &str,
+        attempt: &str,
+        outcome: Outcome,
+        after: Option<&Snapshot>,
+        now: i64,
+        retry_after_ms: Option<i64>,
+        reason: Option<&str>,
     ) -> Result<Value> {
         let tx = sql(self
             .db
@@ -1010,15 +1031,17 @@ impl Store {
             let delay = retry_after_ms.unwrap_or(60_000).clamp(1_000, 86_400_000);
             sql(tx.execute("INSERT INTO holds VALUES(?,?) ON CONFLICT(account) DO UPDATE SET until_ms=max(until_ms,excluded.until_ms)",params![hash(&encode(&(&before.identity.provider,&before.identity.account,&before.identity.organization))?),now+delay]))?;
         }
-        Self::audit(
-            &tx,
-            now,
-            account,
-            "verification",
-            attempt,
-            result,
-            json!({"provider":before.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"idempotencyHash":hash(attempt),"providerSuccess":provider_success,"providerOutcome":outcome.word(),"verified":verified,"beforeCount":g.left,"afterCount":after.and_then(|a|a.grants.iter().find(|n|n.id==g.id).map(|n|n.left)),"beforeWindows":before.windows,"afterWindows":after.map(|a|&a.windows)}),
-        )?;
+        Self::audit(&tx, now, account, "verification", attempt, result, {
+            let mut details = json!({"provider":before.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"idempotencyHash":hash(attempt),"providerSuccess":provider_success,"providerOutcome":outcome.word(),"verified":verified,"beforeCount":g.left,"afterCount":after.and_then(|a|a.grants.iter().find(|n|n.id==g.id).map(|n|n.left)),"beforeWindows":before.windows,"afterWindows":after.map(|a|&a.windows)});
+            // The reason is kept only for a settled no-send; earlier provider
+            // success for the same attempt keeps its own answer.
+            if result == "not-sent"
+                && let Some(reason) = reason.filter(|r| REFUSAL_REASONS.contains(r))
+            {
+                details["refusalReason"] = json!(reason);
+            }
+            details
+        })?;
         let response = Self::committed_result(&tx, account, attempt)?;
         sql(tx.commit())?;
         Ok(response)
@@ -1132,6 +1155,15 @@ pub enum Outcome {
     Unavailable,
     NotSent,
 }
+/// The fixed reasons a proven no-send can name in its receipt and audit details.
+/// Only these codes cross the helper boundary; provider text never becomes a reason.
+const REFUSAL_REASONS: &[&str] = &[
+    "identity-unconfirmed",
+    "signed-out",
+    "rate-limited",
+    "no-matching-code-login",
+    "ambiguous-code-login",
+];
 impl Outcome {
     fn word(self) -> &'static str {
         match self {
@@ -1343,6 +1375,8 @@ pub fn dispatch(args: &str) -> Result<Value> {
         snapshot: Option<Snapshot>,
         outcome: Option<String>,
         retry_after_ms: Option<i64>,
+        #[serde(default)]
+        reason: Option<String>,
     }
     let a: Input = serde_json::from_str(args).map_err(|_| "shape")?;
     // The request timestamp never authorizes execution. Each transaction samples the
@@ -1379,7 +1413,15 @@ pub fn dispatch(args: &str) -> Result<Value> {
                 Some("not-sent") => Outcome::NotSent,
                 _ => Outcome::Ambiguous,
             };
-            s.finish(&a.account, &a.key, o, a.snapshot.as_ref(), now_ms, a.retry_after_ms)
+            s.finish_refused(
+                &a.account,
+                &a.key,
+                o,
+                a.snapshot.as_ref(),
+                now_ms,
+                a.retry_after_ms,
+                a.reason.as_deref(),
+            )
         }
         "check" => s.check(&a.account, &a.key, snapshot()?, now_ms),
         "history" => s.history(&a.account),

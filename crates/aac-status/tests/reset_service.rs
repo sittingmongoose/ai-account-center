@@ -206,6 +206,55 @@ fn the_service_refuses_a_wire_path_unknown_ops_and_unbound_entropy() {
 }
 
 #[test]
+fn a_proven_no_send_keeps_its_allowlisted_reason_in_the_receipt() {
+    // The finish ledger carries one allowlisted refusal reason from the helper's not-sent
+    // answer through to the receipt; unknown words are omitted, never provider text.
+    for (reason, expected) in [
+        (Some("identity-unconfirmed"), json!("identity-unconfirmed")),
+        (Some("provider text is never allowed"), Value::Null),
+        (None, Value::Null),
+    ] {
+        let ledger = Ledger::new(true);
+        let caller = format!("session:{}", entropy(20));
+        let key = ledger
+            .call("inventory", 2, json!({"snapshot": snapshot(&ledger.db, 1, 100.0)}))
+            .unwrap()["grants"][1]["grantKey"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        ledger.call("prepareGate", 3, json!({"key": key})).unwrap();
+        let token = ledger
+            .call(
+                "prepare",
+                4,
+                json!({"key": key, "caller": caller, "snapshot": snapshot(&ledger.db, 1, 100.0)}),
+            )
+            .unwrap()["confirmationToken"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        ledger.call("claimGate", 5, json!({"key": key})).unwrap();
+        let attempt = ledger
+            .call(
+                "begin",
+                6,
+                json!({"key": key, "caller": caller, "token": token, "snapshot": snapshot(&ledger.db, 1, 100.0)}),
+            )
+            .unwrap()["attemptKey"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut finish = json!({"key": attempt, "outcome": "not-sent", "retryAfterMs": null, "snapshot": null});
+        if let Some(reason) = reason {
+            finish["reason"] = json!(reason);
+        }
+        let receipt = ledger.call("finish", 10, finish).unwrap();
+        assert_eq!(receipt["outcome"], "not-sent");
+        assert_eq!(receipt["refusalReason"], expected, "reason {reason:?}");
+    }
+}
+
+#[test]
 fn ticketed_source_reads_take_exact_fields_and_reach_the_native_source() {
     let ledger = Ledger::new(true);
     let call = |body: Value| service_call(&ledger.db, body.to_string().as_bytes());
