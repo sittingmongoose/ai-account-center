@@ -2818,6 +2818,66 @@ class ResetCodeLoginTests(unittest.TestCase):
                              {"unavailable": True, "reason": "signed-out"})
         client.assert_not_called()
 
+    def test_desktop_target_organization_is_selected_past_the_four_entry_total_cap(self):
+        __import__("shutil").rmtree(self.home / ".claude-t3")
+        target_token = "fixture-private-fifth-org-token"
+        now = time.time()
+        five_org_cache = {}
+        for idx in range(4):
+            other_org = f"{idx + 5:08x}-5555-5555-5555-555555555555"
+            five_org_cache.update(cache(
+                key(org=other_org),
+                token=f"fixture-private-other-{idx}",
+                expiresAt=(now + 7200 - idx * 60) * 1000,
+            ))
+        five_org_cache.update(cache(
+            key(org=OTHER),
+            token=target_token,
+            expiresAt=(now + 3600) * 1000,
+        ))
+        self.desktop = (ACCOUNT, five_org_cache)
+        request = dict(self.request, expectedSavedOrganization=OTHER)
+        with mock.patch.object(usage, "Client") as client:
+            login = usage._desktop_reset_login(dict(request, action="capture"))
+            captured = usage.reset_host(dict(request, action="capture"))
+        client.assert_not_called()
+        self.assertEqual((login["account"], login["organization"]), (ACCOUNT, OTHER))
+        self.assertEqual((captured.get("account"), captured.get("organization")), (ACCOUNT, OTHER))
+        fake = self.client(profile(organization={"uuid": OTHER}), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            read = usage.reset_host(dict(request, expectedSavedBinding=captured["savedLoginBinding"]))
+        self.assertEqual(read["identity"]["organization"], OTHER)
+        self.assertEqual([call[1] for call in fake.calls], [target_token, target_token])
+
+    def test_desktop_org_filter_distinguishes_missing_org_from_empty_cache_and_caps_four_per_org(self):
+        __import__("shutil").rmtree(self.home / ".claude-t3")
+        now = time.time()
+        self.desktop = (ACCOUNT, cache(key(org=ORG), expiresAt=(now + 3600) * 1000))
+        with self.assertRaises(usage.UsageUnavailable) as missing_org:
+            usage._desktop_reset_login(dict(self.request, action="capture", expectedSavedOrganization=OTHER))
+        self.assertEqual(missing_org.exception.status, "unavailable")
+
+        self.desktop = (ACCOUNT, {})
+        with self.assertRaises(usage.UsageUnavailable) as empty_cache:
+            usage._desktop_reset_login(dict(self.request, action="capture", expectedSavedOrganization=OTHER))
+        self.assertEqual(empty_cache.exception.status, "needs_sign_in")
+
+        multi_cache = {}
+        for idx in range(4):
+            other_org = f"{idx + 5:08x}-5555-5555-5555-555555555555"
+            multi_cache.update(cache(key(org=other_org), expiresAt=(now + 9000 - idx * 60) * 1000))
+        for idx in range(5):
+            client_id = f"{idx + 1:08x}-2222-2222-2222-222222222222"
+            multi_cache.update(cache(
+                key(client=client_id, org=OTHER),
+                token=f"fixture-target-{idx}",
+                expiresAt=(now + 3000 + idx * 60) * 1000,
+            ))
+        entries = usage.eligible_entries(ACCOUNT, multi_cache, organization=OTHER)
+        self.assertEqual(len(entries), 4)
+        self.assertEqual([entry[2] for entry in entries],
+                         ["fixture-target-4", "fixture-target-3", "fixture-target-2", "fixture-target-1"])
+
 
 class RefusalReasonParityTests(unittest.TestCase):
     def test_the_helper_route_status_and_page_allowlists_name_the_same_five_codes(self):

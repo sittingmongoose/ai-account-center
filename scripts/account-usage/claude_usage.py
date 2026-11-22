@@ -317,7 +317,7 @@ def decrypt_cache(profile_path):
     return account_uuid, cache
 
 
-def eligible_entries(account_uuid, cache, allow_expired=False):
+def eligible_entries(account_uuid, cache, allow_expired=False, organization=None):
     candidates = []
     now = time.time() * 1000
     for cache_key, entry in cache.items():
@@ -340,6 +340,7 @@ def eligible_entries(account_uuid, cache, allow_expired=False):
             or not isinstance(token, str)
             or not token or len(token) > 32768 or any(ord(char) < 32 for char in token)
             or expires is None or not allow_expired and expires <= now + 30000
+            or (organization is not None and identities[2] != organization)
         ):
             continue
         candidates.append((expires, identities, token))
@@ -1350,13 +1351,11 @@ def _desktop_reset_login(request):
     organization = _reset_target_organization(request)
     root = resolve_profile_path(profile_id, request.get("profileDir"), None, request.get("isDefault") is True)
     account, cache = decrypt_cache(root)
-    candidates = eligible_entries(account, cache)
+    candidates = eligible_entries(account, cache, organization=organization)
     if not candidates:
-        raise UsageUnavailable("needs_sign_in")
-    if organization is not None:
-        candidates = [entry for entry in candidates if entry[1][2] == organization]
-        if not candidates:
+        if organization is not None and eligible_entries(account, cache):
             raise UsageUnavailable()
+        raise UsageUnavailable("needs_sign_in")
     if resolve_profile_path(profile_id, request.get("profileDir"), None, request.get("isDefault") is True) != root:
         raise UsageUnavailable()
     return {"account": account, "organization": candidates[0][1][2], "binding": reset_login_binding(account, cache)}
@@ -1560,7 +1559,7 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 raise UsageUnavailable()
 
         account_uuid, cache = decrypt_cache(profile_root)
-        candidates = eligible_entries(account_uuid, cache)
+        candidates = eligible_entries(account_uuid, cache, organization=expected_saved_organization)
         saved_binding = reset_login_binding(account_uuid, cache) if private_reset_sink is not None else None
 
         if expected_saved_binding is not None and (private_reset_sink is None or saved_binding != expected_saved_binding):
@@ -1574,11 +1573,9 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 raise UsageUnavailable()
 
         if not candidates:
-            raise UsageUnavailable("needs_sign_in")
-        if expected_saved_organization is not None:
-            candidates = [entry for entry in candidates if entry[1][2] == expected_saved_organization]
-            if not candidates:
+            if expected_saved_organization is not None and eligible_entries(account_uuid, cache):
                 raise UsageUnavailable()
+            raise UsageUnavailable("needs_sign_in")
         client = Client()
         forbidden = False
         for _, identities, token in candidates:
