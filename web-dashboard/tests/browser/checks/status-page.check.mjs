@@ -1509,4 +1509,51 @@ export const tests = {
     await t.check(`no re-read while refused (${reads - settled} more)`, reads - settled <= 1);
     await t.noConsoleErrors('console (only the refused reads)', { allow: [/status of 403/] });
   },
+
+  // Delivery warnings on both surfaces that render DeliveryWarnings (open card notes and answered rows): failed
+  // delivery without detail falls back to "Could not tell the agent.", followed by summaryWarning when set.
+  async 'status delivery warnings show failed delivery and summary warning'(t) {
+    await t.viewport(1440, 900);
+    const view = fixture('status-view.json');
+    view.cards.open[0].notes = [
+      {
+        kind: 'note',
+        note: 'Fixture note whose ring failed.',
+        at: '2026-11-06T15:10:00.000Z',
+        delivery: { state: 'failed', detail: '' },
+      },
+    ];
+    view.cards.answered[0].answer.delivery = {
+      state: 'failed',
+      at: '2026-11-05T17:31:02.000Z',
+      detail: '',
+    };
+    await openStatus(t, view);
+    await t.page.waitForSelector(CARD);
+    await t.text('article.q-card [data-tone="warn"]', 'Could not tell the agent.');
+    await t.page.click('.q-foot-actions .disclosure');
+    await t.page.waitForSelector('.sec-questions ul.answered li');
+    await t.text('.sec-questions ul.answered [data-tone="warn"]', 'Could not tell the agent.');
+
+    const summaryWarning = 'Send summary not on the share yet (attempt 2).';
+    view.cards.open[0].notes[0].delivery.summaryWarning = summaryWarning;
+    view.cards.answered[0].answer.delivery.summaryWarning = summaryWarning;
+    await t.page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await t.page.waitForFunction(
+      (text) =>
+        document.querySelector('article.q-card ul.talk')?.textContent.includes(text) &&
+        document.querySelector('.sec-questions ul.answered')?.textContent.includes(text),
+      summaryWarning
+    );
+    await t.equal(
+      'open card note shows failed delivery then summaryWarning in order',
+      await t.page.locator('article.q-card [data-tone="warn"]').allTextContents(),
+      ['Could not tell the agent.', summaryWarning]
+    );
+    await t.equal(
+      'answered row shows failed delivery then summaryWarning in order',
+      await t.page.locator('.sec-questions ul.answered [data-tone="warn"]').allTextContents(),
+      ['Could not tell the agent.', summaryWarning]
+    );
+  },
 };
