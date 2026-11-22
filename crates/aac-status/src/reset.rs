@@ -968,6 +968,7 @@ impl Store {
     }
     /// `finish` carrying the refusal reason a proven no-send named. Only one fixed
     /// allowlisted code reaches the receipt; unknown words are dropped, never provider text.
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_refused(
         &mut self,
         account: &str,
