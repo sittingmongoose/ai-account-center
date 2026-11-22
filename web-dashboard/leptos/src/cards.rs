@@ -1257,13 +1257,10 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
                                 {(!choice.is_empty()).then(|| view! { <div>{format!("Chosen, not sent: {}", choice.join(", "))}</div> })}
                                 {(!note.trim().is_empty()).then(|| view! { <blockquote>{note.clone()}</blockquote> })}
                                 <div class="q-unsent-actions">
-                                    {copy_words_argument(&words).map(|payload| {
-                                        let payload = payload.to_string();
-                                        view! {
-                                            <button class="btn sm" on:click=move |_| copy_words(payload.clone(), copied)>
-                                                {move || match copied.get() { Some(true) => "Copied", Some(false) => "Copy failed: select the words", None => "Copy words" }}
-                                            </button>
-                                        }
+                                    {copy_words_argument(&words).is_some().then(move || view! {
+                                        <button class="btn sm" on:click=move |_| copy_unsent_closed_words(&words, copied)>
+                                            {move || match copied.get() { Some(true) => "Copied", Some(false) => "Copy failed: select the words", None => "Copy words" }}
+                                        </button>
                                     })}
                                     <button class="btn sm" on:click=move |_| drafts.update(|d| drafts::discard(d, &id))>"Discard"</button>
                                 </div>
@@ -1281,22 +1278,40 @@ fn copy_words_argument(note: &str) -> Option<&str> {
     (!note.trim().is_empty()).then_some(note)
 }
 
+/// UnsentClosed's Copy words click: the stored note, exactly as kept (only whether the button shows trims).
+fn copy_unsent_closed_words(note: &str, done: RwSignal<Option<bool>>) {
+    copy_words(note.to_string(), done);
+}
+
 fn copy_words(text: String, done: RwSignal<Option<bool>>) {
-    use wasm_bindgen::JsCast;
     let argument = copy_words_argument(&text).unwrap_or(text.as_str());
-    let navigator = window().navigator();
-    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into())
-        .unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
-    let promise = js_sys::Reflect::get(&clipboard, &"writeText".into())
-        .ok()
-        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
-        .and_then(|f| f.call1(&clipboard, &argument.into()).ok())
-        .and_then(|p| p.dyn_into::<js_sys::Promise>().ok());
-    match promise {
-        Some(p) => spawn_local(async move {
-            done.set(Some(wasm_bindgen_futures::JsFuture::from(p).await.is_ok()));
-        }),
-        None => done.set(Some(false)),
+    write_copy_words(argument, done);
+}
+
+/// The clipboard boundary: the argument reaches `navigator.clipboard.writeText` unchanged. Tests record it here.
+fn write_copy_words(argument: &str, done: RwSignal<Option<bool>>) {
+    #[cfg(test)]
+    {
+        tests::record_clipboard_write(argument);
+        done.set(Some(true));
+    }
+    #[cfg(not(test))]
+    {
+        use wasm_bindgen::JsCast;
+        let navigator = window().navigator();
+        let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into())
+            .unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
+        let promise = js_sys::Reflect::get(&clipboard, &"writeText".into())
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .and_then(|f| f.call1(&clipboard, &argument.into()).ok())
+            .and_then(|p| p.dyn_into::<js_sys::Promise>().ok());
+        match promise {
+            Some(p) => spawn_local(async move {
+                done.set(Some(wasm_bindgen_futures::JsFuture::from(p).await.is_ok()));
+            }),
+            None => done.set(Some(false)),
+        }
     }
 }
 
@@ -1364,6 +1379,19 @@ fn DeliveryWarnings(delivery: Delivery) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static COPIED_WORDS: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn record_clipboard_write(argument: &str) {
+        COPIED_WORDS.with(|c| *c.borrow_mut() = Some(argument.to_string()));
+    }
+
+    fn last_clipboard_write() -> Option<String> {
+        COPIED_WORDS.with(|c| c.borrow().clone())
+    }
 
     #[test]
     fn the_closed_row_copies_the_exact_stored_words() {
@@ -1437,13 +1465,27 @@ mod tests {
 
     #[test]
     fn copy_words_passes_the_exact_stored_note() {
+        let owner = Owner::new();
+        owner.set();
         let note = "  first line\nsecond line\n  ";
-        let argument = copy_words_argument(note).expect("copy button is shown");
-        assert_eq!(argument, note);
-        assert!(
-            !argument.contains('<') && !argument.contains('>'),
-            "clipboard argument must not wrap HTML: {argument:?}"
+        // the closed card shows its button for any note with words, and its click hands over the stored note
+        assert!(copy_words_argument(note).is_some());
+        let done = RwSignal::new(None::<bool>);
+        record_clipboard_write("");
+        copy_unsent_closed_words(note, done);
+        assert_eq!(
+            last_clipboard_write().as_deref(),
+            Some(note),
+            "the clipboard must get the stored note, leading and trailing spaces included"
         );
+        assert_eq!(done.get(), Some(true));
+        // the same for words that look like markup: copied as text, never wrapped in HTML
+        let markup = "  <b>kept</b> & done\n";
+        let done = RwSignal::new(None::<bool>);
+        copy_unsent_closed_words(markup, done);
+        assert_eq!(last_clipboard_write().as_deref(), Some(markup));
+        assert_eq!(done.get(), Some(true));
+        // a whitespace-only note shows no button at all
         assert_eq!(copy_words_argument(" \n "), None);
         assert_eq!(copy_words_argument(""), None);
     }
