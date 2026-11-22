@@ -207,7 +207,7 @@
   "src/web-server/status/status-collectors.ts": "d11a529ac2b4588e4a391114f70c625f2b55b7ceff8f394da501e59b73bb3221",
   "src/web-server/status/status-docs.ts": "91394c7c8d46735c8208bb57db5a58625ca0af2d99bc82fa93c9092323c49714",
   "src/web-server/status/status-files.ts": "58dfe4cd46ff0bd481d2fdf92cae9805470a9c3fda6db48f53a8e73e45b9102c",
-  "src/web-server/status/status-view-panels.ts": "77d2843d5aea33f573d37f565ae2605886cb067b0f00f3ba28dfd7d5d9250c34",
+  "src/web-server/status/status-view-panels.ts": "8e67c7a35711fb909c7b14227f4637cc98996682fc242cdf674b4b85869f42a5",
   "src/web-server/status/status-view-quota.ts": "f806a9544a25cf58aa0aa7c4c92a2d23434fffe74d9d5525c18d01eb396e05e5",
   "src/web-server/status/status-view-strip.ts": "ecb63b749286d68ff1e2e6e294f1814269140e8bc7581e1981175ee04843e834",
   "src/web-server/status/status-view-types.ts": "bfaa0012258b06365deb2d9257f193b5083ab818c6681e1915a8056f7bb02888",

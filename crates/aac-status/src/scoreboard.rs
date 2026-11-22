@@ -534,13 +534,14 @@ fn row_version(row: &RowIn) -> &str {
     row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
 }
 
-/// Process identity for review totals: the process id, or the version when the id is absent.
-fn process_identity(row: &RowIn) -> &str {
-    match row.process.as_ref() {
-        Some(process) if !process.id.is_empty() => process.id.as_str(),
-        Some(process) => process.version.as_deref().unwrap_or(""),
-        None => "",
-    }
+/// Process identity for run and review totals: task, process id, and version.
+fn process_run_key(task_id: &str, row: &RowIn) -> String {
+    format!(
+        "{}|{}|{}",
+        task_id,
+        row.process.as_ref().map(|p| p.id.as_str()).unwrap_or(""),
+        row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
+    )
 }
 
 /// Sorts row indexes the way the reference picks one row per model at one effort for a
@@ -991,8 +992,13 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], _min_r
     }
     if only_ranked(row) && row.verdict == "fine" {
         runs.push(strong("Why only Fine:"));
+        let evidence = if row.basis.as_deref() == Some("benchmark") {
+            "benchmark"
+        } else {
+            "real"
+        };
         runs.push(run(format!(
-            " This is the only model with enough real {} runs to rank here, so there is nothing to compare it with.",
+            " This is the only model with enough {evidence} {} runs to rank here, so there is nothing to compare it with.",
             job.label
         )));
         let bench = row.benchmarks.iter().find(|b| b.ranked);
@@ -1408,12 +1414,7 @@ fn select_models<'a>(view: &'a ViewIn, use_ids: &[&str]) -> Result<(Vec<&'a Task
                     if row_key(row) != model.key {
                         continue;
                     }
-                    let dedupe = format!(
-                        "{}|{}|{}",
-                        task.id,
-                        row.process.as_ref().map(|p| p.id.as_str()).unwrap_or(""),
-                        row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
-                    );
+                    let dedupe = process_run_key(&task.id, row);
                     if seen.insert(dedupe) {
                         real += row.n.observed;
                         bench += row.n.benchmark;
@@ -1428,7 +1429,7 @@ fn select_models<'a>(view: &'a ViewIn, use_ids: &[&str]) -> Result<(Vec<&'a Task
                     if row_key(row) == model.key
                         && let Some(observed) = &row.observed
                     {
-                        review_cols.insert(format!("{}|{}", task.id, process_identity(row)), observed.reviews);
+                        review_cols.insert(process_run_key(&task.id, row), observed.reviews);
                     }
                 }
             }

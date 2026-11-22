@@ -971,3 +971,73 @@ fn why_only_fine_names_the_only_ranked_survivor() {
         "the old count claim must not stand: {compare}"
     );
 }
+
+#[test]
+fn why_only_fine_names_benchmark_runs_when_that_is_the_ranked_basis() {
+    let ranked = json!({
+        "model": "x/one", "label": "One", "runtime": "rt", "effort": "e",
+        "process": null,
+        "n": { "observed": 0, "benchmark": 5 },
+        "basis": "benchmark", "ranked": true, "rank": 1, "verdict": "fine",
+        "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+        "observed": { "n": 0, "reviews": 0, "ranked": false, "why": "", "measures": {} },
+        "benchmarks": [{
+            "n": 5, "reviews": 0, "ranked": true,
+            "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+            "measures": {}
+        }]
+    });
+    let sibling = json!({
+        "model": "x/two", "label": "Two", "runtime": "rt", "effort": "e",
+        "process": null,
+        "n": { "observed": 8, "benchmark": 0 },
+        "basis": "observed", "ranked": false, "verdict": "avoid",
+        "why": "Avoided: not enough reviews.",
+        "observed": {
+            "n": 8, "reviews": 0, "ranked": false, "why": "Avoided: not enough reviews.",
+            "measures": {}
+        },
+        "benchmarks": []
+    });
+    let small: Value = json!({
+        "catalog": {
+            "minRuns": 5,
+            "models": [
+                { "model": "x/one", "label": "One" },
+                { "model": "x/two", "label": "Two" }
+            ],
+            "taskTypes": [{ "id": "worknode-build", "label": "WorkNode build" }]
+        },
+        "uses": [
+            { "id": "planning", "label": "Planning", "taskTypes": [] },
+            {
+                "id": "building",
+                "label": "Building",
+                "taskTypes": [{
+                    "id": "worknode-build",
+                    "label": "WorkNode build",
+                    "unit": "task",
+                    "rows": [ranked, sibling]
+                }]
+            },
+            { "id": "pm-users", "label": "PM users", "taskTypes": [] }
+        ],
+        "sources": []
+    });
+    let parsed: ViewIn = serde_json::from_value(small).unwrap();
+    let view = by_model(&parsed).unwrap();
+    let one = view.views[0]
+        .models
+        .iter()
+        .find(|model| model.label == "One")
+        .expect("ranked Fine row");
+    let compare: String = one.report[0].compare.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(
+        compare,
+        "Why only Fine: This is the only model with enough benchmark WorkNode build runs to rank here, so there is nothing to compare it with."
+    );
+    assert!(
+        !compare.contains("enough real "),
+        "a benchmark-only row must not claim real runs: {compare}"
+    );
+}

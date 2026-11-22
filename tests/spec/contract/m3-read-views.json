@@ -213511,5 +213511,3344 @@
         "overLimitBudgets": 0
       }
     }
+  },
+  {
+    "route": "/api/status",
+    "case": "7:UTC",
+    "body": {
+      "version": 1,
+      "generatedAt": "2026-11-06T16:30:00.000Z",
+      "refresh": {
+        "pollSeconds": 30
+      },
+      "headline": {
+        "tone": "bad",
+        "runs": [
+          {
+            "text": "1 question",
+            "strong": true,
+            "tone": "warn"
+          },
+          {
+            "text": " for you"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 pinned thread is looping (Looping fixture, task A)",
+            "strong": true,
+            "tone": "warn"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 pinned thread waits on you (Waiting fixture)",
+            "tone": "warn"
+          },
+          {
+            "text": " · 1 of 2 items landed"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 blocked",
+            "tone": "warn"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 budget at or over its limit (estimate)",
+            "tone": "bad"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "2 sources not current",
+            "tone": "warn"
+          }
+        ],
+        "counts": {
+          "openCards": 1,
+          "questions": 1,
+          "decisions": 0,
+          "blockedItems": 1,
+          "workingThreads": 1,
+          "staleSources": 2,
+          "loopingPinned": 1,
+          "waitingPinned": 1
+        },
+        "strip": {
+          "items": [
+            {
+              "key": "questions",
+              "section": "questions",
+              "value": "1",
+              "label": "question for you",
+              "short": "question",
+              "tone": "warn",
+              "detail": "1 question for you."
+            },
+            {
+              "key": "looping",
+              "value": "1",
+              "label": "thread looping",
+              "short": "looping",
+              "tone": "bad",
+              "section": "pinned",
+              "detail": "1 pinned thread is looping: Looping fixture (task A)."
+            },
+            {
+              "key": "waiting",
+              "value": "1",
+              "label": "waiting on you",
+              "short": "waits on you",
+              "tone": "warn",
+              "section": "pinned",
+              "detail": "1 pinned thread waits on you: Waiting fixture."
+            },
+            {
+              "key": "blocked",
+              "value": "1",
+              "label": "blocked",
+              "short": "blocked",
+              "tone": "warn",
+              "section": null,
+              "detail": "Blocked: B Item B."
+            },
+            {
+              "key": "budgets",
+              "value": "1",
+              "label": "over budget (estimate)",
+              "short": "over budget",
+              "tone": "bad",
+              "section": "spend",
+              "detail": "1 budget is at or over its limit (estimate)."
+            },
+            {
+              "key": "done",
+              "value": "1/2",
+              "label": "items done",
+              "short": "done",
+              "tone": null,
+              "section": null,
+              "detail": "1 of 2 items landed or done (dropped items are not counted)."
+            },
+            {
+              "key": "sources",
+              "value": "2",
+              "label": "sources not current",
+              "short": "not current",
+              "tone": "warn",
+              "section": null,
+              "detail": "Not current: Machines: Mac unreachable: Fixture host unavailable (since 4:29 PM). Showing the reading from 4:29 PM; Simlock: Waiting for the first reading."
+            }
+          ],
+          "worst": {
+            "state": "looping",
+            "word": "Looping",
+            "tone": "bad",
+            "threadId": "loop",
+            "title": "Looping fixture",
+            "task": "A",
+            "detail": "Fixture loop."
+          }
+        }
+      },
+      "sources": [
+        {
+          "id": "agent-reports",
+          "label": "Agent reports",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 60,
+          "state": "ok",
+          "detail": "1 thread and 1 card read 4:30 PM."
+        },
+        {
+          "id": "pm-mail",
+          "label": "pm-mail registry",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 120,
+          "state": "ok",
+          "detail": "Read 4:30 PM."
+        },
+        {
+          "id": "machines",
+          "label": "Machines",
+          "asOf": "2026-11-06T16:29:30.000Z",
+          "ageSeconds": 30,
+          "staleAfterSeconds": 180,
+          "state": "stale",
+          "detail": "Mac unreachable: Fixture host unavailable (since 4:29 PM). Showing the reading from 4:29 PM."
+        },
+        {
+          "id": "browsers",
+          "label": "Browsers and recordings",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 180,
+          "state": "ok",
+          "detail": "Read 4:30 PM."
+        },
+        {
+          "id": "simlock",
+          "label": "Simlock",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": 180,
+          "state": "missing",
+          "detail": "Waiting for the first reading."
+        },
+        {
+          "id": "usage",
+          "label": "Account usage",
+          "state": "ok",
+          "asOf": "2026-11-06T16:29:30.000Z",
+          "ageSeconds": 30,
+          "staleAfterSeconds": 120,
+          "detail": "Sampled 4:29 PM."
+        },
+        {
+          "id": "quota-watch",
+          "label": "Quota watch (estimates)",
+          "asOf": "2026-11-06T16:27:00.000Z",
+          "ageSeconds": 180,
+          "staleAfterSeconds": 1800,
+          "state": "ok",
+          "detail": "Report from 4:27 PM. Every number is an estimate."
+        }
+      ],
+      "cards": {
+        "source": "agent-reports",
+        "open": [
+          {
+            "id": "vm.fixture--question",
+            "media": [],
+            "label": "S-question",
+            "writer": "vm.fixture",
+            "seq": 1,
+            "project": "proj",
+            "stream": "S",
+            "askedBy": "fixture",
+            "title": "Question question",
+            "now": "Plain words.",
+            "nowAsOf": null,
+            "oldAnswer": null,
+            "whatChanged": null,
+            "options": [
+              {
+                "key": "A",
+                "label": "First",
+                "gets": "Simple",
+                "costs": null,
+                "media": [],
+                "sections": [],
+                "stance": null
+              },
+              {
+                "key": "B",
+                "label": "Second",
+                "gets": null,
+                "costs": "More work",
+                "media": [],
+                "sections": [],
+                "stance": null
+              }
+            ],
+            "recommendation": {
+              "key": "A",
+              "why": "Simpler.",
+              "confidence": null,
+              "flip": null
+            },
+            "multiple": false,
+            "urgency": "today",
+            "blocks": null,
+            "sections": [],
+            "batch": null,
+            "evidence": [],
+            "replies": [],
+            "kind": "question",
+            "neededBy": null,
+            "exception": null,
+            "reversible": null,
+            "verdict": null,
+            "group": null,
+            "agreement": null,
+            "doubt": null,
+            "appliesTo": null,
+            "changesCanon": [],
+            "related": [],
+            "askedAt": "2026-11-06T16:20:00.000Z",
+            "ageSeconds": 600,
+            "askerState": "working",
+            "cardSha256": "9564ea44bb1c8f10ca9f325a64acd33a14e601a49c76fce327f58337fcc156cc",
+            "notes": [],
+            "problem": null,
+            "answerable": true
+          }
+        ],
+        "answerHistoryProblem": null,
+        "answered": [],
+        "batches": [],
+        "complete": true
+      },
+      "pinned": {
+        "asOfMs": 1793982600000,
+        "head": "Fixture pins",
+        "counts": {
+          "pinned": 2,
+          "looping": 1,
+          "waitingOnYou": 1
+        },
+        "machineProblems": [],
+        "updates": [
+          {
+            "id": "loop",
+            "title": "Looping fixture",
+            "looping": {
+              "answer": "yes",
+              "text": "Fixture loop.",
+              "task": "A",
+              "rounds": 3
+            },
+            "blocked": {
+              "waitingOnYou": false,
+              "text": "None."
+            }
+          },
+          {
+            "id": "wait",
+            "title": "Waiting fixture",
+            "looping": {
+              "answer": "no",
+              "text": "No.",
+              "task": null,
+              "rounds": 0
+            },
+            "blocked": {
+              "waitingOnYou": true,
+              "text": "Pick the fixture."
+            }
+          }
+        ]
+      },
+      "projects": [
+        {
+          "id": "proj",
+          "label": "Project",
+          "streams": [
+            {
+              "id": "S",
+              "label": "Stream S",
+              "owner": "lead",
+              "goal": "Ship it",
+              "writer": "vm.fixture",
+              "board": null,
+              "source": "tasks",
+              "asOf": "2026-11-06T16:29:00.000Z",
+              "ageSeconds": 60,
+              "stale": false,
+              "problem": null,
+              "counts": {
+                "total": 3,
+                "todo": 0,
+                "working": 0,
+                "review": 0,
+                "fixing": 0,
+                "blocked": 1,
+                "ready": 0,
+                "landed": 1,
+                "done": 0,
+                "dropped": 1
+              },
+              "completion": {
+                "done": 1,
+                "of": 2
+              },
+              "items": [
+                {
+                  "id": "A",
+                  "title": "Item A",
+                  "state": "landed",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "B",
+                  "title": "Item B",
+                  "state": "blocked",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "C",
+                  "title": "Item C",
+                  "state": "dropped",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                }
+              ]
+            }
+          ],
+          "counts": {
+            "total": 3,
+            "todo": 0,
+            "working": 0,
+            "review": 0,
+            "fixing": 0,
+            "blocked": 1,
+            "ready": 0,
+            "landed": 1,
+            "done": 0,
+            "dropped": 1
+          },
+          "completion": {
+            "done": 1,
+            "of": 2
+          }
+        }
+      ],
+      "threads": {
+        "source": "agent-reports",
+        "also": [
+          "pm-mail"
+        ],
+        "rows": [
+          {
+            "name": "fixture",
+            "writer": "vm.fixture",
+            "machine": "vm",
+            "project": "proj",
+            "stream": "S",
+            "state": "working",
+            "doing": "Building",
+            "blockedOn": null,
+            "progress": null,
+            "model": "claude-opus-5-5",
+            "effort": "high",
+            "account": null,
+            "source": "report",
+            "lastSeen": "2026-11-06T16:29:00.000Z",
+            "ageSeconds": 60,
+            "stale": false,
+            "clockAheadSeconds": null,
+            "problem": null,
+            "registrySource": null
+          },
+          {
+            "name": "mail-worker",
+            "writer": null,
+            "machine": "vm",
+            "project": null,
+            "stream": null,
+            "state": null,
+            "doing": "Fixture task",
+            "blockedOn": null,
+            "progress": null,
+            "model": null,
+            "effort": null,
+            "account": null,
+            "source": "pm-mail",
+            "lastSeen": "2026-11-06T16:29:00.000Z",
+            "ageSeconds": 60,
+            "stale": false,
+            "clockAheadSeconds": null,
+            "problem": null,
+            "registrySource": {
+              "id": "pm-mail",
+              "label": "pm-mail registry",
+              "state": "ok",
+              "asOf": "2026-11-06T16:29:30.000Z",
+              "ageSeconds": 30,
+              "detail": "Read 4:29 PM."
+            }
+          }
+        ]
+      },
+      "machines": {
+        "source": "machines",
+        "also": [
+          "browsers"
+        ],
+        "rows": [
+          {
+            "id": "vm",
+            "label": "Ubuntu VM",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 2,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": 1,
+            "recordings": 0,
+            "gpuPct": 12,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "ok",
+              "asOf": "2026-11-06T16:29:30.000Z",
+              "ageSeconds": 30,
+              "detail": "Read 4:29 PM."
+            },
+            "warnings": [
+              "Memory 2.0 GB available, under the 6 GB floor"
+            ]
+          },
+          {
+            "id": "mac",
+            "label": "Mac",
+            "state": "unreachable",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": "Fixture host unavailable (since 4:29 PM). Showing the reading from 4:29 PM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "windows",
+            "label": "Windows PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "nas1",
+            "label": "Nas1",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "alexis",
+            "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          }
+        ]
+      },
+      "simlock": {
+        "source": "simlock",
+        "capacity": [],
+        "leases": []
+      },
+      "usage": {
+        "source": "usage",
+        "warnings": [],
+        "accounts": [
+          {
+            "id": "fixture-account",
+            "provider": "codex",
+            "label": "Fixture account",
+            "host": "vm",
+            "active": true,
+            "window": "Weekly",
+            "kind": "rate_limit",
+            "usedPct": 100,
+            "remaining": null,
+            "limit": null,
+            "unit": "percent",
+            "resetsAt": "2026-11-06T17:30:00.000Z",
+            "projectedFullAt": null,
+            "runsOutBeforeReset": null,
+            "atLimit": false,
+            "stale": true,
+            "resetPassed": false
+          }
+        ]
+      },
+      "spend": {
+        "source": "quota-watch",
+        "estimate": true,
+        "asOf": "2026-11-06T16:27:00.000Z",
+        "generatedAt": "2026-11-06T16:27:00.000Z",
+        "writer": "vm.quota-watch",
+        "methodId": "token-share-at-list-price",
+        "method": "Each meter is split by each session’s share of tokens at list price.",
+        "periods": [
+          {
+            "id": "day",
+            "label": "Today",
+            "period": "day-2026-11-06",
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 0.67,
+            "coverageText": null,
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "week",
+            "label": "This week",
+            "period": "week-2026-11-02",
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 0.09,
+            "coverageText": "covers 9% of the week",
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "window",
+            "label": "Last 6 hours",
+            "period": null,
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 1,
+            "coverageText": null,
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "budgets": [
+          {
+            "stream": "S",
+            "streamLabel": "Stream S",
+            "desc": "Codex credits",
+            "accounts": [
+              "codex:account-a"
+            ],
+            "unit": "credits",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "per": "day",
+            "limit": null,
+            "use": 17.77,
+            "known": true,
+            "percent": null,
+            "period": "day-2026-11-06",
+            "coverage": 0.67,
+            "coverageText": null,
+            "overLimit": false,
+            "estimate": true,
+            "text": "≈ 17.77 credits today; no limit set."
+          },
+          {
+            "stream": "S",
+            "streamLabel": "Stream S",
+            "desc": "Claude weekly",
+            "accounts": [
+              "claude:account-b"
+            ],
+            "unit": "percent",
+            "meter": "seven_day",
+            "meterLabel": "7-day window",
+            "per": "week",
+            "limit": 10,
+            "use": 10.4,
+            "known": false,
+            "percent": 104,
+            "period": "week-2026-11-02",
+            "coverage": 0.09,
+            "coverageText": "covers 9% of the week",
+            "overLimit": true,
+            "estimate": true,
+            "text": "at least ≈ 10.4 of 10.0 points of the 7-day window this week (104%)."
+          },
+          {
+            "stream": "OTHER",
+            "streamLabel": "OTHER",
+            "desc": "Nothing read",
+            "accounts": [
+              "codex:account-a"
+            ],
+            "unit": "credits",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "per": "day",
+            "limit": 5,
+            "use": null,
+            "known": false,
+            "percent": null,
+            "period": "day-2026-11-06",
+            "coverage": null,
+            "coverageText": "coverage of the day not known",
+            "overLimit": false,
+            "estimate": true,
+            "text": "No reading yet."
+          }
+        ],
+        "unattributed": [
+          {
+            "account": "codex:account-a",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "unit": "credits",
+            "amount": 470.53,
+            "amountText": "≈ 470.53 credits",
+            "reason": "(no stream)",
+            "why": "no stream rule claims these threads",
+            "estimate": true
+          },
+          {
+            "account": "claude:account-b",
+            "meter": "seven_day",
+            "meterLabel": "7-day window",
+            "unit": "percent",
+            "amount": null,
+            "amountText": "not read",
+            "reason": "(no reading)",
+            "why": null,
+            "estimate": true
+          },
+          {
+            "account": "claude:account-c",
+            "meter": "five_hour",
+            "meterLabel": "5-hour window",
+            "unit": "percent",
+            "amount": 2.5,
+            "amountText": "≈ 2.5 points of the 5-hour window",
+            "reason": "(no session seen)",
+            "why": "measured",
+            "estimate": false
+          }
+        ],
+        "machinesNotScanned": [
+          {
+            "name": "mac",
+            "thisPass": true,
+            "error": "ssh timed out",
+            "runsMissed": 2,
+            "runsInWindow": 36
+          }
+        ],
+        "overLimitBudgets": 1
+      }
+    }
+  },
+  {
+    "route": "/api/status",
+    "case": "7:America/New_York",
+    "body": {
+      "version": 1,
+      "generatedAt": "2026-11-06T16:30:00.000Z",
+      "refresh": {
+        "pollSeconds": 30
+      },
+      "headline": {
+        "tone": "bad",
+        "runs": [
+          {
+            "text": "1 question",
+            "strong": true,
+            "tone": "warn"
+          },
+          {
+            "text": " for you"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 pinned thread is looping (Looping fixture, task A)",
+            "strong": true,
+            "tone": "warn"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 pinned thread waits on you (Waiting fixture)",
+            "tone": "warn"
+          },
+          {
+            "text": " · 1 of 2 items landed"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 blocked",
+            "tone": "warn"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 budget at or over its limit (estimate)",
+            "tone": "bad"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "2 sources not current",
+            "tone": "warn"
+          }
+        ],
+        "counts": {
+          "openCards": 1,
+          "questions": 1,
+          "decisions": 0,
+          "blockedItems": 1,
+          "workingThreads": 1,
+          "staleSources": 2,
+          "loopingPinned": 1,
+          "waitingPinned": 1
+        },
+        "strip": {
+          "items": [
+            {
+              "key": "questions",
+              "section": "questions",
+              "value": "1",
+              "label": "question for you",
+              "short": "question",
+              "tone": "warn",
+              "detail": "1 question for you."
+            },
+            {
+              "key": "looping",
+              "value": "1",
+              "label": "thread looping",
+              "short": "looping",
+              "tone": "bad",
+              "section": "pinned",
+              "detail": "1 pinned thread is looping: Looping fixture (task A)."
+            },
+            {
+              "key": "waiting",
+              "value": "1",
+              "label": "waiting on you",
+              "short": "waits on you",
+              "tone": "warn",
+              "section": "pinned",
+              "detail": "1 pinned thread waits on you: Waiting fixture."
+            },
+            {
+              "key": "blocked",
+              "value": "1",
+              "label": "blocked",
+              "short": "blocked",
+              "tone": "warn",
+              "section": null,
+              "detail": "Blocked: B Item B."
+            },
+            {
+              "key": "budgets",
+              "value": "1",
+              "label": "over budget (estimate)",
+              "short": "over budget",
+              "tone": "bad",
+              "section": "spend",
+              "detail": "1 budget is at or over its limit (estimate)."
+            },
+            {
+              "key": "done",
+              "value": "1/2",
+              "label": "items done",
+              "short": "done",
+              "tone": null,
+              "section": null,
+              "detail": "1 of 2 items landed or done (dropped items are not counted)."
+            },
+            {
+              "key": "sources",
+              "value": "2",
+              "label": "sources not current",
+              "short": "not current",
+              "tone": "warn",
+              "section": null,
+              "detail": "Not current: Machines: Mac unreachable: Fixture host unavailable (since 11:29 AM). Showing the reading from 11:29 AM; Simlock: Waiting for the first reading."
+            }
+          ],
+          "worst": {
+            "state": "looping",
+            "word": "Looping",
+            "tone": "bad",
+            "threadId": "loop",
+            "title": "Looping fixture",
+            "task": "A",
+            "detail": "Fixture loop."
+          }
+        }
+      },
+      "sources": [
+        {
+          "id": "agent-reports",
+          "label": "Agent reports",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 60,
+          "state": "ok",
+          "detail": "1 thread and 1 card read 11:30 AM."
+        },
+        {
+          "id": "pm-mail",
+          "label": "pm-mail registry",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 120,
+          "state": "ok",
+          "detail": "Read 11:30 AM."
+        },
+        {
+          "id": "machines",
+          "label": "Machines",
+          "asOf": "2026-11-06T16:29:30.000Z",
+          "ageSeconds": 30,
+          "staleAfterSeconds": 180,
+          "state": "stale",
+          "detail": "Mac unreachable: Fixture host unavailable (since 11:29 AM). Showing the reading from 11:29 AM."
+        },
+        {
+          "id": "browsers",
+          "label": "Browsers and recordings",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 180,
+          "state": "ok",
+          "detail": "Read 11:30 AM."
+        },
+        {
+          "id": "simlock",
+          "label": "Simlock",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": 180,
+          "state": "missing",
+          "detail": "Waiting for the first reading."
+        },
+        {
+          "id": "usage",
+          "label": "Account usage",
+          "state": "ok",
+          "asOf": "2026-11-06T16:29:30.000Z",
+          "ageSeconds": 30,
+          "staleAfterSeconds": 120,
+          "detail": "Sampled 11:29 AM."
+        },
+        {
+          "id": "quota-watch",
+          "label": "Quota watch (estimates)",
+          "asOf": "2026-11-06T16:27:00.000Z",
+          "ageSeconds": 180,
+          "staleAfterSeconds": 1800,
+          "state": "ok",
+          "detail": "Report from 11:27 AM. Every number is an estimate."
+        }
+      ],
+      "cards": {
+        "source": "agent-reports",
+        "open": [
+          {
+            "id": "vm.fixture--question",
+            "media": [],
+            "label": "S-question",
+            "writer": "vm.fixture",
+            "seq": 1,
+            "project": "proj",
+            "stream": "S",
+            "askedBy": "fixture",
+            "title": "Question question",
+            "now": "Plain words.",
+            "nowAsOf": null,
+            "oldAnswer": null,
+            "whatChanged": null,
+            "options": [
+              {
+                "key": "A",
+                "label": "First",
+                "gets": "Simple",
+                "costs": null,
+                "media": [],
+                "sections": [],
+                "stance": null
+              },
+              {
+                "key": "B",
+                "label": "Second",
+                "gets": null,
+                "costs": "More work",
+                "media": [],
+                "sections": [],
+                "stance": null
+              }
+            ],
+            "recommendation": {
+              "key": "A",
+              "why": "Simpler.",
+              "confidence": null,
+              "flip": null
+            },
+            "multiple": false,
+            "urgency": "today",
+            "blocks": null,
+            "sections": [],
+            "batch": null,
+            "evidence": [],
+            "replies": [],
+            "kind": "question",
+            "neededBy": null,
+            "exception": null,
+            "reversible": null,
+            "verdict": null,
+            "group": null,
+            "agreement": null,
+            "doubt": null,
+            "appliesTo": null,
+            "changesCanon": [],
+            "related": [],
+            "askedAt": "2026-11-06T16:20:00.000Z",
+            "ageSeconds": 600,
+            "askerState": "working",
+            "cardSha256": "9564ea44bb1c8f10ca9f325a64acd33a14e601a49c76fce327f58337fcc156cc",
+            "notes": [],
+            "problem": null,
+            "answerable": true
+          }
+        ],
+        "answerHistoryProblem": null,
+        "answered": [],
+        "batches": [],
+        "complete": true
+      },
+      "pinned": {
+        "asOfMs": 1793982600000,
+        "head": "Fixture pins",
+        "counts": {
+          "pinned": 2,
+          "looping": 1,
+          "waitingOnYou": 1
+        },
+        "machineProblems": [],
+        "updates": [
+          {
+            "id": "loop",
+            "title": "Looping fixture",
+            "looping": {
+              "answer": "yes",
+              "text": "Fixture loop.",
+              "task": "A",
+              "rounds": 3
+            },
+            "blocked": {
+              "waitingOnYou": false,
+              "text": "None."
+            }
+          },
+          {
+            "id": "wait",
+            "title": "Waiting fixture",
+            "looping": {
+              "answer": "no",
+              "text": "No.",
+              "task": null,
+              "rounds": 0
+            },
+            "blocked": {
+              "waitingOnYou": true,
+              "text": "Pick the fixture."
+            }
+          }
+        ]
+      },
+      "projects": [
+        {
+          "id": "proj",
+          "label": "Project",
+          "streams": [
+            {
+              "id": "S",
+              "label": "Stream S",
+              "owner": "lead",
+              "goal": "Ship it",
+              "writer": "vm.fixture",
+              "board": null,
+              "source": "tasks",
+              "asOf": "2026-11-06T16:29:00.000Z",
+              "ageSeconds": 60,
+              "stale": false,
+              "problem": null,
+              "counts": {
+                "total": 3,
+                "todo": 0,
+                "working": 0,
+                "review": 0,
+                "fixing": 0,
+                "blocked": 1,
+                "ready": 0,
+                "landed": 1,
+                "done": 0,
+                "dropped": 1
+              },
+              "completion": {
+                "done": 1,
+                "of": 2
+              },
+              "items": [
+                {
+                  "id": "A",
+                  "title": "Item A",
+                  "state": "landed",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "B",
+                  "title": "Item B",
+                  "state": "blocked",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "C",
+                  "title": "Item C",
+                  "state": "dropped",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                }
+              ]
+            }
+          ],
+          "counts": {
+            "total": 3,
+            "todo": 0,
+            "working": 0,
+            "review": 0,
+            "fixing": 0,
+            "blocked": 1,
+            "ready": 0,
+            "landed": 1,
+            "done": 0,
+            "dropped": 1
+          },
+          "completion": {
+            "done": 1,
+            "of": 2
+          }
+        }
+      ],
+      "threads": {
+        "source": "agent-reports",
+        "also": [
+          "pm-mail"
+        ],
+        "rows": [
+          {
+            "name": "fixture",
+            "writer": "vm.fixture",
+            "machine": "vm",
+            "project": "proj",
+            "stream": "S",
+            "state": "working",
+            "doing": "Building",
+            "blockedOn": null,
+            "progress": null,
+            "model": "claude-opus-5-5",
+            "effort": "high",
+            "account": null,
+            "source": "report",
+            "lastSeen": "2026-11-06T16:29:00.000Z",
+            "ageSeconds": 60,
+            "stale": false,
+            "clockAheadSeconds": null,
+            "problem": null,
+            "registrySource": null
+          },
+          {
+            "name": "mail-worker",
+            "writer": null,
+            "machine": "vm",
+            "project": null,
+            "stream": null,
+            "state": null,
+            "doing": "Fixture task",
+            "blockedOn": null,
+            "progress": null,
+            "model": null,
+            "effort": null,
+            "account": null,
+            "source": "pm-mail",
+            "lastSeen": "2026-11-06T16:29:00.000Z",
+            "ageSeconds": 60,
+            "stale": false,
+            "clockAheadSeconds": null,
+            "problem": null,
+            "registrySource": {
+              "id": "pm-mail",
+              "label": "pm-mail registry",
+              "state": "ok",
+              "asOf": "2026-11-06T16:29:30.000Z",
+              "ageSeconds": 30,
+              "detail": "Read 11:29 AM."
+            }
+          }
+        ]
+      },
+      "machines": {
+        "source": "machines",
+        "also": [
+          "browsers"
+        ],
+        "rows": [
+          {
+            "id": "vm",
+            "label": "Ubuntu VM",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 2,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": 1,
+            "recordings": 0,
+            "gpuPct": 12,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "ok",
+              "asOf": "2026-11-06T16:29:30.000Z",
+              "ageSeconds": 30,
+              "detail": "Read 11:29 AM."
+            },
+            "warnings": [
+              "Memory 2.0 GB available, under the 6 GB floor"
+            ]
+          },
+          {
+            "id": "mac",
+            "label": "Mac",
+            "state": "unreachable",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": "Fixture host unavailable (since 11:29 AM). Showing the reading from 11:29 AM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "windows",
+            "label": "Windows PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "nas1",
+            "label": "Nas1",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "alexis",
+            "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          }
+        ]
+      },
+      "simlock": {
+        "source": "simlock",
+        "capacity": [],
+        "leases": []
+      },
+      "usage": {
+        "source": "usage",
+        "warnings": [],
+        "accounts": [
+          {
+            "id": "fixture-account",
+            "provider": "codex",
+            "label": "Fixture account",
+            "host": "vm",
+            "active": true,
+            "window": "Weekly",
+            "kind": "rate_limit",
+            "usedPct": 100,
+            "remaining": null,
+            "limit": null,
+            "unit": "percent",
+            "resetsAt": "2026-11-06T17:30:00.000Z",
+            "projectedFullAt": null,
+            "runsOutBeforeReset": null,
+            "atLimit": false,
+            "stale": true,
+            "resetPassed": false
+          }
+        ]
+      },
+      "spend": {
+        "source": "quota-watch",
+        "estimate": true,
+        "asOf": "2026-11-06T16:27:00.000Z",
+        "generatedAt": "2026-11-06T16:27:00.000Z",
+        "writer": "vm.quota-watch",
+        "methodId": "token-share-at-list-price",
+        "method": "Each meter is split by each session’s share of tokens at list price.",
+        "periods": [
+          {
+            "id": "day",
+            "label": "Today",
+            "period": "day-2026-11-06",
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 0.67,
+            "coverageText": null,
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "week",
+            "label": "This week",
+            "period": "week-2026-11-02",
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 0.09,
+            "coverageText": "covers 9% of the week",
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "window",
+            "label": "Last 6 hours",
+            "period": null,
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 1,
+            "coverageText": null,
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "budgets": [
+          {
+            "stream": "S",
+            "streamLabel": "Stream S",
+            "desc": "Codex credits",
+            "accounts": [
+              "codex:account-a"
+            ],
+            "unit": "credits",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "per": "day",
+            "limit": null,
+            "use": 17.77,
+            "known": true,
+            "percent": null,
+            "period": "day-2026-11-06",
+            "coverage": 0.67,
+            "coverageText": null,
+            "overLimit": false,
+            "estimate": true,
+            "text": "≈ 17.77 credits today; no limit set."
+          },
+          {
+            "stream": "S",
+            "streamLabel": "Stream S",
+            "desc": "Claude weekly",
+            "accounts": [
+              "claude:account-b"
+            ],
+            "unit": "percent",
+            "meter": "seven_day",
+            "meterLabel": "7-day window",
+            "per": "week",
+            "limit": 10,
+            "use": 10.4,
+            "known": false,
+            "percent": 104,
+            "period": "week-2026-11-02",
+            "coverage": 0.09,
+            "coverageText": "covers 9% of the week",
+            "overLimit": true,
+            "estimate": true,
+            "text": "at least ≈ 10.4 of 10.0 points of the 7-day window this week (104%)."
+          },
+          {
+            "stream": "OTHER",
+            "streamLabel": "OTHER",
+            "desc": "Nothing read",
+            "accounts": [
+              "codex:account-a"
+            ],
+            "unit": "credits",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "per": "day",
+            "limit": 5,
+            "use": null,
+            "known": false,
+            "percent": null,
+            "period": "day-2026-11-06",
+            "coverage": null,
+            "coverageText": "coverage of the day not known",
+            "overLimit": false,
+            "estimate": true,
+            "text": "No reading yet."
+          }
+        ],
+        "unattributed": [
+          {
+            "account": "codex:account-a",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "unit": "credits",
+            "amount": 470.53,
+            "amountText": "≈ 470.53 credits",
+            "reason": "(no stream)",
+            "why": "no stream rule claims these threads",
+            "estimate": true
+          },
+          {
+            "account": "claude:account-b",
+            "meter": "seven_day",
+            "meterLabel": "7-day window",
+            "unit": "percent",
+            "amount": null,
+            "amountText": "not read",
+            "reason": "(no reading)",
+            "why": null,
+            "estimate": true
+          },
+          {
+            "account": "claude:account-c",
+            "meter": "five_hour",
+            "meterLabel": "5-hour window",
+            "unit": "percent",
+            "amount": 2.5,
+            "amountText": "≈ 2.5 points of the 5-hour window",
+            "reason": "(no session seen)",
+            "why": "measured",
+            "estimate": false
+          }
+        ],
+        "machinesNotScanned": [
+          {
+            "name": "mac",
+            "thisPass": true,
+            "error": "ssh timed out",
+            "runsMissed": 2,
+            "runsInWindow": 36
+          }
+        ],
+        "overLimitBudgets": 1
+      }
+    }
+  },
+  {
+    "route": "/api/status",
+    "case": "7:invalid-fixture-zone",
+    "body": {
+      "version": 1,
+      "generatedAt": "2026-11-06T16:30:00.000Z",
+      "refresh": {
+        "pollSeconds": 30
+      },
+      "headline": {
+        "tone": "bad",
+        "runs": [
+          {
+            "text": "1 question",
+            "strong": true,
+            "tone": "warn"
+          },
+          {
+            "text": " for you"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 pinned thread is looping (Looping fixture, task A)",
+            "strong": true,
+            "tone": "warn"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 pinned thread waits on you (Waiting fixture)",
+            "tone": "warn"
+          },
+          {
+            "text": " · 1 of 2 items landed"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 blocked",
+            "tone": "warn"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 budget at or over its limit (estimate)",
+            "tone": "bad"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "2 sources not current",
+            "tone": "warn"
+          }
+        ],
+        "counts": {
+          "openCards": 1,
+          "questions": 1,
+          "decisions": 0,
+          "blockedItems": 1,
+          "workingThreads": 1,
+          "staleSources": 2,
+          "loopingPinned": 1,
+          "waitingPinned": 1
+        },
+        "strip": {
+          "items": [
+            {
+              "key": "questions",
+              "section": "questions",
+              "value": "1",
+              "label": "question for you",
+              "short": "question",
+              "tone": "warn",
+              "detail": "1 question for you."
+            },
+            {
+              "key": "looping",
+              "value": "1",
+              "label": "thread looping",
+              "short": "looping",
+              "tone": "bad",
+              "section": "pinned",
+              "detail": "1 pinned thread is looping: Looping fixture (task A)."
+            },
+            {
+              "key": "waiting",
+              "value": "1",
+              "label": "waiting on you",
+              "short": "waits on you",
+              "tone": "warn",
+              "section": "pinned",
+              "detail": "1 pinned thread waits on you: Waiting fixture."
+            },
+            {
+              "key": "blocked",
+              "value": "1",
+              "label": "blocked",
+              "short": "blocked",
+              "tone": "warn",
+              "section": null,
+              "detail": "Blocked: B Item B."
+            },
+            {
+              "key": "budgets",
+              "value": "1",
+              "label": "over budget (estimate)",
+              "short": "over budget",
+              "tone": "bad",
+              "section": "spend",
+              "detail": "1 budget is at or over its limit (estimate)."
+            },
+            {
+              "key": "done",
+              "value": "1/2",
+              "label": "items done",
+              "short": "done",
+              "tone": null,
+              "section": null,
+              "detail": "1 of 2 items landed or done (dropped items are not counted)."
+            },
+            {
+              "key": "sources",
+              "value": "2",
+              "label": "sources not current",
+              "short": "not current",
+              "tone": "warn",
+              "section": null,
+              "detail": "Not current: Machines: Mac unreachable: Fixture host unavailable (since 4:29 PM). Showing the reading from 4:29 PM; Simlock: Waiting for the first reading."
+            }
+          ],
+          "worst": {
+            "state": "looping",
+            "word": "Looping",
+            "tone": "bad",
+            "threadId": "loop",
+            "title": "Looping fixture",
+            "task": "A",
+            "detail": "Fixture loop."
+          }
+        }
+      },
+      "sources": [
+        {
+          "id": "agent-reports",
+          "label": "Agent reports",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 60,
+          "state": "ok",
+          "detail": "1 thread and 1 card read 4:30 PM."
+        },
+        {
+          "id": "pm-mail",
+          "label": "pm-mail registry",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 120,
+          "state": "ok",
+          "detail": "Read 4:30 PM."
+        },
+        {
+          "id": "machines",
+          "label": "Machines",
+          "asOf": "2026-11-06T16:29:30.000Z",
+          "ageSeconds": 30,
+          "staleAfterSeconds": 180,
+          "state": "stale",
+          "detail": "Mac unreachable: Fixture host unavailable (since 4:29 PM). Showing the reading from 4:29 PM."
+        },
+        {
+          "id": "browsers",
+          "label": "Browsers and recordings",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 180,
+          "state": "ok",
+          "detail": "Read 4:30 PM."
+        },
+        {
+          "id": "simlock",
+          "label": "Simlock",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": 180,
+          "state": "missing",
+          "detail": "Waiting for the first reading."
+        },
+        {
+          "id": "usage",
+          "label": "Account usage",
+          "state": "ok",
+          "asOf": "2026-11-06T16:29:30.000Z",
+          "ageSeconds": 30,
+          "staleAfterSeconds": 120,
+          "detail": "Sampled 4:29 PM."
+        },
+        {
+          "id": "quota-watch",
+          "label": "Quota watch (estimates)",
+          "asOf": "2026-11-06T16:27:00.000Z",
+          "ageSeconds": 180,
+          "staleAfterSeconds": 1800,
+          "state": "ok",
+          "detail": "Report from 4:27 PM. Every number is an estimate."
+        }
+      ],
+      "cards": {
+        "source": "agent-reports",
+        "open": [
+          {
+            "id": "vm.fixture--question",
+            "media": [],
+            "label": "S-question",
+            "writer": "vm.fixture",
+            "seq": 1,
+            "project": "proj",
+            "stream": "S",
+            "askedBy": "fixture",
+            "title": "Question question",
+            "now": "Plain words.",
+            "nowAsOf": null,
+            "oldAnswer": null,
+            "whatChanged": null,
+            "options": [
+              {
+                "key": "A",
+                "label": "First",
+                "gets": "Simple",
+                "costs": null,
+                "media": [],
+                "sections": [],
+                "stance": null
+              },
+              {
+                "key": "B",
+                "label": "Second",
+                "gets": null,
+                "costs": "More work",
+                "media": [],
+                "sections": [],
+                "stance": null
+              }
+            ],
+            "recommendation": {
+              "key": "A",
+              "why": "Simpler.",
+              "confidence": null,
+              "flip": null
+            },
+            "multiple": false,
+            "urgency": "today",
+            "blocks": null,
+            "sections": [],
+            "batch": null,
+            "evidence": [],
+            "replies": [],
+            "kind": "question",
+            "neededBy": null,
+            "exception": null,
+            "reversible": null,
+            "verdict": null,
+            "group": null,
+            "agreement": null,
+            "doubt": null,
+            "appliesTo": null,
+            "changesCanon": [],
+            "related": [],
+            "askedAt": "2026-11-06T16:20:00.000Z",
+            "ageSeconds": 600,
+            "askerState": "working",
+            "cardSha256": "9564ea44bb1c8f10ca9f325a64acd33a14e601a49c76fce327f58337fcc156cc",
+            "notes": [],
+            "problem": null,
+            "answerable": true
+          }
+        ],
+        "answerHistoryProblem": null,
+        "answered": [],
+        "batches": [],
+        "complete": true
+      },
+      "pinned": {
+        "asOfMs": 1793982600000,
+        "head": "Fixture pins",
+        "counts": {
+          "pinned": 2,
+          "looping": 1,
+          "waitingOnYou": 1
+        },
+        "machineProblems": [],
+        "updates": [
+          {
+            "id": "loop",
+            "title": "Looping fixture",
+            "looping": {
+              "answer": "yes",
+              "text": "Fixture loop.",
+              "task": "A",
+              "rounds": 3
+            },
+            "blocked": {
+              "waitingOnYou": false,
+              "text": "None."
+            }
+          },
+          {
+            "id": "wait",
+            "title": "Waiting fixture",
+            "looping": {
+              "answer": "no",
+              "text": "No.",
+              "task": null,
+              "rounds": 0
+            },
+            "blocked": {
+              "waitingOnYou": true,
+              "text": "Pick the fixture."
+            }
+          }
+        ]
+      },
+      "projects": [
+        {
+          "id": "proj",
+          "label": "Project",
+          "streams": [
+            {
+              "id": "S",
+              "label": "Stream S",
+              "owner": "lead",
+              "goal": "Ship it",
+              "writer": "vm.fixture",
+              "board": null,
+              "source": "tasks",
+              "asOf": "2026-11-06T16:29:00.000Z",
+              "ageSeconds": 60,
+              "stale": false,
+              "problem": null,
+              "counts": {
+                "total": 3,
+                "todo": 0,
+                "working": 0,
+                "review": 0,
+                "fixing": 0,
+                "blocked": 1,
+                "ready": 0,
+                "landed": 1,
+                "done": 0,
+                "dropped": 1
+              },
+              "completion": {
+                "done": 1,
+                "of": 2
+              },
+              "items": [
+                {
+                  "id": "A",
+                  "title": "Item A",
+                  "state": "landed",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "B",
+                  "title": "Item B",
+                  "state": "blocked",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "C",
+                  "title": "Item C",
+                  "state": "dropped",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                }
+              ]
+            }
+          ],
+          "counts": {
+            "total": 3,
+            "todo": 0,
+            "working": 0,
+            "review": 0,
+            "fixing": 0,
+            "blocked": 1,
+            "ready": 0,
+            "landed": 1,
+            "done": 0,
+            "dropped": 1
+          },
+          "completion": {
+            "done": 1,
+            "of": 2
+          }
+        }
+      ],
+      "threads": {
+        "source": "agent-reports",
+        "also": [
+          "pm-mail"
+        ],
+        "rows": [
+          {
+            "name": "fixture",
+            "writer": "vm.fixture",
+            "machine": "vm",
+            "project": "proj",
+            "stream": "S",
+            "state": "working",
+            "doing": "Building",
+            "blockedOn": null,
+            "progress": null,
+            "model": "claude-opus-5-5",
+            "effort": "high",
+            "account": null,
+            "source": "report",
+            "lastSeen": "2026-11-06T16:29:00.000Z",
+            "ageSeconds": 60,
+            "stale": false,
+            "clockAheadSeconds": null,
+            "problem": null,
+            "registrySource": null
+          },
+          {
+            "name": "mail-worker",
+            "writer": null,
+            "machine": "vm",
+            "project": null,
+            "stream": null,
+            "state": null,
+            "doing": "Fixture task",
+            "blockedOn": null,
+            "progress": null,
+            "model": null,
+            "effort": null,
+            "account": null,
+            "source": "pm-mail",
+            "lastSeen": "2026-11-06T16:29:00.000Z",
+            "ageSeconds": 60,
+            "stale": false,
+            "clockAheadSeconds": null,
+            "problem": null,
+            "registrySource": {
+              "id": "pm-mail",
+              "label": "pm-mail registry",
+              "state": "ok",
+              "asOf": "2026-11-06T16:29:30.000Z",
+              "ageSeconds": 30,
+              "detail": "Read 4:29 PM."
+            }
+          }
+        ]
+      },
+      "machines": {
+        "source": "machines",
+        "also": [
+          "browsers"
+        ],
+        "rows": [
+          {
+            "id": "vm",
+            "label": "Ubuntu VM",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 2,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": 1,
+            "recordings": 0,
+            "gpuPct": 12,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "ok",
+              "asOf": "2026-11-06T16:29:30.000Z",
+              "ageSeconds": 30,
+              "detail": "Read 4:29 PM."
+            },
+            "warnings": [
+              "Memory 2.0 GB available, under the 6 GB floor"
+            ]
+          },
+          {
+            "id": "mac",
+            "label": "Mac",
+            "state": "unreachable",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": "Fixture host unavailable (since 4:29 PM). Showing the reading from 4:29 PM.",
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "windows",
+            "label": "Windows PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "nas1",
+            "label": "Nas1",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "alexis",
+            "label": "Alexis PC",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          },
+          {
+            "id": "1070ti",
+            "label": "1070ti",
+            "state": "ok",
+            "asOf": "2026-11-06T16:29:30.000Z",
+            "ageSeconds": 30,
+            "detail": null,
+            "cpu": {
+              "cores": 8,
+              "load1": 1.2,
+              "busyPct": 12
+            },
+            "memory": {
+              "availableGb": 16,
+              "totalGb": 32
+            },
+            "disk": [
+              {
+                "mount": "/",
+                "freeGb": 200,
+                "totalGb": 500
+              }
+            ],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "browser-check has no row for this machine."
+            },
+            "warnings": []
+          }
+        ]
+      },
+      "simlock": {
+        "source": "simlock",
+        "capacity": [],
+        "leases": []
+      },
+      "usage": {
+        "source": "usage",
+        "warnings": [],
+        "accounts": [
+          {
+            "id": "fixture-account",
+            "provider": "codex",
+            "label": "Fixture account",
+            "host": "vm",
+            "active": true,
+            "window": "Weekly",
+            "kind": "rate_limit",
+            "usedPct": 100,
+            "remaining": null,
+            "limit": null,
+            "unit": "percent",
+            "resetsAt": "2026-11-06T17:30:00.000Z",
+            "projectedFullAt": null,
+            "runsOutBeforeReset": null,
+            "atLimit": false,
+            "stale": true,
+            "resetPassed": false
+          }
+        ]
+      },
+      "spend": {
+        "source": "quota-watch",
+        "estimate": true,
+        "asOf": "2026-11-06T16:27:00.000Z",
+        "generatedAt": "2026-11-06T16:27:00.000Z",
+        "writer": "vm.quota-watch",
+        "methodId": "token-share-at-list-price",
+        "method": "Each meter is split by each session’s share of tokens at list price.",
+        "periods": [
+          {
+            "id": "day",
+            "label": "Today",
+            "period": "day-2026-11-06",
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 0.67,
+            "coverageText": null,
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "week",
+            "label": "This week",
+            "period": "week-2026-11-02",
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 0.09,
+            "coverageText": "covers 9% of the week",
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "window",
+            "label": "Last 6 hours",
+            "period": null,
+            "start": "2026-11-06T10:30:00.000Z",
+            "end": "2026-11-06T16:30:00.000Z",
+            "coverage": 1,
+            "coverageText": null,
+            "streams": [
+              {
+                "stream": "OTHER",
+                "label": "OTHER",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 0,
+                    "valueText": "≈ under 0.01 credits",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "S",
+                "label": "Stream S",
+                "bucket": false,
+                "rows": [
+                  {
+                    "account": "codex:account-a",
+                    "meter": "credits_balance",
+                    "meterLabel": "Credits",
+                    "unit": "credits",
+                    "value": 17.77,
+                    "valueText": "≈ 17.77 credits",
+                    "estimate": true
+                  },
+                  {
+                    "account": "claude:account-b",
+                    "meter": "seven_day",
+                    "meterLabel": "7-day window",
+                    "unit": "percent",
+                    "value": 4.7,
+                    "valueText": "≈ 4.7 points of the 7-day window",
+                    "estimate": true
+                  }
+                ]
+              },
+              {
+                "stream": "(no stream)",
+                "label": "(no stream)",
+                "bucket": true,
+                "rows": [
+                  {
+                    "account": "claude:account-b",
+                    "meter": "five_hour",
+                    "meterLabel": "5-hour window",
+                    "unit": "percent",
+                    "value": null,
+                    "valueText": "not read",
+                    "estimate": true
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "budgets": [
+          {
+            "stream": "S",
+            "streamLabel": "Stream S",
+            "desc": "Codex credits",
+            "accounts": [
+              "codex:account-a"
+            ],
+            "unit": "credits",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "per": "day",
+            "limit": null,
+            "use": 17.77,
+            "known": true,
+            "percent": null,
+            "period": "day-2026-11-06",
+            "coverage": 0.67,
+            "coverageText": null,
+            "overLimit": false,
+            "estimate": true,
+            "text": "≈ 17.77 credits today; no limit set."
+          },
+          {
+            "stream": "S",
+            "streamLabel": "Stream S",
+            "desc": "Claude weekly",
+            "accounts": [
+              "claude:account-b"
+            ],
+            "unit": "percent",
+            "meter": "seven_day",
+            "meterLabel": "7-day window",
+            "per": "week",
+            "limit": 10,
+            "use": 10.4,
+            "known": false,
+            "percent": 104,
+            "period": "week-2026-11-02",
+            "coverage": 0.09,
+            "coverageText": "covers 9% of the week",
+            "overLimit": true,
+            "estimate": true,
+            "text": "at least ≈ 10.4 of 10.0 points of the 7-day window this week (104%)."
+          },
+          {
+            "stream": "OTHER",
+            "streamLabel": "OTHER",
+            "desc": "Nothing read",
+            "accounts": [
+              "codex:account-a"
+            ],
+            "unit": "credits",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "per": "day",
+            "limit": 5,
+            "use": null,
+            "known": false,
+            "percent": null,
+            "period": "day-2026-11-06",
+            "coverage": null,
+            "coverageText": "coverage of the day not known",
+            "overLimit": false,
+            "estimate": true,
+            "text": "No reading yet."
+          }
+        ],
+        "unattributed": [
+          {
+            "account": "codex:account-a",
+            "meter": "credits_balance",
+            "meterLabel": "Credits",
+            "unit": "credits",
+            "amount": 470.53,
+            "amountText": "≈ 470.53 credits",
+            "reason": "(no stream)",
+            "why": "no stream rule claims these threads",
+            "estimate": true
+          },
+          {
+            "account": "claude:account-b",
+            "meter": "seven_day",
+            "meterLabel": "7-day window",
+            "unit": "percent",
+            "amount": null,
+            "amountText": "not read",
+            "reason": "(no reading)",
+            "why": null,
+            "estimate": true
+          },
+          {
+            "account": "claude:account-c",
+            "meter": "five_hour",
+            "meterLabel": "5-hour window",
+            "unit": "percent",
+            "amount": 2.5,
+            "amountText": "≈ 2.5 points of the 5-hour window",
+            "reason": "(no session seen)",
+            "why": "measured",
+            "estimate": false
+          }
+        ],
+        "machinesNotScanned": [
+          {
+            "name": "mac",
+            "thisPass": true,
+            "error": "ssh timed out",
+            "runsMissed": 2,
+            "runsInWindow": 36
+          }
+        ],
+        "overLimitBudgets": 1
+      }
+    }
   }
 ]

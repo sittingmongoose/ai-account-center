@@ -60,10 +60,10 @@ fn unscored_run_reviews_move_no_measure() {
     );
 }
 
-fn process_row(id: &str, reviews: i64) -> Value {
+fn process_row_at(id: &str, version: &str, reviews: i64) -> Value {
     json!({
         "model": "x/one", "label": "One", "runtime": "rt", "effort": "e",
-        "process": { "id": id, "version": "1.0" },
+        "process": { "id": id, "version": version },
         "n": { "observed": 5, "benchmark": 0 },
         "basis": "observed", "ranked": true, "rank": 1, "verdict": "fine",
         "why": "Fine row",
@@ -75,6 +75,10 @@ fn process_row(id: &str, reviews: i64) -> Value {
         },
         "benchmarks": []
     })
+}
+
+fn process_row(id: &str, reviews: i64) -> Value {
+    process_row_at(id, "1.0", reviews)
 }
 
 fn building_view(rows: Vec<Value>) -> ViewIn {
@@ -137,6 +141,22 @@ fn the_same_process_split_across_files_still_totals_reviews_once() {
     assert!(
         model.sheet_head.contains("5 blind reviews"),
         "the same process must not double-count: {}",
+        model.sheet_head
+    );
+}
+
+#[test]
+fn two_versions_of_the_same_process_keep_both_review_totals() {
+    let view = by_model(&building_view(vec![
+        process_row_at("scout-a", "1.0", 5),
+        process_row_at("scout-a", "2.0", 5),
+    ]))
+    .unwrap();
+    let model = &view.views[0].models[0];
+    assert_eq!(model.runs, 10);
+    assert!(
+        model.sheet_head.contains("10 blind reviews"),
+        "id and version are both part of the review key: {}",
         model.sheet_head
     );
 }

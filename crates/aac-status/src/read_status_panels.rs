@@ -167,7 +167,15 @@ pub(super) fn usage(i: &Inputs, source: &V) -> Option<V> {
                 .unwrap_or(&account["sampledAt"]));
             let reset_passed =
                 w["resetPassed"] == true || reset.is_some_and(|r| i.due(r) && sampled.is_none_or(|t| t < r));
-            let stale = source["state"] != "ok" || account["status"] != "ok" || w["cached"] == true || reset_passed;
+            let reading_at = sampled.or_else(|| i.at(&usage["sampledAt"]));
+            let reading_stale = number(&i.age(reading_at))
+                .zip(number(&usage["staleAfterSeconds"]))
+                .is_some_and(|(age, limit)| age > limit);
+            let stale = source["state"] != "ok"
+                || account["status"] != "ok"
+                || w["cached"] == true
+                || reset_passed
+                || reading_stale;
             let at_limit = number(&w["usedPercent"]).is_some_and(|n| n >= 100.0) && !reset_passed && !stale;
             let burn = if reset_passed { &V::Null } else { &w["burn"] };
             let full = i.at(&burn["projectedFullAt"]);
@@ -278,5 +286,31 @@ mod tests {
         let row = &view["accounts"][0];
         assert_eq!(row["atLimit"], true);
         assert_eq!(row["stale"], false);
+    }
+
+    #[test]
+    fn a_window_older_than_the_stale_limit_is_not_at_limit_inside_a_current_feed() {
+        const NOW: i64 = 1_700_000_000_000;
+        let mut acc = account(json!({
+            "kind": "rate_limit",
+            "label": "session",
+            "usedPercent": 100,
+            "cached": false,
+            "sampledAt": NOW - 310_000,
+            "resetAt": NOW + 3_600_000,
+            "resetPassed": false
+        }));
+        acc["sampledAt"] = json!(NOW - 250_000);
+        let i = inputs(json!({
+            "sampledAt": NOW - 250_000,
+            "staleAfterSeconds": 300,
+            "accounts": [acc]
+        }));
+        let view = usage(&i, &json!({"state": "ok"})).expect("usage composes");
+        let row = &view["accounts"][0];
+        assert_eq!(row["usedPct"], 100.0, "the measured 100% stays as history");
+        assert_eq!(row["stale"], true, "a 310s-old window past a 300s limit is stale");
+        assert_eq!(row["atLimit"], false, "a stale window is not an at-limit claim");
+        assert_eq!(view["warnings"], json!([]));
     }
 }

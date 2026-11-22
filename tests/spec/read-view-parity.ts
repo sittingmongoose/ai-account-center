@@ -400,7 +400,16 @@ try {
     if (state === 'ok') value.now += 2000000;
     return value;
   });
-  const cases = [base, complex, history, problems, ...sourceStates];
+  const cachedAtLimit = structuredClone(complex);
+  cachedAtLimit.usage.accounts[0].windows[0].cached = true;
+  cachedAtLimit.usage.accounts[0].windows[0].sampledAt = null;
+  {
+    const expected = buildStatusView({ ...cachedAtLimit, timeZone: 'UTC' });
+    const row = expected.usage.accounts.find((a: { id: string }) => a.id === 'fixture-account');
+    assert.equal(row?.stale, true, 'cached 100% with no sampledAt stays visible as stale');
+    assert.equal(row?.atLimit, false, 'cached 100% with no sampledAt is not an at-limit claim');
+  }
+  const cases = [base, complex, history, problems, ...sourceStates, cachedAtLimit];
   for (const input of cases)
     for (const zone of ['UTC', 'America/New_York', 'invalid-fixture-zone']) {
       input.timeZone = zone;
@@ -525,7 +534,7 @@ try {
   if (process.argv.includes('--regenerate')) fs.writeFileSync(file, golden);
   else assert.equal(fs.readFileSync(file, 'utf8'), golden, 'raw-reader view golden bytes changed');
   console.log(
-    '18 Scoreboard and 21 Status raw-reader states, 4 board ages and 2 prototype names: parity and bytes passed'
+    '18 Scoreboard and 24 Status raw-reader states, 4 board ages and 2 prototype names: parity and bytes passed'
   );
 } finally {
   service.stop();

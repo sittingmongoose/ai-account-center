@@ -229,9 +229,20 @@ export function buildUsage(inputs: StatusInputs, source: Source): StatusView['us
       const resetPassed =
         window.resetPassed ||
         readingPredatesReset(window.resetAt, window.sampledAt ?? account.sampledAt, now);
+      const readingRaw = window.sampledAt ?? account.sampledAt ?? usage.sampledAt;
+      const readingMs =
+        typeof readingRaw === 'number'
+          ? readingRaw
+          : typeof readingRaw === 'string'
+            ? Date.parse(readingRaw)
+            : NaN;
+      const readingStale =
+        Number.isFinite(readingMs) && (ageSeconds(now, readingMs) ?? 0) > usage.staleAfterSeconds;
       // Only a current reading of a fresh sample can raise a warning.
-      const stale = sampleStale || account.status !== 'ok' || window.cached || resetPassed;
-      const atLimit = window.usedPercent !== null && window.usedPercent >= 100 && !resetPassed;
+      const stale =
+        sampleStale || account.status !== 'ok' || window.cached || resetPassed || readingStale;
+      const atLimit =
+        window.usedPercent !== null && window.usedPercent >= 100 && !resetPassed && !stale;
       // A passed reset ends the old window: its pace says nothing about the new one.
       const burn = resetPassed ? null : window.burn;
       const row: UsageAccountView = {
