@@ -1462,7 +1462,8 @@ class HttpBoundaryTests(unittest.TestCase):
         self.assertNotIn("private", str(caught.exception))
 
     def test_forbidden_usage_is_not_a_sign_in_demand(self):
-        # A verified profile's 403 is not proof a sign-in is missing (claude-offer-R1-L4).
+        # A verified profile's 403 is not proof a sign-in is missing (claude-offer-R1-L4),
+        # and it invents no word of its own: the generic unavailable status is enough.
         client = usage.Client()
         error = urllib.error.HTTPError("https://api.anthropic.com/api/oauth/usage", 403,
                                        "private-upstream-message", {}, mock.Mock())
@@ -1470,7 +1471,8 @@ class HttpBoundaryTests(unittest.TestCase):
         with mock.patch.object(client.opener, "open", side_effect=error):
             with self.assertRaises(usage.UsageUnavailable) as caught:
                 client.get("/api/oauth/usage", TOKEN)
-        self.assertEqual(caught.exception.status, "forbidden")
+        self.assertEqual(caught.exception.status, "unavailable")
+        self.assertNotIn("private", str(caught.exception))
 
     def test_redirect_handler_refuses_cross_origin(self):
         self.assertIsNone(usage.NoRedirect().redirect_request(None, None, 302, "", {}, "https://evil.invalid"))

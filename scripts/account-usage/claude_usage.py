@@ -392,8 +392,9 @@ class Client:
             if error.code == 429:
                 raise UsageUnavailable("rate_limited", retry_after_seconds(error.headers.get("Retry-After")))
             if error.code == 403:
-                # A forbidden reply to a verified profile is not proof a sign-in is missing.
-                raise UsageUnavailable("forbidden")
+                # A forbidden reply to a verified profile is not proof a sign-in is missing,
+                # and it has no public word of its own: the row stays generic unavailable.
+                raise UsageUnavailable()
             raise UsageUnavailable("needs_sign_in" if error.code == 401 else "error")
         except (OSError, ValueError, UnicodeError, urllib.error.URLError):
             raise UsageUnavailable("error")
@@ -1669,7 +1670,7 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:
         result["status"] = ("error" if error.status == "rate_limited" else
-                            "unavailable" if error.status in ("identity_unconfirmed", "forbidden") else error.status)
+                            "unavailable" if error.status == "identity_unconfirmed" else error.status)
         if error.status == "identity_unconfirmed":
             result["resetReason"] = "identity-unconfirmed"
         if error.status == "rate_limited":

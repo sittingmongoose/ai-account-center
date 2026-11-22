@@ -3512,6 +3512,7 @@
     "word": "reason",
     "cause": null,
     "sources": [
+      "scripts/account-usage/claude_usage.py:reason",
       "scripts/antigravity/runtime_health.py:reason",
       "src/antigravity/runtime-health.ts:reason",
       "src/web-server/status/card-schema.ts:reason"
