@@ -96,6 +96,12 @@
       "efforts": []
     },
     {
+      "model": "google/gemini-4-neon",
+      "efforts": [
+        "high"
+      ]
+    },
+    {
       "model": "google/gemini-4-argon",
       "efforts": [
         "high"
@@ -120,6 +126,15 @@
     {
       "model": "google/gemini-4-hydrogen",
       "efforts": []
+    },
+    {
+      "model": "xai/grok-4.6",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     }
   ],
   "aliases": {
@@ -128,6 +143,7 @@
     "alibaba-token-plan/qwen3.8-max": "alibaba/qwen3.8-max",
     "alibaba-token-plan/qwen4-max": "alibaba/qwen4-max",
     "alibaba-token-plan/qwen4-max-preview": "alibaba/qwen4-max-preview",
+    "antigravity/gemini-4-neon": "google/gemini-4-neon",
     "builtin:bigmodel-coding-plan\\GLM-5.3": "zai/glm-5.3",
     "builtin:zai-coding-plan\\GLM-5.3": "zai/glm-5.3",
     "claude-fable-5-1": "anthropic/claude-fable-5-1",
@@ -168,6 +184,7 @@
     "cursor/gpt-6.1-terra": "openai/gpt-6.1-terra",
     "cursor/gpt-6.2-astra": "openai/gpt-6.2-astra",
     "cursor/gpt-6.2-sol": "openai/gpt-6.2-sol",
+    "cursor/grok-4.6": "xai/grok-4.6",
     "cursor/grok-4.7": "xai/grok-4.7",
     "cursor/muse-ember-1.0": "muse/muse-ember-1.0",
     "cursor/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
@@ -177,6 +194,7 @@
     "deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
     "gemini-4-argon": "google/gemini-4-argon",
     "gemini-4-hydrogen": "google/gemini-4-hydrogen",
+    "gemini-4-neon": "google/gemini-4-neon",
     "glm-5.3": "zai/glm-5.3",
     "gpt-6-astra": "openai/gpt-6-astra",
     "gpt-6-luna": "openai/gpt-6-luna",
@@ -184,6 +202,7 @@
     "gpt-6.1-terra": "openai/gpt-6.1-terra",
     "gpt-6.2-astra": "openai/gpt-6.2-astra",
     "gpt-6.2-sol": "openai/gpt-6.2-sol",
+    "grok-4.6": "xai/grok-4.6",
     "grok-4.7": "xai/grok-4.7",
     "muse-ember-1.0": "muse/muse-ember-1.0",
     "muse-spark-1.3": "muse/muse-spark-1.3-contributor",
@@ -10363,6 +10382,600 @@
       }
     },
     {
+      "id": "google/gemini-4-neon",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "gemini-4-neon-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "gemini-4-neon-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "gemini-4-neon-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "gemini-4-neon-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "gemini-4-neon-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gemini-4-neon-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": ""
+      }
+    },
+    {
+      "id": "google/gemini-4-neon-unknownsuffix",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon-unknownsuffix",
+        "effort": null
+      }
+    },
+    {
+      "id": "gemini-4-neon-unknownsuffix",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "gemini-4-neon-unknownsuffix",
+        "effort": "max"
+      }
+    },
+    {
       "id": "google/gemini-4-argon",
       "effort": null,
       "useTable": true,
@@ -13927,6 +14540,600 @@
       }
     },
     {
+      "id": "xai/grok-4.6",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "grok-4.6-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "grok-4.6-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "grok-4.6-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "grok-4.6-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "grok-4.6-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "grok-4.6-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": ""
+      }
+    },
+    {
+      "id": "xai/grok-4.6-unknownsuffix",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6-unknownsuffix",
+        "effort": null
+      }
+    },
+    {
+      "id": "grok-4.6-unknownsuffix",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "grok-4.6-unknownsuffix",
+        "effort": "max"
+      }
+    },
+    {
       "id": "account:zai-individual-coding-plan/GLM-5.3",
       "effort": null,
       "useTable": true,
@@ -14164,6 +15371,54 @@
       },
       "overrideAliases": {
         "alibaba-token-plan/qwen4-max-preview": "unlisted/model"
+      }
+    },
+    {
+      "id": "antigravity/gemini-4-neon",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "antigravity/gemini-4-neon",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "antigravity/gemini-4-neon",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "antigravity/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "antigravity/gemini-4-neon-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "antigravity/gemini-4-neon",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "antigravity/gemini-4-neon",
+        "effort": null
+      },
+      "overrideAliases": {
+        "antigravity/gemini-4-neon": "unlisted/model"
       }
     },
     {
@@ -16087,6 +17342,54 @@
       }
     },
     {
+      "id": "cursor/grok-4.6",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "cursor/grok-4.6",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "cursor/grok-4.6",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "cursor/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "cursor/grok-4.6-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "cursor/grok-4.6",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "cursor/grok-4.6",
+        "effort": null
+      },
+      "overrideAliases": {
+        "cursor/grok-4.6": "unlisted/model"
+      }
+    },
+    {
       "id": "cursor/grok-4.7",
       "effort": null,
       "useTable": true,
@@ -16519,6 +17822,54 @@
       }
     },
     {
+      "id": "gemini-4-neon",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      }
+    },
+    {
+      "id": "gemini-4-neon-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gemini-4-neon",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "google/gemini-4-neon",
+        "effort": null
+      },
+      "overrideAliases": {
+        "gemini-4-neon": "unlisted/model"
+      }
+    },
+    {
       "id": "glm-5.3",
       "effort": null,
       "useTable": true,
@@ -16852,6 +18203,54 @@
       },
       "overrideAliases": {
         "gpt-6.2-sol": "unlisted/model"
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      }
+    },
+    {
+      "id": "grok-4.6-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "grok-4.6",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "xai/grok-4.6",
+        "effort": null
+      },
+      "overrideAliases": {
+        "grok-4.6": "unlisted/model"
       }
     },
     {
