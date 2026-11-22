@@ -422,6 +422,24 @@ export const tests = {
     await t.check('the cached card explains its lock without repeating the file problem', !(await t.page.locator('article.q-card .q-problem').innerText()).includes(card.problem));
   },
 
+  async 'status card problem reason renders as a capitalized sentence'(t) {
+    await t.viewport(1440, 900);
+    const view = fixture('status-design-view.json');
+    const card = view.cards.open[0];
+    view.cards.open = [card];
+    view.reportProblems = [];
+    card.problem = 'is not a regular file';
+    card.answerable = false;
+    await openStatus(t, view);
+    await t.text('article.q-card .q-problem', /Can't be answered right now\. [A-Z][^.]*\./);
+    await t.equal(
+      'the locked banner renders the reason as its own sentence without editorializing',
+      (await t.page.locator('article.q-card .q-problem').innerText()).replace(/\s+/g, ' ').trim(),
+      "Can't be answered right now. Is not a regular file. The last good version is shown. It can be answered once the agent rewrites it."
+    );
+    await t.audit('status card problem sentence 1440');
+  },
+
   async 'status question disclosures retain their choices when the card changes'(t) {
     await t.viewport(1440, 900);
     const view = fixture('status-design-view.json');

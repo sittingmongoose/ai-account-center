@@ -1040,4 +1040,133 @@ fn why_only_fine_names_benchmark_runs_when_that_is_the_ranked_basis() {
         !compare.contains("enough real "),
         "a benchmark-only row must not claim real runs: {compare}"
     );
+
+#[test]
+fn unreadable_run_file_carries_row_source_state_and_age_without_changing_verdict() {
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    doc["sources"] = json!([
+        {
+            "id": "scoreboard-runs",
+            "label": "Agent runs",
+            "asOf": "2026-11-06T16:25:00.000Z",
+            "ageSeconds": 300,
+            "staleAfterSeconds": 180,
+            "state": "unreadable",
+            "detail": "1 file unreadable since 4:25 PM: vm.build/runs/2026-11-06/vm.build--eio.json (could not be read). 92 runs from 3 writers read 4:25 PM (68 observed, 24 benchmark)."
+        },
+        {
+            "id": "scoreboard-catalog",
+            "label": "Scoreboard catalog",
+            "asOf": "2026-11-06T16:30:00.000Z",
+            "ageSeconds": 0,
+            "staleAfterSeconds": 180,
+            "state": "ok",
+            "detail": "Catalog read 4:30 PM."
+        }
+    ]);
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let actual = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
+    let opus = actual["views"][0]["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["key"] == "anthropic/claude-opus-5-5|claude-code|xhigh")
+        .expect("Opus 5.5 xhigh row");
+    assert_eq!(opus["cells"]["worknode-build"]["verdict"], json!("recommended"));
+    assert_eq!(opus["cells"]["worknode-build"]["word"], json!("Recommended"));
+    assert_eq!(opus["sourceState"], json!("unreadable"));
+    assert_eq!(opus["asOf"], json!("2026-11-06T16:25:00.000Z"));
+    assert_eq!(opus["ageSeconds"], json!(300));
+}
+
+#[test]
+fn catalog_listing_failure_carries_error_source_state_without_inventing_age() {
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    doc["sources"] = json!([
+        {
+            "id": "scoreboard-runs",
+            "label": "Agent runs",
+            "asOf": "2026-11-06T16:30:00.000Z",
+            "ageSeconds": 10,
+            "staleAfterSeconds": 180,
+            "state": "ok",
+            "detail": "92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark)."
+        },
+        {
+            "id": "scoreboard-catalog",
+            "label": "Scoreboard catalog",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 180,
+            "state": "error",
+            "detail": "The catalog folder could not be listed."
+        }
+    ]);
+    let parsed: ViewIn = serde_json::from_value(doc.clone()).unwrap();
+    let actual = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
+    let opus = actual["views"][0]["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["key"] == "anthropic/claude-opus-5-5|claude-code|xhigh")
+        .expect("Opus 5.5 xhigh row");
+    assert_eq!(opus["cells"]["worknode-build"]["verdict"], json!("recommended"));
+    assert_eq!(opus["sourceState"], json!("error"));
+    assert!(
+        opus.get("asOf").is_none(),
+        "must not invent asOf from another source: {opus}"
+    );
+    assert!(
+        opus.get("ageSeconds").is_none(),
+        "must not invent ageSeconds from another source: {opus}"
+    );
+
+    // When the failing catalog still has a last-good timestamp, the row carries that age.
+    doc["sources"][1]["asOf"] = json!("2026-11-06T16:23:00.000Z");
+    doc["sources"][1]["ageSeconds"] = json!(420);
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let cached = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
+    let opus = &cached["views"][0]["models"][0];
+    assert_eq!(opus["sourceState"], json!("error"));
+    assert_eq!(opus["asOf"], json!("2026-11-06T16:23:00.000Z"));
+    assert_eq!(opus["ageSeconds"], json!(420));
+}
+
+#[test]
+fn healthy_sources_carry_ok_source_state_and_empty_sources_omit_it() {
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    doc["sources"] = json!([
+        {
+            "id": "scoreboard-runs",
+            "label": "Agent runs",
+            "asOf": "2026-11-06T16:29:50.000Z",
+            "ageSeconds": 10,
+            "staleAfterSeconds": 180,
+            "state": "ok",
+            "detail": "92 runs from 3 writers read 4:29 PM (68 observed, 24 benchmark)."
+        },
+        {
+            "id": "scoreboard-catalog",
+            "label": "Scoreboard catalog",
+            "asOf": "2026-11-06T16:29:35.000Z",
+            "ageSeconds": 25,
+            "staleAfterSeconds": 180,
+            "state": "ok",
+            "detail": "Catalog read 4:29 PM."
+        }
+    ]);
+    let parsed: ViewIn = serde_json::from_value(doc.clone()).unwrap();
+    let healthy = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
+    let opus = &healthy["views"][0]["models"][0];
+    assert_eq!(opus["sourceState"], json!("ok"));
+    assert_eq!(opus["asOf"], json!("2026-11-06T16:29:35.000Z"));
+    assert_eq!(opus["ageSeconds"], json!(25));
+
+    doc["sources"] = json!([]);
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let bare = serde_json::to_value(by_model(&parsed).unwrap()).unwrap();
+    let opus = &bare["views"][0]["models"][0];
+    assert!(opus.get("sourceState").is_none());
+    assert!(opus.get("asOf").is_none());
+    assert!(opus.get("ageSeconds").is_none());
 }

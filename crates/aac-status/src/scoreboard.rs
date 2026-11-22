@@ -226,8 +226,16 @@ pub struct CreditsRateIn {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SourceIn {
     pub id: String,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub as_of: Option<String>,
+    #[serde(default)]
+    pub age_seconds: Option<i64>,
+    #[serde(default)]
     pub detail: String,
 }
 
@@ -336,6 +344,12 @@ pub struct ModelOut {
     pub head: String,
     pub head_runs: Vec<Run>,
     pub sheet_head: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_seconds: Option<i64>,
     pub cells: BTreeMap<String, Option<CellOut>>,
     pub report: Vec<ReportOut>,
 }
@@ -1462,6 +1476,7 @@ fn select_models<'a>(view: &'a ViewIn, use_ids: &[&str]) -> Result<(Vec<&'a Task
 fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str]) -> Result<ViewOut> {
     let min_runs = view.catalog.min_runs;
     let (jobs, shown, grouped) = select_models(view, use_ids)?;
+    let (source_state, as_of, age_seconds) = row_source_health(&view.sources);
 
     let out_models: Vec<ModelOut> = grouped
         .iter()
@@ -1540,6 +1555,9 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                     model.reviews,
                     if model.reviews == 1 { "review" } else { "reviews" }
                 ),
+                source_state: source_state.clone(),
+                as_of: as_of.clone(),
+                age_seconds,
                 cells,
                 report,
             })
@@ -1753,6 +1771,45 @@ fn read_note(sources: &[SourceIn]) -> (Vec<Run>, Option<String>) {
     }
     let summary = read.map(|(runs, at, _, _)| format!("{runs} {} read at {at}", runs_word(runs)));
     (note, summary)
+}
+
+fn source_severity(state: &str) -> u8 {
+    match state {
+        "ok" => 0,
+        "stale" => 1,
+        "unreadable" => 2,
+        "missing" => 3,
+        "error" => 4,
+        _ => 4,
+    }
+}
+
+/// Source health carried into each row built from `view.sources`: worst non-ok state wins
+/// (using that failing source's own `asOf` and `ageSeconds`, never borrowing another source's
+/// timestamp); when every stateful source is `ok`, carries `"ok"` with the oldest reading among
+/// them. When no source declares a state, all three stay `None` (never fabricating `"ok"` or 0).
+fn row_source_health(sources: &[SourceIn]) -> (Option<String>, Option<String>, Option<i64>) {
+    let stateful: Vec<(&str, &SourceIn)> = sources
+        .iter()
+        .filter_map(|source| {
+            let state = source.state.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
+            Some((state, source))
+        })
+        .collect();
+    if stateful.is_empty() {
+        return (None, None, None);
+    }
+    let worst_sev = stateful
+        .iter()
+        .map(|(state, _)| source_severity(state))
+        .max()
+        .unwrap_or(0);
+    let picked = stateful
+        .iter()
+        .filter(|(state, _)| source_severity(state) == worst_sev)
+        .max_by(|(_, a), (_, b)| a.age_seconds.cmp(&b.age_seconds))
+        .expect("stateful is non-empty");
+    (Some(picked.0.to_string()), picked.1.as_of.clone(), picked.1.age_seconds)
 }
 
 // ---------------------------------------------------------------------------------------------

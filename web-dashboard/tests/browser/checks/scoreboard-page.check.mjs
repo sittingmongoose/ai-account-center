@@ -504,4 +504,85 @@ export const tests = {
 		await drag(160);
 		await t.count('.sheet', 0);
 	},
+
+	async 'scoreboard row source-health chip keys off each row without changing rank or verdict'(t) {
+		const mixedRows = (view) => {
+			const next = structuredClone(view);
+			for (const section of next.byModel.views) {
+				for (const m of section.models) {
+					if (m.key === 'anthropic/claude-opus-5-5|claude-code|xhigh') {
+						m.sourceState = 'unreadable';
+						m.asOf = '2026-11-06T16:25:00.000Z';
+						m.ageSeconds = 300;
+					} else if (m.key === 'openai/gpt-6.1-sol|codex|high') {
+						m.sourceState = 'ok';
+						m.asOf = '2026-11-06T16:30:00.000Z';
+						m.ageSeconds = 0;
+					} else if (m.key === 'zai/glm-5.3|zcode|max') {
+						m.sourceState = 'error';
+						m.asOf = null;
+						m.ageSeconds = null;
+					} else {
+						delete m.sourceState;
+						delete m.asOf;
+						delete m.ageSeconds;
+					}
+				}
+			}
+			return next;
+		};
+		await t.viewport(1440, 900);
+		await openBoard(t, '', mixedRows);
+		await t.page.click('.seg button >> nth=0');
+		await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
+		await t.equal('page is not marked stale when the fetch succeeded', await t.page.locator('.page').getAttribute('data-stale'), null);
+		const opusRow = t.page.locator('.sb-matrix tbody tr[data-row]').nth(0);
+		await t.text(opusRow, /Opus 5\.5/);
+		await t.text(opusRow.locator('.v-rec').first(), 'Recommended');
+		await t.text(opusRow.locator('.sb-src-state').first(), /^Cached · 5m ago$/);
+		await t.equal('row chip carries the source state', await opusRow.locator('.sb-src-state').first().getAttribute('data-source-state'), 'unreadable');
+		const solRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'Sol 6.1' }).first();
+		await t.equal('healthy row renders no source chip', await solRow.locator('.sb-src-state').count(), 0);
+		const glmRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'GLM 5.3' }).first();
+		await t.text(glmRow.locator('.sb-src-state').first(), /^Unavailable$/);
+		await t.text('.detail-grid .job h3 .sb-src-state >> nth=0', /^Cached · 5m ago$/);
+		await t.audit('scoreboard row source health 1440');
+
+		for (const f of FORMATS.filter((x) => ['iphone', 'duo-folded', 'duo-open-upright'].includes(x.name))) {
+			await t.newContext({ viewport: { width: f.w, height: f.h }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+			await openBoard(t, `?safe=${f.safe}`, mixedRows);
+			await t.page.click('.seg button >> nth=0');
+			await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
+			const opusCard = t.page.locator('.sb-models .sbm').nth(0);
+			await t.text(opusCard.locator('.v-rec').first(), 'Recommended');
+			await t.text(opusCard.locator('.sb-src-state').first(), /^Cached · 5m ago$/);
+			const solCard = t.page.locator('.sb-models .sbm').filter({ hasText: 'Sol 6.1' }).first();
+			await t.equal(`${f.name}: healthy card renders no source chip`, await solCard.locator('.sb-src-state').count(), 0);
+			const glmCard = t.page.locator('.sb-models .sbm').filter({ hasText: 'GLM 5.3' }).first();
+			await t.text(glmCard.locator('.sb-src-state').first(), /^Unavailable$/);
+			await t.check(`${f.name}: source chips stay single-line and unclipped`, await t.page.evaluate(() => {
+				const chips = [...document.querySelectorAll('.sb-models .sb-src-state')];
+				return chips.length > 0 && chips.every((el) => {
+					const r = el.getBoundingClientRect();
+					return el.getClientRects().length === 1 && r.height < 24 && r.right <= innerWidth + 1 && el.scrollWidth <= el.clientWidth + 1;
+				});
+			}));
+			await t.check(`${f.name}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+			await t.audit(`scoreboard row source health ${f.name}`);
+			if (f.name === 'iphone') {
+				await opusCard.click();
+				await t.page.waitForSelector('.sheet .job');
+				await t.text('.sheet .job h3 .sb-src-state >> nth=0', /^Cached · 5m ago$/);
+				await t.check('phone sheet source chip stays single-line and inside the sheet', await t.page.evaluate(() => {
+					const sheet = document.querySelector('.sheet').getBoundingClientRect();
+					const chips = [...document.querySelectorAll('.sheet .sb-src-state')];
+					return chips.length > 0 && chips.every((el) => {
+						const r = el.getBoundingClientRect();
+						return el.getClientRects().length === 1 && r.height < 24 && r.right <= sheet.right + 1 && el.scrollWidth <= el.clientWidth + 1;
+					});
+				}));
+				await t.page.click('.sheet-close');
+			}
+		}
+	},
 };

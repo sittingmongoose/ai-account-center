@@ -222,6 +222,9 @@ pub struct ModelRow {
     pub head_runs: Vec<Run>,
     #[serde(deserialize_with = "nullable")]
     pub sheet_head: String,
+    pub source_state: Option<String>,
+    pub as_of: Option<String>,
+    pub age_seconds: Option<i64>,
     #[serde(deserialize_with = "nullable")]
     pub cells: BTreeMap<String, Option<ModelCell>>,
     #[serde(deserialize_with = "nullable")]
@@ -570,6 +573,85 @@ fn verdict_class(verdict: &str) -> &'static str {
         "avoid" => "v-avoid",
         _ => "v-nd",
     }
+}
+
+/// Per-row source health label shown beside a verdict when a row's backing source failed or went
+/// stale, keyed off the row's own `sourceState`/`ageSeconds` rather than `board.error`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RowSourceChip {
+    pub state: String,
+    pub tone: &'static str,
+    pub label: &'static str,
+    pub age: Option<String>,
+}
+
+impl RowSourceChip {
+    pub(crate) fn text(&self) -> String {
+        match &self.age {
+            Some(age) => format!("{} · {age}", self.label),
+            None => self.label.to_string(),
+        }
+    }
+}
+
+pub(crate) fn row_source_chip_parts(
+    state: Option<&str>,
+    age_seconds: Option<i64>,
+    elapsed_seconds: i64,
+) -> Option<RowSourceChip> {
+    let state = state.map(str::trim).filter(|s| !s.is_empty())?;
+    if state == "ok" {
+        return None;
+    }
+    let (label, tone) = match state {
+        "unreadable" | "stale" => ("Cached", "warn"),
+        _ => ("Unavailable", "crit"),
+    };
+    let age = fmt::live_age(age_seconds, elapsed_seconds).map(fmt::age);
+    Some(RowSourceChip {
+        state: state.to_string(),
+        tone,
+        label,
+        age,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn row_source_chip(row: &ModelRow, elapsed_seconds: i64) -> Option<RowSourceChip> {
+    row_source_chip_parts(
+        row.source_state.as_deref(),
+        row.age_seconds,
+        elapsed_seconds,
+    )
+}
+
+fn source_state_tag(
+    state: Option<String>,
+    as_of: Option<String>,
+    age_seconds: Option<i64>,
+    board: Board,
+) -> AnyView {
+    let Some(initial) = row_source_chip_parts(state.as_deref(), age_seconds, 0) else {
+        return ().into_any();
+    };
+    let title = as_of
+        .as_deref()
+        .map(fmt::clock)
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("Source {}: as of {t}", initial.state))
+        .unwrap_or_else(|| format!("Source {}", initial.state));
+    let state_attr = initial.state;
+    let tone = initial.tone;
+    view! {
+        <span class="sb-src-state" data-source-state=state_attr data-tone=tone title=title>
+            {move || {
+                row_source_chip_parts(state.as_deref(), age_seconds, board.elapsed_seconds())
+                    .map(|c| c.text())
+                    .unwrap_or_default()
+            }}
+        </span>
+    }
+    .into_any()
 }
 
 #[derive(Clone, Copy)]
@@ -1090,17 +1172,35 @@ fn ModelsSections(
                 let key = m.key.clone();
                 let k2 = m.key.clone();
                 let k = keys.get(&m.key).cloned();
+                let row_state = m.source_state.clone();
                 let cells = jobs
                     .iter()
                     .map(|j| match m.cells.get(&j.id).cloned().flatten() {
-                        Some(c) => view! { <td><span class=format!("verdict {}", verdict_class(&c.verdict))>{c.word.clone()}</span><span class="vsub">{sub_chunks(&c.sub)}</span></td> }.into_any(),
+                        Some(c) => {
+                            let tag = source_state_tag(
+                                m.source_state.clone(),
+                                m.as_of.clone(),
+                                m.age_seconds,
+                                board,
+                            );
+                            view! {
+                                <td>
+                                    <div class="verdict-line">
+                                        <span class=format!("verdict {}", verdict_class(&c.verdict))>{c.word.clone()}</span>
+                                        {tag}
+                                    </div>
+                                    <span class="vsub">{sub_chunks(&c.sub)}</span>
+                                </td>
+                            }
+                            .into_any()
+                        }
                         None => view! { <td><span class="verdict v-none">"–"</span></td> }.into_any(),
                     })
                     .collect_view();
                 let pass = arr::pass_text(k.as_ref());
                 let last = ago(k.as_ref().and_then(|k| k.last_run_at.as_deref()));
                 view! {
-                    <tr data-row="1" class:sub=*sub class:sel=move || selected_key.get().as_ref() == Some(&k2) on:click=move |_| on_row.run(key.clone())>
+                    <tr data-row="1" data-source-state=row_state class:sub=*sub class:sel=move || selected_key.get().as_ref() == Some(&k2) on:click=move |_| on_row.run(key.clone())>
                         <td>{row_name(&m, *sub, false)}</td>
                         {cells}
                         <td class="num-col">{pass}</td>
@@ -1127,11 +1227,26 @@ fn ModelsSections(
                 let Some(m) = view.models.get(*index).cloned() else { return ().into_any() };
                 let open = m.clone();
                 let k = keys.get(&m.key).cloned();
+                let row_state = m.source_state.clone();
                 let job_rows = jobs
                     .iter()
                     .filter_map(|j| {
                         let c = m.cells.get(&j.id).cloned().flatten()?;
-                        Some(view! { <div class="sbm-job"><span class="k">{j.label.clone()}</span><span><span class=verdict_class(&c.verdict)>{c.word.clone()}</span></span></div> })
+                        let tag = source_state_tag(
+                            m.source_state.clone(),
+                            m.as_of.clone(),
+                            m.age_seconds,
+                            board,
+                        );
+                        Some(view! {
+                            <div class="sbm-job">
+                                <span class="k">{j.label.clone()}</span>
+                                <span class="sbm-v">
+                                    <span class=verdict_class(&c.verdict)>{c.word.clone()}</span>
+                                    {tag}
+                                </span>
+                            </div>
+                        })
                     })
                     .collect_view();
                 let stats = [
@@ -1143,7 +1258,7 @@ fn ModelsSections(
                 .collect::<Vec<_>>()
                 .join(" · ");
                 view! {
-                    <button class="sbm" class:sub=*sub class:sel={let k = m.key.clone(); move || selected_key.get().as_ref() == Some(&k)} on:click=move |_| { on_row.run(open.key.clone()); on_sheet.run(open.clone()); }>
+                    <button class="sbm" data-source-state=row_state class:sub=*sub class:sel={let k = m.key.clone(); move || selected_key.get().as_ref() == Some(&k)} on:click=move |_| { on_row.run(open.key.clone()); on_sheet.run(open.clone()); }>
                         <div class="sbm-head">{row_name(&m, *sub, false)}<span class="sbm-n">{stats}</span><Icon name="chev-right" class="chev"/></div>
                         <div class="sbm-jobs">{job_rows}</div>
                     </button>
@@ -1203,7 +1318,7 @@ fn ModelsSections(
                 <Show when=move || runs_open.get()>
                     {let key = m.key.clone(); move || runs_list(&recent(), &key)}
                 </Show>
-                <DetailGrid report=m.report.clone()/>
+                <DetailGrid report=m.report.clone() source_state=m.source_state.clone() as_of=m.as_of.clone() age_seconds=m.age_seconds board=board/>
             })}
         </section>
     }
@@ -1319,25 +1434,34 @@ fn SbTools(
 }
 
 #[component]
-fn DetailGrid(report: Vec<JobReport>) -> impl IntoView {
+fn DetailGrid(
+    report: Vec<JobReport>,
+    source_state: Option<String>,
+    as_of: Option<String>,
+    age_seconds: Option<i64>,
+    board: Board,
+) -> impl IntoView {
     view! {
         <div class="detail-grid">
-            {report.into_iter().map(|j| view! {
-                <div class="job">
-                    <h3>{j.label.clone()}" "<span class=verdict_class(&j.verdict)>{j.word.clone()}</span></h3>
-                    <p class="basis">{j.basis.clone()}</p>
-                    {j.measures.iter().map(|m| {
-                        let note = m.note.clone();
-                        view! {
-                            <div class="measure">
-                                <div class="mt"><span class="ml">{m.label.clone()}</span><span class="mv">{m.value.clone()}" "<small>{m.sub.clone()}</small></span></div>
-                                {m.range.map(|r| view! { <RangeBar low=r.low high=r.high value=r.value/> })}
-                                {(!note.is_empty()).then(|| view! { <p class="mn">{note}</p> })}
-                            </div>
-                        }
-                    }).collect_view()}
-                    {(!j.compare.is_empty()).then(|| view! { <p class="cmp">{runs_view(j.compare.clone())}</p> })}
-                </div>
+            {report.into_iter().map(|j| {
+                let tag = source_state_tag(source_state.clone(), as_of.clone(), age_seconds, board);
+                view! {
+                    <div class="job">
+                        <h3>{j.label.clone()}" "<span class=verdict_class(&j.verdict)>{j.word.clone()}</span>{tag}</h3>
+                        <p class="basis">{j.basis.clone()}</p>
+                        {j.measures.iter().map(|m| {
+                            let note = m.note.clone();
+                            view! {
+                                <div class="measure">
+                                    <div class="mt"><span class="ml">{m.label.clone()}</span><span class="mv">{m.value.clone()}" "<small>{m.sub.clone()}</small></span></div>
+                                    {m.range.map(|r| view! { <RangeBar low=r.low high=r.high value=r.value/> })}
+                                    {(!note.is_empty()).then(|| view! { <p class="mn">{note}</p> })}
+                                </div>
+                            }
+                        }).collect_view()}
+                        {(!j.compare.is_empty()).then(|| view! { <p class="cmp">{runs_view(j.compare.clone())}</p> })}
+                    </div>
+                }
             }).collect_view()}
         </div>
     }
@@ -1411,7 +1535,7 @@ fn ModelSheet(
                         <Mark name=m.mark.clone() size=24/>
                         <div><div class="t">{format!("{} · {}", m.label, m.effort_text)}</div><div class="s">{m.sheet_head.clone()}</div></div>
                     </div>
-                    <DetailGrid report=m.report/>
+                    <DetailGrid report=m.report source_state=m.source_state as_of=m.as_of age_seconds=m.age_seconds board=board/>
                 })}
                 // the desktop detail's runs, here too: the phone shows no detail plate
                 <div class="sb-sheet-runs"><Disclosure open=runs_open label="Latest runs of this model and effort".to_string()/></div>
@@ -2010,5 +2134,53 @@ mod tests {
         assert_eq!(verdict_class("recommended"), "v-rec");
         assert_eq!(verdict_class("avoid"), "v-avoid");
         assert_eq!(verdict_class("not-enough-data"), "v-nd");
+    }
+
+    #[test]
+    fn row_source_chip_keys_off_row_state_and_live_age_without_inventing_missing_age() {
+        let bare: ModelRow = serde_json::from_str(r#"{"key":"m|r|e"}"#).unwrap();
+        assert_eq!(row_source_chip(&bare, 0), None);
+
+        let ok: ModelRow = serde_json::from_str(
+            r#"{"key":"m|r|e","sourceState":"ok","asOf":"2026-11-06T16:30:00.000Z","ageSeconds":12}"#,
+        )
+        .unwrap();
+        assert_eq!(row_source_chip(&ok, 30), None);
+
+        let unreadable: ModelRow = serde_json::from_str(
+            r#"{"key":"m|r|e","sourceState":"unreadable","asOf":"2026-11-06T16:25:00.000Z","ageSeconds":300}"#,
+        )
+        .unwrap();
+        let chip = row_source_chip(&unreadable, 0).expect("unreadable row carries a chip");
+        assert_eq!(chip.state, "unreadable");
+        assert_eq!(chip.tone, "warn");
+        assert_eq!(chip.text(), "Cached · 5m ago");
+        assert_eq!(
+            row_source_chip(&unreadable, 60).unwrap().text(),
+            "Cached · 6m ago"
+        );
+
+        let stale: ModelRow =
+            serde_json::from_str(r#"{"key":"m|r|e","sourceState":"stale","ageSeconds":600}"#)
+                .unwrap();
+        let chip = row_source_chip(&stale, 0).expect("stale row carries a chip");
+        assert_eq!(chip.tone, "warn");
+        assert_eq!(chip.text(), "Cached · 10m ago");
+
+        let error_cached: ModelRow =
+            serde_json::from_str(r#"{"key":"m|r|e","sourceState":"error","ageSeconds":420}"#)
+                .unwrap();
+        let chip = row_source_chip(&error_cached, 0).expect("error row carries a chip");
+        assert_eq!(chip.tone, "crit");
+        assert_eq!(chip.text(), "Unavailable · 7m ago");
+
+        let error_no_age: ModelRow = serde_json::from_str(
+            r#"{"key":"m|r|e","sourceState":"error","asOf":null,"ageSeconds":null}"#,
+        )
+        .unwrap();
+        let chip = row_source_chip(&error_no_age, 120).expect("error row without age still warns");
+        assert_eq!(chip.tone, "crit");
+        assert_eq!(chip.age, None);
+        assert_eq!(chip.text(), "Unavailable");
     }
 }

@@ -62,6 +62,21 @@ fn sentence_case(text: &str) -> String {
     }
 }
 
+/// Render a card problem reason as its own sentence without editorializing: uppercase the first
+/// character and append a period unless it already ends with `.`, `?` or `!`.
+pub(crate) fn problem_sentence(reason: &str) -> String {
+    let trimmed = reason.trim();
+    let mut chars = trimmed.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let mut out: String = first.to_uppercase().chain(chars).collect();
+    if !out.ends_with(['.', '?', '!']) {
+        out.push('.');
+    }
+    out
+}
+
 /// The card guide's last sentence, when a card has it ("You won't see any change in the app either way."): it is
 /// reassurance, so it sits with the facts, not in the problem.
 fn split_calm(text: &str) -> (String, Option<String>) {
@@ -771,7 +786,13 @@ fn CardBody(
                         {if locked { "Can't be answered right now. " } else { "" }}
                         {let reason = c.problem.clone(); move || {
                             let (history, drawer) = problem_location.get();
-                            (!history && !drawer).then(|| reason.clone().unwrap_or_else(|| "The card could not be checked.".into()))
+                            (!history && !drawer).then(|| {
+                                reason
+                                    .as_deref()
+                                    .map(problem_sentence)
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or_else(|| "The card could not be checked.".into())
+                            })
                         }}
                         {move || locked.then(|| {
                             if problem_location.with(|(history, _)| *history) {
@@ -1342,5 +1363,19 @@ mod tests {
         }];
         let (_, title, _, _) = unsent_row("thread--q1", &draft, &answered);
         assert_eq!(title, "The question");
+    }
+
+    #[test]
+    fn problem_sentence_capitalizes_and_punctuates_without_editorializing() {
+        assert_eq!(
+            problem_sentence("is not a regular file"),
+            "Is not a regular file."
+        );
+        assert_eq!(problem_sentence("  not valid JSON  "), "Not valid JSON.");
+        assert_eq!(problem_sentence("Could not be read."), "Could not be read.");
+        assert_eq!(problem_sentence("could not be read?"), "Could not be read?");
+        assert_eq!(problem_sentence("corrupt file!"), "Corrupt file!");
+        assert_eq!(problem_sentence(""), "");
+        assert_eq!(problem_sentence("   "), "");
     }
 }

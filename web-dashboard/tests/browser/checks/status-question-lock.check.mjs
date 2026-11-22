@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const card = 'article.q-card';
 const notice = `${card} .q-problem`;
 const drawer = '.c2-report-problems';
-const rollbackReason = 'its seq is lower than one already read, so this copy is ignored';
+const rollbackSentence = 'Its seq is lower than one already read, so this copy is ignored.';
 
 async function statusFixture(t, name) {
   const dist = path.resolve(t.args.repo ?? root, 'dist/web-server/status');
@@ -79,7 +79,7 @@ async function reloadStatus(t, applied, expected) {
 
 async function checkPlacement(t, insideDrawer) {
   const text = await t.page.locator(notice).innerText();
-  await t.equal('the card contains the reason only while it is out of the drawer', text.includes(rollbackReason), !insideDrawer);
+  await t.equal('the card contains the reason only while it is out of the drawer', text.includes(rollbackSentence), !insideDrawer);
   await t.check('the question remains locked', await t.page.locator(`${card} .opt-pick`).first().isDisabled());
   if (insideDrawer) {
     const disclosure = t.page.locator(drawer);
