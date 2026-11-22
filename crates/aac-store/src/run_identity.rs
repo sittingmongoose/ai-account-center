@@ -521,7 +521,7 @@ mod tests {
             { "model": "google/gemini-4-argon", "label": "Gemini 4 Argon", "family": "Gemini", "runtimes": ["antigravity"], "efforts": ["high"] },
             { "model": "alibaba/qwen3.8-max", "label": "Qwen 3.8 Max", "family": "Qwen", "runtimes": [], "efforts": [] },
             { "model": "alibaba/qwen4-max-preview", "label": "Qwen 4 Max Preview", "family": "Qwen", "runtimes": ["omp"], "efforts": [] },
-            { "model": "deepseek/deepseek-v4.1-flash", "label": "DeepSeek V4.1 Flash", "family": "DeepSeek", "runtimes": ["opencode-go"], "efforts": [] },
+            { "model": "deepseek/deepseek-v4.1-flash", "label": "DeepSeek V4.1 Flash", "family": "DeepSeek", "runtimes": ["omp"], "efforts": [] },
             { "model": "zai/glm-5.3", "label": "GLM 5.3", "family": "GLM", "runtimes": ["zcode"], "efforts": ["max"] },
             { "model": "muse/muse-ember-1.0", "label": "Muse Ember 1.0", "family": "Muse", "runtimes": ["muse"], "efforts": ["max"] },
             { "model": "xai/grok-4.7", "label": "Grok 4.7", "family": "Grok", "runtimes": ["cursor", "grok"], "efforts": [] },
@@ -975,5 +975,37 @@ mod tests {
         let a = catalog_hash(Some("m"), Some("a"));
         assert_ne!(a, catalog_hash(Some("ma"), Some("")));
         assert_eq!(a.len(), 64);
+    }
+
+    /// DeepSeek V4.1 Flash runs in OMP: the share catalog's runtime word must be the harness
+    /// word `harness_word` canonicalizes, the synthetic fixture must not drift from the share
+    /// catalog, and an `omp` run must identify as the DeepSeek family with its harness reported.
+    #[test]
+    fn deepseek_runs_in_omp_and_the_fixture_matches_the_share_catalog() {
+        let packaged = Catalog::from_texts(
+            Some(include_str!("../../../docs/agent-reports/catalog/models.json")),
+            Some(include_str!("../../../docs/agent-reports/catalog/model-aliases.json")),
+        )
+        .unwrap();
+        let share = packaged.model("deepseek/deepseek-v4.1-flash").unwrap();
+        assert_eq!(share.runtimes, ["omp"]);
+        let fixture = catalog();
+        assert_eq!(
+            fixture.model("deepseek/deepseek-v4.1-flash").unwrap().runtimes,
+            share.runtimes,
+            "the fixture's DeepSeek runtime word drifted from the share catalog"
+        );
+        let identity = identify(
+            &packaged,
+            &Written {
+                model: Some("deepseek/deepseek-v4.1-flash".into()),
+                harness: Some("omp".into()),
+                ..Written::default()
+            },
+        );
+        assert_eq!(identity.model_id.as_deref(), Some("deepseek/deepseek-v4.1-flash"));
+        assert_eq!(identity.model_family.as_deref(), Some("deepseek"));
+        assert_eq!(identity.harness.as_deref(), Some("omp"));
+        assert_eq!(identity.harness_source, "reported");
     }
 }
