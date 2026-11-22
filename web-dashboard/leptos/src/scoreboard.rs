@@ -24,6 +24,10 @@ pub struct ScoreboardView {
     pub version: u32,
     #[serde(deserialize_with = "nullable")]
     pub generated_at: String,
+    /// A server cache hit's age at the read: every age in the view counts from the compose that
+    /// produced it, so the page's own clock starts this far in (L1). Absent from an older
+    /// server (0).
+    pub cache_age_seconds: f64,
     pub refresh: Option<Refresh>,
     #[serde(deserialize_with = "nullable")]
     pub sources: Vec<SbSource>,
@@ -648,7 +652,7 @@ fn source_state_tag_opt(
         view! {
             <span class="sb-src-state" data-source-state=state_attr data-tone=tone title=title>
                 {move || {
-                    row_source_chip_parts(state.as_deref(), age_seconds, board.elapsed_seconds())
+                    row_source_chip_parts(state.as_deref(), age_seconds, board.view_age_seconds())
                         .map(|c| c.text())
                         .unwrap_or_default()
                 }}
@@ -673,6 +677,9 @@ struct Board {
     error: RwSignal<Option<FetchError>>,
     fetched_at_ms: RwSignal<f64>,
     now_ms: RwSignal<f64>,
+    /// The server cache age of the view in hand (seconds): the view was composed that long
+    /// before the read arrived, so its ages already count that much (L1).
+    cache_age_seconds: RwSignal<i64>,
     loading: RwSignal<bool>,
     /// The server filters as a query string (Scoreboard v2); empty reads every run.
     query: RwSignal<String>,
@@ -707,6 +714,8 @@ impl Board {
                 match result {
                     Ok(view) => {
                         let now = js_sys::Date::now();
+                        self.cache_age_seconds
+                            .set(view.cache_age_seconds.max(0.0).floor() as i64);
                         self.view.set(Some(view));
                         self.fetched_at_ms.set(now);
                         self.now_ms.set(now);
@@ -733,6 +742,20 @@ impl Board {
     fn elapsed_seconds(self) -> i64 {
         ((self.now_ms.get() - self.fetched_at_ms.get()) / 1000.0).floor() as i64
     }
+
+    /// The page's clock for every age the view itself carries: the response's own age plus the
+    /// time since it arrived, so a cache hit starts where its compose started (L1).
+    fn view_age_seconds(self) -> i64 {
+        view_age(self.elapsed_seconds(), self.cache_age_seconds.get())
+    }
+}
+
+/// The age to add to an age the view was composed with: the browser's time since the read plus
+/// the server's cache age at that read. Never negative (a clock that moved backwards adds zero).
+fn view_age(elapsed_seconds: i64, cache_age_seconds: i64) -> i64 {
+    elapsed_seconds
+        .max(0)
+        .saturating_add(cache_age_seconds.max(0))
 }
 
 #[component]
@@ -742,6 +765,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         error: RwSignal::new(None),
         fetched_at_ms: RwSignal::new(js_sys::Date::now()),
         now_ms: RwSignal::new(js_sys::Date::now()),
+        cache_age_seconds: RwSignal::new(0),
         loading: RwSignal::new(false),
         query: RwSignal::new(String::new()),
         refreshed: RwSignal::new(Vec::new()),
@@ -1051,13 +1075,9 @@ fn sub_chunks(sub: &[String]) -> impl IntoView + use<> {
         .collect_view()
 }
 
-/// A row's name: "Opus 5.5 · xhigh", or only the effort under its model's own line.
-fn row_name(m: &ModelRow, sub: bool, chevron: bool) -> AnyView {
-    row_name_with_tag(m, sub, chevron, None)
-}
-
-/// Like [`row_name`], optionally placing a single row-level source-health tag below the runtime
-/// line on desktop so the label renders once per row rather than repeating in every job column.
+/// A row's name: "Opus 5.5 · xhigh", or only the effort under its model's own line, with the
+/// row's single source-health tag below the runtime line: desktop renders it once per row, the
+/// phone list in the model row's heading (M4).
 fn row_name_with_tag(m: &ModelRow, sub: bool, chevron: bool, row_tag: Option<AnyView>) -> AnyView {
     let eff = m.effort_text.clone();
     let runtime = m.runtime.clone();
@@ -1086,6 +1106,47 @@ fn row_name_with_tag(m: &ModelRow, sub: bool, chevron: bool, row_tag: Option<Any
         </div>
     }
     .into_any()
+}
+
+/// Where a model row's health chips go, from the view alone: the row's heading carries the
+/// model-wide health, and a job's verdict carries a chip only when that job's own evidence has
+/// one. Model-wide health is never moved onto a healthy job (M4); the renderer still adds each
+/// chip's live age.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ChipPlaces {
+    /// The model's own aggregate source health, shown once in its heading.
+    pub heading: bool,
+    /// One per job in the row's cells: shown only from that cell's own evidence.
+    pub jobs: Vec<bool>,
+}
+
+fn has_chip(state: Option<&str>, age_seconds: Option<i64>) -> bool {
+    row_source_chip_parts(state, age_seconds, 0).is_some()
+}
+
+pub(crate) fn chip_places(model: &ModelRow, jobs: &[Job]) -> ChipPlaces {
+    ChipPlaces {
+        heading: has_chip(model.source_state.as_deref(), model.age_seconds),
+        jobs: jobs
+            .iter()
+            .map(|job| {
+                model
+                    .cells
+                    .get(&job.id)
+                    .and_then(|cell| cell.as_ref())
+                    .is_some_and(|cell| has_chip(cell.source_state.as_deref(), cell.age_seconds))
+            })
+            .collect(),
+    }
+}
+
+/// The detail grid's jobs: each carries its own report's chip, and nothing the model's aggregate
+/// health alone would place on it (M4).
+pub(crate) fn report_chip_places(report: &[JobReport]) -> Vec<bool> {
+    report
+        .iter()
+        .map(|job| has_chip(job.source_state.as_deref(), job.age_seconds))
+        .collect()
 }
 
 /// "4h ago" from an ISO time, or "–".
@@ -1243,35 +1304,27 @@ fn ModelsSections(
                 let open = m.clone();
                 let k = keys.get(&m.key).cloned();
                 let row_state = m.source_state.clone();
-                let any_cell_tagged = jobs.iter().any(|j| {
-                    m.cells
-                        .get(&j.id)
-                        .and_then(|c| c.as_ref())
-                        .is_some_and(|c| {
-                            row_source_chip_parts(c.source_state.as_deref(), c.age_seconds, 0)
-                                .is_some()
-                        })
-                });
-                let shown_jobs: Vec<(Job, ModelCell)> = jobs
+                // Model-wide health stays on the heading; a job's chip comes only from its own
+                // evidence, never moved onto the first healthy job (M4).
+                let places = chip_places(&m, &jobs);
+                let heading_tag = places
+                    .heading
+                    .then(|| {
+                        source_state_tag(m.source_state.clone(), m.as_of.clone(), m.age_seconds, board)
+                    });
+                let shown_jobs: Vec<(Job, ModelCell, bool)> = jobs
                     .iter()
-                    .filter_map(|j| {
+                    .enumerate()
+                    .filter_map(|(at, j)| {
                         let c = m.cells.get(&j.id).cloned().flatten()?;
-                        Some((j.clone(), c))
+                        Some((j.clone(), c, places.jobs.get(at).copied().unwrap_or(false)))
                     })
                     .collect();
                 let job_rows = shown_jobs
                     .into_iter()
-                    .enumerate()
-                    .map(|(idx, (j, c))| {
-                        let tag = if any_cell_tagged {
+                    .map(|(j, c, tagged)| {
+                        let tag = if tagged {
                             source_state_tag(c.source_state, c.as_of, c.age_seconds, board)
-                        } else if idx == 0 {
-                            source_state_tag(
-                                m.source_state.clone(),
-                                m.as_of.clone(),
-                                m.age_seconds,
-                                board,
-                            )
                         } else {
                             ().into_any()
                         };
@@ -1296,7 +1349,7 @@ fn ModelsSections(
                 .join(" · ");
                 view! {
                     <button class="sbm" data-source-state=row_state class:sub=*sub class:sel={let k = m.key.clone(); move || selected_key.get().as_ref() == Some(&k)} on:click=move |_| { on_row.run(open.key.clone()); on_sheet.run(open.clone()); }>
-                        <div class="sbm-head">{row_name(&m, *sub, false)}<span class="sbm-n">{stats}</span><Icon name="chev-right" class="chev"/></div>
+                        <div class="sbm-head">{row_name_with_tag(&m, *sub, false, heading_tag)}<span class="sbm-n">{stats}</span><Icon name="chev-right" class="chev"/></div>
                         <div class="sbm-jobs">{job_rows}</div>
                     </button>
                 }
@@ -1349,13 +1402,14 @@ fn ModelsSections(
                 <div class="plate-head">
                     <Mark name=m.mark.clone() size=22/>
                     <h2>{format!("{} · {}", m.label, m.effort_text)}</h2>
+                    {source_state_tag(m.source_state.clone(), m.as_of.clone(), m.age_seconds, board)}
                     <span class="plate-meta">{m.head.clone()}{runs_view(m.head_runs.clone())}</span>
                     <div class="plate-tools"><button class="link" style="font-size:12.5px" on:click=move |_| runs_open.update(|o| *o = !*o)>"Latest runs of this model and effort"</button></div>
                 </div>
                 <Show when=move || runs_open.get()>
                     {let key = m.key.clone(); move || runs_list(&recent(), &key)}
                 </Show>
-                <DetailGrid report=m.report.clone() source_state=m.source_state.clone() as_of=m.as_of.clone() age_seconds=m.age_seconds board=board/>
+                <DetailGrid report=m.report.clone() board=board/>
             })}
         </section>
     }
@@ -1471,23 +1525,15 @@ fn SbTools(
 }
 
 #[component]
-fn DetailGrid(
-    report: Vec<JobReport>,
-    source_state: Option<String>,
-    as_of: Option<String>,
-    age_seconds: Option<i64>,
-    board: Board,
-) -> impl IntoView {
-    let any_job_tagged = report
-        .iter()
-        .any(|j| row_source_chip_parts(j.source_state.as_deref(), j.age_seconds, 0).is_some());
+fn DetailGrid(report: Vec<JobReport>, board: Board) -> impl IntoView {
+    // Each job's chip is its own evidence; the model's aggregate health stays in the heading
+    // (M4).
+    let places = report_chip_places(&report);
     view! {
         <div class="detail-grid">
-            {report.into_iter().enumerate().map(|(idx, j)| {
-                let tag = if any_job_tagged {
+            {report.into_iter().enumerate().map(|(at, j)| {
+                let tag = if places.get(at).copied().unwrap_or(false) {
                     source_state_tag(j.source_state, j.as_of, j.age_seconds, board)
-                } else if idx == 0 {
-                    source_state_tag(source_state.clone(), as_of.clone(), age_seconds, board)
                 } else {
                     ().into_any()
                 };
@@ -1580,8 +1626,9 @@ fn ModelSheet(
                     <div class="sheet-title">
                         <Mark name=m.mark.clone() size=24/>
                         <div><div class="t">{format!("{} · {}", m.label, m.effort_text)}</div><div class="s">{m.sheet_head.clone()}</div></div>
+                        {source_state_tag(m.source_state.clone(), m.as_of.clone(), m.age_seconds, board)}
                     </div>
-                    <DetailGrid report=m.report source_state=m.source_state as_of=m.as_of age_seconds=m.age_seconds board=board/>
+                    <DetailGrid report=m.report board=board/>
                 })}
                 // the desktop detail's runs, here too: the phone shows no detail plate
                 <div class="sb-sheet-runs"><Disclosure open=runs_open label="Latest runs of this model and effort".to_string()/></div>
@@ -1818,7 +1865,7 @@ fn SourcesList(board: Board, open: RwSignal<bool>) -> impl IntoView {
     view! {
         <ul class="sb-sources" id="sources" hidden=move || !open.get()>
             {move || board.view.with(|v| v.as_ref().map(|v| v.sources.clone()).unwrap_or_default()).into_iter().map(|s| {
-                let age = fmt::live_age(s.age_seconds, board.elapsed_seconds()).map(fmt::age);
+                let age = fmt::live_age(s.age_seconds, board.view_age_seconds()).map(fmt::age);
                 view! { <li><b>{s.label.clone()}</b>{age.map(|a| format!(" · {a}"))}{format!(": {}", s.detail)}</li> }
             }).collect_view()}
         </ul>
@@ -2233,5 +2280,124 @@ mod tests {
             serde_json::from_str(r#"{"key":"m|r|e","sourceState":"mystery","ageSeconds":60}"#)
                 .unwrap();
         assert_eq!(row_source_chip(&unknown, 0), None);
+    }
+}
+
+#[cfg(test)]
+mod m4_l1_tests {
+    use super::*;
+
+    /// The fixture's case: the kept Scout 1.0 benchmark file failed, so the model's aggregate
+    /// health is unreadable while both of its jobs' own evidence is healthy.
+    fn model() -> ModelRow {
+        serde_json::from_str(
+            r#"{
+                "key":"anthropic/claude-opus-5-5|claude-code|xhigh",
+                "label":"Opus 5.5","effortText":"xhigh","runtime":"Claude Code",
+                "sourceState":"unreadable","asOf":"2026-11-06T16:25:00.000Z","ageSeconds":300,
+                "cells":{
+                    "worknode-build":{"verdict":"recommended","word":"Recommended","sub":[]},
+                    "scout":{"verdict":"fine","word":"Fine","sub":[]}
+                },
+                "report":[]
+            }"#,
+        )
+        .unwrap()
+    }
+
+    /// A row whose Scout job has its own failed file.
+    fn own_failure() -> ModelRow {
+        serde_json::from_str(
+            r#"{
+                "key":"anthropic/claude-opus-5-5|claude-code|xhigh",
+                "label":"Opus 5.5","effortText":"xhigh","runtime":"Claude Code",
+                "sourceState":"unreadable","asOf":"2026-11-06T16:25:00.000Z","ageSeconds":300,
+                "cells":{
+                    "worknode-build":{"verdict":"recommended","word":"Recommended","sub":[]},
+                    "scout":{"verdict":"fine","word":"Fine","sub":[],"sourceState":"unreadable","ageSeconds":60}
+                },
+                "report":[]
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn jobs() -> Vec<Job> {
+        vec![
+            Job {
+                id: "worknode-build".into(),
+                label: "WorkNode build".into(),
+            },
+            Job {
+                id: "scout".into(),
+                label: "Scout".into(),
+            },
+        ]
+    }
+
+    /// M4: the model's aggregate health sits in its heading; a job's verdict shows a chip only
+    /// from that job's own evidence (the first-cell fallback must not put Cached on a healthy
+    /// WorkNode build because a Scout benchmark file failed).
+    #[test]
+    fn model_health_stays_on_the_heading_and_never_moves_to_a_healthy_job() {
+        let places = chip_places(&model(), &jobs());
+        assert!(
+            places.heading,
+            "the model-wide chip belongs in the model heading"
+        );
+        assert_eq!(
+            places.jobs,
+            vec![false, false],
+            "no healthy job carries the model's chip"
+        );
+        let places = chip_places(&own_failure(), &jobs());
+        assert_eq!(
+            places.jobs,
+            vec![false, true],
+            "a job with its own failed file still carries its own chip"
+        );
+    }
+
+    /// The detail grid, same rule: each job's report supplies its chip, never the model's.
+    #[test]
+    fn detail_jobs_carry_only_their_own_report_chip() {
+        let report: Vec<JobReport> = serde_json::from_str(
+            r#"[
+                {"label":"WorkNode build","verdict":"recommended","word":"Recommended","basis":"observed","measures":[],"compare":[]},
+                {"label":"Scout","verdict":"fine","word":"Fine","basis":"observed","measures":[],"compare":[],
+                 "sourceState":"unreadable","ageSeconds":300}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(report_chip_places(&report), vec![false, true]);
+    }
+
+    /// L1: a cache hit's view was composed before it was read, so every age it carries starts
+    /// that much older. A second visitor 50 s after a failure reads a 5-minute-old failure, not
+    /// "just now".
+    #[test]
+    fn a_cache_hit_starts_the_view_clock_at_its_server_age() {
+        assert_eq!(view_age(0, 50), 50);
+        assert_eq!(view_age(10, 50), 60);
+        assert_eq!(
+            view_age(-4, 50),
+            50,
+            "a browser clock that moved back adds no time"
+        );
+        assert_eq!(
+            view_age(10, -3),
+            10,
+            "an older server's absent cache age is 0"
+        );
+        let failing: ModelRow =
+            serde_json::from_str(r#"{"key":"m|r|e","sourceState":"unreadable","ageSeconds":300}"#)
+                .unwrap();
+        let chip = row_source_chip(&failing, view_age(0, 50)).expect("a failing row has a chip");
+        assert_eq!(chip.text(), "Cached · 6m ago");
+        assert_eq!(
+            row_source_chip(&failing, view_age(0, 0)).unwrap().text(),
+            "Cached · 5m ago",
+            "without the server age the same read would be too young (the bug)"
+        );
     }
 }
