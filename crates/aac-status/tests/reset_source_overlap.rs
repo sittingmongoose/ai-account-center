@@ -475,6 +475,83 @@ fn request_admission_cannot_reorder_actual_captures_in_either_delivery_order() {
     }
 }
 
+fn claude_identity(account: &str) -> Identity {
+    Identity {
+        provider: "claude".into(),
+        account: account.into(),
+        organization: format!("org-{account}"),
+        profile: "reused".into(),
+        host: "fixture-host".into(),
+    }
+}
+fn guarded_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    dir
+}
+
+#[test]
+fn a_stalled_credential_capture_does_not_delay_an_unrelated_store_write() {
+    let dir = guarded_dir();
+    let db = dir.path().join("claims.sqlite");
+    let mut a = Store::open(&db).unwrap();
+    let mut b = Store::open(&db).unwrap();
+    // A's capture closure runs while A holds no transaction: B's own capture, a real
+    // IMMEDIATE ledger write for another account, must complete inside A's closure.
+    let mut b_result: Option<Result<((), ReadTicket)>> = None;
+    let mut b_waited = Duration::ZERO;
+    let (_, ticket_a) = a
+        .capture_read("claude:a", || {
+            std::thread::sleep(Duration::from_millis(200));
+            let started = std::time::Instant::now();
+            b_result = Some(b.capture_read("claude:b", || Ok(())));
+            b_waited = started.elapsed();
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        b_result.unwrap().is_ok(),
+        "an unrelated capture must not wait behind A's credential capture"
+    );
+    assert!(
+        b_waited < Duration::from_millis(200),
+        "B waited {b_waited:?} behind A's stalled capture"
+    );
+    assert!(ticket_a.sequence.parse::<u64>().is_ok());
+}
+
+#[test]
+fn an_older_capture_refuses_instead_of_rolling_back_a_newer_binding() {
+    let dir = guarded_dir();
+    let db = dir.path().join("claims.sqlite");
+    let mut a = Store::open(&db).unwrap();
+    let mut b = Store::open(&db).unwrap();
+    let older = claude_identity("account-old");
+    let newer = claude_identity("account-new");
+    // A's slow capture reads the OLD login; while it runs outside the transaction,
+    // B captures and binds the NEW login on the same route.
+    let mut b_result: Option<Result<((), ReadTicket)>> = None;
+    let stalled = a.capture_identity_read("claude:reused", || {
+        b_result = Some(b.capture_identity_read("claude:reused", || Ok(((), newer.clone()))));
+        std::thread::sleep(Duration::from_millis(50));
+        Ok(((), older.clone()))
+    });
+    assert!(
+        b_result.unwrap().is_ok(),
+        "the newer capture must bind while the older one runs"
+    );
+    assert_eq!(stalled.unwrap_err(), "identity-changed");
+    // The newer binding survives and the refused capture allocated no read order.
+    assert_eq!(
+        a.pending("claude:reused", now()).unwrap()["canonicalAccountKey"],
+        b.pending("claude:reused", now()).unwrap()["canonicalAccountKey"]
+    );
+    let (_, ticket) = a
+        .capture_identity_read("claude:reused", || Ok(((), newer.clone())))
+        .unwrap();
+    assert_eq!(ticket.sequence, "2");
+}
+
 #[test]
 fn provider_rpc_does_not_hold_the_capture_transaction() {
     let (dir, home, binary) = setup();

@@ -392,9 +392,11 @@ impl Store {
         Ok(value)
     }
 
-    /// Capture the saved login and allocate its order while holding one immediate
-    /// transaction. The callback must do only bounded credential capture, never provider I/O.
-    /// Process exit or unwinding rolls back the transaction and releases its lock.
+    /// Capture the saved login first, then allocate its order in one immediate
+    /// transaction that opens only after the callback returns. The callback must do
+    /// only bounded credential capture, never provider I/O, and must not open its own
+    /// store. A stalled helper delays only its own route, never the store's other
+    /// writers. Process exit or unwinding still rolls the transaction back.
     pub fn capture_read<T>(&mut self, account: &str, capture: impl FnOnce() -> Result<T>) -> Result<(T, ReadTicket)> {
         self.capture_inner(account, || Ok((capture()?, None)))
     }
@@ -417,10 +419,16 @@ impl Store {
         account: &str,
         capture: impl FnOnce() -> Result<(T, Option<Identity>)>,
     ) -> Result<(T, ReadTicket)> {
+        // The bounded credential capture runs before the exclusive section, so a
+        // stalled helper cannot delay the store's unrelated writers. The binding
+        // snapshot taken here is what bind_capture compares inside the transaction:
+        // if another capture bound a different login while this one ran, this older
+        // capture is refused instead of rolling the newer binding back.
+        let binding_before = Self::account_canonical_from(&self.db, account)?;
+        let (captured, identity) = capture()?;
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
-        let (captured, identity) = capture()?;
         let sequence: i64 = sql(tx.query_row(
             "UPDATE source_read_clock SET value=value+1 WHERE singleton=1 AND value<9223372036854775807 RETURNING value",
             [], |r| r.get(0),
@@ -430,7 +438,7 @@ impl Store {
             params![account, sequence],
         ))?;
         if let Some(identity) = identity {
-            Self::bind_capture(&tx, account, &identity, sequence)?;
+            Self::bind_capture(&tx, account, &identity, sequence, binding_before)?;
         }
         let ticket = ReadTicket {
             capture_version: 1,
@@ -441,7 +449,13 @@ impl Store {
         Ok((captured, ticket))
     }
 
-    fn bind_capture(db: &Connection, account: &str, identity: &Identity, sequence: i64) -> Result<()> {
+    fn bind_capture(
+        db: &Connection,
+        account: &str,
+        identity: &Identity,
+        sequence: i64,
+        binding_before: Option<String>,
+    ) -> Result<()> {
         if !matches!(identity.provider.as_str(), "codex" | "claude")
             || identity.account.is_empty()
             || identity.profile.is_empty()
@@ -452,6 +466,12 @@ impl Store {
         }
         let canonical = Self::canonical_identity(identity)?;
         let previous = Self::account_canonical_from(db, account)?;
+        // The capture ran outside the transaction. A binding that changed while it ran
+        // belongs to a newer capture of a different login; this older capture must not
+        // silently replace it.
+        if previous.as_ref() != Some(&canonical) && binding_before != previous {
+            return Err("identity-changed");
+        }
         let captured: Option<(String, i64, bool)> = sql(db
             .query_row(
                 "SELECT lock_key,since_ticket,account_changed FROM route_capture_bindings WHERE account=?",

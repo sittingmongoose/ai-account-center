@@ -944,7 +944,7 @@ fn admission_only_inflight_tickets_cannot_override_captured_identity_after_upgra
 }
 
 #[test]
-fn capture_and_allocation_serialize_across_connections_without_time_ordering() {
+fn captures_overlap_outside_the_transaction_and_allocation_still_serializes() {
     let (dir, _) = open();
     let db = dir.path().join("claims.sqlite");
     let (captured, seen) = std::sync::mpsc::channel();
@@ -971,13 +971,20 @@ fn capture_and_allocation_serialize_across_connections_without_time_ordering() {
             })
             .unwrap()
     });
-    assert!(second_seen.recv_timeout(std::time::Duration::from_millis(100)).is_err());
+    // The capture closure no longer holds the write lock, so the second capture
+    // starts while the first is still stalled in its credential read.
+    assert!(second_seen.recv_timeout(std::time::Duration::from_millis(100)).is_ok());
     release.send(()).unwrap();
     let (x, xt) = first.join().unwrap();
     let (y, yt) = second.join().unwrap();
     assert_eq!(x, "identity-x");
     assert_eq!(y, "identity-y");
-    assert!(yt.sequence.parse::<u64>().unwrap() > xt.sequence.parse::<u64>().unwrap());
+    let (xs, ys) = (xt.sequence.parse::<u64>().unwrap(), yt.sequence.parse::<u64>().unwrap());
+    // Allocation still serializes through the one read clock: both commits get a
+    // distinct rising order regardless of which transaction committed first.
+    assert_ne!(xs, ys);
+    assert_eq!(xs.min(ys), 1);
+    assert_eq!(xs.max(ys), 2);
 }
 
 #[test]
