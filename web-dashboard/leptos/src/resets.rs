@@ -1115,6 +1115,12 @@ impl ResetCtx {
     pub fn may_read_for_open(&self) -> bool {
         !self.dialog_open()
     }
+    /// Sign-out or frame disposal cleans up the owner and disposes these signals,
+    /// but a `spawn_local` completion outlives it. A late answer is dropped:
+    /// nothing may read or write a disposed value.
+    fn owner_alive(&self) -> bool {
+        self.states.try_with_value(|_| ()).is_some()
+    }
     pub fn show(&self, account: &str, provider: &str, fetch: bool) {
         if self.account.get_untracked() == account {
             return;
@@ -1131,11 +1137,12 @@ impl ResetCtx {
     }
     fn lock_key(&self, account: &str) -> String {
         self.aliases
-            .with_value(|a| {
+            .try_with_value(|a| {
                 a.iter()
                     .find(|(route, _, _)| route == account)
                     .map(|(_, key, _)| key.clone())
             })
+            .flatten()
             .unwrap_or_else(|| account.into())
     }
     /// Binding order is global, while attempt state stays with its immutable canonical account.
@@ -1189,6 +1196,11 @@ impl ResetCtx {
             .current(&self.provider.get_untracked())
     }
     fn update_state<R>(&self, account: &str, change: impl FnOnce(&mut AccountState) -> R) -> R {
+        if !self.owner_alive() {
+            // Disposed owner: the change runs on a throwaway state so the caller's
+            // result stays defined; nothing is stored or projected.
+            return change(&mut AccountState::default());
+        }
         let key = self.lock_key(account);
         let mut state = self.state_of(&key);
         let out = change(&mut state);
@@ -1241,13 +1253,15 @@ impl ResetCtx {
     }
     fn history_of(&self, account: &str) -> Vec<HistoryEvent> {
         let canonical = self.lock_key(account);
-        self.histories.with_value(|histories| {
-            histories
-                .iter()
-                .find(|(key, _)| key == &canonical)
-                .map(|(_, events)| events.clone())
-                .unwrap_or_default()
-        })
+        self.histories
+            .try_with_value(|histories| {
+                histories
+                    .iter()
+                    .find(|(key, _)| key == &canonical)
+                    .map(|(_, events)| events.clone())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
     }
     #[cfg(test)]
     fn take(&self, account: &str, inv: Inventory, started_ms: f64) {
@@ -1396,6 +1410,9 @@ impl ResetCtx {
     /// A claim or check answer for the canonical account it names. `send` is the claim's own action id: its receipt
     /// records provenance even when a newer snapshot is already admitted (see `reset_state`).
     fn receive(&self, identity: &str, result: &ClaimResult, send: Option<u64>) -> bool {
+        if !self.owner_alive() {
+            return false;
+        }
         if result
             .evidence
             .as_ref()
@@ -1413,6 +1430,9 @@ impl ResetCtx {
         answer: Answer<ClaimResult>,
         received_ms: f64,
     ) {
+        if !self.owner_alive() {
+            return;
+        }
         match answer {
             Answer::Ok(result) => {
                 self.receive(identity, &result, Some(send));
@@ -1435,6 +1455,9 @@ impl ResetCtx {
         send: Option<u64>,
         received_ms: f64,
     ) -> bool {
+        if !self.owner_alive() {
+            return false;
+        }
         let ordered = refusal
             .evidence
             .as_ref()

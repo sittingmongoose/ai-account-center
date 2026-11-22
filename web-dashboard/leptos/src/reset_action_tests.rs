@@ -639,6 +639,8 @@ fn a_check_again_ok_after_owner_cleanup_is_dropped_not_a_panic() {
     let t = trace(false);
     let (rc, canonical, _send, attempt) = Owner::new().with(|| {
         let (rc, canonical) = start(&t);
+        // The server lists the pending attempt, so Check again has a key to ask about.
+        rc.take(ROUTE, inventory(&t, "duringRetry"), 101.);
         let send = rc.begin_send(&canonical, 102.);
         let attempt = rc.unresolved.get_untracked().key.unwrap();
         (rc, canonical, send, attempt)
