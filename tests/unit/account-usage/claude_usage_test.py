@@ -2075,7 +2075,8 @@ class ResetWebInventoryTests(unittest.TestCase):
                 response.__enter__.return_value = response
                 response.read.return_value = b'{"result":"reset"}'
                 self.oauth.opener.open.return_value = response
-                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.assertEqual(usage.reset_host(request),
+                                 {"outcome": "not-sent", "reason": "identity-unconfirmed"})
                 self.oauth.opener.open.assert_not_called()
 
     def test_conflicting_live_cookie_identity_does_not_try_capsule_or_oauth_usage(self):
@@ -2307,7 +2308,10 @@ class ResetWebInventoryTests(unittest.TestCase):
                 self.oauth.opener.open.assert_called_once()
 
     def test_wrong_oauth_or_web_identity_never_reaches_the_offline_claim_opener(self):
-        for location in ("oauth-account", "oauth-org", "web-account", "web-org"):
+        # The web check names the identity mismatch; an OAuth profile that never
+        # confirms this account exhausts the login and names the sign-in.
+        for location, reason in (("oauth-account", "signed-out"), ("oauth-org", "signed-out"),
+                                 ("web-account", "identity-unconfirmed"), ("web-org", "identity-unconfirmed")):
             with self.subTest(location=location):
                 self.oauth.responses = [profile()]
                 self.web.get.side_effect = [self.web_account, self.payload]
@@ -2321,7 +2325,8 @@ class ResetWebInventoryTests(unittest.TestCase):
                     wrong = {**self.web_account, "uuid": OTHER} if location == "web-account" else {
                         **self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}
                     self.web.get.side_effect = [wrong]
-                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.assertEqual(usage.reset_host(request),
+                                 {"outcome": "not-sent", "reason": reason})
                 self.oauth.opener.open.assert_not_called()
 
     def test_web_cookie_without_eligible_oauth_token_cannot_offer_or_claim(self):
@@ -2330,7 +2335,8 @@ class ResetWebInventoryTests(unittest.TestCase):
         self.oauth.opener = mock.Mock()
         self.web.reset_mock()
         self.assertTrue(usage.reset_host(self.request).get("unavailable"))
-        self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+        self.assertEqual(usage.reset_host(request),
+                         {"outcome": "not-sent", "reason": "signed-out"})
         self.web.get.assert_not_called()
         self.oauth.opener.open.assert_not_called()
 
@@ -2354,6 +2360,44 @@ class ResetWebInventoryTests(unittest.TestCase):
                 self.oauth.opener = mock.Mock()
                 self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
                 self.oauth.opener.open.assert_not_called()
+
+    def test_not_sent_names_the_confirmed_refusal_reason(self):
+        # claude-offer-R1-L3: the identity check refuses before any POST; the receipt
+        # carries the allowlisted cause instead of collapsing to a bare "not sent".
+        self.oauth.responses = [profile()]
+        self.web.get.side_effect = [self.web_account, self.payload]
+        request = self.claim_request()
+        self.oauth.responses = [profile()]
+        self.web.get.side_effect = [{**self.web_account, "uuid": OTHER}]
+        self.oauth.opener = mock.Mock()
+        self.assertEqual(usage.reset_host(request),
+                         {"outcome": "not-sent", "reason": "identity-unconfirmed"})
+        self.oauth.opener.open.assert_not_called()
+
+    def test_a_throttled_claim_read_names_rate_limited_not_sent(self):
+        # claude-reset-Sol-L3: a rate-limited pre-POST read is a named not-sent, so the
+        # user can tell throttling from sign-in or identity causes.
+        self.oauth.responses = [profile()]
+        self.web.get.side_effect = [self.web_account, self.payload]
+        request = self.claim_request()
+        self.oauth.responses = [profile(), usage.UsageUnavailable("rate_limited", 1800)]
+        self.web.get.side_effect = usage.UsageUnavailable()
+        self.oauth.opener = mock.Mock()
+        self.assertEqual(usage.reset_host(request),
+                         {"outcome": "not-sent", "reason": "rate-limited"})
+        self.oauth.opener.open.assert_not_called()
+
+    def test_a_signed_out_claim_read_names_the_sign_in_not_sent(self):
+        # claude-reset-Astra-L2: a needs_sign_in read before the POST names sign-in,
+        # so the user can tell it from identity or rate-limit causes.
+        self.oauth.responses = [profile()]
+        self.web.get.side_effect = [self.web_account, self.payload]
+        request = self.claim_request()
+        self.current = (ACCOUNT, cache(token=""))
+        self.oauth.opener = mock.Mock()
+        self.assertEqual(usage.reset_host(request),
+                         {"outcome": "not-sent", "reason": "signed-out"})
+        self.oauth.opener.open.assert_not_called()
 
 
 class ResetCaptureTests(unittest.TestCase):

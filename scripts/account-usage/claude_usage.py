@@ -1780,6 +1780,11 @@ def reset_host(request):
     dispatch = {"started": False}
     result = _reset_host(request, dispatch)
     if request.get("action") == "claim" and not dispatch["started"]:
+        # The refusal keeps its fixed cause so the receipt can say why nothing
+        # was sent; only the allowlisted reasons cross, never provider text.
+        reason = result.get("reason")
+        if reason in set(RESET_LOGIN_REASONS.values()) | {"rate-limited"}:
+            return {"outcome": "not-sent", "reason": reason}
         return {"outcome": "not-sent"}
     return result
 
