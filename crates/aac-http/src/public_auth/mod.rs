@@ -2376,6 +2376,82 @@ mod tests {
         let _ = handle.await;
     }
 
+    #[tokio::test]
+    async fn settings_preference_write_conflict_preserves_both_clients() {
+        let (home, addr, handle) = settings_server().await;
+        let first = format!(
+            "Origin: http://{addr}\r\nContent-Type: application/json\r\nCookie: {}\r\n",
+            login(addr).await
+        );
+        let second = format!(
+            "Origin: http://{addr}\r\nContent-Type: application/json\r\nCookie: {}\r\n",
+            login(addr).await
+        );
+        let path = "/api/accounts/preferences";
+        let zone = request(
+            addr,
+            path,
+            "PATCH",
+            &first,
+            r#"{"timeZone":"Europe/Paris"}"#,
+        )
+        .await;
+        assert!(zone.starts_with("HTTP/1.1 200"), "{zone}");
+
+        // Keep the registry lease held while the second client attempts a save.
+        let rows = aac_files::registry::rows().unwrap();
+        let owners = native_settings::owners();
+        let held = owners
+            .claim(rows, "dashboard-preferences", home.path(), None)
+            .unwrap();
+        let body = r#"{"snapshotCleanup":{"auto":false}}"#;
+        let refused = request(addr, path, "PATCH", &second, body).await;
+        assert!(refused.starts_with("HTTP/1.1 409"), "{refused}");
+        assert!(
+            refused.contains(r#""code":"preferences_busy""#),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("Another preferences save is in progress. Try again."),
+            "{refused}"
+        );
+        assert!(refused.contains("cache-control: no-store"), "{refused}");
+        let unchanged = request(addr, path, "GET", &first, "").await;
+        assert!(
+            unchanged.contains(r#""snapshotCleanup":{"auto":true}"#),
+            "{unchanged}"
+        );
+        drop(held);
+
+        // Contention on a later lease in the acquisition sequence must also return 409 and
+        // release any earlier lease taken during the failed attempt.
+        let held_txn = owners
+            .claim(rows, "dashboard-preferences-transaction", home.path(), None)
+            .unwrap();
+        let refused_txn = request(addr, path, "PATCH", &second, body).await;
+        assert!(refused_txn.starts_with("HTTP/1.1 409"), "{refused_txn}");
+        assert!(
+            refused_txn.contains(r#""code":"preferences_busy""#),
+            "{refused_txn}"
+        );
+        let primary_free = owners
+            .claim(rows, "dashboard-preferences", home.path(), None)
+            .unwrap();
+        drop(primary_free);
+        drop(held_txn);
+
+        let saved = request(addr, path, "PATCH", &second, body).await;
+        assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+        let reread = request(addr, path, "GET", &first, "").await;
+        assert!(
+            reread.contains(r#""timeZone":"Europe/Paris""#)
+                && reread.contains(r#""snapshotCleanup":{"auto":false}"#),
+            "{reread}"
+        );
+        handle.abort();
+        let _ = handle.await;
+    }
+
     /// The cut's own settings, preferences and visibility routes: the TS admission sentences
     /// and the files the existing owners write.
     #[tokio::test]
