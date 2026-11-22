@@ -343,6 +343,34 @@ test('a failed service is never a live reading of that service, so its missing p
   assert.equal(antigravityMissingWindow(failedT3, 'new-pool'), 'Not reported');
 });
 
+test('a spend-only, extra-usage-only or passed-reset reading is not live, so missing pools stay Unavailable', () => {
+  // The Mac tray's isMeter rule: amounts (balance, spend, extra_usage) are not meters, and a
+  // reading sampled before its reset no longer describes the window (resetPassed). Neither
+  // proves Google reported no such quota, so an extra pool cell must not read "Not reported".
+  const plan = { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true };
+  const amountOnly = (id, kind) => account(id, plan, [
+    { ...window('cli-gemini-5h'), kind },
+    { ...window('gemini-5h'), kind },
+  ]);
+  const passedReset = account('passed-reset', plan, [
+    { ...window('cli-gemini-5h'), resetPassed: true },
+    { ...window('gemini-5h'), resetPassed: true },
+  ]);
+  for (const row of [amountOnly('spend-only', 'spend'), amountOnly('extra-only', 'extra_usage'), passedReset]) {
+    assert.equal(antigravityMissingWindow(row, 'cli-new-pool'), 'Unavailable');
+    assert.equal(antigravityMissingWindow(row, 'new-pool'), 'Unavailable');
+  }
+  // A live meter beside an amount or a passed-reset window still reports the extra pool.
+  const live = account('live', plan, [
+    window('cli-gemini-5h'),
+    { ...window('cli-gemini-weekly'), kind: 'spend' },
+    { ...window('gemini-5h'), resetPassed: true },
+    window('gemini-weekly'),
+  ]);
+  assert.equal(antigravityMissingWindow(live, 'cli-new-pool'), 'Not reported');
+  assert.equal(antigravityMissingWindow(live, 'new-pool'), 'Not reported');
+});
+
 test('an app-only row never adds app columns to Home, even listed first', () => {
   const plan = { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true };
   const appOnly = account('app-only', plan, tonightApp);

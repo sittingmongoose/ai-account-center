@@ -49,9 +49,12 @@ export function antigravityMissingWindow(account, key) {
   return 'Unavailable';
 }
 function antigravityHasLiveReading(account, service) {
+  // The Mac tray's isMeter rule: amounts (balance, spend, extra_usage) are not meters, and a
+  // reading whose reset has passed no longer describes the window. Neither is a live reading.
   return account?.status === 'ok'
     && visibleUsageWindows('antigravity', account.windows)
-      .some(window => window.kind !== 'balance' && window.status !== 'cached' && window.cached !== true
+      .some(window => !['balance', 'spend', 'extra_usage'].includes(window.kind) && window.resetPassed !== true
+        && window.status !== 'cached' && window.cached !== true
         && window.status !== 'unavailable' && antigravityService(window.key) === service);
 }
 const SERVICE_NAMES = { cli: 'T3 (Antigravity CLI)', app: 'The Antigravity app' };
