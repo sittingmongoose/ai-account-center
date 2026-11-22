@@ -3,6 +3,7 @@ export function createResetHints(win) {
   const listeners = new Set(), seen = new Set();
   const key = 'aac-reset-claims-changed', type = 'reset-claims-changed';
   let socket, channel, retry, stopped = true, serial = 0;
+  let live = false, opened = false, delay = 1000;
   const notify = () => { for (const listener of listeners) listener(); };
   const nextId = () => `${Date.now()}:${++serial}:${Math.random()}`;
   const remember = (id) => {
@@ -27,25 +28,36 @@ export function createResetHints(win) {
     if (event.key !== key) return;
     try { receive(JSON.parse(event.newValue)); } catch { notify(); }
   };
+  const reconnect = () => {
+    retry = win.setTimeout(connect, delay);
+    delay = Math.min(delay * 2, 30000);
+  };
   const connect = () => {
     if (stopped) return;
+    opened = false;
     try {
       socket = new win.WebSocket(`${win.location.protocol === 'https:' ? 'wss' : 'ws'}://${win.location.host}/ws`);
-      socket.onopen = notify; // Reconnect reads through any missed events.
+      socket.onopen = () => { opened = true; live = true; delay = 1000; notify(); }; // Reconnect reads through any missed events.
       socket.onmessage = (event) => {
         try { receive(JSON.parse(event.data), true); } catch { /* Not a reset hint. */ }
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         notify();
-        if (!stopped) retry = win.setTimeout(connect, 1000);
+        if (stopped) return;
+        // Signed out (the server's 4001), or an upgrade refused before any live session: the page's
+        // signed-out handling takes over; another attempt would only log one more refusal.
+        if (event?.code === 4001 || (!opened && !live)) { stopped = true; return; }
+        reconnect();
       };
     } catch {
       notify();
-      retry = win.setTimeout(connect, 1000);
+      reconnect();
     }
   };
   const start = () => {
     stopped = false;
+    live = false;
+    delay = 1000;
     try {
       channel = new win.BroadcastChannel(key);
       channel.onmessage = (event) => receive(event.data);

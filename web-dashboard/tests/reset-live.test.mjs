@@ -10,7 +10,8 @@ function browserPair({ channel = true } = {}) {
     win.document.visibilityState = 'visible';
     win.location = { protocol: 'https:', host: 'synthetic.invalid' };
     win.timers = new Map();
-    win.setTimeout = (fn) => { const id = Symbol(); win.timers.set(id, fn); return id; };
+    win.delays = [];
+    win.setTimeout = (fn, ms) => { const id = Symbol(); win.timers.set(id, fn); win.delays.push(ms); return id; };
     win.clearTimeout = (id) => win.timers.delete(id);
     win.sockets = [];
     win.WebSocket = class {
@@ -96,4 +97,62 @@ test('a server hint relays once to browser peers even when their own sockets hav
   b.sockets[0].onmessage({data});
   assert.equal(first,1); assert.equal(second,1); // A delayed WS copy cannot re-fence a recovered view.
   stopA(); stopB();
+});
+
+test('a signed-out close stops the reconnect: the page\'s signed-out handling takes over', () => {
+  const { browser } = browserPair(); const win = browser(); let fences = 0;
+  const bus = createResetHints(win); const stop = bus.subscribe(() => fences++);
+  win.sockets[0].onopen();
+  win.sockets[0].onclose({ code: 4001, reason: 'Signed out', wasClean: true });
+  assert.equal(fences, 2);
+  assert.equal(win.timers.size, 0);
+  for (const type of ['focus', 'online']) win.dispatchEvent(new Event(type));
+  assert.equal(win.sockets.length, 1);
+  stop();
+});
+test('an upgrade refused before any live session stops the reconnect', () => {
+  const { browser } = browserPair(); const win = browser();
+  const bus = createResetHints(win); const stop = bus.subscribe(() => {});
+  win.sockets[0].onclose({ code: 1006, wasClean: false });
+  assert.equal(win.timers.size, 0);
+  win.dispatchEvent(new Event('online'));
+  assert.equal(win.sockets.length, 1);
+  stop();
+});
+test('a live drop backs off instead of retrying every second', () => {
+  const { browser } = browserPair(); const win = browser();
+  const bus = createResetHints(win); const stop = bus.subscribe(() => {});
+  win.sockets[0].onopen();
+  const drop = () => {
+    win.sockets.at(-1).onclose({ code: 1006, wasClean: false });
+    assert.equal(win.timers.size, 1);
+    for (const [id, fn] of win.timers) { win.timers.delete(id); fn(); }
+  };
+  for (let i = 0; i < 7; i++) drop();
+  assert.deepEqual(win.delays, [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
+  assert.equal(win.sockets.length, 8);
+  win.sockets.at(-1).onopen();
+  win.sockets.at(-1).onclose({ code: 1006, wasClean: false });
+  assert.equal(win.delays.at(-1), 1000);
+  stop();
+});
+test('a dropped connection on a live session still reconnects', () => {
+  const { browser } = browserPair(); const win = browser(); let fences = 0;
+  const bus = createResetHints(win); const stop = bus.subscribe(() => fences++);
+  win.sockets[0].onopen();
+  win.sockets[0].onmessage({ data: JSON.stringify({ type: 'reset-claims-changed', id: 'live-1' }) });
+  assert.equal(fences, 2);
+  win.sockets[0].onclose({ code: 1006, wasClean: false });
+  assert.equal(win.timers.size, 1);
+  for (const [id, fn] of win.timers) { win.timers.delete(id); fn(); }
+  assert.equal(win.sockets.length, 2);
+  // The first retry misses (the server is still down): a live session keeps trying, with back-off.
+  win.sockets[1].onclose({ code: 1006, wasClean: false });
+  assert.equal(win.delays.at(-1), 2000);
+  for (const [id, fn] of win.timers) { win.timers.delete(id); fn(); }
+  assert.equal(win.sockets.length, 3);
+  win.sockets[2].onopen();
+  win.sockets[2].onmessage({ data: JSON.stringify({ type: 'reset-claims-changed', id: 'live-2' }) });
+  assert.equal(fences, 6);
+  stop();
 });
