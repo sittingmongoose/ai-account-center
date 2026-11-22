@@ -101,8 +101,8 @@ if case != "empty":
     put_json(release_dir / ".install-complete.json", record)
 
     if platform == "windows":
-        command_file(folders[0] / "agy.exe", "agy 1.8.5")
-        command_file(folders[0] / "claude.exe", "2.3.51 (Claude Code)")
+        command_file(folders[0] / "agy.exe", "agy 0.50.0-alpha-1")
+        command_file(folders[0] / "claude.exe", "0.50.0+build.1 (Claude Code)")
         put(folders[0] / "omp.cmd")
         put(folders[2] / "muse.cmd")
         put(folders[2] / ".muse-launcher.ps1")
@@ -138,7 +138,7 @@ if case != "empty":
         else:
             put(folder / "index.js")
     else:
-        for name, release in (("agy", "1.7.2"), ("muse", "0.23.8"), ("omp", "16.2.7"),
+        for name, release in (("agy", "1.7.2"), ("muse", "0.50.0-alpha-1"), ("omp", "0.50.0+build.1"),
                               ("codex", "0.124.0"), ("claude", "2.3.51")):
             command_file(folders[1] / name, "{} {}".format(name, release))
         default = (system / "opt/homebrew" if platform == "mac" else home / ".local") / "lib/node_modules"

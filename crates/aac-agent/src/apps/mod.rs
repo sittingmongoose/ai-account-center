@@ -211,7 +211,7 @@ fn read_json(path: &Path, cap: u64) -> Option<Value> {
 }
 
 static VERSION: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"[0-9]+\.[0-9]+(?:\.[0-9]+){0,3}(?:-[A-Za-z0-9.]+)?")
+    regex::Regex::new(r"[0-9]+\.[0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.+-]+)?")
         .expect("app version pattern")
 });
 
@@ -219,7 +219,17 @@ fn version(text: Option<&str>) -> Option<String> {
     let text = text.filter(|text| text.len() <= 65_536)?;
     // A greedy match already consumes the trailing ASCII digits. It starts at the
     // beginning of the leftmost run that can satisfy the Python version expression.
-    VERSION.find(text).map(|value| value.as_str().to_owned())
+    // The regex crate has no look-around, so Python's `(?<!\d)` / `(?![0-9])`
+    // guards are applied on the match bounds.
+    let value = VERSION.find(text)?;
+    let bytes = text.as_bytes();
+    if value.start() > 0 && bytes[value.start() - 1].is_ascii_digit() {
+        return None;
+    }
+    if value.end() < bytes.len() && bytes[value.end()].is_ascii_digit() {
+        return None;
+    }
+    Some(value.as_str().to_owned())
 }
 
 fn checked_version(value: Option<&str>, pattern: &regex::Regex, max: usize) -> Option<String> {
