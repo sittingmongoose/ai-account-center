@@ -1068,7 +1068,9 @@ pub struct ResetCtx {
     /// The shown account's lock, projected from server evidence and unanswered sends.
     pub unresolved: RwSignal<Unresolved>,
     pub token_until: RwSignal<Option<f64>>,
-    pub checking: RwSignal<bool>,
+    /// The live Check again ticket: `(identity, check id)`. Busy means the ticket names the
+    /// shown account's identity, never another account's.
+    pub checking: RwSignal<Option<(String, u64)>>,
     /// The last good inventory per account, with when its read started (a reopen within a minute reuses it).
     cache: StoredValue<Vec<(String, f64, Inventory)>>,
     /// Canonical account state survives navigation and saved-profile reassignment.
@@ -1076,6 +1078,7 @@ pub struct ResetCtx {
     aliases: StoredValue<Vec<(String, String, u64)>>,
     read_epoch: StoredValue<u64>,
     action_id: StoredValue<u64>,
+    check_id: StoredValue<u64>,
     notice: RwSignal<Option<Said>>,
     older: RwSignal<Vec<String>>,
     histories: StoredValue<Vec<(String, Vec<HistoryEvent>)>>,
@@ -1093,12 +1096,13 @@ impl ResetCtx {
             said: RwSignal::new(None),
             unresolved: RwSignal::new(Unresolved::default()),
             token_until: RwSignal::new(None),
-            checking: RwSignal::new(false),
+            checking: RwSignal::new(None),
             cache: StoredValue::new(vec![]),
             states: StoredValue::new(vec![]),
             aliases: StoredValue::new(vec![]),
             read_epoch: StoredValue::new(0),
             action_id: StoredValue::new(0),
+            check_id: StoredValue::new(0),
             notice: RwSignal::new(None),
             older: RwSignal::new(vec![]),
             histories: StoredValue::new(vec![]),
@@ -1668,8 +1672,43 @@ impl ResetCtx {
             me.refresh();
         });
     }
+    /// Start a check for `identity`: store its monotonic ticket before the read spawns.
+    fn begin_check(&self, identity: &str) -> u64 {
+        let id = self.check_id.get_value() + 1;
+        self.check_id.set_value(id);
+        self.checking.set(Some((identity.into(), id)));
+        id
+    }
+    /// Retire this check's ticket on every completion path, before any navigation early-return.
+    /// Only the still-current ticket for the same identity clears: a stale answer must not clear
+    /// a newer check, and a disposed owner is never touched.
+    fn retire_check(&self, identity: &str, id: u64) {
+        let _ = self.checking.try_update(|ticket| {
+            if ticket
+                .as_ref()
+                .is_some_and(|(who, n)| who == identity && *n == id)
+            {
+                *ticket = None;
+            }
+        });
+    }
+    /// The live ticket when it names the shown account's identity; `None` for every other account.
+    pub fn check_ticket(&self) -> Option<(String, u64)> {
+        let identity = self.lock_key(&self.account.get_untracked());
+        self.checking
+            .try_get_untracked()
+            .flatten()
+            .filter(|(who, _)| *who == identity)
+    }
+    /// Reactive busy read for the button and the pending line: the ticket names this account.
+    pub fn check_busy(&self) -> bool {
+        let identity = self.lock_key(&self.account.get());
+        self.checking.get().is_some_and(|(who, _)| who == identity)
+    }
     pub fn check_again(&self) {
-        if self.checking.get_untracked() {
+        let account = self.account.get_untracked();
+        let identity = self.lock_key(&account);
+        if self.check_ticket().is_some() {
             return;
         }
         let Some(attempt) = self.unresolved.with_untracked(|u| u.key.clone()) else {
@@ -1677,9 +1716,7 @@ impl ResetCtx {
             return;
         };
         let me = *self;
-        let account = self.account.get_untracked();
-        let identity = self.lock_key(&account);
-        self.checking.set(true);
+        let id = self.begin_check(&identity);
         spawn_local(async move {
             match check(&account, &attempt).await {
                 Answer::Ok(result) if result.attempt_key == attempt => {
@@ -1690,12 +1727,14 @@ impl ResetCtx {
                 }
                 _ => {}
             }
+            // Every completion path retires this request's own ticket, even when navigation
+            // moved the page on: the busy state belongs to the request, not the page.
+            me.retire_check(&identity, id);
             if me.account.try_get_untracked().as_deref() != Some(account.as_str())
                 || me.lock_key(&account) != identity
             {
                 return;
             }
-            me.checking.set(false);
             me.refresh();
         });
     }
@@ -1774,9 +1813,9 @@ pub fn ResetsGroup(
                     <span>{s.text.clone()}{move || rc.token_until.get().map(|until| format!(" Unconsumed claim tokens expire by {}. Check again then.", when(until)))}</span>
                     {show_check.then(|| view! {
                         <button type="button" class="btn sm" data-probe="resets-check"
-                            disabled=move || rc.checking.get()
+                            disabled=move || rc.check_busy()
                             on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); rc.check_again(); }>
-                            {move || if rc.checking.get() { "Checking\u{2026}" } else { "Check again" }}
+                            {move || if rc.check_busy() { "Checking\u{2026}" } else { "Check again" }}
                         </button>
                     })}
                 </div>
