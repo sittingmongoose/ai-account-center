@@ -185,7 +185,10 @@ function churningStore(catalogOnly = false) {
       if (method !== 'runsQuery') throw new Error(`unexpected method ${method}`);
       calls += 1;
       if (calls > 40) throw new Error('churn sentinel: the query never settled');
-      const { after } = JSON.parse(args) as { after: [number, number] | null };
+      const { after, includeReceipts } = JSON.parse(args) as {
+        after: [number, number] | null;
+        includeReceipts?: boolean;
+      };
       if (after === null) firstPages += 1;
       else if (churn) {
         if (catalogOnly) catalogHash = catalogHash === CATALOG ? MOVED_CATALOG : CATALOG;
@@ -200,7 +203,9 @@ function churningStore(catalogOnly = false) {
         skipped: 0,
         generation,
         catalogHash,
-        ...(after === null ? { problems: [], accepted: [] } : {}),
+        ...(after === null
+          ? { problems: [], ...(includeReceipts === true ? { accepted: [row(rows[0])] } : {}) }
+          : {}),
       });
     },
   };
@@ -244,6 +249,8 @@ describe('a paged read terminates while imports continue (review M1)', () => {
     const store = storeWith(script.handle, () => now);
     const first = await store.query({});
     expect(first.length).toBe(5001);
+    const firstState = await store.state({});
+    expect(firstState.runs.length).toBe(5001);
     script.startChurn();
     now = 5000;
     const runs = await store.query({});
@@ -256,6 +263,7 @@ describe('a paged read terminates while imports continue (review M1)', () => {
     // The answer says it was read up to the retained snapshot, not the later clock.
     expect(state.scannedAt).toBe(1000);
     expect(state.runs.length).toBe(5001);
+    expect(state.accepted?.length).toBe(1);
     expect(
       state.problems.some(
         (problem) => problem.file === 'store/read' && /generation 1/.test(problem.reason)
@@ -279,5 +287,38 @@ describe('a paged read terminates while imports continue (review M1)', () => {
     };
     const state = await storeWith(handle, () => now).state({});
     expect(state.scannedAt).toBe(1000);
+  });
+
+  it('keeps state() receipts reads separate from plain query() reads in the fallback cache', async () => {
+    // state() warms includeReceipts=true; a plain query() with identical filters must not reuse it.
+    const receiptsFirst = churningStore();
+    const storeA = storeWith(receiptsFirst.handle, () => 1000);
+    const warmedState = await storeA.state({ reviewsOnly: true });
+    expect(warmedState.accepted?.length).toBe(1);
+    receiptsFirst.startChurn();
+    await expect(storeA.query({ reviewsOnly: true })).rejects.toThrow(/store_moving/);
+
+    // Plain query() warms includeReceipts=false; state() must not reuse it and drop receipts.
+    const queryFirst = churningStore();
+    const storeB = storeWith(queryFirst.handle, () => 1000);
+    expect((await storeB.query({ reviewsOnly: true })).length).toBe(5001);
+    queryFirst.startChurn();
+    await expect(storeB.state({ reviewsOnly: true })).rejects.toThrow(/store_moving/);
+
+    // Warming both keeps each cached read under its own includeReceipts key.
+    const both = churningStore();
+    let now = 1000;
+    const storeC = storeWith(both.handle, () => now);
+    await storeC.query({ reviewsOnly: true });
+    now = 2000;
+    await storeC.state({ reviewsOnly: true });
+    both.startChurn();
+    now = 5000;
+    const fallbackRuns = await storeC.query({ reviewsOnly: true });
+    expect(fallbackRuns.length).toBe(5001);
+    const fallbackState = await storeC.state({ reviewsOnly: true });
+    expect(fallbackState.scannedAt).toBe(2000);
+    expect(fallbackState.accepted?.length).toBe(1);
+    expect(fallbackState.problems.some((problem) => problem.file === 'store/read')).toBe(true);
   });
 });

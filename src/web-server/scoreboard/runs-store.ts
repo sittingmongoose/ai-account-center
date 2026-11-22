@@ -283,6 +283,7 @@ export class RunsStore {
       query.source ?? null,
       query.taskType ?? null,
       query.reviewsOnly ?? false,
+      query.includeReceipts ?? false,
     ]);
     const store = this.deps.store();
     if (!store)
