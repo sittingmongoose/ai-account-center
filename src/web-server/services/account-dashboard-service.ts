@@ -33,7 +33,6 @@ import { usesAccountRegistry } from './account-registry-mode';
 import {
   migrateAccountVisibilityIds,
   readAccountVisibility,
-  replaceVisibilityAccountIds,
   VisibilityMemory,
   type AccountVisibilityRead,
   type AccountVisibilityUpdateResult,
@@ -169,10 +168,10 @@ const MAX_SCOPES = 16;
 const VISIBILITY_BUDGET_FLOOR_MS = 250;
 
 /**
- * Find unambiguous `<bare discover id> -> <digest row id>` migrations for `opencode-go` rows:
- * present only when the bare id is absent from `accounts` and maps to exactly one expanded row.
+ * Expanded digest row ids observed per bare `opencode-go` discover id (deduplicated),
+ * excluding any bare id that is still present itself in `accounts`.
  */
-function uniqueDiscoveredOpencodeIds(accounts: readonly DashboardAccount[]): Map<string, string> {
+function discoveredOpencodeDigests(accounts: readonly DashboardAccount[]): Map<string, string[]> {
   const present = new Set<string>();
   const candidates = new Map<string, string[]>();
   for (const account of accounts) {
@@ -181,25 +180,55 @@ function uniqueDiscoveredOpencodeIds(accounts: readonly DashboardAccount[]): Map
     const parent = discoveredOpencodeGoParentId(account.id);
     if (!parent) continue;
     const group = candidates.get(parent);
-    if (group) group.push(account.id);
-    else candidates.set(parent, [account.id]);
+    if (!group) candidates.set(parent, [account.id]);
+    else if (!group.includes(account.id)) group.push(account.id);
   }
-  const unique = new Map<string, string>();
+  const result = new Map<string, string[]>();
   for (const [parent, ids] of candidates) {
-    if (!present.has(parent) && ids.length === 1) unique.set(parent, ids[0]);
+    if (!present.has(parent)) result.set(parent, ids);
   }
-  return unique;
+  return result;
 }
 
-function hasMigratableIds(
+function visibilityContainsAccountId(
   visibility: { hiddenAccountIds: readonly string[]; trayHiddenAccountIds: readonly string[] },
-  replacements: ReadonlyMap<string, string>
+  id: string
 ): boolean {
-  if (replacements.size === 0) return false;
-  return (
-    visibility.hiddenAccountIds.some((id) => replacements.has(id)) ||
-    visibility.trayHiddenAccountIds.some((id) => replacements.has(id))
-  );
+  return visibility.hiddenAccountIds.includes(id) || visibility.trayHiddenAccountIds.includes(id);
+}
+
+/**
+ * Resolve unambiguous `<bare discover id> -> <digest row id>` migrations for bare ids still
+ * present in `visibility`. Once a bare id has been seen with a digest key, never retarget it
+ * to a different key or after multiple keys appear; entries clear once the bare id leaves
+ * `visibility`.
+ */
+function selectOpencodeMigrations(
+  visibility: { hiddenAccountIds: readonly string[]; trayHiddenAccountIds: readonly string[] },
+  accounts: readonly DashboardAccount[],
+  observed: Map<string, string | null>
+): Map<string, string> {
+  for (const parent of [...observed.keys()]) {
+    if (!visibilityContainsAccountId(visibility, parent)) observed.delete(parent);
+  }
+  const migrations = new Map<string, string>();
+  for (const [parent, digests] of discoveredOpencodeDigests(accounts)) {
+    if (!visibilityContainsAccountId(visibility, parent)) continue;
+    if (digests.length === 1) {
+      const [only] = digests;
+      if (!observed.has(parent)) {
+        observed.set(parent, only);
+        migrations.set(parent, only);
+      } else if (observed.get(parent) === only) {
+        migrations.set(parent, only);
+      } else {
+        observed.set(parent, null);
+      }
+    } else if (digests.length > 1) {
+      observed.set(parent, null);
+    }
+  }
+  return migrations;
 }
 
 /**
@@ -265,8 +294,28 @@ export class AccountDashboardService {
   /** Last known "Sign-in needed" computers per Claude manifest entry, kept across collections. */
   private readonly claudeSignIn = new Map<string, Set<ClaudeDashboardPlatform>>();
   private readonly visibility = new VisibilityMemory(MAX_SCOPES);
+  /**
+   * Per-scope bare OpenCode Go discover ids seen while still unmigrated in visibility:
+   * a digest string locks the bare id to its first sole target; `null` marks it ambiguous
+   * once multiple keys or a different key appear.
+   */
+  private readonly opencodeBareTargets = new Map<string, Map<string, string | null>>();
 
   constructor(private readonly deps: AccountDashboardDeps = {}) {}
+
+  private opencodeTargetsFor(scope: string): Map<string, string | null> {
+    let observed = this.opencodeBareTargets.get(scope);
+    if (!observed) {
+      observed = new Map();
+      this.opencodeBareTargets.set(scope, observed);
+      while (this.opencodeBareTargets.size > MAX_SCOPES) {
+        const oldest = this.opencodeBareTargets.keys().next().value;
+        if (oldest === undefined) break;
+        this.opencodeBareTargets.delete(oldest);
+      }
+    }
+    return observed;
+  }
 
   private claudeTarget(scope: string, profile: ClaudeDesktopProfile): UsageFailoverTarget {
     const primarySources: UsagePrimarySource[] = [];
@@ -948,40 +997,40 @@ export class AccountDashboardService {
       ...(registeredAntigravity ? state.antigravity : []),
     ];
     let effectiveVisibility = visibility;
-    const uniqueOpencodeIds = uniqueDiscoveredOpencodeIds(accounts);
-    if (visibilityReadOk && hasMigratableIds(visibility, uniqueOpencodeIds)) {
-      const migrate =
-        this.deps.migrateVisibility ??
-        (this.deps.readVisibility
-          ? undefined
-          : (dir: string, replacements: ReadonlyMap<string, string>) =>
-              migrateAccountVisibilityIds(dir, replacements));
-      if (migrate) {
-        try {
-          const migrated = await migrate(scope, uniqueOpencodeIds);
-          if (migrated.state === 'saved') {
-            effectiveVisibility = this.visibility.record(scope, {
-              state: 'ok',
-              visibility: migrated.visibility,
-            });
+    if (visibilityReadOk) {
+      const observed = this.opencodeTargetsFor(scope);
+      const migrations = selectOpencodeMigrations(visibility, accounts, observed);
+      if (migrations.size > 0) {
+        const migrate =
+          this.deps.migrateVisibility ??
+          (this.deps.readVisibility
+            ? undefined
+            : (dir: string, replacements: ReadonlyMap<string, string>) =>
+                migrateAccountVisibilityIds(dir, replacements));
+        if (migrate) {
+          try {
+            const migrated = await migrate(scope, migrations);
+            if (migrated.state === 'saved') {
+              effectiveVisibility = this.visibility.record(scope, {
+                state: 'ok',
+                visibility: migrated.visibility,
+              });
+              for (const parent of [...observed.keys()]) {
+                if (!visibilityContainsAccountId(effectiveVisibility, parent)) {
+                  observed.delete(parent);
+                }
+              }
+            }
+          } catch {
+            /* Persistence could not complete (lease busy or write failed); stay visible. */
           }
-        } catch {
-          /* Best-effort persistence: another process may own the visibility file. */
         }
       }
     }
     const hiddenProviders = new Set<string>(effectiveVisibility.hiddenProviders);
     const trayHiddenProviders = new Set<string>(effectiveVisibility.trayHiddenProviders);
-    const carriedHiddenAccountIds = replaceVisibilityAccountIds(
-      effectiveVisibility.hiddenAccountIds,
-      uniqueOpencodeIds
-    ).list;
-    const carriedTrayHiddenAccountIds = replaceVisibilityAccountIds(
-      effectiveVisibility.trayHiddenAccountIds,
-      uniqueOpencodeIds
-    ).list;
-    const hiddenAccountIds = new Set(carriedHiddenAccountIds);
-    const trayHiddenAccountIds = new Set(carriedTrayHiddenAccountIds);
+    const hiddenAccountIds = new Set(effectiveVisibility.hiddenAccountIds);
+    const trayHiddenAccountIds = new Set(effectiveVisibility.trayHiddenAccountIds);
     const server = (this.deps.serverInfo ?? getDashboardServerInfo)();
     const claudeSignIns = await (
       this.deps.claudeSignIns ?? (() => readClaudeSignInRenewal())
@@ -1065,9 +1114,9 @@ export class AccountDashboardService {
       settings: {
         refreshIntervalSeconds,
         hiddenProviders: [...effectiveVisibility.hiddenProviders],
-        hiddenAccountIds: carriedHiddenAccountIds,
+        hiddenAccountIds: [...effectiveVisibility.hiddenAccountIds],
         trayHiddenProviders: [...effectiveVisibility.trayHiddenProviders],
-        trayHiddenAccountIds: carriedTrayHiddenAccountIds,
+        trayHiddenAccountIds: [...effectiveVisibility.trayHiddenAccountIds],
         visibilityAvailable: effectiveVisibility.available,
       },
       providers: buildDashboardProviders(

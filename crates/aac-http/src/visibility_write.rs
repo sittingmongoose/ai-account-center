@@ -105,7 +105,13 @@ pub(crate) fn migrate_account_ids(
     let rows = registry::rows().map_err(|_| Decline::Internal)?;
     let store = owners
         .claim(rows, "account-visibility", root, None)
-        .map_err(|_| Decline::Unsupported)?;
+        .map_err(|error| {
+            if error.cause == Cause::Busy {
+                Decline::Busy
+            } else {
+                Decline::Unsupported
+            }
+        })?;
     let Some(current) = visibility(root) else {
         return Ok(None);
     };
@@ -347,6 +353,18 @@ mod tests {
             })
             .collect();
         let owners = Owners::from_boot(rows, &files).expect("owners");
+
+        // Returns Busy without modifying the file while another holder owns the lease.
+        let bytes_before = fs::read(&file).expect("read initial bytes");
+        let held = owners
+            .claim(rows, "account-visibility", dir.path(), None)
+            .expect("hold lease");
+        assert!(matches!(
+            migrate_account_ids(dir.path(), &owners, &replacements),
+            Err(Decline::Busy)
+        ));
+        assert_eq!(fs::read(&file).expect("read busy bytes"), bytes_before);
+        drop(held);
 
         let migrated = migrate_account_ids(dir.path(), &owners, &replacements)
             .expect("migrate")

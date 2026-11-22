@@ -13,8 +13,10 @@ import {
 } from '../../../src/web-server/services/account-dashboard-service';
 import {
   readAccountVisibility,
+  replaceVisibilityAccountIds,
   writeAccountVisibility,
 } from '../../../src/web-server/services/account-visibility';
+import { claimFileLease } from '../../../src/shared/private-file-lease';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 import { antigravityPlanDisplay } from '../../../src/antigravity/plan';
 import type { AntigravityDashboardAccount } from '../../../src/antigravity/usage-contract';
@@ -1800,11 +1802,28 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
     };
   }
 
-  it('carries a bare opencode-go hide choice to a unique digest row independently for Home and trays', async () => {
+  it('carries a bare opencode-go hide choice to a unique digest row only when saved, independently for Home and trays', async () => {
     const namedOne = opencodeRow('opencode-go:acct:11111111', 'Key 1');
     const namedTwo = opencodeRow('opencode-go:acct:22222222', 'Key 2');
     const unnamed = opencodeRow('opencode-go:usage:cccccccc', 'Key cccccccc');
 
+    const saveMigration =
+      (initial: { hiddenAccountIds: string[]; trayHiddenAccountIds: string[] }) =>
+      async (_dir: string, replacements: ReadonlyMap<string, string>) => ({
+        state: 'saved' as const,
+        visibility: {
+          hiddenProviders: [],
+          hiddenAccountIds: replaceVisibilityAccountIds(initial.hiddenAccountIds, replacements)
+            .list,
+          trayHiddenProviders: [],
+          trayHiddenAccountIds: replaceVisibilityAccountIds(
+            initial.trayHiddenAccountIds,
+            replacements
+          ).list,
+        },
+      });
+
+    const homeOnlyInitial = { hiddenAccountIds: ['opencode-go:usage'], trayHiddenAccountIds: [] };
     const homeOnly = await new AccountDashboardService(
       deps({
         getAdditionalAccounts: async () => [namedOne, namedTwo, unnamed],
@@ -1812,11 +1831,11 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
           state: 'ok',
           visibility: {
             hiddenProviders: [],
-            hiddenAccountIds: ['opencode-go:usage'],
+            ...homeOnlyInitial,
             trayHiddenProviders: [],
-            trayHiddenAccountIds: [],
           },
         }),
+        migrateVisibility: saveMigration(homeOnlyInitial),
       })
     ).get();
     expect(homeOnly.settings.hiddenAccountIds).toEqual(['opencode-go:usage:cccccccc']);
@@ -1830,6 +1849,7 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
       trayHidden: false,
     });
 
+    const trayOnlyInitial = { hiddenAccountIds: [], trayHiddenAccountIds: ['opencode-go:usage'] };
     const trayOnly = await new AccountDashboardService(
       deps({
         getAdditionalAccounts: async () => [namedOne, namedTwo, unnamed],
@@ -1837,11 +1857,11 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
           state: 'ok',
           visibility: {
             hiddenProviders: [],
-            hiddenAccountIds: [],
+            ...trayOnlyInitial,
             trayHiddenProviders: [],
-            trayHiddenAccountIds: ['opencode-go:usage'],
           },
         }),
+        migrateVisibility: saveMigration(trayOnlyInitial),
       })
     ).get();
     expect(trayOnly.settings.hiddenAccountIds).toEqual([]);
@@ -1851,6 +1871,10 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
       trayHidden: true,
     });
 
+    const bothInitial = {
+      hiddenAccountIds: ['codex:party', 'opencode-go:usage', 'opencode-go:usage:cccccccc'],
+      trayHiddenAccountIds: ['opencode-go:usage'],
+    };
     const both = await new AccountDashboardService(
       deps({
         getAdditionalAccounts: async () => [namedOne, namedTwo, unnamed],
@@ -1858,11 +1882,11 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
           state: 'ok',
           visibility: {
             hiddenProviders: [],
-            hiddenAccountIds: ['codex:party', 'opencode-go:usage', 'opencode-go:usage:cccccccc'],
+            ...bothInitial,
             trayHiddenProviders: [],
-            trayHiddenAccountIds: ['opencode-go:usage'],
           },
         }),
+        migrateVisibility: saveMigration(bothInitial),
       })
     ).get();
     expect(both.settings.hiddenAccountIds).toEqual(['codex:party', 'opencode-go:usage:cccccccc']);
@@ -1871,6 +1895,36 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
       hidden: true,
       trayHidden: true,
     });
+
+    // When the migration save fails (unavailable or throws), the row stays visible and the bare ID stays untouched.
+    for (const failingMigrate of [
+      async () => ({ state: 'unavailable' as const }),
+      async () => {
+        throw new Error('lease busy');
+      },
+    ]) {
+      const unsaved = await new AccountDashboardService(
+        deps({
+          getAdditionalAccounts: async () => [namedOne, namedTwo, unnamed],
+          readVisibility: async () => ({
+            state: 'ok',
+            visibility: {
+              hiddenProviders: [],
+              hiddenAccountIds: ['opencode-go:usage'],
+              trayHiddenProviders: [],
+              trayHiddenAccountIds: ['opencode-go:usage'],
+            },
+          }),
+          migrateVisibility: failingMigrate,
+        })
+      ).get();
+      expect(unsaved.settings.hiddenAccountIds).toEqual(['opencode-go:usage']);
+      expect(unsaved.settings.trayHiddenAccountIds).toEqual(['opencode-go:usage']);
+      expect(unsaved.accounts.find((a) => a.id === 'opencode-go:usage:cccccccc')).toMatchObject({
+        hidden: false,
+        trayHidden: false,
+      });
+    }
   });
 
   it('does not carry a bare opencode-go hide choice when two digest rows are present', async () => {
@@ -2062,6 +2116,175 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not remap an unsaved bare opencode-go hide when the lease is busy and never moves it to key B', async () => {
+    const idA = 'opencode-go:usage:aaaaaaaa';
+    const idB = 'opencode-go:usage:bbbbbbbb';
+    const rowA = opencodeRow(idA, 'Key aaaaaaaa');
+    const rowB = opencodeRow(idB, 'Key bbbbbbbb');
+
+    // Part 1: hold the visibility lease during the A-only generation, release it, then A+B,
+    // then B-only. Tested independently for Home-only and tray-only.
+    for (const trayOnly of [false, true]) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-opencode-vis-busy-'));
+      fs.chmodSync(dir, 0o700);
+      try {
+        const initialHome = trayOnly ? [] : ['codex:party', 'opencode-go:usage'];
+        const initialTray = trayOnly ? ['codex:party', 'opencode-go:usage'] : [];
+        await writeAccountVisibility(dir, {
+          hiddenProviders: [],
+          hiddenAccountIds: initialHome,
+          trayHiddenProviders: [],
+          trayHiddenAccountIds: initialTray,
+        });
+
+        let now = Date.parse('2026-11-21T12:00:00Z');
+        let currentRows: DashboardAccount[] = [rowA];
+        const service = new AccountDashboardService(
+          deps({
+            scope: () => dir,
+            now: () => now,
+            readVisibility: undefined,
+            getAdditionalAccounts: async () => currentRows,
+          })
+        );
+
+        const held = claimFileLease(dir, path.join(dir, 'account-visibility.json.lock'));
+        try {
+          // Step 1: A-only while lease is busy -> A stays visible and bare ID stays on disk.
+          const step1 = await service.get('mac', true);
+          expect(step1.accounts.find((a) => a.id === idA)).toMatchObject({
+            hidden: false,
+            trayHidden: false,
+          });
+          expect(step1.settings.hiddenAccountIds).toEqual(initialHome);
+          expect(step1.settings.trayHiddenAccountIds).toEqual(initialTray);
+          expect(await readAccountVisibility(dir)).toEqual({
+            state: 'ok',
+            visibility: {
+              hiddenProviders: [],
+              hiddenAccountIds: initialHome,
+              trayHiddenProviders: [],
+              trayHiddenAccountIds: initialTray,
+            },
+          });
+        } finally {
+          held.close();
+        }
+
+        // Step 2: lease released, A+B present -> neither key is hidden.
+        currentRows = [rowA, rowB];
+        now += 61_000;
+        const step2 = await service.get('mac', true);
+        expect(step2.accounts.find((a) => a.id === idA)).toMatchObject({
+          hidden: false,
+          trayHidden: false,
+        });
+        expect(step2.accounts.find((a) => a.id === idB)).toMatchObject({
+          hidden: false,
+          trayHidden: false,
+        });
+
+        // Step 3: B-only -> B is never hidden, and disk ends with A's digest or the
+        // untouched bare ID, never B's digest.
+        currentRows = [rowB];
+        now += 61_000;
+        const step3 = await service.get('mac', true);
+        expect(step3.accounts.find((a) => a.id === idB)).toMatchObject({
+          hidden: false,
+          trayHidden: false,
+        });
+        const allowedHome = trayOnly
+          ? [[]]
+          : [
+              ['codex:party', idA],
+              ['codex:party', 'opencode-go:usage'],
+            ];
+        const allowedTray = trayOnly
+          ? [
+              ['codex:party', idA],
+              ['codex:party', 'opencode-go:usage'],
+            ]
+          : [[]];
+        expect(allowedHome).toContainEqual(step3.settings.hiddenAccountIds);
+        expect(allowedTray).toContainEqual(step3.settings.trayHiddenAccountIds);
+        const saved = await readAccountVisibility(dir);
+        expect(saved.state).toBe('ok');
+        if (saved.state === 'ok') {
+          expect(allowedHome).toContainEqual(saved.visibility.hiddenAccountIds);
+          expect(allowedTray).toContainEqual(saved.visibility.trayHiddenAccountIds);
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    // Part 2: next generation retries while A is still sole key, re-reads under the lease,
+    // and migrates only lists that still hold the bare ID.
+    const retryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-opencode-vis-retry-'));
+    fs.chmodSync(retryDir, 0o700);
+    try {
+      await writeAccountVisibility(retryDir, {
+        hiddenProviders: [],
+        hiddenAccountIds: ['codex:party', 'opencode-go:usage'],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: ['opencode-go:usage'],
+      });
+
+      let now = Date.parse('2026-11-21T12:00:00Z');
+      const service = new AccountDashboardService(
+        deps({
+          scope: () => retryDir,
+          now: () => now,
+          readVisibility: undefined,
+          getAdditionalAccounts: async () => [rowA],
+        })
+      );
+
+      const held = claimFileLease(retryDir, path.join(retryDir, 'account-visibility.json.lock'));
+      try {
+        const busy = await service.get('mac', true);
+        expect(busy.accounts.find((a) => a.id === idA)).toMatchObject({
+          hidden: false,
+          trayHidden: false,
+        });
+        // Concurrent Settings save removes the bare ID from Home while keeping tray bare.
+        fs.writeFileSync(
+          path.join(retryDir, 'account-visibility.json'),
+          JSON.stringify({
+            version: 1,
+            hiddenProviders: [],
+            hiddenAccountIds: ['codex:party'],
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: ['opencode-go:usage'],
+          }) + '\n',
+          { mode: 0o600 }
+        );
+      } finally {
+        held.close();
+      }
+
+      now += 61_000;
+      const retried = await service.get('mac', true);
+      expect(retried.accounts.find((a) => a.id === idA)).toMatchObject({
+        hidden: false,
+        trayHidden: true,
+      });
+      expect(retried.settings.hiddenAccountIds).toEqual(['codex:party']);
+      expect(retried.settings.trayHiddenAccountIds).toEqual([idA]);
+      expect(await readAccountVisibility(retryDir)).toEqual({
+        state: 'ok',
+        visibility: {
+          hiddenProviders: [],
+          hiddenAccountIds: ['codex:party'],
+          trayHiddenProviders: [],
+          trayHiddenAccountIds: [idA],
+        },
+      });
+    } finally {
+      fs.rmSync(retryDir, { recursive: true, force: true });
     }
   });
 });

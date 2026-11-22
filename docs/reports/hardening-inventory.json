@@ -530,16 +530,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 713,
-      "typedThrows": 239,
+      "totalThrows": 714,
+      "typedThrows": 240,
       "plainThrows": 40,
       "otherThrows": 434,
-      "adoptionRatio": 0.3352,
+      "adoptionRatio": 0.3361,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 421,
-          "typed": 173,
+          "count": 422,
+          "typed": 174,
           "plain": 7
         },
         {
@@ -762,12 +762,12 @@
           "loc": 1203
         },
         {
-          "file": "src/web-server/rust-service-transport.ts",
-          "loc": 1124
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 1174
         },
         {
-          "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 1091
+          "file": "src/web-server/rust-service-transport.ts",
+          "loc": 1124
         },
         {
           "file": "src/web-server/rust-service.ts",

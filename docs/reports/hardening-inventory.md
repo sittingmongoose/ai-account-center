@@ -50,7 +50,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 33.5% (239/713) |
+| typed-error adoption (typed/total throws) | 33.6% (240/714) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 51 (221 total, 170 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
@@ -89,8 +89,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/usage-failover-service.ts` | 1244 |
 | `src/antigravity/registry.ts` | 1206 |
 | `src/web-server/status/status-collectors.ts` | 1203 |
+| `src/web-server/services/account-dashboard-service.ts` | 1174 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
-| `src/web-server/services/account-dashboard-service.ts` | 1091 |
 | `src/web-server/rust-service.ts` | 1035 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/additional-account-service.ts` | 938 |
