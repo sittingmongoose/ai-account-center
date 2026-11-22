@@ -105,6 +105,42 @@ fn generated_provider_rows_equal_the_json() {
 }
 
 #[test]
+fn generated_antigravity_columns_equal_the_json() {
+    if SYNTHETIC {
+        return;
+    }
+    let table = json(ANTIGRAVITY_JSON);
+    let columns = table["columns"].as_array().expect("columns");
+    assert_eq!(columns.len(), ANTIGRAVITY_LABELS.len());
+    assert_eq!(columns.len(), ANTIGRAVITY_SHORTS.len());
+    let mut third_party = Vec::new();
+    let mut weekly_only = Vec::new();
+    for (row, ((key, label), (short_key, short))) in columns
+        .iter()
+        .zip(ANTIGRAVITY_LABELS.iter().zip(ANTIGRAVITY_SHORTS.iter()))
+    {
+        assert_eq!(*key, row["key"]);
+        assert_eq!(*label, row["label"]);
+        assert_eq!(*short_key, row["key"]);
+        assert_eq!(*short, row["short"]);
+        let service = if key.starts_with("cli-") {
+            "cli"
+        } else {
+            "app"
+        };
+        assert_eq!(service, row["service"]);
+        if row["thirdParty"].as_bool().expect("thirdParty") {
+            third_party.push(*key);
+        }
+        if row["weeklyOnly"].as_bool().expect("weeklyOnly") {
+            weekly_only.push(*key);
+        }
+    }
+    assert_eq!(ANTIGRAVITY_THIRD_PARTY.to_vec(), third_party);
+    assert_eq!(ANTIGRAVITY_WEEKLY_ONLY.to_vec(), weekly_only);
+}
+
+#[test]
 fn generated_tool_and_host_rows_equal_the_json() {
     if SYNTHETIC {
         return;

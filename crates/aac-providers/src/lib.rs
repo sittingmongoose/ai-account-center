@@ -15,6 +15,8 @@ pub const PROVIDERS_JSON: &str = include_str!("../../../config/tables/providers.
 pub const TOOLS_JSON: &str = include_str!("../../../config/tables/tools.json");
 /// See [`PROVIDERS_JSON`].
 pub const HOSTS_JSON: &str = include_str!("../../../config/tables/hosts.json");
+/// See [`PROVIDERS_JSON`].
+pub const ANTIGRAVITY_JSON: &str = include_str!("../../../config/tables/antigravity-columns.json");
 
 /// One provider row of `providers.json`.
 #[derive(Debug, PartialEq, Eq)]

@@ -200,8 +200,9 @@ function callWith(worker, route, headers) {
  */
 async function measureHome() {
   const require = (await import('node:module')).createRequire(import.meta.url);
-  const { serverZoneFacts } = require(path.join(dist, 'web-server/views/home-zone.js'));
-  const { homeFormatProbe } = await import(path.join(here, '../../web-dashboard/public/view-model.mjs'));
+  const { homeFormatProbe, homeZoneFacts } = await import(
+    path.join(here, '../../web-dashboard/public/view-model.mjs')
+  );
   const fixture = home('off');
   home('d7');
   home('fed');
@@ -221,7 +222,7 @@ async function measureHome() {
     username: 'fixture-admin',
     host: '127.0.0.1',
     formatProbe: homeFormatProbe(),
-    zone: serverZoneFacts('America/New_York', now),
+    zone: homeZoneFacts('America/New_York', now),
   };
   const page = { 'x-aac-home-context': encodeURIComponent(JSON.stringify(context)) };
   const route = (worker) =>

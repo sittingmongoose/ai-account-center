@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "columns": [
+    {
+      "key": "cli-gemini-5h",
+      "service": "cli",
+      "label": "Gemini 5-hour, in T3 (Antigravity CLI)",
+      "short": "T3 Gemini 5hr",
+      "thirdParty": false,
+      "weeklyOnly": true
+    },
+    {
+      "key": "cli-gemini-weekly",
+      "service": "cli",
+      "label": "Gemini weekly, in T3 (Antigravity CLI)",
+      "short": "T3 Gemini wk",
+      "thirdParty": false,
+      "weeklyOnly": false
+    },
+    {
+      "key": "cli-3p-5h",
+      "service": "cli",
+      "label": "Claude and GPT 5-hour, in T3 (Antigravity CLI)",
+      "short": "T3 Claude GPT 5hr",
+      "thirdParty": true,
+      "weeklyOnly": true
+    },
+    {
+      "key": "cli-3p-weekly",
+      "service": "cli",
+      "label": "Claude and GPT weekly, in T3 (Antigravity CLI)",
+      "short": "T3 Claude GPT wk",
+      "thirdParty": true,
+      "weeklyOnly": false
+    },
+    {
+      "key": "gemini-5h",
+      "service": "app",
+      "label": "Gemini 5-hour, in the Antigravity app",
+      "short": "App Gemini 5hr",
+      "thirdParty": false,
+      "weeklyOnly": true
+    },
+    {
+      "key": "gemini-weekly",
+      "service": "app",
+      "label": "Gemini weekly, in the Antigravity app",
+      "short": "App Gemini wk",
+      "thirdParty": false,
+      "weeklyOnly": false
+    },
+    {
+      "key": "3p-5h",
+      "service": "app",
+      "label": "Claude and GPT 5-hour, in the Antigravity app",
+      "short": "App Claude GPT 5hr",
+      "thirdParty": true,
+      "weeklyOnly": true
+    },
+    {
+      "key": "3p-weekly",
+      "service": "app",
+      "label": "Claude and GPT weekly, in the Antigravity app",
+      "short": "App Claude GPT wk",
+      "thirdParty": true,
+      "weeklyOnly": false
+    }
+  ]
+}

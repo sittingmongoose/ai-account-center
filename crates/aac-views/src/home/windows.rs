@@ -4,6 +4,7 @@ use super::memo::{Key, Part};
 use super::{Acc, Ctx};
 use crate::js::*;
 use aac_api::home::{AmountView, MeterView};
+use aac_providers::{ANTIGRAVITY_LABELS, ANTIGRAVITY_SHORTS};
 use serde_json::{Map, Value};
 
 static TRUE: Value = Value::Bool(true);
@@ -434,28 +435,11 @@ pub fn period(w: &Win) -> &'static str {
     "other"
 }
 
-/// Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for
-/// the Antigravity app. Never added together. Home shows only T3's (what T3 spends); the app's
-/// appear only in the account's Details (the owner, 2026-11-19).
-const ANTIGRAVITY_LABELS: [(&str, &str); 8] = [
-    ("cli-gemini-5h", "Gemini 5-hour, in T3 (Antigravity CLI)"),
-    (
-        "cli-gemini-weekly",
-        "Gemini weekly, in T3 (Antigravity CLI)",
-    ),
-    (
-        "cli-3p-5h",
-        "Claude and GPT 5-hour, in T3 (Antigravity CLI)",
-    ),
-    (
-        "cli-3p-weekly",
-        "Claude and GPT weekly, in T3 (Antigravity CLI)",
-    ),
-    ("gemini-5h", "Gemini 5-hour, in the Antigravity app"),
-    ("gemini-weekly", "Gemini weekly, in the Antigravity app"),
-    ("3p-5h", "Claude and GPT 5-hour, in the Antigravity app"),
-    ("3p-weekly", "Claude and GPT weekly, in the Antigravity app"),
-];
+// Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for
+// the Antigravity app. Never added together. Home shows only T3's (what T3 spends); the app's
+// appear only in the account's Details (the owner, 2026-11-19). The labels are generated from
+// `config/tables/antigravity-columns.json` (aac-providers); the page and the bars carry the
+// same words, pinned by tests/spec/tables.test.ts.
 
 /// antigravity-data.mjs `antigravityService`: which Google quota service a window's key names.
 pub fn antigravity_service(key: Option<&str>) -> &'static str {
@@ -556,19 +540,7 @@ pub fn short_window_label(provider: Option<&str>, w: &Win) -> R<String> {
     if provider != Some("antigravity") {
         return window_label(provider, w);
     }
-    let short = lookup(
-        &[
-            ("cli-gemini-5h", "T3 Gemini 5hr"),
-            ("cli-gemini-weekly", "T3 Gemini wk"),
-            ("cli-3p-5h", "T3 Claude GPT 5hr"),
-            ("cli-3p-weekly", "T3 Claude GPT wk"),
-            ("gemini-5h", "App Gemini 5hr"),
-            ("gemini-weekly", "App Gemini wk"),
-            ("3p-5h", "App Claude GPT 5hr"),
-            ("3p-weekly", "App Claude GPT wk"),
-        ],
-        w.key().unwrap_or("undefined"),
-    )?;
+    let short = lookup(&ANTIGRAVITY_SHORTS, w.key().unwrap_or("undefined"))?;
     match short {
         Some(s) => Ok(s.into()),
         None => window_label(provider, w),

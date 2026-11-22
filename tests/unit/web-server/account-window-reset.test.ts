@@ -4,6 +4,9 @@ import {
   readingPredatesReset,
 } from '../../../src/web-server/services/account-window-reset';
 import type { DashboardAccountWindow } from '../../../src/web-server/services/account-dashboard-types';
+import {
+  readingPredatesReset as projectionPredatesReset,
+} from '../../../src/web-server/agent-usage/agent-usage-projection';
 
 const RESET = '2026-10-01T15:00:00.000Z';
 const AT_RESET = Date.parse(RESET);
@@ -107,5 +110,28 @@ describe('reset-passed readings (review finding F6)', () => {
     const marked = markPassedResets(account, AT_RESET);
     expect(marked.windows[0]).toEqual({ ...account.windows[0], resetPassed: true });
     expect(marked.windows[1]).toEqual({ ...account.windows[1], resetPassed: true });
+  });
+});
+
+describe('the agent-usage projection predicate agrees with the reference', () => {
+  it('matches on every reset/sampled shape', () => {
+    const now = AT_RESET + 86_400_000;
+    const cases: Array<[string | null | undefined, string | null | undefined]> = [
+      [RESET, '2026-10-01T12:00:00Z'],
+      [RESET, RESET],
+      [RESET, '2026-10-01T15:00:00.001Z'],
+      [RESET, null],
+      [RESET, undefined],
+      [RESET, 'not a date'],
+      [null, '2026-10-01T12:00:00Z'],
+      [undefined, null],
+      ['not a date', '2026-10-01T12:00:00Z'],
+      ['2026-12-01T00:00:00Z', '2026-10-01T12:00:00Z'],
+    ];
+    for (const [resetAt, sampledAt] of cases) {
+      expect(projectionPredatesReset(resetAt, sampledAt, now)).toBe(
+        readingPredatesReset(resetAt, sampledAt, now)
+      );
+    }
   });
 });

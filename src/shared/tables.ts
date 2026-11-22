@@ -13,6 +13,7 @@ import path from 'path';
 export type ProviderTable = typeof import('../../config/tables/providers.json');
 export type ToolTable = typeof import('../../config/tables/tools.json');
 export type HostTable = typeof import('../../config/tables/hosts.json');
+export type AntigravityTable = typeof import('../../config/tables/antigravity-columns.json');
 
 /** Every id in the provider table, dashboard providers first, in table order. */
 export type TableProviderId = keyof ProviderTable['providers'];
@@ -20,6 +21,7 @@ export type TableProviderRow = ProviderTable['providers'][TableProviderId];
 export type TableAnalyticsTool = keyof ToolTable['analyticsTools'];
 export type TableScannerOnlyKind = keyof ToolTable['scannerOnlyKinds'];
 export type TableUsageLogTool = keyof ToolTable['usageLogTools'];
+export type AntigravityColumn = AntigravityTable['columns'][number];
 
 export const TABLES_DIR = path.resolve(__dirname, '../../config/tables');
 
@@ -38,6 +40,10 @@ function load<T>(name: string): T {
 export const PROVIDER_TABLE: ProviderTable = load('providers.json');
 export const TOOL_TABLE: ToolTable = load('tools.json');
 export const HOST_TABLE: HostTable = load('hosts.json');
+export const ANTIGRAVITY_TABLE: AntigravityTable = load('antigravity-columns.json');
+
+/** The Antigravity pool columns in table order: a view of the table, never a copy. */
+export const ANTIGRAVITY_COLUMNS: readonly AntigravityColumn[] = ANTIGRAVITY_TABLE.columns;
 
 /** The provider rows in table order (`Object.entries` keeps it: no id is an integer key). */
 export const PROVIDER_ROWS: ReadonlyArray<readonly [TableProviderId, TableProviderRow]> =

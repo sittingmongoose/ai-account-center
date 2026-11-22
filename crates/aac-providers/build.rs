@@ -19,13 +19,19 @@ const PROVIDER_KEYS: [&str; 9] = [
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let tables = manifest.join("../../config/tables");
-    for name in ["providers.json", "tools.json", "hosts.json"] {
+    for name in [
+        "providers.json",
+        "tools.json",
+        "hosts.json",
+        "antigravity-columns.json",
+    ] {
         println!("cargo:rerun-if-changed={}", tables.join(name).display());
     }
     let synthetic = env::var_os("CARGO_FEATURE_SYNTHETIC_TABLE").is_some();
     let mut providers = read(&tables.join("providers.json"));
     let mut tools = read(&tables.join("tools.json"));
     let hosts = read(&tables.join("hosts.json"));
+    let antigravity = read(&tables.join("antigravity-columns.json"));
     if synthetic {
         add_synthetic(&mut providers, &mut tools);
     }
@@ -35,6 +41,7 @@ fn main() {
     write_tools(&mut out, &tools);
     write_tool_views(&mut out, &tools, &providers);
     write_hosts(&mut out, &hosts);
+    write_antigravity(&mut out, &antigravity);
     writeln!(
         out,
         "/// True only in the test-only `synthetic-table` build (one synthetic provider and tool).\n\
@@ -587,6 +594,86 @@ fn write_hosts(out: &mut String, table: &Map<String, Value>) {
          pub static LEGACY_STORAGE_HOSTS: [&str; {}] = [{}];\n\n",
         hosts.len(),
         hosts.join(", ")
+    )
+    .expect("write");
+}
+
+fn write_antigravity(out: &mut String, table: &Map<String, Value>) {
+    let columns = table["columns"].as_array().expect("columns: not an array");
+    assert!(!columns.is_empty(), "columns: empty");
+    let row_keys: BTreeSet<&str> = [
+        "key",
+        "service",
+        "label",
+        "short",
+        "thirdParty",
+        "weeklyOnly",
+    ]
+    .into_iter()
+    .collect();
+    let mut keys = BTreeSet::new();
+    let mut labels = String::new();
+    let mut shorts = String::new();
+    let mut third_party = Vec::new();
+    let mut weekly_only = Vec::new();
+    for row in columns {
+        let key = text(row, "key", "columns");
+        let at = format!("columns.{key}");
+        assert!(
+            !key.is_empty()
+                && key
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && !key.starts_with('-')
+                && !key.ends_with('-')
+                && !key.contains("--"),
+            "{at}: keys are lowercase words and digits joined by '-'"
+        );
+        assert!(keys.insert(key), "{at}: duplicate key");
+        let keys_of_row: BTreeSet<&str> = row
+            .as_object()
+            .expect("column row")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys_of_row, row_keys, "{at}: keys");
+        let service = text(row, "service", &at);
+        assert_eq!(
+            service,
+            if key.starts_with("cli-") {
+                "cli"
+            } else {
+                "app"
+            },
+            "{at}: service matches the cli- prefix"
+        );
+        let label = text(row, "label", &at);
+        let short = text(row, "short", &at);
+        assert!(!label.is_empty() && !short.is_empty(), "{at}: labels");
+        writeln!(labels, "    ({key:?}, {label:?}),").expect("write");
+        writeln!(shorts, "    ({key:?}, {short:?}),").expect("write");
+        if flag(row, "thirdParty", &at) {
+            third_party.push(format!("{key:?}"));
+        }
+        if flag(row, "weeklyOnly", &at) {
+            weekly_only.push(format!("{key:?}"));
+        }
+    }
+    let count = columns.len();
+    write!(
+        out,
+        "/// `columns` of antigravity-columns.json: pool key and full Details label, in table order.\n\
+         pub const ANTIGRAVITY_LABELS: [(&str, &str); {count}] = [\n{labels}];\n\n\
+         /// The short Home column heads (view-model.mjs `shortWindowLabel`), in table order.\n\
+         pub const ANTIGRAVITY_SHORTS: [(&str, &str); {count}] = [\n{shorts}];\n\n\
+         /// Keys whose plan reason is \"Not on plan\" when `thirdPartyModels` is false.\n\
+         pub const ANTIGRAVITY_THIRD_PARTY: [&str; {}] = [{}];\n\n\
+         /// Keys whose plan reason is \"Weekly only\" when `quotaPolicy` is \"weekly\".\n\
+         pub const ANTIGRAVITY_WEEKLY_ONLY: [&str; {}] = [{}];\n\n",
+        third_party.len(),
+        third_party.join(", "),
+        weekly_only.len(),
+        weekly_only.join(", "),
     )
     .expect("write");
 }

@@ -278,6 +278,17 @@ describe('the Python fallback helpers equal the table', () => {
     expect(got[1]).toEqual(Object.fromEntries(rows.map(([id, row]) => [id, row.failover.label])));
     expect(got[2]).toEqual(ids((row) => row.card).sort());
   });
+
+  it('desktop_helpers providers are a carried capability subset', () => {
+    const got = python(
+      'import desktop_helpers as d;print(json.dumps([sorted(d.PROVIDERS),d.PROVIDERS]))'
+    );
+    // The desktop collector's capability subset, not a table projection: its labels are
+    // its own (config/tables/README.md). Ids must stay dashboard providers.
+    expect(got[0]).toEqual(['antigravity', 'cursor', 'muse']);
+    for (const id of got[0]) expect(dashboard).toContain(id);
+    for (const words of Object.values(got[1]) as string[]) expect(words.length).toBeGreaterThan(0);
+  });
 });
 
 describe("the page's JS lists equal the table", () => {
@@ -418,5 +429,103 @@ describe('a synthetic provider and tool added to the table', () => {
     } finally {
       fs.rmSync(fixture, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the Antigravity column table owns every copy', () => {
+  const columns = json('config/tables/antigravity-columns.json').columns as Array<{
+    key: string;
+    service: string;
+    label: string;
+    short: string;
+    thirdParty: boolean;
+    weeklyOnly: boolean;
+  }>;
+  const cli = columns.filter((column) => column.service === 'cli');
+
+  it('antigravity-data.mjs labels and plan-reason subsets', () => {
+    const source = read('web-dashboard/public/antigravity-data.mjs');
+    expect(literals(source, 'const ANTIGRAVITY_LABELS = [', '];')).toEqual(
+      columns.flatMap((column) => [column.key, column.label])
+    );
+    const subset = (pattern: RegExp) => {
+      const match = source.match(pattern);
+      expect(match).not.toBeNull();
+      return [...(match?.[1] ?? '').matchAll(/'([^']*)'/g)].map((m) => m[1]).sort();
+    };
+    expect(
+      subset(/if \(\[([^\]]*)\]\.includes\(key\) && plan\?\.thirdPartyModels === false\)/)
+    ).toEqual(columns.filter((column) => column.thirdParty).map((column) => column.key).sort());
+    expect(subset(/if \(\[([^\]]*)\]\.includes\(key\) && plan\?\.quotaPolicy === 'weekly'\)/)).toEqual(
+      columns.filter((column) => column.weeklyOnly).map((column) => column.key).sort()
+    );
+  });
+
+  it('view-model.mjs short column heads', () => {
+    const source = read('web-dashboard/public/view-model.mjs');
+    const from = source.indexOf('export function shortWindowLabel');
+    const body = source.slice(from, source.indexOf('}[w?.key]', from));
+    expect([...body.matchAll(/'([^']+)': '([^']+)'/g)].map((m) => [m[1], m[2]])).toEqual(
+      columns.map((column) => [column.key, column.short])
+    );
+  });
+
+  it('the Mac bar keys and captions', () => {
+    const source = read('macos-bar/Sources/CCSBarCore/TrayModel.swift');
+    expect(literals(source, 'public static let antigravityKeys = [', ']')).toEqual(
+      cli.map((column) => column.key)
+    );
+    const from = source.indexOf('func antigravityLabel');
+    const body = source.slice(from, source.indexOf('default: return key', from));
+    expect([...body.matchAll(/case "([^"]+)": return "([^"]+)"/g)].map((m) => [m[1], m[2]])).toEqual(
+      cli.map((column) => [column.key, column.short])
+    );
+  });
+
+  it('the Windows bar keys and captions', () => {
+    const source = read('windows-bar/CCSBar/MainWindow.xaml.cs');
+    const from = source.indexOf('AntigravityKeys =');
+    const body = source.slice(from, source.indexOf('];', from));
+    expect([...body.matchAll(/\("([^"]+)", "([^"]+)"\)/g)].map((m) => [m[1], m[2]])).toEqual(
+      cli.map((column) => [column.key, column.short])
+    );
+  });
+
+  it('the zone window constants match the Rust producer', () => {
+    const view = read('web-dashboard/public/view-model.mjs');
+    const rust = read('crates/aac-http/src/zone_facts.rs');
+    const days = view.match(/export const HOME_ZONE_DAYS = \{ past: (\d+), future: (\d+) \}/);
+    expect(days?.[1]).toBe(rust.match(/const PAST_DAYS: i64 = (\d+);/)?.[1]);
+    expect(days?.[2]).toBe(rust.match(/const FUTURE_DAYS: i64 = (\d+);/)?.[1]);
+    const normal = (text: string | undefined) => text?.replace(/_/g, '').replace(/\s+/g, '');
+    expect(normal(view.match(/const ZONE_DAY = ([\d_]+);/)?.[1])).toBe(
+      normal(rust.match(/const ZONE_DAY: i64 = ([\d_]+);/)?.[1])
+    );
+    expect(normal(view.match(/const ZONE_STEP = ([\d_ *]+);/)?.[1])).toBe(
+      normal(rust.match(/const ZONE_STEP: i64 = ([\d_ *]+);/)?.[1])
+    );
+  });
+});
+
+describe('the carried provider lists equal their projection', () => {
+  it('the TS key-store providers', () => {
+    const source = read('src/web-server/services/account-key-store.ts');
+    expect(literals(source, 'export const KEY_PROVIDERS = [', ']')).toEqual(
+      ids((row) => row.keyStore)
+    );
+  });
+
+  it('the agent-usage and backfill provider order', () => {
+    const expected = [
+      'codex',
+      'claude',
+      ...analyticsOrder.filter((id) => id !== 'codex' && id !== 'claude'),
+    ];
+    const projection = read('src/web-server/agent-usage/agent-usage-projection.ts');
+    expect(literals(projection, 'const PROVIDERS: readonly DashboardProvider[] = [', ']')).toEqual(
+      expected
+    );
+    const backfill = read('src/store/usage-backfill.ts');
+    expect(literals(backfill, 'const PROVIDERS = [', ']')).toEqual(expected);
   });
 });

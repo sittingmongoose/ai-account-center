@@ -11,7 +11,7 @@ use chrono::Offset;
 
 const ZONE_DAY: i64 = 86_400_000;
 const ZONE_STEP: i64 = 6 * 3_600_000;
-/// `HOME_ZONE_DAYS` in `home-zone.ts`.
+/// `HOME_ZONE_DAYS` in `view-model.mjs` (the page's zone facts; pinned by tables.test.ts).
 const PAST_DAYS: i64 = 120;
 const FUTURE_DAYS: i64 = 400;
 

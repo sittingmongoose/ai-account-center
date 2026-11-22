@@ -3,6 +3,7 @@
 use super::Acc;
 use super::windows::{Win, antigravity_canonical, antigravity_service, visible};
 use crate::js::*;
+use aac_providers::{ANTIGRAVITY_THIRD_PARTY, ANTIGRAVITY_WEEKLY_ONLY};
 use serde_json::Value;
 
 /// One bound profile (`antigravityView(...).antigravityAccounts[]`): only what Home reads.
@@ -234,14 +235,10 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
 /// antigravity-data.mjs `antigravityMissingWindow`.
 pub fn missing_window(account: Acc, key: &str) -> R<&'static str> {
     let plan = account.get("antigravityPlan");
-    if matches!(key, "3p-5h" | "3p-weekly" | "cli-3p-5h" | "cli-3p-weekly")
-        && is_false(get(plan, "thirdPartyModels"))
-    {
+    if ANTIGRAVITY_THIRD_PARTY.contains(&key) && is_false(get(plan, "thirdPartyModels")) {
         return Ok("Not on plan");
     }
-    if matches!(key, "gemini-5h" | "3p-5h" | "cli-gemini-5h" | "cli-3p-5h")
-        && is_str(get(plan, "quotaPolicy"), "weekly")
-    {
+    if ANTIGRAVITY_WEEKLY_ONLY.contains(&key) && is_str(get(plan, "quotaPolicy"), "weekly") {
         return Ok("Weekly only");
     }
     if !antigravity_canonical(key) && has_live_reading(account, antigravity_service(Some(key)))? {
