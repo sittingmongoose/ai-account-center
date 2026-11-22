@@ -25,39 +25,10 @@ const DAY_MS: f64 = 86_400_000.0;
 /// Ranges up to this long are answered hourly; longer ones in local days (`HOURLY_RANGE_MS`).
 pub(crate) const HOURLY_RANGE_MS: f64 = 92.0 * DAY_MS;
 
-/// The tools `rangeToSources` publishes, in its order (seven; the projection's grid has nine).
-const RANGE_TOOLS: [&str; 7] = [
-    "claude",
-    "codex",
-    "omp",
-    "muse",
-    "zcode",
-    "jsonl",
-    "antigravity",
-];
-/// Every tool the activity collector reads; published as `tools` on provider and model rows.
-const TOOLS: [&str; 9] = [
-    "claude",
-    "codex",
-    "omp",
-    "muse",
-    "zcode",
-    "jsonl",
-    "antigravity",
-    "cursor",
-    "devin",
-];
-const KNOWN_CLI_TARGETS: [&str; 9] = [
-    "claude",
-    "codex",
-    "droid",
-    "omp",
-    "muse",
-    "zcode",
-    "antigravity",
-    "cursor",
-    "devin",
-];
+// The tools `rangeToSources` publishes (`activitySources`, seven; the projection's grid has
+// nine), every tool the activity collector reads (`activityTools`, published as `tools` on
+// provider and model rows) and the session targets it accepts (`cliTargets`) come from the
+// tool table, in its order, so the port cannot drift from the scanner's kinds.
 const MAX_SESSION_SAMPLE: usize = 50;
 const MAX_NAMED_DAY_MODELS: usize = 12;
 const MAX_PUBLISHED_MODELS: usize = 500;
@@ -84,31 +55,6 @@ const RATE_KEYS: [&str; 5] = [
     "cacheCreationPerMillion",
     "cacheReadPerMillion",
     "source",
-];
-
-/// `USAGE_ROUTE_PROVIDERS`: the dashboard provider a route string names.
-const USAGE_ROUTE_PROVIDERS: [(&str, &str); 13] = [
-    ("anthropic", "claude"),
-    ("claude", "claude"),
-    ("openai", "codex"),
-    ("codex", "codex"),
-    ("alibaba-token-plan", "qwen"),
-    ("zai", "zai"),
-    ("zai-coding-plan", "zai"),
-    ("kimi-code", "kimi-code"),
-    ("opencode-go", "opencode-go"),
-    ("opencode-zen", "opencode-go"),
-    ("cursor", "cursor"),
-    ("muse-code", "muse"),
-    ("google-antigravity", "antigravity"),
-];
-/// `TOOL_PROVIDERS`: the tools whose logs are one provider's usage by construction.
-const TOOL_PROVIDERS: [(&str, &str); 5] = [
-    ("claude", "claude"),
-    ("codex", "codex"),
-    ("muse", "muse"),
-    ("antigravity", "antigravity"),
-    ("cursor", "cursor"),
 ];
 
 /// `USAGE_PROVIDER_ORDER`: the shared providers table's analytics order, then "other".
@@ -326,10 +272,7 @@ fn route_provider(route: Option<&str>) -> Option<&'static str> {
     if let Some(rest) = key.strip_prefix("builtin:") {
         key = rest.to_owned();
     }
-    USAGE_ROUTE_PROVIDERS
-        .iter()
-        .find(|(name, _)| *name == key)
-        .map(|(_, provider)| *provider)
+    aac_providers::usage_route_provider(&key)
 }
 
 /// True when a usage row is Kimi Code (OMP logs only). Keep in sync with
@@ -351,7 +294,7 @@ fn is_kimi_code_usage(model: Option<&str>, route: Option<&str>) -> bool {
 
 /// `usageProviderFor`: the tool's own provider, else Kimi Code, else the route, else the model's prefix, else other.
 fn usage_provider_for(tool: &str, route: Option<&str>, model: Option<&str>) -> &'static str {
-    if let Some((_, own)) = TOOL_PROVIDERS.iter().find(|(name, _)| *name == tool) {
+    if let Some(own) = aac_providers::tool_provider(tool) {
         return own;
     }
     if is_kimi_code_usage(model, route) {
@@ -397,11 +340,7 @@ fn split_row(row: &Object, tool: &str) -> R<Vec<(&'static str, Object)>> {
         list.push(breakdown.clone());
         groups.set(provider.to_owned(), list);
     }
-    let home = TOOL_PROVIDERS
-        .iter()
-        .find(|(name, _)| *name == tool)
-        .map(|(_, provider)| *provider)
-        .unwrap_or("other");
+    let home = aac_providers::tool_provider(tool).unwrap_or("other");
     let entries = groups.into_entries();
     if entries.is_empty() {
         return Ok(vec![(home, row.clone())]);
@@ -498,25 +437,12 @@ fn split_row(row: &Object, tool: &str) -> R<Vec<(&'static str, Object)>> {
 
 /// The providers `usage_provider_for` returns are static table words; keep them `'static`.
 fn leak_provider(provider: String) -> &'static str {
-    // Every word comes from the constant tables above (or "other"); match it back.
-    const WORDS: [&str; 12] = [
-        "claude",
-        "codex",
-        "antigravity",
-        "muse",
-        "cursor",
-        "kimi-code",
-        "qwen",
-        "zai",
-        "opencode-go",
-        "omp",
-        "zcode",
-        "other",
-    ];
-    WORDS
-        .iter()
-        .find(|word| **word == provider)
-        .copied()
+    // Every word a route, a tool or a model can name is a dashboard provider or an analytics
+    // tool (or "other"); match it back to the table's static id.
+    aac_providers::dashboard_providers()
+        .map(|row| row.id.as_str())
+        .chain(aac_providers::ANALYTICS_TOOLS.iter().map(|tool| tool.id))
+        .find(|word| *word == provider)
         .unwrap_or("other")
 }
 
@@ -1035,7 +961,7 @@ fn range_to_sources(
         list.push(row);
     }
     let mut out: Vec<SourceData> = Vec::new();
-    for tool in RANGE_TOOLS {
+    for tool in aac_providers::activity_sources() {
         let hours = by_tool.get(tool);
         let sessions = sessions_by_tool.get(tool).map(Vec::as_slice).unwrap_or(&[]);
         if hours.is_none() && sessions.is_empty() {
@@ -1169,7 +1095,7 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
     for source in sources {
         let source = obj(source)?;
         let tool = text(source.get("tool"))?;
-        if !TOOLS.contains(&tool) {
+        if !aac_providers::activity_tools().any(|id| id == tool) {
             continue;
         }
         let state_word = text(source.get("state")).unwrap_or("");
@@ -2212,7 +2138,7 @@ fn project(
             "totals": source_totals.publish(),
             "usageEvents": js_num(usage_events),
             "sessionCount": sessions.len(),
-            "tools": TOOLS.iter().filter(|tool| tools.iter().any(|t| t.as_str() == **tool)).collect::<Vec<_>>(),
+            "tools": aac_providers::activity_tools().filter(|tool| tools.iter().any(|t| t.as_str() == *tool)).collect::<Vec<_>>(),
         }));
     }
     // byDay / byHour, in their sort orders.
@@ -2464,7 +2390,7 @@ fn project(
         let target = session
             .get("target")
             .and_then(Value::as_str)
-            .filter(|target| KNOWN_CLI_TARGETS.contains(target));
+            .filter(|target| aac_providers::is_cli_target(target));
         let mut row = json!({
             "key": key.as_str(),
             "provider": candidate.provider,
@@ -2602,9 +2528,8 @@ fn project(
                 target.insert(
                     "tools".into(),
                     json!(
-                        TOOLS
-                            .iter()
-                            .filter(|tool| row.tools.iter().any(|t| t.as_str() == **tool))
+                        aac_providers::activity_tools()
+                            .filter(|tool| row.tools.iter().any(|t| t.as_str() == *tool))
                             .collect::<Vec<_>>()
                     ),
                 );
@@ -2920,6 +2845,47 @@ pub(crate) fn activity_selection(query: &Object) -> R<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The port reads the tool table's own lists: the order it publishes tools in, the targets
+    /// it accepts, the tools whose logs are one provider's usage, and the route words.
+    #[test]
+    fn the_tool_tables_keep_their_old_lists() {
+        assert_eq!(
+            aac_providers::activity_sources().collect::<Vec<_>>(),
+            [
+                "claude",
+                "codex",
+                "omp",
+                "muse",
+                "zcode",
+                "jsonl",
+                "antigravity"
+            ]
+        );
+        assert_eq!(
+            aac_providers::activity_tools().collect::<Vec<_>>(),
+            [
+                "claude",
+                "codex",
+                "omp",
+                "muse",
+                "zcode",
+                "jsonl",
+                "antigravity",
+                "cursor",
+                "devin"
+            ]
+        );
+        assert!(aac_providers::is_cli_target("droid"));
+        assert!(!aac_providers::is_cli_target("codex-cli"));
+        assert_eq!(route_provider(Some("opencode-zen")), Some("opencode-go"));
+        assert_eq!(route_provider(None), None);
+        assert_eq!(usage_provider_for("muse", None, None), "muse");
+        assert_eq!(usage_provider_for("omp", None, None), "other");
+        assert_eq!(leak_provider("qwen".to_owned()), "qwen");
+        assert_eq!(leak_provider("omp".to_owned()), "omp");
+        assert_eq!(leak_provider("opencode-wallet".to_owned()), "other");
+    }
 
     #[test]
     fn collate_is_total_and_keeps_the_ascii_order() {

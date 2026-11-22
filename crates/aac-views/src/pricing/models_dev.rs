@@ -479,34 +479,14 @@ impl RegistryRefresh {
 
 // ------------------------------------------------------------- pricing-resolver.ts
 
-/// `PROVIDER_ALIASES`.
-const PROVIDER_ALIASES: [(&str, &str); 11] = [
-    ("agy", "google"),
-    ("antigravity", "google"),
-    ("claude", "anthropic"),
-    ("codex", "openai"),
-    ("copilot", "github-copilot"),
-    ("gemini", "google"),
-    ("ghcp", "github-copilot"),
-    ("github", "github-copilot"),
-    ("kimi", "moonshotai"),
-    ("moonshot", "moonshotai"),
-    ("qwen", "alibaba"),
-];
-
 /// `normalizeModelsDevProviderId`: the alias-mapped, trimmed and lowercased provider id.
 pub fn normalize_models_dev_provider_id(provider: &str) -> Option<String> {
     if provider.is_empty() {
         return None;
     }
     let normalized = normalize_id(provider);
-    Some(
-        PROVIDER_ALIASES
-            .iter()
-            .find(|(alias, _)| *alias == normalized)
-            .map(|(_, mapped)| (*mapped).to_owned())
-            .unwrap_or(normalized),
-    )
+    // `PROVIDER_ALIASES`: an alias the provider table lists maps to its models.dev provider.
+    Some(aac_providers::pricing_alias(&normalized).map_or(normalized, str::to_owned))
 }
 
 /// `splitProviderPrefix`: everything before the first `/` (when non-empty) is the provider.
@@ -655,6 +635,35 @@ mod tests {
         normalize_registry_payload(&json!({
             "openai": { "id": "openai", "models": { "gpt-5.5": { "id": "gpt-5.5", "cost": { "input": 5, "output": 30 } } } }
         })).expect("fixture normalizes")
+    }
+
+    /// `PROVIDER_ALIASES` is the provider table's `pricingAliases`; a word it does not alias is
+    /// its own models.dev id.
+    #[test]
+    fn provider_aliases_come_from_the_table() {
+        for (alias, models_dev) in [
+            ("agy", "google"),
+            ("antigravity", "google"),
+            ("claude", "anthropic"),
+            ("codex", "openai"),
+            ("copilot", "github-copilot"),
+            ("gemini", "google"),
+            ("ghcp", "github-copilot"),
+            ("github", "github-copilot"),
+            ("kimi", "moonshotai"),
+            ("moonshot", "moonshotai"),
+            ("qwen", "alibaba"),
+        ] {
+            assert_eq!(
+                normalize_models_dev_provider_id(alias).as_deref(),
+                Some(models_dev),
+                "{alias}"
+            );
+        }
+        assert_eq!(
+            normalize_models_dev_provider_id("OpenAI").as_deref(),
+            Some("openai")
+        );
     }
 
     #[test]
