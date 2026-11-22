@@ -761,6 +761,11 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
     }
     // The scoreboard moves slowly: re-read on its own poll while the page is visible, and keep ages running.
     let ticks = RwSignal::new(0u32);
+    let reread = crate::live::on_status_event(
+        || crate::page_on_screen(crate::Page::Scoreboard),
+        board.error,
+        move || board.reload(),
+    );
     let _ = set_interval(
         move || {
             board.now_ms.set(js_sys::Date::now());
@@ -776,11 +781,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             let t = ticks.get_untracked() + 15;
             if t >= every {
                 ticks.set(0);
-                if crate::page_on_screen(crate::Page::Scoreboard)
-                    && !crate::live::refused(&board.error)
-                {
-                    board.reload();
-                }
+                reread();
             } else {
                 ticks.set(t);
             }
@@ -790,12 +791,15 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
     // Shown again by the shell, or back online: read at once (a refusal the server explains still doesn't), until
     // the page is unmounted (owned.rs).
     for event in [crate::SHOWN_EVENT, "online"] {
-        crate::owned::listen(&window(), event, move || {
-            if crate::page_on_screen(crate::Page::Scoreboard) && !crate::live::refused(&board.error)
-            {
-                board.reload();
-            }
-        });
+        crate::owned::listen(
+            &window(),
+            event,
+            crate::live::on_status_event(
+                || crate::page_on_screen(crate::Page::Scoreboard),
+                board.error,
+                move || board.reload(),
+            ),
+        );
     }
     let by_model = Memo::new(move |_| {
         board

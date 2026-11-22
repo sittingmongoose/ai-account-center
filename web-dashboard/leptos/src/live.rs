@@ -102,6 +102,35 @@ pub(crate) fn automatic_reread(on_screen: bool, error: &RwSignal<Option<FetchErr
     on_screen && !refused(error)
 }
 
+/// The Status page's automatic re-read callback: the poll, `visibilitychange`, the shell's shown-again
+/// event, `online`, and the socket's open all register this body. It owns the refusal guard, so a page
+/// the server refused adds no read on any of them (a manual Refresh still asks).
+pub(crate) fn on_status_event(
+    on_screen: impl Fn() -> bool + 'static,
+    error: RwSignal<Option<FetchError>>,
+    reload: impl Fn() + 'static,
+) -> impl Fn() {
+    move || {
+        if automatic_reread(on_screen(), &error) {
+            reload();
+        }
+    }
+}
+
+/// The `/ws` socket's message body: a `status-changed` hint, then the same on-screen/refusal rule.
+pub(crate) fn on_status_hint(
+    on_screen: impl Fn() -> bool + 'static,
+    error: RwSignal<Option<FetchError>>,
+    reload: impl Fn() + 'static,
+) -> impl Fn(&str) {
+    let read = on_status_event(on_screen, error, reload);
+    move |text: &str| {
+        if text.contains("\"status-changed\"") {
+            read();
+        }
+    }
+}
+
 pub fn start() -> Live {
     let live = Live {
         view: RwSignal::new(None),
@@ -123,6 +152,7 @@ pub fn start() -> Live {
     // Safety poll while visible; a missed hint only delays.
     let poll = Rc::new(Cell::new(0u32));
     let polled = poll.clone();
+    let reread = on_status_event(visible, live.error, move || live.reload());
     let _ = set_interval(
         move || {
             let every = live
@@ -133,9 +163,7 @@ pub fn start() -> Live {
             let ticks = polled.get() + 5;
             if ticks >= every {
                 polled.set(0);
-                if automatic_reread(visible(), &live.error) {
-                    live.reload();
-                }
+                reread();
             } else {
                 polled.set(ticks);
             }
@@ -145,19 +173,19 @@ pub fn start() -> Live {
 
     // Coming back to the page reads at once (a refusal the server explains still doesn't). These, and the hint
     // socket, stop with the page (owned.rs).
-    owned::listen(&document(), "visibilitychange", move || {
-        if automatic_reread(visible(), &live.error) {
-            live.reload();
-        }
-    });
+    owned::listen(
+        &document(),
+        "visibilitychange",
+        on_status_event(visible, live.error, move || live.reload()),
+    );
 
     // Shown again by the shell, or back online: read at once.
     for event in [crate::SHOWN_EVENT, "online"] {
-        owned::listen(&window(), event, move || {
-            if automatic_reread(visible(), &live.error) {
-                live.reload();
-            }
-        });
+        owned::listen(
+            &window(),
+            event,
+            on_status_event(visible, live.error, move || live.reload()),
+        );
     }
 
     let socket: Rc<RefCell<Option<web_sys::WebSocket>>> = Rc::new(RefCell::new(None));
@@ -188,24 +216,21 @@ fn connect_hints(live: Live, slot: Rc<RefCell<Option<web_sys::WebSocket>>>, dela
         return;
     };
 
+    let hint = on_status_hint(visible, live.error, move || live.reload());
     let on_message =
         Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             let Some(text) = event.data().as_string() else {
                 return;
             };
             // a hidden page ignores hints (its reads would keep the server's collectors busy); returning to it reads
-            if text.contains("\"status-changed\"") && automatic_reread(visible(), &live.error) {
-                live.reload();
-            }
+            hint(&text);
         });
     socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
     on_message.forget();
 
-    let on_open = Closure::<dyn Fn()>::new(move || {
-        if automatic_reread(visible(), &live.error) {
-            live.reload();
-        }
-    });
+    let on_open = Closure::<dyn Fn()>::new(on_status_event(visible, live.error, move || {
+        live.reload();
+    }));
     socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
     on_open.forget();
 
@@ -252,34 +277,62 @@ mod tests {
     #[test]
     fn a_refused_answer_rereads_once_and_event_callbacks_stay_quiet() {
         use std::cell::Cell;
+        use std::rc::Rc;
         let owner = Owner::new();
         owner.set();
         let error = RwSignal::new(None::<FetchError>);
-        let reloads = Cell::new(0u32);
-        let maybe_reload = |on_screen: bool| {
-            if automatic_reread(on_screen, &error) {
-                reloads.set(reloads.get() + 1);
-            }
-        };
+        let screen = Rc::new(Cell::new(true));
         // the first load always reads
-        reloads.set(reloads.get() + 1);
+        let reads = Rc::new(Cell::new(1u32));
+        let read = {
+            let reads = reads.clone();
+            move || reads.set(reads.get() + 1)
+        };
+        // the bodies the page registers: the poll, visibilitychange, shown-again, online, and socket open
+        let events: Vec<_> = (0..4)
+            .map(|_| {
+                let screen = screen.clone();
+                on_status_event(move || screen.get(), error, read.clone())
+            })
+            .collect();
+        let hint = {
+            let screen = screen.clone();
+            on_status_hint(move || screen.get(), error, read.clone())
+        };
+        // a refusal the server explains: no event or hint adds a second read on screen
         error.set(Some(FetchError::Refused(
             "These tabs need dashboard sign-in turned on.".into(),
         )));
-        // poll, visibility, shown-again, online, socket hint: no second read
-        for _ in 0..5 {
-            maybe_reload(true);
+        for event in &events {
+            event();
         }
+        hint("{\"type\":\"status-changed\"}");
         assert_eq!(
-            reloads.get(),
+            reads.get(),
             1,
             "a refused answer must re-read once, not twice"
         );
-        maybe_reload(false);
-        assert_eq!(reloads.get(), 1);
-        // a later good read lets the next on-screen event read once
+        // a hint that is not a status change never reads
         error.set(None);
-        maybe_reload(true);
-        assert_eq!(reloads.get(), 2);
+        hint("{\"type\":\"hello\"}");
+        assert_eq!(reads.get(), 1);
+        // healthy and on screen: each of the five callbacks reads once
+        for event in &events {
+            event();
+        }
+        hint("{\"type\":\"status-changed\"}");
+        assert_eq!(reads.get(), 6);
+        // hidden: the events and the hint read nothing, even when healthy
+        screen.set(false);
+        for _ in 0..2 {
+            events[0]();
+            hint("{\"type\":\"status-changed\"}");
+        }
+        assert_eq!(reads.get(), 6);
+        // back on screen: the next event and the next hint read once each
+        screen.set(true);
+        events[1]();
+        hint("{\"type\":\"status-changed\"}");
+        assert_eq!(reads.get(), 8);
     }
 }
