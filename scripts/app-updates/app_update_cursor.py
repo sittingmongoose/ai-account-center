@@ -7,7 +7,7 @@ import time
 
 import app_update_common as _common
 from app_update_common import (
-    Install, UpdateFailure, POWERSHELL_UTF8, cli_probe, command, diagnostics, display_path, environment, powershell, ps_quote, result, version_text, version_tuple,
+    Install, UpdateFailure, cli_probe, command, diagnostics, display_path, environment, powershell, ps_quote, result, version_text, version_tuple,
 )
 from app_update_macos import gui_command
 
@@ -78,14 +78,11 @@ def windows_command(path, argument, timeout=20, quiet=False):
     a process-scoped policy for this one launcher, which leaves the user's own policy
     as it is. Group Policy still overrides it; that refusal is classified by its words.
     The launcher ends with `exit $LASTEXITCODE`, so a failed update is a failed run.
-    A `-File` pipe stays in the OEM code page (a localized path reads as U+FFFD), so the
-    launcher runs through the call operator with the same UTF-8 console setting powershell()
-    uses, under the same process-scoped Bypass."""
+    The path is its own -File argument (data, not PowerShell source, so a typographic apostrophe
+    is safe); the -File pipe's OEM code page is handled on the reading side (console decoding)."""
     if pathlib.Path(path).suffix.lower() == ".ps1":
-        script = (POWERSHELL_UTF8 + "& " + ps_quote(path) + " " + argument +
-                  "; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
-        argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
-        return command(argv, timeout=timeout, capture=True, errors=True, label="cursor-agent " + argument, quiet=quiet)
+        argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(path), argument]
+        return command(argv, timeout=timeout, capture=True, errors=True, label="cursor-agent " + argument, quiet=quiet, console=True)
     # An older .cmd-only install: PowerShell's call operator, no script file, no policy.
     return powershell("$ErrorActionPreference='Stop'; & " + ps_quote(path) + " " + argument +
                       "; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }", timeout=timeout, label="cursor-agent " + argument, quiet=quiet)

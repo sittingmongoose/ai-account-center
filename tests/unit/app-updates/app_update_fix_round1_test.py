@@ -497,23 +497,25 @@ class B12PowerShell(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------------------------
-# updateall-round1-cursor-oem: the .ps1 launcher ran through -File, whose pipe stays in the OEM
-# code page, so a localized failure path read as U+FFFD. The invocation must ask for UTF-8 the
-# way common.powershell() does, keeping the process-scoped Bypass and $LASTEXITCODE propagation.
+# updateall-round1-cursor-oem: the .ps1 launcher runs through -File, so its path is data (a
+# typographic apostrophe cannot break a PowerShell string) and its exit code is the launcher's.
+# A -File pipe stays in the OEM code page, so the reading side decodes UTF-8 first and then the
+# OEM code page; the code page is injectable (cp850) for this Linux fixture.
 # ---------------------------------------------------------------------------------------------
 FAKE_POWERSHELL = "#!" + sys.executable + "\n" + r'''import json, os, sys
 argv = sys.argv[1:]
 with open(os.environ["FAKE_PS_ARGV"], "w", encoding="utf-8") as record:
-    json.dump(["powershell.exe"] + sys.argv[1:], record)
-joined = " ".join(argv)
-utf8 = "-Command" in argv and "[Console]::OutputEncoding=" in joined
-encoding = "utf-8" if utf8 else "cp437"
-if "--version" in joined:
-    sys.stdout.buffer.write("2026.11.11-b912975\n".encode(encoding))
+    json.dump(["powershell.exe"] + argv, record)
+if "--version" in " ".join(argv):
+    sys.stdout.buffer.write(b"2026.11.11-b912975\n")
     sys.exit(0)
-message = r"Update failed: cannot write C:\Users\René\AppData\Local\cursor-agent (error 5)" + "\n"
-sys.stdout.buffer.write(message.encode(encoding))
-sys.exit(1)
+out = os.environ.get("FAKE_PS_STDOUT_FILE")
+if out:
+    sys.stdout.buffer.write(open(out, "rb").read())
+else:
+    message = r"Update failed: cannot write C:\Users\René\AppData\Local\cursor-agent (error 5)" + "\n"
+    sys.stdout.buffer.write(message.encode("cp850"))
+sys.exit(int(os.environ.get("FAKE_PS_EXIT", "1")))
 '''
 
 
@@ -526,17 +528,23 @@ class CursorOemOutput(Home):
         fake.chmod(0o755)
         return bindir
 
-    def launcher(self):
-        ps1 = self.root / "AppData/Local/cursor-agent/cursor-agent.ps1"
+    def launcher(self, folder="cursor-agent"):
+        ps1 = self.root / "AppData/Local" / folder / "cursor-agent.ps1"
         ps1.parent.mkdir(parents=True)
         ps1.write_text("# fixture launcher\n")
         return ps1
 
-    def shell_env(self, bindir):
-        return mock.patch.dict(os.environ, {
+    def shell_env(self, bindir, **extra):
+        # The child gets a temporary HOME and CCS_HOME too (lane rule): it must never reach the
+        # real home. The fake only writes its argv record and stdout, both inside this test root.
+        values = {
             "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
             "FAKE_PS_ARGV": str(self.root / "fake-ps-argv.json"),
-        })
+            "HOME": str(self.root),
+            "CCS_HOME": str(self.root / "ccs-home"),
+        }
+        values.update(extra)
+        return mock.patch.dict(os.environ, values)
 
     def recorded_argv(self):
         return json.loads((self.root / "fake-ps-argv.json").read_text(encoding="utf-8"))
@@ -544,7 +552,8 @@ class CursorOemOutput(Home):
     @unittest.skipUnless(POSIX, "the fake powershell.exe is a POSIX script")
     def test_a_localized_launcher_failure_keeps_its_non_ascii_path(self):
         ps1 = self.launcher()
-        with self.shell_env(self.fake_shell()):
+        with self.shell_env(self.fake_shell()), \
+                mock.patch.object(common, "CONSOLE_OEM_CODEC", "cp850", create=True):
             with self.assertRaises(common.UpdateFailure) as caught:
                 cursor.windows_command(ps1, "update", timeout=30)
         self.assertTrue(caught.exception.output.startswith("Update failed:"), caught.exception.output)
@@ -553,18 +562,27 @@ class CursorOemOutput(Home):
         self.assertEqual(caught.exception.exit_code, 1)
 
     @unittest.skipUnless(POSIX, "the fake powershell.exe is a POSIX script")
-    def test_the_utf8_switch_keeps_the_version_probe_the_policy_and_the_exit_code(self):
-        ps1 = self.launcher()
+    def test_a_path_with_a_typographic_apostrophe_is_one_file_argument(self):
+        ps1 = self.launcher(folder="O\u2019Neil-agent")
         with self.shell_env(self.fake_shell()):
             version, probe, reason = cursor.windows_version(ps1, timeout=30)
         self.assertEqual((version, probe, reason), ("2026.11.11-b912975", None, None))
         argv = self.recorded_argv()
-        self.assertEqual(argv[:6], ["powershell.exe", "-NoProfile", "-NonInteractive",
-                                    "-ExecutionPolicy", "Bypass", "-Command"])
-        script = argv[6]
-        self.assertTrue(script.startswith(common.POWERSHELL_UTF8), script[:80])
-        self.assertIn("& " + common.ps_quote(ps1) + " --version", script)
-        self.assertIn("$LASTEXITCODE", script)
+        self.assertIn("-File", argv)
+        self.assertNotIn("-Command", argv)
+        self.assertEqual(argv[argv.index("-File") + 1], str(ps1))
+        self.assertEqual(argv[-1], "--version")
+
+    @unittest.skipUnless(POSIX, "the fake powershell.exe is a POSIX script")
+    def test_the_policy_refusal_fixture_still_takes_the_policy_fallback(self):
+        ps1 = self.launcher()
+        refusal = self.root / "policy-refusal.txt"
+        refusal.write_bytes(evidence("cursor-alexis-policy.txt").encode("utf-8"))
+        with self.shell_env(self.fake_shell(), FAKE_PS_STDOUT_FILE=str(refusal), FAKE_PS_EXIT="1"):
+            with self.assertRaises(common.UpdateFailure) as caught:
+                cursor.windows_command(ps1, "update", timeout=30)
+        failure = cursor.classify(caught.exception, time.time())
+        self.assertEqual((failure.code, failure.reason), ("policy_blocked", "execution_policy"))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -585,7 +603,7 @@ class B13CursorFallback(Home):
         fake = FakeWindows(self, policy_restricted=True)
         def run(argv, *args, **kwargs):
             argv = [str(a) for a in argv]
-            if argv[0] == "powershell.exe" and ".ps1" in " ".join(argv):  # Group Policy ignores the process-scoped Bypass
+            if "-File" in argv:  # Group Policy ignores the process-scoped Bypass
                 fake.runs.append(argv)
                 return 1, evidence("cursor-alexis-policy.txt").encode()
             if argv[0].endswith("node.exe"):

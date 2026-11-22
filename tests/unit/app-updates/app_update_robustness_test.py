@@ -144,12 +144,9 @@ class CursorWindowsRegressions(Home):
         self.assertEqual((install.version, install.probe), ("2026.11.11-b912975", None),
                          "the readiness probe was refused: the row would read 'Unknown: the readiness check could not run'")
         self.assertEqual((row["status"], row["version"]), ("current", "2026.11.11-b912975"))
-        update = next(argv for argv in fake.runs if "-Command" in argv and " update" in argv[-1])
-        self.assertEqual(update[:6], ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
-        script = update[6]
-        self.assertTrue(script.startswith(common.POWERSHELL_UTF8), script[:80])
-        self.assertIn("& " + common.ps_quote(str(self.root / "AppData/Local/cursor-agent/cursor-agent.ps1")) + " update", script)
-        self.assertIn("$LASTEXITCODE", script)
+        update = next(argv for argv in fake.runs if argv[-1] == "update")
+        self.assertEqual(update[:7], ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+                                      str(self.root / "AppData/Local/cursor-agent/cursor-agent.ps1")])
         self.assertEqual(row["diagnostics"]["tool"], "cursor-agent")
 
     def test_group_policy_that_overrides_bypass_is_reported_as_policy_blocked_after_a_direct_try(self):
@@ -158,7 +155,7 @@ class CursorWindowsRegressions(Home):
         real = fake.run
         def enforced(argv, *args, **kwargs):
             argv = [str(arg) for arg in argv]
-            if argv[0] == "powershell.exe" and ".ps1" in " ".join(argv):  # Group Policy ignores the process scope.
+            if "-File" in argv:  # Group Policy ignores the process scope.
                 fake.runs.append(argv)
                 sink = kwargs.get("errors_sink")
                 text = evidence("cursor-alexis-policy.txt")

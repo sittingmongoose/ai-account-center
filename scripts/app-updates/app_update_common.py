@@ -1007,7 +1007,7 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False,
             sink.close()
 
 
-def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None, kill_tree=False, label=None, stderr_tail=True, quiet=False):
+def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None, kill_tree=False, label=None, stderr_tail=True, quiet=False, console=False):
     """Run one fixed command; a non-zero exit raises UpdateFailure. errors keeps the run's stderr,
     merged with its stdout, in the exception's output for in-memory classification only.
     kill_tree opts this one call into whole-tree cleanup; only the muse warm sets it.
@@ -1021,6 +1021,7 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
     service states) never become "what ran"."""
     record = _Silent() if quiet else diagnostics()
     stderr = []
+    decode = decode_console if console else (lambda data: data.decode("utf-8", "replace"))
     try:
         returncode, data = _run_bounded(
             [str(arg) for arg in argv], timeout,
@@ -1036,21 +1037,37 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
         record.note("not_started")
         raise UpdateFailure("update_failed", reason="not_started") from None
     if returncode != 0:
-        text = data.decode("utf-8", "replace")[-262144:] if errors else b"".join(stderr).decode("utf-8", "replace")
-        diagnostic = data.decode("utf-8", "replace") if errors or not text else text
+        text = decode(data)[-262144:] if errors else decode(b"".join(stderr))
+        diagnostic = decode(data) if errors or not text else text
         record.ran(argv, returncode, diagnostic, label)
         raise UpdateFailure(output=text, exit_code=returncode)
     record.ran(argv, 0, label=label)
     if capture and len(data) > min(2 * 1024 * 1024, capture_limit):
         raise UpdateFailure()
-    return data.decode("utf-8", "replace") if capture else ""
+    return decode(data) if capture else ""
 
 
-# Windows PowerShell 5.1 writes to a pipe in the OEM code page (CP437, CP850, ...), which
-# command() would read as UTF-8: a "C:\\Users\\Ren\u00e9" path or a localized error came back as U+FFFD.
+# Windows PowerShell 5.1 writes to a pipe in the OEM code page (CP437, CP850, ...). The Cursor
+# launcher runs through -File (its path is data, not PowerShell source), so its output is decoded
+# on the reading side: UTF-8 first, then the OEM code page on invalid UTF-8 (decode_console below).
 # UTF8Encoding($false) has no byte-order mark: [System.Text.Encoding]::UTF8 carries one, and a BOM
 # before the first character would break every json.loads of a PowerShell reply.
 POWERSHELL_UTF8 = "[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding $false); "
+
+# The OEM fallback code page for console decoding. None means the platform OEM ('oem' on Windows,
+# UTF-8 elsewhere); tests inject a fixed code page (cp850) on machines without the Windows codec.
+CONSOLE_OEM_CODEC = None
+
+
+def decode_console(data):
+    """UTF-8 first (a UTF-8 or ASCII console reads exactly); on invalid UTF-8, the OEM code page."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        codec = CONSOLE_OEM_CODEC
+        if codec is None:
+            codec = "oem" if os.name == "nt" else "utf-8"
+        return data.decode(codec, "replace")
 
 
 def powershell(script, timeout=30, capture_limit=65536, label=None, quiet=False):
