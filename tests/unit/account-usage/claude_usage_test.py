@@ -2819,5 +2819,30 @@ class ResetCodeLoginTests(unittest.TestCase):
         client.assert_not_called()
 
 
+class RefusalReasonParityTests(unittest.TestCase):
+    def test_the_helper_route_status_and_page_allowlists_name_the_same_five_codes(self):
+        # Low 5: one five-code list lives in four places; this keeps them in sync.
+        expected = {"identity-unconfirmed", "signed-out", "rate-limited",
+                    "no-matching-code-login", "ambiguous-code-login"}
+        root = Path(__file__).resolve().parents[3]
+
+        def block(path, marker, close):
+            text = (root / path).read_text(encoding="utf-8")
+            return text.split(marker, 1)[1].split(close, 1)[0]
+
+        helper = block("scripts/account-usage/claude_usage.py", "RESET_LOGIN_REASONS = {", "}")
+        self.assertEqual({public for _, public in re.findall(r'"([a-z_]+)": "([a-z-]+)"', helper)} | {"rate-limited"},
+                         expected)
+
+        def rust_codes(path, name):
+            return set(re.findall(r'"([a-z-]+)"', block(path, f"const {name}: &[&str] = &[", "];")))
+
+        self.assertEqual(rust_codes("crates/aac-status/src/reset.rs", "REFUSAL_REASONS"), expected)
+        self.assertLessEqual(expected, rust_codes("crates/aac-http/src/public_auth/reset_routes.rs", "SAFE_REASONS"))
+        page = block("web-dashboard/leptos/src/resets.rs", "pub fn why_not(", "\n}\n")
+        for reason in expected:
+            self.assertIn(f'"{reason}"', page, reason)
+
+
 if __name__ == "__main__":
     unittest.main()
