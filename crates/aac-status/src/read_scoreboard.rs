@@ -441,24 +441,22 @@ fn base_rows(
             )?);
         }
         let mut row = json!({"key":key,"model":model(&first),"runtime":first["model"]["harness"],"effort":first["model"]["effort"],"process":if task["byProcess"]==true&&first["process"].is_object(){json!({"id":first["process"]["id"],"version":first["process"]["version"]})}else{V::Null},"observed":if observed.is_empty(){V::Null}else{column(&observed,"observed",&V::Null,task,catalog,index,ctx)?},"benchmarks":benchmarks});
-        if let Some((as_of, age_seconds)) = traced_run_problem(&files, problems, now, ctx)
-            .or_else(|| {
-                let mut earliest: Option<i64> = None;
-                let mut matched = false;
-                for run in &runs {
-                    let Some(since) = review_health.get(s(&run["id"])) else {
-                        continue;
-                    };
-                    matched = true;
-                    if let Some(since) = *since
-                        && earliest.is_none_or(|prev| since < prev)
-                    {
-                        earliest = Some(since);
-                    }
+        if let Some((as_of, age_seconds)) = traced_run_problem(&files, problems, now, ctx).or_else(|| {
+            let mut earliest: Option<i64> = None;
+            let mut matched = false;
+            for run in &runs {
+                let Some(since) = review_health.get(s(&run["id"])) else {
+                    continue;
+                };
+                matched = true;
+                if let Some(since) = *since
+                    && earliest.is_none_or(|prev| since < prev)
+                {
+                    earliest = Some(since);
                 }
-                matched.then(|| (ctx.iso(earliest), age(now, earliest)))
-            })
-            && let Some(obj) = row.as_object_mut()
+            }
+            matched.then(|| (ctx.iso(earliest), age(now, earliest)))
+        }) && let Some(obj) = row.as_object_mut()
         {
             obj.insert("sourceState".to_owned(), json!("unreadable"));
             obj.insert("asOf".to_owned(), as_of);
@@ -1162,7 +1160,8 @@ fn compose_core(
             // already named and stays the row's (a rarer case than the one this covers).
             if let Some((state, as_of, age_seconds)) = &catalog_health {
                 for row in &mut rows {
-                    if row["ranked"] == true && row.get("sourceState").is_none()
+                    if row["ranked"] == true
+                        && row.get("sourceState").is_none()
                         && let Some(obj) = row.as_object_mut()
                     {
                         obj.insert("sourceState".to_owned(), state.clone());

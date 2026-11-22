@@ -2811,7 +2811,9 @@ fn merge_pass_problems(previous: &[Json], fresh: Vec<Json>) -> Vec<Json> {
     fresh
         .into_iter()
         .map(|mut problem| {
-            let since = problem["file"].as_str().and_then(|file| first.get(file).copied());
+            let since = problem["file"]
+                .as_str()
+                .and_then(|file| first.get(file).copied());
             if let (Some(since), Some(obj)) = (since, problem.as_object_mut()) {
                 obj.insert("since".to_string(), json!(since));
             }

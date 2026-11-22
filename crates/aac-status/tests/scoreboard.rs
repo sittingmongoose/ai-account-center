@@ -1414,7 +1414,11 @@ fn m1_row(view: &Value) -> &Value {
         .iter()
         .find(|r| r["model"] == "anthropic/claude-opus-5-5")
         .expect("the Opus row");
-    assert_eq!(row["ranked"], json!(true), "the row ranks; it is what carries the verdict");
+    assert_eq!(
+        row["ranked"],
+        json!(true),
+        "the row ranks; it is what carries the verdict"
+    );
     assert_eq!(row["verdict"], json!("fine"));
     row
 }
@@ -1428,7 +1432,11 @@ fn a_failed_catalog_listing_is_disclosed_on_every_ranked_verdict() {
     let view = m1_view(data, facts);
     assert_eq!(view["sources"][1]["state"], json!("error"));
     let row = m1_row(&view);
-    assert_eq!(row["sourceState"], json!("error"), "the retained catalog's failure: {row}");
+    assert_eq!(
+        row["sourceState"],
+        json!("error"),
+        "the retained catalog's failure: {row}"
+    );
     assert_eq!(row["asOf"], json!("2026-11-06T16:25:00.000Z"));
     assert_eq!(row["ageSeconds"].as_f64(), Some(300.0));
 }
@@ -1444,7 +1452,11 @@ fn a_failed_retained_review_file_is_disclosed_on_the_row_it_reviewed() {
     );
     let view = m1_view(data, facts);
     let row = m1_row(&view);
-    assert_eq!(row["sourceState"], json!("unreadable"), "the review still ranked it: {row}");
+    assert_eq!(
+        row["sourceState"],
+        json!("unreadable"),
+        "the review still ranked it: {row}"
+    );
     assert_eq!(row["asOf"], json!("2026-11-06T16:25:00.000Z"));
     assert_eq!(
         row["ageSeconds"].as_f64(),
