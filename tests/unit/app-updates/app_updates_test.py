@@ -2241,6 +2241,7 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         (self.root / 'explorer.exe').touch()
         self.events, self.launched, self.processes, self.packages = [], [], [], {}
+        self.environments = {}
         self.session, self.forced, self.next_pid = 1, 0, 900
         self.use('codex-desktop')
         kernel = mock.Mock()
@@ -2251,6 +2252,9 @@ class WindowsDesktopReopenTests(unittest.TestCase):
             mock.patch.object(desktop.ctypes, 'windll', types.SimpleNamespace(kernel32=kernel), create=True),
             mock.patch.object(desktop, 'scan', side_effect=lambda platform: list(self.processes)),
             mock.patch.object(desktop, 'process_package', side_effect=lambda item: self.packages.get(item.pid)),
+            # A direct relaunch replays the instance's captured launch environment.
+            mock.patch.object(desktop, 'windows_context',
+                              side_effect=lambda pid: ('/fixture', self.environments.get(pid, {})), create=True),
             mock.patch.object(desktop, 'terminate_desktops', side_effect=self.close),
             mock.patch.object(desktop, 'restart_desktops', side_effect=AssertionError('Ubuntu relaunch used on Windows')),
             mock.patch.object(desktop.subprocess, 'Popen', side_effect=self.popen),
@@ -2483,7 +2487,8 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.use('claude-desktop')
         self.run_main()
         work, home = '/fixture/Roaming/Claude-work', '/fixture/Roaming/Claude-home'
-        self.run_main(['--user-data-dir=' + work], packaged=False)
+        work_pid = self.run_main(['--user-data-dir=' + work], packaged=False)
+        self.environments[work_pid] = {'XDG_CONFIG_HOME': '/fixture/work-config'}
         self.run_main(['--user-data-dir=' + home], packaged=False)
         value = desktop.update_desktop(self.package(self.old_root, self.OLD))
         new_exe = str(self.new_root / self.executable)
@@ -2492,6 +2497,9 @@ class WindowsDesktopReopenTests(unittest.TestCase):
             ([new_exe, '--user-data-dir=' + home], str(self.new_root / 'app')),
             ([new_exe, '--user-data-dir=' + work], str(self.new_root / 'app')),
         ]))
+        # The profile's captured environment is replayed by its direct relaunch.
+        work_launch = next(kwargs for argv, kwargs in self.launched if argv[-1].endswith(work))
+        self.assertEqual(work_launch['env'].get('XDG_CONFIG_HOME'), '/fixture/work-config')
         self.assertEqual(self.events, ['download', 'close', 'install', 'launch', 'launch', 'launch'])
         self.assert_reopened(value, 3)
 
