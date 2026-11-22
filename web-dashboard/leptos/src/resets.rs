@@ -104,6 +104,9 @@ pub struct ClaimResult {
     pub attempt_key: String,
     #[serde(deserialize_with = "nullable")]
     pub outcome: String,
+    /// The allowlisted cause a proven no-send named; empty when the ledger proved none.
+    #[serde(deserialize_with = "nullable")]
+    pub refusal_reason: String,
     #[serde(deserialize_with = "nullable")]
     pub verification: String,
     pub provider_success: bool,
@@ -658,6 +661,11 @@ fn result_words(r: &ClaimResult, provider: &str) -> Said {
             check: true,
         },
         "nothing-to-reset" => plain("Nothing to reset right now. Nothing was spent."),
+        // A proven no-send names its allowlisted cause; the generic sentence stays the fallback.
+        "not-sent" if !r.refusal_reason.is_empty() => bad(&format!(
+            "{} Nothing was spent.",
+            why_not(&r.refusal_reason, provider)
+        )),
         "not-sent" => bad("AAC did not send this reset. Nothing was spent."),
         "no-credit" => bad("That reset is no longer there. Nothing was spent."),
         "already-used" => bad("That reset was already used."),
@@ -2340,6 +2348,36 @@ mod tests {
             "That reset was already used."
         );
         assert!(!result_said(&used, "claude").check);
+    }
+
+    #[test]
+    fn a_not_sent_receipt_names_its_proven_reason() {
+        // claude-reset rows: a not-sent receipt with an allowlisted refusalReason says the
+        // per-reason sentence instead of the generic one; without a reason it stays generic.
+        let refused: ClaimResult = serde_json::from_str(
+            r#"{"attemptKey":"a","outcome":"not-sent","refusalReason":"identity-unconfirmed"}"#,
+        )
+        .unwrap();
+        let said = result_said(&refused, "claude");
+        assert_eq!(
+            said.text,
+            "AAC couldn't confirm which account this is, so it won't use this reset. Nothing was spent."
+        );
+        assert!(said.bad && !said.check);
+        let throttled: ClaimResult = serde_json::from_str(
+            r#"{"attemptKey":"a","outcome":"not-sent","refusalReason":"rate-limited"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            result_said(&throttled, "claude").text,
+            "Claude is limiting reset requests. Try again later. Nothing was spent."
+        );
+        let bare: ClaimResult =
+            serde_json::from_str(r#"{"attemptKey":"a","outcome":"not-sent"}"#).unwrap();
+        assert_eq!(
+            result_said(&bare, "claude").text,
+            "AAC did not send this reset. Nothing was spent."
+        );
     }
 
     #[test]
