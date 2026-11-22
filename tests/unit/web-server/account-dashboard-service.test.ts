@@ -11,6 +11,10 @@ import {
   AccountDashboardService,
   type AccountDashboardDeps,
 } from '../../../src/web-server/services/account-dashboard-service';
+import {
+  readAccountVisibility,
+  writeAccountVisibility,
+} from '../../../src/web-server/services/account-visibility';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 import { antigravityPlanDisplay } from '../../../src/antigravity/plan';
 import type { AntigravityDashboardAccount } from '../../../src/antigravity/usage-contract';
@@ -1893,6 +1897,171 @@ describe('OpenCode Go visibility carryover (Low 1)', () => {
         hidden: false,
         trayHidden: false,
       });
+    }
+  });
+
+  it('persists a bare opencode-go hide onto key A independently for Home and tray and never moves it to key B', async () => {
+    const idA = 'opencode-go:usage:aaaaaaaa';
+    const idB = 'opencode-go:usage:bbbbbbbb';
+    const rowA = opencodeRow(idA, 'Key aaaaaaaa');
+    const rowB = opencodeRow(idB, 'Key bbbbbbbb');
+
+    for (const trayOnly of [false, true]) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-opencode-vis-seq-'));
+      fs.chmodSync(dir, 0o700);
+      try {
+        await writeAccountVisibility(dir, {
+          hiddenProviders: [],
+          hiddenAccountIds: trayOnly ? [] : ['codex:party', 'opencode-go:usage'],
+          trayHiddenProviders: [],
+          trayHiddenAccountIds: trayOnly ? ['codex:party', 'opencode-go:usage'] : [],
+        });
+
+        let now = Date.parse('2026-11-21T12:00:00Z');
+        let currentRows: DashboardAccount[] = [rowA];
+        const service = new AccountDashboardService(
+          deps({
+            scope: () => dir,
+            now: () => now,
+            readVisibility: undefined,
+            getAdditionalAccounts: async () => currentRows,
+          })
+        );
+
+        const expectedHome = trayOnly ? [] : ['codex:party', idA];
+        const expectedTray = trayOnly ? ['codex:party', idA] : [];
+
+        // Step 1: only key A exists -> A is hidden and the digest replaces the bare ID on disk.
+        const step1 = await service.get('mac', true);
+        expect(step1.settings.hiddenAccountIds).toEqual(expectedHome);
+        expect(step1.settings.trayHiddenAccountIds).toEqual(expectedTray);
+        expect(step1.accounts.find((a) => a.id === idA)).toMatchObject({
+          hidden: !trayOnly,
+          trayHidden: trayOnly,
+        });
+        expect(await readAccountVisibility(dir)).toEqual({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: expectedHome,
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: expectedTray,
+          },
+        });
+
+        // Step 2: add key B alongside A -> A stays hidden, B is visible.
+        currentRows = [rowA, rowB];
+        now += 61_000;
+        const step2 = await service.get('mac', true);
+        expect(step2.accounts.find((a) => a.id === idA)).toMatchObject({
+          hidden: !trayOnly,
+          trayHidden: trayOnly,
+        });
+        expect(step2.accounts.find((a) => a.id === idB)).toMatchObject({
+          hidden: false,
+          trayHidden: false,
+        });
+
+        // Step 3: remove A, leave only B -> B stays visible, saved choice stays on A.
+        currentRows = [rowB];
+        now += 61_000;
+        const step3 = await service.get('mac', true);
+        expect(step3.accounts.find((a) => a.id === idB)).toMatchObject({
+          hidden: false,
+          trayHidden: false,
+        });
+        expect(step3.settings.hiddenAccountIds).toEqual(expectedHome);
+        expect(step3.settings.trayHiddenAccountIds).toEqual(expectedTray);
+        expect(await readAccountVisibility(dir)).toEqual({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: expectedHome,
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: expectedTray,
+          },
+        });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('never alters a visibility choice saved directly on an opencode-go digest id', async () => {
+    const idA = 'opencode-go:usage:aaaaaaaa';
+    const idB = 'opencode-go:usage:bbbbbbbb';
+    const rowA = opencodeRow(idA, 'Key aaaaaaaa');
+    const rowB = opencodeRow(idB, 'Key bbbbbbbb');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-opencode-vis-direct-'));
+    fs.chmodSync(dir, 0o700);
+    try {
+      await writeAccountVisibility(dir, {
+        hiddenProviders: [],
+        hiddenAccountIds: [idA],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: [idB],
+      });
+      const file = path.join(dir, 'account-visibility.json');
+      const before = fs.readFileSync(file, 'utf8');
+
+      let now = Date.parse('2026-11-21T12:00:00Z');
+      let currentRows: DashboardAccount[] = [rowA];
+      const service = new AccountDashboardService(
+        deps({
+          scope: () => dir,
+          now: () => now,
+          readVisibility: undefined,
+          getAdditionalAccounts: async () => currentRows,
+        })
+      );
+
+      const s1 = await service.get('mac', true);
+      expect(s1.accounts.find((a) => a.id === idA)).toMatchObject({
+        hidden: true,
+        trayHidden: false,
+      });
+
+      currentRows = [rowB];
+      now += 61_000;
+      const s2 = await service.get('mac', true);
+      expect(s2.accounts.find((a) => a.id === idB)).toMatchObject({
+        hidden: false,
+        trayHidden: true,
+      });
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+
+      // Migrating a bare ID on Home must not alter a direct digest choice on tray.
+      await writeAccountVisibility(dir, {
+        hiddenProviders: [],
+        hiddenAccountIds: ['opencode-go:usage'],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: [idB],
+      });
+      currentRows = [rowA];
+      now += 61_000;
+      const mixed1 = await service.get('mac', true);
+      expect(mixed1.accounts.find((a) => a.id === idA)).toMatchObject({
+        hidden: true,
+        trayHidden: false,
+      });
+      expect(await readAccountVisibility(dir)).toEqual({
+        state: 'ok',
+        visibility: {
+          hiddenProviders: [],
+          hiddenAccountIds: [idA],
+          trayHiddenProviders: [],
+          trayHiddenAccountIds: [idB],
+        },
+      });
+      currentRows = [rowB];
+      now += 61_000;
+      const mixed2 = await service.get('mac', true);
+      expect(mixed2.accounts.find((a) => a.id === idB)).toMatchObject({
+        hidden: false,
+        trayHidden: true,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -2,10 +2,13 @@
 use crate::account_reads::{id_list, known_providers, store_folder, visibility};
 use crate::preferences_write::retry_busy_lease;
 use aac_core::Cause;
-use aac_files::registry::{self, Owners};
+use aac_files::{
+    OwnedStore,
+    registry::{self, Owners},
+};
 use aac_views::decline::Decline;
 use serde_json::{Map, Value, json};
-use std::{path::Path, time::Instant};
+use std::{collections::HashMap, path::Path, time::Instant};
 
 const LISTS: [&str; 4] = [
     "hiddenProviders",
@@ -80,6 +83,59 @@ pub(crate) fn body_valid(patch: bool, bytes: &[u8]) -> bool {
     input
         .iter()
         .all(|(key, input)| change(key, input, patch).is_some())
+}
+
+fn write_document(store: &OwnedStore, document: &Map<String, Value>) -> Result<(), Decline> {
+    let mut file = serde_json::to_vec_pretty(document).map_err(|_| Decline::Internal)?;
+    file.push(b'\n');
+    store.replace_settings(&file).map_err(|_| Decline::Internal)
+}
+
+/// Persist unambiguous bare-to-digest account ID migrations in place under the visibility file
+/// lease. Updates `hiddenAccountIds` and `trayHiddenAccountIds` independently, only for bare IDs
+/// still present while the lease is held. Returns `Ok(None)` when the file is unavailable.
+pub(crate) fn migrate_account_ids(
+    root: &Path,
+    owners: &Owners,
+    replacements: &HashMap<String, String>,
+) -> Result<Option<Value>, Decline> {
+    if replacements.is_empty() {
+        return Ok(visibility(root).map(|mut current| current["visibility"].take()));
+    }
+    let rows = registry::rows().map_err(|_| Decline::Internal)?;
+    let store = owners
+        .claim(rows, "account-visibility", root, None)
+        .map_err(|_| Decline::Unsupported)?;
+    let Some(current) = visibility(root) else {
+        return Ok(None);
+    };
+    let mut any_changed = false;
+    let mut lists = Map::new();
+    let mut document = Map::new();
+    document.insert("version".into(), json!(1));
+    for key in LISTS {
+        let prior = current["visibility"][key]
+            .as_array()
+            .ok_or(Decline::Shape)?;
+        let next = if key.ends_with("AccountIds") {
+            let (replaced, changed) =
+                crate::account_usage::dashboard::replace_account_ids(prior, replacements);
+            if changed {
+                any_changed = true;
+                list(key, &Value::Array(replaced)).ok_or(Decline::Shape)?
+            } else {
+                prior.clone()
+            }
+        } else {
+            prior.clone()
+        };
+        document.insert(key.into(), Value::Array(next.clone()));
+        lists.insert(key.into(), Value::Array(next));
+    }
+    if any_changed {
+        write_document(&store, &document)?;
+    }
+    Ok(Some(Value::Object(lists)))
 }
 
 pub(crate) fn save(
@@ -181,11 +237,7 @@ fn save_until(
         document.insert(key.into(), Value::Array(next.clone()));
         lists.insert(key.into(), Value::Array(next));
     }
-    let mut file = serde_json::to_vec_pretty(&document).map_err(|_| Decline::Internal)?;
-    file.push(b'\n');
-    store
-        .replace_settings(&file)
-        .map_err(|_| Decline::Internal)?;
+    write_document(&store, &document)?;
     Ok(
         json!({ "state": "saved", "visibility": lists, "folderWarnings": current["folderWarnings"] }),
     )
@@ -258,5 +310,79 @@ mod tests {
                 "trayHiddenAccountIds": []
             })
         );
+    }
+
+    #[test]
+    fn migrate_account_ids_persists_independently_under_lease_and_leaves_direct_digests_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        #[cfg(unix)]
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("chmod dir");
+        let file = dir.path().join("account-visibility.json");
+        fs::write(
+            &file,
+            r#"{"version":1,"hiddenProviders":["cursor"],"hiddenAccountIds":["codex:party","opencode-go:usage","opencode-go:usage:aaaaaaaa"],"trayHiddenProviders":["qwen"],"trayHiddenAccountIds":["opencode-go:usage:bbbbbbbb"]}"#,
+        )
+        .expect("write visibility");
+        #[cfg(unix)]
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("chmod file");
+
+        let rows = registry::rows().expect("registry rows");
+        let ts_owners = Owners::defaults(rows);
+        let replacements = HashMap::from([(
+            "opencode-go:usage".to_owned(),
+            "opencode-go:usage:aaaaaaaa".to_owned(),
+        )]);
+        // Refuses when another process owns the visibility row.
+        assert!(migrate_account_ids(dir.path(), &ts_owners, &replacements).is_err());
+
+        let files: std::collections::BTreeMap<String, String> = rows
+            .iter()
+            .map(|row| {
+                let owner = if row.id == "account-visibility" {
+                    "rust-service"
+                } else {
+                    row.owner.word()
+                };
+                (row.id.clone(), owner.to_owned())
+            })
+            .collect();
+        let owners = Owners::from_boot(rows, &files).expect("owners");
+
+        let migrated = migrate_account_ids(dir.path(), &owners, &replacements)
+            .expect("migrate")
+            .expect("available");
+        assert_eq!(
+            migrated,
+            json!({
+                "hiddenProviders": ["cursor"],
+                "hiddenAccountIds": ["codex:party", "opencode-go:usage:aaaaaaaa"],
+                "trayHiddenProviders": ["qwen"],
+                "trayHiddenAccountIds": ["opencode-go:usage:bbbbbbbb"]
+            })
+        );
+        // No new file created beside account-visibility.json (only its .lock lease).
+        for entry in fs::read_dir(dir.path()).expect("read dir") {
+            let name = entry.expect("entry").file_name();
+            let name = name.to_string_lossy();
+            assert!(
+                name == "account-visibility.json" || name == "account-visibility.json.lock",
+                "unexpected file {name}"
+            );
+        }
+
+        // Subsequent migration with a different digest is a no-op because the bare ID is gone.
+        let bytes_after = fs::read(&file).expect("read migrated bytes");
+        let second = migrate_account_ids(
+            dir.path(),
+            &owners,
+            &HashMap::from([(
+                "opencode-go:usage".to_owned(),
+                "opencode-go:usage:cccccccc".to_owned(),
+            )]),
+        )
+        .expect("second migrate")
+        .expect("available");
+        assert_eq!(second, migrated);
+        assert_eq!(fs::read(&file).expect("read unchanged bytes"), bytes_after);
     }
 }

@@ -151,7 +151,7 @@ impl Producer {
             .map_err(|_| Decline::Internal)??;
         let now = UtcMs::now().map_err(|_| Decline::Date)?.get() as i64;
         let visibility_available = disk.visibility.is_some();
-        let visibility = {
+        let mut visibility = {
             let mut current = self.visibility.lock().await;
             if let Some(visibility) = disk.visibility {
                 *current = visibility;
@@ -172,6 +172,23 @@ impl Producer {
         let entries = self.renewal_entries(now).await;
         let codex = self.codex_rows(disk.codex, &entries, now);
         let (additional, codex, claude) = tokio::join!(additional, codex, claude);
+
+        if visibility_available {
+            let migrations = dashboard::unique_discovered_opencode_ids(&additional);
+            if dashboard::has_migratable_ids(&visibility, &migrations) {
+                let root = self.root.clone();
+                let owners = self.owners.clone();
+                if let Ok(Ok(Some(saved))) = tokio::task::spawn_blocking(move || {
+                    crate::visibility_write::migrate_account_ids(&root, &owners, &migrations)
+                })
+                .await
+                {
+                    let mut current = self.visibility.lock().await;
+                    *current = saved.clone();
+                    visibility = saved;
+                }
+            }
+        }
 
         let mut samples = Vec::with_capacity(4);
         for (selected, desktop) in [Desktop::Mac, Desktop::Windows].into_iter().enumerate() {
@@ -980,5 +997,372 @@ mod tests {
             renewal_row_note(&entries, "party", false, false, now).is_none(),
             "a live source never gets a note"
         );
+    }
+
+    struct MutableOpencodeKeys {
+        keys: std::sync::Mutex<Vec<(&'static str, &'static str, i64)>>,
+        now: std::sync::atomic::AtomicI64,
+    }
+
+    impl crate::account_usage::coordinator::FailoverDeps for MutableOpencodeKeys {
+        fn transport<'a>(
+            &'a self,
+            _host: &'a crate::account_usage::coordinator::UsageHost,
+            request: &'a Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, ()>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                if request["provider"] != "opencode-go" {
+                    return Ok(json!({"version":1,"action":"inventory","candidates":[]}));
+                }
+                let keys = self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if request["action"] == "inventory" {
+                    let candidates: Vec<Value> = keys
+                        .iter()
+                        .map(|(locator, key, _)| {
+                            json!({
+                                "locator": locator.repeat(64),
+                                "selectors": ["discover"],
+                                "revision": "2".repeat(64),
+                                "identity": {"kind": "opencode-go-credential", "key": key.repeat(64)}
+                            })
+                        })
+                        .collect();
+                    return Ok(json!({
+                        "version": 1,
+                        "action": "inventory",
+                        "candidates": candidates
+                    }));
+                }
+                let prefix = request["candidate"]["identity"]["key"]
+                    .as_str()
+                    .and_then(|s| s.get(..1))
+                    .unwrap_or("");
+                let used = keys
+                    .iter()
+                    .find(|(_, key, _)| *key == prefix)
+                    .map(|(_, _, used)| *used)
+                    .unwrap_or(99);
+                let at = aac_num::ecma::to_iso_string(
+                    self.now.load(std::sync::atomic::Ordering::Relaxed),
+                )
+                .unwrap_or_else(|| "2026-11-21T17:00:00.000Z".into());
+                Ok(json!({
+                    "version": 1,
+                    "action": "collect",
+                    "candidate": request["candidate"],
+                    "failureCode": null,
+                    "sample": {
+                        "status": "ok",
+                        "sampledAt": at,
+                        "fetchedAt": at,
+                        "windows": [{"key": "weekly", "label": "Weekly", "usedPercent": used}]
+                    }
+                }))
+            })
+        }
+
+        fn hosts<'a>(
+            &'a self,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Vec<crate::account_usage::coordinator::UsageHost>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Vec::new() })
+        }
+
+        fn now(&self) -> f64 {
+            self.now.load(std::sync::atomic::Ordering::Relaxed) as f64
+        }
+    }
+
+    fn visibility_and_collection_owners() -> Owners {
+        let rows = aac_files::registry::rows().expect("bundled private files");
+        let files: std::collections::BTreeMap<String, String> = rows
+            .iter()
+            .map(|row| {
+                let owner = if matches!(row.moves_with.as_deref(), Some("collection" | "writes")) {
+                    "rust-service"
+                } else {
+                    row.owner.word()
+                };
+                (row.id.clone(), owner.to_owned())
+            })
+            .collect();
+        Owners::from_boot(rows, &files).expect("owners")
+    }
+
+    /// Reviewer Low fix round 1: migrating a legacy bare `opencode-go:usage` hide onto the sole
+    /// digest row persists that digest into `account-visibility.json` (Home and tray
+    /// independently), so adding key B keeps A hidden and removing A never hides B. A choice made
+    /// directly on a digest is never modified.
+    #[tokio::test]
+    async fn opencode_go_bare_hide_persists_onto_key_a_and_never_moves_to_key_b() {
+        let key_a = ("1", "a", 11);
+        let key_b = ("3", "b", 22);
+        let id_a = "opencode-go:usage:aaaaaaaa";
+        let id_b = "opencode-go:usage:bbbbbbbb";
+
+        let find_row = |sample: &sampler::DashboardSample, id: &str| -> Value {
+            sample.dashboard["accounts"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["id"] == id))
+                .cloned()
+                .unwrap_or_else(|| panic!("row {id} missing from {:?}", sample.desktop))
+        };
+
+        // Home-only and tray-only: run the three-step sequence (only A -> A+B -> only B).
+        for tray_only in [false, true] {
+            let label = if tray_only { "tray-only" } else { "home-only" };
+            let dir = tempfile::tempdir().expect("fixture root");
+            let root = fs::canonicalize(dir.path()).expect("canonical root");
+            set_mode(&root, 0o700);
+            private_bytes(
+                &root.join("account-usage-accounts.json"),
+                &serde_json::to_vec(&json!({
+                    "version": 2,
+                    "accounts": [{
+                        "id": "opencode-go:usage",
+                        "provider": "opencode-go",
+                        "platform": "ubuntu",
+                        "sshHost": null,
+                        "label": "OpenCode Go",
+                        "credential": {"kind": "discover"},
+                        "createdAt": null,
+                        "createdBy": "migration"
+                    }]
+                }))
+                .expect("registry"),
+            );
+            let initial_home = if tray_only {
+                json!([])
+            } else {
+                json!(["codex:party", "opencode-go:usage"])
+            };
+            let initial_tray = if tray_only {
+                json!(["codex:party", "opencode-go:usage"])
+            } else {
+                json!([])
+            };
+            private_bytes(
+                &root.join("account-visibility.json"),
+                &serde_json::to_vec(&json!({
+                    "version": 1,
+                    "hiddenProviders": [],
+                    "hiddenAccountIds": initial_home,
+                    "trayHiddenProviders": [],
+                    "trayHiddenAccountIds": initial_tray
+                }))
+                .expect("visibility"),
+            );
+
+            let owners = visibility_and_collection_owners();
+            let deps = Arc::new(MutableOpencodeKeys {
+                keys: std::sync::Mutex::new(vec![key_a]),
+                now: std::sync::atomic::AtomicI64::new(1_795_280_400_000),
+            });
+            let mut producer = Producer::new(root.clone(), owners.clone()).with_home(None);
+            producer.failover = Arc::new(
+                crate::account_usage::coordinator::FailoverCoordinator::new(deps.clone(), owners),
+            );
+
+            let expected_home = if tray_only {
+                json!([])
+            } else {
+                json!(["codex:party", id_a])
+            };
+            let expected_tray = if tray_only {
+                json!(["codex:party", id_a])
+            } else {
+                json!([])
+            };
+
+            // Step 1: only key A exists -> A is hidden in the configured list and persisted.
+            let step1 = producer
+                .collect(CompanionInputs::default())
+                .await
+                .expect("step 1 collect");
+            assert_eq!(step1.len(), 4);
+            for sample in &step1 {
+                let row_a = find_row(sample, id_a);
+                assert_eq!(row_a["hidden"], !tray_only, "{label} step 1 Mac/Win hidden");
+                assert_eq!(row_a["trayHidden"], tray_only, "{label} step 1 trayHidden");
+                assert_eq!(
+                    sample.dashboard["settings"]["hiddenAccountIds"], expected_home,
+                    "{label} step 1 settings home"
+                );
+                assert_eq!(
+                    sample.dashboard["settings"]["trayHiddenAccountIds"], expected_tray,
+                    "{label} step 1 settings tray"
+                );
+            }
+            let saved_after_step1 =
+                crate::account_reads::visibility(&root).expect("saved visibility step 1");
+            assert_eq!(
+                saved_after_step1["visibility"]["hiddenAccountIds"], expected_home,
+                "{label} step 1 persisted home"
+            );
+            assert_eq!(
+                saved_after_step1["visibility"]["trayHiddenAccountIds"], expected_tray,
+                "{label} step 1 persisted tray"
+            );
+
+            // Step 2: add key B alongside A -> A stays hidden, B is visible.
+            *deps.keys.lock().unwrap_or_else(|e| e.into_inner()) = vec![key_a, key_b];
+            deps.now
+                .fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+            let step2 = producer
+                .collect(CompanionInputs::default())
+                .await
+                .expect("step 2 collect");
+            for sample in &step2 {
+                let row_a = find_row(sample, id_a);
+                let row_b = find_row(sample, id_b);
+                assert_eq!(row_a["hidden"], !tray_only, "{label} step 2 A hidden");
+                assert_eq!(
+                    row_a["trayHidden"], tray_only,
+                    "{label} step 2 A trayHidden"
+                );
+                assert_eq!(row_b["hidden"], false, "{label} step 2 B hidden");
+                assert_eq!(row_b["trayHidden"], false, "{label} step 2 B trayHidden");
+            }
+
+            // Step 3: remove A, leaving only B -> B stays visible, saved choice remains on A.
+            *deps.keys.lock().unwrap_or_else(|e| e.into_inner()) = vec![key_b];
+            deps.now
+                .fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+            let step3 = producer
+                .collect(CompanionInputs::default())
+                .await
+                .expect("step 3 collect");
+            for sample in &step3 {
+                let row_b = find_row(sample, id_b);
+                assert_eq!(row_b["hidden"], false, "{label} step 3 B hidden");
+                assert_eq!(row_b["trayHidden"], false, "{label} step 3 B trayHidden");
+                assert_eq!(
+                    sample.dashboard["settings"]["hiddenAccountIds"], expected_home,
+                    "{label} step 3 settings home"
+                );
+                assert_eq!(
+                    sample.dashboard["settings"]["trayHiddenAccountIds"], expected_tray,
+                    "{label} step 3 settings tray"
+                );
+            }
+            let saved_after_step3 =
+                crate::account_reads::visibility(&root).expect("saved visibility step 3");
+            assert_eq!(
+                saved_after_step3["visibility"]["hiddenAccountIds"], expected_home,
+                "{label} step 3 persisted home"
+            );
+            assert_eq!(
+                saved_after_step3["visibility"]["trayHiddenAccountIds"], expected_tray,
+                "{label} step 3 persisted tray"
+            );
+        }
+
+        // Direct digest choice: never changed, even when the chosen key disappears and another
+        // key is the sole row, and even when the other list (Home vs tray) migrates a bare ID.
+        let dir = tempfile::tempdir().expect("direct digest root");
+        let root = fs::canonicalize(dir.path()).expect("canonical root");
+        set_mode(&root, 0o700);
+        private_bytes(
+            &root.join("account-usage-accounts.json"),
+            &serde_json::to_vec(&json!({
+                "version": 2,
+                "accounts": [{
+                    "id": "opencode-go:usage",
+                    "provider": "opencode-go",
+                    "platform": "ubuntu",
+                    "sshHost": null,
+                    "label": "OpenCode Go",
+                    "credential": {"kind": "discover"},
+                    "createdAt": null,
+                    "createdBy": "migration"
+                }]
+            }))
+            .expect("registry"),
+        );
+        let direct_bytes = serde_json::to_vec(&json!({
+            "version": 1,
+            "hiddenProviders": [],
+            "hiddenAccountIds": [id_a],
+            "trayHiddenProviders": [],
+            "trayHiddenAccountIds": [id_b]
+        }))
+        .expect("direct visibility");
+        private_bytes(&root.join("account-visibility.json"), &direct_bytes);
+
+        let owners = visibility_and_collection_owners();
+        let deps = Arc::new(MutableOpencodeKeys {
+            keys: std::sync::Mutex::new(vec![key_a]),
+            now: std::sync::atomic::AtomicI64::new(1_795_280_400_000),
+        });
+        let mut producer = Producer::new(root.clone(), owners.clone()).with_home(None);
+        producer.failover = Arc::new(crate::account_usage::coordinator::FailoverCoordinator::new(
+            deps.clone(),
+            owners,
+        ));
+
+        let s1 = producer
+            .collect(CompanionInputs::default())
+            .await
+            .expect("direct s1");
+        assert_eq!(find_row(&s1[0], id_a)["hidden"], true);
+        assert_eq!(find_row(&s1[0], id_a)["trayHidden"], false);
+
+        *deps.keys.lock().unwrap_or_else(|e| e.into_inner()) = vec![key_b];
+        deps.now
+            .fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+        let s2 = producer
+            .collect(CompanionInputs::default())
+            .await
+            .expect("direct s2");
+        assert_eq!(find_row(&s2[0], id_b)["hidden"], false);
+        assert_eq!(find_row(&s2[0], id_b)["trayHidden"], true);
+        // Exact file bytes untouched because no bare ID was present to migrate.
+        assert_eq!(
+            fs::read(root.join("account-visibility.json")).expect("read direct file"),
+            direct_bytes
+        );
+
+        // Migrating a bare ID on Home must not alter a direct digest choice on tray.
+        private_bytes(
+            &root.join("account-visibility.json"),
+            &serde_json::to_vec(&json!({
+                "version": 1,
+                "hiddenProviders": [],
+                "hiddenAccountIds": ["opencode-go:usage"],
+                "trayHiddenProviders": [],
+                "trayHiddenAccountIds": [id_b]
+            }))
+            .expect("mixed visibility"),
+        );
+        *deps.keys.lock().unwrap_or_else(|e| e.into_inner()) = vec![key_a];
+        deps.now
+            .fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+        let m1 = producer
+            .collect(CompanionInputs::default())
+            .await
+            .expect("mixed m1");
+        assert_eq!(find_row(&m1[0], id_a)["hidden"], true);
+        assert_eq!(find_row(&m1[0], id_a)["trayHidden"], false);
+        let saved_mixed = crate::account_reads::visibility(&root).expect("saved mixed");
+        assert_eq!(saved_mixed["visibility"]["hiddenAccountIds"], json!([id_a]));
+        assert_eq!(
+            saved_mixed["visibility"]["trayHiddenAccountIds"],
+            json!([id_b])
+        );
+        *deps.keys.lock().unwrap_or_else(|e| e.into_inner()) = vec![key_b];
+        deps.now
+            .fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+        let m2 = producer
+            .collect(CompanionInputs::default())
+            .await
+            .expect("mixed m2");
+        assert_eq!(find_row(&m2[0], id_b)["hidden"], false);
+        assert_eq!(find_row(&m2[0], id_b)["trayHidden"], true);
     }
 }

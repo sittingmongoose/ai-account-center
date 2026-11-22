@@ -121,6 +121,73 @@ export async function patchAccountVisibility(
   );
 }
 
+/**
+ * Replace matching entries in an account-id list in place, preserving order and dropping
+ * duplicates. Returns `changed: false` when no entry matched `replacements`.
+ */
+export function replaceVisibilityAccountIds(
+  list: readonly string[],
+  replacements: ReadonlyMap<string, string>
+): { list: string[]; changed: boolean } {
+  if (list.length === 0 || replacements.size === 0) return { list: [...list], changed: false };
+  let changed = false;
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const id of list) {
+    const replacement = replacements.get(id);
+    if (replacement !== undefined) changed = true;
+    const mapped = replacement ?? id;
+    if (seen.has(mapped)) continue;
+    seen.add(mapped);
+    next.push(mapped);
+  }
+  return { list: next, changed };
+}
+
+/**
+ * Persist unambiguous bare-to-digest account ID migrations in place under the visibility file
+ * mutex and registry lease. Updates `hiddenAccountIds` and `trayHiddenAccountIds` independently,
+ * only for bare IDs still present when the lock is held. Writes nothing when no bare ID remains
+ * or when the file is unavailable.
+ */
+export async function migrateAccountVisibilityIds(
+  ccsDir: string,
+  replacements: ReadonlyMap<string, string>,
+  forward?: VisibilityForward
+): Promise<AccountVisibilityUpdateResult> {
+  if (replacements.size === 0) {
+    const current = await readAccountVisibility(ccsDir);
+    return current.state === 'ok'
+      ? { state: 'saved', visibility: current.visibility }
+      : { state: 'unavailable' };
+  }
+  return forwardVisibility(
+    ccsDir,
+    async () => {
+      const current = await readAccountVisibility(ccsDir);
+      if (current.state !== 'ok') return { state: 'unavailable' };
+      const home = replaceVisibilityAccountIds(current.visibility.hiddenAccountIds, replacements);
+      const tray = replaceVisibilityAccountIds(
+        current.visibility.trayHiddenAccountIds,
+        replacements
+      );
+      if (!home.changed && !tray.changed) {
+        return { state: 'saved', visibility: current.visibility };
+      }
+      const next: AccountVisibility = {
+        hiddenProviders: current.visibility.hiddenProviders,
+        hiddenAccountIds: home.changed ? home.list : current.visibility.hiddenAccountIds,
+        trayHiddenProviders: current.visibility.trayHiddenProviders,
+        trayHiddenAccountIds: tray.changed ? tray.list : current.visibility.trayHiddenAccountIds,
+      };
+      if (!parseVisibilityBody(next)) throw new ConfigError('Visibility limits exceeded');
+      const visibility = await saveVisibility(ccsDir, next);
+      return { state: 'saved', visibility };
+    },
+    forward
+  );
+}
+
 export type AccountVisibilityRead =
   { state: 'ok'; visibility: AccountVisibility } | { state: 'unavailable' };
 

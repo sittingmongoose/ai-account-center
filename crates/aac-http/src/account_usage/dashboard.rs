@@ -225,11 +225,9 @@ pub struct Input<'a> {
     pub server: Option<&'a Value>,
 }
 
-/// Carry a saved bare OpenCode Go discover id (e.g. `opencode-go:usage`) to its expanded digest
-/// row id when that bare id maps to exactly one expanded row and is no longer present itself.
-/// Applied separately to `hiddenAccountIds` and `trayHiddenAccountIds` so Home and tray stay
-/// independent.
-fn carry_visibility(rows: &[Value], visibility: &Value) -> Value {
+/// Unambiguous `<bare discover id> -> <digest row id>` migrations for `opencode-go` rows:
+/// present only when the bare id is absent from `rows` and maps to exactly one expanded row.
+pub(super) fn unique_discovered_opencode_ids(rows: &[Value]) -> HashMap<String, String> {
     let mut present = HashSet::new();
     let mut candidates: HashMap<&str, Vec<&str>> = HashMap::new();
     for row in rows {
@@ -244,12 +242,64 @@ fn carry_visibility(rows: &[Value], visibility: &Value) -> Value {
             candidates.entry(parent).or_default().push(id);
         }
     }
-    let unique: HashMap<&str, &str> = candidates
+    candidates
         .into_iter()
         .filter_map(|(parent, ids)| {
-            (!present.contains(parent) && ids.len() == 1).then_some((parent, ids[0]))
+            (!present.contains(parent) && ids.len() == 1)
+                .then(|| (parent.to_owned(), ids[0].to_owned()))
         })
-        .collect();
+        .collect()
+}
+
+/// Whether either account visibility list contains a bare id eligible for migration.
+pub(super) fn has_migratable_ids(visibility: &Value, migrations: &HashMap<String, String>) -> bool {
+    if migrations.is_empty() {
+        return false;
+    }
+    ["hiddenAccountIds", "trayHiddenAccountIds"]
+        .into_iter()
+        .any(|key| {
+            visibility
+                .get(key)
+                .and_then(Value::as_array)
+                .is_some_and(|list| {
+                    list.iter()
+                        .any(|entry| entry.as_str().is_some_and(|id| migrations.contains_key(id)))
+                })
+        })
+}
+
+/// Replace matching account ids in place, preserving order and dropping duplicates.
+pub(crate) fn replace_account_ids(
+    list: &[Value],
+    replacements: &HashMap<String, String>,
+) -> (Vec<Value>, bool) {
+    if list.is_empty() || replacements.is_empty() {
+        return (list.to_vec(), false);
+    }
+    let mut changed = false;
+    let mut next = Vec::with_capacity(list.len());
+    for entry in list {
+        let mapped = match entry.as_str().and_then(|id| replacements.get(id)) {
+            Some(digest) => {
+                changed = true;
+                Value::String(digest.clone())
+            }
+            None => entry.clone(),
+        };
+        if !next.contains(&mapped) {
+            next.push(mapped);
+        }
+    }
+    (next, changed)
+}
+
+/// Carry a saved bare OpenCode Go discover id (e.g. `opencode-go:usage`) to its expanded digest
+/// row id when that bare id maps to exactly one expanded row and is no longer present itself.
+/// Applied separately to `hiddenAccountIds` and `trayHiddenAccountIds` so Home and tray stay
+/// independent.
+fn carry_visibility(rows: &[Value], visibility: &Value) -> Value {
+    let unique = unique_discovered_opencode_ids(rows);
     if unique.is_empty() {
         return visibility.clone();
     }
@@ -261,17 +311,7 @@ fn carry_visibility(rows: &[Value], visibility: &Value) -> Value {
         let Some(list) = object.get(key).and_then(Value::as_array) else {
             continue;
         };
-        let mut next = Vec::with_capacity(list.len());
-        for entry in list {
-            let mapped = entry
-                .as_str()
-                .and_then(|id| unique.get(id).copied())
-                .map(|id| Value::String(id.to_owned()))
-                .unwrap_or_else(|| entry.clone());
-            if !next.contains(&mapped) {
-                next.push(mapped);
-            }
-        }
+        let (next, _) = replace_account_ids(list, &unique);
         object.insert(key.into(), Value::Array(next));
     }
     carried
