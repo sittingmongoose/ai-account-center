@@ -992,6 +992,10 @@ The service uses the same L5 registry and pool.
   locally, with a 120-second process bound and one pending read. It saves the
   previous observation's layout, uses the ten-minute TTL, and keeps dated
   last-good rows on an unavailable result. A manual refresh bypasses the TTL.
+  In production the shared reader is called directly: the registry's default owner of
+  `cursor-account-observation` is TypeScript, and the Windows in-process owner has no socket
+  caller. This private route is the owner-host entry point, used when the Rust collection
+  owns the row.
   Its fixed key-status and quota subcommands also serve the Cursor quota-card
   transport. The quota-card cache is a separate fingerprint-bound file. The
   lease owner clears it when the reader confirms absence of a key.
