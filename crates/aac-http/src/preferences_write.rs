@@ -601,8 +601,9 @@ fn check_overlap(sources: &[Value], hosts: &[(String, String)]) -> Result<(), Pu
         let home = home_prefix(&portable);
         let relative = home.map(|end| portable[end..].to_owned());
         let read_roots = if current.tool == "jsonl" {
-            ["claude-code", "codex", "omp", "muse", "zcode"]
-                .iter()
+            // Every usage-log tool with its own built-in roots; the generic JSONL format has
+            // none (its roots are the extra source's own).
+            aac_providers::builtin_root_tools()
                 .flat_map(|tool| builtin_roots(tool, relative.as_deref()))
                 .collect::<Vec<_>>()
         } else {
@@ -645,4 +646,16 @@ fn check_overlap(sources: &[Value], hosts: &[(String, String)]) -> Result<(), Pu
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// The built-in roots a generic JSONL source may not cover are the usage-log tools of the
+    /// tool table, minus the generic format itself (the old hand list).
+    #[test]
+    fn builtin_root_tools_keep_the_old_hand_list() {
+        let mut tools: Vec<&str> = aac_providers::builtin_root_tools().collect();
+        tools.sort_unstable();
+        assert_eq!(tools, ["claude-code", "codex", "muse", "omp", "zcode"]);
+    }
 }

@@ -453,6 +453,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/account_usage/rows.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/account_usage/sources.rs",
       "kind": "internal",
       "evidence": [],
@@ -782,6 +788,12 @@
       "evidence": [
         "HTTP"
       ]
+    },
+    {
+      "file": "crates/aac-http/src/preferences_write.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/profile_reads.rs",

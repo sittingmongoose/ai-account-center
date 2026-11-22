@@ -119,15 +119,10 @@ impl Producer {
         force: bool,
     ) -> Vec<Value> {
         use futures_util::{StreamExt, stream};
-        let order = [
-            "antigravity",
-            "muse",
-            "cursor",
-            "kimi-code",
-            "qwen",
-            "zai",
-            "opencode-go",
-        ];
+        // The standalone sources' order is the provider table's `additionalProviders`.
+        let order: Vec<&str> = aac_providers::additional_providers()
+            .map(|row| row.id.as_str())
+            .collect();
         sources.sort_by_key(|source| {
             order
                 .iter()

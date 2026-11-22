@@ -244,15 +244,10 @@ pub(crate) fn legacy(root: Option<&Path>) -> (Vec<Source>, bool) {
             aac_files::read::ReadPolicy::capped(32 * 1024).ancestors(Ancestors::NoLinkBelow(root));
         aac_files::read::read(&file, &policy)
     });
-    let order = [
-        "antigravity",
-        "muse",
-        "cursor",
-        "kimi-code",
-        "qwen",
-        "zai",
-        "opencode-go",
-    ];
+    // The standalone sources' order is the provider table's `additionalProviders`.
+    let order: Vec<&str> = aac_providers::additional_providers()
+        .map(|row| row.id.as_str())
+        .collect();
     let mut valid = matches!(&read, None | Some(Read::Absent));
     let mut overrides = BTreeMap::new();
     let config = match read {

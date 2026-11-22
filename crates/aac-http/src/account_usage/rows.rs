@@ -105,18 +105,15 @@ pub(super) fn windows(value: &Value, limit: usize) -> Vec<Value> {
         .collect()
 }
 
-const LABELS: [(&str, &str); 3] = [
-    ("antigravity", "Antigravity"),
-    ("qwen", "Qwen token plan"),
-    ("zai", "Z.ai coding plan"),
-];
-
+/// The account row's label: the provider table's Analytics label (sentence case, as the old
+/// hand list had it), else the row's own label, else the id.
 fn label(id: &str) -> &str {
-    LABELS
-        .iter()
-        .find(|entry| entry.0 == id)
-        .map(|entry| entry.1)
-        .or_else(|| aac_providers::provider(id).map(|row| row.label))
+    aac_providers::provider(id)
+        .map(|row| {
+            row.analytics
+                .as_ref()
+                .map_or(row.label, |analytics| analytics.label)
+        })
         .unwrap_or(id)
 }
 
@@ -420,4 +417,20 @@ pub(super) fn codex(
     row["windows"] = json!(windows);
     row["capabilities"] = json!({"codexProfile":name,"claudeProfileId":null,"claudePlatforms":[]});
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Account rows keep the labels the old hand list spelled out (`LABELS`), and every other
+    /// provider keeps its own label.
+    #[test]
+    fn account_labels_keep_the_old_hand_list() {
+        assert_eq!(label("antigravity"), "Antigravity");
+        assert_eq!(label("qwen"), "Qwen token plan");
+        assert_eq!(label("zai"), "Z.ai coding plan");
+        assert_eq!(label("opencode-go"), "OpenCode Go");
+        assert_eq!(label("retired-provider"), "retired-provider");
+    }
 }

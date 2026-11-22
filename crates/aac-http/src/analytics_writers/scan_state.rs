@@ -19,10 +19,12 @@ pub(super) struct LegacyCache {
 }
 
 impl LegacyCache {
+    /// A legacy cache version rebuilds a tool's rows up to the version the tool table names
+    /// (`legacyRebuildThrough`); v7 and v8 wrote the current per-file cells.
     pub fn rebuilds(&self, tool: &str) -> bool {
         match self.version {
-            Some(3..=5) => matches!(tool, "claude" | "codex" | "muse"),
-            Some(6) => matches!(tool, "codex" | "muse"),
+            Some(version @ 3..=6) => aac_providers::legacy_rebuild_through(tool)
+                .is_some_and(|through| version <= u64::from(through)),
             Some(7..=8) => false,
             _ => true,
         }
