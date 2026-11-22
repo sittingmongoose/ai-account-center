@@ -631,3 +631,70 @@ fn a_redeeming_credit_names_its_own_state_and_stays_unclaimable() {
         "redeeming"
     );
 }
+
+/// Lost answer -> redeeming -> credit available again: no in-product exit.
+/// Guards the documented recovery limit from a future automatic release. U1's lock wording is
+/// "A reset request has no confirmed answer yet. The reset may have been used; check again."
+#[test]
+fn a_lost_answer_then_redeeming_then_available_keeps_the_u1_lock() {
+    const U1: &str = "A reset request has no confirmed answer yet. The reset may have been used; check again.";
+    let f = Fixture::new();
+    f.state(
+        json!({"five":2,"week":60,"fiveMins":300,"weekMins":10080,"spent":false,"outcome":"reset",
+        "refill":{"status":"redeeming"}}),
+    );
+    let mut s = f.store();
+    let attempt = nonce(3);
+    let (_, write, _) = reserve(&f, &mut s, &attempt);
+    f.send(&write);
+    let redeeming = f.read();
+    assert_eq!(
+        (redeeming.grants[0].left, redeeming.grants[0].usable),
+        (1, false),
+        "redeeming is in progress, not spent"
+    );
+    let r = s
+        .finish(ROUTE, &attempt, Outcome::Ambiguous, Some(&redeeming), wall(), None)
+        .unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed");
+    assert_eq!(r["pending"], true, "{U1}");
+    assert_eq!(r["providerSuccess"], false, "a lost answer is not provider success");
+
+    // Check again while it is still redeeming: still unconfirmed, still locked, nothing sent.
+    let r = s.check(ROUTE, &attempt, &f.read(), wall()).unwrap();
+    assert_eq!(
+        (r["outcome"].clone(), r["pending"].clone()),
+        (json!("claimed-unconfirmed"), json!(true)),
+        "{U1}"
+    );
+
+    // Later read: the same credit looks available again. That is not proof this attempt was unused.
+    f.state(json!({"five":2,"week":60,"fiveMins":300,"weekMins":10080,"spent":false,"outcome":"reset"}));
+    let available = f.read();
+    assert_eq!(
+        (available.grants[0].left, available.grants[0].usable),
+        (1, true),
+        "the credit looks usable again"
+    );
+    let r = s.check(ROUTE, &attempt, &available, wall()).unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed", "available is not an exit");
+    assert_eq!(r["pending"], true, "{U1}: pending stays; no automatic release");
+    assert_eq!(r["providerSuccess"], false);
+
+    // Repeated Check again, including a later inventory read, still cannot release.
+    let r = s.check(ROUTE, &attempt, &f.read(), wall()).unwrap();
+    assert_eq!(
+        (r["outcome"].clone(), r["pending"].clone()),
+        (json!("claimed-unconfirmed"), json!(true)),
+        "{U1}"
+    );
+    let inv = s.inventory(ROUTE, &f.read(), wall(), &nonce(5)).unwrap();
+    assert_eq!(inv["pendingAttempt"], attempt);
+    assert_eq!(
+        inv["grants"][0]["claimable"], true,
+        "the grant itself can look usable; the account lock is separate"
+    );
+    let key = inv["grants"][0]["grantKey"].as_str().unwrap().to_owned();
+    assert_eq!(s.gate(ROUTE, &key, wall(), true), Err("check-again-required"), "{U1}");
+    assert_eq!(f.sent().len(), 1, "check never sends");
+}

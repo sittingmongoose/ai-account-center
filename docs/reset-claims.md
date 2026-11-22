@@ -63,6 +63,29 @@ cached account card label. Provider `reset` without proof is
 `claimed-unconfirmed`; `providerSuccess` distinguishes this from a timeout.
 Missing spent grants remain unconfirmed rather than inferring a zero count.
 
+### Lost-answer recovery limits
+
+These limits are fail-safe. The lock is not a bug, and the product does not invent an
+automatic release.
+
+A lost answer followed by redeeming and then an available credit has **no in-product exit**;
+the lock remains on purpose. Recovery requires an owner-approved manual review, never
+automatic release from an available read. Repeating Check again, including after the local
+unanswered-send interval (`read_after_ms`), cannot tell "OpenAI gave the credit back" from
+"another client used it". The Details UI keeps U1's sentence: a reset request has no
+confirmed answer yet. The reset may have been used; check again.
+
+A redemption detail row that is absent cannot confirm a claim; the attempt stays
+`claimed-unconfirmed` and the lock stays. Whether provider responses actually omit those
+detail rows needs an authorized trace; this document does not invent that shape.
+
+`nothingToReset` trusts the provider's explicit terminal answer; no contradictory-read
+reconciliation is performed, and no spend is inferred from a contradictory read.
+
+An exact-credit proof shows a spend occurred; it does not identify which client spent it
+(the same account may be used elsewhere). Do not add an acknowledgement the server cannot
+prove.
+
 The reset ledger (`crates/aac-status/src/reset*.rs`) owns policy, normalization,
 confirmation consumption, limits, durable account serialization and audit.
 The Rust dashboard listener admits browser requests and resolves accounts from
