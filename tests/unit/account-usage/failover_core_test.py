@@ -1201,6 +1201,18 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(caught.exception.retry_after, 180)
         self.assertNotIn("private", str(caught.exception))
 
+    def test_http_403_is_unavailable_not_a_sign_in_demand(self):
+        # Low 1: the sibling reader reads the same usage route; a 403 there is not proof either.
+        error = urllib.error.HTTPError(core.CLAUDE_USAGE_URL, 403, "fixture-private-body", Message(), io.BytesIO(b"secret"))
+        opener = mock.Mock()
+        opener.open.side_effect = error
+        with mock.patch.object(core.urllib.request, "build_opener", return_value=opener):
+            client = core.Client()
+            with self.assertRaises(core.Failure) as caught:
+                client.get(core.CLAUDE_USAGE_URL, TOKEN)
+        self.assertEqual(caught.exception.code, "unavailable")
+        self.assertNotIn("private", str(caught.exception))
+
     def test_oauth_http_observations_include_only_stage_status_and_retry(self):
         headers = Message()
         headers["Retry-After"] = "90"

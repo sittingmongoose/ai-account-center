@@ -1,11 +1,11 @@
 {
   "crates/aac-http/src/public_auth/reset_routes.rs": "927c44a3966f007f778defabd1d33a5ff64185b5d3a009c54fca1a32b94cf4d6",
-  "scripts/account-usage/claude_usage.py": "134de57127b3f57e233d001d820e945a495b72043f40c67200115038370c9405",
+  "scripts/account-usage/claude_usage.py": "07f92309b1f5614626a9c659309dd0362df7d9ac4ea80e3dabcc55019bf6e977",
   "scripts/account-usage/cursor_usage.py": "7fc27661a8f9a44a67683c7d485366d903e41d732d1a2014aed7fef405cee154",
   "scripts/account-usage/desktop_helpers.py": "86d73d556af2c28855d48258bbd9687c8c55d3070d629c282664aab1a10880d3",
   "scripts/account-usage/desktop_usage.py": "21716466b3defc9356524c7b9cd1e453437f2c43f3ef3755296e4d119738d5df",
   "scripts/account-usage/failover_additional.py": "ea2b1f639e04705eaa3339a414372e020994d50c10dcf24f22b996193c5653c7",
-  "scripts/account-usage/failover_core.py": "9e6623091220efa6c36995eb7a9633aad210fbe19a2fa1e1cbcdb3154c844074",
+  "scripts/account-usage/failover_core.py": "561372a59eccc6968f02f32aa6d1c055169bb0979e2d3e202db86ded30726934",
   "scripts/account-usage/failover_special.py": "16dbc2544c5d318ce7d72a99de3de30b3f4bafb74284833804d978df2d4f303b",
   "scripts/account-usage/failover_usage.py": "8551cc916214eb7f0aeb372bd3ccf67fbaa7cb7a578535503b260581d341ea14",
   "scripts/account-usage/muse_console.py": "201f860539c55252ab2b623f93a4e10ea6970a00165292a7425917128cff790b",

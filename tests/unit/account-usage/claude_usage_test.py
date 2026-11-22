@@ -122,6 +122,49 @@ class IdentityTests(unittest.TestCase):
         self.assertNotEqual(result["status"], "needs_sign_in")
         self.assertNotIn("reason", result)
 
+    def test_a_forbidden_desktop_token_does_not_hide_the_next_saved_token(self):
+        # M1: a 403 rejects one saved token, not the whole account; the next token still reads usage.
+        stale, good, second_client = "fixture-stale-token", "fixture-good-token", "55555555-5555-5555-5555-555555555555"
+        saved = {**cache(key(client=second_client), token=stale, expiresAt=(time.time() + 7200) * 1000),
+                 **cache(key(), token=good, expiresAt=(time.time() + 3600) * 1000)}
+        usage_payload = {"five_hour": {"utilization": 10, "resets_at": None},
+                         "seven_day": {"utilization": 20, "resets_at": None}}
+
+        class Response:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def read1(self, count):
+                body, self.body = self.body, b""
+                return body
+
+        class Tokens:
+            def __init__(self):
+                self.calls = []
+
+            def open(self, request, **kwargs):
+                token = request.get_header("Authorization").split(" ", 1)[1]
+                self.calls.append((request.full_url.rsplit("/", 1)[-1], token))
+                if token == stale:
+                    raise urllib.error.HTTPError(request.full_url, 403, "forbidden", {}, None)
+                body = profile() if request.full_url.endswith("/api/oauth/profile") else usage_payload
+                return Response(json.dumps(body).encode())
+
+        opener = Tokens()
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, saved)), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]), \
+                mock.patch.object(usage.urllib.request, "build_opener", return_value=opener):
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual([token for _, token in opener.calls], [stale, good, good])
+
     def test_exact_native_key_and_scope_are_eligible(self):
         entries = usage.eligible_entries(ACCOUNT, cache())
         self.assertEqual(entries[0][1], [ACCOUNT, CLIENT, ORG])
@@ -1462,8 +1505,9 @@ class HttpBoundaryTests(unittest.TestCase):
         self.assertNotIn("private", str(caught.exception))
 
     def test_forbidden_usage_is_not_a_sign_in_demand(self):
-        # A verified profile's 403 is not proof a sign-in is missing (claude-offer-R1-L4),
-        # and it invents no word of its own: the generic unavailable status is enough.
+        # A verified profile's 403 is not proof a sign-in is missing (claude-offer-R1-L4).
+        # It carries its own internal status so the token loop and Code-login fallback still
+        # run, and every public boundary publishes it as the generic unavailable.
         client = usage.Client()
         error = urllib.error.HTTPError("https://api.anthropic.com/api/oauth/usage", 403,
                                        "private-upstream-message", {}, mock.Mock())
@@ -1471,7 +1515,7 @@ class HttpBoundaryTests(unittest.TestCase):
         with mock.patch.object(client.opener, "open", side_effect=error):
             with self.assertRaises(usage.UsageUnavailable) as caught:
                 client.get("/api/oauth/usage", TOKEN)
-        self.assertEqual(caught.exception.status, "unavailable")
+        self.assertEqual(caught.exception.status, "forbidden")
         self.assertNotIn("private", str(caught.exception))
 
     def test_redirect_handler_refuses_cross_origin(self):
@@ -2557,6 +2601,58 @@ class ResetCodeLoginTests(unittest.TestCase):
             result = usage.reset_host(self.request)
         self.assertEqual([call[1] for call in fake.calls], [TOKEN, self.CODE_TOKEN, self.CODE_TOKEN])
         self.assertEqual(result["raw"]["grants"][0]["id"], "code_grant")
+
+    def test_a_forbidden_desktop_profile_falls_back_to_the_code_login(self):
+        # M1: a Desktop 403 is not a sign-out answer; the account's Code login still offers the reset.
+        self.desktop = (ACCOUNT, cache())
+        payload, tokens = self.payload(), []
+
+        class Response:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def read1(self, count):
+                body, self.body = self.body, b""
+                return body
+
+        class Opener:
+            def open(self, request, **kwargs):
+                token = request.get_header("Authorization").split(" ", 1)[1]
+                tokens.append("desktop" if token == TOKEN else "code")
+                if token == TOKEN:
+                    raise urllib.error.HTTPError(request.full_url, 403, "forbidden", {}, None)
+                body = profile() if request.full_url.endswith("/api/oauth/profile") else payload
+                return Response(json.dumps(body).encode())
+
+        with mock.patch.object(usage.urllib.request, "build_opener", return_value=Opener()):
+            result = usage.reset_host(self.request)
+        self.assertEqual(tokens, ["desktop", "code", "code"])
+        self.assertEqual(result["raw"]["grants"][0]["id"], "code_grant")
+        self.assertEqual(result["identity"]["account"], ACCOUNT)
+
+    def test_a_forbidden_desktop_without_a_code_login_stays_unavailable_not_signed_out(self):
+        # A 403 is not a sign-out claim: with no other login the reset reads unavailable, no reason.
+        __import__("shutil").rmtree(self.home / ".claude-t3")
+        self.desktop = (ACCOUNT, cache())
+
+        class Opener:
+            def __init__(self):
+                self.calls = 0
+
+            def open(self, request, **kwargs):
+                self.calls += 1
+                raise urllib.error.HTTPError(request.full_url, 403, "forbidden", {}, None)
+
+        opener = Opener()
+        with mock.patch.object(usage.urllib.request, "build_opener", return_value=opener):
+            self.assertEqual(usage.reset_host(self.request), {"unavailable": True})
+        self.assertEqual(opener.calls, 1)
 
     def test_working_desktop_stays_first(self):
         self.desktop = (ACCOUNT, cache())

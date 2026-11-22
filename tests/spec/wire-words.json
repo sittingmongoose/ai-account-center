@@ -1271,6 +1271,15 @@
     ]
   },
   {
+    "word": "forbidden",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:error.status",
+      "scripts/account-usage/claude_usage.py:result.get('status')",
+      "scripts/account-usage/claude_usage.py:status"
+    ]
+  },
+  {
     "word": "foreground",
     "cause": null,
     "sources": [
@@ -1554,7 +1563,8 @@
     "sources": [
       "scripts/account-usage/claude_usage.py:RESET_LOGIN_REASONS",
       "scripts/account-usage/claude_usage.py:error.status",
-      "scripts/account-usage/claude_usage.py:result['status']"
+      "scripts/account-usage/claude_usage.py:result['status']",
+      "scripts/account-usage/claude_usage.py:status"
     ]
   },
   {
@@ -3387,6 +3397,7 @@
       "scripts/account-usage/claude_usage.py:failureCode",
       "scripts/account-usage/claude_usage.py:result.get('failureCode')",
       "scripts/account-usage/claude_usage.py:result['status']",
+      "scripts/account-usage/claude_usage.py:status",
       "scripts/account-usage/cursor_usage.py:error.failure_code",
       "scripts/account-usage/cursor_usage.py:failureCode",
       "scripts/account-usage/desktop_helpers.py:failure_code",

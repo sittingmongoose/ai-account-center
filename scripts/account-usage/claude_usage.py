@@ -392,9 +392,10 @@ class Client:
             if error.code == 429:
                 raise UsageUnavailable("rate_limited", retry_after_seconds(error.headers.get("Retry-After")))
             if error.code == 403:
-                # A forbidden reply to a verified profile is not proof a sign-in is missing,
-                # and it has no public word of its own: the row stays generic unavailable.
-                raise UsageUnavailable()
+                # A forbidden reply to a verified profile is not proof a sign-in is missing.
+                # It keeps its own internal status so the saved-token loop and the Code-login
+                # fallback still try the next login; every public boundary shows unavailable.
+                raise UsageUnavailable("forbidden")
             raise UsageUnavailable("needs_sign_in" if error.code == 401 else "error")
         except (OSError, ValueError, UnicodeError, urllib.error.URLError):
             raise UsageUnavailable("error")
@@ -1579,11 +1580,17 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             if not candidates:
                 raise UsageUnavailable()
         client = Client()
+        forbidden = False
         for _, identities, token in candidates:
             verify_root()
             try:
                 profile = client.get("/api/oauth/profile", token)
             except UsageUnavailable as error:
+                if error.status == "forbidden":
+                    # One rejected token never condemns the account: try every saved login,
+                    # and remember the refusal so a 403 is never published as signed-out.
+                    forbidden = True
+                    continue
                 if error.status == "needs_sign_in":
                     continue
                 raise
@@ -1667,10 +1674,15 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                                     "usage": usage, "token": token, "verifyRoot": verify_root,
                                     "verifyLogin": verify_login, "observedAtMs": identity_verified_ms, "savedLoginBinding": saved_binding})
             return result
-        raise UsageUnavailable("needs_sign_in")
+        raise UsageUnavailable("forbidden" if forbidden else "needs_sign_in")
     except UsageUnavailable as error:
-        result["status"] = ("error" if error.status == "rate_limited" else
-                            "unavailable" if error.status == "identity_unconfirmed" else error.status)
+        # A forbidden read has no public word: the user sees unavailable. The private reset
+        # path keeps the status so it can still fall back to the account's Code login.
+        status = error.status
+        if status == "forbidden" and private_reset_sink is None:
+            status = "unavailable"
+        result["status"] = ("error" if status == "rate_limited" else
+                            "unavailable" if status == "identity_unconfirmed" else status)
         if error.status == "identity_unconfirmed":
             result["resetReason"] = "identity-unconfirmed"
         if error.status == "rate_limited":
@@ -1826,7 +1838,7 @@ def _reset_host(request, dispatch):
                                  profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
                                  private_reset_sink=captured.append, expected_saved_binding=login["desktop"]["binding"],
                                  expected_saved_organization=login["organization"])
-            if result.get("status") == "needs_sign_in" and not captured:
+            if result.get("status") in ("needs_sign_in", "forbidden") and not captured:
                 if login["codeAmbiguous"]:
                     return {"unavailable": True, "reason": "ambiguous-code-login"}
                 if login["code"] is not None:

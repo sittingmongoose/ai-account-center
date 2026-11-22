@@ -726,7 +726,7 @@ class Client:
             retry_after = _retry_after((error.headers or {}).get("Retry-After"))
             if status == 429:
                 raise Failure("rate_limited", retry_after) from None
-            raise Failure("needs_sign_in" if error.code in (401, 403) else "unavailable") from None
+            raise Failure("needs_sign_in" if error.code == 401 else "unavailable") from None
         except (OSError, ValueError, UnicodeError, urllib.error.URLError):
             raise Failure() from None
         finally:
