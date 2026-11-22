@@ -396,4 +396,74 @@ export const tests = {
 			&& resetRequests(server).filter((q) => q.path.endsWith('/check')).length === 1, JSON.stringify(resetRequests(server)));
 		await t.shot('resets-check-busy-scope', 'B\'s Check again enabled while A\'s check was in flight and after it settled');
 	},
+
+	async 'resets: a check on another account cannot re-open a live check'(t) {
+		// M1: one busy ticket for the whole page let B's check overwrite A's, so A's own Check again
+		// came back enabled while A's read was still held: a second read for A could go out.
+		let release;
+		const checkGate = new Promise((resolve) => { release = resolve; });
+		const { server } = resetServer({ claim: 'unconfirmed', two: true, checkGate });
+		await open(t, server);
+		await openDetails(t, 'claude:one');
+		await t.until('usable', () => !!document.querySelector('.details [data-probe="reset-use"]'), null, { timeout: 10000 });
+		await t.page.click('.details [data-probe="reset-use"]');
+		await t.until('the dialog shows', () => !!document.querySelector('[data-probe="reset-dialog-use"]'), null, { timeout: 5000 });
+		await t.page.click('[data-probe="reset-dialog-use"]');
+		await t.until('the unconfirmed words', () => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').includes('Check again.'), null, { timeout: 5000 });
+		await t.page.click('.details [data-probe="resets-check"]');
+		await t.until('A shows Checking while its read is held', () => document.querySelector('.details [data-probe="resets-check"]')?.textContent === 'Checking\u2026', null, { timeout: 5000 });
+		await t.page.keyboard.press('Escape');
+		await openDetails(t, 'claude:two');
+		await t.until('B offers its own Check again', () => !!document.querySelector('.details [data-probe="resets-check"]'), null, { timeout: 10000 });
+		// The fixture answers no check for B, so B's own check settles at once (aborted -> lost).
+		await t.page.click('.details [data-probe="resets-check"]');
+		await t.until('B settled', () => document.querySelector('.details [data-probe="resets-check"]')?.textContent === 'Check again', null, { timeout: 5000 });
+		await t.page.keyboard.press('Escape');
+		await openDetails(t, 'claude:one');
+		await t.until('A still offers its button', () => !!document.querySelector('.details [data-probe="resets-check"]'), null, { timeout: 10000 });
+		const a = t.page.locator('.details [data-probe="resets-check"]');
+		const aDisabled = await a.isDisabled();
+		const aText = await a.textContent();
+		if (!aDisabled) await a.click();
+		await new Promise((r) => setTimeout(r, 500));
+		const oneChecks = resetRequests(server).filter((q) => q.path === '/api/accounts/claude%3Aone/reset-claims/check').length;
+		release();
+		await t.check('A stays busy while its first read is held', aDisabled, `disabled=${aDisabled} text=${aText}`);
+		await t.check('A never has two check reads in flight', oneChecks === 1, `claude:one checks in flight=${oneChecks}; ${JSON.stringify(resetRequests(server).map((q) => q.path))}`);
+		await t.noConsoleErrors('console: only the fixture\'s aborted check for B', { allow: [/net::ERR_FAILED/] });
+	},
+
+	async 'resets: an answer landing while another account is shown still ends its own busy state'(t) {
+		// resets-Astra-L1 (A), resets-Sol-2-L2 .. resets-Sol-7-L2: the ticket must retire before the
+		// navigation early-return, or the account that asked stays busy until a reload.
+		let release;
+		const checkGate = new Promise((resolve) => { release = resolve; });
+		const { server } = resetServer({ claim: 'unconfirmed', two: true, checkGate });
+		const fail = (status, payload) => ({ status, contentType: 'application/json', body: JSON.stringify(payload) });
+		server.routes.unshift(['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/check$/, async () => { await checkGate; return fail(503, { error: 'busy' }); }]);
+		await open(t, server);
+		await openDetails(t, 'claude:one');
+		await t.until('usable', () => !!document.querySelector('.details [data-probe="reset-use"]'), null, { timeout: 10000 });
+		await t.page.click('.details [data-probe="reset-use"]');
+		await t.until('the dialog shows', () => !!document.querySelector('[data-probe="reset-dialog-use"]'), null, { timeout: 5000 });
+		await t.page.click('[data-probe="reset-dialog-use"]');
+		await t.until('the unconfirmed words', () => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').includes('Check again.'), null, { timeout: 5000 });
+		await t.page.click('.details [data-probe="resets-check"]');
+		await t.until('A shows Checking while its read is held', () => document.querySelector('.details [data-probe="resets-check"]')?.textContent === 'Checking\u2026', null, { timeout: 5000 });
+		await t.page.keyboard.press('Escape');
+		await openDetails(t, 'claude:two');
+		await t.until('B offers its own Check again', () => !!document.querySelector('.details [data-probe="resets-check"]'), null, { timeout: 10000 });
+		// A's 503 lands while B is the shown account.
+		release();
+		await new Promise((r) => setTimeout(r, 2000));
+		await t.page.keyboard.press('Escape');
+		await openDetails(t, 'claude:one');
+		await new Promise((r) => setTimeout(r, 1000));
+		const a = t.page.locator('.details [data-probe="resets-check"]');
+		const n = await a.count();
+		const stuck = n > 0 && (await a.isDisabled());
+		await t.check('A is not stuck Checking after its answer landed on B', !stuck, `count=${n} text=${n ? await a.textContent() : ''}`);
+		await t.noConsoleErrors('console: only the fixture\'s refused 503', { allow: [/status of 503/] });
+		await t.shot('resets-check-retired-offpage', 'A\'s Check again after its refused read landed while B was shown');
+	},
 };

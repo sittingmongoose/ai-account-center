@@ -807,7 +807,7 @@ fn a_check_ticket_is_scoped_to_its_identity_and_retires_only_itself() {
         // A's answer lands after navigation and retires only A's ticket.
         rc.retire_check(&canonical, a);
         assert_eq!(rc.check_ticket(), None);
-        assert!(rc.checking.get_untracked().is_none());
+        assert!(rc.checking.get_untracked().is_empty());
         // B's own check stays live when a stale A answer arrives.
         let b = rc.begin_check("codex:other");
         assert_eq!(rc.check_ticket(), Some(("codex:other".into(), b)));
@@ -841,5 +841,39 @@ fn a_check_ticket_retiring_after_owner_cleanup_is_dropped_not_a_panic() {
         outcome.is_ok(),
         "a disposed owner must not be touched by a late ticket retirement"
     );
-    assert!(rc.checking.try_get_untracked().is_none());
+    assert!(
+        rc.checking
+            .try_get_untracked()
+            .is_none_or(|tickets| tickets.is_empty())
+    );
+}
+
+/// Spec resets-checking-flag M1: one ticket for the page let a check on B overwrite A's ticket, so
+/// A's own Check again came back enabled while A's read was still in flight (two reads for A).
+/// The busy state must be one ticket per identity: B's check touches only B's entry.
+#[test]
+fn another_accounts_check_leaves_a_live_check_on_the_first_busy() {
+    let t = trace(false);
+    Owner::new().with(|| {
+        let (rc, canonical) = start(&t);
+        let a = rc.begin_check(&canonical);
+        // Open B and start (then settle) its own check while A's read is still held.
+        rc.show("codex:other", "codex", false);
+        let b = rc.begin_check("codex:other");
+        assert_eq!(rc.check_ticket(), Some(("codex:other".into(), b)));
+        rc.retire_check("codex:other", b);
+        assert_eq!(rc.check_ticket(), None);
+        // Back on A: its own read never finished, so A must still be busy.
+        rc.show(ROUTE, "codex", false);
+        assert_eq!(
+            rc.check_ticket(),
+            Some((canonical.clone(), a)),
+            "A's read is still in flight, so A must stay busy"
+        );
+        assert!(rc.check_busy(), "A's Check again must stay disabled");
+        // And A's own retirement still ends it.
+        rc.retire_check(&canonical, a);
+        assert_eq!(rc.check_ticket(), None);
+        assert!(!rc.check_busy());
+    });
 }
