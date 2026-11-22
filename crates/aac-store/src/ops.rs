@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 
 /// The longest meta value TypeScript may store (its markers and reports are small JSON).
 const META_VALUE_MAX: usize = 16 * 1024;
+/// The longest meta key: fixed words or SHA-256-derived (`ts:backfill:<64 hex>` is 76).
+const META_KEY_MAX: usize = 128;
 
 pub type Slot = Mutex<Option<Arc<Engine>>>;
 
@@ -313,6 +315,11 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             let a: MetaArgs = parse(args)?;
             if !a.key.starts_with("ts:") {
                 fail!("invalid", "TypeScript meta keys start with ts:");
+            }
+            // A meta key is a persisted string like any other: bounded, no control characters,
+            // nothing shaped like a credential (current keys are fixed words or hashes).
+            if !usage::text_ok(&a.key, META_KEY_MAX) {
+                fail!("invalid", "the meta key is empty, too long or not plain text");
             }
             // A meta value is a persisted string like any other: bounded, no control
             // characters, nothing shaped like a credential.

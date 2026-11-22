@@ -933,6 +933,66 @@ fn a_store_from_an_unreleased_test_build_is_refused_untouched() {
     fs::remove_dir_all(&base).unwrap();
 }
 
+/// A pending restore intent never acts on a store the build refuses: admission runs before the
+/// restore, so a dev-build store (data files, a restore intent, no release marker) is refused
+/// with every byte left as it was.
+#[test]
+fn a_pending_restore_never_touches_a_refused_store() {
+    let base = temp_dir("review-refused-restore");
+    let dev = base.join("dev");
+    fs::create_dir_all(dev.join("log/readings")).unwrap();
+    fs::write(dev.join("log/readings/000001"), b"reading bytes").unwrap();
+    fs::write(dev.join("aac.redb"), b"redb bytes").unwrap();
+    let staging = dev.join("tmp/restore-0123456789abcdef");
+    fs::create_dir_all(staging.join("log")).unwrap();
+    fs::write(staging.join("log/staged"), b"staged bytes").unwrap();
+    let quarantine = dev.join("quarantine/20261122T000000Z-pre-restore-01");
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(
+        dev.join("restore.intent.json"),
+        format!(
+            "{{\"staging\":\"{}\",\"quarantine\":\"{}\",\"backup\":\"test\"}}",
+            staging.display(),
+            quarantine.display()
+        ),
+    )
+    .unwrap();
+    let before = walk(&dev);
+    let error = ops::open_engine(dev.to_str().unwrap(), None, None)
+        .err()
+        .expect("a test-build store is refused");
+    assert_eq!(error.code, "unreleased_store");
+    assert_eq!(walk(&dev), before, "a refused store is left exactly as it was");
+    fs::remove_dir_all(&base).unwrap();
+}
+
+/// A release marker above `u32::MAX` is a newer store, not an unreleased one: the marker is
+/// read as a number first, so any numeric value above this build's release is `newer_store`.
+#[test]
+fn a_release_marker_above_u32_is_newer_not_unreleased() {
+    let base = temp_dir("review-release-marker");
+    for (i, (text, code)) in [
+        ("4294967297", "newer_store"),
+        ("18446744073709551615", "newer_store"),
+        ("2", "newer_store"),
+        ("0", "unreleased_store"),
+        ("", "unreleased_store"),
+        ("abc", "unreleased_store"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = base.join(format!("m{i}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("release"), text).unwrap();
+        let error = ops::open_engine(dir.to_str().unwrap(), None, None)
+            .err()
+            .unwrap_or_else(|| panic!("{text:?}: expected a refusal"));
+        assert_eq!(error.code, code, "{text:?}");
+    }
+    fs::remove_dir_all(&base).unwrap();
+}
+
 /// A backup that does not say it holds a version-1 store is refused before anything changes.
 #[test]
 fn a_backup_from_an_unreleased_test_build_is_refused() {
@@ -1132,6 +1192,23 @@ fn set_meta_refuses_credentials() {
         );
         assert_eq!(refused.err().map(|e| e.code), Some("invalid"), "{value:?}");
     }
+    // A key is a persisted string too: credential-shaped or oversized keys are refused and
+    // nothing is written.
+    for key in [
+        "ts:sk-ant-api03-SYNTHETIC_SECRET_1234567890",
+        &format!("ts:{}", "k".repeat(200)),
+    ] {
+        let refused = ops::call(&engine, "setMeta", &json!({ "key": key, "value": "ok" }).to_string());
+        assert_eq!(refused.err().map(|e| e.code), Some("invalid"), "{key:?}");
+    }
+    assert_eq!(
+        call(
+            &engine,
+            "getMeta",
+            json!({ "key": "ts:sk-ant-api03-SYNTHETIC_SECRET_1234567890" })
+        ),
+        Json::Null
+    );
     assert_eq!(call(&engine, "getMeta", json!({ "key": "ts:probe" })), Json::Null);
     let marker = "{\"file\":\"usage-history.jsonl\",\"records\":120,\"at\":1793000000000}";
     call(&engine, "setMeta", json!({ "key": "ts:backfill:abc", "value": marker }));

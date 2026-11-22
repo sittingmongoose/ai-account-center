@@ -28,9 +28,11 @@ const UNRELEASED: &str =
 fn admit_release(dir: &Path) -> Result<()> {
     let marker = dir.join(RELEASE_FILE);
     match fs::read_to_string(&marker) {
-        Ok(text) => match text.trim().parse::<u32>() {
-            Ok(STORE_RELEASE) => Ok(()),
-            Ok(n) if n > STORE_RELEASE => fail!(
+        // Parsed as u64 so a marker above u32::MAX is still read as a number and reported as a
+        // newer store, not as an unreleased one.
+        Ok(text) => match text.trim().parse::<u64>() {
+            Ok(n) if n == u64::from(STORE_RELEASE) => Ok(()),
+            Ok(n) if n > u64::from(STORE_RELEASE) => fail!(
                 "newer_store",
                 "store release {n} is newer than this build ({STORE_RELEASE})"
             ),
@@ -227,8 +229,10 @@ impl Engine {
     pub fn open(dir: &Path, config: Config, projectors: Vec<Box<dyn Projector>>) -> Result<Engine> {
         fsx::private_dir(dir)?;
         let lock = fsx::lock_store(dir)?;
-        finish_restore(dir)?;
+        // A store this build refuses is never changed: admission runs before the restore, so a
+        // pending intent does not act on a dev-build store first.
         admit_release(dir)?;
+        finish_restore(dir)?;
         for sub in ["log", "quarantine", "tmp"] {
             fsx::private_dir(&dir.join(sub))?;
         }
@@ -1602,9 +1606,10 @@ pub fn restore(dir: &Path, backup_dir: &Path) -> Result<Json> {
     }
     fsx::private_dir(dir)?;
     let _lock = fsx::lock_store(dir)?;
-    finish_restore(dir)?;
-    // A store of this release, or a new one, receives the restore; a dev-build store is refused.
+    // A store of this release, or a new one, receives the restore; a dev-build store is refused
+    // before the pending restore is finished, so nothing it refuses is changed.
     admit_release(dir)?;
+    finish_restore(dir)?;
     // A fresh staging folder, named here and never from the manifest.
     fsx::private_dir(&dir.join("tmp"))?;
     let staging = dir.join("tmp").join(format!("restore-{}", fsx::random_hex(8)));

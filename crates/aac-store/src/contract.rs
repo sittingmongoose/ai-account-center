@@ -239,7 +239,7 @@ pub fn quality_words(bits: u32) -> Vec<String> {
 #[serde(rename_all = "camelCase")]
 pub struct Cwd {
     pub key: String,
-    /// Home written as `~`.
+    /// Home written as `~` or `~/...`; a path in any other form is refused.
     pub path: String,
 }
 
@@ -444,6 +444,13 @@ pub fn label_ok(s: &str, max: usize) -> bool {
 
 fn route_ok(s: &str) -> bool {
     s.is_empty() || (s.len() <= 64 && label_ok(s, 64) && s == s.to_lowercase())
+}
+
+/// A cwd path names the reader's home: `~` or `~/...`. The contract carries no home pattern, so
+/// a bare absolute path cannot be attributed to the reader's home; it is refused, never
+/// rewritten into a different one.
+fn cwd_path_ok(s: &str) -> bool {
+    s == "~" || s.starts_with("~/")
 }
 
 fn usd_ok(v: f64) -> bool {
@@ -672,7 +679,7 @@ impl Report {
             if s.target.as_deref().map(|t| !label_ok(t, 32)).unwrap_or(false)
                 || s.cwd
                     .as_ref()
-                    .map(|c| !hex16_ok(&c.key) || !label_ok(&c.path, MAX_CWD_PATH))
+                    .map(|c| !hex16_ok(&c.key) || !label_ok(&c.path, MAX_CWD_PATH) || !cwd_path_ok(&c.path))
                     .unwrap_or(false)
             {
                 fail!("invalid", "a session's target or folder is malformed");
@@ -740,6 +747,17 @@ mod tests {
         assert!(scanner_report(|v| v["counts"]["newestMtime"] = 99_999_999_999_999u64.into()).is_err());
         assert_eq!(Mtime::Ms(5).ms(), Some(5));
         assert_eq!(Mtime::Iso("1970-01-01T00:00:01Z".into()).ms(), Some(1000));
+    }
+
+    #[test]
+    fn a_cwd_path_must_write_the_home_as_tilde() {
+        // The contract carries no home pattern, so a bare absolute path cannot be attributed to
+        // the reader's home; it is refused, never rewritten.
+        assert!(scanner_report(|v| v["sessions"][0]["cwd"]["path"] = "/home/alice/projects/x".into()).is_err());
+        assert!(scanner_report(|v| v["sessions"][0]["cwd"]["path"] = "C:\\Users\\alice\\projects\\x".into()).is_err());
+        assert!(scanner_report(|v| v["sessions"][0]["cwd"]["path"] = "~".into()).is_ok());
+        assert!(scanner_report(|v| v["sessions"][0]["cwd"]["path"] = "~/projects/aac".into()).is_ok());
+        assert!(scanner_report(|v| v["sessions"][0]["cwd"] = serde_json::Value::Null).is_ok());
     }
 
     #[test]
