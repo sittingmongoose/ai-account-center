@@ -165,6 +165,16 @@ pub(crate) fn disabled_for_public(root: &std::path::Path) -> bool {
         })
 }
 
+/// In-memory mirror of a job failure record: keeps the monotonic sequence and fixed code
+/// visible through `hostJobs` even when `aac.redb` refuses `set_meta`.
+#[derive(Clone)]
+struct JobFailure {
+    seq: u64,
+    code: Option<String>,
+    ms: u64,
+    persisted: bool,
+}
+
 /// The job loop's record, readable through the `hostJobs` method (never in `status`, whose
 /// shape the goldens pin).
 #[derive(Default)]
@@ -172,6 +182,8 @@ struct Jobs {
     passes: u64,
     last_pass_ms: Option<u64>,
     last_error: Option<String>,
+    last_error_record: Option<JobFailure>,
+    last_share_record: Option<JobFailure>,
 }
 
 struct State {
@@ -473,31 +485,62 @@ impl StoreHost {
     }
 
     fn jobs_json(&self) -> String {
-        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let engine = self.engine();
         // The persisted failure records survive a host restart; each is one meta write
         // holding a monotonic sequence plus code/time, so a backward wall clock cannot
-        // hide a new failure (round 3 L1).
-        let (error, share) = self
-            .engine()
+        // hide a new failure (round 3 L1). When a meta write fails, the newer in-memory
+        // record keeps the failure visible with `last*Persisted: false`.
+        let (error, share) = engine
+            .as_ref()
             .map(|engine| {
                 (
-                    failure_record(&engine, "ts:host_job_last_error"),
-                    failure_record(&engine, "ts:host_job_last_share_failure"),
+                    failure_record(engine, "ts:host_job_last_error"),
+                    failure_record(engine, "ts:host_job_last_share_failure"),
                 )
             })
             .unwrap_or((Value::Null, Value::Null));
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let persisted_error_seq = error["seq"].as_u64().unwrap_or(0);
+        let (error_code, error_ms, error_seq, error_persisted) = match &state.jobs.last_error_record
+        {
+            Some(mem) if mem.seq > persisted_error_seq => (
+                mem.code.as_deref().map_or(Value::Null, |c| json!(c)),
+                json!(mem.ms),
+                json!(mem.seq),
+                json!(mem.persisted),
+            ),
+            _ => (
+                error["code"].clone(),
+                error["ms"].clone(),
+                error["seq"].clone(),
+                error["seq"].as_u64().map_or(Value::Null, |_| json!(true)),
+            ),
+        };
+        let persisted_share_seq = share["seq"].as_u64().unwrap_or(0);
+        let (share_ms, share_seq, share_persisted) = match &state.jobs.last_share_record {
+            Some(mem) if mem.seq > persisted_share_seq => {
+                (json!(mem.ms), json!(mem.seq), json!(mem.persisted))
+            }
+            _ => (
+                share["ms"].clone(),
+                share["seq"].clone(),
+                share["seq"].as_u64().map_or(Value::Null, |_| json!(true)),
+            ),
+        };
         json!({
-            "open": self.engine().is_some(),
+            "open": engine.is_some(),
             "bootError": state.boot_error,
             "jobs": {
                 "passes": state.jobs.passes,
                 "lastPassMs": state.jobs.last_pass_ms,
                 "lastError": state.jobs.last_error,
-                "lastErrorCode": error["code"],
-                "lastErrorMs": error["ms"],
-                "lastErrorSeq": error["seq"],
-                "lastShareFailedMs": share["ms"],
-                "lastShareSeq": share["seq"],
+                "lastErrorCode": error_code,
+                "lastErrorMs": error_ms,
+                "lastErrorSeq": error_seq,
+                "lastErrorPersisted": error_persisted,
+                "lastShareFailedMs": share_ms,
+                "lastShareSeq": share_seq,
+                "lastSharePersisted": share_persisted,
             },
         })
         .to_string()
@@ -543,37 +586,78 @@ impl StoreHost {
                 false,
             ),
         };
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        state.jobs.passes += 1;
-        state.jobs.last_pass_ms = Some(now);
-        if let Some(error) = &error {
-            state.jobs.last_error = Some(error.clone());
-        }
-        drop(state);
+        let (prior_error_seq, prior_share_seq) = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.jobs.passes += 1;
+            state.jobs.last_pass_ms = Some(now);
+            if let Some(error) = &error {
+                state.jobs.last_error = Some(error.clone());
+            }
+            (
+                state.jobs.last_error_record.as_ref().map_or(0, |r| r.seq),
+                state.jobs.last_share_record.as_ref().map_or(0, |r| r.seq),
+            )
+        };
         // R3 review L1: the operator warning must survive a host restart. Persist one
         // record per failure kind — a monotonic sequence with the fixed code and time
         // (never the message, which can name private paths). TS's hosted-jobs watch reads
         // them back through `hostJobs` and warns as it does for the in-process loop; the
         // sequence, not the wall time, identifies a new failure (round 3 L1).
-        if let Some(engine) = self.engine() {
-            let stamp = |key: &str, record: Value| {
-                if let Err(error) = engine.set_meta(key, &record.to_string()) {
-                    tracing::warn!(target: "aac_http", "store job diagnostic not persisted: {error}");
-                }
+        // If `set_meta` fails, keep the failure record in memory so `hostJobs` still names
+        // it with a monotonic sequence and `last*Persisted: false`.
+        let engine = self.engine();
+        let stamp = |key: &str, record: Value| -> bool {
+            let Some(engine) = engine.as_ref() else {
+                return false;
             };
-            if let Some(error) = &error {
-                let seq = next_failure_seq(&engine, "ts:host_job_last_error");
-                stamp(
-                    "ts:host_job_last_error",
-                    json!({"seq": seq, "code": job_error_code(error), "ms": now}),
-                );
+            match engine.set_meta(key, &record.to_string()) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(target: "aac_http", "store job diagnostic not persisted: {error}");
+                    false
+                }
             }
-            if share_failed {
-                let seq = next_failure_seq(&engine, "ts:host_job_last_share_failure");
-                stamp(
-                    "ts:host_job_last_share_failure",
-                    json!({"seq": seq, "ms": now}),
-                );
+        };
+        let next_error = error.as_ref().map(|error| {
+            let persisted_seq = engine
+                .as_ref()
+                .map_or(0, |e| persisted_failure_seq(e, "ts:host_job_last_error"));
+            let seq = persisted_seq.max(prior_error_seq) + 1;
+            let code = job_error_code(error);
+            let persisted = stamp(
+                "ts:host_job_last_error",
+                json!({"seq": seq, "code": &code, "ms": now}),
+            );
+            JobFailure {
+                seq,
+                code: Some(code),
+                ms: now,
+                persisted,
+            }
+        });
+        let next_share = share_failed.then(|| {
+            let persisted_seq = engine.as_ref().map_or(0, |e| {
+                persisted_failure_seq(e, "ts:host_job_last_share_failure")
+            });
+            let seq = persisted_seq.max(prior_share_seq) + 1;
+            let persisted = stamp(
+                "ts:host_job_last_share_failure",
+                json!({"seq": seq, "ms": now}),
+            );
+            JobFailure {
+                seq,
+                code: None,
+                ms: now,
+                persisted,
+            }
+        });
+        if next_error.is_some() || next_share.is_some() {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(record) = next_error {
+                state.jobs.last_error_record = Some(record);
+            }
+            if let Some(record) = next_share {
+                state.jobs.last_share_record = Some(record);
             }
         }
     }
@@ -658,10 +742,9 @@ fn failure_record(engine: &Engine, key: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// The next failure sequence for a record key: monotonic across passes and restarts,
-/// independent of the wall clock (round 3 L1).
-fn next_failure_seq(engine: &Engine, key: &str) -> u64 {
-    failure_record(engine, key)["seq"].as_u64().unwrap_or(0) + 1
+/// The last persisted failure sequence for a record key, or 0 when none exists.
+fn persisted_failure_seq(engine: &Engine, key: &str) -> u64 {
+    failure_record(engine, key)["seq"].as_u64().unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -910,6 +993,59 @@ mod tests {
             jobs["jobs"]["lastShareFailedMs"],
             json!(now + DAY_MS - 1_000)
         );
+        host.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_meta_write_still_publishes_the_job_failure_with_a_monotonic_sequence()
+    -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let now = aac_store::engine::now_ms();
+        // Fresh host: closing the engine's db while the host slot keeps it makes both the
+        // pass and set_meta fail, as when aac.redb refuses writes.
+        let dir = root.path().join("store-unpersisted");
+        let host = StoreHost::new(boot(dir));
+        host.open_at_boot();
+        let engine = host.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+
+        host.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(1), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorCode"], json!("closed"), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
+
+        // A second unpersisted failure advances the sequence monotonically.
+        host.job_pass(now + 1_000);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now + 1_000), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
+        host.close_engine();
+
+        // After a persisted failure (seq 1), an unpersisted failure advances to seq 2.
+        let dir = root.path().join("store-after-persisted");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(dir));
+        host.open_at_boot();
+        host.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(1), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(true), "{jobs}");
+
+        let engine = host.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+        host.job_pass(now + 2_000);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now + 2_000), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorCode"], json!("closed"), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
         host.close_engine();
         Ok(())
     }

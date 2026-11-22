@@ -300,8 +300,10 @@ export interface HostJobsState {
     lastErrorMs?: number | null;
     /** Monotonic failure identity: a backward wall clock cannot hide a new failure. */
     lastErrorSeq?: number | null;
+    lastErrorPersisted?: boolean | null;
     lastShareFailedMs: number | null;
     lastShareSeq?: number | null;
+    lastSharePersisted?: boolean | null;
   };
 }
 

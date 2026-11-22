@@ -16,7 +16,11 @@ import {
   getRecentLogEntries,
 } from '../../../src/services/logging/log-buffer';
 import { invalidateLoggingConfigCache } from '../../../src/services/logging/log-config';
-import { AacStore, startAacStoreHostJobsWatch } from '../../../src/store/store-service';
+import {
+  AacStore,
+  startAacStoreHostJobsWatch,
+  type HostJobsState,
+} from '../../../src/store/store-service';
 import type { NativeStoreHandle } from '../../../src/store/native-loader';
 
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
@@ -206,6 +210,49 @@ describe('the hosted store jobs watch', () => {
     clock.ticks.shift()!();
     await flush();
     expect(warnings().length).toBe(4);
+    stop();
+  });
+
+  it('warns once for an unpersisted failure record without logging the raw error string', async () => {
+    const host = scriptedHost();
+    const unpersisted: HostJobsState['jobs'] = {
+      ...host.state,
+      lastError: 'closed: /private/store/aac.redb is unavailable',
+      lastErrorCode: 'closed',
+      lastErrorMs: 1_500,
+      lastErrorSeq: 1,
+      lastErrorPersisted: false,
+      lastShareFailedMs: null,
+      lastShareSeq: null,
+    };
+    const handle: NativeStoreHandle = {
+      async call(method) {
+        if (method !== 'hostJobs') throw new Error(`unexpected method ${method}`);
+        return JSON.stringify({ open: true, bootError: null, jobs: unpersisted });
+      },
+    };
+    const store = new AacStore(handle, path.join(root, 'store'));
+    const clock = manualSchedule();
+    const stop = startAacStoreHostJobsWatch({ store: () => store, schedule: clock.schedule });
+    clock.ticks.shift()!();
+    await flush();
+    const first = warnings();
+    expect(first.map((entry) => entry.event)).toEqual(['store.maintenance_failed']);
+    expect(first[0].message).toBe('Store maintenance did not finish');
+    expect(first[0].context).toEqual({ code: 'closed' });
+    expect(JSON.stringify(first)).not.toContain('/private/store/aac.redb');
+
+    // Repeating the same unpersisted sequence warns no second time.
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(1);
+
+    // A later unpersisted failure advances the sequence and warns once more.
+    unpersisted.lastErrorSeq = 2;
+    unpersisted.lastErrorMs = 2_500;
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(2);
     stop();
   });
 });
