@@ -647,9 +647,12 @@ to reopen each the way it was started:
 
 - an instance with a data-directory argument reopens the way AAC's launcher
   starts a Claude profile: the updated package's `app\Claude.exe` by path, its
-  folder as the working directory and the same
-  `--user-data-dir="%APPDATA%\Claude-<id>"`. Package identity does not change
-  this; AAC's named profile on the Windows PC has it too;
+  folder as the working directory, the same
+  `--user-data-dir="%APPDATA%\Claude-<id>"` and the environment the instance was
+  started with (captured before the close; a per-launch configuration such as a
+  profile's own variable would otherwise be lost to the scheduled worker's).
+  Package identity does not change this; AAC's named profile on the Windows PC
+  has it too;
 - an instance without arguments and with package identity (the Start menu, or
   Claude's default instance launched through `explorer.exe shell:AppsFolder\...`)
   reopens by its AUMID (`OpenAI.Codex_2p2nqsd0c76g0!App`,

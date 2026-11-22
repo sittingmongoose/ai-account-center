@@ -1,5 +1,6 @@
 """App-update helper/bridge parity (rows 8, 9, 24) and the base process boundaries. Fixtures and mocks only."""
 import contextlib
+import ctypes
 import os
 import pathlib
 import re
@@ -199,3 +200,52 @@ class ParityTests(unittest.TestCase):
         self.assertEqual(set(killed), {42}, "the pre-install stop is kept")
         self.assertEqual(restarted, [42], "the stopped terminal is reopened")
         self.assertEqual((row["status"], row["restartedProcesses"]), ("updated", 1))
+
+    def test_windows_replace_replays_the_captured_launch_environment(self):
+        # Reviewer probe M4: the Windows Update apps entry point captures the app and reopens it
+        # by path. A per-launch configuration in its environment must survive the update.
+        import app_update_desktop as desktop
+
+        class Kernel32:
+            @staticmethod
+            def ProcessIdToSessionId(_pid, target):
+                target._obj.value = 1
+                return 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            app = home / "WindowsApps/Microsoft.ChatGPT_2p2nqsd0c76g0/ChatGPT.exe"
+            app.parent.mkdir(parents=True)
+            app.write_text("fixture", encoding="utf-8")
+            install = common.Install("codex-desktop", "windows", app, "1.0.0", "msix",
+                                     identity="OpenAI.Codex", publisher="CN=OpenAI")
+            refreshed = common.Install("codex-desktop", "windows", app, "2.0.0", "msix",
+                                       identity="OpenAI.Codex", publisher="CN=OpenAI")
+            instance = processes.Process(
+                7, 1, 0, str(app), "s7", [str(app), "--user-data-dir=/fixture/profile"],
+                cwd="C:\\Users\\fixture", env={}, session=1,
+            )
+            patches = (
+                mock.patch.object(desktop.ctypes, "windll", mock.Mock(kernel32=Kernel32()), create=True),
+                mock.patch.object(desktop, "scan", return_value=[instance]),
+                mock.patch.object(desktop, "process_package", return_value=None),
+                mock.patch.object(
+                    desktop, "windows_context",
+                    return_value=("C:\\Users\\fixture", {"XDG_CONFIG_HOME": "/custom", "KEEP": "yes"}),
+                    create=True,
+                ),
+                mock.patch.object(desktop, "terminate_desktops", return_value=0),
+                mock.patch.object(desktop, "windows_package", return_value=refreshed),
+                mock.patch.object(desktop, "require_replace_time"),
+            )
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                popen = stack.enter_context(mock.patch.object(desktop.subprocess, "Popen"))
+                value = desktop.windows_replace(install, "1.0.0", lambda: None, lambda info: True)
+        popen.assert_called_once()
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv, [str(app), "--user-data-dir=/fixture/profile"])
+        env = popen.call_args.kwargs.get("env") or {}
+        self.assertEqual((env.get("XDG_CONFIG_HOME"), env.get("KEEP")), ("/custom", "yes"))
+        self.assertEqual((value["status"], value["restartedProcesses"]), ("updated", 1))

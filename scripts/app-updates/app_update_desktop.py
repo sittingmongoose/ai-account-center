@@ -16,11 +16,11 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from app_update_common import (
-    Install, RangeReader, UpdateFailure, command, download, powershell, private_temporary,
+    Install, RangeReader, UpdateFailure, command, download, environment, powershell, private_temporary,
     marker_applies_to, marker_owes_restart, pending_marker, ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
 )
 from app_update_processes import (
-    desktop_arguments, family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops,
+    desktop_arguments, family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops, windows_context,
 )
 
 
@@ -530,11 +530,11 @@ def windows_capture(install):
 
     Read-only. An instance with a data-directory argument reopens from the
     refreshed package the way AAC's launcher starts a Claude profile (that exe,
-    its folder, the same argument), packaged or not. One without arguments
-    reopens through its AUMID when packaged (the Start menu, or Claude's
-    default) and by path when not. One in another session, one of another
-    package, one whose AUMID cannot be built and any it cannot inspect raise
-    UpdateFailure("quit_first"): nothing may close for it.
+    its folder, the same argument, and its captured environment). One without
+    arguments reopens through its AUMID when packaged (the Start menu, or
+    Claude's default) and by path when not. One in another session, one of
+    another package, one whose AUMID cannot be built and any it cannot inspect
+    raise UpdateFailure("quit_first"): nothing may close for it.
     """
     try:
         contexts = main_contexts(install, scan("windows"))
@@ -554,9 +554,12 @@ def windows_capture(install):
                 raise UpdateFailure("quit_first")
             if arguments or name is None:
                 # By path: the launcher's start for a profile, or a plain start of an unpackaged app.
-                plans.append((item, None, arguments))
+                # Its environment is part of that start (a per-launch configuration), so it is
+                # captured before the close and replayed by the direct reopen below.
+                _, launch = windows_context(item.pid)
+                plans.append((item, None, arguments, launch))
             elif install.package_family and windows_explorer().is_file():
-                plans.append((item, install.package_family + "!" + application, []))
+                plans.append((item, install.package_family + "!" + application, [], None))
             else:
                 raise UpdateFailure("quit_first")
         return contexts, plans
@@ -566,14 +569,17 @@ def windows_capture(install):
 
 def reopen_windows(install, plans):
     """Start each planned instance from this install, then wait for its main processes to show."""
-    for _, aumid, arguments in plans:
+    for _, aumid, arguments, launch in plans:
         if aumid:
             # explorer.exe exits 1 even after it opened the app: only the scan below decides.
             argv, cwd = [str(windows_explorer()), "shell:AppsFolder\\" + aumid], None
+            subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=DETACHED)
         else:
-            # The same direct start as AAC's Claude launcher: current exe, its folder, one data directory.
+            # The same direct start as AAC's Claude launcher: current exe, its folder, one data
+            # directory, and the captured environment so per-launch configuration survives.
             argv, cwd = [str(install.path), *arguments], str(install.path.parent)
-        subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=DETACHED)
+            subprocess.Popen(argv, cwd=cwd, env=environment(launch), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, creationflags=DETACHED)
     if not plans:
         return 0
     deadline = time.monotonic() + WINDOWS_REOPEN_SECONDS
