@@ -875,16 +875,20 @@ impl Projector for UsageProjector {
         readings: ReplayReadings,
     ) -> Result<Vec<Finding>> {
         if event.event_type == "usage.day_closed" {
-            let complete = project_day_closed(txn, &msgpack::to_json(&event.payload), Some(readings))?;
-            return Ok(if complete {
-                Vec::new()
-            } else {
-                vec![crate::engine::finding(
+            let payload = msgpack::to_json(&event.payload);
+            let complete = project_day_closed(txn, &payload, Some(readings))?;
+            let mut findings = Vec::new();
+            if !complete {
+                findings.push(crate::engine::finding(
                     "readings",
                     "late_rows_unavailable",
                     "Some archived late-reading counts could not be reconstructed from the retained readings",
-                )]
-            });
+                ));
+            }
+            if readings != ReplayReadings::Complete {
+                findings.extend(open_period_heads(txn, &payload)?);
+            }
+            return Ok(findings);
         }
         self.apply(txn, log, event)
     }
@@ -2102,6 +2106,57 @@ fn restore_closed_period(
     saved.emitted = true;
     write_period(txn, a, w, start, &saved)?;
     Ok(Vec::new())
+}
+
+/// An open period rebuilt from the surviving readings can start later than its true start:
+/// retention retired the readings its first deltas were measured from, and the close archive
+/// proves the series was already active before the rebuilt start. Disclose the unavailable
+/// head with the period's bounds — the gap rule `span_at` uses for a burn query's start (7.2) —
+/// instead of letting the consumed total silently begin at the first surviving reading.
+/// Mirrors `late_rows_unavailable`; the total itself stays as rebuilt, never invented.
+fn open_period_heads(txn: &WriteTransaction, payload: &Json) -> Result<Vec<Finding>> {
+    let mut out = Vec::new();
+    let readings = txn.open_table(db::READING_DAY)?;
+    for series in payload["series"].as_array().into_iter().flatten() {
+        let account: AccountObs = serde_json::from_value(series["account"].clone())?;
+        let window: WindowObs = serde_json::from_value(series["window"].clone())?;
+        let a = db::intern(txn, db::KIND_ACCOUNT, &account.identity)?;
+        let w = db::intern(txn, db::KIND_WINDOW, &window.identity)?;
+        let Some(latest) = read_latest(txn, a, w)? else {
+            continue;
+        };
+        let start = latest.period_start;
+        let Some(period) = read_period(txn, a, w, start)? else {
+            continue;
+        };
+        // A final period keeps its archived total or a visible reset: its head is proven.
+        if period.is_final {
+            continue;
+        }
+        let Some(meta) = get(txn, db::SERIES, Key::new().u32(a).u32(w).as_slice())? else {
+            continue;
+        };
+        let first_ms = db::unpack::<SeriesMeta>(&meta)?.first_ms.max(0) as u64;
+        // The series began at or after the rebuilt start: no earlier reading to lose.
+        if first_ms >= start {
+            continue;
+        }
+        // A kept reading before the start proves the head (the reset that opened this period
+        // is visible); only a gap discloses, as `span_at` does for a burn query's start.
+        let open = open_spans_for(&txn.open_table(db::LATEST)?, [(a, w)])?;
+        if span_at(&readings, &open, (a, w), start.saturating_sub(1))?.is_some() {
+            continue;
+        }
+        out.push(crate::engine::finding(
+            "readings",
+            "period_rows_unavailable",
+            &format!(
+                "Some early readings of an open period could not be reconstructed from the retained readings; its consumed total starts at the first surviving reading (period start {} ms, end {} ms, series history from {} ms)",
+                start, period.end_ms, first_ms
+            ),
+        ));
+    }
+    Ok(out)
 }
 
 fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<ReplayReadings>) -> Result<bool> {

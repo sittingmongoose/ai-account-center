@@ -1300,6 +1300,177 @@ fn a_degraded_segment_rebuild_flags_late_rows_unavailable_instead_of_inventing_c
     fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn an_open_period_rebuilt_after_its_first_readings_retired_discloses_period_rows_unavailable() {
+    let dir = temp_dir("open-period-retired");
+    let retention_days = 30u64;
+    let open_retained = |p: &Path| ops::open_engine(p.to_str().unwrap(), None, Some(retention_days)).unwrap();
+    let day = (now_ms() / DAY as u64) as u32 + 1;
+    let t = i64::from(day) * DAY;
+    {
+        let engine = open_retained(&dir);
+        // A weekly period opens at t; its first readings seal into their own segment.
+        record(
+            &engine,
+            vec![obs(1, t, vec![window("seven_day", Some(10.0), Some(t + 5 * DAY))])],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + MIN,
+                vec![window("seven_day", Some(15.0), Some(t + 5 * DAY))],
+            )],
+        );
+        engine.lock_logs().readings.seal().unwrap();
+        let seg0_end_seq = engine.lock_logs().readings.manifest().segments[0].end_seq;
+        // The period stays open across the day boundary: no reset, so the close archives
+        // the day rollup but not the period.
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + DAY,
+                vec![window("seven_day", Some(20.0), Some(t + 5 * DAY))],
+            )],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + DAY + MIN,
+                vec![window("seven_day", Some(25.0), Some(t + 5 * DAY))],
+            )],
+        );
+        engine.lock_logs().readings.seal().unwrap();
+        let closed = aac_store::usage::close_days(&engine, (t + DAY + 3 * HOUR) as u64).unwrap();
+        assert_eq!(closed["closed"], json!([day]));
+        // Retention retires the first readings once their day is closed and a backup holds them.
+        let pruned = aac_store::usage::prune(&engine, (t + 100 * DAY) as u64).unwrap();
+        assert!(pruned["removedRows"].as_u64().unwrap() >= 2, "{pruned:#}");
+        let retired = aac_store::usage::retire_segments(&engine, (t + 100 * DAY) as u64, Some(seg0_end_seq)).unwrap();
+        assert_eq!(retired["retired"], 1, "{retired:#}");
+        engine.close().unwrap();
+    }
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let rebuilt_periods = {
+        let rebuilt = open_retained(&dir);
+        // The rebuilt period starts at the first surviving reading. Its early delta stays
+        // unavailable: no invented total, no zero, no scaled estimate.
+        let series = aac_store::usage::SeriesRef {
+            identity: identity(1),
+            window: "[\"seven_day\",\"rate_limit\",null]".into(),
+        };
+        let periods = aac_store::usage::periods(&rebuilt, &[series], (t - MIN) as u64, (t + 2 * DAY) as u64).unwrap();
+        let summary: Vec<(i64, i64, f64)> = periods[0]["periods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    (p["start"].as_i64().unwrap() - t) / MIN,
+                    (p["end"].as_i64().unwrap() - t) / MIN,
+                    p["consumed"].as_f64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(summary, vec![(1440, 1441, 5.0)]);
+        // One readings finding discloses the lost head with the period's bounds, mirroring
+        // late_rows_unavailable (which stays as it is).
+        let findings = rebuilt.status().unwrap()["findings"].as_array().unwrap().clone();
+        let heads: Vec<_> = findings
+            .iter()
+            .filter(|f| f["kind"] == "period_rows_unavailable")
+            .collect();
+        assert_eq!(heads.len(), 1, "{findings:#?}");
+        assert_eq!(heads[0]["log"], "readings");
+        let detail = heads[0]["detail"].as_str().unwrap();
+        assert!(detail.contains(&(t + DAY).to_string()), "{detail}");
+        assert!(detail.contains(&t.to_string()), "{detail}");
+        let snapshot = dump(&rebuilt, &["period"]);
+        rebuilt.close().unwrap();
+        snapshot
+    };
+    {
+        let reopened = open_retained(&dir);
+        assert!(finding_kinds(&reopened).iter().any(|k| k == "period_rows_unavailable"));
+        assert_eq!(dump(&reopened, &["period"]), rebuilt_periods);
+        reopened.close().unwrap();
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_period_whose_readings_survive_retention_gets_no_period_rows_finding() {
+    let dir = temp_dir("open-period-kept");
+    let retention_days = 30u64;
+    let open_retained = |p: &Path| ops::open_engine(p.to_str().unwrap(), None, Some(retention_days)).unwrap();
+    let day = (now_ms() / DAY as u64) as u32 + 1;
+    let t = i64::from(day) * DAY;
+    {
+        let engine = open_retained(&dir);
+        record(
+            &engine,
+            vec![obs(1, t, vec![window("seven_day", Some(10.0), Some(t + 5 * DAY))])],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + MIN,
+                vec![window("seven_day", Some(15.0), Some(t + 5 * DAY))],
+            )],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + DAY,
+                vec![window("seven_day", Some(20.0), Some(t + 5 * DAY))],
+            )],
+        );
+        record(
+            &engine,
+            vec![obs(
+                1,
+                t + DAY + MIN,
+                vec![window("seven_day", Some(25.0), Some(t + 5 * DAY))],
+            )],
+        );
+        let closed = aac_store::usage::close_days(&engine, (t + DAY + 3 * HOUR) as u64).unwrap();
+        assert_eq!(closed["closed"], json!([day]));
+        engine.close().unwrap();
+    }
+    // Nothing retired: the rebuild sees every reading, the period keeps its true start and
+    // full consumed total, and no head disclosure is due.
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    {
+        let rebuilt = open_retained(&dir);
+        let series = aac_store::usage::SeriesRef {
+            identity: identity(1),
+            window: "[\"seven_day\",\"rate_limit\",null]".into(),
+        };
+        let periods = aac_store::usage::periods(&rebuilt, &[series], (t - MIN) as u64, (t + 2 * DAY) as u64).unwrap();
+        let summary: Vec<(i64, i64, f64)> = periods[0]["periods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    (p["start"].as_i64().unwrap() - t) / MIN,
+                    (p["end"].as_i64().unwrap() - t) / MIN,
+                    p["consumed"].as_f64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(summary, vec![(0, 1441, 15.0)]);
+        let kinds = finding_kinds(&rebuilt);
+        assert!(!kinds.iter().any(|k| k == "period_rows_unavailable"), "{kinds:?}");
+        rebuilt.close().unwrap();
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 fn build_v1_cross_day_split_store(
     dir: &Path,
     retention_days: u64,
