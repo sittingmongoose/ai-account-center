@@ -21,7 +21,8 @@ HIDDEN = {'creationflags': 0x08000000} if os.name == 'nt' else {}
 WINDOWS_TASK_REGISTER = (
     "$ErrorActionPreference='Stop';"
     "$helper=Join-Path $HOME '.ccs\\app-updates\\app_updates.py';"
-    "if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'Updater helper is not deployed.' };"
+    "$present=%s;"
+    "if (-not (Test-Path -LiteralPath $present -PathType Leaf)) { throw 'Updater helper is not deployed.' };"
     "$python=(Get-Command python.exe -ErrorAction Stop).Source;"
     "$pythonw=Join-Path (Split-Path -Parent $python) 'pythonw.exe';"
     "if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) { throw 'pythonw.exe was not found' };"
@@ -34,6 +35,11 @@ WINDOWS_TASK_REGISTER = (
     "Register-ScheduledTask -TaskName 'CCS App Updates' -Action $action -Principal $principal "
     "-Settings $settings -Force | Out-Null"
 )
+
+
+def powershell_literal(value):
+    """One PowerShell single-quoted string: no escape processing in it, a quote written twice."""
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 class Refused(Exception):
@@ -116,12 +122,17 @@ def run_powershell(script):
         timeout=30, **HIDDEN)
 
 
-def ensure_windows_task():
-    """Register CCS App Updates when a Windows host has helpers but no task."""
-    present = run_powershell("Get-ScheduledTask -TaskName 'CCS App Updates' -ErrorAction Stop")
-    if present.returncode == 0:
+def ensure_windows_task(present):
+    """Register CCS App Updates when a Windows host has helpers but no task.
+
+    `present` is the helper this publication is about to select; the task's action
+    always names the stable launcher, so registering first is harmless and keeps
+    an interrupted publication from leaving a task without its launcher.
+    """
+    current = run_powershell("Get-ScheduledTask -TaskName 'CCS App Updates' -ErrorAction Stop")
+    if current.returncode == 0:
         return
-    done = run_powershell(WINDOWS_TASK_REGISTER)
+    done = run_powershell(WINDOWS_TASK_REGISTER % powershell_literal(present))
     if done.returncode != 0:
         raise Refused('windows_task_missing')
 
@@ -165,7 +176,7 @@ def publish(root, platform, expected, payload):
     if (current and (marked or os.name != 'nt') and matches(root / current, expected)
             and capable(root / 'app_updates.py', platform)):
         if platform == 'windows':
-            ensure_windows_task()
+            ensure_windows_task(root / 'app_updates.py')
         return {'ok': True, 'changed': False, 'generation': current}
     previous = current
     if launcher is not None and current is None:
@@ -195,6 +206,11 @@ def publish(root, platform, expected, payload):
         os.rename(stage, root / generation)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+    if platform == 'windows':
+        # Registration runs before the swap: the task action names the stable launcher, and
+        # this publication's staged generation is what the swap will select, so an
+        # interrupted, refused or timed-out registration leaves the prior state selected.
+        ensure_windows_task(root / generation / 'app_updates.py')
     replace(root, (
         '# aac-helpers: ' + generation + '\n' + FORMAT + '\n'
         + '# aac-helpers-previous: ' + (previous or 'none') + '\n'
@@ -207,15 +223,6 @@ def publish(root, platform, expected, payload):
         # The launcher that answered before stays in force; an absent one stays absent.
         restore(root, launcher)
         raise Refused('helper_capability_missing')
-    if platform == 'windows':
-        # Registration runs after the swap, so it is part of the publication: a refused,
-        # timed-out or unstartable registration must not leave a replacement launcher active
-        # while its task is missing.
-        try:
-            ensure_windows_task()
-        except (Refused, OSError, subprocess.SubprocessError):
-            restore(root, launcher)
-            raise
     return {'ok': True, 'changed': True, 'generation': generation, 'previous': previous}
 
 

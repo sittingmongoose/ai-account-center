@@ -1146,12 +1146,15 @@ and never invokes its helper. Python must be
 available. A Windows helper sync verifies `Get-ScheduledTask -TaskName
 'CCS App Updates'` and, when the task is missing, registers it from that same
 script as the signed-in user, with the InteractiveToken/Limited shape of
-`install-windows-task.ps1`. Registration failure is `helper_sync_failed` with
-`windows_task_missing`; the job does not dispatch rows that would fail because
-the task was never registered. Registration is part of the publication's
-rollback: a refused registration puts the launcher that answered before back, or
-leaves a fresh host without one, so the synced generation never runs without its
-task. Registration does **not** run an update.
+`install-windows-task.ps1`. The task action always names the stable launcher
+path, and registration runs before the launcher swap: it checks the staged
+generation that the swap is about to select, so a refused, timed-out or
+interrupted registration leaves the launcher that answered before selected, or
+a fresh host without one, without needing to undo a swap. Registration failure
+is `helper_sync_failed` with `windows_task_missing`; a timed-out registration is
+`helper_sync_failed` with `helper_sync_timeout` (cause `timeout`), never
+`helper_not_writable`. The job does not dispatch rows that would fail because
+the task was never registered. Registration does **not** run an update.
 `install-windows-task.ps1` still applies the same shape by hand. The helper
 queues that task from SSH session zero, so the user's interactive session must
 be signed in. Existing CCS Bar tasks are untouched.

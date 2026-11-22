@@ -2,8 +2,8 @@
 //! `syncRemoteHelpers` did. The agent runs `~/.ccs/app-updates/app_updates.py` under its own
 //! account and needs a helper that answers `--agent-capabilities`. The dashboard sends the
 //! package's checksum-verified set through the agent's own transport and account. The fixed
-//! script publishes it as one immutable generation, checks the capability before and after the
-//! launcher swap and keeps the previous generation for rollback. A failure dispatches nothing.
+//! script publishes it as one immutable generation, registers the Windows task, swaps the
+//! launcher last and keeps the previous generation for rollback. A failure dispatches nothing.
 use aac_config::OperatingSystem;
 use aac_core::Cause;
 use aac_transport::{CallOptions, CancellationToken, Computer, ProcessOutput};

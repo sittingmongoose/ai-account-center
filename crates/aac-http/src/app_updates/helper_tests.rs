@@ -371,6 +371,26 @@ print('fresh_absent=%s' % (not (fresh_home / launcher).exists()))
 
 #[cfg(unix)]
 #[test]
+fn a_process_exit_at_registration_leaves_the_previous_launcher_selected() {
+    // M6: the swap is last, so losing the updater process while Task Scheduler works changes
+    // nothing on disk: the launcher that answered before still answers (absent stays absent).
+    let stdout = interrupted_registration("exit");
+    assert!(
+        stdout.contains("mode=exit exit=3"),
+        "the fixture must lose the process at registration: {stdout}"
+    );
+    assert!(
+        stdout.contains("prior_selected=True"),
+        "the previous launcher must stay selected: {stdout}"
+    );
+    assert!(
+        stdout.contains("fresh_absent=True"),
+        "a fresh host must stay without a launcher: {stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_registration_timeout_answers_the_timeout_reason_and_keeps_the_prior_launcher() {
     // L2: a timed-out registration is a timeout, not helper_not_writable, and the launcher
     // bytes are the ones that answered before.
