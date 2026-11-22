@@ -44,6 +44,8 @@ import {
 import { resetDeviceStoreForTests } from '../../src/web-server/services/dashboard-device-store';
 import { resetSetupCodeForTests } from '../../src/web-server/services/dashboard-setup-code';
 import * as usageTransport from '../../src/web-server/services/additional-usage-transport';
+import { broadcastDashboardEvent } from '../../src/web-server/dashboard-events';
+import { WebSocket } from 'ws';
 
 const USERNAME = 'e2e-admin';
 const PASSWORD = 'first-password-123';
@@ -1294,5 +1296,29 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     const saved = configYamlText(ctx);
     expect(saved).toContain('10.6.0.0/24');
     expect(saved).toContain('192.168.0.0/16');
+  });
+
+  it('case 18: logout closes the session /ws socket, so a later reset hint does not reach it', async () => {
+    const ctx = await startE2E();
+    const jar = await setupFresh(ctx);
+    // The dashboard opens /ws on load with the browser cookie.
+    const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/ws`, {
+      headers: { Cookie: jar.cookie, Origin: ctx.base },
+    });
+    const received: string[] = [];
+    socket.on('message', (data) => received.push(String(data)));
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+
+    const logout = await jar.send('POST', '/api/auth/logout', {});
+    expect(logout.status).toBe(200);
+    // Give the close frame a moment before the next broadcast.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    broadcastDashboardEvent({ type: 'reset-claims-changed', id: 'x' });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(received).toHaveLength(0);
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
   });
 });

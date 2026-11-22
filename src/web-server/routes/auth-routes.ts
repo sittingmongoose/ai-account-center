@@ -24,6 +24,7 @@ import {
   localNetworkTrust,
   requestClientAddress,
 } from '../middleware/secure-transport';
+import { closeSessionClients } from '../dashboard-events';
 import { forgetSession } from '../services/dashboard-auth-state';
 import { createApiRouter } from './api-router';
 import { signInServerLimiter } from './auth-rate-limits';
@@ -201,6 +202,8 @@ router.post('/login', loginRateLimiter, signInServerLimiter, login);
  * Clear session and log out user.
  */
 router.post('/logout', (req: Request, res: Response) => {
+  // The session's /ws sockets close with it, before the id is destroyed.
+  if (req.sessionID) closeSessionClients(req.sessionID);
   forgetSession(req.sessionID);
   req.session.destroy((err) => {
     if (err) {

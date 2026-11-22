@@ -11,6 +11,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import {
   attachDashboardEventServer,
   broadcastDashboardEvent,
+  closeSessionClients,
 } from '../../../src/web-server/dashboard-events';
 import {
   redactSignInJob,
@@ -212,5 +213,85 @@ describe('dashboard events', () => {
     expect(codes(lan)).toEqual(['ABCD-12345', null]);
     // Not secure when it connected: it stays that way even while the check passes.
     expect(codes(late)).toEqual([null, null]);
+  });
+
+  it('closes only the /ws sockets of the session that signed out', async () => {
+    const server = http.createServer();
+    const wss = new WebSocketServer({ server, path: '/ws' });
+    const detach = attachDashboardEventServer(wss, {
+      authKind: () => 'session',
+      sessionIdentity: (request) => ({
+        sessionId:
+          typeof request.headers['x-test-session'] === 'string'
+            ? request.headers['x-test-session']
+            : null,
+        expires: null,
+      }),
+    });
+    closers.push(async () => {
+      detach();
+      for (const client of wss.clients) client.terminate();
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/ws`;
+    const connect = async (session: string) => {
+      const socket = new WebSocket(url, { headers: { 'x-test-session': session } });
+      const messages: string[] = [];
+      socket.on('message', (data) => messages.push(String(data)));
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', () => resolve());
+        socket.once('error', reject);
+      });
+      closers.push(async () => socket.close());
+      return { socket, messages };
+    };
+    const [signingOut, staying] = await Promise.all([connect('session-a'), connect('session-b')]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const closed = new Promise<number>((resolve) => signingOut.socket.once('close', resolve));
+    expect(closeSessionClients('session-a')).toBe(1);
+    expect(await closed).toBe(4001);
+    // The other session's socket stays open and still gets its hints.
+    expect(broadcastDashboardEvent({ type: 'reset-claims-changed', id: 'x' })).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(signingOut.messages).toHaveLength(0);
+    expect(staying.messages).toEqual(['{"type":"reset-claims-changed","id":"x"}']);
+    expect(staying.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('closes a session socket whose recorded cookie expiry has passed, and sends it nothing', async () => {
+    const server = http.createServer();
+    const wss = new WebSocketServer({ server, path: '/ws' });
+    const detach = attachDashboardEventServer(wss, {
+      authKind: () => 'session',
+      // A recorded server expiry in the past: the cookie's lifetime ended
+      // without the socket going away.
+      sessionIdentity: () => ({ sessionId: 'expiring', expires: new Date(Date.now() - 60_000) }),
+    });
+    closers.push(async () => {
+      detach();
+      for (const client of wss.clients) client.terminate();
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/ws`;
+    const socket = new WebSocket(url);
+    const messages: string[] = [];
+    socket.on('message', (data) => messages.push(String(data)));
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+    closers.push(async () => socket.close());
+    const closed = new Promise<number>((resolve) => socket.once('close', resolve));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broadcastDashboardEvent({ type: 'reset-claims-changed', id: 'x' })).toBe(0);
+    expect(await closed).toBe(4001);
+    expect(messages).toHaveLength(0);
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
   });
 });

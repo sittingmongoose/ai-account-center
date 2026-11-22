@@ -334,6 +334,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     isSecure: isSecureTransport,
     authKind: (request) => authKind(request as express.Request),
     sessionEpoch: (request) => (request as express.Request).session?.epoch ?? null,
+    // The upgrade's session identity, so a logout closes the socket it opened.
+    sessionIdentity: (request) => {
+      const req = request as express.Request;
+      return { sessionId: req.sessionID ?? null, expires: req.session?.cookie?.expires ?? null };
+    },
   });
 
   const detachRustEvents = options.dashboardEventFeed

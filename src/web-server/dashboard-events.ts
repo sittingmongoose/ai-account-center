@@ -123,6 +123,12 @@ type EventSource = DashboardEvent | ((client: DashboardEventClient) => Dashboard
 interface ClientRecord extends DashboardEventClient {
   /** isSecureTransport() of the upgrade request, asked again now. */
   stillSecure: () => boolean;
+  /** The upgrade's socket, so a record whose recorded session expiry passed can be closed. */
+  socket: WebSocket;
+  /** The session id of a browser connection, so its logout closes this socket. */
+  sessionId: string | null;
+  /** The session cookie's recorded expiry (ms since epoch); null when the upgrade carried none. */
+  sessionExpires: number | null;
 }
 
 const servers = new Set<WebSocketServer>();
@@ -130,10 +136,25 @@ const clients = new WeakMap<WebSocket, ClientRecord>();
 
 function clientView(record: ClientRecord | undefined): DashboardEventClient {
   if (!record) return UNKNOWN_CLIENT;
+  // A recorded server expiry in the past means the cookie's lifetime ended
+  // without the socket going away: the connection no longer counts as a
+  // session and closes now. A browser-session cookie records no expiry; that
+  // socket is never guess-closed here.
+  const expired =
+    record.authKind === 'session' &&
+    record.sessionExpires !== null &&
+    record.sessionExpires <= Date.now();
+  if (expired) {
+    try {
+      record.socket.close(4001, 'Signed out');
+    } catch {
+      // Already closing.
+    }
+  }
   return {
     secure: record.secure && record.stillSecure(),
-    authKind: record.authKind,
-    sessionEpoch: record.sessionEpoch,
+    authKind: expired ? null : record.authKind,
+    sessionEpoch: expired ? null : record.sessionEpoch,
   };
 }
 
@@ -144,6 +165,15 @@ export interface DashboardEventServerOptions {
   authKind?: (request: IncomingMessage) => RequestAuthKind;
   /** The session epoch of each browser connection, so "sign out other browsers" can close it. */
   sessionEpoch?: (request: IncomingMessage) => number | null;
+  /**
+   * The identity of each browser connection (its session id and the cookie
+   * expiry the upgrade recorded), so a logout can close its sockets. Asked
+   * only for connections already classified as a session.
+   */
+  sessionIdentity?: (request: IncomingMessage) => {
+    sessionId: string | null;
+    expires: Date | null;
+  } | null;
 }
 
 /** Register a server's clients; returns the detach function for shutdown. */
@@ -175,7 +205,28 @@ export function attachDashboardEventServer(
     } catch {
       sessionEpoch = null;
     }
-    clients.set(socket, { secure, authKind: kind, sessionEpoch, stillSecure });
+    let sessionId: string | null = null;
+    let sessionExpires: number | null = null;
+    if (kind === 'session') {
+      try {
+        const value = options.sessionIdentity?.(request) ?? null;
+        if (value && typeof value.sessionId === 'string' && value.sessionId) {
+          sessionId = value.sessionId;
+          sessionExpires = value.expires instanceof Date ? value.expires.getTime() : null;
+        }
+      } catch {
+        /* Unknown session identity: the socket keeps its classification. */
+      }
+    }
+    clients.set(socket, {
+      socket,
+      secure,
+      authKind: kind,
+      sessionEpoch,
+      stillSecure,
+      sessionId,
+      sessionExpires,
+    });
   };
   wss.on('connection', onConnection);
   return () => {
@@ -238,6 +289,29 @@ export function closeStaleSessionClients(isCurrent: (epoch: number | null) => bo
         current = false;
       }
       if (current) continue;
+      try {
+        client.close(4001, 'Signed out');
+        closed += 1;
+      } catch {
+        // Already closing.
+      }
+    }
+  }
+  return closed;
+}
+
+/**
+ * Close the browser-session sockets opened with `sessionId` (a logout or a
+ * session destruction). Returns how many closed. Sockets whose upgrade
+ * recorded no session id are left to the epoch and expiry checks.
+ */
+export function closeSessionClients(sessionId: string): number {
+  let closed = 0;
+  for (const wss of servers) {
+    for (const client of wss.clients) {
+      const info = clients.get(client);
+      if (!info || info.authKind !== 'session') continue;
+      if (info.sessionId !== sessionId) continue;
       try {
         client.close(4001, 'Signed out');
         closed += 1;
