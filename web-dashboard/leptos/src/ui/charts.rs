@@ -440,6 +440,36 @@ pub(crate) fn tip_rendered_box(centre: f64, w: f64, lo: f64, hi: f64) -> (f64, f
     (x - w / 2.0, x + w / 2.0)
 }
 
+/// TipLayer's clamped centre once the card's width and the content bounds are known.
+fn tip_layer_clamped_pos(
+    centre_x: f64,
+    y: f64,
+    below: bool,
+    w: f64,
+    lo: f64,
+    hi: f64,
+) -> (f64, f64, bool) {
+    let (left, right) = tip_rendered_box(centre_x, w, lo, hi);
+    ((left + right) / 2.0, y, below)
+}
+
+/// TipLayer's Effect body: with the card's words in it, its measured width (`w`) and the page's content
+/// bounds known, place the clamped centre. The test drives the same body through `at`, `text` and `pos`.
+pub(crate) fn place_tip_after_layout(
+    at: RwSignal<(f64, f64, bool)>,
+    text: RwSignal<String>,
+    w: f64,
+    bounds: (f64, f64),
+    pos: RwSignal<(f64, f64, bool)>,
+) {
+    let (centre_x, y, below) = at.get();
+    if text.with(|t| t.is_empty()) {
+        return;
+    }
+    let (lo, hi) = bounds;
+    pos.set(tip_layer_clamped_pos(centre_x, y, below, w, lo, hi));
+}
+
 /// The anchored panel's max heights (below, above), each cleared of the bottom inset (review N3).
 pub(crate) fn pop_max_heights(vh: f64, top: f64, anchor_top: f64, safe_bottom: f64) -> (f64, f64) {
     (
@@ -538,19 +568,13 @@ pub fn TipLayer(children: Children) -> impl IntoView {
     // The card is placed once it has rendered its words: its measured width keeps the whole box between the content
     // bounds, so a wide tip at the content edge never draws under the rail.
     Effect::new(move |_| {
-        let (centre_x, y, below) = at.get();
-        if text.with(|t| t.is_empty()) {
-            return;
-        }
         let vw = window()
             .inner_width()
             .ok()
             .and_then(|v| v.as_f64())
             .unwrap_or(1024.0);
-        let (lo, hi) = page_bounds(vw);
         let w = card.get().map(|c| c.offset_width() as f64).unwrap_or(0.0);
-        let (left, right) = tip_rendered_box(centre_x, w, lo, hi);
-        pos.set(((left + right) / 2.0, y, below));
+        place_tip_after_layout(at, text, w, page_bounds(vw), pos);
     });
     let over = move |e: web_sys::PointerEvent| {
         if e.pointer_type() != "mouse" {
@@ -911,25 +935,47 @@ mod tests {
 
     #[test]
     fn a_tip_stays_inside_the_card_after_position_and_text_change() {
-        let (lo, hi) = content_bounds(951.0, "rail", "right", 84.0);
-        let inside = |centre: f64, width: f64| {
-            let (left, right) = tip_rendered_box(centre, width, lo, hi);
+        let owner = Owner::new();
+        owner.set();
+        let vw = 951.0;
+        let (lo, hi) = content_bounds(vw, "rail", "right", 84.0);
+        let at = RwSignal::new((0.0f64, 0.0f64, false));
+        let text = RwSignal::new(String::new());
+        let pos = RwSignal::new((0.0f64, 0.0f64, false));
+        // no words yet: the card stays unplaced
+        at.set((900.0, 10.0, true));
+        place_tip_after_layout(at, text, 340.0, (lo, hi), pos);
+        assert_eq!(pos.get(), (0.0, 0.0, false));
+        let inside = |centre: f64, w: f64, words: &str| {
+            // the tip's position and text change, then the same Effect body places the card
+            text.set(words.to_string());
+            at.set((centre, 10.0, true));
+            place_tip_after_layout(at, text, w, (lo, hi), pos);
+            let (x, y, below) = pos.get();
+            assert_eq!((y, below), (10.0, true));
+            let (left, right) = (x - w / 2.0, x + w / 2.0);
             assert!(
                 left >= lo && right <= hi,
-                "tip [{left}, {right}] left the content [{lo}, {hi}] at centre {centre} width {width}"
+                "tip [{left}, {right}] left the content [{lo}, {hi}] at centre {centre} width {w}"
             );
             (left, right)
         };
         // short text, mid-card
-        inside(437.0, 120.0);
-        // longer text, moved to the left edge
-        let (left, right) = inside(20.0, 340.0);
-        assert!(left >= lo);
-        assert!(right <= hi);
-        // same long text, moved to the right rail
-        let (left, right) = inside(900.0, 340.0);
-        assert!(left >= lo);
-        assert!(right <= hi);
+        assert_eq!(inside(437.0, 120.0, "mid"), (377.0, 497.0));
+        // longer text, moved to the left edge: the whole box clears 8
+        let (left, _) = inside(20.0, 340.0, "a much longer tip after the text change");
+        assert_eq!(left, 12.0);
+        // same long text, moved to the right rail: the whole box clears the rail (867)
+        let (_, right) = inside(900.0, 340.0, "a much longer tip after the text change");
+        assert_eq!(right, 863.0);
+        // a phone (no rail, 402 wide): the same whole-box clamp at the window edge
+        let (lo, hi) = content_bounds(402.0, "phone", "", 0.0);
+        text.set("a long tip on a phone".to_string());
+        at.set((100.0, 10.0, true));
+        place_tip_after_layout(at, text, 340.0, (lo, hi), pos);
+        let (x, _, _) = pos.get();
+        assert_eq!((x - 170.0, x + 170.0), (12.0, 352.0));
+        assert!(x - 170.0 >= lo && x + 170.0 <= hi);
     }
 
     #[test]
