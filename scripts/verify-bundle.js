@@ -11,6 +11,14 @@ const { precacheList, stampedPrecache } = require('./ui-precache');
 const UI_DIR = path.join(__dirname, '../dist/ui');
 // Whole dist/ui, gzipped: the Leptos runtime, the JavaScript data layer, fonts and icons.
 const MAX_SIZE = 4 * 1024 * 1024;
+/** Gzipped caps for the files the frame downloads on first load (entry HTML, wasm, JS, CSS, font). */
+const FIRST_LOAD_MAX = Object.freeze({
+  html: 64 * 1024,
+  css: 256 * 1024,
+  font: 128 * 1024,
+  js: 512 * 1024,
+  wasm: 3 * 1024 * 1024,
+});
 const LEPTOS_NAME = 'aac_web';
 const LEPTOS_VERSION = '0.9.0-rc1';
 const APP_ENTRY = 'app/index.html';
@@ -42,14 +50,42 @@ function isVariantFile(name) {
   return name.endsWith('.br') || name.endsWith('.gz');
 }
 
+/** Gzipped size of one shipped file; same encoder as the whole-bundle cap. */
+function gzippedBytes(filePath) {
+  return zlib.gzipSync(fs.readFileSync(filePath)).length;
+}
+
 /** Gzipped size of the shipped files; .br/.gz copies are alternates of files already counted. */
 function walkDir(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).reduce((total, file) => {
     const filePath = path.join(dir, file.name);
     if (file.isDirectory()) return total + walkDir(filePath);
     if (isVariantFile(file.name)) return total;
-    return total + zlib.gzipSync(fs.readFileSync(filePath)).length;
+    return total + gzippedBytes(filePath);
   }, 0);
+}
+
+/** First-load files the frame fetches, with their gzip caps. Paths come from the stamped manifest. */
+function firstLoadEntries(manifest) {
+  return [
+    [APP_ENTRY, FIRST_LOAD_MAX.html],
+    ['app/app.css', FIRST_LOAD_MAX.css],
+    ['app/MartianMono.ttf', FIRST_LOAD_MAX.font],
+    [`pkg/${manifest.buildId}/${LEPTOS_NAME}.js`, FIRST_LOAD_MAX.js],
+    [manifest.wasm.path, FIRST_LOAD_MAX.wasm],
+  ];
+}
+
+/** Fail closed when one first-load entry grows while the whole-bundle total still fits. */
+function verifyFirstLoadCaps(uiDir, manifest) {
+  for (const [relative, max] of firstLoadEntries(manifest)) {
+    const bytes = gzippedBytes(path.join(uiDir, relative));
+    if (bytes > max) {
+      throw new Error(
+        `Bundle entry too large: ${relative} ${bytes} bytes gzipped (max: ${max} bytes).`
+      );
+    }
+  }
 }
 
 function listFiles(dir, relative = '') {
@@ -270,6 +306,7 @@ function verifyBundle(uiDir = UI_DIR) {
   verifyPwaShell(uiDir, shellBuildId);
   verifyPrecompressed(uiDir, manifest);
   verifyModes(uiDir);
+  verifyFirstLoadCaps(uiDir, manifest);
   const totalSize = walkDir(uiDir);
   if (totalSize > MAX_SIZE)
     throw new Error(

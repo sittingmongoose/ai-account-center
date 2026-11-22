@@ -788,6 +788,36 @@ describe('the Leptos dashboard build', () => {
       expect(() => verifyBundle(output)).toThrow(message);
     }
   });
+
+  it('refuses a first-load entry that exceeds its gzip cap while the total stays under', () => {
+    const root = fixture();
+    build({ repoRoot: root, run: runner([]) });
+    const output = path.join(root, 'dist', 'ui');
+    const page = path.join(output, 'app', 'index.html');
+    fs.appendFileSync(page, crypto.randomBytes(80 * 1024));
+    for (const suffix of ['.br', '.gz']) {
+      const variant = `${page}${suffix}`;
+      if (fs.existsSync(variant)) fs.rmSync(variant);
+    }
+    const manifestPath = path.join(output, 'ui-build-manifest.json');
+    const listed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    listed.precompressed = listed.precompressed.filter(
+      (entry: { path: string }) => entry.path !== 'app/index.html'
+    );
+    fs.writeFileSync(manifestPath, `${JSON.stringify(listed)}\n`);
+    fs.chmodSync(manifestPath, 0o644);
+    fs.chmodSync(page, 0o644);
+    const gzipped = (dir: string): number =>
+      fs.readdirSync(dir, { withFileTypes: true }).reduce((total, file) => {
+        const filePath = path.join(dir, file.name);
+        if (file.isDirectory()) return total + gzipped(filePath);
+        if (file.name.endsWith('.br') || file.name.endsWith('.gz')) return total;
+        return total + zlib.gzipSync(fs.readFileSync(filePath)).length;
+      }, 0);
+    expect(zlib.gzipSync(fs.readFileSync(page)).length).toBeGreaterThan(64 * 1024);
+    expect(gzipped(output)).toBeLessThan(4 * 1024 * 1024);
+    expect(() => verifyBundle(output)).toThrow('Bundle entry too large: app/index.html');
+  });
 });
 
 it('refuses an upgrade module that is not the pinned bytes, even one built from an edited source (recheck L3)', () => {
