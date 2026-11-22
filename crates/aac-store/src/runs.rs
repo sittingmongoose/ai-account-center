@@ -1723,11 +1723,23 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
             let txn = crate::engine::begin(db)?;
             for (path, size, mtime, sha, state) in &touch {
                 let row = match get(&txn, RUN_FILE, &path_key(path))? {
-                    Some(bytes) => FileRow {
-                        size: *size,
-                        mtime_ms: *mtime,
-                        ..FileRow::decode(&bytes)?
-                    },
+                    Some(bytes) => {
+                        let mut row = FileRow {
+                            size: *size,
+                            mtime_ms: *mtime,
+                            ..FileRow::decode(&bytes)?
+                        };
+                        // Valid bytes read again (an exact-byte repair takes this known-content
+                        // path): the file is no longer refused, so its active refusal ends here
+                        // (M2). A refused stat refresh keeps its refusal.
+                        if *state == 1 && row.state == 2 {
+                            row.state = 1;
+                            row.sha = *sha;
+                            row.reason = 0;
+                            row.at_ms = args.now_ms;
+                        }
+                        row
+                    }
                     // The same content under another path: remember the path's stat so it is not
                     // read on every pass (keyed by its hash; no path text).
                     None => FileRow {

@@ -918,10 +918,14 @@ impl ScoreboardOwned {
     /// one secret policy between scan and record exactly as the TypeScript shuttle does,
     /// and the store records what passes.
     pub(crate) async fn ingest_pass(&self, force_full: bool) {
+        self.ingest_pass_at(force_full, now_ms()).await;
+    }
+
+    /// [`Self::ingest_pass`] at a stated clock (tests drive the age of a continuing problem).
+    pub(crate) async fn ingest_pass_at(&self, force_full: bool, now: u64) {
         let Some(store) = &self.store else {
             return;
         };
-        let now = now_ms();
         let full =
             force_full || now.saturating_sub(self.last_full_at.load(Ordering::Relaxed)) >= FULL_MS;
         let scan = match store
@@ -970,6 +974,9 @@ impl ScoreboardOwned {
         let changed = {
             let mut pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
             let changed = pass.generation != generation || pass.catalog_hash != catalog_hash;
+            // A folder problem that continues keeps its first observed time; a successful
+            // listing drops it, and a new problem starts at this pass (M3).
+            let problems = merge_pass_problems(&pass.problems, problems);
             *pass = PassState {
                 state: scan["state"].as_str().unwrap_or("error").to_string(),
                 more,
@@ -1283,6 +1290,14 @@ impl ScoreboardOwned {
         let refused = &store_facts.refused;
         let safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
         let pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
+        // After a restart the scan's path map starts empty, but a refused file that shares its
+        // path with a retained run is still that run's file: the refusal names it again so the
+        // row's warning matches. Other refused paths stay withheld (M2).
+        let retained_paths: HashMap<String, &str> = held
+            .state_rows
+            .iter()
+            .filter_map(|row| row["file"].as_str().map(|file| (path_hash(file), file)))
+            .collect();
         let mut problems: Vec<Json> = if held.share.is_some() {
             Vec::new()
         } else {
@@ -1290,10 +1305,16 @@ impl ScoreboardOwned {
                 .iter()
                 .map(|row| {
                     let hash = row["pathHash"].as_str().unwrap_or_default();
-                    json!({
-                        "file": safe_paths.get(hash).cloned().unwrap_or_else(|| {
+                    let file = safe_paths
+                        .get(hash)
+                        .map(String::as_str)
+                        .or_else(|| retained_paths.get(hash).copied())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
                             format!("refused/{NAME_WITHHELD} {}", &hash[..hash.len().min(12)])
-                        }),
+                        });
+                    json!({
+                        "file": file,
                         "reason": row["reason"].as_str().unwrap_or("refused"),
                         "since": row["atMs"],
                     })
@@ -2771,6 +2792,30 @@ fn check_rows_of(rows: &[&Json]) -> Vec<RunRow> {
             seq: row["doc"]["seq"].as_u64().unwrap_or(0),
             sha256: row["sha256"].as_str().unwrap_or_default().to_string(),
             first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
+        })
+        .collect()
+}
+
+/// This pass's problems, with a continuing problem keeping the time it was first observed: the
+/// scanner names the failing folder every pass and the owner stamps it, so the age must come from
+/// the first pass that saw it. A problem that stopped is dropped with the pass that no longer
+/// reports it (M3).
+fn merge_pass_problems(previous: &[Json], fresh: Vec<Json>) -> Vec<Json> {
+    if previous.is_empty() {
+        return fresh;
+    }
+    let first: HashMap<&str, u64> = previous
+        .iter()
+        .filter_map(|problem| Some((problem["file"].as_str()?, problem["since"].as_u64()?)))
+        .collect();
+    fresh
+        .into_iter()
+        .map(|mut problem| {
+            let since = problem["file"].as_str().and_then(|file| first.get(file).copied());
+            if let (Some(since), Some(obj)) = (since, problem.as_object_mut()) {
+                obj.insert("since".to_string(), json!(since));
+            }
+            problem
         })
         .collect()
 }
@@ -4552,6 +4597,164 @@ mod tests {
                 (now, date())
             ),
             "missing-outcome-rank"
+
+    /// The runs state of the owner's held snapshot at `clock`, as the page reads it.
+    async fn held_state(owner: &ScoreboardOwned, clock: u64) -> (serde_json::Value, bool) {
+        let held = owner.held(Some(clock)).await.expect("held runs");
+        let picked: Vec<usize> = (0..held.rows.len()).collect();
+        let state = owner
+            .state_of(&held, &picked, clock)
+            .await
+            .expect("runs state");
+        let run_kept = has_bench(&held);
+        (state, run_kept)
+    }
+
+    /// M2 (2026-11-22): a refusal names the retained run's path again after a restart (the
+    /// owner's in-memory path map starts empty), and an exact-byte repair ends the refusal
+    /// instead of leaving a Cached chip on a healthy file.
+    #[tokio::test]
+    async fn a_refused_run_is_named_after_a_reopen_and_cleared_by_an_exact_repair() {
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let path = root
+            .path()
+            .join("v1/writers/vm.lead/runs/2026-11-04/vm.lead--bench.json");
+        let label = "writers/vm.lead/runs/2026-11-04/vm.lead--bench.json";
+        let good = std::fs::read(&path).expect("the good run's bytes");
+        let at = 1_790_000_000_000u64;
+        {
+            let host = StoreHost::new(boot(store_dir.clone()));
+            host.open_at_boot();
+            let owner = owner(root.path().to_path_buf(), Some(host));
+            owner.catalog_pass(at);
+            owner.ingest_pass_at(true, at).await;
+            let (state, kept) = held_state(&owner, at).await;
+            assert!(kept, "the good run is accepted: {state}");
+            assert!(
+                state["problems"]
+                    .as_array()
+                    .expect("problems")
+                    .iter()
+                    .all(|p| p["file"] != json!(label)),
+                "a good run is not refused: {state}"
+            );
+            // An invalid replacement of the same file is refused, and the refusal names it.
+            std::fs::write(&path, [0xff_u8, 0xfe, 0x00]).expect("invalid replacement");
+            owner.ingest_pass_at(true, at + 60_000).await;
+            let (state, kept) = held_state(&owner, at + 60_000).await;
+            assert!(kept, "the recorded run stays: {state}");
+            assert!(
+                state["problems"]
+                    .as_array()
+                    .expect("problems")
+                    .iter()
+                    .any(|p| p["file"] == json!(label)),
+                "the refusal names the file this pass: {state}"
+            );
+        }
+        // Restart: a new store host and a new owner; the owner's path map is empty.
+        let at = at + 120_000;
+        let host = StoreHost::new(boot(store_dir.clone()));
+        host.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(host));
+        owner.catalog_pass(at);
+        owner.ingest_pass_at(true, at).await;
+        let (state, kept) = held_state(&owner, at).await;
+        assert!(kept, "the recorded run stays after the restart: {state}");
+        let refused: Vec<&serde_json::Value> = state["problems"]
+            .as_array()
+            .expect("problems")
+            .iter()
+            .filter(|p| p["file"] == json!(label))
+            .collect();
+        assert_eq!(
+            refused.len(),
+            1,
+            "the persisted refusal names the retained run's path after a restart: {state}"
+        );
+        // The exact original bytes return: the refusal ends with them.
+        std::fs::write(&path, &good).expect("exact-byte repair");
+        owner.ingest_pass_at(true, at + 60_000).await;
+        let (state, kept) = held_state(&owner, at + 60_000).await;
+        assert!(kept, "the repaired run stays: {state}");
+        assert!(
+            state["problems"]
+                .as_array()
+                .expect("problems")
+                .iter()
+                .all(|p| p["file"] != json!(label)),
+            "a repaired file is no longer refused: {state}"
+        );
+    }
+
+    /// M3 (2026-11-22): a folder problem that continues keeps the time it was first observed;
+    /// a successful listing clears it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_continuing_folder_problem_keeps_its_first_time_across_ingest_passes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        let day = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+        let folder = "writers/vm.lead/runs/2026-11-04";
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let host = StoreHost::new(boot(store_dir));
+        host.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(host));
+        let t0 = 1_790_000_000_000u64;
+        owner.catalog_pass(t0);
+        owner.ingest_pass_at(true, t0).await;
+        let (state, _) = held_state(&owner, t0).await;
+        assert!(
+            state["problems"]
+                .as_array()
+                .expect("problems")
+                .iter()
+                .all(|p| p["file"] != json!(folder)),
+            "a listed folder has no problem: {state}"
+        );
+        let original = std::fs::metadata(&day).expect("folder").permissions();
+        std::fs::set_permissions(&day, std::fs::Permissions::from_mode(0o000))
+            .expect("folder made unreadable");
+        let first = t0 + 3_600_000;
+        owner.ingest_pass_at(true, first).await;
+        let (state, kept) = held_state(&owner, first).await;
+        assert!(kept, "the run is served from history: {state}");
+        let since = |state: &serde_json::Value| {
+            state["problems"]
+                .as_array()
+                .expect("problems")
+                .iter()
+                .find(|p| p["file"] == json!(folder))
+                .map(|p| p["since"].as_u64().expect("since"))
+                .expect("the unreadable folder is a problem")
+        };
+        assert_eq!(since(&state), first);
+        let second = first + 3_600_000;
+        owner.ingest_pass_at(true, second).await;
+        let (state, _) = held_state(&owner, second).await;
+        assert_eq!(
+            since(&state),
+            first,
+            "the continuing folder problem keeps the time it was first observed"
+        );
+        std::fs::set_permissions(&day, original).expect("folder restored");
+        let third = second + 3_600_000;
+        owner.ingest_pass_at(true, third).await;
+        let (state, _) = held_state(&owner, third).await;
+        assert!(
+            state["problems"]
+                .as_array()
+                .expect("problems")
+                .iter()
+                .all(|p| p["file"] != json!(folder)),
+            "a successful listing clears the folder problem: {state}"
         );
     }
 
