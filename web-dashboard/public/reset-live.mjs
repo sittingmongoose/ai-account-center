@@ -33,9 +33,10 @@ export function createResetHints(win) {
     retry = win.setTimeout(resume, delay);
     delay = Math.min(delay * 2, 30000);
   };
-  // Every reconnect asks the server first whether this browser still has a session: a 4001 close
-  // can be a rotation that keeps this browser signed in, and a refused upgrade must not be retried
-  // (and logged) forever. /api/auth/check always answers 200, even signed out, with no console error.
+  // Every reconnect asks the server first whether this connection may open /ws: a 4001 close can be
+  // a rotation that keeps this browser signed in, and a refused upgrade must not be retried (and
+  // logged) forever. /api/auth/check reports wsAllowed by the upgrade's own predicate and always
+  // answers 200, even signed out, with no console error.
   const resume = async () => {
     const mine = generation;
     let answer = null;
@@ -44,8 +45,8 @@ export function createResetHints(win) {
       if (response.ok) answer = await response.json();
     } catch { /* Network or unreadable answer: keep backing off. */ }
     if (stopped || mine !== generation) return;
-    if (answer && (answer.authenticated === true || answer.authRequired === false)) { connect(); return; }
-    if (answer) { stopped = true; return; } // The server says this browser is signed out.
+    if (answer && answer.wsAllowed === true) { connect(); return; }
+    if (answer) { stopped = true; return; } // Signed out, or this connection may not open /ws.
     reconnect();
   };
   const connect = () => {

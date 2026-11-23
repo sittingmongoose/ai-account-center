@@ -370,6 +370,22 @@ describe('F1: API session guard whatever the URL letter case', () => {
   });
 });
 
+describe('L3: /api/auth/check reports whether this connection may open /ws', () => {
+  it('allows a signed-in loopback browser and stops a signed-out one', async () => {
+    const cookie = await signIn();
+    const signedIn = await send('GET', '/api/auth/check', { cookie });
+    expect(signedIn.status).toBe(200);
+    const inBody = await signedIn.json();
+    expect(inBody.authenticated).toBe(true);
+    expect(inBody.wsAllowed).toBe(true);
+    const signedOut = await send('GET', '/api/auth/check');
+    expect(signedOut.status).toBe(200);
+    const outBody = await signedOut.json();
+    expect(outBody.authenticated).toBe(false);
+    expect(outBody.wsAllowed).toBe(false);
+  });
+});
+
 describe('F2: malformed login requests stay inside the request', () => {
   it.each([
     { name: 'an empty object', body: {} },

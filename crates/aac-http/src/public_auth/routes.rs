@@ -2,7 +2,7 @@ use super::{
     AuthRuntime, Reply, RequestInfo,
     devices::{DeviceAuth, DeviceError, Devices, Pair, id_valid},
     error, invalid_body, plain,
-    policy::{get, header, origin_allowed},
+    policy::{bearer, get, header, origin_allowed},
     response, service_error, set_header,
     storage::{Config, DAYS, NewSession, Session, StoreError, is_hex, iso, same},
 };
@@ -125,8 +125,17 @@ fn check(config: &Config, req: &RequestInfo, session: &Browser) -> Outcome {
     let configured = config.configured();
     let session = session.as_ref().map(|(_, session)| session);
     let authenticated = session.is_some_and(|session| session.authenticated);
+    // Whether this connection may open /ws, by the upgrade's own predicate: the dashboard origin,
+    // and either a signed-in browser session (auth on, no device bearer) or this computer (auth off).
+    // The page stops reconnecting when this is false, instead of retrying a refused upgrade forever.
+    let ws_allowed = origin_allowed(&req.headers)
+        && if config.enabled {
+            authenticated && bearer(&req.headers).is_none()
+        } else {
+            req.connection.peer.is_loopback()
+        };
     let mut value = json!({
-        "authRequired":config.enabled,"authEnabled":config.enabled,"authConfigured":configured,
+        "authRequired":config.enabled,"authEnabled":config.enabled,"authConfigured":configured,"wsAllowed":ws_allowed,
         "isLocalAccess":!req.connection.lan_proxy && req.connection.peer.is_loopback(),
         "accessMode":if !config.enabled {"open"} else if configured {"login"} else {"setup"},
         "authenticated":authenticated,"username":session.and_then(|session| session.username.as_deref()),
@@ -875,5 +884,55 @@ fn device_write_error(kind: DeviceError) -> Reply {
             "auth_store_unavailable",
             "Paired devices cannot be saved right now.",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::storage::Overrides;
+    use super::*;
+    use axum::http::HeaderMap;
+    use std::net::IpAddr;
+
+    async fn check_value(config: &Config, peer: IpAddr, session: &Browser) -> Value {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "localhost".parse().unwrap());
+        let req = RequestInfo {
+            path: "/api/auth/check".into(),
+            raw_path: "/api/auth/check".into(),
+            query: None,
+            method: Method::GET,
+            connection: config.network.connection(&headers, peer, false),
+            headers,
+            body: Value::Null,
+            body_bytes: 0,
+            json_content: false,
+            has_body: false,
+            tls: false,
+            at: 0,
+        };
+        let reply = check(config, &req, session).unwrap();
+        let bytes = axum::body::to_bytes(reply.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn auth_check_reports_whether_this_connection_may_open_ws() {
+        let open = Config::new(
+            json!({"dashboard_auth":{"enabled":false}}),
+            &Overrides::default(),
+        );
+        let lan: IpAddr = "192.168.1.50".parse().unwrap();
+        let local: IpAddr = "127.0.0.1".parse().unwrap();
+        // Open mode from another device: the upgrade refuses a non-loopback peer, so check says
+        // the socket may not open and the page must stop reconnecting.
+        let off_lan = check_value(&open, lan, &None).await;
+        assert_eq!(off_lan["authRequired"], json!(false));
+        assert_eq!(off_lan["wsAllowed"], json!(false));
+        // Open mode on this computer: unchanged, the socket may open.
+        let off_local = check_value(&open, local, &None).await;
+        assert_eq!(off_local["wsAllowed"], json!(true));
     }
 }

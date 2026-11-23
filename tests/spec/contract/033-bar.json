@@ -21,7 +21,8 @@
       "setupCodeRequired": false,
       "signedOutReason": null,
       "trustedLocalNetwork": false,
-      "username": "fixture-admin"
+      "username": "fixture-admin",
+      "wsAllowed": true
     },
     "headers": {
       "cache-control": "no-store",

@@ -9,6 +9,7 @@ import type { Request, Response } from 'express';
 
 import type { DashboardAuthConfig } from '../../config/unified-config-types';
 import {
+  isDashboardWebSocketUpgradeAllowed,
   isLoopbackRemoteAddress,
   loginRateLimiter,
   markCredentialsAccepted,
@@ -239,6 +240,9 @@ router.get('/check', (req: Request, res: Response) => {
   res.json({
     ...accessState,
     authenticated: req.session?.authenticated ?? false,
+    // Whether this connection may open /ws, by the upgrade's own predicate; the page stops
+    // reconnecting when false (open mode from another device) instead of retrying forever.
+    wsAllowed: isDashboardWebSocketUpgradeAllowed(req),
     username: req.session?.username ?? null,
     // CONTRACT-auth-devices sections 2a, 4 and 10 (additive fields).
     signedOutReason: req.session?.revoked === true ? 'revoked' : null,

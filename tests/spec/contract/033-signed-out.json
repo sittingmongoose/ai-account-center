@@ -21,7 +21,8 @@
       "setupCodeRequired": false,
       "signedOutReason": null,
       "trustedLocalNetwork": false,
-      "username": null
+      "username": null,
+      "wsAllowed": false
     },
     "headers": {
       "cache-control": "no-store",

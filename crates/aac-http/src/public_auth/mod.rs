@@ -1884,6 +1884,33 @@ mod tests {
         let _ = handle.await;
     }
 
+    #[tokio::test]
+    async fn auth_check_reports_ws_allowed_for_signed_in_and_signed_out_browsers() {
+        let (_home, _auth, addr, handle) = server().await;
+        let cookie = login(addr).await;
+        let signed_in = request(
+            addr,
+            "/api/auth/check",
+            "GET",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        )
+        .await;
+        assert!(signed_in.starts_with("HTTP/1.1 200"), "{signed_in}");
+        let body: Value =
+            serde_json::from_str(signed_in.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["authenticated"], json!(true));
+        assert_eq!(body["wsAllowed"], json!(true));
+        let signed_out = request(addr, "/api/auth/check", "GET", "", "").await;
+        assert!(signed_out.starts_with("HTTP/1.1 200"), "{signed_out}");
+        let body: Value =
+            serde_json::from_str(signed_out.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["authenticated"], json!(false));
+        assert_eq!(body["wsAllowed"], json!(false));
+        handle.abort();
+        let _ = handle.await;
+    }
+
     type SessionSocket = tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >;

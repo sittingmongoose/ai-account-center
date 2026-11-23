@@ -21,7 +21,7 @@ function browserPair({ channel = true } = {}) {
     };
     // GET /api/auth/check always answers 200, signed in or out; win.auth is the answer it gives.
     win.checks = 0;
-    win.auth = { authenticated: true, authRequired: true };
+    win.auth = { authenticated: true, authRequired: true, wsAllowed: true };
     win.fetch = async (url, options) => {
       win.checks++;
       win.lastFetch = { url, options };
@@ -190,10 +190,26 @@ test('an open dashboard (authRequired false) reconnects without a session', asyn
   const bus = createResetHints(win); const stop = bus.subscribe(() => {});
   win.sockets[0].onopen();
   win.sockets[0].onclose({ code: 1006, wasClean: false });
-  win.auth = { authenticated: false, authRequired: false };
+  win.auth = { authenticated: false, authRequired: false, wsAllowed: true };
   await fire(win);
   assert.equal(win.checks, 1);
   assert.equal(win.sockets.length, 2);
+  stop();
+});
+test('open mode from another device stops retrying when the server says the socket may not open', async () => {
+  const { browser } = browserPair(); const win = browser();
+  const bus = createResetHints(win); const stop = bus.subscribe(() => {});
+  win.sockets[0].onopen();
+  win.sockets[0].onclose({ code: 1006, wasClean: false });
+  // Auth is off, but this peer is not on the dashboard computer: the upgrade refuses /ws.
+  win.auth = { authenticated: false, authRequired: false, wsAllowed: false };
+  assert.equal(win.timers.size, 1);
+  await fire(win);
+  assert.equal(win.checks, 1);
+  assert.equal(win.sockets.length, 1); // no new socket attempt
+  assert.equal(win.timers.size, 0); // stopped, not a retry loop
+  win.dispatchEvent(new Event('online'));
+  assert.equal(win.sockets.length, 1);
   stop();
 });
 test('a live drop backs off instead of retrying every second', async () => {
