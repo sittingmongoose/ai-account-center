@@ -60,6 +60,7 @@ pub mod signin_callbacks;
 mod signins;
 mod status_answers_route;
 mod status_cache;
+mod status_collate;
 mod status_fed;
 mod status_owned;
 mod status_produce;

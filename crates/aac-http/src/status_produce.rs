@@ -565,9 +565,23 @@ impl Produce {
                 offset_minutes: zone.offset_now,
                 zone: &zone.zone,
             });
-        let Ok(sources) = sources else {
+        let Ok(mut sources) = sources else {
             return;
         };
+        // Every word ranked, not only printable ASCII (a middle-dot usage label is compared).
+        if let Some(facts) = crate::status_collate::complete_order(
+            &[
+                &sources.reports,
+                &sources.quota,
+                &sources.pinned,
+                &sources.collected,
+                &sources.answers,
+                &sources.facts_data,
+            ],
+            &sources.facts,
+        ) {
+            sources.facts = facts;
+        }
         let pushed = [
             (REPORTS, sources.reports, None),
             (QUOTA, sources.quota, None),

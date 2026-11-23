@@ -862,7 +862,10 @@ async fn scoreboard_facts(
     let offsets = crate::zone_facts::server_zone_facts(time_zone, i64::try_from(now).ok()?)?;
     let facts = aac_status::produce::facts::Facts::of(&[&data], Some(&offsets.zone));
     let data_text = json!({ "timeZone": time_zone }).to_string();
-    let facts_text = facts.to_text();
+    // Every word ranked, not only printable ASCII (status_collate): a non-ASCII run label
+    // compared by the composer would otherwise decline the answer.
+    let facts_text = crate::status_collate::complete_order_of(&[&data], &facts.to_text())
+        .unwrap_or_else(|| facts.to_text());
     let short: String = catalog_hash.chars().take(12).collect();
     let facts_id = format!("{generation}:{short}:{now}");
     let body = format!(
