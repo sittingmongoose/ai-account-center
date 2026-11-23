@@ -1986,7 +1986,9 @@ impl ScoreboardOwned {
         if picked.iter().any(|&index| prepared.proto[index]) {
             return Err(Decline::Unsupported);
         }
-        let join_reviews = if filtered {
+        // Reviews outside the filter still join its rows; their validated files come along so the
+        // composer can disclose a review source this pass could not read (2026-11-23 A).
+        let (join_reviews, join_review_files) = if filtered {
             let picked_ids: std::collections::HashSet<&str> = picked
                 .iter()
                 .map(|&index| held.rows[index].id.as_str())
@@ -1997,6 +1999,7 @@ impl ScoreboardOwned {
             }
             reviews_query.insert("reviewsOnly".to_string(), json!(true));
             let mut joined = Vec::new();
+            let mut joined_files = Vec::new();
             for index in held.pick(&Json::Object(reviews_query)) {
                 if picked_ids.contains(held.rows[index].id.as_str()) {
                     continue;
@@ -2010,11 +2013,12 @@ impl ScoreboardOwned {
                         return Err(Decline::Unsupported);
                     }
                     joined.push(join_review_doc(&raw));
+                    joined_files.push(json!(held.rows[index].file.as_ref()));
                 }
             }
-            joined
+            (joined, joined_files)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let mut rows_owned: Vec<Json> = Vec::with_capacity(picked.len());
         let mut docs_owned: Vec<Json> = Vec::with_capacity(picked.len());
@@ -2073,6 +2077,10 @@ impl ScoreboardOwned {
         data.insert("catalog".to_string(), catalog);
         data.insert("runs".to_string(), runs);
         data.insert("joinReviews".to_string(), Json::Array(join_reviews));
+        data.insert(
+            "joinReviewFiles".to_string(),
+            Json::Array(join_review_files),
+        );
         data.insert("seedFailures".to_string(), json!(seed_failures));
         data.insert(
             "finish".to_string(),

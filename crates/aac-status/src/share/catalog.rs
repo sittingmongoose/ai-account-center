@@ -499,6 +499,9 @@ impl ShareFiles {
 pub struct CatalogState {
     pub state: &'static str,
     pub scanned_at: Option<u64>,
+    /// When the current listing failure was first seen: kept across failed scans, cleared by a
+    /// listing that succeeds (or finds the folder missing), so a verdict's age does not restart.
+    pub failed_since: Option<u64>,
     pub missing_files: Vec<String>,
     pub problems: Vec<Problem>,
     pub min_runs: u64,
@@ -516,6 +519,7 @@ pub struct CatalogReader {
     files: ShareFiles,
     state: &'static str,
     scanned_at: Option<u64>,
+    failed_since: Option<u64>,
 }
 
 impl CatalogReader {
@@ -525,6 +529,7 @@ impl CatalogReader {
             files: ShareFiles::new(),
             state: "missing",
             scanned_at: None,
+            failed_since: None,
         }
     }
 
@@ -535,6 +540,7 @@ impl CatalogReader {
         let listed: HashSet<String> = match fs.list(&dir) {
             Ok(entries) => {
                 self.state = "ok";
+                self.failed_since = None;
                 entries.into_iter().map(|entry| entry.name).collect()
             }
             Err(error) => {
@@ -543,9 +549,12 @@ impl CatalogReader {
                 }
                 self.state = if is_missing(&error) { "missing" } else { "error" };
                 // A folder that cannot be listed withdraws nothing; a removed one does,
-                // after the grace.
+                // after the grace. A continuing failure keeps its first observed time.
                 if self.state == "error" {
+                    self.failed_since.get_or_insert(now);
                     self.files.keep("catalog/", &mut seen);
+                } else {
+                    self.failed_since = None;
                 }
                 self.files.sweep(&seen, now);
                 self.scanned_at = Some(now);
@@ -584,6 +593,7 @@ impl CatalogReader {
         CatalogState {
             state: self.state,
             scanned_at: self.scanned_at,
+            failed_since: self.failed_since,
             missing_files: CATALOG_FILES
                 .iter()
                 .filter(|name| {
@@ -615,7 +625,7 @@ impl CatalogReader {
 
 /// The snapshot as the Scoreboard envelope's `catalog` member.
 pub fn state_json(state: &CatalogState) -> Json {
-    json!({
+    let mut out = json!({
         "state": state.state,
         "scannedAt": state.scanned_at,
         "missingFiles": state.missing_files,
@@ -630,5 +640,10 @@ pub fn state_json(state: &CatalogState) -> Json {
         "measures": state.measures,
         "uses": state.uses,
         "benchmarks": state.benchmarks,
-    })
+    });
+    // Only a failed listing has the fact; every other snapshot keeps the bytes it always had.
+    if let Some(since) = state.failed_since {
+        out["failedSince"] = json!(since);
+    }
+    out
 }

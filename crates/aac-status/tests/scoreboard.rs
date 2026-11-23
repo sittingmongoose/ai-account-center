@@ -1308,10 +1308,17 @@ fn read_scoreboard_traces_failed_run_file_only_to_its_row_using_failure_since() 
 const M1_NOW: i64 = 1_793_982_600_000; // 2026-11-06T16:30:00.000Z
 const M1_FAILED: i64 = 1_793_982_300_000; // 2026-11-06T16:25:00.000Z
 const M1_EARLIER: i64 = 1_793_982_000_000; // 2026-11-06T16:20:00.000Z
+const M1_HOUR: i64 = 1_793_985_900_000; // 2026-11-06T17:25:00.000Z (one hour after M1_FAILED)
 
 /// One observed build run on Opus and its blind review by Sol, with the catalog and scan state a
-/// caller sets: enough to rank one row (minRuns 1, one decisive review).
-fn m1_envelope(catalog: Value, problems: Value) -> (Value, aac_status::read_context::Presentation) {
+/// caller sets: enough to rank one row (minRuns 1, one decisive review). `filtered` keeps only the
+/// build run in the view and joins the review from outside it; `now` is the request's clock.
+fn m1_envelope(
+    catalog: Value,
+    problems: Value,
+    filtered: bool,
+    now: i64,
+) -> (Value, aac_status::read_context::Presentation) {
     let run = |id: &str, writer: &str, kind: &str, model: &str, ended: &str, review: Value| {
         json!({
             "schema": "agent-reports/run@1", "id": id, "writer": writer, "seq": 1,
@@ -1342,11 +1349,11 @@ fn m1_envelope(catalog: Value, problems: Value) -> (Value, aac_status::read_cont
     let target_file = "writers/vm.lead/runs/2026-11-06/vm.lead--WN-1.json";
     let review_file = "writers/mac.reviews/runs/2026-11-06/mac.reviews--R1.json";
     let data = json!({
-        "now": M1_NOW,
         "timeZone": "UTC",
         "root": "/fixture",
         "catalog": {
             "state": catalog["state"], "scannedAt": catalog["scannedAt"],
+            "failedSince": catalog["failedSince"],
             "missingFiles": [], "problems": catalog["problems"], "minRuns": 1,
             "models": [
                 { "model": "anthropic/claude-opus-5-5", "label": "Opus 5.5", "family": "Claude", "runtimes": ["claude-code"], "efforts": ["xhigh"], "prices": null, "notes": null },
@@ -1364,21 +1371,28 @@ fn m1_envelope(catalog: Value, problems: Value) -> (Value, aac_status::read_cont
             ],
             "benchmarks": []
         },
+        "now": now,
         "runs": {
-            "correctionsResolved": true, "state": "ok", "scannedAt": M1_NOW,
-            "runs": [
-                { "file": target_file, "firstSeenAt": M1_EARLIER, "sha256": "a", "doc": target },
-                { "file": review_file, "firstSeenAt": M1_EARLIER, "sha256": "b", "doc": review }
-            ],
+            "correctionsResolved": true, "state": "ok", "scannedAt": now,
+            "runs": if filtered {
+                vec![json!({ "file": target_file, "firstSeenAt": M1_EARLIER, "sha256": "a", "doc": target.clone() })]
+            } else {
+                vec![
+                    json!({ "file": target_file, "firstSeenAt": M1_EARLIER, "sha256": "a", "doc": target.clone() }),
+                    json!({ "file": review_file, "firstSeenAt": M1_EARLIER, "sha256": "b", "doc": review.clone() })
+                ]
+            },
             "writers": 2, "skipped": { "runFiles": 0, "writerFolders": 0 }, "problems": problems
         },
-        "docs": [target, review],
-        "joinReviews": [],
+        "docs": if filtered { vec![target] } else { vec![target, review.clone()] },
+        "joinReviews": if filtered { vec![review] } else { Vec::new() },
+        "joinReviewFiles": if filtered { vec![json!(review_file)] } else { Vec::new() },
         "seedFailures": []
     });
     let facts: aac_status::read_context::Presentation = serde_json::from_value(json!({
         "dates": {
             M1_NOW.to_string(): { "iso": "2026-11-06T16:30:00.000Z", "clock": "4:30 PM", "day": "Nov 6" },
+            M1_HOUR.to_string(): { "iso": "2026-11-06T17:25:00.000Z", "clock": "5:25 PM", "day": "Nov 6" },
             M1_FAILED.to_string(): { "iso": "2026-11-06T16:25:00.000Z", "clock": "4:25 PM", "day": "Nov 6" },
             M1_EARLIER.to_string(): { "iso": "2026-11-06T16:20:00.000Z", "clock": "4:20 PM", "day": "Nov 6" }
         },
@@ -1428,6 +1442,8 @@ fn a_failed_catalog_listing_is_disclosed_on_every_ranked_verdict() {
     let (data, facts) = m1_envelope(
         json!({"state": "error", "scannedAt": M1_FAILED, "problems": []}),
         json!([]),
+        false,
+        M1_NOW,
     );
     let view = m1_view(data, facts);
     assert_eq!(view["sources"][1]["state"], json!("error"));
@@ -1449,6 +1465,8 @@ fn a_failed_retained_review_file_is_disclosed_on_the_row_it_reviewed() {
             { "file": "writers/mac.reviews/runs/2026-11-06/mac.reviews--R1.json", "reason": "contains NUL bytes from a damaged write", "since": M1_FAILED },
             { "file": "writers/mac.reviews/runs/2026-11-06/mac.reviews--never.json", "reason": "contains NUL bytes from a damaged write", "since": M1_EARLIER }
         ]),
+        false,
+        M1_NOW,
     );
     let view = m1_view(data, facts);
     let row = m1_row(&view);
@@ -1463,4 +1481,73 @@ fn a_failed_retained_review_file_is_disclosed_on_the_row_it_reviewed() {
         Some(300.0),
         "a never-read damaged file adds no attribution (the earlier 16:20 problem must not win)"
     );
+}
+
+/// 2026-11-23 A: the WorkNode build filter joins its review from outside the filter, and that
+/// joined review's file could not be read this pass. The verdict used the review, so it carries
+/// the review source's failure (the reviewer's first scenario).
+#[test]
+fn a_joined_review_outside_the_filter_discloses_its_failed_file() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "ok", "scannedAt": M1_NOW, "problems": []}),
+        json!([
+            { "file": "writers/mac.reviews/runs/2026-11-06/mac.reviews--R1.json", "reason": "contains NUL bytes from a damaged write", "since": M1_FAILED }
+        ]),
+        true,
+        M1_NOW,
+    );
+    let view = m1_view(data, facts);
+    let row = m1_row(&view);
+    assert_eq!(
+        row["sourceState"],
+        json!("unreadable"),
+        "the joined review still ranked it: {row}"
+    );
+    assert_eq!(row["asOf"], json!("2026-11-06T16:25:00.000Z"));
+    assert_eq!(row["ageSeconds"].as_f64(), Some(300.0));
+}
+
+/// 2026-11-23 A, second scenario: the review's dated folder could not be listed (the file name
+/// itself is fine), and the verdict that used the review still carries the failure.
+#[test]
+fn a_failed_review_dated_folder_discloses_the_verdict_that_used_it() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "ok", "scannedAt": M1_NOW, "problems": []}),
+        json!([
+            { "file": "writers/mac.reviews/runs/2026-11-06", "reason": "folder could not be listed", "since": M1_FAILED }
+        ]),
+        false,
+        M1_NOW,
+    );
+    let view = m1_view(data, facts);
+    let row = m1_row(&view);
+    assert_eq!(
+        row["sourceState"],
+        json!("unreadable"),
+        "the folder holds the review that ranked it: {row}"
+    );
+    assert_eq!(row["asOf"], json!("2026-11-06T16:25:00.000Z"));
+    assert_eq!(row["ageSeconds"].as_f64(), Some(300.0));
+}
+
+/// 2026-11-23 B: a catalog listing that has failed for an hour ages the verdict by that hour, not
+/// from the latest failed scan's `scannedAt`.
+#[test]
+fn a_continuing_catalog_failure_ages_the_verdict_from_its_first_failure() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "error", "scannedAt": M1_HOUR, "failedSince": M1_FAILED, "problems": []}),
+        json!([]),
+        false,
+        M1_HOUR,
+    );
+    let view = m1_view(data, facts);
+    assert_eq!(view["sources"][1]["state"], json!("error"));
+    let row = m1_row(&view);
+    assert_eq!(row["sourceState"], json!("error"));
+    assert_eq!(
+        row["asOf"],
+        json!("2026-11-06T16:25:00.000Z"),
+        "the first failed listing, not the latest scan"
+    );
+    assert_eq!(row["ageSeconds"].as_f64(), Some(3600.0));
 }

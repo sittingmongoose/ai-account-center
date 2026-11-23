@@ -983,6 +983,50 @@ describe('service', () => {
     expect(view.sources[0].detail).toContain('provisional last-known count');
     expect(view.sources[0].detail).toContain('not a current count or a guaranteed lower bound');
   });
+
+  it('a continuing catalog listing failure ages the verdict from its first failure (2026-11-23 B)', async () => {
+    const root = dirs.make('ccs-scoreboard-');
+    writeScoreboardFixture(root, { now: NOW });
+    let now = NOW;
+    let failCatalog = false;
+    const flaky: typeof nodeReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (failCatalog && path.basename(dir) === 'catalog')
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const catalog = new CatalogReader({ root: () => root, now: () => now, fs: flaky });
+    const runs = new RunsReader({ root: () => root, now: () => now });
+    await Promise.all([catalog.scan(), runs.scan()]);
+    expect(catalog.snapshot().failedSince).toBeUndefined();
+    const first = now + 60_000;
+    failCatalog = true;
+    now = first;
+    await catalog.scan();
+    expect(catalog.snapshot().state).toBe('error');
+    expect(catalog.snapshot().failedSince).toBe(first);
+    // An hour of continuing failure: the snapshots differ, the first observed time does not.
+    now = first + 3_600_000;
+    await catalog.scan();
+    expect(catalog.snapshot().failedSince).toBe(first);
+    const view = buildScoreboardView({
+      now,
+      timeZone: 'UTC',
+      root,
+      catalog: catalog.snapshot(),
+      runs: runs.snapshot(),
+    });
+    const row = rows(view, 'building', 'worknode-build').find((r) => r.ranked);
+    expect(row?.sourceState).toBe('error');
+    expect(row?.asOf).toBe(new Date(first).toISOString());
+    expect(row?.ageSeconds).toBe(3600);
+    // A successful listing clears it.
+    failCatalog = false;
+    await catalog.scan();
+    expect(catalog.snapshot().failedSince).toBeUndefined();
+  });
 });
 
 describe('the runs Source', () => {
@@ -1309,7 +1353,10 @@ describe('a failed input behind a ranked verdict (M1, 2026-11-22)', () => {
     skipped: { runFiles: 0, writerFolders: 0 },
     problems,
   });
-  const view = (catalog: Record<string, unknown>, problems: Array<{ file: string; reason: string; since: number }>) =>
+  const view = (
+    catalog: Record<string, unknown>,
+    problems: Array<{ file: string; reason: string; since: number }>
+  ) =>
     buildScoreboardView({
       now: NOW,
       timeZone: 'UTC',
@@ -1328,6 +1375,50 @@ describe('a failed input behind a ranked verdict (M1, 2026-11-22)', () => {
   it('a failed catalog listing is disclosed on the ranked verdict that used it', () => {
     const row = ranked(view({ ...base(), state: 'error', scannedAt: failAt }, []));
     expect(row?.sourceState).toBe('error');
+    expect(row?.asOf).toBe(new Date(failAt).toISOString());
+    expect(row?.ageSeconds).toBe(300);
+  });
+
+  /** The WorkNode build filter: only the build run is in the view; the review joins it from outside. */
+  const filteredView = (problems: Array<{ file: string; reason: string; since: number }>) => {
+    const all = runs(problems);
+    return buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root: '/reports',
+      catalog: base() as unknown as CatalogState,
+      runs: { ...all, runs: all.runs.filter((row) => row.doc.task.type === 'worknode-build') },
+      joinReviews: [reviewRun],
+      joinReviewFiles: [reviewFile],
+    });
+  };
+
+  it('a joined review from outside the filter discloses its failed file on the verdict that used it', () => {
+    // The reviewer's first scenario: WorkNode build filter, the runs Source unreadable because the
+    // joined review's file could not be read, and the ranked row carried no source state (2026-11-23 A).
+    const row = ranked(
+      filteredView([
+        { file: reviewFile, reason: 'contains NUL bytes from a damaged write', since: failAt },
+      ])
+    );
+    expect(row?.sourceState).toBe('unreadable');
+    expect(row?.asOf).toBe(new Date(failAt).toISOString());
+    expect(row?.ageSeconds).toBe(300);
+  });
+
+  it('a failed review dated folder discloses the verdict that used the review', () => {
+    // The reviewer's second scenario: the review's folder could not be listed, so no file name
+    // matches; the verdict still used the review and says so (2026-11-23 A).
+    const row = ranked(
+      view(base(), [
+        {
+          file: 'writers/mac.reviews/runs/2026-11-06',
+          reason: 'folder could not be listed',
+          since: failAt,
+        },
+      ])
+    );
+    expect(row?.sourceState).toBe('unreadable');
     expect(row?.asOf).toBe(new Date(failAt).toISOString());
     expect(row?.ageSeconds).toBe(300);
   });

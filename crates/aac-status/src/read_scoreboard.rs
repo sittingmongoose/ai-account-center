@@ -335,49 +335,68 @@ fn traced_run_problem(files: &[&str], problems: &[V], now: i64, ctx: &Context) -
     }
     matched.then(|| (ctx.iso(earliest), age(now, earliest)))
 }
-/// The rows a retained blind-review file was applied to: a review whose file this scan could not
-/// read still joins its target (the review runs keep their last good copy), so the target's row
-/// carries the failure. A review that no longer joins, or a file never read, names no row.
-fn review_problems(
+/// A review file, or the dated folder holding it, that this pass could not read. The review keeps
+/// its last good copy and still joins, so every verdict that used at least one joined review
+/// carries the review source's failure and its first-observed time. With no finer provenance than
+/// the file, this does not try to trace which verdict used which review (2026-11-23 A).
+fn review_source_health(
     docs: &[&V],
     facts: &[&RowFacts],
+    join: &[V],
+    join_files: &[V],
     problems: &[V],
-    index: &Index,
+    now: i64,
     ctx: &Context,
-) -> HashMap<String, Option<i64>> {
-    let mut out: HashMap<String, Option<i64>> = HashMap::new();
+) -> Option<(V, V)> {
+    let (mut matched, mut earliest) = (false, None::<i64>);
+    let mut consider = |file: &str| {
+        if file.is_empty() {
+            return;
+        }
+        for problem in problems {
+            let p_file = s(&problem["file"]);
+            if !p_file.starts_with("writers/") {
+                continue;
+            }
+            if file != p_file && !file.strip_prefix(p_file).is_some_and(|rest| rest.starts_with('/')) {
+                continue;
+            }
+            matched = true;
+            if let Some(since) = ctx.epoch(&problem["since"])
+                && earliest.is_none_or(|prev| since < prev)
+            {
+                earliest = Some(since);
+            }
+        }
+    };
+    // Reviews in the view, and reviews joined from outside its filter (whose file the owner
+    // still knows: `joinReviewFiles` runs alongside `joinReviews`).
     for (at, doc) in docs.iter().enumerate() {
+        if !doc["review"].is_null() {
+            consider(facts[at].file.as_str());
+        }
+    }
+    for (at, doc) in join.iter().enumerate() {
         if doc["review"].is_null() {
             continue;
         }
-        let file = facts[at].file.as_str();
-        if !file.starts_with("writers/") {
-            continue;
-        }
-        let Some(problem) = problems.iter().find(|p| s(&p["file"]) == file) else {
-            continue;
-        };
-        let target = s(&doc["review"]["of"]);
-        if target.is_empty() || !index.of(target).iter().any(|r| r["id"] == doc["id"]) {
-            continue;
-        }
-        let since = ctx.epoch(&problem["since"]);
-        let slot = out.entry(target.to_owned()).or_insert(None);
-        if let Some(since) = since
-            && slot.is_none_or(|prev| since < prev)
-        {
-            *slot = Some(since);
+        if let Some(file) = join_files.get(at).and_then(|file| file.as_str()) {
+            consider(file);
         }
     }
-    out
+    matched.then(|| (ctx.iso(earliest), age(now, earliest)))
 }
 /// A ranked verdict rests on the retained catalog definitions. When this pass could not list the
-/// catalog, the verdict says so, with the last good read's time (never an invented failure time).
+/// catalog, the verdict says so with the first time that listing failed — kept across failed
+/// scans by the reader, not re-stamped from `scannedAt` on each one. A catalog input without the
+/// fact (an older reader) falls back to its last good read rather than inventing a time.
 fn catalog_verdict_health(catalog: &V, now: i64, ctx: &Context) -> Option<(V, V, V)> {
     if catalog["state"] != "error" {
         return None;
     }
-    let at = ctx.epoch(&catalog["scannedAt"]);
+    let at = ctx
+        .epoch(&catalog["failedSince"])
+        .or_else(|| ctx.epoch(&catalog["scannedAt"]));
     Some((json!("error"), ctx.iso(at), age(now, at)))
 }
 #[allow(clippy::too_many_arguments)]
@@ -387,7 +406,7 @@ fn base_rows(
     catalog: &V,
     index: &Index,
     problems: &[V],
-    review_health: &HashMap<String, Option<i64>>,
+    review_source: &Option<(V, V)>,
     now: i64,
     ctx: &Context,
 ) -> Option<Vec<V>> {
@@ -441,22 +460,11 @@ fn base_rows(
             )?);
         }
         let mut row = json!({"key":key,"model":model(&first),"runtime":first["model"]["harness"],"effort":first["model"]["effort"],"process":if task["byProcess"]==true&&first["process"].is_object(){json!({"id":first["process"]["id"],"version":first["process"]["version"]})}else{V::Null},"observed":if observed.is_empty(){V::Null}else{column(&observed,"observed",&V::Null,task,catalog,index,ctx)?},"benchmarks":benchmarks});
-        if let Some((as_of, age_seconds)) = traced_run_problem(&files, problems, now, ctx).or_else(|| {
-            let mut earliest: Option<i64> = None;
-            let mut matched = false;
-            for run in &runs {
-                let Some(since) = review_health.get(s(&run["id"])) else {
-                    continue;
-                };
-                matched = true;
-                if let Some(since) = *since
-                    && earliest.is_none_or(|prev| since < prev)
-                {
-                    earliest = Some(since);
-                }
-            }
-            matched.then(|| (ctx.iso(earliest), age(now, earliest)))
-        }) && let Some(obj) = row.as_object_mut()
+        // A row whose ranking used at least one joined review rests on the review source.
+        let used_review = runs.iter().any(|run| !index.of(s(&run["id"])).is_empty());
+        if let Some((as_of, age_seconds)) = traced_run_problem(&files, problems, now, ctx)
+            .or_else(|| used_review.then(|| review_source.clone()).flatten())
+            && let Some(obj) = row.as_object_mut()
         {
             obj.insert("sourceState".to_owned(), json!("unreadable"));
             obj.insert("asOf".to_owned(), as_of);
@@ -1123,7 +1131,8 @@ fn compose_core(
         Index::new(docs, &join, &known_models, &known_types, ctx)?
     };
     let problems = array(&input["runs"]["problems"]);
-    let review_health = review_problems(docs, facts, &problems, &index, ctx);
+    let join_files = array(&input["joinReviewFiles"]);
+    let review_source = review_source_health(docs, facts, &join, &join_files, &problems, now, ctx);
     let catalog_health = catalog_verdict_health(catalog, now, ctx);
     let mut bases = HashMap::new();
     for task in types {
@@ -1135,7 +1144,7 @@ fn compose_core(
                 catalog,
                 &index,
                 &problems,
-                &review_health,
+                &review_source,
                 now,
                 ctx,
             )?,

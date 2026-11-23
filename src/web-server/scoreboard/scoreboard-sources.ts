@@ -16,6 +16,12 @@ export interface ScoreboardInputs {
   runs: RunsState;
   /** Review runs outside a filtered view that review its runs (joined, never rows). */
   joinReviews?: readonly RunDoc[];
+  /**
+   * Each joined review's validated file, in the same order as `joinReviews`: the owner still
+   * knows it when the review run is outside the current filter, so a failed review source can be
+   * disclosed on the verdicts that used it. `null` when the caller does not know it.
+   */
+  joinReviewFiles?: readonly (string | null)[];
   /** Catalog seeds this server could not write at start. */
   seedFailures?: readonly SeedFailure[];
 }

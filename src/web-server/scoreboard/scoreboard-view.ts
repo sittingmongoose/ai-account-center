@@ -100,8 +100,8 @@ interface Shared {
   labels: ReadonlyMap<string, string>;
   benchmarkLabels: ReadonlyMap<string, string>;
   minRuns: number;
-  /** A retained blind-review file this scan could not read, by the run it reviews: its since. */
-  reviewHealth: ReadonlyMap<string, number | null>;
+  /** A review file (or its dated folder) this scan could not read: its first failure time. */
+  reviewSource: RowSourceHealth | null;
   /** The catalog listing failed this scan: ranked verdicts still rest on the retained catalog. */
   catalogHealth: RowSourceHealth | null;
 }
@@ -176,27 +176,32 @@ function tracedRunProblem(
 }
 
 /**
- * The health a retained blind-review file leaves on the run it reviews: the review still joins
- * (its last good copy is scored), so the target's row carries the failure. A review that no
- * longer joins, or a file never read, names no row. The age is since the file first failed.
+ * A review file, or the dated folder holding it, that this scan could not read. The review keeps
+ * its last good copy and still joins, so every verdict that used at least one joined review
+ * carries the review source's failure and its first-observed time. With no finer provenance than
+ * the file, this does not try to trace which verdict used which review (2026-11-23 A).
  */
-function reviewProblem(
-  runIds: readonly string[],
-  health: ReadonlyMap<string, number | null>,
+function reviewSourceHealth(
+  files: readonly string[],
+  problems: readonly ReportProblem[],
   now: number
 ): RowSourceHealth | null {
   let matched = false;
   let earliest: number | null = null;
-  for (const id of runIds) {
-    if (!health.has(id)) continue;
-    matched = true;
-    const since = health.get(id);
-    if (
-      typeof since === 'number' &&
-      Number.isFinite(since) &&
-      (earliest === null || since < earliest)
-    )
-      earliest = since;
+  for (const file of files) {
+    if (!file.startsWith('writers/')) continue;
+    for (const problem of problems) {
+      if (!problem.file.startsWith('writers/')) continue;
+      const prefix = `${problem.file}/`;
+      if (file !== problem.file && !file.startsWith(prefix)) continue;
+      matched = true;
+      if (
+        typeof problem.since === 'number' &&
+        Number.isFinite(problem.since) &&
+        (earliest === null || problem.since < earliest)
+      )
+        earliest = problem.since;
+    }
   }
   if (!matched) return null;
   return {
@@ -212,7 +217,14 @@ function catalogVerdictHealth(
   now: number
 ): RowSourceHealth | null {
   if (catalog.state !== 'error') return null;
-  const at = typeof catalog.scannedAt === 'number' ? catalog.scannedAt : null;
+  // The first time this listing failed, kept across failed scans by the reader; an older input
+  // without the fact keeps its last good read rather than inventing a time.
+  const at =
+    typeof catalog.failedSince === 'number'
+      ? catalog.failedSince
+      : typeof catalog.scannedAt === 'number'
+        ? catalog.scannedAt
+        : null;
   return { sourceState: 'error', asOf: iso(at), ageSeconds: ageSeconds(now, at) };
 }
 
@@ -282,13 +294,10 @@ function baseRows(
           shared
         )
       ),
+      // A row whose ranking used at least one joined review rests on the review source.
       sourceHealth:
         tracedRunProblem(files, problems, now) ??
-        reviewProblem(
-          rowRuns.map((run) => run.id),
-          shared.reviewHealth,
-          now
-        ),
+        (rowRuns.some((run) => shared.index.of(run.id).length > 0) ? shared.reviewSource : null),
     };
   });
 }
@@ -500,30 +509,25 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
     return labels.has(id);
   };
   const index = buildReviewIndex(docs, inputs.joinReviews ?? [], scoredReviewer);
-  // A retained blind-review file this scan could not read still joins its target (its last good
-  // copy is scored): the target's row carries the failure and when the file first failed.
-  const reviewHealth = new Map<string, number | null>();
+  // Every review source this scan can name: the view's own review runs, and reviews joined from
+  // outside its filter (whose file the owner supplies alongside the doc).
+  const reviewFiles: string[] = [];
   for (const [i, doc] of docs.entries()) {
-    if (!doc.review) continue;
     const file = runs.runs[i]?.file;
-    if (!file || !file.startsWith('writers/')) continue;
-    const problem = runs.problems.find((entry) => entry.file === file);
-    if (!problem) continue;
-    if (!index.of(doc.review.of).some((review) => review.id === doc.id)) continue;
-    const since =
-      typeof problem.since === 'number' && Number.isFinite(problem.since) ? problem.since : null;
-    const previous = reviewHealth.get(doc.review.of);
-    const earliest =
-      typeof previous === 'number' && (since === null || previous < since) ? previous : since;
-    reviewHealth.set(doc.review.of, earliest);
+    if (doc.review && file) reviewFiles.push(file);
   }
+  for (const [i, doc] of (inputs.joinReviews ?? []).entries()) {
+    const file = inputs.joinReviewFiles?.[i];
+    if (doc.review && typeof file === 'string') reviewFiles.push(file);
+  }
+  const reviewSource = reviewSourceHealth(reviewFiles, runs.problems, now);
   const shared: Shared = {
     index,
     defs: new Map(catalog.measures.map((measure) => [measure.id, measure])),
     labels,
     benchmarkLabels: new Map(catalog.benchmarks.map((item) => [item.id, item.label])),
     minRuns: catalog.minRuns,
-    reviewHealth,
+    reviewSource,
     catalogHealth: catalogVerdictHealth(catalog, now),
   };
   const base = new Map(

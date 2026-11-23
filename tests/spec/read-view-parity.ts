@@ -57,9 +57,18 @@ try {
   filtered.runs.runs = filtered.runs.runs.filter(
     (row: any) => row.doc.task.type === 'worknode-build'
   );
-  filtered.joinReviews = scoreBase.runs.runs
-    .filter((row: any) => row.doc.task.type === 'review')
-    .map((row: any) => row.doc);
+  const joinedReviewRows = scoreBase.runs.runs.filter((row: any) => row.doc.task.type === 'review');
+  filtered.joinReviews = joinedReviewRows.map((row: any) => row.doc);
+  // The owner still knows each joined review's validated file (2026-11-23 A).
+  filtered.joinReviewFiles = joinedReviewRows.map((row: any) => row.file);
+  // A joined review's own file, or its dated folder, failed this pass: every verdict that used a
+  // joined review carries the review source's state.
+  const reviewSource = structuredClone(filtered);
+  reviewSource.runs.problems.push({
+    file: filtered.joinReviewFiles[0],
+    reason: 'contains NUL bytes from a damaged write',
+    since: now - 600_000,
+  });
   const missing = structuredClone(scoreBase);
   missing.catalog.scannedAt = null;
   missing.catalog.state = 'missing';
@@ -139,10 +148,8 @@ try {
   const reviewFailed = structuredClone(scoreBase);
   {
     const review = reviewFailed.runs.runs.find(
-      (row: {
-        file: string;
-        doc: { task: { type: string }; review: { of: string } | null };
-      }) => row.doc.task.type === 'review' && Boolean(row.doc.review?.of)
+      (row: { file: string; doc: { task: { type: string }; review: { of: string } | null } }) =>
+        row.doc.task.type === 'review' && Boolean(row.doc.review?.of)
     );
     assert.ok(review, 'a review run with a target to fail');
     reviewFailed.runs.problems.push({
@@ -161,6 +168,7 @@ try {
     unscoredReviews,
     catalogFailed,
     reviewFailed,
+    reviewSource,
   ];
   for (const input of scoreCases)
     for (const zone of ['UTC', 'America/New_York', 'invalid-fixture-zone']) {

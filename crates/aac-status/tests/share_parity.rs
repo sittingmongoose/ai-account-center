@@ -307,3 +307,36 @@ fn the_owned_readers_match_the_typescript_readers_step_for_step() {
         }
     }
 }
+
+/// 2026-11-23 B: a continuing catalog listing failure keeps the time it was first observed and a
+/// successful listing clears it, so a verdict's age does not restart at each failed scan.
+#[test]
+fn a_continuing_catalog_listing_failure_keeps_its_first_time() {
+    let tree = || -> indexmap::IndexMap<String, Node> {
+        serde_json::from_value::<Vec<(String, Node)>>(json!([["/reports/v1/catalog", {"type": "dir"}]]))
+            .expect("tree")
+            .into_iter()
+            .collect()
+    };
+    let ok = MemFs {
+        tree: tree(),
+        errors: json!({}),
+    };
+    let failed = MemFs {
+        tree: tree(),
+        errors: json!({"/reports/v1/catalog": {"list": "EACCES"}}),
+    };
+    let mut catalog = CatalogReader::new(PathBuf::from("/reports"));
+    catalog.scan(&ok, 1_000);
+    assert_eq!(catalog.snapshot().failed_since, None);
+    catalog.scan(&failed, 2_000);
+    assert_eq!(catalog.snapshot().failed_since, Some(2_000));
+    catalog.scan(&failed, 2_000 + 3_600_000);
+    assert_eq!(
+        catalog.snapshot().failed_since,
+        Some(2_000),
+        "a continuing failure keeps its first observed time"
+    );
+    catalog.scan(&ok, 2_000 + 7_200_000);
+    assert_eq!(catalog.snapshot().failed_since, None, "a successful listing clears it");
+}

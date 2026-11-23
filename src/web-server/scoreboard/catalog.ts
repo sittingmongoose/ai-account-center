@@ -334,6 +334,12 @@ export interface CatalogState {
   /** missing: no `v1/catalog` folder; error: the folder could not be listed. */
   state: 'ok' | 'missing' | 'error';
   scannedAt: number | null;
+  /**
+   * When the current listing failure was first seen: kept across failed scans and cleared by a
+   * successful listing, so a verdict built on the retained catalog ages from the first failure
+   * rather than restarting at every scan. Absent unless `state` is `error`.
+   */
+  failedSince?: number | null;
   /** True when the snapshot was taken while a scan was still running: the catalog read so far, not the whole folder. */
   partial?: boolean;
   /** Catalog files with no good copy and no named problem. */
@@ -354,6 +360,7 @@ export class CatalogReader {
   private readonly files: ShareFiles<CatalogFile>;
   private state: CatalogState['state'] = 'missing';
   private scannedAt: number | null = null;
+  private failedSince: number | null = null;
   private scanning: Promise<void> | null = null;
 
   constructor(private readonly options: { root: () => string; now?: () => number; fs?: ReaderFs }) {
@@ -375,6 +382,7 @@ export class CatalogReader {
       .catch(() => {
         this.state = 'error';
         this.scannedAt = this.now();
+        this.failedSince ??= this.scannedAt;
       })
       .finally(() => {
         this.scanning = null;
@@ -390,11 +398,15 @@ export class CatalogReader {
       const entries = await (this.options.fs ?? nodeReaderFs).readdir(dir);
       listed = new Set(entries.map((entry) => entry.name));
       this.state = 'ok';
+      this.failedSince = null;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | null)?.code;
       if (code !== 'ENOENT' && isTransientShareError(error)) return;
       this.state = code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'error';
       // A folder that cannot be listed withdraws nothing; a removed one does, after the grace.
+      // A continuing failure keeps its first observed time; any other state clears it.
+      if (this.state === 'error') this.failedSince ??= this.now();
+      else this.failedSince = null;
       if (this.state === 'error') this.files.keep('catalog/', seen);
       this.files.sweep(seen);
       this.scannedAt = this.now();
@@ -418,6 +430,7 @@ export class CatalogReader {
     return {
       state: this.state,
       ...(this.scanning !== null ? { partial: true } : {}),
+      ...(this.state === 'error' ? { failedSince: this.failedSince } : {}),
       scannedAt: this.scannedAt,
       missingFiles: CATALOG_FILES.filter(
         (name) => !this.files.get(`catalog/${name}`) && !named.has(`catalog/${name}`)
