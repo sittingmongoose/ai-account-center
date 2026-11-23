@@ -108,6 +108,8 @@ impl Service {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .env_clear()
+            .env("HOME", &root)
+            .env("CCS_HOME", &root)
             .spawn()?;
         let ready = (|| -> Result<()> {
             let mut boot =

@@ -34,13 +34,13 @@ class MacTerminalBrokerTests(unittest.TestCase):
             target.write_text("#!/usr/bin/python3\nimport os, pathlib\npathlib.Path(%r).write_text(' '.join(sorted(k for k in os.environ if k.startswith('SSH_') or k == 'KEEP')))\n" % str(report))
             target.chmod(0o755)
             install = common.Install("antigravity-cli", "mac", target)
-            context = processes.Process(1, 0, 1, str(target), "1", cwd=directory, env={**SSH, "KEEP": "yes", "PATH": "/usr/bin:/bin"})
+            context = processes.Process(1, 0, 1, str(target), "1", cwd=directory, env={**SSH, "KEEP": "yes", "PATH": "/usr/bin:/bin", "HOME": directory, "CCS_HOME": directory})
             launched = []
 
             def open_terminal(argv, **kwargs):
                 # Stands in for `open -a Terminal <script>`: run the brokered script as Terminal would.
                 self.assertEqual(argv[:3], ["/usr/bin/open", "-a", "Terminal"])
-                launched.append(subprocess.Popen(["/bin/sh", argv[3]], env={"HOME": directory, "PATH": "/usr/bin:/bin"}))
+                launched.append(subprocess.Popen(["/bin/sh", argv[3]], env={"HOME": directory, "CCS_HOME": directory, "PATH": "/usr/bin:/bin"}))
 
             with mock.patch.object(pathlib.Path, "home", return_value=home), mock.patch.object(terminal, "command", side_effect=open_terminal):
                 terminal._broker_terminal(install, context, [])

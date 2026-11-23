@@ -643,8 +643,10 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(command[:2], ['/bin/sh', '-c'])
         self.assertEqual(command[3:], ['sh', '/fixture/claude-desktop'])
         self.assertNotRegex(command[2], r'(^|[^$])\$([^$]|$)', 'an unescaped $ would be expanded by systemd onto the argv')
-        seen = subprocess.run(['/bin/sh', '-c', command[2].replace('$$', '$'), 'sh', '/bin/sh', '-c', 'echo "$LD_LIBRARY_PATH|$AAC_LOADER_LD_LIBRARY_PATH"'],
-                              env={'AAC_LOADER_LD_LIBRARY_PATH': '/nonexistent/lib'}, capture_output=True, text=True, check=True)
+        with tempfile.TemporaryDirectory() as home:
+            seen = subprocess.run(['/bin/sh', '-c', command[2].replace('$$', '$'), 'sh', '/bin/sh', '-c', 'echo "$LD_LIBRARY_PATH|$AAC_LOADER_LD_LIBRARY_PATH"'],
+                                  env={'AAC_LOADER_LD_LIBRARY_PATH': '/nonexistent/lib', 'HOME': home, 'CCS_HOME': home},
+                                  capture_output=True, text=True, check=True)
         self.assertEqual(seen.stdout.strip(), '/nonexistent/lib|')
 
     def _click_codex_cli(self, root, version, marker=None, manager='native', binary=True, running=()):

@@ -805,7 +805,7 @@ class RegistryV2AccountTests(unittest.TestCase):
 
     def run_main(self, *arguments):
         environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home),
-                       "USERPROFILE": str(self.home), "PYTHONDONTWRITEBYTECODE": "1"}
+                       "CCS_HOME": str(self.home), "USERPROFILE": str(self.home), "PYTHONDONTWRITEBYTECODE": "1"}
         return subprocess.run([sys.executable, str(HELPERS / "plan_usage.py"), *arguments],
                               capture_output=True, text=True, timeout=20, env=environment)
 
@@ -902,7 +902,7 @@ class SharedCredentialKindFixtureTests(unittest.TestCase):
         table = self.fixture["helpers"]["desktop_usage.py"]
         self.assertTrue(all(kinds == ["discover"] for kinds in table.values()))
         with tempfile.TemporaryDirectory() as home:
-            environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": home, "USERPROFILE": home,
+            environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": home, "CCS_HOME": home, "USERPROFILE": home,
                            "PYTHONDONTWRITEBYTECODE": "1"}
             for provider in table:
                 with self.subTest(provider=provider):

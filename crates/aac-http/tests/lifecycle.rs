@@ -99,7 +99,9 @@ impl Service {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .env_clear();
+            .env_clear()
+            .env("HOME", &root)
+            .env("CCS_HOME", &root);
         for (k, v) in env {
             command.env(k, v);
         }

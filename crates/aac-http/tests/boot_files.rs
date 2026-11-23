@@ -36,6 +36,8 @@ fn starts(files: Option<Value>) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .env_clear()
+        .env("HOME", &root)
+        .env("CCS_HOME", &root)
         .spawn()
         .unwrap();
     let mut line = json!({"ccsDir":root,"socketPath":socket,"secret":SECRET,"bootId":BOOT_ID});
