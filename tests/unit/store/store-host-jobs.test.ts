@@ -255,4 +255,48 @@ describe('the hosted store jobs watch', () => {
     expect(warnings().length).toBe(2);
     stop();
   });
+
+  it('warns once for an unpersisted share-backup failure and again when its sequence advances', async () => {
+    const host = scriptedHost();
+    const unpersisted: HostJobsState['jobs'] = {
+      ...host.state,
+      lastError: null,
+      lastErrorCode: null,
+      lastErrorMs: null,
+      lastErrorSeq: null,
+      lastErrorPersisted: null,
+      lastShareFailedMs: 2_500,
+      lastShareSeq: 1,
+      lastSharePersisted: false,
+    };
+    const handle: NativeStoreHandle = {
+      async call(method) {
+        if (method !== 'hostJobs') throw new Error(`unexpected method ${method}`);
+        return JSON.stringify({ open: true, bootError: null, jobs: unpersisted });
+      },
+    };
+    const store = new AacStore(handle, path.join(root, 'store'));
+    const clock = manualSchedule();
+    const stop = startAacStoreHostJobsWatch({ store: () => store, schedule: clock.schedule });
+    clock.ticks.shift()!();
+    await flush();
+    const first = warnings();
+    expect(first.map((entry) => entry.event)).toEqual(['store.share_backup_failed']);
+    expect(first[0].message).toBe('The share copy of the store backup failed');
+
+    // Repeating the same unpersisted share sequence warns no second time.
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(1);
+
+    // A later unpersisted share failure advances the sequence and warns once more.
+    unpersisted.lastShareSeq = 2;
+    unpersisted.lastShareFailedMs = 3_500;
+    clock.ticks.shift()!();
+    await flush();
+    const all = warnings();
+    expect(all.length).toBe(2);
+    expect(all[1].event).toBe('store.share_backup_failed');
+    stop();
+  });
 });

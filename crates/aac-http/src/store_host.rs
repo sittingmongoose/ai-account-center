@@ -184,6 +184,8 @@ struct Jobs {
     last_error: Option<String>,
     last_error_record: Option<JobFailure>,
     last_share_record: Option<JobFailure>,
+    known_error_seq: u64,
+    known_share_seq: u64,
 }
 
 struct State {
@@ -306,13 +308,38 @@ impl StoreHost {
             Ok(Err(error)) => Some(error.to_string()),
             Err(_) => Some("panic: the store stopped this call".to_string()),
         };
+        let (error_seq, share_seq) = if error.is_none() {
+            self.engine()
+                .as_ref()
+                .map(|engine| {
+                    (
+                        persisted_failure_seq(engine, "ts:host_job_last_error"),
+                        persisted_failure_seq(engine, "ts:host_job_last_share_failure"),
+                    )
+                })
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state.ready = true;
         state.boot_error = error.clone();
+        state.jobs.known_error_seq = state.jobs.known_error_seq.max(error_seq);
+        state.jobs.known_share_seq = state.jobs.known_share_seq.max(share_seq);
         drop(state);
         self.ready_changed.notify_all();
         if let Some(error) = &error {
             tracing::warn!(target: "aac_http", "store host open failed: {error}");
+        }
+    }
+
+    fn seed_failure_floors(&self, engine: &Engine) {
+        let error_seq = persisted_failure_seq(engine, "ts:host_job_last_error");
+        let share_seq = persisted_failure_seq(engine, "ts:host_job_last_share_failure");
+        if error_seq > 0 || share_seq > 0 {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.jobs.known_error_seq = state.jobs.known_error_seq.max(error_seq);
+            state.jobs.known_share_seq = state.jobs.known_share_seq.max(share_seq);
         }
     }
 
@@ -477,10 +504,19 @@ impl StoreHost {
             return Err("invalid: the store dir differs from the boot's store dir".to_string());
         }
         match self.engine() {
-            Some(engine) => ops::call(&engine, "status", "{}")
-                .map(|value| value.to_string())
-                .map_err(|e| e.to_string()),
-            None => ops::dispatch(&self.slot, "open", args).map_err(|e| e.to_string()),
+            Some(engine) => {
+                self.seed_failure_floors(&engine);
+                ops::call(&engine, "status", "{}")
+                    .map(|value| value.to_string())
+                    .map_err(|e| e.to_string())
+            }
+            None => {
+                let opened = ops::dispatch(&self.slot, "open", args).map_err(|e| e.to_string())?;
+                if let Some(engine) = self.engine() {
+                    self.seed_failure_floors(&engine);
+                }
+                Ok(opened)
+            }
         }
     }
 
@@ -499,8 +535,9 @@ impl StoreHost {
                 )
             })
             .unwrap_or((Value::Null, Value::Null));
-        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let persisted_error_seq = error["seq"].as_u64().unwrap_or(0);
+        state.jobs.known_error_seq = state.jobs.known_error_seq.max(persisted_error_seq);
         let (error_code, error_ms, error_seq, error_persisted) = match &state.jobs.last_error_record
         {
             Some(mem) if mem.seq > persisted_error_seq => (
@@ -517,6 +554,7 @@ impl StoreHost {
             ),
         };
         let persisted_share_seq = share["seq"].as_u64().unwrap_or(0);
+        state.jobs.known_share_seq = state.jobs.known_share_seq.max(persisted_share_seq);
         let (share_ms, share_seq, share_persisted) = match &state.jobs.last_share_record {
             Some(mem) if mem.seq > persisted_share_seq => {
                 (json!(mem.ms), json!(mem.seq), json!(mem.persisted))
@@ -586,6 +624,10 @@ impl StoreHost {
                 false,
             ),
         };
+        self.record_job_outcome(now, error, share_failed);
+    }
+
+    fn record_job_outcome(&self, now: u64, error: Option<String>, share_failed: bool) {
         let (prior_error_seq, prior_share_seq) = {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             state.jobs.passes += 1;
@@ -594,8 +636,18 @@ impl StoreHost {
                 state.jobs.last_error = Some(error.clone());
             }
             (
-                state.jobs.last_error_record.as_ref().map_or(0, |r| r.seq),
-                state.jobs.last_share_record.as_ref().map_or(0, |r| r.seq),
+                state
+                    .jobs
+                    .last_error_record
+                    .as_ref()
+                    .map_or(0, |r| r.seq)
+                    .max(state.jobs.known_error_seq),
+                state
+                    .jobs
+                    .last_share_record
+                    .as_ref()
+                    .map_or(0, |r| r.seq)
+                    .max(state.jobs.known_share_seq),
             )
         };
         // R3 review L1: the operator warning must survive a host restart. Persist one
@@ -654,9 +706,11 @@ impl StoreHost {
         if next_error.is_some() || next_share.is_some() {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(record) = next_error {
+                state.jobs.known_error_seq = state.jobs.known_error_seq.max(record.seq);
                 state.jobs.last_error_record = Some(record);
             }
             if let Some(record) = next_share {
+                state.jobs.known_share_seq = state.jobs.known_share_seq.max(record.seq);
                 state.jobs.last_share_record = Some(record);
             }
         }
@@ -1047,6 +1101,205 @@ mod tests {
         assert_eq!(jobs["jobs"]["lastErrorCode"], json!("closed"), "{jobs}");
         assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
         host.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_restarted_host_keeps_unpersisted_failure_sequences_monotonic() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let now = aac_store::engine::now_ms();
+
+        // Case 1 (seq 1 -> 2): Boot 1 persists seq 1; Boot 2 restarts via open_at_boot,
+        // then the engine closes before the next failing pass.
+        let dir1 = root.path().join("store-restart-seq1");
+        std::fs::create_dir_all(&dir1).map_err(|e| e.to_string())?;
+        std::fs::write(dir1.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
+        let host1 = StoreHost::new(boot(dir1.clone()));
+        host1.open_at_boot();
+        host1.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host1.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(1), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(true), "{jobs}");
+        host1.close_engine();
+        drop(host1);
+
+        let host2 = StoreHost::new(boot(dir1));
+        host2.open_at_boot();
+        let jobs: Value = serde_json::from_str(&host2.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(1), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(true), "{jobs}");
+        let engine = host2.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+        host2.job_pass(now + 2_000);
+        let jobs: Value = serde_json::from_str(&host2.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorCode"], json!("closed"), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now + 2_000), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
+        host2.close_engine();
+
+        // Case 2 (seq 2 -> 3): Boot 1 persists seq 1 and seq 2; Boot 2 opens via
+        // open_idempotent (after a locked open_at_boot), then the engine closes before
+        // the next failing pass — sequence must advance to 3, never regress to 1.
+        let dir2 = root.path().join("store-restart-seq2");
+        std::fs::create_dir_all(&dir2).map_err(|e| e.to_string())?;
+        std::fs::write(dir2.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
+        let host1 = StoreHost::new(boot(dir2.clone()));
+        host1.open_at_boot();
+        host1.job_pass(now);
+        host1.job_pass(now + 1_000);
+        let jobs: Value = serde_json::from_str(&host1.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2), "{jobs}");
+        host1.close_engine();
+        drop(host1);
+
+        let holder =
+            ops::open_engine(&dir2.to_string_lossy(), None, None).map_err(|e| e.to_string())?;
+        let host2 = StoreHost::new(boot(dir2.clone()));
+        host2.open_at_boot();
+        assert!(host2.engine().is_none(), "boot open fails while lock held");
+        holder.close().map_err(|e| e.to_string())?;
+        drop(holder);
+        host2.call_blocking("open", &json!({ "dir": dir2 }).to_string())?;
+        // Close immediately after open_idempotent without calling jobs_json() first,
+        // proving open_idempotent itself seeded the monotonic floor.
+        let engine = host2.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+        host2.job_pass(now + 3_000);
+        let jobs: Value = serde_json::from_str(&host2.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(3), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorCode"], json!("closed"), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now + 3_000), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
+        host2.close_engine();
+
+        // Case 3 (jobs_json ratchets the floor): a persisted failure written after boot
+        // is observed via jobs_json(), raising the floor so a later closed-engine pass
+        // still advances monotonically.
+        let dir3 = root.path().join("store-ratchet");
+        let host3 = StoreHost::new(boot(dir3));
+        host3.open_at_boot();
+        let engine = host3.engine().ok_or("engine")?;
+        engine
+            .set_meta(
+                "ts:host_job_last_error",
+                &json!({"seq": 5, "code": "io", "ms": now}).to_string(),
+            )
+            .map_err(|e| e.to_string())?;
+        drop(engine);
+        let jobs: Value = serde_json::from_str(&host3.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(5), "{jobs}");
+        let engine = host3.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+        host3.job_pass(now + 4_000);
+        let jobs: Value = serde_json::from_str(&host3.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(6), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
+        host3.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_meta_write_still_publishes_the_share_failure_with_a_monotonic_sequence()
+    -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let now = aac_store::engine::now_ms();
+
+        // Fresh host: closed engine makes set_meta fail on a share failure; sequence
+        // starts at 1 and advances monotonically with lastSharePersisted: false.
+        let dir_fresh = root.path().join("store-share-unpersisted");
+        let host = StoreHost::new(boot(dir_fresh));
+        host.open_at_boot();
+        let engine = host.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+
+        host.record_job_outcome(now, None, true);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(1), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastSharePersisted"], json!(false), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], Value::Null, "{jobs}");
+
+        host.record_job_outcome(now + 1_000, None, true);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(2), "{jobs}");
+        assert_eq!(
+            jobs["jobs"]["lastShareFailedMs"],
+            json!(now + 1_000),
+            "{jobs}"
+        );
+        assert_eq!(jobs["jobs"]["lastSharePersisted"], json!(false), "{jobs}");
+        host.close_engine();
+
+        // Restarted host after persisted share failures (seq 1 -> 2, and seq 2 -> 3):
+        // Boot 1 persists seq 1, Boot 2 seeds floor and advances to seq 2 when closed.
+        let dir_restart = root.path().join("store-share-restart");
+        let share = root.path().join("share-copy-file");
+        std::fs::write(&share, b"not a folder").map_err(|e| e.to_string())?;
+        let mut config = boot(dir_restart.clone());
+        config.share_backup_dir = Some(share.clone());
+        let host1 = StoreHost::new(config);
+        host1.open_at_boot();
+        host1.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host1.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(1), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastSharePersisted"], json!(true), "{jobs}");
+        host1.close_engine();
+        drop(host1);
+
+        let host2 = StoreHost::new(boot(dir_restart.clone()));
+        host2.open_at_boot();
+        let engine = host2.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+        host2.record_job_outcome(now + 2_000, None, true);
+        let jobs: Value = serde_json::from_str(&host2.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(2), "{jobs}");
+        assert_eq!(
+            jobs["jobs"]["lastShareFailedMs"],
+            json!(now + 2_000),
+            "{jobs}"
+        );
+        assert_eq!(jobs["jobs"]["lastSharePersisted"], json!(false), "{jobs}");
+        host2.close_engine();
+        drop(host2);
+
+        // Second persisted share failure on Boot 3 (seq 2), then Boot 4 closed -> seq 3.
+        let mut config3 = boot(dir_restart.clone());
+        config3.share_backup_dir = Some(share);
+        let host3 = StoreHost::new(config3);
+        host3.open_at_boot();
+        let engine = host3.engine().ok_or("engine")?;
+        engine
+            .set_meta("last_backup_ms", "0")
+            .map_err(|e| e.to_string())?;
+        drop(engine);
+        host3.job_pass(now + DAY_MS);
+        let jobs: Value = serde_json::from_str(&host3.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(2), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastSharePersisted"], json!(true), "{jobs}");
+        host3.close_engine();
+        drop(host3);
+
+        let host4 = StoreHost::new(boot(dir_restart));
+        host4.open_at_boot();
+        let engine = host4.engine().ok_or("engine")?;
+        engine.close().map_err(|e| e.to_string())?;
+        drop(engine);
+        host4.record_job_outcome(now + DAY_MS + 1_000, None, true);
+        let jobs: Value = serde_json::from_str(&host4.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(3), "{jobs}");
+        assert_eq!(
+            jobs["jobs"]["lastShareFailedMs"],
+            json!(now + DAY_MS + 1_000),
+            "{jobs}"
+        );
+        assert_eq!(jobs["jobs"]["lastSharePersisted"], json!(false), "{jobs}");
+        host4.close_engine();
         Ok(())
     }
 
