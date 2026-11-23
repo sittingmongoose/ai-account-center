@@ -262,6 +262,10 @@ describe('route table (L1)', () => {
         'agent-control': 2500,
         'status-inputs': 5000,
         'scoreboard-inputs': 5000,
+        // Monday hotfix: the native Analytics read and the Store status read on a real-size
+        // store take longer than 400 ms (deadline declines); budgets stay under the 10 s link deadline.
+        analytics: 8000,
+        'store-status': 5000,
       };
       const budget = budgets[String(row.handler)] ?? 400;
       expect(row.budgetMs).toBe(budget);
