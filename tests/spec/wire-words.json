@@ -2854,6 +2854,7 @@
       "src/web-server/scoreboard/runs-store.ts:this.last?.state",
       "src/web-server/scoreboard/runs-types.ts:state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/scoreboard/scoreboard-view.ts:catalog.state",
       "src/web-server/services/account-analytics-compose.ts:account.status",
       "src/web-server/services/account-analytics-compose.ts:status",
       "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
