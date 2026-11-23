@@ -477,3 +477,20 @@ test('details group the 2026-11-19 Ultra models, Orchestrators included, under s
   );
   assert.ok(v.note.replace(/\s+/g, ' ').includes('Orchestrator (Carbon)'));
 });
+
+test('a passed-reset extra pool reads Unavailable on Home', () => {
+  // M1: one account reports Gemini 4 Argon (the shared CLI column). The other account's only
+  // CLI meters passed their resets, so they no longer describe those windows and cannot prove
+  // Google reported no Argon quota there: the cell is Unavailable, exactly as Details says.
+  const plan = { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true };
+  const pro = account('argon', plan, [...tonightT3, ...tonightApp]);
+  const passed = account('passed', plan, [
+    { ...window('cli-gemini-weekly'), resetPassed: true },
+    { ...window('cli-3p-weekly'), resetPassed: true },
+  ]);
+  const v = section([pro, passed]);
+  const at = v.columns.findIndex((column) => column.key === 'cli-gemini-argon-wtu-weekly');
+  assert.notEqual(at, -1);
+  assert.equal(v.rows[1].cells[at].naText, 'Unavailable');
+  assert.equal(v.rows[1].cells[at].hasValue, false);
+});
