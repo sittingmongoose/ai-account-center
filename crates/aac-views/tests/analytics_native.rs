@@ -123,3 +123,128 @@ fn a_non_utc_zone_without_proven_offsets_declines() {
     let failed = analytics_owned::compose_native(input("America/New_York", None), &mut EmptyStore);
     assert_eq!(failed, Err(Decline::Zone));
 }
+
+// --- Collation hotfix: a non-ASCII activity label in an old (>30d) bucket ---
+
+const OLD_BUCKET: u64 = NOW - 40 * DAY; // outside the 7d/30d windows, inside 90d and all
+const RECENT_BUCKET: u64 = NOW - 2 * DAY; // inside the 7d window
+
+/// A store with one activity bucket holding a row per model. `costs` sets each row's logged cost in
+/// nano-dollars: equal costs force the projection's ranking tie-breaks onto the name/key collation,
+/// unequal costs leave the ranking on cost alone. The bucket's age selects which ranges see it.
+struct ActivityStore {
+    bucket: u64,
+    models: Vec<&'static str>,
+    costs: Vec<u64>,
+}
+
+impl analytics_owned::AnalyticsStore for ActivityStore {
+    fn activity_oldest(&mut self) -> Result<Option<u64>, Decline> {
+        Ok(Some(NOW - 100 * DAY))
+    }
+    fn quota_oldest(&mut self) -> Result<Option<u64>, Decline> {
+        Ok(Some(NOW - 100 * DAY))
+    }
+    fn activity_range(&mut self, _query: Value) -> Result<Value, Decline> {
+        let rows: Vec<Value> = self
+            .models
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                json!([
+                    self.bucket,
+                    0,
+                    0,
+                    0,
+                    index,
+                    1000,
+                    500,
+                    0,
+                    0,
+                    Value::Null,
+                    self.costs[index],
+                    0,
+                    1,
+                    0
+                ])
+            })
+            .collect();
+        Ok(json!({
+            "tools": ["claude"],
+            "routes": ["anthropic"],
+            "models": self.models,
+            "rows": rows,
+            "sessions": { "sample": [], "signatures": [], "total": 0, "truncated": false },
+            "quality": [],
+        }))
+    }
+    fn activity_sources(&mut self, _from_ms: u64, _to_ms: u64) -> Result<Value, Decline> {
+        Ok(json!({
+            "computers": [{
+                "computer": "ubuntu", "oldestMs": NOW - 100 * DAY, "newestMs": NOW,
+                "lastReadMs": NOW, "gaps": [],
+            }],
+            "sources": [],
+        }))
+    }
+    fn history_records(&mut self, _query: Value) -> Result<Value, Decline> {
+        Ok(json!([]))
+    }
+}
+
+fn fixture_input(range: &str, models: &[&str]) -> NativeInput {
+    let mut native = input("UTC", None);
+    native.query.insert("range".into(), json!(range));
+    // A pricing key per model on the anthropic route: null is a missing fact (no rate), which the
+    // projection accepts; an absent key would decline Unsupported before the collation sort runs.
+    let mut pricing = Map::new();
+    for model in models {
+        pricing.insert(format!("{model}\0anthropic"), Value::Null);
+    }
+    native.pricing = Value::Object(pricing);
+    native
+}
+
+#[test]
+fn a_non_ascii_activity_label_answers_90d_and_all() {
+    // On 7d41daa85 the projection sort declined Collation on the non-ASCII model name, turning the
+    // 90d and all reads into 500s. The total collation answers them. The old bucket sits outside the
+    // 7d window, so the 7d answer never sees the label and is untouched.
+    for range in ["90d", "all"] {
+        let mut store = ActivityStore {
+            bucket: OLD_BUCKET,
+            models: vec!["ascii-model", "café"],
+            costs: vec![1_000_000_000, 1_000_000_000],
+        };
+        let answer =
+            analytics_owned::compose_native(fixture_input(range, &store.models), &mut store)
+                .unwrap_or_else(|err| panic!("{range} declined: {err:?}"));
+        assert_eq!(answer["range"]["preset"], json!(range));
+        let activity =
+            String::from_utf8(js_json::write(&answer["activity"])).expect("utf-8 activity");
+        assert!(
+            activity.contains("café"),
+            "{range} answer keeps the non-ASCII model"
+        );
+    }
+}
+
+#[test]
+fn the_7d_ascii_activity_bytes_are_unchanged() {
+    // Parity guard: an all-ASCII 7d fixture must compose to the exact bytes the ASCII-only collation
+    // produced on 7d41daa85 (captured below), so the total collation reorders nothing ASCII.
+    let mut store = ActivityStore {
+        bucket: RECENT_BUCKET,
+        models: vec!["ascii-model", "gpt-4o"],
+        costs: vec![1_000_000_000, 2_000_000_000],
+    };
+    let answer = analytics_owned::compose_native(fixture_input("7d", &store.models), &mut store)
+        .expect("7d composes");
+    let text = String::from_utf8(js_json::write(&answer["activity"])).expect("utf-8 activity");
+    assert_eq!(
+        text, GOLDEN_7D_ACTIVITY,
+        "the 7d ASCII activity bytes changed"
+    );
+}
+
+const GOLDEN_7D_ACTIVITY: &str = r#"{"status":"ok","refreshing":false,"refreshingRemote":[],"scope":"multi-host-cli","timezone":"UTC","accountAttribution":"unavailable","costBasis":"estimated-api-equivalent","fetchedAt":"2026-11-19T00:00:00.000Z","message":"CLI activity kept in AAC's history (UTC hourly buckets; days are grouped in UTC). Cost is an API-equivalent estimate, not a subscription charge.","totals":{"inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false},"providers":[{"provider":"claude","label":"Claude","totals":{"inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false},"usageEvents":2,"sessionCount":0,"tools":["claude"]}],"byDay":[{"date":"2026-11-17","provider":"claude","inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"requestCount":2}],"byHour":[{"hour":"2026-11-17T00:00:00Z","provider":"claude","inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"requestCount":2}],"models":[{"model":"gpt-4o","provider":"claude","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":2,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"rates":null,"tools":["claude"]},{"model":"ascii-model","provider":"claude","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":1,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"rates":null,"tools":["claude"]}],"byDayModel":[{"date":"2026-11-17","provider":"claude","model":"gpt-4o","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":2,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false},{"date":"2026-11-17","provider":"claude","model":"ascii-model","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":1,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false}],"sessions":{"total":0,"sample":[],"truncated":false},"anomalies":{"thresholds":{"costSpikeMultiplier":2,"highInputTokens":10000000,"highIoRatio":100,"highCacheReadTokens":1000000000},"items":[],"summary":{"totalAnomalies":0,"highInputDays":0,"highIoRatioDays":0,"costSpikeDays":0,"highCacheReadDays":0}},"sources":[],"history":{"computers":[{"host":"ubuntu","oldestAt":"2026-08-11T00:00:00.000Z","newestAt":"2026-11-19T00:00:00.000Z","lastReadAt":"2026-11-19T00:00:00.000Z","gaps":[]}],"sources":[],"backfill":{"running":false,"sources":[]},"quality":[]},"resolution":"hour"}"#;

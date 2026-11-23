@@ -6,10 +6,11 @@
 //! `src/web-server/services/account-analytics-anomalies.ts`.
 //!
 //! Inputs are the store's own `activityRange`/`activitySources` answers plus the live collector
-//! state and the resolved pricing facts the TS front door supplies. Every string the projection
-//! collates must be printable ASCII (the CLDR root order `aac_num::intl::ascii_compare` proves
-//! against Node); every zone word comes from the envelope's proven offset segments. Anything
-//! else is a named [`Decline`], and the TS computation answers.
+//! state and the resolved pricing facts the TS front door supplies. The projection collates with
+//! its own `collate`: the CLDR root order `ascii_compare` proves against Node for printable
+//! ASCII, extended to a total order for any UTF-8 so non-ASCII activity labels answer instead of
+//! declining; every zone word comes from the envelope's proven offset segments. Anything else is a
+//! named [`Decline`], and the TS computation answers.
 use crate::decline::Decline;
 use aac_num::{civil, ecma, intl};
 use serde_json::{Map, Value, json};
@@ -192,12 +193,58 @@ fn time(value: f64) -> R<i64> {
 fn iso(ms: f64) -> R<String> {
     ecma::to_iso_string(time(ms)?).ok_or(Decline::Date)
 }
-/// `a.localeCompare(b)` for printable ASCII; any other pair declines.
-fn cmp_str(a: &str, b: &str) -> R<Ordering> {
-    if a == b {
-        return Ok(Ordering::Equal);
+/// Primary weight base for characters outside printable ASCII: above every printable-ASCII primary
+/// (each is below `intl::ASCII_ORDER.len()`), so any such character sorts after every printable
+/// ASCII character at the primary level, ordered by its Unicode code point.
+const NON_ASCII_PRIMARY: u32 = 256;
+
+/// `(primary, tertiary)` weights of a printable ASCII byte from `intl::ASCII_ORDER`, the same
+/// weights `intl::ascii_compare` uses: one primary per letter pair (lowercase first), else its rank.
+fn ascii_weights(c: u8) -> Option<(u32, u32)> {
+    let order = intl::ASCII_ORDER.as_bytes();
+    let at = order.iter().position(|&o| o == c)? as u32;
+    let digits_end = order.iter().position(|&o| o == b'a')? as u32;
+    Some(if c.is_ascii_alphabetic() {
+        (
+            digits_end + (at - digits_end) / 2,
+            u32::from(c.is_ascii_uppercase()),
+        )
+    } else {
+        (at, 0)
+    })
+}
+
+/// A total, deterministic order for any two UTF-8 strings that is exactly `intl::ascii_compare`
+/// whenever both are printable ASCII, so ASCII answers and parity goldens are unchanged. Printable
+/// ASCII keeps its CLDR root `(primary, tertiary)` weights; every other character (non-ASCII, or an
+/// ASCII control) takes [`NON_ASCII_PRIMARY`] plus its code point as primary and zero tertiary.
+/// Comparing the primary weights left to right (a prefix first), then the tertiary weights, is a
+/// lexicographic order on weight keys: total and transitive for any input. It lives here, not in
+/// `aac-num`, so the agent's source closure (which includes `aac-num`) is unchanged.
+fn collate(a: &str, b: &str) -> Ordering {
+    fn keys(s: &str) -> (Vec<u32>, Vec<u32>) {
+        let mut primary = Vec::with_capacity(s.len());
+        let mut tertiary = Vec::with_capacity(s.len());
+        for c in s.chars() {
+            let printable = ('\u{20}'..='\u{7e}').contains(&c);
+            let (p, t) = match printable.then(|| ascii_weights(c as u8)).flatten() {
+                Some(w) => w,
+                None => (NON_ASCII_PRIMARY + c as u32, 0),
+            };
+            primary.push(p);
+            tertiary.push(t);
+        }
+        (primary, tertiary)
     }
-    intl::ascii_compare(a, b).ok_or(Decline::Collation)
+    let (pa, ta) = keys(a);
+    let (pb, tb) = keys(b);
+    pa.cmp(&pb).then_with(|| ta.cmp(&tb))
+}
+/// `a.localeCompare(b)` for printable ASCII, extended to a total deterministic order for any UTF-8
+/// ([`collate`]). Non-ASCII labels and the NUL-separated ranking keys no longer decline
+/// the projection sort; printable-ASCII pairs keep the exact CLDR root order.
+fn cmp_str(a: &str, b: &str) -> R<Ordering> {
+    Ok(collate(a, b))
 }
 /// `hourEpoch`: `YYYY-MM-DD HH:00` as the UTC instant, else NaN (`None`).
 fn hour_epoch(hour: &str) -> Option<f64> {
@@ -2861,6 +2908,68 @@ pub(crate) fn activity_selection(query: &Object) -> R<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collate_is_total_and_keeps_the_ascii_order() {
+        // Printable ASCII pairs keep exactly the ascii_compare (ICU root) order.
+        for (a, b) in [
+            ("a_1", "a-1"),
+            ("a-b", "ab"),
+            ("aB", "Ab"),
+            ("A", "a b"),
+            ("x", "x"),
+            ("", ""),
+            ("", "a"),
+            ("a", ""),
+            ("Z", "a"),
+            ("claude-3", "claude-3-5"),
+            ("gpt-4o", "gpt-4"),
+        ] {
+            assert_eq!(
+                collate(a, b),
+                intl::ascii_compare(a, b).expect("a printable ASCII pair"),
+                "{a:?} vs {b:?}"
+            );
+        }
+        // Non-ASCII and control characters no longer decline; the order is deterministic.
+        assert_eq!(collate("é", "e"), Ordering::Greater);
+        assert_eq!(collate("e", "é"), Ordering::Less);
+        assert_eq!(collate("模型", "model"), Ordering::Greater);
+        assert_eq!(collate("café", "cafe"), Ordering::Greater);
+        assert_eq!(collate("a\tb", "ab"), Ordering::Greater);
+        assert_eq!(collate("x", "x"), Ordering::Equal);
+        // A byte-order fallback for the declined pairs would cycle here: the ICU ranks put "a" < "A",
+        // while bytes put "A" < "Bé" < "a". collate must stay a total order, so sorting is consistent.
+        let mut words = ["a", "A", "Bé", "é", "ab", "abé", "az", "Z", "模型", "a\tb"];
+        words.sort_by(|a, b| collate(a, b));
+        for pair in words.windows(2) {
+            assert_ne!(
+                collate(pair[0], pair[1]),
+                Ordering::Greater,
+                "{:?} sorted before {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        for a in words {
+            for b in words {
+                assert_eq!(
+                    collate(a, b),
+                    collate(b, a).reverse(),
+                    "antisymmetry {a:?} {b:?}"
+                );
+                for c in words {
+                    if collate(a, b) != Ordering::Greater && collate(b, c) != Ordering::Greater {
+                        assert_ne!(
+                            collate(a, c),
+                            Ordering::Greater,
+                            "transitivity {a:?} {b:?} {c:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn analytics_grid_shows_missing_agents_as_unavailable_after_an_ok_read() {
