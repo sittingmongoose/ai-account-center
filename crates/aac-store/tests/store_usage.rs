@@ -1400,6 +1400,93 @@ fn an_open_period_rebuilt_after_its_first_readings_retired_discloses_period_rows
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Astra M5 (2026-11-23 C): two accounts' open periods start at different times. One diagnostic
+/// must name both periods with their bounds — right after the replay, and after reopening the
+/// store (the finding key is log, kind and range, so it must not carry only one account's words).
+#[test]
+fn two_accounts_open_period_heads_share_one_disclosure_naming_both_periods() {
+    let dir = temp_dir("open-period-two-accounts");
+    let retention_days = 30u64;
+    let open_retained = |p: &Path| ops::open_engine(p.to_str().unwrap(), None, Some(retention_days)).unwrap();
+    let day = (now_ms() / DAY as u64) as u32 + 1;
+    let t = i64::from(day) * DAY;
+    let second = t + 2 * HOUR;
+    {
+        let engine = open_retained(&dir);
+        // Each account opens its weekly period at its own time; the first readings retire.
+        for (account, start) in [(1u32, t), (2u32, second)] {
+            record(
+                &engine,
+                vec![obs(account, start, vec![window("seven_day", Some(10.0), Some(t + 5 * DAY))])],
+            );
+            record(
+                &engine,
+                vec![obs(account, start + MIN, vec![window("seven_day", Some(15.0), Some(t + 5 * DAY))])],
+            );
+        }
+        engine.lock_logs().readings.seal().unwrap();
+        let seg0_end_seq = engine.lock_logs().readings.manifest().segments[0].end_seq;
+        // Both periods stay open across the day boundary: no reset, so the close archives the
+        // day rollup and the period header but not a final total.
+        for account in [1u32, 2] {
+            record(
+                &engine,
+                vec![obs(account, t + DAY, vec![window("seven_day", Some(20.0), Some(t + 5 * DAY))])],
+            );
+            record(
+                &engine,
+                vec![obs(account, t + DAY + MIN, vec![window("seven_day", Some(25.0), Some(t + 5 * DAY))])],
+            );
+        }
+        engine.lock_logs().readings.seal().unwrap();
+        let closed = aac_store::usage::close_days(&engine, (t + DAY + 3 * HOUR) as u64).unwrap();
+        assert_eq!(closed["closed"], json!([day]));
+        let pruned = aac_store::usage::prune(&engine, (t + 100 * DAY) as u64).unwrap();
+        assert!(pruned["removedRows"].as_u64().unwrap() >= 4, "{pruned:#}");
+        let retired = aac_store::usage::retire_segments(&engine, (t + 100 * DAY) as u64, Some(seg0_end_seq)).unwrap();
+        assert_eq!(retired["retired"], 1, "{retired:#}");
+        engine.close().unwrap();
+    }
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let detail = {
+        let rebuilt = open_retained(&dir);
+        let findings = rebuilt.status().unwrap()["findings"].as_array().unwrap().clone();
+        let heads: Vec<_> = findings
+            .iter()
+            .filter(|f| f["kind"] == "period_rows_unavailable")
+            .collect();
+        assert_eq!(heads.len(), 1, "one diagnostic for both periods: {findings:#?}");
+        let detail = heads[0]["detail"].as_str().unwrap().to_string();
+        for account in [1u32, 2] {
+            assert!(
+                detail.contains(&format!("{} on ", identity(account))),
+                "account {account} is named: {detail}"
+            );
+        }
+        assert!(detail.contains(&format!("period start {} ms", t + DAY)), "{detail}");
+        assert!(detail.contains(&format!("series history from {t} ms")), "{detail}");
+        assert!(detail.contains(&format!("series history from {second} ms")), "{detail}");
+        rebuilt.close().unwrap();
+        detail
+    };
+    {
+        let reopened = open_retained(&dir);
+        let findings = reopened.status().unwrap()["findings"].as_array().unwrap().clone();
+        let heads: Vec<_> = findings
+            .iter()
+            .filter(|f| f["kind"] == "period_rows_unavailable")
+            .collect();
+        assert_eq!(heads.len(), 1, "{findings:#?}");
+        assert_eq!(
+            heads[0]["detail"],
+            json!(detail),
+            "the persisted diagnostic keeps both periods"
+        );
+        reopened.close().unwrap();
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn a_period_whose_readings_survive_retention_gets_no_period_rows_finding() {
     let dir = temp_dir("open-period-kept");

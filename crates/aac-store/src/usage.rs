@@ -2114,9 +2114,14 @@ fn restore_closed_period(
 /// head with the period's bounds — the gap rule `span_at` uses for a burn query's start (7.2) —
 /// instead of letting the consumed total silently begin at the first surviving reading.
 /// Mirrors `late_rows_unavailable`; the total itself stays as rebuilt, never invented.
+///
+/// One event can rebuild several periods, and the finding key is only log, kind and range: two
+/// accounts whose periods start at different times would otherwise collapse into whichever
+/// arrived first (and the persisted copy could be the other one). Every affected period is named
+/// in one diagnostic, with its account, window and bounds.
 fn open_period_heads(txn: &WriteTransaction, payload: &Json) -> Result<Vec<Finding>> {
-    let mut out = Vec::new();
     let readings = txn.open_table(db::READING_DAY)?;
+    let mut affected: Vec<(String, String, u64, i64, u64)> = Vec::new();
     for series in payload["series"].as_array().into_iter().flatten() {
         let account: AccountObs = serde_json::from_value(series["account"].clone())?;
         let window: WindowObs = serde_json::from_value(series["window"].clone())?;
@@ -2147,16 +2152,32 @@ fn open_period_heads(txn: &WriteTransaction, payload: &Json) -> Result<Vec<Findi
         if span_at(&readings, &open, (a, w), start.saturating_sub(1))?.is_some() {
             continue;
         }
-        out.push(crate::engine::finding(
-            "readings",
-            "period_rows_unavailable",
-            &format!(
-                "Some early readings of an open period could not be reconstructed from the retained readings; its consumed total starts at the first surviving reading (period start {} ms, end {} ms, series history from {} ms)",
-                start, period.end_ms, first_ms
-            ),
-        ));
+        affected.push((account.identity.clone(), window.identity.clone(), start, period.end_ms, first_ms));
     }
-    Ok(out)
+    if affected.is_empty() {
+        return Ok(Vec::new());
+    }
+    let periods: Vec<String> = affected
+        .iter()
+        .map(|(account, window, start, end, first_ms)| {
+            format!(
+                "{account} on {window}: period start {start} ms, end {end} ms, series history from {first_ms} ms"
+            )
+        })
+        .collect();
+    let total = if affected.len() == 1 {
+        "its consumed total starts at the first surviving reading"
+    } else {
+        "their consumed totals start at the first surviving readings"
+    };
+    Ok(vec![crate::engine::finding(
+        "readings",
+        "period_rows_unavailable",
+        &format!(
+            "Some early readings of an open period could not be reconstructed from the retained readings; {total} ({})",
+            periods.join("; ")
+        ),
+    )])
 }
 
 fn project_day_closed(txn: &WriteTransaction, payload: &Json, replay: Option<ReplayReadings>) -> Result<bool> {
