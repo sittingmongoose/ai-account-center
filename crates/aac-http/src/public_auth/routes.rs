@@ -135,10 +135,10 @@ fn check(config: &Config, req: &RequestInfo, session: &Browser) -> Outcome {
             req.connection.peer.is_loopback()
         };
     let mut value = json!({
-        "authRequired":config.enabled,"authEnabled":config.enabled,"authConfigured":configured,"wsAllowed":ws_allowed,
+        "authRequired":config.enabled,"authEnabled":config.enabled,"authConfigured":configured,
         "isLocalAccess":!req.connection.lan_proxy && req.connection.peer.is_loopback(),
         "accessMode":if !config.enabled {"open"} else if configured {"login"} else {"setup"},
-        "authenticated":authenticated,"username":session.and_then(|session| session.username.as_deref()),
+        "authenticated":authenticated,"wsAllowed":ws_allowed,"username":session.and_then(|session| session.username.as_deref()),
         "signedOutReason":session.filter(|session| session.revoked).map(|_| "revoked"),
         "setupCodeRequired":!configured && !req.connection.direct_loopback,
         "secureTransport":req.connection.secure,"secureOrigin":config.network.origin
@@ -889,6 +889,7 @@ fn device_write_error(kind: DeviceError) -> Reply {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::super::storage::Overrides;
     use super::*;
     use axum::http::HeaderMap;
