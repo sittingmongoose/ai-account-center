@@ -357,8 +357,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 184,
-    "filesAffected": 56,
+    "totalMarkers": 185,
+    "filesAffected": 57,
     "topFiles": [
       {
         "file": "src/web-server/rust-service.ts",
@@ -600,8 +600,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 39,
-      "totalSourceFiles": 438,
-      "coverageRatio": 0.089,
+      "totalSourceFiles": 437,
+      "coverageRatio": 0.0892,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "config",
@@ -615,7 +615,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 249,
+          "count": 248,
           "withLogger": 25
         },
         {

@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 107 |
 | Sync fs occurrences (runtime hotpaths) | 486 |
 | Sync fs files affected (runtime hotpaths) | 54 |
-| Legacy shim markers | 184 |
-| Legacy shim files affected | 56 |
+| Legacy shim markers | 185 |
+| Legacy shim files affected | 57 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -54,7 +54,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 51 (221 total, 170 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
-| files with createLogger | 39/438 |
+| files with createLogger | 39/437 |
 | subdomains with zero createLogger | 8 (antigravity, config, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
 | files > 600 LOC | 27 |

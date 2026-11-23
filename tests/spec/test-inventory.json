@@ -3693,6 +3693,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/utils/fetch-proxy-node26.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/utils/fetch-proxy-setup.test.ts",
       "kind": "HTTP",
       "evidence": [
