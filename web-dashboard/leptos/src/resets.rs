@@ -798,6 +798,15 @@ pub fn confirm_deadline(
     }
 }
 
+/// When "Open it again" may be pressed: not before the server has freed this dialog's own
+/// confirmation token. The server frees it at `expiresAtMs`; the confirm deadline ends
+/// `CONFIRM_MARGIN_MS` earlier to leave room for the claim's fresh read, so offering reopen at
+/// that deadline met a server still holding the token. Without a server expiry, fall back to the
+/// client's full confirmation life past the confirm deadline.
+pub fn reopen_deadline(server_expires_at_ms: Option<f64>, confirm_deadline_ms: f64) -> f64 {
+    server_expires_at_ms.unwrap_or(confirm_deadline_ms + CONFIRM_MARGIN_MS)
+}
+
 /// "1:05" left on the confirmation.
 pub fn countdown(ms_left: f64) -> String {
     let s = (ms_left.max(0.0) / 1000.0).ceil() as i64;
@@ -1977,6 +1986,7 @@ fn ResetConfirm(rc: ResetCtx) -> impl IntoView {
         let banked = g.kind == "banked";
         let used = banked.then(|| used_now(&prepared.usage)).flatten();
         let expired = move || !sending && now.get() >= deadline;
+        let reopen_at = reopen_deadline(prepared.expires_at_ms, deadline);
         let reopen = grant_key.clone();
         let confirmation_key = prepared.confirmation_key.clone();
         Some(view! {
@@ -2005,10 +2015,20 @@ fn ResetConfirm(rc: ResetCtx) -> impl IntoView {
                             on:click=move |_| rc.close()>"Cancel"</button>
                         {move || if expired() {
                             let k = reopen.clone();
-                            view! {
-                                <button class="btn primary" data-probe="reset-dialog-reopen"
-                                    on:click=move |_| { rc.dialog.set(Dialog::Closed); rc.open(k.clone(), ready); }>"Open it again"</button>
-                            }.into_any()
+                            let wait = reopen_at - now.get();
+                            if wait > 0.0 {
+                                let secs = (wait / 1000.0).ceil() as i64;
+                                view! {
+                                    <button class="btn primary" disabled=true aria-disabled="true" data-probe="reset-dialog-reopen">
+                                        {format!("Open it again (available in {secs} s)")}
+                                    </button>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <button class="btn primary" data-probe="reset-dialog-reopen"
+                                        on:click=move |_| { rc.dialog.set(Dialog::Closed); rc.open(k.clone(), ready); }>"Open it again"</button>
+                                }.into_any()
+                            }
                         } else {
                             let confirmation_key = confirmation_key.clone();
                             view! {
@@ -2655,6 +2675,26 @@ mod tests {
         assert_eq!(until_words(5.5 * 3_600_000.0), "in 5 h");
         assert_eq!(until_words(30_000.0), "in 1 min");
         assert_eq!(until_words(-1.0), "");
+    }
+
+    #[test]
+    fn open_it_again_waits_until_the_server_frees_the_token() {
+        let sent = NOW;
+        let expiry = NOW + 120_000.0;
+        let deadline = confirm_deadline(sent, Some(expiry), NOW);
+        let reopen = reopen_deadline(Some(expiry), deadline);
+        // At the client deadline the button is disabled: the server still holds the token.
+        assert!(
+            deadline < reopen,
+            "reopen offered at {deadline}, the server frees the token at {expiry}"
+        );
+        // It enables exactly at the token's expiry, never before.
+        assert_eq!(reopen, expiry);
+        // No server expiry: the client's full life past the confirm deadline.
+        assert_eq!(
+            reopen_deadline(None, deadline),
+            deadline + CONFIRM_MARGIN_MS
+        );
     }
 
     #[test]

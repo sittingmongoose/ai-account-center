@@ -79,7 +79,7 @@ function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_0
 	const evidence = () => ({
 		canonicalAccountKey, revision: String(revision), latestAttempt,
 		pendingAttempts: r.pending ? [{ attemptKey: r.pending, attemptOrder: '1' }] : [],
-		claimTokens: { untilMs: expiresAtMs, tokenKeys: expiresAtMs ? [confirmationKey] : [] },
+		claimTokens: (expiresAtMs && expiresAtMs > Date.now()) ? { untilMs: expiresAtMs, tokenKeys: [confirmationKey] } : { untilMs: null, tokenKeys: [] },
 	});
 	const receipt = (pending, weekly = 0) => {
 		r.pending = pending ? KEY('9') : null;
@@ -104,6 +104,9 @@ function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_0
 		['GET', /^\/api\/accounts\/preferences$/, () => json(200, {})],
 		['GET', /^\/api\/(?:(?:antigravity|codex)\/profiles|claude\/desktop-profiles)$/, () => json(200, { profiles: [] })],
 		['GET', /^\/api\/accounts\/claude%3Aone\/reset-claims$/, () => {
+			// The server prunes expired tokens during a read and advances the revision; mirror that so
+			// a reopen read after the token's expiry sees a newer, token-free snapshot it can admit.
+			if (expiresAtMs && expiresAtMs <= Date.now()) { expiresAtMs = null; revision++; }
 			const current = inventory(r.spent, r.pending);
 			if (emptyWeekly) {
 				current.grants = current.grants.map((g) => g.claimable
@@ -293,24 +296,26 @@ export const tests = {
 	},
 
 	async 'resets: Open it again reads after the confirmation token expired'(t) {
-		const { server, expireToken } = resetServer({ confirmMs: 1_000 });
+		const { server } = resetServer({ confirmMs: 2_500 });
 		await open(t, server);
 		await openDetails(t, 'claude:one');
 		await t.until('usable', () => !!document.querySelector('.details [data-probe="reset-use"]'), null, { timeout: 10000 });
 		await t.page.click('.details [data-probe="reset-use"]');
 		await t.until('the expired confirmation offers Open it again', () => !!document.querySelector('[data-probe="reset-dialog-reopen"]'), null, { timeout: 5000 });
-		expireToken();
+		// L1: the button stays disabled while the server still holds this dialog's own token; it
+		// enables only after the token's expiry. The fixture expires the token by time, not expireToken().
+		await t.check('Open it again is disabled while the token is outstanding', await t.page.evaluate(() => document.querySelector('[data-probe="reset-dialog-reopen"]')?.disabled === true));
+		await t.until('Open it again enables after the token expiry', () => {
+			const button = document.querySelector('[data-probe="reset-dialog-reopen"]');
+			return !!button && !button.disabled;
+		}, null, { timeout: 5000 });
 		const before = resetRequests(server).length;
 		await t.page.click('[data-probe="reset-dialog-reopen"]');
 		for (let i = 0; i < 50 && resetRequests(server).length <= before; i++) await t.page.waitForTimeout(100);
 		await t.check('Open it again started a reset read', resetRequests(server).length > before, String(resetRequests(server).length - before));
 		const after = resetRequests(server).slice(before);
 		await t.check('the recovery read hit inventory or prepare', after.some((q) => q.path.includes('/reset-claims')), JSON.stringify(after));
-		await t.until('the dialog reopened or named that nothing was sent', () => {
-			const dialog = document.querySelector('[data-probe="reset-dialog"]');
-			const said = document.querySelector('.details [data-probe="reset-result"]')?.innerText || '';
-			return !!dialog || said.includes('could not confirm') && said.includes('Nothing was sent');
-		}, null, { timeout: 5000 });
+		await t.until('the dialog reopened', () => !!document.querySelector('[data-probe="reset-dialog"]'), null, { timeout: 5000 });
 	},
 
 	async 'resets: Z.ai lists its cards with Use in Z.ai, Qwen has none, neither reads the claim routes'(t) {
