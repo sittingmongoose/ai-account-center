@@ -211,21 +211,43 @@ function reviewSourceHealth(
   };
 }
 
-/** A ranked verdict rests on the retained catalog; a failed listing is its own known failure. */
+/**
+ * A ranked verdict rests on the retained catalog. A failed listing is its own known failure; a
+ * listing that succeeded can still leave a file failed, and the reader keeps that file's last
+ * good copy while the ranking uses it. Both disclose the catalog's failure, from its first
+ * reported time — the listing's `failedSince`, or the earliest file problem's `since`.
+ */
 function catalogVerdictHealth(
   catalog: ScoreboardInputs['catalog'],
   now: number
 ): RowSourceHealth | null {
-  if (catalog.state !== 'error') return null;
-  // The first time this listing failed, kept across failed scans by the reader; an older input
-  // without the fact keeps its last good read rather than inventing a time.
-  const at =
-    typeof catalog.failedSince === 'number'
-      ? catalog.failedSince
-      : typeof catalog.scannedAt === 'number'
-        ? catalog.scannedAt
-        : null;
-  return { sourceState: 'error', asOf: iso(at), ageSeconds: ageSeconds(now, at) };
+  if (catalog.state === 'error') {
+    // The first time this listing failed, kept across failed scans by the reader; an older input
+    // without the fact keeps its last good read rather than inventing a time.
+    const at =
+      typeof catalog.failedSince === 'number'
+        ? catalog.failedSince
+        : typeof catalog.scannedAt === 'number'
+          ? catalog.scannedAt
+          : null;
+    return { sourceState: 'error', asOf: iso(at), ageSeconds: ageSeconds(now, at) };
+  }
+  if (catalog.state !== 'ok') return null;
+  let earliest: number | null = null;
+  for (const problem of catalog.problems) {
+    if (
+      typeof problem.since === 'number' &&
+      Number.isFinite(problem.since) &&
+      (earliest === null || problem.since < earliest)
+    )
+      earliest = problem.since;
+  }
+  if (earliest === null) return null;
+  return {
+    sourceState: 'unreadable',
+    asOf: iso(earliest),
+    ageSeconds: ageSeconds(now, earliest),
+  };
 }
 
 interface BaseRow {

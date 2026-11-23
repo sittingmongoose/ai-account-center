@@ -388,16 +388,26 @@ fn review_source_health(
 }
 /// A ranked verdict rests on the retained catalog definitions. When this pass could not list the
 /// catalog, the verdict says so with the first time that listing failed — kept across failed
-/// scans by the reader, not re-stamped from `scannedAt` on each one. A catalog input without the
-/// fact (an older reader) falls back to its last good read rather than inventing a time.
+/// scans by the reader, not re-stamped from `scannedAt` on each one. A listing that succeeded can
+/// still leave a file failed: the reader keeps that file's last good copy, and the ranking used
+/// it, so the verdict carries the same disclosure from the earliest reported file failure. A
+/// catalog input without the fact (an older reader) falls back to its last good read rather than
+/// inventing a time.
 fn catalog_verdict_health(catalog: &V, now: i64, ctx: &Context) -> Option<(V, V, V)> {
-    if catalog["state"] != "error" {
+    if catalog["state"] == "error" {
+        let at = ctx
+            .epoch(&catalog["failedSince"])
+            .or_else(|| ctx.epoch(&catalog["scannedAt"]));
+        return Some((json!("error"), ctx.iso(at), age(now, at)));
+    }
+    if catalog["state"] != "ok" {
         return None;
     }
-    let at = ctx
-        .epoch(&catalog["failedSince"])
-        .or_else(|| ctx.epoch(&catalog["scannedAt"]));
-    Some((json!("error"), ctx.iso(at), age(now, at)))
+    let at = array(&catalog["problems"])
+        .iter()
+        .filter_map(|problem| ctx.epoch(&problem["since"]))
+        .min()?;
+    Some((json!("unreadable"), ctx.iso(Some(at)), age(now, Some(at))))
 }
 #[allow(clippy::too_many_arguments)]
 fn base_rows(

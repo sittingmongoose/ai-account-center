@@ -158,6 +158,15 @@ try {
       since: now - 600_000,
     });
   }
+  // Sol M1 / Astra M3 (2026-11-23 C): the catalog folder lists, but `measures.json` was refused
+  // and its retained copy still supplied the scoring rules. The ranked verdicts say so on both
+  // readers, from the file's first failure.
+  const catalogFileFailed = structuredClone(scoreBase);
+  catalogFileFailed.catalog.problems.push({
+    file: 'catalog/measures.json',
+    reason: 'could not be read',
+    since: now - 300_000,
+  });
   const scoreCases = [
     scoreBase,
     filtered,
@@ -169,6 +178,7 @@ try {
     catalogFailed,
     reviewFailed,
     reviewSource,
+    catalogFileFailed,
   ];
   for (const input of scoreCases)
     for (const zone of ['UTC', 'America/New_York', 'invalid-fixture-zone']) {

@@ -1027,6 +1027,44 @@ describe('service', () => {
     await catalog.scan();
     expect(catalog.snapshot().failedSince).toBeUndefined();
   });
+
+  it('a refused catalog file marks every ranked verdict and keeps the ranks (Sol M1)', async () => {
+    const root = dirs.make('ccs-scoreboard-');
+    writeScoreboardFixture(root, { now: NOW });
+    let now = NOW;
+    const catalog = new CatalogReader({ root: () => root, now: () => now });
+    const runs = new RunsReader({ root: () => root, now: () => now });
+    await Promise.all([catalog.scan(), runs.scan()]);
+    expect(catalog.snapshot().problems).toEqual([]);
+    // The folder still lists; a catalog edit leaves measures.json invalid, so the reader keeps
+    // the last good rules and records the file's first failure.
+    fs.writeFileSync(path.join(root, 'v1/catalog/measures.json'), '{"kind":"measures","measures":[');
+    const failedAt = now + 60_000;
+    now = failedAt;
+    await catalog.scan();
+    const snapshot = catalog.snapshot();
+    expect(snapshot.state).toBe('ok');
+    expect(snapshot.problems.map((problem) => problem.file)).toEqual(['catalog/measures.json']);
+    expect(snapshot.problems[0]?.since).toBe(failedAt);
+    const view = buildScoreboardView({
+      now,
+      timeZone: 'UTC',
+      root,
+      catalog: snapshot,
+      runs: runs.snapshot(),
+    });
+    expect(view.sources[1]?.state).toBe('unreadable');
+    const ranked = rows(view, 'building', 'worknode-build').filter((row) => row.ranked);
+    expect(ranked.map((row) => row.rank)).toEqual([1, 2]);
+    for (const row of ranked) {
+      expect(row.sourceState).toBe('unreadable');
+      expect(row.asOf).toBe(new Date(failedAt).toISOString());
+      expect(row.ageSeconds).toBe(0);
+    }
+    expect(
+      rows(view, 'building', 'worknode-build').find((row) => !row.ranked)?.sourceState
+    ).toBeUndefined();
+  });
 });
 
 describe('the runs Source', () => {
@@ -1377,6 +1415,31 @@ describe('a failed input behind a ranked verdict (M1, 2026-11-22)', () => {
     expect(row?.sourceState).toBe('error');
     expect(row?.asOf).toBe(new Date(failAt).toISOString());
     expect(row?.ageSeconds).toBe(300);
+  });
+
+  it('a failed catalog file is disclosed on the ranked verdict that used its retained rules', () => {
+    // Sol M1 / Astra M3: the folder lists, measures.json could not be read, and its retained copy
+    // still supplied the weighting and the minimum-run rule (2026-11-23 C).
+    const row = ranked(
+      view(
+        {
+          ...base(),
+          problems: [
+            { file: 'catalog/measures.json', reason: 'could not be read', since: failAt },
+            {
+              file: 'catalog/uses.json',
+              reason: 'contains NUL bytes from a damaged write',
+              since: earlier,
+            },
+          ],
+        },
+        []
+      )
+    );
+    expect(row?.sourceState).toBe('unreadable');
+    expect(row?.asOf).toBe(new Date(earlier).toISOString());
+    expect(row?.ageSeconds).toBe(600);
+    expect(row?.rank).toBe(1);
   });
 
   /** The WorkNode build filter: only the build run is in the view; the review joins it from outside. */

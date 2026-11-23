@@ -1457,6 +1457,38 @@ fn a_failed_catalog_listing_is_disclosed_on_every_ranked_verdict() {
     assert_eq!(row["ageSeconds"].as_f64(), Some(300.0));
 }
 
+/// Sol M1 / Astra M3 (2026-11-23 C): the catalog folder lists, but `measures.json` could not be
+/// read and its retained copy supplied the weighting and the minimum-run rule. The ranked verdict
+/// says the catalog was unreadable, from the earliest reported file failure, and keeps its rank.
+#[test]
+fn a_failed_catalog_file_is_disclosed_on_every_ranked_verdict() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "ok", "scannedAt": M1_NOW, "problems": [
+            { "file": "catalog/measures.json", "reason": "could not be read", "since": M1_FAILED },
+            { "file": "catalog/uses.json", "reason": "contains NUL bytes from a damaged write", "since": M1_EARLIER }
+        ]}),
+        json!([]),
+        false,
+        M1_NOW,
+    );
+    let view = m1_view(data, facts);
+    assert_eq!(
+        view["sources"][1]["state"],
+        json!("unreadable"),
+        "the catalog Source already names the refused file: {}",
+        view["sources"][1]
+    );
+    let row = m1_row(&view);
+    assert_eq!(
+        row["sourceState"],
+        json!("unreadable"),
+        "the retained measures still ranked it: {row}"
+    );
+    assert_eq!(row["asOf"], json!("2026-11-06T16:20:00.000Z"));
+    assert_eq!(row["ageSeconds"].as_f64(), Some(600.0));
+    assert_eq!(row["rank"], json!(1));
+}
+
 #[test]
 fn a_failed_retained_review_file_is_disclosed_on_the_row_it_reviewed() {
     let (data, facts) = m1_envelope(
