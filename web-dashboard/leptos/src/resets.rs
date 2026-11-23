@@ -801,10 +801,22 @@ pub fn confirm_deadline(
 /// When "Open it again" may be pressed: not before the server has freed this dialog's own
 /// confirmation token. The server frees it at `expiresAtMs`; the confirm deadline ends
 /// `CONFIRM_MARGIN_MS` earlier to leave room for the claim's fresh read, so offering reopen at
-/// that deadline met a server still holding the token. Without a server expiry, fall back to the
-/// client's full confirmation life past the confirm deadline.
-pub fn reopen_deadline(server_expires_at_ms: Option<f64>, confirm_deadline_ms: f64) -> f64 {
-    server_expires_at_ms.unwrap_or(confirm_deadline_ms + CONFIRM_MARGIN_MS)
+/// that deadline met a server still holding the token. Reopen waits for the later of that expiry
+/// and the confirm deadline plus the margin, and—like `confirm_deadline`—ignores a server expiry
+/// whose clock skew exceeds one confirmation life, falling back to the client-side bound.
+pub fn reopen_deadline(
+    server_expires_at_ms: Option<f64>,
+    confirm_deadline_ms: f64,
+    server_now_guess_ms: f64,
+) -> f64 {
+    let local = confirm_deadline_ms + CONFIRM_MARGIN_MS;
+    // The same clock-skew guard as confirm_deadline: trust a server expiry only when it agrees
+    // with our clock within one confirmation life. Never offer reopen before the confirm deadline
+    // plus the margin, so a skewed or absent expiry cannot re-expose the early-click refusal.
+    match server_expires_at_ms {
+        Some(at) if (at - server_now_guess_ms).abs() <= CONFIRM_LIFE_MS => local.max(at),
+        _ => local,
+    }
 }
 
 /// "1:05" left on the confirmation.
@@ -1986,7 +1998,7 @@ fn ResetConfirm(rc: ResetCtx) -> impl IntoView {
         let banked = g.kind == "banked";
         let used = banked.then(|| used_now(&prepared.usage)).flatten();
         let expired = move || !sending && now.get() >= deadline;
-        let reopen_at = reopen_deadline(prepared.expires_at_ms, deadline);
+        let reopen_at = reopen_deadline(prepared.expires_at_ms, deadline, js_sys::Date::now());
         let reopen = grant_key.clone();
         let confirmation_key = prepared.confirmation_key.clone();
         Some(view! {
@@ -2682,7 +2694,7 @@ mod tests {
         let sent = NOW;
         let expiry = NOW + 120_000.0;
         let deadline = confirm_deadline(sent, Some(expiry), NOW);
-        let reopen = reopen_deadline(Some(expiry), deadline);
+        let reopen = reopen_deadline(Some(expiry), deadline, NOW);
         // At the client deadline the button is disabled: the server still holds the token.
         assert!(
             deadline < reopen,
@@ -2692,9 +2704,28 @@ mod tests {
         assert_eq!(reopen, expiry);
         // No server expiry: the client's full life past the confirm deadline.
         assert_eq!(
-            reopen_deadline(None, deadline),
+            reopen_deadline(None, deadline, NOW),
             deadline + CONFIRM_MARGIN_MS
         );
+    }
+
+    #[test]
+    fn reopen_deadline_ignores_a_skewed_server_expiry() {
+        // Server clock far ahead: confirm_deadline falls back to the client life, and reopen must
+        // too, instead of staying disabled for the skewed 500 s.
+        let skewed = NOW + 500_000.0;
+        let deadline = confirm_deadline(NOW, Some(skewed), NOW);
+        let reopen = reopen_deadline(Some(skewed), deadline, NOW);
+        assert_eq!(reopen, deadline + CONFIRM_MARGIN_MS);
+        assert!(reopen <= NOW + 120_000.0);
+        // A server expiry earlier than the confirm deadline must never enable reopen before it.
+        let early = NOW + 50_000.0;
+        let deadline2 = confirm_deadline(NOW, Some(early), NOW);
+        assert!(reopen_deadline(Some(early), deadline2, NOW) >= deadline2 + CONFIRM_MARGIN_MS);
+        // Clocks agree: reopen waits for the server's own expiry.
+        let expiry = NOW + 120_000.0;
+        let deadline3 = confirm_deadline(NOW, Some(expiry), NOW);
+        assert_eq!(reopen_deadline(Some(expiry), deadline3, NOW), expiry);
     }
 
     #[test]
