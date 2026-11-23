@@ -114,8 +114,8 @@ struct PreparedDocs {
     /// Each row's display-normalized doc with its run's review merged in (the envelope
     /// path's `effective` step), aligned with `HeldRuns::rows`.
     docs: Vec<Json>,
-    /// Whether the row or its doc holds a prototype name (`read_context::proto_named`): a
-    /// filter that picks one declines, as the envelope path does.
+    /// Whether the row or its doc holds an exact prototype name (`status_fed::proto_exact`): a
+    /// filter that picks one declines. Prose holding such a name as a word is answered.
     proto: Vec<bool>,
     /// What compose reads of each row (`read_scoreboard::row_facts`).
     facts: Vec<aac_status::read_scoreboard::RowFacts>,
@@ -974,8 +974,7 @@ impl ScoreboardOwned {
             .iter()
             .zip(&normalized)
             .map(|(row, doc)| {
-                aac_status::read_context::proto_named(row)
-                    || aac_status::read_context::proto_named(doc)
+                crate::status_fed::proto_exact(row) || crate::status_fed::proto_exact(doc)
             })
             .collect();
         let facts = held
@@ -1906,6 +1905,50 @@ mod tests {
             "{}",
             inputs["runs"]
         );
+    }
+
+    /// Live Nov 23: run notes such as "C8-B1 constructor, cuts" made every Scoreboard filter
+    /// that picked the run decline. Prose answers; an exact prototype name still declines.
+    #[tokio::test]
+    async fn a_run_whose_prose_holds_a_prototype_word_is_answered() {
+        let root = tempfile::tempdir().expect("reports");
+        let dir = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+        std::fs::create_dir_all(&dir).expect("run folder");
+        let prose = BENCH.replace("\"Task bench\"", "\"FIX8: C8-B1 constructor, cuts\"");
+        let exact = BENCH
+            .replace("vm.lead--bench", "vm.lead--exact")
+            .replace("\"Task bench\"", "\"constructor\"");
+        std::fs::write(dir.join("vm.lead--bench.json"), prose).expect("run file");
+        std::fs::write(dir.join("vm.lead--exact.json"), exact).expect("run file");
+        let owner = owner(root.path().to_path_buf(), None);
+        owner.catalog_pass(1_790_000_000_000);
+        let held = owner.held(Some(1_790_000_000_000)).await.expect("held");
+        let catalog = owner
+            .catalog_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        assert!(!catalog.is_null(), "catalog");
+        let prepared = owner.held_docs(&held, &catalog, "test-catalog");
+        let mut seen = 0;
+        for (index, (_, row)) in held.rows.iter().enumerate() {
+            match row["doc"]["id"].as_str() {
+                Some("vm.lead--bench") => {
+                    seen += 1;
+                    assert!(
+                        aac_status::read_context::proto_named(row),
+                        "word rule sees it"
+                    );
+                    assert!(!prepared.proto[index], "prose run must be answered");
+                }
+                Some("vm.lead--exact") => {
+                    seen += 1;
+                    assert!(prepared.proto[index], "an exact name still declines");
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(seen, 2, "{:?}", held.rows);
     }
 
     #[tokio::test]

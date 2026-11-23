@@ -94,7 +94,7 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
             .ok_or(Decline::Shape)?;
         at += found + 1;
     }
-    read_status::fed_part(&value).ok_or(Decline::Shape)?;
+    fed_part(&value).ok_or(Decline::Shape)?;
     if aac_views::js_json::write(&value) != text.as_bytes() {
         return Err(Decline::Shape);
     }
@@ -109,6 +109,28 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
         None
     };
     Ok(Part { data: value, facts })
+}
+
+/// `read_status::fed_part` with the prototype-name rule narrowed to [`proto_exact`]: the data is an
+/// object and no key or string in it is exactly an `Object.prototype` member name. The composer's
+/// word rule (`read_context::proto_named`) also refused prose that merely holds such a name as a
+/// word ("constructor refusals" in a card), which only ever handed the read to TS; with no TS
+/// fallback it failed the whole page. A plain object lookup `{...}[name]` reads an inherited
+/// member only for the exact name, so an exact name still declines.
+pub(crate) fn fed_part(data: &Value) -> Option<()> {
+    (data.is_object() && !proto_exact(data)).then_some(())
+}
+
+/// True when a key or string anywhere in `value` is exactly an `Object.prototype` member name
+/// (`read_context::PROTO_NAMES`).
+pub(crate) fn proto_exact(value: &Value) -> bool {
+    let named = |text: &str| aac_status::read_context::PROTO_NAMES.contains(&text);
+    match value {
+        Value::String(text) => named(text),
+        Value::Array(rows) => rows.iter().any(proto_exact),
+        Value::Object(map) => map.iter().any(|(key, v)| named(key) || proto_exact(v)),
+        _ => false,
+    }
 }
 
 /// The front door's per-request facts: the clock, now's two words (formatted by TS in the facts' time zone) and
@@ -286,10 +308,22 @@ mod tests {
                 Decline::Shape,
             ),
             (REPORTS, "[1]", "{}", Decline::Shape),
-            // An Object.prototype name anywhere declines, as the envelope does.
+            // An exact Object.prototype name as a key or a string anywhere declines.
             (
                 REPORTS,
                 r#"{"reports":{"constructor":1}}"#,
+                "{}",
+                Decline::Shape,
+            ),
+            (
+                REPORTS,
+                r#"{"reports":{"cards":[{"label":"toString"}]}}"#,
+                "{}",
+                Decline::Shape,
+            ),
+            (
+                REPORTS,
+                r#"{"reports":{"cards":[{"__proto__":{}}]}}"#,
                 "{}",
                 Decline::Shape,
             ),
@@ -323,6 +357,46 @@ mod tests {
         )
         .expect("facts");
         assert!(facts.facts.is_some());
+    }
+
+    /// Live Nov 23: a withdrawn card's prose ("original_scope constructor refusals") declined
+    /// every Status read (`shape`). Prose that holds a prototype name as a word answers; the
+    /// other checks still hold for it.
+    #[test]
+    fn prose_holding_a_prototype_name_as_a_word_is_prepared() {
+        let card = r#"{"reports":{"threads":[],"tasks":[],"cards":[{"id":"vm.lead--E5-1","state":"withdrawn","title":"Entailment proof","blocks":"recipe_tuple / original_scope constructor refusals reach it first","notes":["C8-B1 constructor, cuts","a toString() call","valueOf.x and hasOwnProperty-check"]}],"problems":[]}}"#;
+        assert!(prepare(REPORTS, &raw(card), &raw("{}")).is_ok());
+        assert!(fed_part(&serde_json::from_str(card).expect("json")).is_some());
+        // The word rule the composer keeps elsewhere still sees it; this gate does not.
+        assert!(aac_status::read_context::proto_named(
+            &serde_json::from_str(card).expect("json")
+        ));
+        // Round trip and member checks still apply to such prose.
+        let spaced = card.replacen("{\"reports\"", "{ \"reports\"", 1);
+        assert_eq!(
+            prepare(REPORTS, &raw(&spaced), &raw("{}")).err(),
+            Some(Decline::Shape)
+        );
+        let extra = card.replacen("]}}", "]},\"x\":1}", 1);
+        assert_eq!(
+            prepare(REPORTS, &raw(&extra), &raw("{}")).err(),
+            Some(Decline::Shape)
+        );
+        // Every exact name still declines, as a key or as a string.
+        for name in aac_status::read_context::PROTO_NAMES {
+            let as_key = format!(r#"{{"reports":{{"{name}":1}}}}"#);
+            let as_text = format!(r#"{{"reports":["{name}"]}}"#);
+            assert_eq!(
+                prepare(REPORTS, &raw(&as_key), &raw("{}")).err(),
+                Some(Decline::Shape),
+                "{as_key}"
+            );
+            assert_eq!(
+                prepare(REPORTS, &raw(&as_text), &raw("{}")).err(),
+                Some(Decline::Shape),
+                "{as_text}"
+            );
+        }
     }
 
     #[test]
