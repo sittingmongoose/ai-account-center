@@ -155,11 +155,7 @@ function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_0
 			}),
 		]] : []),
 	);
-	const expireToken = () => {
-		expiresAtMs = null;
-		revision++;
-	};
-	return { server, r, expireToken };
+	return { server, r };
 }
 
 /** Serves the fixture, and aborts any reset route it doesn't answer (never the real server). */
