@@ -511,10 +511,17 @@ def _limits_window(entry, used):
             "windowMinutes": minutes, "used": None, "limit": None, "unit": None,
         }
 
-    scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else None
+    raw_scope = entry.get("scope")
+    scope = raw_scope if isinstance(raw_scope, dict) else None
     if not _model_scope_ok(scope):
         return None
     if kind == "session":
+        # A session quota is the account-wide five-hour window only when the reply leaves the
+        # scope out, sends null, or sends an explicitly unscoped object. Any other shape (a
+        # string, a list, a number) names no account-wide limit, so the entry is dropped rather
+        # than reported as this account's five-hour usage.
+        if raw_scope is not None and not isinstance(raw_scope, dict):
+            return None
         return window("five_hour", "Five-hour usage", 300) if _reset_unscoped(scope) else None
     if kind == "weekly_all":
         return window("seven_day", "Weekly usage", 10080)

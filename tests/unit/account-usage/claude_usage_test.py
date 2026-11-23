@@ -762,6 +762,23 @@ class ScopeScreeningTests(unittest.TestCase):
         self.assertEqual(window["label"], "Five-hour usage")
         self.assertEqual(usage.reset_windows({"limits": [entry]}), {"five_hour": 42})
 
+    def test_session_scope_of_any_other_shape_is_never_account_wide(self):
+        # Astra L3 (2026-11-23 C): a non-object scope does not prove an account-wide limit. Only
+        # absent, null or an explicitly unscoped object does.
+        for scope in ("account", ["global"], 7, True):
+            with self.subTest(scope=scope):
+                entry = {"kind": "session", "group": "session", "percent": 42,
+                         "scope": scope}
+                self.assertIsNone(usage._limits_window(entry, 42))
+                self.assertEqual(usage.normalize_windows({"limits": [entry]}), [])
+        for entry in ({"kind": "session", "group": "session", "percent": 42},
+                      {"kind": "session", "group": "session", "percent": 42,
+                       "scope": None},
+                      {"kind": "session", "group": "session", "percent": 42,
+                       "scope": {"model": None, "surface": None}}):
+            with self.subTest(entry=entry):
+                self.assertEqual(usage._limits_window(entry, 42)["key"], "five_hour")
+
     def test_display_name_only_fable_weekly_stays_claimable(self):
         entry = {"kind": "weekly_scoped", "group": "weekly", "percent": 80,
                  "scope": {"model": {"display_name": "Fable"}}}
