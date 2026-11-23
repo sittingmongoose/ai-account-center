@@ -15,12 +15,12 @@ const fixture = (name) => JSON.parse(fs.readFileSync(path.join(LEPTOS, 'fixtures
 
 /**
  * Builds a real server `/api/scoreboard` JSON payload where one previously-read run file
- * (`vm.scoreboard-lead--WN-1.json`, Opus 5.5 xhigh worknode-build) becomes unreadable 5 minutes
- * before the latest scan, while `vm.scoreboard-lead--damaged.json` was never readable.
- * Uses the real RunsReader, CatalogReader, buildScoreboardView and native aac-status composer
- * with zero client-side mutation of row states.
+ * (`corruptId`) becomes unreadable 5 minutes before the latest scan, while
+ * `vm.scoreboard-lead--damaged.json` was never readable. Uses the real RunsReader,
+ * CatalogReader, buildScoreboardView and native aac-status composer with zero client-side
+ * mutation of row states.
  */
-async function buildTracedUnreadableView() {
+async function buildUnreadableView(corruptId) {
 	const { writeScoreboardFixture } = await import(pathToFileURL(path.join(ROOT, 'scripts', 'scoreboard-fixture.mjs')).href);
 	const { CatalogReader } = require(path.join(ROOT, 'dist', 'web-server', 'scoreboard', 'catalog.js'));
 	const { RunsReader } = require(path.join(ROOT, 'dist', 'web-server', 'scoreboard', 'runs-reader.js'));
@@ -37,8 +37,8 @@ async function buildTracedUnreadableView() {
 		const catalog = new CatalogReader(opts);
 		const runs = new RunsReader(opts);
 		await Promise.all([catalog.scan(), runs.scan()]);
-		const wn1 = runs.snapshot().runs.find((r) => r.doc.id === 'vm.scoreboard-lead--WN-1');
-		if (!wn1) throw new Error('expected vm.scoreboard-lead--WN-1 in scoreboard fixture');
+		const wn1 = runs.snapshot().runs.find((r) => r.doc.id === corruptId);
+		if (!wn1) throw new Error(`expected ${corruptId} in scoreboard fixture`);
 		const wn1Abs = path.join(tmp, 'v1', wn1.file);
 		fs.writeFileSync(wn1Abs, Buffer.from('{"schema":\0\0\0'));
 		const bump = new Date(failAt + 2000);
@@ -69,6 +69,15 @@ async function buildTracedUnreadableView() {
 		fs.rmSync(tmp, { recursive: true, force: true });
 	}
 }
+/** The WorkNode build run's own file failed: the model heading and that job both carry it. */
+const buildTracedUnreadableView = () => buildUnreadableView('vm.scoreboard-lead--WN-1');
+/**
+ * The kept Scout 1.0 benchmark file (an older process version of the same Opus 5.5 xhigh row)
+ * failed: the model-wide health is unreadable while every displayed job's own evidence is
+ * healthy, so only the model heading may carry the chip (review M4's aggregate-only case).
+ */
+const buildScoutAggregateOnlyView = () =>
+	buildUnreadableView('windows.scoreboard-bench--bench-opus-v1-1');
 const PHONE = { viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 const FORMATS = [
 	{ name: 'desktop', w: 1440, h: 900, safe: '0,0,0,0', mobile: false },
@@ -613,6 +622,8 @@ export const tests = {
 		await t.equal('unrelated model row renders no source chip', await solRow.locator('.sb-src-state').count(), 0);
 		const glmRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'GLM 5.3' }).first();
 		await t.equal('second unrelated row renders no source chip', await glmRow.locator('.sb-src-state').count(), 0);
+		await t.equal('the model heading carries the aggregate chip', await t.page.locator('.plate-head .sb-src-state').count(), 1);
+		await t.text('.plate-head .sb-src-state', /^Cached · 5m ago$/);
 		await t.count('.detail-grid .sb-src-state', 1);
 		await t.text('.detail-grid .job h3:has-text("WorkNode build") .sb-src-state', /^Cached · 5m ago$/);
 		await t.audit('scoreboard row source health 1440');
@@ -625,15 +636,18 @@ export const tests = {
 			await t.page.waitForSelector('.picks');
 			await t.page.click('.seg button >> nth=0');
 			await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
-			await t.equal(`${f.name}: only one card job carries a source chip`, await t.page.locator('.sb-models .sb-src-state').count(), 1);
+			await t.equal(`${f.name}: the card heading and the failing job carry one chip each`, await t.page.locator('.sb-models .sb-src-state').count(), 2);
 			const opusCard = t.page.locator('.sb-models .sbm').filter({ hasText: 'Opus 5.5' }).filter({ hasText: 'xhigh' }).first();
 			await t.text(opusCard.locator('.v-rec').first(), 'Recommended');
+			await t.text(opusCard.locator('.sbm-head .sb-src-state'), /^Cached · 5m ago$/);
+			await t.equal(`${f.name}: the card heading carries the model-wide chip`, await opusCard.locator('.sbm-head .sb-src-state').count(), 1);
+			await t.equal(`${f.name}: the failing job carries its own chip`, await opusCard.locator('.sbm-jobs .sb-src-state').count(), 1);
 			await t.text(opusCard.locator('.sbm-job:has-text("WorkNode build") .sb-src-state'), /^Cached · 5m ago$/);
 			const solCard = t.page.locator('.sb-models .sbm').filter({ hasText: 'Sol 6.1' }).first();
 			await t.equal(`${f.name}: healthy card renders no source chip`, await solCard.locator('.sb-src-state').count(), 0);
 			await t.check(`${f.name}: source chip stays single-line and unclipped`, await t.page.evaluate(() => {
 				const chips = [...document.querySelectorAll('.sb-models .sb-src-state')];
-				return chips.length === 1 && chips.every((el) => {
+				return chips.length === 2 && chips.every((el) => {
 					const r = el.getBoundingClientRect();
 					return el.getClientRects().length === 1 && r.height < 24 && r.right <= innerWidth + 1 && el.scrollWidth <= el.clientWidth + 1;
 				});
@@ -644,12 +658,14 @@ export const tests = {
 				await t.shot('scoreboard-traced-row-iphone', 'Scoreboard on 402 px iPhone from server output: only Opus 5.5 xhigh WorkNode build carries Cached · 5m ago');
 				await opusCard.click();
 				await t.page.waitForSelector('.sheet .job');
-				await t.count('.sheet .sb-src-state', 1);
+				await t.count('.sheet .sb-src-state', 2);
+				await t.text('.sheet .sheet-title .sb-src-state', /^Cached · 5m ago$/);
+				await t.equal('the sheet title carries the model-wide chip', await t.page.locator('.sheet .sheet-title .sb-src-state').count(), 1);
 				await t.text('.sheet .job h3:has-text("WorkNode build") .sb-src-state', /^Cached · 5m ago$/);
 				await t.check('phone sheet source chip stays single-line and inside the sheet', await t.page.evaluate(() => {
 					const sheet = document.querySelector('.sheet').getBoundingClientRect();
 					const chips = [...document.querySelectorAll('.sheet .sb-src-state')];
-					return chips.length === 1 && chips.every((el) => {
+					return chips.length === 2 && chips.every((el) => {
 						const r = el.getBoundingClientRect();
 						return el.getClientRects().length === 1 && r.height < 24 && r.right <= sheet.right + 1 && el.scrollWidth <= el.clientWidth + 1;
 					});
@@ -657,5 +673,58 @@ export const tests = {
 				await t.page.click('.sheet-close');
 			}
 		}
+	},
+
+	// Review M4's aggregate-only case (2026-11-23): the kept Scout 1.0 benchmark file failed, so the
+	// model is unhealthy while every displayed job's own evidence is healthy. Only the model heading
+	// may carry the chip; the old first-cell fallback put it beside a healthy WorkNode build.
+	async 'scoreboard aggregate health stays in the model heading above healthy jobs'(t) {
+		const view = await buildScoutAggregateOnlyView();
+		const opus = view.byModel.views[0].models.find((m) => m.key === 'anthropic/claude-opus-5-5|claude-code|xhigh');
+		await t.equal('the aggregate failure is on the model row', opus.sourceState, 'unreadable');
+		await t.equal('its age is the failure age (5m)', opus.ageSeconds, 300);
+		const taggedCells = Object.values(opus.cells).filter((c) => c && c.sourceState !== undefined);
+		await t.equal('no displayed job cell carries the aggregate chip', taggedCells.length, 0);
+		const taggedReports = opus.report.filter((r) => r.sourceState !== undefined);
+		await t.equal('no job report carries it either', taggedReports.length, 0);
+		const serve = async () => {
+			await t.app.signIn();
+			await t.page.evaluate(() => {
+				try {
+					localStorage.removeItem('aac.scoreboard.sort.v1');
+					localStorage.removeItem('aac.scoreboard.group.v1');
+				} catch {}
+			});
+			await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => r.fulfill({ json: view }));
+		};
+		await t.viewport(1440, 900);
+		await serve();
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.waitForSelector('.picks');
+		await t.page.click('.seg button >> nth=0');
+		await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
+		const opusRow = t.page.locator('.sb-matrix tbody tr[data-row]').filter({ hasText: 'Opus 5.5' }).filter({ hasText: 'xhigh' }).first();
+		await t.text(opusRow.locator('.sb-src-state').first(), /^Cached · 5m ago$/);
+		await t.equal('the model row name carries the aggregate chip', await opusRow.locator('.sb-src-state').count(), 1);
+		await t.equal('the desktop detail jobs stay clear', await t.page.locator('.detail-grid .sb-src-state').count(), 0);
+		await t.text('.plate-head .sb-src-state', /^Cached · 5m ago$/);
+		await t.audit('scoreboard aggregate-only health 1440');
+
+		await t.newContext({ viewport: { width: 402, height: 812 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+		await serve();
+		await t.goto('/app/scoreboard?safe=0,0,34,0', { settleMs: 300 });
+		await t.page.waitForSelector('.picks');
+		await t.page.click('.seg button >> nth=0');
+		await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
+		const card = t.page.locator('.sb-models .sbm').filter({ hasText: 'Opus 5.5' }).filter({ hasText: 'xhigh' }).first();
+		await t.text(card.locator('.sbm-head .sb-src-state'), /^Cached · 5m ago$/);
+		await t.equal('the card heading carries the aggregate chip', await card.locator('.sbm-head .sb-src-state').count(), 1);
+		await t.equal('no card job carries it', await card.locator('.sbm-jobs .sb-src-state').count(), 0);
+		await card.click();
+		await t.page.waitForSelector('.sheet .job');
+		await t.text('.sheet .sheet-title .sb-src-state', /^Cached · 5m ago$/);
+		await t.equal('the sheet title carries it', await t.page.locator('.sheet .sheet-title .sb-src-state').count(), 1);
+		await t.equal('no sheet job carries it', await t.page.locator('.sheet .job h3 .sb-src-state').count(), 0);
+		await t.page.click('.sheet-close');
 	},
 };
