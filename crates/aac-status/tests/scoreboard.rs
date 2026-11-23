@@ -1530,6 +1530,65 @@ fn a_failed_review_dated_folder_discloses_the_verdict_that_used_it() {
     assert_eq!(row["ageSeconds"].as_f64(), Some(300.0));
 }
 
+/// SB3 (2026-11-23 A): the Store now names a writer's `runs` folder it could not list. The review
+/// under it is retained and still joins the filtered view, so the verdict that used it carries the
+/// review source's failure (the folder is an ancestor of the review file).
+#[test]
+fn a_failed_writer_runs_folder_discloses_the_verdict_that_used_its_retained_review() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "ok", "scannedAt": M1_NOW, "problems": []}),
+        json!([
+            { "file": "writers/mac.reviews/runs", "reason": "folder could not be listed", "since": M1_FAILED }
+        ]),
+        true,
+        M1_NOW,
+    );
+    let view = m1_view(data, facts);
+    let row = m1_row(&view);
+    assert_eq!(
+        row["sourceState"],
+        json!("unreadable"),
+        "the retained review still ranked it: {row}"
+    );
+    assert_eq!(row["asOf"], json!("2026-11-06T16:25:00.000Z"));
+    assert_eq!(row["ageSeconds"].as_f64(), Some(300.0));
+}
+
+/// SB3 low (2026-11-23 A): a refused review file that still joins from its earlier good copy is
+/// scored, so it is not counted as unscored; a refused file with no copy under the view or its
+/// joined reviews is. The parity case 9 shape: one unreadable, not two.
+#[test]
+fn a_retained_joined_review_with_an_earlier_copy_is_not_counted_unreadable() {
+    let (data, facts) = m1_envelope(
+        json!({"state": "ok", "scannedAt": M1_NOW, "problems": []}),
+        json!([
+            { "file": "writers/mac.reviews/runs/2026-11-06/mac.reviews--R1.json", "reason": "contains NUL bytes from a damaged write", "since": M1_FAILED },
+            { "file": "writers/mac.reviews/runs/2026-11-06/mac.reviews--never.json", "reason": "contains NUL bytes from a damaged write", "since": M1_FAILED }
+        ]),
+        true,
+        M1_NOW,
+    );
+    let view = m1_view(data, facts);
+    assert_eq!(
+        view["unscored"]["unreadable"],
+        json!(1),
+        "the retained join review has an earlier good copy: {}",
+        view["unscored"]
+    );
+    assert_eq!(
+        view["sources"][0]["state"],
+        json!("unreadable"),
+        "the file-level failure stays in the runs Source: {}",
+        view["sources"][0]
+    );
+    let row = m1_row(&view);
+    assert_eq!(
+        row["sourceState"],
+        json!("unreadable"),
+        "the verdict warning stays: {row}"
+    );
+}
+
 /// 2026-11-23 B: a catalog listing that has failed for an hour ages the verdict by that hour, not
 /// from the latest failed scan's `scannedAt`.
 #[test]

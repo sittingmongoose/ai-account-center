@@ -128,7 +128,7 @@
   "src/web-server/scoreboard/runs-types.ts": "255c3f6bd6077de5a52bebb3dc4bfcf2827562f3ecd95296f7c8e0f3c91a48d2",
   "src/web-server/scoreboard/scoreboard-sources.ts": "7ff69e21cda87853cd331610aed0096b7eae0976a87eba08d4815f2101610419",
   "src/web-server/scoreboard/scoreboard-view-types.ts": "cccc6e6eb0c653ff2d1c31f3987a43c01bfed6b4345913d46d3851c2b28e13eb",
-  "src/web-server/scoreboard/scoreboard-view.ts": "1465d80e0e80cc355d0c37d36728dd69ef5cb03fcc38531cf19f982e739de2ef",
+  "src/web-server/scoreboard/scoreboard-view.ts": "86bc2564a80180fbfeb3ffbc7c490303db3f8046c7edc65f8bbe9e4aef7b966e",
   "src/web-server/services/account-analytics-compose.ts": "44adfc35b58e06eb8f6566ed6c92c26f1c7369a578562b13af4137c2e8a26c80",
   "src/web-server/services/account-analytics-history.ts": "ad68c09b6d21d9a434d17b57396d38ea7a005130bc460c3971f11711502262c3",
   "src/web-server/services/account-analytics-projection.ts": "561096e5ef802266ab15bfdb47b8b6919937ea2ac4e04144db4dfcf1a474c8e8",

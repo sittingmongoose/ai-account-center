@@ -61,7 +61,9 @@ Accounts are not part of the identity (they change cost, not the model); they st
 Same share rules as the Status reader (`docs/status-tab.md`, Reading rules): every level is listed before it is read,
 ENOENT and ESTALE keep the last good copy and retry (on a file or a folder listing, the same error on two scans in a
 row is named in the runs Source), a file absent from its listing stays for 2 minutes, temporary (dot)
-files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. The highest
+files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. A writer's
+`runs` folder that cannot be listed (a writer with no such folder is ordinary absence) is named in the runs Source like
+a date folder; its retained reviews stay and the verdicts that used them say so. The highest
 `seq` per run id wins, across date folders. A file that does not read is counted and named in the runs Source, never
 dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 256 MB. One scan lists at most 20,000 writers, newest run-date
 folder first (a date folder may be empty, so a newer empty date folder can outrank a writer with newer runs), and reads at most 50,000 run files and 256 MB (over the run-file or byte limit the newest days are
@@ -75,7 +77,8 @@ form no row and take no part in any verdict, and a review such a run writes coun
 measures (the runs Source counts it under reviews ignored). The catalog Source names them ("not scored"). So every row is a catalog
 model (`inCatalog` is always true). The view's `unscored` counts every run not scored, by one reason each: `unreadable`
 (run files the reader refused with no earlier good copy, the same files the runs Source names and the readers check
-refuses), then, for runs it read, `no-model`, `no-task-type`, `unknown-model`, `unknown-task-type`, in that precedence;
+refuses; a good copy under either the view's own rows or a review it joined from outside its filter counts, so such a
+review is scored, not counted here), then, for runs it read, `no-model`, `no-task-type`, `unknown-model`, `unknown-task-type`, in that precedence;
 plus `scanLimit` (run files past any cap or under a folder that could not be listed,
 `RunsState.skipped.runFiles`, the newest days kept; past the writer cap a lower bound, and under an unlistable
 folder a provisional last-known count, `RunsState.provisionalRunFiles`, both named in the runs Source), the six sum to `total`, which counts runs and run files. The page names them in one line under its head ("48 runs and run files not scored: 4 unreadable, 12 unknown

@@ -1438,4 +1438,20 @@ describe('a failed input behind a ranked verdict (M1, 2026-11-22)', () => {
     expect(row?.asOf).toBe(new Date(failAt).toISOString());
     expect(row?.ageSeconds).toBe(300);
   });
+
+  it('a retained joined review with an earlier good copy is not counted unscored', () => {
+    // SB3 low: the refused file with a retained copy in `joinReviewFiles` is scored from it, so
+    // only the file with no good copy counts (parity case 9: one unreadable, not two).
+    const built = filteredView([
+      { file: reviewFile, reason: 'contains NUL bytes from a damaged write', since: failAt },
+      {
+        file: 'writers/mac.reviews/runs/2026-11-06/mac.reviews--never.json',
+        reason: 'contains NUL bytes from a damaged write',
+        since: failAt,
+      },
+    ]);
+    expect(built.unscored.unreadable).toBe(1);
+    expect(built.sources[0]?.state).toBe('unreadable');
+    expect(ranked(built)?.sourceState).toBe('unreadable');
+  });
 });

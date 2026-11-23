@@ -386,12 +386,14 @@ function bump(map: Map<string, number>, key: string): void {
 /**
  * Run files the runs reader refused (each named in the runs Source and refused in the readers
  * check) that left no good copy to score. A refused newer version of a run whose earlier copy
- * still reads is scored from that copy and not counted; the runs under a folder the reader could
- * not list count under the scan limit instead, from the folder's last good listing (a lower
- * bound), with the folder problem naming why.
+ * still reads is scored from that copy and not counted — whether that copy is one of the view's
+ * rows or a retained review joined from outside its filter; the runs under a folder the reader
+ * could not list count under the scan limit instead, from the folder's last good listing (a
+ * lower bound), with the folder problem naming why.
  */
-function unreadableRuns(runs: RunsState): number {
+function unreadableRuns(runs: RunsState, joinReviewFiles: readonly (string | null)[] = []): number {
   const read = new Set(runs.runs.map((run) => run.file));
+  for (const file of joinReviewFiles) if (typeof file === 'string') read.add(file);
   return runs.problems.filter(
     (problem) => /^writers\/[^/]+\/runs\/.+\.json$/.test(problem.file) && !read.has(problem.file)
   ).length;
@@ -470,7 +472,7 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
         endedAt: raw.endedAt,
       });
   }
-  const unreadable = unreadableRuns(runs);
+  const unreadable = unreadableRuns(runs, inputs.joinReviewFiles ?? []);
   const scanLimit = scanLimitRuns(runs);
   const unscoredSummary: UnscoredSummary = {
     total:

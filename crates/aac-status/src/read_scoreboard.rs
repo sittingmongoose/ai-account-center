@@ -1095,7 +1095,12 @@ fn compose_core(
         };
         examples.push((at, reason));
     }
-    let run_files: HashSet<&str> = facts.iter().map(|f| f.file.as_str()).collect();
+    // Run files this view scored: its own rows and the retained reviews that join them from
+    // outside its filter. A refused file with an earlier good copy under either is scored from
+    // that copy, not counted as unscored (SB3 low, 2026-11-23 A).
+    let join_files = array(&input["joinReviewFiles"]);
+    let mut run_files: HashSet<&str> = facts.iter().map(|f| f.file.as_str()).collect();
+    run_files.extend(join_files.iter().filter_map(|file| file.as_str()));
     let unreadable = array(&input["runs"]["problems"])
         .iter()
         .filter(|p| {
@@ -1131,7 +1136,6 @@ fn compose_core(
         Index::new(docs, &join, &known_models, &known_types, ctx)?
     };
     let problems = array(&input["runs"]["problems"]);
-    let join_files = array(&input["joinReviewFiles"]);
     let review_source = review_source_health(docs, facts, &join, &join_files, &problems, now, ctx);
     let catalog_health = catalog_verdict_health(catalog, now, ctx);
     let mut bases = HashMap::new();
