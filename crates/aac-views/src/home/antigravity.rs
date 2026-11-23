@@ -248,6 +248,10 @@ pub fn missing_window(account: Acc, key: &str) -> R<&'static str> {
 }
 
 /// A live (not cached) reading of the same quota service (T3's CLI or the app).
+///
+/// The Mac tray's isMeter rule, as `antigravity-data.mjs` `antigravityHasLiveReading` states it:
+/// amounts (balance, spend, extra_usage) are not meters, and a reading whose reset has passed
+/// no longer describes the window. Neither proves Google reported no such quota.
 fn has_live_reading(account: Acc, service: &str) -> R<bool> {
     if !is_str(account.get("status"), "ok") {
         return Ok(false);
@@ -256,6 +260,9 @@ fn has_live_reading(account: Acc, service: &str) -> R<bool> {
         .iter()
         .any(|w: &Win| {
             !is_str(w.get("kind"), "balance")
+                && !is_str(w.get("kind"), "spend")
+                && !is_str(w.get("kind"), "extra_usage")
+                && !is_true(w.get("resetPassed"))
                 && !is_str(w.get("status"), "cached")
                 && !is_true(w.get("cached"))
                 && !is_str(w.get("status"), "unavailable")
