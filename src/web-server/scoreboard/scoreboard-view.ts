@@ -213,41 +213,32 @@ function reviewSourceHealth(
 
 /**
  * A ranked verdict rests on the retained catalog. A failed listing is its own known failure; a
- * listing that succeeded can still leave a file failed, and the reader keeps that file's last
- * good copy while the ranking uses it. Both disclose the catalog's failure, from its first
- * reported time — the listing's `failedSince`, or the earliest file problem's `since`.
+ * listing that succeeded can still leave a file failed, and the ranking used that file's retained
+ * copy. Both disclose from the catalog's first reported failure: `failedSince`, or the earliest
+ * file problem's `since` (an older input without the fact keeps its last good read).
  */
 function catalogVerdictHealth(
   catalog: ScoreboardInputs['catalog'],
   now: number
 ): RowSourceHealth | null {
   if (catalog.state === 'error') {
-    // The first time this listing failed, kept across failed scans by the reader; an older input
-    // without the fact keeps its last good read rather than inventing a time.
-    const at =
-      typeof catalog.failedSince === 'number'
-        ? catalog.failedSince
-        : typeof catalog.scannedAt === 'number'
-          ? catalog.scannedAt
-          : null;
+    const { failedSince, scannedAt } = catalog;
+    const at = typeof failedSince === 'number' ? failedSince : scannedAt;
     return { sourceState: 'error', asOf: iso(at), ageSeconds: ageSeconds(now, at) };
   }
   if (catalog.state !== 'ok') return null;
   let earliest: number | null = null;
   for (const problem of catalog.problems) {
+    const since = problem.since;
     if (
-      typeof problem.since === 'number' &&
-      Number.isFinite(problem.since) &&
-      (earliest === null || problem.since < earliest)
+      typeof since === 'number' &&
+      Number.isFinite(since) &&
+      (earliest === null || since < earliest)
     )
-      earliest = problem.since;
+      earliest = since;
   }
   if (earliest === null) return null;
-  return {
-    sourceState: 'unreadable',
-    asOf: iso(earliest),
-    ageSeconds: ageSeconds(now, earliest),
-  };
+  return { sourceState: 'unreadable', asOf: iso(earliest), ageSeconds: ageSeconds(now, earliest) };
 }
 
 interface BaseRow {
