@@ -144,6 +144,9 @@ pub struct Collector {
     /// Roots their probe found absent: never touched again this scan (the report included).
     pub absent_roots: HashSet<(String, PathBuf)>,
     pub store_incremental: bool,
+    /// Per kind, the folders only the optional experiment walk found this scan (each with its
+    /// real path): files read under them are marked `optionalRoot` on their print.
+    pub optional_roots: HashMap<String, Vec<(PathBuf, PathBuf)>>,
     settled_paths: HashMap<(String, String), String>,
     settled_slot: u64,
     /// Prints of settled files this scan confirmed without reading them, per kind. They stay
@@ -230,6 +233,7 @@ impl Collector {
             agy_unreadable: 0,
             codex_compressed_unread: HashSet::new(),
             usage_partial: HashSet::new(),
+            optional_roots: HashMap::new(),
             read_failures: HashMap::new(),
             replaced_files: BTreeSet::new(),
             root_origins: HashMap::new(),
@@ -461,6 +465,13 @@ impl Collector {
         if self.store_incremental && matches!(kind, "claude" | "codex" | "muse" | "omp") {
             current.path_key = Some(util::filekey(kind, path));
             current.file_identity = crate::fsx::identity(path).map(|(device, inode)| format!("{device:x}:{inode:x}"));
+        }
+        if self.optional_roots.get(kind).is_some_and(|roots| {
+            roots
+                .iter()
+                .any(|(root, real)| path.starts_with(root) || path.starts_with(real))
+        }) {
+            current.optional_root = Some(true);
         }
         if kind == "claude" {
             let name = path

@@ -380,6 +380,14 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         let cut_before = collector.truncated;
         let experiment_list = if ["claude", "codex", "omp", "muse"].contains(&kind.as_str()) {
             let (list, limit, failed) = experiment_dirs(&mut found, request, home, kind);
+            let requested = paths_of(&request.experiment_roots, kind);
+            collector.optional_roots.insert(
+                kind.clone(),
+                list.iter()
+                    .filter(|path| !requested.contains(path))
+                    .map(|path| (path.clone(), crate::util::realpath(path)))
+                    .collect(),
+            );
             if let Some((read, seen)) = limit {
                 collector.search_limit(kind, read, seen);
             }
@@ -573,15 +581,20 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             && found.as_ref().is_some_and(|f| f.optional_limited)
         {
             entry.insert("optionalSearchLimited".into(), json!(true));
-            // Previously observed files are real candidates whose disappearance this optional
-            // cutoff cannot confirm. Preserve their usage and complete-read clock.
+            // Previously observed files from folders only the optional walk found are real
+            // candidates whose disappearance this optional cutoff cannot confirm: the cut walk may
+            // not have reached their folder. Preserve their usage and complete-read clock. A file
+            // last read from a known root, which is listed in full, is gone when it is missing
+            // (a tool's own cleanup), so it never keeps the kind partial.
             let unconfirmed = request
                 .fingerprints
                 .get(kind)
                 .and_then(Value::as_object)
                 .map_or(0, |prior| {
                     prior
-                        .keys()
+                        .iter()
+                        .filter(|(_, print)| print["optionalRoot"] == true)
+                        .map(|(key, _)| key)
                         .filter(|key| {
                             !entry["fingerprints"]
                                 .as_object()

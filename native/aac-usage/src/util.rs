@@ -200,6 +200,10 @@ pub struct Print {
     pub path_key: Option<String>,
     pub file_identity: Option<String>,
     pub append_state: Option<Value>,
+    /// Read from a folder only the optional experiment walk found (not a known root and not a
+    /// requested experiment root). Only such a file, once missing, can be hiding in a folder a
+    /// later cut walk did not reach; a known root's missing file is gone.
+    pub optional_root: Option<bool>,
 }
 
 /// A resumable read's place in one file (DESIGN 16.1). `through` is the decoded byte offset after
@@ -275,6 +279,7 @@ impl Print {
             path_key: None,
             file_identity: None,
             append_state: None,
+            optional_root: None,
         }
     }
 
@@ -330,6 +335,9 @@ impl Print {
         }
         if let Some(state) = &self.append_state {
             map.insert("appendState".into(), state.clone());
+        }
+        if let Some(optional) = self.optional_root {
+            map.insert("optionalRoot".into(), Value::from(optional));
         }
         if let Some(unread) = self.unread_usage {
             map.insert("unreadUsage".into(), Value::from(unread));

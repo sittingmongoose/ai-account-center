@@ -47,7 +47,8 @@ fn optional_search_bound_keeps_complete_known_roots_complete_and_unknown_prior_f
     }
     assert_eq!(answer["rows"][0]["i"], 123);
     let mut prior = answer["kinds"]["codex"]["fingerprints"].clone();
-    prior["ab".repeat(32)] = json!({"size":10,"mtimeMs":20});
+    // Read earlier from a folder only the optional walk found: the cut walk may not reach it now.
+    prior["ab".repeat(32)] = json!({"size":10,"mtimeMs":20,"optionalRoot":true});
     let answer = scan(home.path(), json!({"codex":prior}));
     assert_eq!(answer["kinds"]["codex"]["unconfirmedFiles"], 1);
     assert_eq!(
@@ -148,4 +149,58 @@ fn depth_cap_is_partial_only_when_it_leaves_an_entry_unread() {
     write(&log.path().join(".codex/sessions/rollout-fixture.jsonl"), &rollout());
     write(&deep(log.path()).join("rollout-deep.jsonl"), &rollout());
     assert!(partial(log.path()), "a log past the cap is unread");
+}
+
+fn rollout_for(id: &str) -> String {
+    rollout().replace("search-bound-fixture", id)
+}
+
+/// Monday scan-partial (2026-11-23): Claude Code and Codex delete their own old logs. A file that
+/// was read from a known log folder and is gone now cannot be hiding in a place the cut optional
+/// walk did not reach: its retained print must not keep the kind partial on every scan. A file
+/// first found under a folder only the optional walk discovered stays unconfirmed when it is
+/// missing, because a later cut walk may simply not have reached that folder.
+#[test]
+fn a_known_root_file_that_is_gone_is_not_unconfirmed_but_an_optional_root_file_is() {
+    let home = tempfile::tempdir().unwrap();
+    write(
+        &home.path().join(".codex/sessions/rollout-known.jsonl"),
+        &rollout_for("search-bound-known"),
+    );
+    // Popped first by the walk (it takes the last-sorted child first), so it is found before the
+    // unrelated folder spends the entry bound.
+    let optional = home.path().join("zlab/run/codex/rollout-optional.jsonl");
+    write(&optional, &rollout_for("search-bound-optional"));
+    let unrelated = home.path().join("unrelated");
+    fs::create_dir(&unrelated).unwrap();
+    for n in 0..20_010 {
+        fs::write(unrelated.join(format!("file-{n:05}")), "").unwrap();
+    }
+    let first = scan(home.path(), json!({}));
+    assert_eq!(first["kinds"]["codex"]["optionalSearchLimited"], true, "{first}");
+    assert_ne!(first["kinds"]["codex"]["partial"], true, "{first}");
+    let prints = first["kinds"]["codex"]["fingerprints"].as_object().unwrap().clone();
+    assert_eq!(prints.len(), 2, "{first}");
+    let flagged: Vec<_> = prints.values().filter(|p| p["optionalRoot"] == true).collect();
+    assert_eq!(
+        flagged.len(),
+        1,
+        "only the walk-found folder's file is optional: {first}"
+    );
+
+    // A known-root file read earlier and deleted since (a tool's own cleanup).
+    let mut prior = prints.clone();
+    prior.insert("cd".repeat(32), json!({"size":10,"mtimeMs":20,"newestUsageMs":null}));
+    let answer = scan(home.path(), json!({"codex":prior}));
+    assert!(answer["kinds"]["codex"]["unconfirmedFiles"].is_null(), "{answer}");
+    assert_ne!(
+        answer["kinds"]["codex"]["partial"], true,
+        "a gone file from a fully listed known folder is not unknown: {answer}"
+    );
+
+    // The walk-found file goes missing: it may sit in a folder a cut walk did not reach.
+    fs::remove_file(&optional).unwrap();
+    let answer = scan(home.path(), json!({"codex":prints}));
+    assert_eq!(answer["kinds"]["codex"]["unconfirmedFiles"], 1, "{answer}");
+    assert_eq!(answer["kinds"]["codex"]["partial"], true, "{answer}");
 }
