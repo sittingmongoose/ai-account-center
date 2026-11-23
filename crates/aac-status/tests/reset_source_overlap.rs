@@ -559,6 +559,42 @@ fn an_older_capture_refuses_instead_of_rolling_back_a_newer_binding() {
 }
 
 #[test]
+fn an_aba_capture_cannot_replace_the_newer_binding_with_its_read() {
+    let dir = guarded_dir();
+    let db = dir.path().join("claims.sqlite");
+    let mut a = Store::open(&db).unwrap();
+    let mut b = Store::open(&db).unwrap();
+    let x = claude_identity("account-x");
+    let y = claude_identity("account-y");
+    // Bind X first, so the route has a binding before A's capture starts.
+    a.capture_identity_read("claude:reused", || Ok(((), x.clone())))
+        .unwrap();
+    let bound_x = a.pending("claude:reused", now()).unwrap()["canonicalAccountKey"].clone();
+    // A's slow capture reads Y; while it runs outside the transaction, B binds Y and then
+    // X again on the same route (X -> Y -> X). The canonical value ends where it started,
+    // but a newer capture moved the binding while A ran.
+    let mut b_result: Option<Result<((), ReadTicket)>> = None;
+    let stalled = a.capture_identity_read("claude:reused", || {
+        b_result = Some(b.capture_identity_read("claude:reused", || Ok(((), y.clone()))));
+        b.capture_identity_read("claude:reused", || Ok(((), x.clone())))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        Ok(((), y.clone()))
+    });
+    assert!(
+        b_result.unwrap().is_ok(),
+        "the intermediate capture must bind while the older one runs"
+    );
+    // A read Y, but the newer binding is X: A must be refused, not bind Y over it.
+    assert_eq!(stalled.unwrap_err(), "identity-changed");
+    let after = a.pending("claude:reused", now()).unwrap();
+    assert_eq!(
+        after["canonicalAccountKey"], bound_x,
+        "the route must stay bound to X, not the Y that A read"
+    );
+}
+
+#[test]
 fn provider_rpc_does_not_hold_the_capture_transaction() {
     let (dir, home, binary) = setup();
     let db = dir.path().join("claims.sqlite");

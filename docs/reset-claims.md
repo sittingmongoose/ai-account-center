@@ -172,8 +172,10 @@ Each native reader captures the saved login identity/hash outside any transactio
 then allocates its read ticket and binds the identity in one SQLite immediate
 transaction that opens only after the capture returns. Ticket order follows commit
 order across workers and processes, and the transaction commits before provider
-I/O. A capture whose route binding changed while it ran is refused instead of
-replacing the newer binding. Codex captures `auth.json` locally. Claude's
+I/O. A capture is refused when the route binding's forward-only revision moved
+while it ran and the capture's own login differs from the current binding, so an
+older read never replaces a newer binding, even one that returned to the original
+login (X -> Y -> X). Codex captures `auth.json` locally. Claude's
 credential-host helper captures saved credentials without OAuth, then pins its
 separate provider read to that account, organization and hash. A failed capture
 allocates no ticket and opens no transaction. The bounded helper never holds the

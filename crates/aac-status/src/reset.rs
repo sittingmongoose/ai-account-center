@@ -422,11 +422,11 @@ impl Store {
         capture: impl FnOnce() -> Result<(T, Option<Identity>)>,
     ) -> Result<(T, ReadTicket)> {
         // The bounded credential capture runs before the exclusive section, so a
-        // stalled helper cannot delay the store's unrelated writers. The binding
-        // snapshot taken here is what bind_capture compares inside the transaction:
-        // if another capture bound a different login while this one ran, this older
-        // capture is refused instead of rolling the newer binding back.
-        let binding_before = Self::account_canonical_from(&self.db, account)?;
+        // stalled helper cannot delay the store's unrelated writers. The binding's
+        // forward-only revision snapshot taken here is what bind_capture compares inside
+        // the transaction: if any newer capture moved the binding while this one ran, this
+        // older capture is refused instead of rolling the newer binding back.
+        let since_before = Self::capture_since_from(&self.db, account)?;
         let (captured, identity) = capture()?;
         let tx = sql(self
             .db
@@ -440,7 +440,7 @@ impl Store {
             params![account, sequence],
         ))?;
         if let Some(identity) = identity {
-            Self::bind_capture(&tx, account, &identity, sequence, binding_before)?;
+            Self::bind_capture(&tx, account, &identity, sequence, since_before)?;
         }
         let ticket = ReadTicket {
             capture_version: 1,
@@ -456,7 +456,7 @@ impl Store {
         account: &str,
         identity: &Identity,
         sequence: i64,
-        binding_before: Option<String>,
+        since_before: Option<i64>,
     ) -> Result<()> {
         if !matches!(identity.provider.as_str(), "codex" | "claude")
             || identity.account.is_empty()
@@ -468,12 +468,6 @@ impl Store {
         }
         let canonical = Self::canonical_identity(identity)?;
         let previous = Self::account_canonical_from(db, account)?;
-        // The capture ran outside the transaction. A binding that changed while it ran
-        // belongs to a newer capture of a different login; this older capture must not
-        // silently replace it.
-        if previous.as_ref() != Some(&canonical) && binding_before != previous {
-            return Err("identity-changed");
-        }
         let captured: Option<(String, i64, bool)> = sql(db
             .query_row(
                 "SELECT lock_key,since_ticket,account_changed FROM route_capture_bindings WHERE account=?",
@@ -481,6 +475,14 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional())?;
+        // The capture ran outside the transaction. The binding's forward-only read-ticket
+        // revision detects any newer capture, even one that returned the route to its original
+        // canonical (X -> Y -> X): comparing canonical values alone cannot see that change, so
+        // this older capture must not replace the newer binding with its own read.
+        let since_now = captured.as_ref().map(|(_, since, _)| *since);
+        if previous.as_ref() != Some(&canonical) && since_before != since_now {
+            return Err("identity-changed");
+        }
         let same = previous.as_ref() == Some(&canonical);
         let (since, changed) = match captured {
             Some((key, since, changed)) if key == canonical && same => (since, changed),
@@ -582,6 +584,15 @@ impl Store {
     }
     fn account_canonical(&self, account: &str) -> Result<Option<String>> {
         Self::account_canonical_from(&self.db, account)
+    }
+    fn capture_since_from(db: &Connection, account: &str) -> Result<Option<i64>> {
+        sql(db
+            .query_row(
+                "SELECT since_ticket FROM route_capture_bindings WHERE account=?",
+                [account],
+                |r| r.get(0),
+            )
+            .optional())
     }
     fn account_canonical_from(db: &Connection, account: &str) -> Result<Option<String>> {
         let key: Option<String> = sql(db
