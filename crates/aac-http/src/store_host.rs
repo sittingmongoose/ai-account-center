@@ -1121,8 +1121,8 @@ mod tests {
     }
 
     #[test]
-    fn a_reopened_host_names_a_new_instance_and_keeps_its_persisted_failure()
-    -> Result<(), String> {
+    fn a_reopened_host_names_a_new_instance_and_keeps_its_persisted_failure() -> Result<(), String>
+    {
         // M3: the watch resets its cursors when this identity changes, so a reopened host's
         // persisted failure 1 is a baseline, not a failure already reported.
         let root = tempfile::tempdir().map_err(|e| e.to_string())?;
