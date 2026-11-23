@@ -42,6 +42,10 @@ const CONVERGE_WINDOW_MS: i64 = 10 * 60_000;
 const CONVERGE_INTERVAL_MS: i64 = 60_000;
 /// One scan's budget and response cap (the transport's scan frame cap times two).
 const SCAN_DEADLINE_MS: u64 = 120_000;
+/// The scanner's own budget inside one scan call. The scanner caps it at 120 s and the agent
+/// stops the call at SCAN_DEADLINE_MS; a shorter budget lets a long first scan return its
+/// partial rows and fingerprints (resumed next pass) instead of the agent deadline killing it.
+const SCANNER_BUDGET_MS: u64 = 90_000;
 const SCAN_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// The archive walk's bounds (`usage-backfill.ts`).
 const MAX_ARCHIVE_FILES: usize = 2000;
@@ -489,7 +493,7 @@ fn scan_request(
         "immutableSqlite": false,
         "extraRoots": extra,
         "cwd": cwd,
-        "deadlineMs": SCAN_DEADLINE_MS,
+        "deadlineMs": SCANNER_BUDGET_MS,
         "presence": true,
     });
     if let Some(roots) = experiment_roots.filter(|roots| !roots.is_empty()) {
@@ -1053,6 +1057,19 @@ fn report_writer_failure(name: &'static str, error: &tokio::task::JoinError) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_scanner_budget_leaves_room_inside_the_scan_call() {
+        // The agent stops a scan call at SCAN_DEADLINE_MS; the scanner must return its partial
+        // rows before that, so a long first scan resumes instead of failing the whole computer.
+        let request = scan_request(&["codex".to_owned()], 0, serde_json::json!({}), false, None);
+        let budget = request["deadlineMs"].as_u64().expect("deadlineMs");
+        assert!(budget <= 120_000, "the scanner refuses budgets over 120 s");
+        assert!(
+            budget + 20_000 <= SCAN_DEADLINE_MS,
+            "budget {budget} leaves no margin"
+        );
+    }
+
     use super::*;
 
     #[tokio::test]
