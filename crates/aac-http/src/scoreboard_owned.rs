@@ -3018,6 +3018,16 @@ mod tests {
         std::fs::write(dir.join("vm.lead--bench.json"), BENCH).expect("run file");
     }
 
+    const REVIEW: &str = r#"{"schema":"agent-reports/run@1","id":"mac.reviews--R1","writer":"mac.reviews","seq":1,"writtenAt":"2026-11-04T16:45:00Z","source":"observed","project":"proj","stream":null,"task":{"id":"review-bench","type":"review","title":"Review bench","size":{"tasks":1}},"model":{"provider":"anthropic","id":"claude-opus-5-5","harness":"claude-code","effort":"high"},"startedAt":null,"endedAt":"2026-11-04T16:45:00Z","wallSeconds":60,"outcome":"done","benchmark":null,"review":{"of":"vm.lead--bench","verdict":"pass","findings":{"high":0,"medium":0,"low":0},"overturned":false,"disputed":false,"by":null}}"#;
+
+    /// The bench run's blind review by `mac.reviews`, which the WorkNode build filter joins from
+    /// outside it.
+    fn write_review(root: &Path) {
+        let dir = root.join("v1/writers/mac.reviews/runs/2026-11-04");
+        std::fs::create_dir_all(&dir).expect("review folder");
+        std::fs::write(dir.join("mac.reviews--R1.json"), REVIEW).expect("review file");
+    }
+
     fn boot(dir: PathBuf) -> StoreBoot {
         StoreBoot {
             binding_identity: aac_store::build_identity(),
@@ -4818,5 +4828,83 @@ mod tests {
         let views = owner.views.lock().unwrap_or_else(|p| p.into_inner());
         assert_eq!(views.len(), 1, "one oversized view keeps only itself");
         assert!(views.contains_key("solo"));
+    }
+
+    /// SB3 (2026-11-23 A): a writer's `runs` folder that cannot be listed is named in the runs
+    /// state, its retained review stays, and a continuing failure keeps its first time. The
+    /// composer matches the ancestor path, so the verdict that used the review says so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreadable_writer_runs_folder_is_named_with_its_first_time_and_clears_on_a_good_listing()
+     {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        write_review(root.path());
+        let folder = "writers/mac.reviews/runs";
+        let runs = root.path().join("v1").join(folder);
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let host = StoreHost::new(boot(store_dir));
+        host.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(host));
+        let t0 = 1_790_000_000_000u64;
+        owner.catalog_pass(t0);
+        owner.ingest_pass_at(true, t0).await;
+        let (state, _) = held_state(&owner, t0).await;
+        assert!(
+            state["problems"]
+                .as_array()
+                .expect("problems")
+                .iter()
+                .all(|p| p["file"] != json!(folder)),
+            "a listed folder has no problem: {state}"
+        );
+        let original = std::fs::metadata(&runs).expect("folder").permissions();
+        std::fs::set_permissions(&runs, std::fs::Permissions::from_mode(0o000))
+            .expect("folder made unreadable");
+        let first = t0 + 3_600_000;
+        owner.ingest_pass_at(true, first).await;
+        let (state, kept) = held_state(&owner, first).await;
+        assert!(kept, "the bench run is served from history: {state}");
+        let review = owner
+            .held(Some(first))
+            .await
+            .expect("held")
+            .rows
+            .iter()
+            .any(|(_, row)| row["doc"]["id"].as_str() == Some("mac.reviews--R1"));
+        assert!(review, "the review under the unlistable folder is retained");
+        let since = |state: &serde_json::Value| {
+            state["problems"]
+                .as_array()
+                .expect("problems")
+                .iter()
+                .find(|p| p["file"] == json!(folder))
+                .map(|p| p["since"].as_u64().expect("since"))
+                .expect("the unlistable writer folder is a problem")
+        };
+        assert_eq!(since(&state), first);
+        let second = first + 3_600_000;
+        owner.ingest_pass_at(true, second).await;
+        let (state, _) = held_state(&owner, second).await;
+        assert_eq!(
+            since(&state),
+            first,
+            "the continuing writer folder problem keeps the time it was first observed"
+        );
+        std::fs::set_permissions(&runs, original).expect("folder restored");
+        let third = second + 3_600_000;
+        owner.ingest_pass_at(true, third).await;
+        let (state, _) = held_state(&owner, third).await;
+        assert!(
+            state["problems"]
+                .as_array()
+                .expect("problems")
+                .iter()
+                .all(|p| p["file"] != json!(folder)),
+            "a successful listing clears the writer folder problem: {state}"
+        );
     }
 }

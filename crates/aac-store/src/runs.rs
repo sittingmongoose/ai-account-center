@@ -1150,7 +1150,21 @@ pub fn scan(engine: &Engine, args: &ScanArgs) -> Result<Json> {
     let (mut listed_folders, mut skipped_folders) = (0usize, 0usize);
     for writer in &writers {
         let runs_dir = writers_dir.join(writer).join("runs");
-        let Ok(days) = fs::read_dir(&runs_dir) else { continue };
+        // A writer that never wrote a run has no `runs` folder: that is ordinary absence. Any
+        // other failure hides every date folder under it, so name the folder this pass; the owner
+        // keeps the first time it saw it and the composer marks the verdicts that used a retained
+        // review from it (SB3, 2026-11-23 A).
+        let days = match fs::read_dir(&runs_dir) {
+            Ok(days) => days,
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    problems.push(
+                        json!({ "file": format!("writers/{writer}/runs"), "reason": "folder could not be listed" }),
+                    );
+                }
+                continue;
+            }
+        };
         for day in days.flatten() {
             let name = day.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') || !is_date_folder(&name) {

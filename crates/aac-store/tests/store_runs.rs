@@ -409,6 +409,61 @@ fn backfill_reads_everything_in_passes_with_no_cap() {
     assert!(status["payloadBlocks"]["compressed"].as_u64().unwrap() >= 60);
 }
 
+/// SB3 (2026-11-23 A): a writer's `runs` folder that cannot be listed hides every date folder
+/// under it, so the scan names the folder (the owner keeps its first time and the composer marks
+/// the verdicts that used a retained review under it). A writer that never wrote a run has no
+/// `runs` folder: ordinary absence, not named.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_writer_runs_folder_is_named_and_a_missing_one_is_not() {
+    use std::os::unix::fs::PermissionsExt;
+    let share = Share::new("runs-sb3-folder");
+    share.run(
+        "vm.lead",
+        "r1",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
+    // A writer folder with a thread and no `runs` folder.
+    share.thread("mac.reviews", "thread:delegated-task:command%3Areview%3A1");
+    let store = temp_dir("runs-sb3-folder-store");
+    let engine = open(&store);
+    let named = |scan: &Json| -> Vec<String> {
+        scan["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["file"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (scan, _) = pass(&engine, &share, T0 + 10 * DAY, 100, true);
+    assert!(
+        named(&scan).is_empty(),
+        "a writer with no runs folder is not a problem: {}",
+        scan["problems"]
+    );
+    let runs = share.root.join("v1/writers/vm.lead/runs");
+    let original = fs::metadata(&runs).unwrap().permissions();
+    fs::set_permissions(&runs, fs::Permissions::from_mode(0o000)).unwrap();
+    let (scan, _) = pass(&engine, &share, T0 + 11 * DAY, 100, true);
+    fs::set_permissions(&runs, original).unwrap();
+    assert_eq!(
+        named(&scan),
+        vec!["writers/vm.lead/runs".to_string()],
+        "the unlistable folder is named: {}",
+        scan["problems"]
+    );
+    assert_eq!(scan["problems"][0]["reason"], json!("folder could not be listed"));
+    // The retained run still reads from the store; the folder problem names why nothing new came.
+    assert_eq!(query(&engine, json!({})).len(), 1);
+    let (scan, _) = pass(&engine, &share, T0 + 12 * DAY, 100, true);
+    assert_eq!(scan["state"], json!("ok"));
+}
+
 #[test]
 fn runs_are_kept_forever_and_a_rebuild_gives_the_same_tables() {
     let share = Share::new("runs-forever");
