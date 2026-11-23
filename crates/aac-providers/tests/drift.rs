@@ -229,19 +229,101 @@ fn production_source(text: &str) -> String {
     let mut rest = text;
     while let Some(at) = rest.find(marker) {
         out.push_str(&rest[..at]);
-        let item = &rest[at + marker.len()..];
-        let Some(open) = item.find('{') else { break };
-        if let Some(semicolon) = item.find(';').filter(|end| *end < open) {
-            rest = &item[semicolon + 1..];
-            continue;
-        }
-        match block_end(item, open) {
-            Some(end) => rest = &item[end..],
+        // The marker decorates one item: a `mod`/`fn`/`impl` block, or a field, a struct-literal
+        // field or a statement, which ends at `,`, `;` or the enclosing `}`. Skip only that item;
+        // the production block after it is still scanned.
+        let item = skip_decorations(&rest[at + marker.len()..]);
+        match item_end(item) {
+            Some((open, true)) => match block_end(item, open) {
+                Some(end) => rest = &item[end..],
+                None => break,
+            },
+            Some((end, false)) => rest = &item[end + 1..],
             None => break,
         }
     }
     out.push_str(rest);
     out
+}
+
+/// `text` after its leading whitespace, line comments and `#[...]` attributes: the item a
+/// `#[cfg(test)]` decorates.
+fn skip_decorations(mut text: &str) -> &str {
+    loop {
+        let rest = text.trim_start();
+        if rest.starts_with("#[") {
+            match attribute_end(rest) {
+                Some(end) => text = &rest[end..],
+                None => return rest,
+            }
+        } else if rest.starts_with("//") {
+            text = rest.find('\n').map_or("", |end| &rest[end..]);
+        } else {
+            return rest;
+        }
+    }
+}
+
+/// The index just past the `]` that closes the `#[` at the start of `attribute`.
+fn attribute_end(attribute: &str) -> Option<usize> {
+    let bytes = attribute.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 2;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b']' => {
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+                depth -= 1;
+                i += 1;
+            }
+            b'"' => i = string_end(attribute, i),
+            b'\'' => i = char_or_lifetime_end(attribute, i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Where the item that starts at `text` ends: `(index, true)` for its own `{` block, or
+/// `(index, false)` for the first `,`, `;` or `}` outside parentheses and brackets (a field, a
+/// struct-literal field or a statement). Signature commas (`fn f(a, b)`) do not end an item.
+fn item_end(text: &str) -> Option<(usize, bool)> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b'{' if depth == 0 => return Some((i, true)),
+            b',' | b';' | b'}' if depth == 0 => return Some((i, false)),
+            b'"' => i = string_end(text, i),
+            b'\'' => i = char_or_lifetime_end(text, i),
+            b'r' | b'b' => i = raw_string_end(text, i).unwrap_or(i + 1),
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                i = text[i..].find('\n').map_or(bytes.len(), |end| i + end);
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i = text[i + 2..]
+                    .find("*/")
+                    .map_or(bytes.len(), |end| i + 2 + end + 2);
+            }
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// The index just past the `}` that closes the `{` at `open`, skipping strings and comments.
@@ -418,6 +500,16 @@ fn the_scan_skips_test_fixtures_and_still_catches_production_literals() {
     // Fixtures carry braces in strings, raw strings and chars; the skip must survive them.
     let tricky = "#[cfg(test)]\nmod tests {\n    fn f() { let s = \"}{ \\\" } {\"; let r = r#\"{ \"#; let c = '{'; }\n}\nconst P: [&str; 3] = [\"claude\", \"codex\", \"cursor\"];\n";
     assert_eq!(list_literals(&production_source(tricky), &words).len(), 1);
+    // A test-only struct field ends at its comma: the production block after it is still held
+    // to the tables (`aac-agent/src/apps/mod.rs` has such a field before `impl Host`).
+    let field = "struct Host {\n    root: PathBuf,\n    #[cfg(test)]\n    system_root: Option<PathBuf>,\n}\n\nimpl Host {\n    const P: [&str; 3] = [\"claude\", \"codex\", \"cursor\"];\n}\n";
+    assert_eq!(list_literals(&production_source(field), &words).len(), 1);
+    // A decorated field with an attribute of its own is still only the field.
+    let annotated = "struct Host {\n    #[cfg(test)]\n    #[allow(dead_code)]\n    test_only: bool,\n}\nconst P: [&str; 3] = [\"claude\", \"codex\", \"cursor\"];\n";
+    assert_eq!(
+        list_literals(&production_source(annotated), &words).len(),
+        1
+    );
 }
 
 #[test]

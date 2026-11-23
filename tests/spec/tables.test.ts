@@ -133,6 +133,39 @@ describe('TS derives its lists from the tables', () => {
         '])'
       )
     ).toEqual(Object.entries(providerTable.pricingAliases).flat());
+    // The copies below are module-private, so read from their sources.
+    expect(
+      literals(
+        read('src/web-server/agent-usage/agent-usage-projection.ts'),
+        'const PROVIDERS: readonly DashboardProvider[] = [',
+        ']'
+      )
+    ).toEqual(providerTable.snapshotOrder);
+    const update = await load('src/web-server/services/app-update-contract.ts');
+    expect(Object.keys(update.UPDATE_APP_LABELS)).toEqual(toolTable.appInventory);
+    // The TypeScript runner owns the three agent-provider flows; Claude's terminal flow is the
+    // Rust-side addition the table's list has on top of it.
+    expect(
+      literals(
+        read('src/web-server/services/signin-job-types.ts'),
+        'export type SignInJobProvider =',
+        ';'
+      )
+    ).toEqual(providerTable.signInSessions.filter((id: string) => id !== 'claude'));
+    expect(
+      literals(
+        read('src/store/activity-answer.ts'),
+        'const TOOLS: readonly AccountAnalyticsActivityProvider[] = [',
+        ']'
+      )
+    ).toEqual(toolTable.activitySources);
+    expect(literals(read('src/store/activity-coverage.ts'), '  const tools = [', ']')).toEqual([
+      ...toolTable.activitySources,
+      ...Object.keys(toolTable.scannerOnlyKinds),
+    ]);
+    // The legacy cache rebuild rule has no TypeScript reader left (the migration is Rust's);
+    // pin its versions here so a one-sided edit of the rule fails in this table test too.
+    expect(toolTable.legacyRebuildThrough).toEqual({ claude: 5, codex: 6, muse: 6 });
   });
 
   it('analytics tools, usage-log tools and the legacy storage hosts', async () => {
