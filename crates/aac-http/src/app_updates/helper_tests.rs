@@ -343,6 +343,98 @@ print('fresh_absent=%s' % (not (fresh / 'app_updates.py').exists()))
 }
 
 #[cfg(unix)]
+#[test]
+fn registration_under_a_typographic_apostrophe_home_keeps_the_profile_path_out_of_source() {
+    // M2: Windows allows U+2019 in a profile path, and Windows PowerShell treats it as a
+    // single-quote delimiter. The registration command must therefore never carry the profile
+    // path: the staged helper is named relative to `$HOME` and resolved inside PowerShell.
+    let dir = tempfile::tempdir().expect("fixture");
+    let home = dir.path().join("o\u{2019}brien");
+    let ccs = dir.path().join("ccs-home");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    std::fs::create_dir_all(&ccs).expect("fixture ccs home");
+    let harness = r#"
+import pathlib, subprocess, sys
+
+home = pathlib.Path(sys.argv[1])
+
+class Done:
+    def __init__(self, code=0, stdout=''):
+        self.returncode, self.stdout, self.stderr = code, stdout, ''
+
+seen = []
+
+def run(args, **kwargs):
+    script = args[-1] if args else ''
+    if args and args[0] == 'powershell.exe' and 'Get-ScheduledTask' in script:
+        return Done(1)
+    if args and args[0] == 'powershell.exe' and 'Register-ScheduledTask' in script:
+        seen.append(script)
+        return Done(0)
+    return Done(0)
+
+subprocess.run = run
+subprocess.check_output = lambda args, **kwargs: 'S-1-5-21-1-2-3-1001'
+source = sys.stdin.read().removesuffix('\nmain()\n')
+namespace = {}
+exec(source, namespace)
+namespace['capable'] = lambda script, platform: True
+data = b'# new helper\n'
+expected = {'app_updates.py': namespace['digest'](data)}
+namespace['publish'](home / '.ccs' / 'app-updates', 'windows', expected, {'app_updates.py': data})
+script = seen[0]
+prefix = '$present=Join-Path $HOME '
+lines = [part for part in script.split(';') if part.startswith(prefix)]
+print('registrations=%d' % len(seen))
+print('home_in_source=%s' % (str(home) in script))
+print('smart_quote_in_source=%s' % ('\u2019' in script))
+print('join_line=%s' % bool(lines))
+if lines:
+    staged = home / lines[0][len(prefix):].strip("'")
+    print('present_exists=%s' % staged.is_file())
+"#;
+    let mut command = std::process::Command::new("/usr/bin/python3");
+    command
+        .args(["-B", "-c", harness])
+        .arg(&home)
+        .env("HOME", &home)
+        .env("CCS_HOME", &ccs)
+        .env("TMPDIR", dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("run registration fixture");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("helper stdin")
+        .write_all(SCRIPT.as_bytes())
+        .expect("helper script");
+    let result = child.wait_with_output().expect("registration result");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("registrations=1"), "{stdout}");
+    assert!(
+        stdout.contains("home_in_source=False"),
+        "the profile path must not be PowerShell source: {stdout}"
+    );
+    assert!(
+        stdout.contains("smart_quote_in_source=False"),
+        "no typographic apostrophe may reach the script: {stdout}"
+    );
+    assert!(
+        stdout.contains("join_line=True"),
+        "the staged helper is resolved under $HOME: {stdout}"
+    );
+    assert!(
+        stdout.contains("present_exists=True"),
+        "the resolved staged helper must exist: {stdout}"
+    );
+}
+
+#[cfg(unix)]
 /// Publish through the real script in a child process, with registration told to behave as `mode`:
 /// "exit" loses the updater process at registration, "timeout" returns PowerShell's timeout.
 fn interrupted_registration(mode: &str) -> String {

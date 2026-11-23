@@ -21,7 +21,7 @@ HIDDEN = {'creationflags': 0x08000000} if os.name == 'nt' else {}
 WINDOWS_TASK_REGISTER = (
     "$ErrorActionPreference='Stop';"
     "$helper=Join-Path $HOME '.ccs\\app-updates\\app_updates.py';"
-    "$present=%s;"
+    "$present=Join-Path $HOME %s;"
     "if (-not (Test-Path -LiteralPath $present -PathType Leaf)) { throw 'Updater helper is not deployed.' };"
     "$python=(Get-Command python.exe -ErrorAction Stop).Source;"
     "$pythonw=Join-Path (Split-Path -Parent $python) 'pythonw.exe';"
@@ -40,6 +40,16 @@ WINDOWS_TASK_REGISTER = (
 def powershell_literal(value):
     """One PowerShell single-quoted string: no escape processing in it, a quote written twice."""
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def home_relative(path):
+    """A path under the user's home, relative and forward-slashed.
+
+    The registration resolves it under PowerShell's `$HOME`, so the profile's own characters
+    never enter the command's source: Windows permits U+2019 in a profile path, and Windows
+    PowerShell treats it as a single-quote delimiter (ASCII doubling cannot escape it).
+    """
+    return pathlib.Path(os.path.relpath(path, pathlib.Path.home())).as_posix()
 
 
 class Refused(Exception):
@@ -132,7 +142,7 @@ def ensure_windows_task(present):
     current = run_powershell("Get-ScheduledTask -TaskName 'CCS App Updates' -ErrorAction Stop")
     if current.returncode == 0:
         return
-    done = run_powershell(WINDOWS_TASK_REGISTER % powershell_literal(present))
+    done = run_powershell(WINDOWS_TASK_REGISTER % powershell_literal(home_relative(present)))
     if done.returncode != 0:
         raise Refused('windows_task_missing')
 
