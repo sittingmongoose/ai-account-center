@@ -19,7 +19,7 @@
   "src/web-server/routes/auth-network-routes.ts": "4ffea36751b0d8512c7d05501c8b38cd9504c8ab4fe897037681a57f4b677e69",
   "src/web-server/routes/auth-rate-limits.ts": "50c83fba08d8c21d7d6f19d16626dac3edc7ccfd12aa480c3b7e829c419ba66e",
   "src/web-server/routes/auth-route-helpers.ts": "e59da1320e57e2c2025ddaaf98868bc1ac215633f5689167b50bb30185c249ff",
-  "src/web-server/routes/auth-routes.ts": "1c2edb170a542b36c6b6a23406dc7936bc5c1110959a3b2cd21db08f9991fac6",
+  "src/web-server/routes/auth-routes.ts": "9b88795a74be34659e8c60bda07fb259a94ddf07a8d850e0045e4b1d00b626de",
   "src/web-server/routes/auth-session-routes.ts": "9087f7b4312dcf028faa52d4e278b33e469b7a82161bc1d95e7c34d60d01d71e",
   "src/web-server/routes/bar-routes.ts": "bdc16629846cc448521898aaac9ab7ff077899984873daadc4d94ab9dcb0fd5d",
   "src/web-server/routes/index.ts": "eb25416af98da897c77c53d589795a064c5532c96b50652819655617bff61817",
