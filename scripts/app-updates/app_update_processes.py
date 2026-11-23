@@ -356,7 +356,9 @@ def main_contexts(install, processes):
         raise UpdateFailure("restart_context")
     for item in mains:
         if install.platform == "mac":
-            item.args = mac_arguments(item.pid)
+            # The same read the CLI context uses: the relaunch replays this app's environment,
+            # never the worker's (a per-launch XDG_CONFIG_HOME and the like).
+            item.args, item.env = mac_context(item.pid)
         if not item.args:
             raise UpdateFailure("restart_context")
         if install.platform == "ubuntu":

@@ -816,12 +816,39 @@ class T3Fixtures(unittest.TestCase):
             return len(buffer.value)
         libproc.proc_pidpath.side_effect = pidpath
         with mock.patch.object(processes, "command", return_value=output), mock.patch.object(processes.ctypes, "CDLL", return_value=libproc), \
-                mock.patch.object(processes, "mac_arguments", return_value=[main]):
+                mock.patch.object(processes, "mac_context", return_value=([main], {"PATH": "/usr/bin:/bin"})):
             rows = processes.scan("mac")
             self.assertEqual([item.pid for item in processes.family(install, rows)], [1, 2])
             contexts = processes.main_contexts(install, rows)
         self.assertEqual([item.pid for item in contexts], [1])
+        self.assertEqual(contexts[0].env, {"PATH": "/usr/bin:/bin"})
         self.assertFalse(processes.same_process(contexts[0], processes.Process(1, 0, uid, main, "reused-pid")))
+
+    def test_mac_relaunch_replays_the_captured_apps_environment_not_the_workers(self):
+        # Sol M3: capture takes the app's argv AND environment from mac_context, so the reopen
+        # starts with the app's per-launch config root, never the update worker's (2026-11-23 C).
+        root = self.root / t3.MAC_NAME
+        install = t3.T3Install("t3-code", "mac", root, OLD, package_root=root, desktop=True)
+        main = str(root / "Contents/MacOS/T3 Code (Nightly)")
+        rows = [processes.Process(os.getpid(), 0, os.getuid(), main, "start-1")]
+        app_env = {"XDG_CONFIG_HOME": "/fixture/app-config", "PATH": "/usr/bin:/bin"}
+        launched = []
+
+        def open_app(argv, **kwargs):
+            launched.append((argv, kwargs))
+
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "/fixture/worker-config"}), \
+                mock.patch.object(processes, "mac_context", return_value=([main], app_env)), \
+                mock.patch.object(processes, "command", side_effect=open_app), \
+                mock.patch.object(processes, "scan", return_value=rows):
+            contexts = processes.main_contexts(install, rows)
+            self.assertEqual(contexts[0].env, app_env)
+            processes.restart_desktops(install, contexts)
+        self.assertEqual(len(launched), 1)
+        argv, kwargs = launched[0]
+        self.assertEqual(argv, ["/usr/bin/open", "-n", "-a", install.path, "--args"])
+        self.assertEqual(kwargs["env"]["XDG_CONFIG_HOME"], "/fixture/app-config")
+        self.assertEqual(kwargs["env"]["PATH"], "/usr/bin:/bin")
 
     def test_t3_windows_close_still_rejects_another_session(self):
         executable = self.root / t3.WINDOWS_NAME
