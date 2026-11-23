@@ -37,6 +37,64 @@ fn output(code: i32, stdout: &str) -> ProcessOutput {
     }
 }
 
+/// The fixture's own home and CCS home, both under `root`.
+///
+/// A helper child must never see the caller's real home: on 2026-11-22 a fixture without
+/// HOME published into the machine's real `~/.ccs/app-updates`.
+#[cfg(unix)]
+fn fixture_homes(root: &Path) -> (PathBuf, PathBuf) {
+    let home = root.join("home");
+    let ccs = root.join("ccs-home");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    std::fs::create_dir_all(&ccs).expect("fixture ccs home");
+    (home, ccs)
+}
+
+/// A fixture child: HOME and CCS_HOME both under the test's temporary directory.
+#[cfg(unix)]
+fn fixture_command<S: AsRef<std::ffi::OsStr>>(root: &Path, program: S) -> std::process::Command {
+    let (home, ccs) = fixture_homes(root);
+    let mut command = std::process::Command::new(program);
+    command.env("HOME", home).env("CCS_HOME", ccs);
+    command
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_children_never_inherit_the_callers_home() {
+    let dir = tempfile::tempdir().expect("fixture");
+    let (home, ccs) = fixture_homes(dir.path());
+    let output = fixture_command(dir.path(), "/usr/bin/python3")
+        .args([
+            "-B",
+            "-c",
+            "import os, pathlib; print(os.environ['HOME']); print(os.environ['CCS_HOME']); print(pathlib.Path.home())",
+        ])
+        .output()
+        .expect("run home guard child");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let values: Vec<&str> = text.lines().collect();
+    assert_eq!(values.len(), 3, "{text}");
+    for value in &values {
+        assert!(
+            Path::new(value).starts_with(dir.path()),
+            "a fixture child must use the fixture directory, not {value}: {text}"
+        );
+    }
+    let (home, ccs) = (home.to_string_lossy(), ccs.to_string_lossy());
+    assert_eq!(
+        (values[0], values[1], values[2]),
+        (home.as_ref(), ccs.as_ref(), home.as_ref()),
+        "{text}"
+    );
+    assert_ne!(
+        values[0],
+        std::env::var("HOME").unwrap_or_default(),
+        "a fixture child inherited the caller's HOME"
+    );
+}
+
 #[test]
 fn payload_carries_the_script_manifest_and_files_in_order() {
     let dir = tempfile::tempdir().expect("fixture");
@@ -162,15 +220,15 @@ print('reasons=%s' % ','.join(reasons))
 print('prior_restored=%s' % ((root / 'app_updates.py').read_bytes() == prior))
 print('fresh_absent=%s' % (not (fresh / 'app_updates.py').exists()))
 "#;
-    let mut child = std::process::Command::new("/usr/bin/python3")
+    let mut command = fixture_command(dir.path(), "/usr/bin/python3");
+    command
         .args(["-B", "-c", harness])
         .arg(dir.path())
         .arg(dir.path().join("fresh"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("run windows task rollback fixture");
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("run windows task rollback fixture");
     use std::io::Write;
     child
         .stdin
@@ -248,15 +306,15 @@ print('outcomes=%s' % ','.join(outcomes))
 print('prior_restored=%s' % ((root / 'app_updates.py').read_bytes() == prior))
 print('fresh_absent=%s' % (not (fresh / 'app_updates.py').exists()))
 "#;
-    let mut child = std::process::Command::new("/usr/bin/python3")
+    let mut command = fixture_command(dir.path(), "/usr/bin/python3");
+    command
         .args(["-B", "-c", harness])
         .arg(dir.path())
         .arg(dir.path().join("fresh"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("run windows task timeout fixture");
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("run windows task timeout fixture");
     use std::io::Write;
     child
         .stdin
@@ -338,19 +396,22 @@ launcher = pathlib.Path('.ccs/app-updates/app_updates.py')
 for home in (prior_home, fresh_home):
     done = subprocess.run([sys.executable, '-B', '-c', child], input=payload,
                           capture_output=True, timeout=60,
-                          env={**os.environ, 'HOME': str(home)})
+                          env={**os.environ, 'HOME': str(home),
+                               'CCS_HOME': str(home / 'ccs-home')})
     reply = done.stdout.decode().strip().splitlines()
     print('mode=%s exit=%d reply=%s' % (mode, done.returncode, reply[0] if reply else ''))
 print('prior_selected=%s' % ((prior_home / launcher).read_bytes() == prior))
 print('fresh_absent=%s' % (not (fresh_home / launcher).exists()))
 "#;
-    let mut child = std::process::Command::new("/usr/bin/python3")
+    let mut command = fixture_command(dir.path(), "/usr/bin/python3");
+    command
         .args(["-B", "-c", harness, mode])
-        .arg(dir.path())
+        .arg(dir.path().join("home"))
         .arg(dir.path().join("fresh"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command
         .spawn()
         .expect("run registration interruption fixture");
     use std::io::Write;
@@ -476,17 +537,16 @@ print('registers=%d' % len(registers))
 print('started=%d' % len(started))
 print('row=%s' % row['status'])
 "#;
-    let mut child = std::process::Command::new("/usr/bin/python3")
+    let mut command = fixture_command(dir.path(), "/usr/bin/python3");
+    command
         .args(["-B", "-c", harness])
         .arg(dir.path())
         .arg(&home)
         .arg(repo().join("scripts/app-updates"))
-        .env("HOME", &home)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("run windows task start fixture");
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("run windows task start fixture");
     use std::io::Write;
     child
         .stdin
@@ -553,13 +613,13 @@ assert (backup / 'app_updates.py').read_bytes() == b'# flat helper\n'
 assert (root / result['generation'] / 'acl-granted').is_file(), 'new helper ACL missing'
 assert (backup / 'acl-granted').is_file(), 'rollback helper ACL missing'
 "#;
-    let mut child = std::process::Command::new("/usr/bin/python3")
+    let mut command = fixture_command(dir.path(), "/usr/bin/python3");
+    command
         .args(["-B", "-c", harness])
         .arg(dir.path())
         .stdin(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("run helper ACL fixture");
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("run helper ACL fixture");
     use std::io::Write;
     child
         .stdin
@@ -582,7 +642,7 @@ assert (backup / 'acl-granted').is_file(), 'rollback helper ACL missing'
 fn local_sync_publishes_a_capable_generation_and_keeps_the_previous_one() {
     let dir = tempfile::tempdir().expect("fixture");
     let root = dir.path().canonicalize().expect("canonical root");
-    std::fs::create_dir(root.join("home")).expect("home");
+    fixture_homes(&root);
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
     command
         .args([
@@ -593,6 +653,7 @@ fn local_sync_publishes_a_capable_generation_and_keeps_the_previous_one() {
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", root.join("home"))
+        .env("CCS_HOME", root.join("ccs-home"))
         .env("AAC_TEST_HELPER_SYNC_ROOT", &root);
     for name in ["AAC_TEST_PACKAGED_AGENT", "AAC_TEST_WAVE84_HELPERS"] {
         if let Some(value) = std::env::var_os(name) {
@@ -618,8 +679,8 @@ fn native() -> &'static str {
 }
 
 #[cfg(unix)]
-fn probe(launcher: &Path) -> bool {
-    std::process::Command::new("/usr/bin/python3")
+fn probe(root: &Path, launcher: &Path) -> bool {
+    fixture_command(root, "/usr/bin/python3")
         .arg("-B")
         .arg(launcher)
         .args(["--platform", native(), "--agent-capabilities"])
@@ -714,6 +775,7 @@ fn agent(root: &Path, home: &Path) -> Option<Value> {
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", home)
+        .env("CCS_HOME", root.join("ccs-home"))
         .env("AAC_APP_UPDATE_PYTHON", &python)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -793,7 +855,7 @@ async fn local_sync_child() {
     // Absent helper: the agent falls back, the sync publishes, the probe and agent pass.
     assert_agent(&root, &home, false);
     assert_eq!(sync(&computer, &set, native(), &cancel).await, Ok(()));
-    assert!(probe(&helpers.join("app_updates.py")));
+    assert!(probe(&root, &helpers.join("app_updates.py")));
     assert_eq!(launcher_line(&helpers, "# aac-helpers-previous: "), "none");
     assert_agent(&root, &home, true);
     let first = generations(&helpers);
@@ -832,10 +894,10 @@ async fn local_sync_child() {
         .iter()
         .map(|name| std::fs::read(helpers.join(&wave84).join(name)).expect("Wave 84 bytes"))
         .collect();
-    assert!(!probe(&helpers.join("app_updates.py")));
+    assert!(!probe(&root, &helpers.join("app_updates.py")));
     assert_agent(&root, &home, false);
     assert_eq!(sync(&computer, &set, native(), &cancel).await, Ok(()));
-    assert!(probe(&helpers.join("app_updates.py")));
+    assert!(probe(&root, &helpers.join("app_updates.py")));
     assert_agent(&root, &home, true);
     assert_eq!(launcher_line(&helpers, "# aac-helpers-previous: "), wave84);
     let current = launcher_line(&helpers, "# aac-helpers: ");
@@ -852,15 +914,14 @@ async fn local_sync_child() {
         );
     }
     // The documented rollback selects the previous generation again.
-    let rollback = std::process::Command::new("/usr/bin/python3")
+    let rollback = fixture_command(&root, "/usr/bin/python3")
         .args(["-c", include_str!("helper_rollback.py")])
-        .env("HOME", &home)
         .output()
         .expect("rollback");
     assert!(rollback.status.success(), "{rollback:?}");
     assert_eq!(launcher_line(&helpers, "# aac-helpers: "), wave84);
     assert_eq!(launcher_line(&helpers, "# aac-helpers-previous: "), current);
-    assert!(!probe(&helpers.join("app_updates.py")));
+    assert!(!probe(&root, &helpers.join("app_updates.py")));
 
     // Flat helpers from before generations are kept as a generation too.
     std::fs::remove_dir_all(&helpers).expect("reset helpers");
@@ -872,5 +933,5 @@ async fn local_sync_child() {
         std::fs::read_to_string(helpers.join(&previous).join("app_updates.py")).expect("flat"),
         STAND_IN
     );
-    assert!(probe(&helpers.join("app_updates.py")));
+    assert!(probe(&root, &helpers.join("app_updates.py")));
 }
