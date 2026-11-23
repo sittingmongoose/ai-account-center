@@ -2538,17 +2538,34 @@ class WindowsDesktopReopenTests(unittest.TestCase):
 
     def test_a_direct_reopen_uses_only_the_captured_environment(self):
         # M5: the relaunched app keeps its own settings and gains no worker settings, with one
-        # PATH even when the app's block spells it 'Path' and the worker's uses 'PATH'.
+        # PATH even when the app's block spells it 'Path' and the worker's uses 'PATH'. AAC's
+        # own launch settings replace a captured spelling instead of sitting beside it.
         self.use('claude-desktop')
         pid = self.run_main(['--user-data-dir=/fixture/Roaming/Claude-work'], packaged=False)
-        self.environments[pid] = {'Path': '/app/bin', 'APP_ONLY': 'yes', 'XDG_CONFIG_HOME': '/app/config'}
+        self.environments[pid] = {'Path': '/app/bin', 'APP_ONLY': 'yes', 'XDG_CONFIG_HOME': '/app/config',
+                                  'no_update_notifier': 'captured'}
         with mock.patch.dict(os.environ, {'WORKER_ONLY': 'yes', 'XDG_CONFIG_HOME': '/worker/config', 'PATH': '/worker/bin'}):
             value = desktop.update_desktop(self.package(self.old_root, self.OLD))
         env = self.launched[0][1]['env']
         self.assertNotIn('WORKER_ONLY', env)
         self.assertEqual(env.get('XDG_CONFIG_HOME'), '/app/config')
         self.assertEqual([setting for name, setting in env.items() if name.upper() == 'PATH'], ['/app/bin'])
+        self.assertEqual([setting for name, setting in env.items() if name.upper() == 'NO_UPDATE_NOTIFIER'], ['1'])
         self.assert_reopened(value, 1)
+
+    def test_a_captured_lowercase_launch_setting_is_replaced_not_duplicated(self):
+        # Low 1: AAC's own launch settings go through the same case-insensitive lookup, so a
+        # captured 'no_update_notifier' cannot sit beside the injected 'NO_UPDATE_NOTIFIER'.
+        env = common.captured_launch_environment({'no_update_notifier': 'captured', 'Path': '/app/bin'})
+        self.assertEqual([setting for name, setting in env.items() if name.upper() == 'NO_UPDATE_NOTIFIER'], ['1'])
+        self.assertEqual(env.get('Path'), '/app/bin')
+
+    def test_a_drive_relative_profile_reports_quit_first(self):
+        # Low 2: D:named-profile from a C: folder stays drive-relative after the join, so the
+        # same profile is not guaranteed once the app starts from its new folder.
+        self.use('claude-desktop')
+        self.run_main(['--user-data-dir=D:named-profile'])
+        self.assert_quit_first_untouched(desktop.update_desktop(self.package(self.old_root, self.OLD)))
 
     def test_an_instance_that_cannot_be_reopened_reports_quit_first_before_any_download_or_close(self):
         self.use('claude-desktop')

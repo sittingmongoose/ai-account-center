@@ -423,17 +423,23 @@ def captured_launch_environment(captured=None):
     The helper's own settings never enter the relaunched process: a worker's
     XDG_CONFIG_HOME or its PATH would change the app's start. Windows names are
     case-insensitive, so each name survives once (the app's own spelling first)
-    and PATH appears once.
+    and PATH appears once. The launch settings AAC always adds replace a captured
+    spelling of the same name instead of sitting beside it.
     """
-    result, names = {}, set()
+    values, spellings = {}, {}
     for key, value in (captured or {}).items():
         folded = key.upper()
-        if folded in names:
+        if folded in spellings:
             continue
-        names.add(folded)
-        result[key] = value
-    result.update(NO_AUTO_UPDATE)
-    return strip_dashboard_secrets(result)
+        spellings[folded] = key
+        values[key] = value
+    for key, value in NO_AUTO_UPDATE.items():
+        folded = key.upper()
+        if folded in spellings:
+            values.pop(spellings[folded])
+        spellings[folded] = key
+        values[key] = value
+    return strip_dashboard_secrets(values)
 
 
 def environment(extra=None):

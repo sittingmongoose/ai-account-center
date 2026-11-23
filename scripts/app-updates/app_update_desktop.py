@@ -21,7 +21,7 @@ from app_update_common import (
     version_text, version_tuple, write_private_json,
 )
 from app_update_processes import (
-    desktop_arguments, desktop_data_folder, family, live_contexts, main_contexts, restart_desktops, scan,
+    desktop_data_folder, desktop_profile, family, live_contexts, main_contexts, restart_desktops, scan,
     terminate_desktops, windows_context,
 )
 
@@ -559,9 +559,12 @@ def windows_capture(install):
                 # A relative data directory only reopens from the folder the app ran in,
                 # so that folder must be read before the arguments are planned.
                 item.cwd, item.env = windows_context(item.pid)
-                if not isinstance(item.cwd, str) or not item.cwd or not pathlib.Path(item.cwd).is_absolute():
-                    raise UpdateFailure("quit_first")
-            arguments = desktop_arguments(item, "windows")
+            arguments, reproducible = desktop_profile(item, "windows")
+            if not reproducible:
+                # A relative folder that is still drive-relative after the join (for
+                # example D:named-profile from a C: folder) is not the same profile once
+                # the app starts from its new folder.
+                raise UpdateFailure("quit_first")
             if arguments or name is None:
                 # By path: the launcher's start for a profile, or a plain start of an unpackaged app.
                 # Its environment is part of that start (a per-launch configuration), so it is

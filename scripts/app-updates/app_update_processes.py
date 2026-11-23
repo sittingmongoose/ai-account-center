@@ -829,21 +829,40 @@ def desktop_data_folder(context, platform):
     return value, not pathlib.Path(value).is_absolute()
 
 
-def desktop_arguments(context, platform):
-    """Only an existing data-directory flag is reapplied; never replay work arguments.
+WINDOWS_DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?![\\/]).*")
+
+
+def desktop_profile(context, platform):
+    """The relaunch argv and whether a supplied data-directory flag can be reproduced.
 
     A relative folder is the app's own: it is resolved against the app's working
-    directory, never this helper's, and dropped when that directory is unknown.
+    directory, never this helper's. It cannot be reproduced when that directory is
+    unknown, or when the joined value is still not absolute: a Windows
+    `D:named-profile` names a folder relative to whatever drive-relative folder the
+    app starts in, so moving the process to the new executable would change it.
     """
     value, relative = desktop_data_folder(context, platform)
     if value is None:
-        return []
+        return [], True
     if relative:
         cwd = getattr(context, "cwd", None)
         if not isinstance(cwd, str) or not cwd or not pathlib.Path(cwd).is_absolute():
-            return []
+            return [], False
+        if platform == "windows" and WINDOWS_DRIVE_RELATIVE.fullmatch(value):
+            return [], False
         value = str(pathlib.Path(cwd) / value)
-    return ["--user-data-dir=" + value]
+        if not pathlib.Path(value).is_absolute():
+            return [], False
+    return ["--user-data-dir=" + value], True
+
+
+def desktop_arguments(context, platform):
+    """Only an existing data-directory flag is reapplied; never replay work arguments.
+
+    A folder that cannot be reproduced is dropped here; the desktop capture refuses to
+    close such an instance instead (desktop_profile).
+    """
+    return desktop_profile(context, platform)[0]
 
 
 def terminate_desktops(install, contexts, grace=15, ready=None):
