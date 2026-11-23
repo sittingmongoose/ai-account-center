@@ -58,11 +58,12 @@ function scriptedHost() {
     lastShareSeq: 1 as number | null,
   };
   let down = false;
+  let instance = 'host-1';
   const handle: NativeStoreHandle = {
     async call(method) {
       if (method !== 'hostJobs') throw new Error(`unexpected method ${method}`);
       if (down) throw new Error('service_down: the store service is not answering');
-      return JSON.stringify({ open: true, bootError: null, jobs: state });
+      return JSON.stringify({ open: true, bootError: null, instance, jobs: state });
     },
   };
   return {
@@ -70,6 +71,9 @@ function scriptedHost() {
     state,
     setDown: (value: boolean) => {
       down = value;
+    },
+    setInstance: (value: string) => {
+      instance = value;
     },
   };
 }
@@ -210,6 +214,50 @@ describe('the hosted store jobs watch', () => {
     clock.ticks.shift()!();
     await flush();
     expect(warnings().length).toBe(4);
+    stop();
+  });
+
+  it('a supervised restart makes the persisted record the baseline, not a new warning', async () => {
+    const host = scriptedHost();
+    const clock = manualSchedule();
+    const stop = startAacStoreHostJobsWatch({ store: () => host.store, schedule: clock.schedule });
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(2);
+    // A later pass fails without a durable write: sequence 2 lives in memory only.
+    host.state.lastErrorSeq = 2;
+    host.state.lastErrorMs = 3_000;
+    host.state.lastErrorCode = 'db_unavailable';
+    host.state.lastShareSeq = 2;
+    host.state.lastShareFailedMs = 4_000;
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(4);
+    // The supervised host restarts: the fresh host reports only the persisted failure 1.
+    host.setInstance('host-2');
+    host.state.lastErrorSeq = 1;
+    host.state.lastErrorMs = 1_000;
+    host.state.lastErrorCode = 'io';
+    host.state.lastShareSeq = 1;
+    host.state.lastShareFailedMs = 2_000;
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(4);
+    // A fresh failure may reuse sequence 2 (the old in-memory record is gone): it still warns.
+    host.state.lastErrorSeq = 2;
+    host.state.lastErrorMs = 5_000;
+    host.state.lastErrorCode = 'io';
+    host.state.lastShareSeq = 2;
+    host.state.lastShareFailedMs = 6_000;
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().slice(4).map((entry) => entry.event)).toEqual([
+      'store.maintenance_failed',
+      'store.share_backup_failed',
+    ]);
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(6);
     stop();
   });
 

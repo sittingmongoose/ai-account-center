@@ -192,6 +192,9 @@ struct State {
     /// The boot open finished (successfully or not); socket calls wait for it.
     ready: bool,
     boot_error: Option<String>,
+    /// This host's identity: a supervised restart is a new process (new id), so the dashboard
+    /// watch can tell a reopened store's persisted record from a failure it already reported.
+    instance: String,
     jobs: Jobs,
 }
 
@@ -231,6 +234,17 @@ fn meta_ms(status: &Value, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// One host's identity (never persisted): a supervised restart opens a new process, so a new
+/// id; the counter keeps two hosts in one process (the tests) apart.
+fn host_instance() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = NEXT.fetch_add(1, Ordering::Relaxed);
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    format!("{}-{started:x}-{count:x}", std::process::id())
+}
+
 impl StoreHost {
     #[cfg(all(test, windows))]
     pub(crate) fn boot_for_test(&self) -> &StoreBoot {
@@ -247,6 +261,7 @@ impl StoreHost {
             state: Mutex::new(State {
                 ready: false,
                 boot_error: None,
+                instance: host_instance(),
                 jobs: Jobs::default(),
             }),
             ready_changed: Condvar::new(),
@@ -568,6 +583,7 @@ impl StoreHost {
         json!({
             "open": engine.is_some(),
             "bootError": state.boot_error,
+            "instance": state.instance,
             "jobs": {
                 "passes": state.jobs.passes,
                 "lastPassMs": state.jobs.last_pass_ms,
@@ -1101,6 +1117,38 @@ mod tests {
         assert_eq!(jobs["jobs"]["lastErrorCode"], json!("closed"), "{jobs}");
         assert_eq!(jobs["jobs"]["lastErrorPersisted"], json!(false), "{jobs}");
         host.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_reopened_host_names_a_new_instance_and_keeps_its_persisted_failure()
+    -> Result<(), String> {
+        // M3: the watch resets its cursors when this identity changes, so a reopened host's
+        // persisted failure 1 is a baseline, not a failure already reported.
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let now = aac_store::engine::now_ms();
+        let dir = root.path().join("store-instance");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(dir.clone()));
+        host.open_at_boot();
+        host.job_pass(now);
+        let first: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        let instance = first["instance"].as_str().ok_or("instance")?.to_string();
+        assert!(!instance.is_empty(), "{first}");
+        let again: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(again["instance"], json!(instance), "{again}");
+        host.close_engine();
+        drop(host);
+
+        let reopened = StoreHost::new(boot(dir));
+        reopened.open_at_boot();
+        let restarted: Value =
+            serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        assert_ne!(restarted["instance"], json!(instance), "{restarted}");
+        assert_eq!(restarted["jobs"]["lastErrorSeq"], json!(1), "{restarted}");
+        assert_eq!(restarted["jobs"]["lastErrorPersisted"], json!(true));
+        reopened.close_engine();
         Ok(())
     }
 

@@ -292,6 +292,8 @@ export class AacStore {
 export interface HostJobsState {
   open: boolean;
   bootError: string | null;
+  /** The host instance's identity; a supervised restart answers a new one. */
+  instance?: string | null;
   jobs: {
     passes: number;
     lastPassMs: number | null;
@@ -623,22 +625,48 @@ export function startAacStoreHostJobsWatch(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let warnedError: number | null = null;
   let warnedShare: number | null = null;
+  /** The host instance the two cursors belong to; a supervised restart replaces it. */
+  let hostInstance: string | null = null;
+  /**
+   * A durable sequence warns only when it passes the cursor. The stamp fallback keeps the
+   * difference test (round 3 L1): a backward wall clock must not hide a new failure.
+   */
+  const newFailure = (
+    seq: number | null | undefined,
+    stamp: number | null | undefined,
+    warned: number | null
+  ): boolean =>
+    seq !== null && seq !== undefined
+      ? warned === null || seq > warned
+      : stamp !== null && stamp !== undefined && stamp !== warned;
   const poll = async (): Promise<void> => {
     if (stopped) return;
     const store = current();
     if (!store) return;
     let jobs: HostJobsState['jobs'] | null = null;
+    let instance: string | null = null;
     try {
-      jobs = (await store.hostJobs()).jobs;
+      const answer = await store.hostJobs();
+      jobs = answer.jobs;
+      instance = answer.instance ?? null;
     } catch {
       /* A down or restarting service names itself through the lifecycle and fallback
          warnings; the next tick reads the reopened host. */
     }
     // A tick already in flight when the watch stops (a fallback) warns nothing.
     if (stopped || !jobs) return;
-    const errorId = jobs.lastErrorSeq ?? jobs.lastErrorMs ?? null;
-    if (errorId !== null && errorId !== warnedError) {
-      warnedError = errorId;
+    if (instance !== null && hostInstance !== null && instance !== hostInstance) {
+      // The supervised store child reopened the store: what it reports now is the persisted
+      // record this watch may already have seen, so it is only the baseline. A failure after
+      // it, even one reusing a sequence the old instance burned, still warns.
+      hostInstance = instance;
+      warnedError = jobs.lastErrorSeq ?? jobs.lastErrorMs ?? null;
+      warnedShare = jobs.lastShareSeq ?? jobs.lastShareFailedMs ?? null;
+      return;
+    }
+    hostInstance = instance ?? hostInstance;
+    if (newFailure(jobs.lastErrorSeq, jobs.lastErrorMs, warnedError)) {
+      warnedError = jobs.lastErrorSeq ?? jobs.lastErrorMs ?? null;
       try {
         logger.warn('store.maintenance_failed', 'Store maintenance did not finish', {
           code: jobs.lastErrorCode ?? 'unknown',
@@ -647,9 +675,8 @@ export function startAacStoreHostJobsWatch(
         /* Logging never stops the dashboard. */
       }
     }
-    const shareId = jobs.lastShareSeq ?? jobs.lastShareFailedMs ?? null;
-    if (shareId !== null && shareId !== warnedShare) {
-      warnedShare = shareId;
+    if (newFailure(jobs.lastShareSeq, jobs.lastShareFailedMs, warnedShare)) {
+      warnedShare = jobs.lastShareSeq ?? jobs.lastShareFailedMs ?? null;
       try {
         logger.warn('store.share_backup_failed', 'The share copy of the store backup failed');
       } catch {
