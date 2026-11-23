@@ -1417,11 +1417,19 @@ fn two_accounts_open_period_heads_share_one_disclosure_naming_both_periods() {
         for (account, start) in [(1u32, t), (2u32, second)] {
             record(
                 &engine,
-                vec![obs(account, start, vec![window("seven_day", Some(10.0), Some(t + 5 * DAY))])],
+                vec![obs(
+                    account,
+                    start,
+                    vec![window("seven_day", Some(10.0), Some(t + 5 * DAY))],
+                )],
             );
             record(
                 &engine,
-                vec![obs(account, start + MIN, vec![window("seven_day", Some(15.0), Some(t + 5 * DAY))])],
+                vec![obs(
+                    account,
+                    start + MIN,
+                    vec![window("seven_day", Some(15.0), Some(t + 5 * DAY))],
+                )],
             );
         }
         engine.lock_logs().readings.seal().unwrap();
@@ -1431,11 +1439,19 @@ fn two_accounts_open_period_heads_share_one_disclosure_naming_both_periods() {
         for account in [1u32, 2] {
             record(
                 &engine,
-                vec![obs(account, t + DAY, vec![window("seven_day", Some(20.0), Some(t + 5 * DAY))])],
+                vec![obs(
+                    account,
+                    t + DAY,
+                    vec![window("seven_day", Some(20.0), Some(t + 5 * DAY))],
+                )],
             );
             record(
                 &engine,
-                vec![obs(account, t + DAY + MIN, vec![window("seven_day", Some(25.0), Some(t + 5 * DAY))])],
+                vec![obs(
+                    account,
+                    t + DAY + MIN,
+                    vec![window("seven_day", Some(25.0), Some(t + 5 * DAY))],
+                )],
             );
         }
         engine.lock_logs().readings.seal().unwrap();

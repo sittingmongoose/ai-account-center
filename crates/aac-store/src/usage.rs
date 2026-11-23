@@ -2152,7 +2152,13 @@ fn open_period_heads(txn: &WriteTransaction, payload: &Json) -> Result<Vec<Findi
         if span_at(&readings, &open, (a, w), start.saturating_sub(1))?.is_some() {
             continue;
         }
-        affected.push((account.identity.clone(), window.identity.clone(), start, period.end_ms, first_ms));
+        affected.push((
+            account.identity.clone(),
+            window.identity.clone(),
+            start,
+            period.end_ms,
+            first_ms,
+        ));
     }
     if affected.is_empty() {
         return Ok(Vec::new());
@@ -2160,9 +2166,7 @@ fn open_period_heads(txn: &WriteTransaction, payload: &Json) -> Result<Vec<Findi
     let periods: Vec<String> = affected
         .iter()
         .map(|(account, window, start, end, first_ms)| {
-            format!(
-                "{account} on {window}: period start {start} ms, end {end} ms, series history from {first_ms} ms"
-            )
+            format!("{account} on {window}: period start {start} ms, end {end} ms, series history from {first_ms} ms")
         })
         .collect();
     let total = if affected.len() == 1 {
