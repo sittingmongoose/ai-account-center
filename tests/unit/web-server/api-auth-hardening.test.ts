@@ -384,6 +384,22 @@ describe('L3: /api/auth/check reports whether this connection may open /ws', () 
     expect(outBody.authenticated).toBe(false);
     expect(outBody.wsAllowed).toBe(false);
   });
+  it('reports wsAllowed for an open-mode guest on this computer', async () => {
+    // Auth off: a loopback guest may open /ws; the page must keep reconnecting. (A non-loopback
+    // peer is refused by the same predicate, covered in auth-middleware.test.ts.)
+    process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+    try {
+      const guest = await send('GET', '/api/auth/check');
+      expect(guest.status).toBe(200);
+      const body = await guest.json();
+      expect(body.authRequired).toBe(false);
+      expect(body.authenticated).toBe(false);
+      expect(body.accessMode).toBe('open');
+      expect(body.wsAllowed).toBe(true);
+    } finally {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+    }
+  });
 });
 
 describe('F2: malformed login requests stay inside the request', () => {
