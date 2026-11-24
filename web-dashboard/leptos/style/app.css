@@ -2958,7 +2958,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .fx dd.t .c2-answer { margin-left: 8px; }
   .fx dd.t .c2-when[data-soft] { text-align: left; max-width: none; }
   .c2-name { font-size: 19px; }
-  /* Dense on a phone (Jared, 2026-11-24): smaller type, and a section head never splits its words. */
+  /* Dense on a phone (owner, 2026-11-24): smaller type, and a section head never splits its words. */
   .fx { font-size: 13px; }
   .fx dt { font-size: 10px; }
   .c2-wr, .c2-fin-rows li { font-size: 13px; }
@@ -3013,7 +3013,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 }
 @container content (max-width: 899.98px) {
   /* Each pinned thread its own plate, with a gap; the group heads sit on the page. Dense: small type, no orphaned
-     words (Jared, 2026-11-24). */
+     words (owner, 2026-11-24). */
   .sec-pinned.c2 { background: transparent; border: 0; box-shadow: none; }
   .sec-pinned.c2 > .plate-head { padding: 4px 2px 6px; }
   .sec-pinned.c2 .c2-body, .sec-pinned.c2 .c2-silent { border-top: 0; }

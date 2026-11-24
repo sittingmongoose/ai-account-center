@@ -2563,7 +2563,7 @@ test('update rows name their cause instead of "Failed" and show which tool ran a
   assert.deepEqual([item('ubuntu', 'Muse Code').result, item('ubuntu', 'Muse Code').tip], ['Failed', 'The app update failed; check its supported installer.']);
 });
 
-test("OpenCode Go with three stored keys (Jared's shape): three rows, no stand-in, nothing reads an unpinned key", () => {
+test("OpenCode Go with three stored keys (the owner's shape): three rows, no stand-in, nothing reads an unpinned key", () => {
   const go = (id, label, digest) =>
     account({ id, provider: 'opencode-go', providerLabel: 'OpenCode Go', label, email: null, plan: 'Go', platform: 'ubuntu', capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] }, ...(digest ? {} : {}) });
   const accounts = [

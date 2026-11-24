@@ -205,7 +205,7 @@ public static class FixtureRender
             window.ToggleDetailsForCheck("prov:opencode-go:opencode-go:example-1");
             await Settle(window);
 
-            // Card OCG1, Jared's shape: Account 2, Account 3 and one stored key's row, each its own row with its own name.
+            // Card OCG1, the owner's shape: Account 2, Account 3 and one stored key's row, each its own row with its own name.
             var three = Clone(fixture);
             var goTemplate = three.Accounts.First(account => account.Provider == "opencode-go");
             three.Accounts.RemoveAll(account => account.Provider == "opencode-go");

@@ -85,7 +85,7 @@ enum ReviewR2Check {
     exit(failures.isEmpty ? 0 : 1)
   }
 
-  /// Card OCG1, Jared's shape (`Tests/Fixtures/opencode-three-keys.json`): Account 2, Account 3 and one stored key's
+  /// Card OCG1, the owner's shape (`Tests/Fixtures/opencode-three-keys.json`): Account 2, Account 3 and one stored key's
   /// row, each its own row. Rendered offscreen and read back: every row's distinguishing name shows in full, also when
   /// an older dashboard names the key row "OpenCode Go <digest>", and nothing folds them into "1 of N".
   static func openCodeKeyRows(_ check: (Bool, String) -> Void) throws {

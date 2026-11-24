@@ -552,7 +552,7 @@ export const tests = {
     }
   },
 
-  // SR2 = C (Jared, 2026-11-18): concept A with Coming up. Every thread's next step with a time sits in Coming up,
+  // SR2 = C (owner, 2026-11-18): concept A with Coming up. Every thread's next step with a time sits in Coming up,
   // soonest first; a row says Next with its time in bold and its open work by state; the opened thread has Needs you,
   // Now and Next, Finished today with times, and its open work as one table (task, what is happening, waits on, due).
   // A thread that needs the owner answers from its row.
