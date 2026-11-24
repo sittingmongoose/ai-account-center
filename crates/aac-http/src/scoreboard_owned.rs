@@ -538,8 +538,9 @@ fn cached_bytes(view: &Json, at: u64, etag: &str, now: u64, stale: bool) -> (Vec
 
 /// What one computed presentation was made over: the held snapshot (by sequence, rows and
 /// its generation key), the catalog snapshot it saw (by content fingerprint and scan
-/// stamp), the seed failures and one display zone. Any move recomputes — except a scan
-/// stamp-only move, whose one new date fact is patched into the kept facts text.
+/// stamp), the runs problems, the seed failures and one display zone. Any move recomputes —
+/// except a catalog scan-stamp-only move, whose one new date fact is patched into the kept
+/// facts text.
 #[derive(Clone, PartialEq, Eq)]
 struct FactsKey {
     held_seq: u64,
@@ -548,6 +549,7 @@ struct FactsKey {
     catalog_hash: String,
     catalog_scanned_at: Option<u64>,
     catalog_fingerprint: String,
+    runs_problems_hash: String,
     seed_hash: String,
     time_zone: String,
 }
@@ -557,13 +559,15 @@ impl FactsKey {
     /// which carries a `/`; the zone enters as its hash's first digits).
     fn id(&self) -> String {
         let short: String = self.catalog_hash.chars().take(12).collect();
+        let probs: String = self.runs_problems_hash.chars().take(8).collect();
         let zone: String = sha256_text(&self.time_zone).chars().take(8).collect();
         format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             self.generation,
             self.held_seq,
             short,
             self.catalog_scanned_at.unwrap_or(0),
+            probs,
             zone
         )
     }
@@ -575,6 +579,7 @@ impl FactsKey {
             && self.generation == other.generation
             && self.catalog_hash == other.catalog_hash
             && self.catalog_fingerprint == other.catalog_fingerprint
+            && self.runs_problems_hash == other.runs_problems_hash
             && self.seed_hash == other.seed_hash
             && self.time_zone == other.time_zone
     }
@@ -1364,7 +1369,7 @@ impl ScoreboardOwned {
         feed: &Feed,
         held: &Arc<HeldRuns>,
         catalog: &Json,
-        now: u64,
+        runs: &Json,
     ) -> Result<(Arc<Presentation>, String), Decline> {
         if let Some(id) = &feed.facts {
             let mut parsed = self.parsed_facts.lock().unwrap_or_else(|p| p.into_inner());
@@ -1393,6 +1398,7 @@ impl ScoreboardOwned {
             catalog_hash: held.key.1.clone(),
             catalog_scanned_at: catalog["scannedAt"].as_u64(),
             catalog_fingerprint: catalog_fingerprint(catalog),
+            runs_problems_hash: sha256_text(&runs["problems"].to_string()),
             seed_hash: sha256_text(&json!(seed_failures).to_string()),
             time_zone: feed.time_zone.clone(),
         };
@@ -1405,10 +1411,6 @@ impl ScoreboardOwned {
         {
             return Ok((computed.presentation.clone(), key.id()));
         }
-        let picked: Vec<usize> = (0..held.rows.len()).collect();
-        // The runs state's small parts only (problems, stamps, counts): the rows
-        // themselves enter the facts as their held entries below, uncloned.
-        let runs = self.state_rows(held, &picked, now, false, false).await?;
         let prepared = self.held_docs(held, catalog, &held.key.1);
         let share_only = held.share.is_some();
         let identity = if share_only {
@@ -1426,7 +1428,7 @@ impl ScoreboardOwned {
             .unwrap_or_default();
         // The front door's facts input, leaf for leaf: its skeleton (with `root` empty, as
         // it sent), the catalog, the runs state and every doc (raw, with the normalized
-        // model words the patches introduce named alongside).
+        // model words, synthesized row keys and normalized unknown outcomes named alongside).
         let skeleton = json!({
             "now": feed.now,
             "timeZone": feed.time_zone,
@@ -1516,8 +1518,10 @@ impl ScoreboardOwned {
         let time_zone = feed.time_zone.clone();
         let feed_now = feed.now;
         let catalog_owned = catalog.clone();
+        let runs_owned = runs.clone();
         let rows = held.rows.clone();
         let facts_held = Arc::clone(held);
+        let prepared_owned = Arc::clone(&prepared);
 
         let (facts_text, presentation) =
             tokio::task::spawn_blocking(move || -> Result<(String, Presentation), Decline> {
@@ -1527,14 +1531,39 @@ impl ScoreboardOwned {
                 // is never materialized for the facts pass.
                 let mut acc = aac_status::produce::facts::Acc::default();
                 let mut words = indexmap::IndexSet::new();
-                for value in [&skeleton, &catalog_owned, &runs, &patch_words] {
+                for value in [&skeleton, &catalog_owned, &runs_owned, &patch_words] {
                     acc.read(value, true);
                     words.extend(aac_status::produce::facts::words_of(value));
                 }
-                for entry in &rows {
+                for (index, entry) in rows.iter().enumerate() {
                     let state = entry.state_row();
                     acc.read(&state, true);
                     words.extend(aac_status::produce::facts::words_of(&state));
+                    let doc = &state["doc"];
+                    // Synthesized row keys (`base_rows` -> `judged_rows` tie-breaker) and
+                    // normalized unknown outcomes (`runs_source_of` -> `counted`): both are
+                    // compared via `ctx.compare` and do not appear verbatim in the raw docs.
+                    if let Some(patch) = prepared_owned.patches.get(index).and_then(Option::as_ref)
+                        && !patch.id.is_empty()
+                    {
+                        let harness = doc["model"]["harness"].as_str().unwrap_or("");
+                        let effort = patch.effort.as_deref().unwrap_or("");
+                        let base_key = format!("{}|{harness}|{effort}", patch.id);
+                        let proc_id = doc["process"]["id"].as_str().unwrap_or("");
+                        let proc_ver = doc["process"]["version"].as_str().unwrap_or("");
+                        let proc_key = format!("{base_key}|{proc_id}|{proc_ver}");
+                        for extra in [base_key, proc_key] {
+                            if words.insert(extra.clone()) {
+                                acc.read(&Json::String(extra), true);
+                            }
+                        }
+                    }
+                    if aac_status::read_measures::outcome(doc) == 0 {
+                        let word = normalized_unknown_outcome(doc);
+                        if words.insert(word.clone()) {
+                            acc.read(&Json::String(word), true);
+                        }
+                    }
                 }
                 for accepted in facts_held.accepted_slice().unwrap_or(&[]) {
                     acc.read(accepted, true);
@@ -1543,7 +1572,7 @@ impl ScoreboardOwned {
                 let facts = aac_status::produce::facts::Facts::build(&acc, Some(&offsets.zone));
                 let words = Json::Array(words.into_iter().map(Json::String).collect());
                 let values: Vec<&Json> =
-                    vec![&skeleton, &catalog_owned, &runs, &patch_words, &words];
+                    vec![&skeleton, &catalog_owned, &runs_owned, &patch_words, &words];
                 // Every word ranked, as the front door completed them (`status_collate`).
                 let facts_text =
                     crate::status_collate::complete_order_of(&values, &facts.to_text())
@@ -1772,10 +1801,6 @@ impl ScoreboardOwned {
                 None
             }
         };
-        // The facts generation the request names, pushed by its caller, or the facts
-        // computed over this snapshot when none was pushed. The request's own `now`
-        // comes from its header words.
-        let (presentation, order_key) = self.presentation(&feed, &held, &catalog, now).await?;
         let picked = if share_only {
             (0..held.rows.len()).collect::<Vec<_>>()
         } else {
@@ -1787,24 +1812,45 @@ impl ScoreboardOwned {
                 || feed.source != "all"
                 || feed.task_type.is_some());
         let runs = self.state_rows(&held, &picked, now, false, false).await?;
+        // The facts generation the request names, pushed by its caller, or the facts
+        // computed over this snapshot and runs state when none was pushed. The request's
+        // own `now` comes from its header words.
+        let (presentation, order_key) = self.presentation(&feed, &held, &catalog, &runs).await?;
         self.record_check_held(&held, &picked, &runs);
+        let prepared = self.held_docs(&held, &catalog, &catalog_hash);
+        if picked.iter().any(|&index| prepared.proto[index]) {
+            return Err(Decline::Unsupported);
+        }
         let join_reviews = if filtered {
+            let picked_ids: std::collections::HashSet<&str> = picked
+                .iter()
+                .map(|&index| held.rows[index].id.as_str())
+                .collect();
             let mut reviews_query = Map::new();
             if let Some(from_ms) = feed.from_ms {
                 reviews_query.insert("fromMs".to_string(), json!(from_ms));
             }
             reviews_query.insert("reviewsOnly".to_string(), json!(true));
-            held.pick(&Json::Object(reviews_query))
-                .into_iter()
-                .map(|index| held.rows[index].doc())
-                .collect::<Vec<_>>()
+            let mut joined = Vec::new();
+            for index in held.pick(&Json::Object(reviews_query)) {
+                if picked_ids.contains(held.rows[index].id.as_str()) {
+                    continue;
+                }
+                let raw = held.rows[index].doc();
+                if raw["review"]["of"]
+                    .as_str()
+                    .is_some_and(|target| picked_ids.contains(target))
+                {
+                    if prepared.proto[index] {
+                        return Err(Decline::Unsupported);
+                    }
+                    joined.push(join_review_doc(&raw));
+                }
+            }
+            joined
         } else {
             Vec::new()
         };
-        let prepared = self.held_docs(&held, &catalog, &catalog_hash);
-        if picked.iter().any(|&index| prepared.proto[index]) {
-            return Err(Decline::Unsupported);
-        }
         let mut rows_owned: Vec<Json> = Vec::with_capacity(picked.len());
         let mut docs_owned: Vec<Json> = Vec::with_capacity(picked.len());
         for &index in &picked {
@@ -1883,16 +1929,34 @@ impl ScoreboardOwned {
         // A miss is a facts generation older than the data (the catalog's 30 s scan moves its
         // `scannedAt` without a new generation): `stale`, so the front door pushes fresh facts
         // and today's handler answers this one request.
-        let view = aac_status::read_scoreboard::compose_fed_parts(
+        let view = match aac_status::read_scoreboard::compose_fed_parts(
             &data,
             &rows,
             &docs,
             &row_facts,
             order.as_deref(),
-            presentation,
+            presentation.clone(),
             (feed.now, now_date),
-        )
-        .ok_or(Decline::Stale)?;
+        ) {
+            Some(view) => view,
+            None => {
+                let reason = Date::of_now(feed.now, feed.clock.clone(), feed.day.clone())
+                    .map(|date| {
+                        compose_decline_reason(
+                            &data,
+                            &rows,
+                            &docs,
+                            &row_facts,
+                            order.as_deref(),
+                            presentation,
+                            (feed.now, date),
+                        )
+                    })
+                    .unwrap_or("compose-returned-none");
+                eprintln!("aac-http: scoreboard compose declined ({reason})");
+                return Err(Decline::Stale);
+            }
+        };
         let mut writer = Writer::with_capacity(64 * 1024);
         writer.value(&view);
         let (bytes, identity_bytes) = writer.finish();
@@ -2593,6 +2657,156 @@ fn check_problems(runs: &Json) -> Vec<Problem> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The few fields `read_measures::Index`, `quality`, and `overclaim` read from a joined review
+/// run outside the filtered row set. Unused prose (`task.title`, `outcome`, `flags`) stays out of
+/// `data["joinReviews"]` so a prototype word inside prose never trips `proto_named(data)`.
+fn join_review_doc(raw: &Json) -> Json {
+    let evidence = raw["evidence"]
+        .as_array()
+        .and_then(|items| items.first())
+        .map(|first| json!([{"path": first["path"]}]))
+        .unwrap_or(Json::Null);
+    json!({
+        "id": raw["id"],
+        "endedAt": raw["endedAt"],
+        "task": {"type": raw["task"]["type"]},
+        "model": {
+            "id": raw["model"]["id"],
+            "provider": raw["model"]["provider"],
+            "effort": raw["model"]["effort"],
+        },
+        "review": {
+            "of": raw["review"]["of"],
+            "verdict": raw["review"]["verdict"],
+            "overturned": raw["review"]["overturned"],
+            "disputed": raw["review"]["disputed"],
+            "by": raw["review"]["by"],
+        },
+        "evidence": evidence,
+    })
+}
+
+/// Normalized unknown-outcome label matching `read_scoreboard::runs_source_of`.
+fn normalized_unknown_outcome(doc: &Json) -> String {
+    doc["outcome"]
+        .as_str()
+        .unwrap_or("")
+        .split(aac_status::read_context::js_whitespace)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Name why `compose_fed_parts` declined (`None`), for one journal line. Called only on the
+/// decline path so the happy path pays nothing; returns only a fixed reason tag, never run text.
+#[allow(clippy::too_many_arguments)]
+fn compose_decline_reason(
+    data: &Json,
+    rows: &[&Json],
+    docs: &[&Json],
+    row_facts: &[&aac_status::read_scoreboard::RowFacts],
+    order: Option<&[usize]>,
+    facts: Arc<Presentation>,
+    now: (i64, Date),
+) -> &'static str {
+    if data["runs"]["correctionsResolved"] != true {
+        return "corrections-unresolved";
+    }
+    if aac_status::read_context::proto_named(data) {
+        return "proto-named";
+    }
+    if rows.len() != docs.len()
+        || row_facts.len() != rows.len()
+        || order.is_some_and(|o| o.len() != rows.len())
+    {
+        return "length-mismatch";
+    }
+    let ctx = aac_status::read_context::Context::shared(facts.clone(), Some(now)).with_iso_any();
+    let missing_clock = |value: &Json| -> bool {
+        if value.is_null() {
+            return false;
+        }
+        let Some(ms) = ctx.epoch(value) else {
+            return true;
+        };
+        let _ = ctx.clock(ms);
+        !ctx.valid()
+    };
+    if missing_clock(&data["runs"]["scannedAt"]) || missing_clock(&data["catalog"]["scannedAt"]) {
+        return "missing-date-fact";
+    }
+    if let Some(problems) = data["runs"]["problems"].as_array()
+        && problems
+            .iter()
+            .filter(|p| !p["file"].as_str().unwrap_or("").starts_with("limits/"))
+            .any(|p| missing_clock(&p["since"]))
+    {
+        return "missing-runs-problem-date";
+    }
+    if let Some(problems) = data["catalog"]["problems"].as_array()
+        && problems.iter().any(|p| missing_clock(&p["since"]))
+    {
+        return "missing-catalog-problem-date";
+    }
+    for doc in docs {
+        if !doc["endedAt"].is_null() {
+            let _ = ctx.epoch(&doc["endedAt"]);
+            if !ctx.valid() {
+                return "missing-epoch-fact";
+            }
+        }
+        let id = doc["id"].as_str().unwrap_or("");
+        if !id.is_empty() && ctx.rank(id).is_none() {
+            return "missing-id-rank";
+        }
+        if let Some(bench) = doc["benchmark"].as_str()
+            && !bench.is_empty()
+            && ctx.rank(bench).is_none()
+        {
+            return "missing-benchmark-rank";
+        }
+        if let Some(model) = doc["model"]["id"].as_str()
+            && !model.is_empty()
+        {
+            let harness = doc["model"]["harness"].as_str().unwrap_or("");
+            let effort = doc["model"]["effort"].as_str().unwrap_or("");
+            let base_key = format!("{model}|{harness}|{effort}");
+            let proc_id = doc["process"]["id"].as_str().unwrap_or("");
+            let proc_ver = doc["process"]["version"].as_str().unwrap_or("");
+            let proc_key = format!("{base_key}|{proc_id}|{proc_ver}");
+            if ctx.rank(&base_key).is_none() || ctx.rank(&proc_key).is_none() {
+                return "missing-row-key-rank";
+            }
+        }
+        if aac_status::read_measures::outcome(doc) == 0
+            && ctx.rank(&normalized_unknown_outcome(doc)).is_none()
+        {
+            return "missing-outcome-rank";
+        }
+    }
+    if data["finish"]["native"] == true {
+        let mut no_native = data.clone();
+        no_native["finish"]["native"] = json!(false);
+        if let Some(now_ms) = data["now"].as_i64()
+            && let Some(date) = Date::of_now(now_ms, String::new(), String::new())
+            && aac_status::read_scoreboard::compose_fed_parts(
+                &no_native,
+                rows,
+                docs,
+                row_facts,
+                order,
+                facts,
+                (now_ms, date),
+            )
+            .is_some()
+        {
+            return "native-by-model-shape";
+        }
+    }
+    "compose-returned-none"
 }
 
 #[cfg(test)]
@@ -3834,5 +4048,367 @@ mod tests {
         eprintln!("rss after-inputs ({inputs_len} bytes, dropped) {rss:.1} MiB (hwm {hwm:.1})");
         let held = owner.held(Some(clock)).await.expect("held");
         assert_eq!(held.rows.len(), 9_000);
+    }
+
+    /// Live Nov 24: `judged_rows` breaks ties on `(basis, rank, n)` by comparing synthesized
+    /// row keys (`model|harness|effort`, and `...|process.id|process.version` when `byProcess`
+    /// is true). Those keys must be ranked in the owner-computed presentation facts, or every
+    /// real multi-model read declines `stale`.
+    #[tokio::test]
+    async fn tied_multi_model_and_by_process_rows_answer_without_stale_decline() {
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        let dir = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+        std::fs::create_dir_all(&dir).expect("run folder");
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog folder");
+        let base: serde_json::Value = serde_json::from_str(BENCH).expect("bench doc");
+        let runs = [
+            (
+                "build-a",
+                "build",
+                "anthropic",
+                "claude-opus-5-5",
+                "high",
+                None,
+            ),
+            (
+                "build-b",
+                "build",
+                "anthropic",
+                "claude-sonnet-5-5",
+                "high",
+                None,
+            ),
+            (
+                "scout-a",
+                "scout",
+                "anthropic",
+                "claude-opus-5-5",
+                "high",
+                Some(("proc-a", "1.0")),
+            ),
+            (
+                "scout-b",
+                "scout",
+                "anthropic",
+                "claude-opus-5-5",
+                "high",
+                Some(("proc-b", "2.0")),
+            ),
+        ];
+        for (suffix, task_type, provider, model, effort, process) in runs {
+            let mut doc = base.clone();
+            doc["id"] = json!(format!("vm.lead--{suffix}"));
+            doc["task"]["id"] = json!(suffix);
+            doc["task"]["type"] = json!(task_type);
+            doc["model"]["provider"] = json!(provider);
+            doc["model"]["id"] = json!(model);
+            doc["model"]["effort"] = json!(effort);
+            if let Some((pid, pver)) = process {
+                doc["process"] = json!({"id": pid, "version": pver});
+            }
+            std::fs::write(dir.join(format!("vm.lead--{suffix}.json")), doc.to_string())
+                .expect("run file");
+        }
+        let owner = owner(root.path().to_path_buf(), None);
+        owner.seed().await;
+        owner.catalog_pass(now);
+        let (bytes, _) = owner
+            .answer(&feed_text_bare(now, "America/New_York"))
+            .await
+            .expect("multi-model and byProcess ties must answer 200");
+        let view: serde_json::Value = serde_json::from_slice(&bytes).expect("view json");
+        assert_eq!(view["version"], json!(1));
+        let rows_count: usize = view["uses"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|u| u["taskTypes"].as_array().into_iter().flatten())
+            .filter_map(|t| t["rows"].as_array().map(Vec::len))
+            .sum();
+        assert!(
+            rows_count >= 4,
+            "expected scored rows across build and scout, got {rows_count}"
+        );
+    }
+
+    /// Live Nov 24: `runs_source_of` counts runs whose outcome is neither done nor a known
+    /// failure word after collapsing whitespace and lowercasing, then sorts those words via
+    /// `ctx.compare`. Owner-computed facts must rank the normalized unknown-outcome strings.
+    #[tokio::test]
+    async fn capitalized_unknown_outcomes_answer_without_stale_decline() {
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        let dir = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+        std::fs::create_dir_all(&dir).expect("run folder");
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog folder");
+        let base: serde_json::Value = serde_json::from_str(BENCH).expect("bench doc");
+        for (suffix, outcome) in [
+            ("unk-a", "Status routes in Rust, 30/30 both"),
+            ("unk-b", "Analytics  in\tRust, 15/15 both"),
+        ] {
+            let mut doc = base.clone();
+            doc["id"] = json!(format!("vm.lead--{suffix}"));
+            doc["task"]["id"] = json!(suffix);
+            doc["outcome"] = json!(outcome);
+            std::fs::write(dir.join(format!("vm.lead--{suffix}.json")), doc.to_string())
+                .expect("run file");
+        }
+        let owner = owner(root.path().to_path_buf(), None);
+        owner.seed().await;
+        owner.catalog_pass(now);
+        let (bytes, _) = owner
+            .answer(&feed_text_bare(now, "America/New_York"))
+            .await
+            .expect("capitalized unknown outcomes must answer 200");
+        let view: serde_json::Value = serde_json::from_slice(&bytes).expect("view json");
+        let detail = view["sources"]
+            .as_array()
+            .and_then(|sources| {
+                sources
+                    .iter()
+                    .find(|s| s["id"].as_str() == Some("scoreboard-runs"))
+            })
+            .and_then(|s| s["detail"].as_str())
+            .unwrap_or("");
+        assert!(
+            detail.contains("analytics in rust, 15/15 both")
+                && detail.contains("status routes in rust, 30/30 both"),
+            "detail: {detail}"
+        );
+    }
+
+    /// A new runs-state problem arriving without a generation change introduces a new `since`
+    /// timestamp that `runs_source_of` formats with `ctx.clock`; `FactsKey` must invalidate so
+    /// cached facts do not miss that timestamp and decline `stale`.
+    #[tokio::test]
+    async fn new_runs_problem_since_invalidates_cached_facts() {
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog folder");
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let store = StoreHost::new(boot(store_dir));
+        store.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        owner.seed().await;
+        owner.catalog_pass(now);
+        owner.ingest_pass(false).await;
+        owner
+            .answer(&feed_text_bare(now, "America/New_York"))
+            .await
+            .expect("first answer");
+        // An ingest pass problem appears with a new `since` timestamp without changing generation.
+        owner
+            .pass
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .problems
+            .push(json!({
+                "file": "writers/vm.lead/runs/2026-11-04/broken.json",
+                "reason": "invalid json",
+                "since": now + 15_000,
+            }));
+        owner
+            .views
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        owner
+            .answer(&feed_text_bare(now + 20_000, "America/New_York"))
+            .await
+            .expect("answer after new runs problem must recompute facts and succeed");
+    }
+
+    /// Live Nov 24: filtered reads carry `joinReviews` inside `data`, which `compose_fed_parts`
+    /// checks with `proto_named`. A review run whose unused prose (`task.title`) contains a
+    /// prototype word (such as `"constructor"`) must not cause filtered reads to decline `stale`.
+    #[tokio::test]
+    async fn filtered_read_with_review_prose_prototype_word_answers() {
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        let dir = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+        std::fs::create_dir_all(&dir).expect("run folder");
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog folder");
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let base: serde_json::Value = serde_json::from_str(BENCH).expect("bench doc");
+        // One observed build run and one review run targeting it whose prose title holds
+        // "constructor" (as in live ea-rev-toolbatch1-solhigh.json).
+        let mut target = base.clone();
+        target["id"] = json!("vm.lead--build-1");
+        target["source"] = json!("observed");
+        target["benchmark"] = serde_json::Value::Null;
+        target["task"]["id"] = json!("build-1");
+        target["task"]["type"] = json!("build");
+        target["endedAt"] = json!("2026-11-04T16:30:00Z");
+        std::fs::write(dir.join("vm.lead--build-1.json"), target.to_string()).expect("target");
+        let mut review = base;
+        review["id"] = json!("vm.lead--rev-1");
+        review["source"] = json!("observed");
+        review["benchmark"] = serde_json::Value::Null;
+        review["task"]["id"] = json!("rev-1");
+        review["task"]["type"] = json!("review");
+        review["task"]["title"] = json!("C4-B1 Invariant constructor check");
+        review["endedAt"] = json!("2026-11-04T16:35:00Z");
+        review["review"] = json!({
+            "of": "vm.lead--build-1",
+            "verdict": "pass",
+            "findings": {"high": 0, "medium": 0, "low": 0},
+            "overturned": false,
+            "disputed": false,
+        });
+        std::fs::write(dir.join("vm.lead--rev-1.json"), review.to_string()).expect("review");
+        let store = StoreHost::new(boot(store_dir));
+        store.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        owner.seed().await;
+        owner.catalog_pass(now);
+        owner.ingest_pass(false).await;
+        let now_i64 = i64::try_from(now).expect("now");
+        let offsets =
+            crate::zone_facts::server_zone_facts("America/New_York", now_i64).expect("zone");
+        let (clock, day) = offsets.zone.words(now_i64).expect("words");
+        let feed = json!({
+            "now": now,
+            "clock": clock,
+            "day": day,
+            "timeZone": "America/New_York",
+            "from": serde_json::Value::Null,
+            "to": serde_json::Value::Null,
+            "source": "real",
+            "taskType": "build",
+            "fromMs": serde_json::Value::Null,
+            "toMs": serde_json::Value::Null,
+        })
+        .to_string();
+        let (bytes, _) = owner
+            .answer(&feed)
+            .await
+            .expect("filtered read with review prose proto word must answer 200");
+        let view: serde_json::Value = serde_json::from_slice(&bytes).expect("view");
+        assert_eq!(view["version"], json!(1));
+        // Confirm the review actually joined onto the filtered build row.
+        let build_reviews = view["uses"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|u| u["taskTypes"].as_array().into_iter().flatten())
+            .filter(|t| t["id"].as_str() == Some("build"))
+            .flat_map(|t| t["rows"].as_array().into_iter().flatten())
+            .find_map(|r| r["observed"]["reviews"].as_u64());
+        assert_eq!(build_reviews, Some(1), "review must join onto build row");
+    }
+
+    #[test]
+    fn compose_decline_reason_names_each_failure_class() {
+        let now = i64::try_from(large_now()).expect("now");
+        let date = || {
+            aac_status::read_context::Date::of_now(now, "12:00 PM".into(), "Nov 5".into())
+                .expect("date")
+        };
+        let empty = Arc::new(aac_status::read_context::Presentation::empty());
+        let base_data = json!({
+            "now": now,
+            "runs": {"correctionsResolved": true, "scannedAt": now, "problems": []},
+            "catalog": {"scannedAt": now, "problems": []},
+            "finish": {"native": false},
+        });
+        let mut unresolved = base_data.clone();
+        unresolved["runs"]["correctionsResolved"] = json!(false);
+        assert_eq!(
+            super::compose_decline_reason(
+                &unresolved,
+                &[],
+                &[],
+                &[],
+                None,
+                empty.clone(),
+                (now, date())
+            ),
+            "corrections-unresolved"
+        );
+        let mut proto = base_data.clone();
+        proto["root"] = json!("constructor");
+        assert_eq!(
+            super::compose_decline_reason(
+                &proto,
+                &[],
+                &[],
+                &[],
+                None,
+                empty.clone(),
+                (now, date())
+            ),
+            "proto-named"
+        );
+        let mut missing_prob_date = base_data.clone();
+        missing_prob_date["runs"]["problems"] = json!([{"file": "writers/a/runs/2026-11-04/x.json", "reason": "bad", "since": now - 10_000}]);
+        assert_eq!(
+            super::compose_decline_reason(
+                &missing_prob_date,
+                &[],
+                &[],
+                &[],
+                None,
+                empty.clone(),
+                (now, date())
+            ),
+            "missing-runs-problem-date"
+        );
+        let doc: serde_json::Value = serde_json::from_str(BENCH).expect("bench");
+        let row =
+            json!({"file": "writers/vm.lead/runs/2026-11-04/vm.lead--bench.json", "doc": doc});
+        let fact = aac_status::read_scoreboard::row_facts(&row, &doc);
+        let pres_with_id: aac_status::read_context::Presentation = serde_json::from_value(json!({
+            "dates": {},
+            "epochs": {"2026-11-04T16:30:00Z": 1793809800000_i64},
+            "order": {"vm.lead--bench": 0, "pilot": 1}
+        }))
+        .expect("pres");
+        assert_eq!(
+            super::compose_decline_reason(
+                &base_data,
+                &[&row],
+                &[&doc],
+                &[&fact],
+                None,
+                Arc::new(pres_with_id),
+                (now, date())
+            ),
+            "missing-row-key-rank"
+        );
+        let mut unk_doc = doc.clone();
+        unk_doc["outcome"] = json!("Custom Upper");
+        let unk_row =
+            json!({"file": "writers/vm.lead/runs/2026-11-04/vm.lead--bench.json", "doc": unk_doc});
+        let unk_fact = aac_status::read_scoreboard::row_facts(&unk_row, &unk_doc);
+        let pres_with_keys: aac_status::read_context::Presentation =
+            serde_json::from_value(json!({
+                "dates": {},
+                "epochs": {"2026-11-04T16:30:00Z": 1793809800000_i64},
+                "order": {
+                    "vm.lead--bench": 0,
+                    "pilot": 1,
+                    "claude-opus-5-5|claude-code|high": 2,
+                    "claude-opus-5-5|claude-code|high||": 3
+                }
+            }))
+            .expect("pres");
+        assert_eq!(
+            super::compose_decline_reason(
+                &base_data,
+                &[&unk_row],
+                &[&unk_doc],
+                &[&unk_fact],
+                None,
+                Arc::new(pres_with_keys),
+                (now, date())
+            ),
+            "missing-outcome-rank"
+        );
     }
 }
