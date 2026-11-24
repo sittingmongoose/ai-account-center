@@ -168,10 +168,19 @@ export const tests = {
       JSON.stringify(before)
     );
     await remember(t);
-    // One line, like the Now it replaces: in concept A's denser sheet Now sits above the reading point, and a Now that
-    // grows a line moves scrollTop by that line (Chrome's scroll anchoring keeps the rows read still).
-    await update(t, view, 'A new update, sheet open.');
+    // The row being read: the first open-work row whose top is inside the sheet. Reading position is that row's place
+    // on screen. In concept A's denser sheet Now sits above it, so a Now that grows a line moves scrollTop by that
+    // line while scroll anchoring keeps the row still; scrollTop alone would call that a jump.
+    const readTop = () =>
+      t.page.evaluate(() => {
+        const sheet = document.querySelector('.c2-sheet-host .sheet');
+        window.__pollRead ??= [...sheet.querySelectorAll('.c2-wr')].find((el) => el.getBoundingClientRect().top >= sheet.getBoundingClientRect().top);
+        return { top: window.__pollRead?.getBoundingClientRect().top ?? null, mounted: !!window.__pollRead?.isConnected };
+      });
+    const readBefore = await readTop();
+    await update(t, view, 'A new status update while this sheet stays open.');
     const after = await state(t);
+    const readAfter = await readTop();
     await t.check(
       'poll retains sheet and host DOM identity',
       after.sameSheet && after.sameHost,
@@ -179,8 +188,8 @@ export const tests = {
     );
     await t.check(
       'poll preserves internal reading position',
-      Math.abs(after.scroll - before.scroll) <= 2,
-      JSON.stringify({ before, after })
+      readBefore.top !== null && readAfter.mounted && Math.abs(readAfter.top - readBefore.top) <= 2,
+      JSON.stringify({ readBefore, readAfter, scroll: [before.scroll, after.scroll] })
     );
     await t.check(
       'poll never refocuses the open sheet',

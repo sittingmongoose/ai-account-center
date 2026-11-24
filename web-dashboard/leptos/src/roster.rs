@@ -1061,7 +1061,7 @@ pub fn finished_today(
 }
 
 /// One thread's next step, as Coming up reads it: the server's time words and, when the report gave one, the instant
-/// (`nextBy`) or the day (`nextByDay`) it is due.
+/// (`nextBy`) and the calendar day (`nextByDay`, or `legacy_day` for a report written before that field).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NextStep {
     pub id: String,
@@ -1069,6 +1069,7 @@ pub struct NextStep {
     pub next: Option<String>,
     pub time: Option<PinnedTime>,
     pub at_ms: Option<f64>,
+    /// Set when the report names a day with no time ("by Thu"): then `at_ms` is only the day's last moment.
     pub day: Option<i64>,
 }
 
@@ -1077,9 +1078,11 @@ pub struct ComingItem {
     pub id: String,
     pub title: String,
     pub next: String,
-    /// "7 PM", or the server's words for a day-only or late time.
+    /// The server's words for the time ("7 PM", "Thu 9:30 AM", "by Thu"); for a late step without its "late, was due".
     pub when: String,
     pub late: bool,
+    /// The server's whole words, said on hover ("late, was due 3:57 AM").
+    pub words: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1095,8 +1098,17 @@ pub struct Coming {
     pub untimed: usize,
 }
 
-/// Coming up: every thread's next step that has a time, in time order and grouped by day, late ones first under
-/// today. Nothing is invented: a step without an instant or a day is counted, never placed.
+/// The day an older report meant by an end-of-day instant: agent-report 1.9 wrote "by Thu" as 23:59:59 New York, which
+/// is 22:59:59 EST in summer, before `nextByDay` existed. The server reads it the same way (pinned.rs `next_due_day`).
+pub fn legacy_day(at_ms: f64) -> Option<i64> {
+    let ms = at_ms as i64;
+    let hour = (ms - 18_000_000).div_euclid(3_600_000).rem_euclid(24);
+    (ms.rem_euclid(3_600_000) == 3_599_000 && matches!(hour, 22 | 23)).then(|| est_day(at_ms))
+}
+
+/// Coming up: every thread's next step that has a time, grouped by day, late ones first under today, then the steps
+/// with a time of day in time order, then the steps that name only a day, at the day's end. Each says the server's
+/// own words for its time; nothing is invented: a step without an instant or a day is counted, never placed.
 pub fn coming_up(steps: &[NextStep], now_ms: f64) -> Coming {
     let today = est_day(now_ms);
     let mut placed: Vec<(i64, u8, f64, ComingItem)> = Vec::new();
@@ -1107,18 +1119,34 @@ pub fn coming_up(steps: &[NextStep], now_ms: f64) -> Coming {
             continue;
         };
         let late = s.time.as_ref().is_some_and(|t| t.late);
-        let words = s.time.as_ref().map(|t| t.text.clone()).unwrap_or_default();
-        let item = |when: String| ComingItem {
-            id: s.id.clone(),
-            title: s.title.clone(),
-            next: next.clone(),
-            when,
-            late,
+        let words = s
+            .time
+            .as_ref()
+            .map(|t| t.text.trim().to_string())
+            .unwrap_or_default();
+        let item = |fallback: String| {
+            let when = if words.is_empty() {
+                fallback
+            } else {
+                words.clone()
+            };
+            let when = when
+                .strip_prefix("late, was due ")
+                .map(str::to_string)
+                .unwrap_or(when);
+            ComingItem {
+                id: s.id.clone(),
+                title: s.title.clone(),
+                next: next.clone(),
+                when,
+                late,
+                words: words.clone(),
+            }
         };
-        match (s.at_ms, s.day) {
-            _ if late => placed.push((today, 0, s.at_ms.unwrap_or(0.0), item(words))),
-            (Some(at), _) => placed.push((est_day(at).max(today), 1, at, item(est_hm(at)))),
-            (None, Some(day)) => placed.push((day.max(today), 2, 0.0, item(words))),
+        match (s.day, s.at_ms) {
+            _ if late => placed.push((today, 0, s.at_ms.unwrap_or(0.0), item(String::new()))),
+            (Some(day), _) => placed.push((day.max(today), 2, 0.0, item(String::new()))),
+            (None, Some(at)) => placed.push((est_day(at).max(today), 1, at, item(est_hm(at)))),
             (None, None) => untimed += 1,
         }
     }
@@ -1825,14 +1853,14 @@ mod tests {
                 (
                     "Today".to_string(),
                     vec![
-                        ("late".to_string(), "late, was due 1 PM".to_string(), true),
+                        ("late".to_string(), "1 PM".to_string(), true),
                         ("half-four".to_string(), "4:30 PM".to_string(), false),
                         ("seven".to_string(), "7 PM".to_string(), false),
                     ]
                 ),
                 (
                     "Tomorrow".to_string(),
-                    vec![("thu".to_string(), "9:30 AM".to_string(), false)]
+                    vec![("thu".to_string(), "Thu 9:30 AM".to_string(), false)]
                 ),
                 (
                     "Fri Nov 20".to_string(),
@@ -1844,5 +1872,71 @@ mod tests {
         assert_eq!(untimed_words(c.untimed), "2 threads give no time");
         assert_eq!(untimed_words(1), "1 thread gives no time");
         assert_eq!(coming_up(&[], now), Coming::default());
+    }
+
+    /// A day-only next step as agent-report 1.9 writes it, the field set of a real writer's status.json (values made
+    /// up): `--by Thu` gives `nextBy` = 23:59:59 New York that day AND `nextByDay` = the date, and the server words it
+    /// "by Thu". Coming up must say the server's words, never the end-of-day clock time.
+    #[test]
+    fn a_day_only_next_step_says_its_day_never_an_end_of_day_clock() {
+        let report: Value = json!({
+            "schema": "status@1", "writer": "vm.example", "seq": 7, "t3Thread": "t-1",
+            "writtenAt": "2026-11-24T14:00:00Z", "saidAt": "2026-11-24T14:00:00Z",
+            "summary": "Settings managers are in their second review.", "goal": "Settings managers land",
+            "next": "Settings managers land on main", "nextBy": "2026-11-27T04:59:59Z", "nextByDay": "2026-11-26",
+            "blockers": [], "looping": null
+        });
+        // 2026-11-24 9 AM EST, a Tuesday; the step is due by Thu Nov 26.
+        let now = 1_795_046_400_000.0 + 5.0 * 86_400_000.0 + 14.0 * 3_600_000.0;
+        let next_by = 1_795_046_400_000.0 + 8.0 * 86_400_000.0 + 4.0 * 3_600_000.0 + 3_599_000.0;
+        assert_eq!(report["nextBy"], "2026-11-27T04:59:59Z");
+        let day = report["nextByDay"].as_str().and_then(day_number);
+        let step = |id: &str, at: Option<f64>, day: Option<i64>, text: &str| NextStep {
+            id: id.into(),
+            title: format!("Thread {id}"),
+            next: Some(format!("Next of {id}")),
+            time: Some(PinnedTime {
+                text: text.into(),
+                late: false,
+            }),
+            at_ms: at,
+            day,
+        };
+        // A precise time on the same day: timed items come before day-only ones.
+        let thu_ten = next_by - 14.0 * 3_600_000.0 + 1_000.0;
+        let c = coming_up(
+            &[
+                step("by-thu", Some(next_by), day, "by Thu"),
+                step("thu-ten", Some(thu_ten), None, "Thu 10 AM"),
+            ],
+            now,
+        );
+        assert_eq!(c.days.len(), 1, "{c:?}");
+        assert_eq!(c.days[0].label, "Thu Nov 26");
+        let items: Vec<(&str, &str)> = c.days[0]
+            .items
+            .iter()
+            .map(|i| (i.id.as_str(), i.when.as_str()))
+            .collect();
+        assert_eq!(items, [("thu-ten", "Thu 10 AM"), ("by-thu", "by Thu")]);
+    }
+
+    /// A report from before `nextByDay`: the end-of-day instant alone still reads as that day (23:59:59 EST, or
+    /// 22:59:59 EST for a summer New York day), and any other instant stays a time of day.
+    #[test]
+    fn an_older_end_of_day_instant_reads_as_its_day() {
+        let thu_end = 1_795_046_400_000.0 + 8.0 * 86_400_000.0 + 4.0 * 3_600_000.0 + 3_599_000.0;
+        assert_eq!(legacy_day(thu_end), day_number("2026-11-26"));
+        assert_eq!(legacy_day(thu_end - 3_600_000.0), day_number("2026-11-26"));
+        assert_eq!(
+            legacy_day(thu_end - 2.0 * 3_600_000.0),
+            None,
+            "9:59:59 PM is a time"
+        );
+        assert_eq!(
+            legacy_day(thu_end - 59_000.0),
+            None,
+            "11:59 PM sharp is a time"
+        );
     }
 }

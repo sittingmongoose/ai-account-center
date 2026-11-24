@@ -999,7 +999,8 @@ fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
                 p.r.stages.iter().filter(|s| s.state != "skipped").count() >= 2
                     || (p.u.left.is_empty()
                         && p.u.done.is_empty()
-                        && (p.u.percent.is_some() || p.r.progress.is_some()))
+                        && (p.u.percent.as_ref().is_some_and(|x| x.done.is_some())
+                            || p.r.progress.is_some()))
                     || (quiet_has_lists(p) && matches!(p.word, Word::Quiet))
             })
         })
@@ -1116,15 +1117,10 @@ fn foot_view(p: &Pin) -> (Option<AnyView>, String) {
     if !counts.is_empty() {
         return (Some(work_strip(&counts)), counts_words(&counts));
     }
+    // No percent (contract v3): an own estimate alone leaves the foot empty.
     let words = foot_words(p);
-    (
-        None,
-        if words == "No stages reported" {
-            String::new()
-        } else {
-            words
-        },
-    )
+    let shown = !(words == "No stages reported" || words.starts_with("Own estimate"));
+    (None, if shown { words } else { String::new() })
 }
 
 #[component]
@@ -1144,7 +1140,8 @@ fn RosterRow(
     let corner = corner_words(&p).or_else(|| age.map(|(a, _)| a));
     // And when a heartbeat is newer, how long ago it was last active, under the words' time.
     let active = roster_active(&p.u);
-    let problem = p.problems().into_iter().next().map(|(short, _)| short);
+    // The short line, cut; the whole sentence on hover, and in the thread a tap opens.
+    let problem = p.problems().into_iter().next();
     let late = (p.u.late_count > 0).then(|| format!("{} late", p.u.late_count));
     let mute = matches!(p.word, Word::Quiet);
     let reporting = !matches!(p.word, Word::Quiet | Word::NotReporting);
@@ -1192,7 +1189,7 @@ fn RosterRow(
                     </span>
                 })}
                 {late.map(|t| view! { <span class="c2-prob" data-tone="warn">{t}</span> })}
-                {problem.map(|t| view! { <span class="c2-prob" data-tone="warn">{t}</span> })}
+                {problem.map(|(short, full)| view! { <span class="c2-prob" data-tone="warn" title=full>{short}</span> })}
             </button>
             {waited.map(|w| view! { <div class="c2-ask"><span class="k">"Waiting"</span><span class="v">{w}</span>{answer}</div> })}
         </li>
@@ -1204,18 +1201,24 @@ fn RosterRow(
 pub struct CardJump(pub RwSignal<Option<String>>);
 
 fn next_step(p: &Pin) -> NextStep {
-    let field = |key: &str| {
+    let at_ms =
         p.u.reported
             .as_ref()
-            .and_then(|r| r[key].as_str().map(str::to_string))
+            .and_then(|r| r["nextBy"].as_str())
+            .and_then(iso_ms);
+    // A date names the day; an explicit null leaves the instant precise; no field at all is an older report, whose
+    // end-of-day instant is a day (the server's rule, pinned.rs `next_due_day`).
+    let day = match p.u.reported.as_ref().and_then(|r| r.get("nextByDay")) {
+        Some(marker) => marker.as_str().and_then(day_number),
+        None => at_ms.and_then(legacy_day),
     };
     NextStep {
         id: p.u.id.clone(),
         title: p.title(),
         next: p.r.next.clone(),
         time: p.u.next_time.clone(),
-        at_ms: field("nextBy").as_deref().and_then(iso_ms),
-        day: field("nextByDay").as_deref().and_then(day_number),
+        at_ms,
+        day,
     }
 }
 
@@ -1254,8 +1257,8 @@ fn ComingUp(
                             {day.items.into_iter().map(|item| {
                                 let id = item.id.clone();
                                 view! {
-                                    <li><button class="c2-cu" on:click=move |_| on_pick.run(id.clone())>
-                                        <b data-tone=item.late.then_some("warn")>{item.when}</b>
+                                    <li><button class="c2-cu" title=item.words.clone() on:click=move |_| on_pick.run(id.clone())>
+                                        <b data-tone=item.late.then_some("warn")>{item.late.then(|| view! { <span class="c2-cu-late">"late"</span>" " })}<span class="nw">{item.when}</span></b>
                                         <span class="c2-cu-next">{item.next}</span>
                                         <small>{item.title}</small>
                                     </button></li>

@@ -557,11 +557,23 @@ export const tests = {
   // Now and Next, Finished today with times, and its open work as one table (task, what is happening, waits on, due).
   // A thread that needs the owner answers from its row.
   async 'status concept A with Coming up'(t) {
-    for (const format of [FORMATS[2], FORMATS[0]]) {
+    const PHONE_390 = { name: 'phone-390', w: 390, h: 844, safe: '0,0,34,0', mobile: true };
+    for (const format of [FORMATS[2], FORMATS[0], PHONE_390, FORMATS[3]]) {
       const data = view();
       const now = Date.now();
       const at = (s) => new Date(now + s * 1000).toISOString();
       const est = (iso) => new Date(iso).toLocaleTimeString('en-US', { timeZone: 'Etc/GMT+5', hour: 'numeric', minute: '2-digit' });
+      // A day-only next step as agent-report 1.9 writes it (a real writer's field set, values made up): nextBy is
+      // 23:59:59 New York on that day, nextByDay the date, and the server words it "by <day>".
+      const estDay = (ms) => Math.floor((ms - 5 * 3600_000) / 86_400_000);
+      const dayAhead = estDay(now) + 2;
+      const dayIso = new Date(dayAhead * 86_400_000).toISOString().slice(0, 10);
+      const weekday = new Date(dayAhead * 86_400_000).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+      const settings = data.pinned.updates.find((u) => u.id === 'pin-settings');
+      settings.reported.next = 'Settings managers land on main';
+      settings.reported.nextBy = new Date((dayAhead + 1) * 86_400_000 + 5 * 3600_000 - 1000).toISOString();
+      settings.reported.nextByDay = dayIso;
+      settings.nextTime = { text: `by ${weekday}`, late: false };
       const alive = data.pinned.updates.find((u) => u.id === 'pin-alive');
       alive.reported.nextBy = at(2 * 3600);
       alive.reported.saidAt = at(-7200);
@@ -577,6 +589,11 @@ export const tests = {
       const carried = data.pinned.updates.find((u) => u.id === 'pin-carried');
       carried.reported.writer = 'vm.lanes';
       carried.displayState = 'needsYou';
+      // A late next step: the server's words are "late, was due <time>".
+      carried.reported.next = 'The lanes decision is filed';
+      carried.reported.nextBy = at(-3 * 3600);
+      carried.reported.nextByDay = null;
+      carried.nextTime = { text: `late, was due ${est(carried.reported.nextBy)}`, late: true };
       await openStatus(t, format, data);
       const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
 
@@ -586,7 +603,28 @@ export const tests = {
       await t.check(`${format.name}: Coming up names the thread`, (await chip.textContent()).includes('Background build'));
       await t.check(`${format.name}: Coming up gives the time`, /^\d{1,2}(:\d\d)? (AM|PM)$/.test((await chip.locator('b').textContent()).trim()), await chip.locator('b').textContent());
       await t.check(`${format.name}: Coming up counts the threads with no time`, /^\d+ threads? gives? no time$/.test((await t.page.locator('.c2-cu-rest').textContent()).trim()), await t.page.locator('.c2-cu-rest').textContent());
-      await t.count('.c2-cu', 1, `${format.name}: only a step with a time is placed`);
+      await t.count('.c2-cu', 3, `${format.name}: only the steps with a time are placed`);
+      // A day-only step says the server's words under its day, never an end-of-day clock time (review H1).
+      const dayOnly = t.page.locator('.c2-cu', { hasText: 'Settings managers land on main' });
+      await t.equal(`${format.name}: a day-only step says its day`, (await dayOnly.locator('b').textContent()).trim(), `by ${weekday}`);
+      await t.check(`${format.name}: no end-of-day clock time anywhere in Coming up`, !/11:59 PM|10:59 PM/.test(await t.page.locator('.c2-coming').textContent()));
+      const dayHead = await dayOnly.evaluate((el) => el.closest('.c2-cu-day').querySelector('h4').textContent.trim());
+      await t.check(`${format.name}: the day-only step sits under its own day`, !/^Today$|^Tomorrow$/.test(dayHead), dayHead);
+      // A late step: a "late" mark and the time, the server's whole words on hover, the time column at most two lines
+      // and no word alone on a line (review M1).
+      const late = t.page.locator('.c2-cu', { hasText: 'The lanes decision is filed' });
+      await t.equal(`${format.name}: a late step's mark`, (await late.locator('.c2-cu-late').textContent()).trim(), 'late');
+      await t.equal(`${format.name}: a late step's time`, (await late.locator('b .nw').textContent()).trim(), est(carried.reported.nextBy));
+      await t.equal(`${format.name}: a late step's whole words on hover`, await late.getAttribute('title'), carried.nextTime.text);
+      const times = await t.page.$$eval('.c2-cu b', (bs) => bs.map((b) => {
+        const lh = parseFloat(getComputedStyle(b).lineHeight);
+        const nw = b.querySelector('.nw');
+        return { text: b.textContent.trim(), lines: Math.round(b.getBoundingClientRect().height / lh), timeLines: nw ? Math.round(nw.getBoundingClientRect().height / lh) : 0 };
+      }));
+      await t.check(`${format.name}: every Coming up time takes at most two lines, its time one`, times.every((x) => x.lines <= 2 && x.timeLines <= 1), JSON.stringify(times));
+      const names = await t.page.$$eval('.c2-cu small', (s) => s.every((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis'));
+      await t.check(`${format.name}: thread names in Coming up are whole, never cut`, names);
+      if (format.mobile) await t.crop(`concept-a-coming-up-${format.name}`, '.c2-coming', `${format.name}: Coming up with a late step, a timed step and a day-only step`);
 
       // The row: Next with its time, the open work by state, what finished today.
       const row = t.page.locator('.c2-row', { hasText: 'Background build' });
@@ -595,10 +633,11 @@ export const tests = {
       await t.equal(`${format.name}: the row counts finished today`, (await row.locator('.c2-fin-n').textContent()).trim(), '1 done today');
       const splitRow = t.page.locator('.c2-row', { hasText: 'Split v3' });
       await t.check(`${format.name}: words for a time go under the Next line`, await splitRow.locator('.c2-next.wrap .c2-when.soft').count() === 1);
+      await t.check(`${format.name}: the cut loop line gives its whole sentence on hover`, /On the shared Projects board kept by vm\.projects-lead, P-BATCH2 has gone back for fixes 4 times without a passing review/.test(await splitRow.locator('.c2-prob').getAttribute('title')));
       const noOrphans = await t.page.evaluate(() => [...document.querySelectorAll('.c2-row .c2-next, .c2-row .c2-l3')].every((el) => el.scrollWidth <= el.clientWidth + 1));
       await t.check(`${format.name}: no row line runs past its plate`, noOrphans);
       await t.page.locator('.sec-pinned').evaluate((el) => el.scrollIntoView({ block: 'start' }));
-      if (format.mobile) await t.shot('concept-a-roster-phone', 'phone: Coming up as rows, then each thread its own plate with Next, its time and the open work by state');
+      if (format.mobile) await t.shot(`concept-a-roster-${format.name}`, `${format.name}: Coming up as rows, then each thread its own plate with Next, its time and the open work by state`);
       else await t.shot('concept-a-desktop', 'desktop: Coming up above the roster; the opened thread with Needs you, Now, Next, Finished today and the open work table');
 
       // Picking a step in Coming up opens its thread.
@@ -625,7 +664,7 @@ export const tests = {
       }, sheet);
       await t.check(`${format.name}: no cell in the thread overflows`, fits);
       if (format.mobile) {
-        await t.crop('concept-a-thread-phone', '.c2-sheet-host .sheet', 'phone: the opened thread: Needs you, Now, Next, open work stacked, Finished today');
+        await t.crop(`concept-a-thread-${format.name}`, '.c2-sheet-host .sheet', `${format.name}: the opened thread: Needs you, Now, Next, open work stacked, Finished today`);
         await t.page.keyboard.press('Escape');
         await t.page.waitForSelector('.c2-sheet-host', { state: 'detached' });
       } else {

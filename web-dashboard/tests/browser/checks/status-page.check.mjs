@@ -1129,7 +1129,9 @@ export const tests = {
     await t.text('.c2-pane .c2-sub', /Thin report: no next step, no times\./);
     await t.check('no fill-in facts for the thin report', !(await t.page.locator('.c2-pane .fx').textContent()).includes('Not reported'));
     await t.check('no Idle roster group', !(await t.page.locator('.c2-group').allTextContents()).some((text) => /^Idle\b/.test(text.trim())));
-    await t.text('.c2-pane', /Own estimate 70%/);
+    // No percent (contract v3): an own estimate alone is not shown, in the row or the thread.
+    await t.check('no own-estimate percent in the pane', !(await t.page.locator('.c2-pane').textContent()).includes('Own estimate'));
+    await t.check('no own-estimate percent in the roster', !(await t.page.locator('.c2-roster').textContent()).includes('Own estimate'));
     await t.text('.c2-silent', /Exact Agent Tooling Assessment/);
 
     for (const [w, h] of [[390, 844], [402, 874], [466, 900], [669, 900], [951, 900], [1760, 1000]]) {
