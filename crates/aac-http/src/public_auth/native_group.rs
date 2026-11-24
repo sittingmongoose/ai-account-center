@@ -31,6 +31,10 @@ pub(super) struct Routes {
     host: std::sync::Arc<super::owner_host::OwnerHost>,
     cut: bool,
     legacy_switch: bool,
+    /// The Scoreboard snapshot this door last read from the service's inputs: (runs
+    /// generation, catalog hash, catalog scan stamp). The owner answers `stale` when it
+    /// moves, and only then is the inputs body fetched again.
+    scoreboard_snapshot: std::sync::Mutex<Option<(u64, String, String)>>,
 }
 
 impl Routes {
@@ -43,6 +47,7 @@ impl Routes {
             host,
             cut,
             legacy_switch,
+            scoreboard_snapshot: std::sync::Mutex::new(None),
         }
     }
 
@@ -786,117 +791,97 @@ fn scoreboard_query(raw: Option<&str>) -> Result<ScoreboardQuery, (&'static str,
     })
 }
 
-/// The Scoreboard's presentation facts: the service's unfiltered input, the envelope facts over
-/// it in the display zone, and the held generation id. `None` declines to the route's 503.
+/// The facts generation id for one read snapshot: its runs generation, its catalog hash
+/// and its catalog scan stamp (see `Routes::scoreboard_snapshot`).
+fn scoreboard_facts_id(generation: u64, catalog_hash: &str, catalog_scanned_at: &str) -> String {
+    let short: String = catalog_hash.chars().take(12).collect();
+    format!("{generation}:{short}:{catalog_scanned_at}")
+}
+
+/// The Scoreboard snapshot the answer names: (runs generation, catalog hash, facts
+/// generation id). The service keeps the facts itself (computed over its held snapshot,
+/// in the request's zone): this door no longer fetches the whole run set to compute and
+/// push them per request. It reads only the snapshot's identity from the inputs — cached
+/// until the owner answers `stale` (`refresh`) — and names the deterministic facts id for
+/// it. `None` declines to the route's 503; every step that can fail logs its reason.
 async fn scoreboard_facts(
     routes: &Routes,
     local: Option<&ScoreboardOwned>,
-    time_zone: &str,
-    now: u64,
+    refresh: bool,
 ) -> Option<(u64, String, String)> {
-    let input = if let Some(owner) = local {
-        owner.inputs().await.ok()?
-    } else {
-        let reply = routes
-            .request("GET", "/internal/scoreboard/inputs", SERVICE, &[], None)
-            .await?;
-        if reply.status != 200 {
-            return None;
-        }
-        json_of(&reply)?
-    };
-    let generation = input.get("generation")?.as_u64()?;
-    let catalog_hash = input.get("catalogHash")?.as_str()?.to_owned();
-    let catalog = input.get("catalog")?.clone();
-    let runs = input.get("runs")?.clone();
-    let docs = input.get("docs")?.clone();
-    if catalog.is_null() || runs.is_null() || docs.is_null() {
-        return None;
+    if !refresh
+        && let Some((generation, catalog_hash, scanned_at)) = routes
+            .scoreboard_snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    {
+        let facts_id = scoreboard_facts_id(generation, &catalog_hash, &scanned_at);
+        return Some((generation, catalog_hash, facts_id));
     }
-    let task_types: Vec<Json> = catalog
-        .get("taskTypes")
-        .and_then(Json::as_array)
-        .map(|types| {
-            types
-                .iter()
-                .map(|kind| {
-                    json!({
-                        "id": kind.get("id").cloned().unwrap_or(Json::Null),
-                        "label": kind.get("label").cloned().unwrap_or(Json::Null),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let share_only = input.get("shareOnly").and_then(Json::as_bool) == Some(true);
-    let data = json!({
-        "now": now,
-        "timeZone": time_zone,
-        "root": "",
-        "catalog": catalog,
-        "runs": runs,
-        "joinReviews": [],
-        "seedFailures": input.get("seedFailures").cloned().unwrap_or_else(|| json!([])),
-        "docs": docs,
-        "finish": {
-            "filters": {
-                "from": Json::Null,
-                "to": Json::Null,
-                "source": "all",
-                "taskType": Json::Null,
-                "available": !share_only,
-                "taskTypes": task_types,
-            },
-            "identity": if share_only {
-                Json::Null
-            } else {
-                input.get("identity").cloned().unwrap_or(Json::Null)
-            },
-            "history": {
-                "store": if share_only { "off" } else { "on" },
-                "runs": Json::Null,
-                "importing": false
-            },
-        },
-    });
-    let offsets = crate::zone_facts::server_zone_facts(time_zone, i64::try_from(now).ok()?)?;
-    let facts = aac_status::produce::facts::Facts::of(&[&data], Some(&offsets.zone));
-    let data_text = json!({ "timeZone": time_zone }).to_string();
-    // Every word ranked, not only printable ASCII (status_collate): a non-ASCII run label
-    // compared by the composer would otherwise decline the answer.
-    let facts_text = crate::status_collate::complete_order_of(&[&data], &facts.to_text())
-        .unwrap_or_else(|| facts.to_text());
-    let short: String = catalog_hash.chars().take(12).collect();
-    let facts_id = format!("{generation}:{short}:{now}");
-    let body = format!(
-        "{{\"generation\":{},\"data\":{},\"facts\":{}}}",
-        Json::String(facts_id.clone()),
-        data_text,
-        facts_text
-    );
-    let publication = if let Some(owner) = local {
-        owner.publish_facts(body.as_bytes()).ok()?
-    } else {
-        let reply = routes
-            .request(
-                "PUT",
-                "/internal/feed/scoreboard-facts",
-                SERVICE,
-                &[("content-type", "application/json")],
-                Some(body.as_bytes()),
-            )
-            .await?;
-        if reply.status != 200 {
-            return None;
+    let input = if let Some(owner) = local {
+        match owner.inputs().await {
+            Ok(input) => input,
+            Err(reason) => {
+                eprintln!("aac-http: scoreboard inputs declined ({})", reason.as_str());
+                return None;
+            }
         }
-        json_of(&reply)?
+    } else {
+        match routes
+            .request("GET", "/internal/scoreboard/inputs", SERVICE, &[], None)
+            .await
+        {
+            Some(reply) if reply.status == 200 => match json_of(&reply) {
+                Some(input) => input,
+                None => {
+                    eprintln!("aac-http: scoreboard inputs reply is not JSON");
+                    return None;
+                }
+            },
+            Some(reply) => {
+                eprintln!(
+                    "aac-http: scoreboard inputs answered {} (decline {})",
+                    reply.status,
+                    decline_reason(&reply).unwrap_or("none")
+                );
+                return None;
+            }
+            None => {
+                eprintln!("aac-http: scoreboard inputs got no reply from the service");
+                return None;
+            }
+        }
     };
-    let held = publication.get("generation")?.as_str()?.to_owned();
-    Some((generation, catalog_hash, held))
+    let Some(generation) = input.get("generation").and_then(Json::as_u64) else {
+        eprintln!("aac-http: scoreboard inputs carry no generation");
+        return None;
+    };
+    let Some(catalog_hash) = input
+        .get("catalogHash")
+        .and_then(Json::as_str)
+        .map(str::to_owned)
+    else {
+        eprintln!("aac-http: scoreboard inputs carry no catalog hash");
+        return None;
+    };
+    let scanned_at = input
+        .get("catalog")
+        .and_then(|catalog| catalog.get("scannedAt"))
+        .and_then(Json::as_u64)
+        .map(|at| at.to_string())
+        .unwrap_or_else(|| "0".to_string());
+    *routes
+        .scoreboard_snapshot
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) =
+        Some((generation, catalog_hash.clone(), scanned_at.clone()));
+    let facts_id = scoreboard_facts_id(generation, &catalog_hash, &scanned_at);
+    Some((generation, catalog_hash, facts_id))
 }
 
-/// `GET /api/scoreboard`: the filters, the display zone's facts for the service's unfiltered
-/// input, and the owned answer (bytes, ETag, view).
+/// `GET /api/scoreboard`: the filters, the snapshot the service holds (its facts stay in
+/// the service), and the owned answer (bytes, ETag, view).
 async fn scoreboard(
     routes: &Routes,
     access: &DashboardAccess,
@@ -946,20 +931,25 @@ async fn scoreboard(
         }
         None => Json::Null,
     };
-    // The service may ingest or rescan between the facts fetch and the answer; its `stale`
-    // decline means fresh facts, exactly as today's handler refetches on the next request.
-    // A cold boot's first seed, or a store that is off or lock-held while the share scan
-    // starts, can take a moment: retry briefly, then answer honestly.
+    // The service may ingest or rescan between the snapshot read and the answer; its
+    // `stale` decline means read the snapshot identity again (the service keeps the facts;
+    // the cached identity is refetched only then). `busy` and `deadline` mean a compose is
+    // still running and filling the owner's view cache. A cold boot's first seed, or a
+    // store that is off or lock-held while the share scan starts, can take a moment: retry
+    // briefly, then answer honestly.
+    let mut refresh_snapshot = false;
     for attempt in 0..6 {
         let Some((generation, catalog_hash, held)) =
-            scoreboard_facts(routes, local.as_deref(), &time_zone, now).await
+            scoreboard_facts(routes, local.as_deref(), refresh_snapshot).await
         else {
             if attempt < 5 {
+                refresh_snapshot = true;
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 continue;
             }
             return decline_because("facts");
         };
+        refresh_snapshot = false;
         let feed = json!({
             "now": now,
             "clock": clock.clone(),
@@ -1000,17 +990,34 @@ async fn scoreboard(
                 Some(reply) if declined(&reply) => Decline::ALL
                     .into_iter()
                     .find(|reason| Some(reason.as_str()) == decline_reason(&reply)),
-                _ => return decline_because("answer"),
+                Some(reply) => {
+                    eprintln!(
+                        "aac-http: scoreboard answer replied {} without a decline",
+                        reply.status
+                    );
+                    return decline_because("answer");
+                }
+                None => {
+                    eprintln!("aac-http: scoreboard answer got no reply from the service");
+                    return decline_because("answer");
+                }
             }
         };
         match reason {
-            Some(Decline::Stale | Decline::Busy) if attempt < 5 => {
+            Some(Decline::Stale) if attempt < 5 => {
+                refresh_snapshot = true;
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
-            Some(Decline::Stale | Decline::Busy) => return decline_because("answer"),
+            Some(Decline::Busy | Decline::Deadline) if attempt < 5 => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            Some(Decline::Stale | Decline::Busy | Decline::Deadline) => {
+                return decline_because("answer");
+            }
             Some(Decline::Unsupported) => return decline_because("unsupported"),
             Some(Decline::Shape) => return decline_because("shape"),
-            _ => return decline_because("declined"),
+            Some(other) => return decline_because(other.as_str()),
+            None => return decline_because("declined"),
         }
     }
     decline_because("answer")
