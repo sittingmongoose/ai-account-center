@@ -98,6 +98,12 @@
       ]
     },
     {
+      "file": "crates/aac-agent/src/apps/update.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-agent/src/claude_host.rs",
       "kind": "internal",
       "evidence": [],
@@ -449,6 +455,12 @@
     },
     {
       "file": "crates/aac-http/src/agent_transport.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/allocator.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -972,6 +984,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/status_collate.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/status_fed.rs",
       "kind": "internal",
       "evidence": [],
@@ -1028,6 +1046,12 @@
     },
     {
       "file": "crates/aac-http/tests/account_reads.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/allocator.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
