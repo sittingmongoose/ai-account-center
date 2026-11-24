@@ -242,6 +242,16 @@ impl Drop for CollectingGuard<'_> {
     }
 }
 
+/// Clears `publish_running` when the publish loop exits, including on panic/unwind, so a
+/// panicked publish cannot wedge every later `trigger_publish` (review L1). Mirrors
+/// `CollectingGuard`.
+struct PublishRunningGuard<'a>(&'a AtomicBool);
+impl Drop for PublishRunningGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 impl State {
     fn new(default_zone: Option<RequestZone>) -> Self {
         let empty = empty_reports();
@@ -328,6 +338,32 @@ fn empty_reports() -> AgentReportsState {
 }
 
 fn default_request_zone(ccs_dir: &Path, now: u64) -> Option<RequestZone> {
+    #[cfg(test)]
+    return default_request_zone_inner(ccs_dir, now, None);
+    #[cfg(not(test))]
+    return default_request_zone_inner(ccs_dir, now);
+}
+
+#[cfg(test)]
+fn default_request_zone_inner(
+    ccs_dir: &Path,
+    now: u64,
+    record: Option<&Arc<Mutex<Vec<std::thread::ThreadId>>>>,
+) -> Option<RequestZone> {
+    if let Some(record) = record
+        && let Ok(mut threads) = record.lock()
+    {
+        threads.push(std::thread::current().id());
+    }
+    zone_request(ccs_dir, now)
+}
+
+#[cfg(not(test))]
+fn default_request_zone_inner(ccs_dir: &Path, now: u64) -> Option<RequestZone> {
+    zone_request(ccs_dir, now)
+}
+
+fn zone_request(ccs_dir: &Path, now: u64) -> Option<RequestZone> {
     let now_i64 = clamp_i64(now);
     let (name, offsets) = crate::zone_facts::status_zone(ccs_dir, now_i64)?;
     Some(RequestZone {
@@ -353,8 +389,21 @@ pub(crate) struct Produce {
     collecting: AtomicBool,
     publish_requested: AtomicBool,
     publish_running: AtomicBool,
+    zone_checked_day: AtomicU64,
     #[cfg(test)]
     publish_delay_ms: AtomicU64,
+    #[cfg(test)]
+    publish_panic_once: AtomicBool,
+    #[cfg(test)]
+    publish_entered: Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(test)]
+    zone_checks: Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(test)]
+    before_commit: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    jobs_now_override: Arc<AtomicU64>,
+    #[cfg(test)]
+    zone_walk_threads: Arc<Mutex<Vec<std::thread::ThreadId>>>,
 }
 
 impl Produce {
@@ -379,6 +428,19 @@ impl Produce {
             publish_running: AtomicBool::new(false),
             #[cfg(test)]
             publish_delay_ms: AtomicU64::new(0),
+            #[cfg(test)]
+            publish_panic_once: AtomicBool::new(false),
+            #[cfg(test)]
+            publish_entered: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            zone_checked_day: AtomicU64::new(0),
+            #[cfg(test)]
+            zone_checks: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(test)]
+            before_commit: Mutex::new(None),
+            #[cfg(test)]
+            jobs_now_override: Arc::new(AtomicU64::new(0)),
+            #[cfg(test)]
+            zone_walk_threads: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -457,20 +519,12 @@ impl Produce {
     }
 
     fn run_publish_loop(self: &Arc<Self>) {
+        let _guard = PublishRunningGuard(&self.publish_running);
         loop {
             self.publish_requested.store(false, Ordering::SeqCst);
             let prewarm = self.current_published().is_some();
             self.publish_once_and_hint(prewarm);
             if self.publish_requested.load(Ordering::SeqCst) {
-                continue;
-            }
-            self.publish_running.store(false, Ordering::SeqCst);
-            if self.publish_requested.load(Ordering::SeqCst)
-                && self
-                    .publish_running
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-            {
                 continue;
             }
             return;
@@ -486,24 +540,54 @@ impl Produce {
                 return;
             }
             let now = now_ms();
-            if let Some(next_zone) = default_request_zone(&self.ccs_dir, now) {
-                let rolled = {
-                    let mut state = self.state();
-                    if state.zone.as_ref().is_some_and(|held| {
-                        held.name == next_zone.name && held.zone != next_zone.zone
-                    }) {
-                        state.zone = Some(next_zone);
-                        state.pinned_dirty = true;
-                        state.sources_dirty = true;
-                        state.pinned_gen = state.pinned_gen.wrapping_add(1);
-                        state.sources_gen = state.sources_gen.wrapping_add(1);
-                        true
-                    } else {
-                        false
+            #[cfg(test)]
+            let now = {
+                let override_now = self.jobs_now_override.load(Ordering::SeqCst);
+                if override_now > 0 { override_now } else { now }
+            };
+            // The preferences read + 520-day zone walk is synchronous file I/O and ~2,080
+            // chrono-tz offset evaluations, but `server_zone_facts` only rolls once per UTC
+            // day. Re-walk only when the day advances, on the blocking pool, never on a Tokio
+            // worker every 5 s tick (review L2).
+            let day = now.div_euclid(86_400_000);
+            if day != self.zone_checked_day.load(Ordering::Acquire) {
+                self.zone_checked_day.store(day, Ordering::Release);
+                let ccs_dir = self.ccs_dir.clone();
+                #[cfg(test)]
+                let record = Arc::clone(&self.zone_walk_threads);
+                let zone_walk = tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    {
+                        default_request_zone_inner(&ccs_dir, now, Some(&record))
                     }
-                };
-                if rolled {
-                    self.trigger_publish();
+                    #[cfg(not(test))]
+                    {
+                        default_request_zone(&ccs_dir, now)
+                    }
+                })
+                .await
+                .unwrap_or(None);
+                if let Some(next_zone) = zone_walk {
+                    #[cfg(test)]
+                    self.zone_checks.fetch_add(1, Ordering::SeqCst);
+                    let rolled = {
+                        let mut state = self.state();
+                        if state.zone.as_ref().is_some_and(|held| {
+                            held.name == next_zone.name && held.zone != next_zone.zone
+                        }) {
+                            state.zone = Some(next_zone);
+                            state.pinned_dirty = true;
+                            state.sources_dirty = true;
+                            state.pinned_gen = state.pinned_gen.wrapping_add(1);
+                            state.sources_gen = state.sources_gen.wrapping_add(1);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if rolled {
+                        self.trigger_publish();
+                    }
                 }
             }
             let demand = self.last_demand.load(Ordering::Relaxed);
@@ -755,6 +839,12 @@ impl Produce {
     /// Readers keep answering from the last good generation throughout this pass.
     fn publish(&self, zone_override: Option<(&str, &Zone, u64)>, prewarm_compose: bool) -> bool {
         let mut cache = self.publisher.lock().unwrap_or_else(|p| p.into_inner());
+        #[cfg(test)]
+        self.publish_entered.fetch_add(1, Ordering::SeqCst);
+        #[cfg(test)]
+        if self.publish_panic_once.swap(false, Ordering::SeqCst) {
+            panic!("flicker-lows: injected publish panic");
+        }
         let snap = {
             let mut state = self.state();
             if let Some((name, zone, sample_now)) = zone_override
@@ -951,6 +1041,14 @@ impl Produce {
                 .iter()
                 .map(|(_, source, _, _, generation)| (*source, Arc::clone(generation)))
                 .collect();
+            #[cfg(test)]
+            {
+                let mut hook = self.before_commit.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some((ready, resume)) = hook.take() {
+                    let _ = ready.send(());
+                    let _ = resume.recv();
+                }
+            }
             let committed = match self.feeds.commit_generations(&commit_input) {
                 Ok(committed) => committed,
                 Err(reason) => {
@@ -966,12 +1064,21 @@ impl Produce {
                     return false;
                 }
             };
-            for ((index, source, text, facts_text, _), held_gen) in
+            for ((index, source, _text, _facts_text, _prepared), held_gen) in
                 changed_meta.into_iter().zip(committed)
             {
-                cache
-                    .held
-                    .insert(source, (text, facts_text, Arc::clone(&held_gen)));
+                // Keep the text and generation paired atomically: record the committed
+                // generation's own text, not Produce's, so an external PUT that outran this
+                // commit (a newer generation kept) is never paired with Produce's text
+                // (review L4).
+                cache.held.insert(
+                    source,
+                    (
+                        held_gen.data.get().to_owned(),
+                        held_gen.facts.get().to_owned(),
+                        Arc::clone(&held_gen),
+                    ),
+                );
                 existing[index] = Some(held_gen);
             }
         }
@@ -1955,7 +2062,7 @@ mod flicker_tests {
         }
     }
 
-    fn scan_with_thread(writer: &str, now: u64) -> Scan {
+    pub(super) fn scan_with_thread(writer: &str, now: u64) -> Scan {
         let mut reports = empty_reports();
         reports.state = "ok";
         reports.scanned_at = Some(now);
@@ -2323,6 +2430,233 @@ mod flicker_tests {
             String::from_utf8(bytes)
                 .unwrap()
                 .contains("\"writer\":\"vm.recovered\"")
+        );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod low_tests {
+    use super::flicker_tests::scan_with_thread;
+    use super::*;
+
+    async fn wait_for(mut cond: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !cond() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "condition never became true"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    fn scratch() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let reports = scratch.path().join("reports");
+        std::fs::create_dir_all(&ccs).unwrap();
+        std::fs::create_dir_all(&reports).unwrap();
+        (scratch, ccs, reports)
+    }
+
+    /// L1: a panic inside a coalesced publish pass must not wedge `publish_running`. The RAII
+    /// guard clears it on unwind, so the next `trigger_publish` still runs a real pass.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn publish_running_is_cleared_when_a_publish_panics() {
+        let (_scratch, ccs, reports) = scratch();
+        let produce = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let now = 1_795_000_000_000_u64;
+        produce.after_scan(scan_with_thread("vm.l1", now)).await;
+        assert!(produce.current_published().is_some(), "seed generation");
+
+        // Arm a panic inside the next coalesced publish pass.
+        produce.publish_panic_once.store(true, Ordering::SeqCst);
+        let entered = Arc::clone(&produce.publish_entered);
+        let before = entered.load(Ordering::SeqCst);
+        produce.mark_answers();
+        wait_for(|| entered.load(Ordering::SeqCst) > before).await;
+        // Let the panicking pass unwind before the next trigger.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // The next coalesced publish must still run, not be a no-op behind a stuck flag.
+        let before_next = entered.load(Ordering::SeqCst);
+        produce.mark_answers();
+        let ran = tokio::time::timeout(Duration::from_secs(3), async {
+            wait_for(|| entered.load(Ordering::SeqCst) > before_next).await;
+        })
+        .await;
+        assert!(
+            ran.is_ok(),
+            "publish_running stayed set after a publish panic; later publishes are no-ops"
+        );
+        wait_for(|| !produce.publish_running.load(Ordering::SeqCst)).await;
+    }
+
+    /// L2: the 5 s producer job must not run the synchronous `default_request_zone` (preferences
+    /// read + 520-day zone walk) on a Tokio worker every tick; it re-walks only when the UTC day
+    /// advances, on the blocking pool.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn jobs_zone_walk_only_once_per_utc_day_off_the_workers() {
+        let (_scratch, ccs, reports) = scratch();
+        let produce = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let checks = Arc::clone(&produce.zone_checks);
+        // Capture this runtime's worker thread ids. Each probe records its worker's id, then
+        // blocks that worker on a std barrier; with both workers blocked at once, the two ids
+        // are necessarily distinct. (The blocking pool shares the worker thread *name*, so only
+        // the id tells a blocking-pool thread apart from a Tokio worker.)
+        let worker_ids = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let mut probes = Vec::new();
+        for _ in 0..2 {
+            let ids = Arc::clone(&worker_ids);
+            let barrier = Arc::clone(&barrier);
+            probes.push(tokio::spawn(async move {
+                ids.lock().unwrap().insert(std::thread::current().id());
+                barrier.wait();
+            }));
+        }
+        for probe in probes {
+            probe.await.unwrap();
+        }
+        let worker_ids = worker_ids.lock().unwrap().clone();
+        assert_eq!(worker_ids.len(), 2, "expected both runtime workers");
+        // A fixed clock inside one UTC day: three ticks, no day change, so one walk.
+        produce
+            .jobs_now_override
+            .store(1_795_000_000_000, Ordering::SeqCst);
+        let stop = Arc::new(AtomicBool::new(false));
+        let jobs = tokio::spawn(Produce::jobs(Arc::clone(&produce), Arc::clone(&stop)));
+        // Let several 5 s ticks pass. The base walks the zone on a Tokio worker every tick
+        // (>= 2); the fix walks once (the UTC day does not advance) and off the workers.
+        tokio::time::sleep(Duration::from_millis(11_500)).await;
+        stop.store(true, Ordering::Release);
+        jobs.await.unwrap();
+        assert_eq!(
+            checks.load(Ordering::SeqCst),
+            1,
+            "the zone walk must run once per UTC day, not on every 5 s Tokio-worker tick"
+        );
+        // The one walk must have run on the blocking pool, never on a Tokio worker.
+        let threads = produce.zone_walk_threads.lock().unwrap().clone();
+        assert_eq!(threads.len(), 1, "exactly one zone walk: {threads:?}");
+        assert!(
+            !worker_ids.contains(&threads[0]),
+            "the zone walk ran on a Tokio worker: {threads:?} (workers {worker_ids:?})"
+        );
+    }
+
+    /// L4: an external PUT that outruns Produce's commit must not leave `PublisherCache::held`
+    /// pairing Produce's text with the external generation. The text and generation stay paired.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn publisher_cache_pairs_text_with_the_committed_generation() {
+        let (_scratch, ccs, reports) = scratch();
+        let feeds = Feeds::new();
+        let produce = Produce::new(feeds.clone(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let now = 1_795_000_000_000_u64;
+        produce.after_scan(scan_with_thread("vm.l4", now)).await;
+        let seed_data = feeds.latest(REPORTS).unwrap().data.get().to_owned();
+
+        // Pause the next publish just before it commits so an external PUT lands a higher
+        // generation first (the PUT outruns Produce's commit).
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        *produce.before_commit.lock().unwrap() = Some((ready_tx, resume_rx));
+        let scan_task = {
+            let produce = Arc::clone(&produce);
+            tokio::spawn(async move {
+                produce
+                    .after_scan(scan_with_thread("vm.l4b", now + 1000))
+                    .await;
+            })
+        };
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let external = format!(
+            "{{\"generation\":\"9000000000000000000\",\"data\":{seed_data},\"facts\":{{}}}}"
+        );
+        feeds.put(REPORTS, external.as_bytes()).unwrap();
+        resume_tx.send(()).unwrap();
+        scan_task.await.unwrap();
+
+        let held_gen = feeds.latest(REPORTS).unwrap();
+        assert_eq!(
+            held_gen.id, "9000000000000000000",
+            "the external generation stays"
+        );
+        let cache = produce.publisher.lock().unwrap_or_else(|p| p.into_inner());
+        let (text, _facts, arc) = cache.held.get(REPORTS).unwrap();
+        assert!(
+            Arc::ptr_eq(arc, &held_gen),
+            "cache holds the committed generation"
+        );
+        assert_eq!(
+            text,
+            held_gen.data.get(),
+            "L4: cache text must be the committed generation's data, not Produce's text"
+        );
+    }
+
+    /// L3: the owned singleflight window must be one-sided. A follower whose `x-aac-now` is in
+    /// the leader's past may not reuse the leader's bytes: their `generatedAt` would be in the
+    /// follower's future.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_past_follower_never_receives_a_future_generated_at() {
+        let (_scratch, ccs, reports) = scratch();
+        let feeds = Feeds::new();
+        let produce = Produce::new(feeds.clone(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let now = 1_795_000_000_000_u64;
+        produce.after_scan(scan_with_thread("vm.l3", now)).await;
+        let gens = match produce.current_published() {
+            Some(PublishedState::Ready(published)) => published.generations.clone(),
+            _ => panic!("expected a published generation"),
+        };
+        // A wide UTC window proves the words of both instants (the same minute, one flight).
+        let now_i64 = clamp_i64(now);
+        let span = 30 * 86_400_000;
+        let zone =
+            Zone::proven(now_i64 - span, now_i64 + span, &[[now_i64 - span, 0]]).expect("utc zone");
+        // The leader composes at the staleness edge's far side; the follower asks 600 ms in the
+        // leader's past (still inside the old two-sided 1 s window).
+        let leader_now = clamp_i64(now + 60_500);
+        let follower_now = clamp_i64(now + 59_900);
+        let words = |ms: i64| zone.words(ms).expect("zone words");
+        let (leader_clock, leader_day) = words(leader_now);
+        let (follower_clock, follower_day) = words(follower_now);
+        assert_eq!(
+            (leader_clock.clone(), leader_day.clone()),
+            (follower_clock.clone(), follower_day.clone()),
+            "both instants must share one (clock, day) so they share a flight"
+        );
+        // Make the leader's compose slow enough for the follower to join its flight.
+        produce.compose.set_compose_delay_ms(150);
+        let compose = produce.compose.clone();
+        let leader_gens = gens.clone();
+        let leader = tokio::spawn(async move {
+            compose
+                .answer_generations_async(
+                    None,
+                    leader_gens,
+                    leader_now,
+                    leader_clock,
+                    leader_day,
+                    true,
+                )
+                .await
+        });
+        // Join while the leader is in flight (same six ids, same clock/day).
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let follower = produce
+            .compose
+            .answer_generations_async(None, gens, follower_now, follower_clock, follower_day, true)
+            .await
+            .expect("follower read");
+        let _ = leader.await.unwrap();
+        let follower_iso = aac_num::ecma::to_iso_string(follower_now).expect("follower iso");
+        let leader_iso = aac_num::ecma::to_iso_string(leader_now).expect("leader iso");
+        let text = String::from_utf8(follower.0).expect("utf8");
+        assert!(
+            text.contains(&format!("\"generatedAt\":\"{follower_iso}\"")),
+            "L3: a past follower must get its own generatedAt, not the leader's future instant ({leader_iso}): {text}"
         );
     }
 }

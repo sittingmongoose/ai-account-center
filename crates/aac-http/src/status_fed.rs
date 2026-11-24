@@ -512,7 +512,13 @@ impl StatusCompose {
             {
                 return Ok((bytes, composed.etag));
             }
-            if share_concurrent_window && now_ms.abs_diff(composed.composed_now) <= 1_000 {
+            // One-sided: a follower may reuse the leader's bytes only when its own clock is at
+            // or after the leader's instant, so `generatedAt` is never in the follower's future
+            // (review L3).
+            if share_concurrent_window
+                && now_ms >= composed.composed_now
+                && now_ms - composed.composed_now <= 1_000
+            {
                 return Ok(((*composed.bytes).clone(), composed.etag));
             }
             if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms)
