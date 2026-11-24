@@ -1,8 +1,4 @@
 //! Private Unix service and the explicitly enabled public TCP front door.
-
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 #[cfg(unix)]
 mod provider_write;
 #[cfg(unix)]

@@ -34,9 +34,6 @@ aac-usage = { path = "../../native/aac-usage" }
 base64 = "0.22"
 indexmap = "2.14.2"
 libc.workspace = true
-# The service binaries' global allocator: glibc arenas retained multi-GB of freed
-# compose transients as RSS (service-memory lane); mimalloc hands pages back.
-mimalloc = "0.1"
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json = { workspace = true, features = ["raw_value", "preserve_order", "float_roundtrip"] }
