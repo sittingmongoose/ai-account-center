@@ -125,9 +125,11 @@ impl Owners {
         // G16c: the producers of the fed Status generations (the owned Status group).
         let scoreboard_feeds = feeds.clone();
         let status_produce = match (&config.owned, &answers_owned) {
-            (Some(owned), Some(answers)) if owned.status => {
-                Some(Produce::new(feeds.clone(), Arc::clone(answers)))
-            }
+            (Some(owned), Some(answers)) if owned.status => Some(Produce::new(
+                feeds.clone(),
+                Arc::clone(answers),
+                config.ccs_dir.clone(),
+            )),
             _ => None,
         };
         let scoreboard_owned = match &config.owned {

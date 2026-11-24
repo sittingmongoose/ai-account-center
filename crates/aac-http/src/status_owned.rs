@@ -179,43 +179,52 @@ impl StatusOwned {
         }
     }
 
-    /// One full pass: scan, capture the new revisions into the hosted store, flush the
-    /// readers-check rows, hold the snapshots and tell the front door. The snapshots come back
-    /// for the producers that feed the Status generations (G16c).
-    pub(crate) async fn pass(self: &Arc<Self>, registry_due: bool) -> Scan {
+    /// One full pass: scan, hold the snapshots and tell the front door, returning the raw
+    /// outcome for [`Self::finish_pass`] and the [`Scan`] for the producers. Running the
+    /// capture and check-flush after [`crate::status_produce::Produce::after_scan`] lets a
+    /// cold start publish real reports before waiting on store open or share writes.
+    async fn scan_pass(self: &Arc<Self>, registry_due: bool) -> (Outcome, u64, Scan) {
         let now = now_ms();
         let owner = Arc::clone(self);
-        let outcome = tokio::task::spawn_blocking(move || owner.scan_blocking(now, registry_due))
+        let (outcome, reports_json, quota_json, docs_json) =
+            tokio::task::spawn_blocking(move || {
+                let outcome = owner.scan_blocking(now, registry_due);
+                let reports_json = reports::state_json(&outcome.reports);
+                let quota_json = quota::state_json(&outcome.quota);
+                let docs_json = status_docs::state_json(&outcome.docs);
+                (outcome, reports_json, quota_json, docs_json)
+            })
             .await
-            .unwrap_or_else(|_| Outcome {
-                changed: false,
-                reports: empty_reports(),
-                docs: StatusDocsState {
-                    state: "missing",
-                    scanned_at: None,
-                    docs: Vec::new(),
-                    problems: Vec::new(),
-                },
-                quota: QuotaReportState {
-                    state: "missing",
-                    scanned_at: None,
-                    good: None,
-                    problem: None,
-                },
-                registry: json!({"data": null, "asOf": null, "error": null}),
+            .unwrap_or_else(|_| {
+                let outcome = Outcome {
+                    changed: false,
+                    reports: empty_reports(),
+                    docs: StatusDocsState {
+                        state: "missing",
+                        scanned_at: None,
+                        docs: Vec::new(),
+                        problems: Vec::new(),
+                    },
+                    quota: QuotaReportState {
+                        state: "missing",
+                        scanned_at: None,
+                        good: None,
+                        problem: None,
+                    },
+                    registry: json!({"data": null, "asOf": null, "error": null}),
+                };
+                let reports_json = reports::state_json(&outcome.reports);
+                let quota_json = quota::state_json(&outcome.quota);
+                let docs_json = status_docs::state_json(&outcome.docs);
+                (outcome, reports_json, quota_json, docs_json)
             });
-        self.capture(&outcome.reports, &outcome.docs).await;
-        let owner = Arc::clone(self);
-        let reports = outcome.reports.clone();
-        let docs = outcome.docs.clone();
-        let _ = tokio::task::spawn_blocking(move || owner.flush_check(&reports, &docs, now)).await;
         let generation = self.next_generation(now);
         {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             state.generation = generation;
-            state.reports = reports::state_json(&outcome.reports);
-            state.quota = quota::state_json(&outcome.quota);
-            state.docs = status_docs::state_json(&outcome.docs);
+            state.reports = reports_json;
+            state.quota = quota_json.clone();
+            state.docs = docs_json;
             state.registry = outcome.registry.clone();
         }
         if outcome.changed {
@@ -224,12 +233,22 @@ impl StatusOwned {
                 "generation": generation,
             }));
         }
-        Scan {
-            reports: outcome.reports,
-            docs: outcome.docs,
-            quota: quota::state_json(&outcome.quota),
-            registry: outcome.registry,
-        }
+        let scan = Scan {
+            reports: outcome.reports.clone(),
+            docs: outcome.docs.clone(),
+            quota: quota_json,
+            registry: outcome.registry.clone(),
+        };
+        (outcome, now, scan)
+    }
+
+    /// Capture the scan's new revisions into the hosted store and flush the readers-check rows.
+    async fn finish_pass(self: &Arc<Self>, outcome: Outcome, now: u64) {
+        self.capture(&outcome.reports, &outcome.docs).await;
+        let owner = Arc::clone(self);
+        let reports = outcome.reports;
+        let docs = outcome.docs;
+        let _ = tokio::task::spawn_blocking(move || owner.flush_check(&reports, &docs, now)).await;
     }
 
     /// The snapshots the front door forwards (and its fallback composer reads).
@@ -510,10 +529,13 @@ pub(crate) async fn jobs(
         if stop.load(Ordering::Acquire) {
             return;
         }
-        let scan = owner.pass(tick.is_multiple_of(REGISTRY_EVERY_PASSES)).await;
+        let (outcome, now, scan) = owner
+            .scan_pass(tick.is_multiple_of(REGISTRY_EVERY_PASSES))
+            .await;
         if let Some(produce) = &produce {
             produce.after_scan(scan).await;
         }
+        owner.finish_pass(outcome, now).await;
         tick = tick.wrapping_add(1);
         tokio::time::sleep(std::time::Duration::from_millis(SCAN_EVERY_MS)).await;
     }

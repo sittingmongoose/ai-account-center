@@ -18,14 +18,16 @@
 //! and day words. The view is the existing composer (`aac_status::read_status`) over the borrowed generations,
 //! written by `aac_views::js_json` as Node writes it, with the revalidated-view ETag. Anything unproven declines
 //! with a named reason, and TS answers.
-use crate::feed::{Feeds, Prepared};
+use crate::feed::{Feeds, Generation, Prepared};
 use aac_status::read_context::{Date, Presentation};
-use aac_status::read_status::{self, Unproven};
+use aac_status::read_status::{self, FedTrace, Unproven};
 use aac_views::decline::Decline;
 use aac_views::js_json::Writer;
 use serde::Deserialize;
 use serde_json::{Value, value::RawValue};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The view's name and version (`x-aac-view: status@1`).
@@ -135,6 +137,7 @@ pub(crate) fn proto_exact(value: &Value) -> bool {
 
 /// The front door's per-request facts: the clock, now's two words (formatted by TS in the facts' time zone) and
 /// the generation it read for each source.
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Feed {
@@ -169,13 +172,21 @@ fn etag(key: String, identity: &[u8]) -> String {
     tag
 }
 
-/// The answer of one fed Status request: the view's bytes and its ETag. Runs on the status pool.
-///
-/// The clock-independent bytes are kept per the six generation ids and the request's clock and day
-/// words ([`crate::status_cache`]). A hit fills `generatedAt` and reuses the ETag, which does not
-/// cover that field. A miss composes, and the kept trace refuses the bytes for a later instant
-/// whose ages or thresholds differ.
-pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Decline> {
+/// Answer one Status request from six already-resolved immutable generations. Used by
+/// synchronous test reads directly from an atomic published snapshot.
+#[cfg(test)]
+pub(crate) fn answer_generations(
+    held: &[Arc<Generation>; 6],
+    now_ms: i64,
+    clock: String,
+    day: String,
+) -> Result<(Vec<u8>, String), Decline> {
+    let composed = compose_generations(held, now_ms, clock, day)?;
+    Ok(((*composed.bytes).clone(), composed.etag))
+}
+
+#[cfg(unix)]
+fn resolve_fed(feeds: &Feeds, feed: &str) -> Result<(Feed, [Arc<Generation>; 6]), Decline> {
     let feed: Feed = crate::json_object::from_slice(
         feed.as_bytes(),
         &[
@@ -191,39 +202,83 @@ pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Dec
         ],
     )
     .map_err(|_| Decline::Shape)?;
-    let ids = [
-        (REPORTS, &feed.reports),
-        (QUOTA, &feed.quota),
-        (PINNED, &feed.pinned),
-        (COLLECTED, &feed.collected),
-        (ANSWERS, &feed.answers),
-        (FACTS, &feed.facts),
+    let held = [
+        feeds.current(REPORTS, &feed.reports)?,
+        feeds.current(QUOTA, &feed.quota)?,
+        feeds.current(PINNED, &feed.pinned)?,
+        feeds.current(COLLECTED, &feed.collected)?,
+        feeds.current(ANSWERS, &feed.answers)?,
+        feeds.current(FACTS, &feed.facts)?,
     ];
-    let mut held = Vec::with_capacity(ids.len());
-    for (source, id) in ids {
-        held.push(feeds.current(source, id)?);
+    Ok((feed, held))
+}
+
+#[derive(Clone)]
+struct Composed {
+    bytes: Arc<Vec<u8>>,
+    etag: String,
+    at: Option<usize>,
+    trace: Option<FedTrace>,
+    composed_now: i64,
+}
+
+fn validate_prepared(held: &[Arc<Generation>; 6]) -> Result<(), Decline> {
+    let mut has_facts = false;
+    for generation in held {
+        let Prepared::Status(part) = &generation.prepared else {
+            return Err(Decline::Internal);
+        };
+        let part = part.as_ref().map_err(|d| *d)?;
+        if part.facts.is_some() {
+            has_facts = true;
+        }
+        if !part.data.is_object() {
+            return Err(Decline::Internal);
+        }
     }
-    let key_ids = [
-        feed.reports.clone(),
-        feed.quota.clone(),
-        feed.pinned.clone(),
-        feed.collected.clone(),
-        feed.answers.clone(),
-        feed.facts.clone(),
-    ];
+    if !has_facts {
+        return Err(Decline::Internal);
+    }
+    Ok(())
+}
+
+/// Best-effort cache pre-warm for a newly prepared generation set on a background producer pass.
+/// Populates `status_cache` on success; errors are left for the request path to report by name.
+pub(crate) fn prewarm_generations(
+    held: &[Arc<Generation>; 6],
+    now_ms: i64,
+    clock: String,
+    day: String,
+) {
+    let _ = compose_generations(held, now_ms, clock, day);
+}
+
+fn compose_generations(
+    held: &[Arc<Generation>; 6],
+    now_ms: i64,
+    clock: String,
+    day: String,
+) -> Result<Composed, Decline> {
+    let key_ids: [String; 6] = std::array::from_fn(|i| held[i].id.clone());
     // Named generations only: `current` already refused an id the service does not hold. The date
     // is checked before a hit so a clock `toISOString` cannot write still declines.
-    let date = Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Date)?;
-    if let Some(hit) = crate::status_cache::hit(&key_ids, &feed.clock, &feed.day, feed.now)
+    let date = Date::of_now(now_ms, clock.clone(), day.clone()).ok_or(Decline::Date)?;
+    if let Some(hit) = crate::status_cache::hit(&key_ids, &clock, &day, now_ms)
         && let Some(bytes) = crate::status_cache::fill(&hit.bytes, hit.at, date.iso_text())
     {
-        return Ok((bytes, hit.etag));
+        return Ok(Composed {
+            bytes: Arc::new(bytes),
+            etag: hit.etag,
+            at: Some(hit.at),
+            trace: None,
+            composed_now: now_ms,
+        });
     }
     let mut parts: Vec<(&str, &Value)> = Vec::with_capacity(20);
-    let now = Value::from(feed.now);
+    let now = Value::from(now_ms);
     parts.push(("now", &now));
     let mut presentation = None;
-    for generation in &held {
+    for generation in held {
         let Prepared::Status(part) = &generation.prepared else {
             return Err(Decline::Internal);
         };
@@ -240,37 +295,242 @@ pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Dec
     }
     let presentation = presentation.ok_or(Decline::Internal)?;
     let iso = date.iso_text().to_owned();
-    let (view, traced) = read_status::compose_fed_traced(parts, presentation, (feed.now, date))
+    let (view, traced) = read_status::compose_fed_traced(parts, presentation, (now_ms, date))
         .map_err(|reason| match reason {
             Unproven::Facts => Decline::Date,
             Unproven::Input => Decline::Unsupported,
         })?;
-    let mut writer = Writer::with_capacity(64 * 1024);
+    let mut writer = Writer::with_capacity(256 * 1024);
     writer.value(&view);
     let (bytes, identity) = writer.finish();
     let key = format!(
         "{}|{}|{}|{}|{}|{}|{}",
-        feed.reports,
-        feed.quota,
-        feed.pinned,
-        feed.collected,
-        feed.answers,
-        feed.facts,
-        feed.now.div_euclid(1000)
+        key_ids[0],
+        key_ids[1],
+        key_ids[2],
+        key_ids[3],
+        key_ids[4],
+        key_ids[5],
+        now_ms.div_euclid(1000)
     );
     let tag = etag(key, &identity);
-    if let Some(at) = crate::status_cache::generated_at(&bytes, &iso) {
+    let at = crate::status_cache::generated_at(&bytes, &iso);
+    if let Some(at) = at {
         crate::status_cache::remember(crate::status_cache::Kept {
             ids: key_ids,
-            clock: feed.clock,
-            day: feed.day,
-            trace: traced,
+            clock,
+            day,
+            trace: traced.clone(),
             bytes: bytes.clone(),
             etag: tag.clone(),
             at,
         });
     }
-    Ok((bytes, tag))
+    Ok(Composed {
+        bytes: Arc::new(bytes),
+        etag: tag,
+        at,
+        trace: Some(traced),
+        composed_now: now_ms,
+    })
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct ComposeKey {
+    ids: [String; 6],
+    clock: String,
+    day: String,
+}
+
+struct Flight {
+    id: u64,
+    rx: tokio::sync::watch::Receiver<Option<Result<Composed, Decline>>>,
+}
+
+struct FlightGuard {
+    inflight: Arc<Mutex<HashMap<ComposeKey, Flight>>>,
+    key: ComposeKey,
+    id: u64,
+}
+
+impl Drop for FlightGuard {
+    fn drop(&mut self) {
+        let mut map = self.inflight.lock().unwrap_or_else(|p| p.into_inner());
+        if map
+            .get(&self.key)
+            .is_some_and(|flight| flight.id == self.id)
+        {
+            map.remove(&self.key);
+        }
+    }
+}
+
+/// Async singleflight for Status view composition. Concurrent reads for the same six generations
+/// and `(clock, day)` share one compose (one `Pool::Status` permit) instead of filling the pool;
+/// the compose runs in its own task so a caller timeout still completes and fills `status_cache`
+/// for the immediate retry.
+#[derive(Clone, Default)]
+pub(crate) struct StatusCompose {
+    inflight: Arc<Mutex<HashMap<ComposeKey, Flight>>>,
+    next_id: Arc<AtomicU64>,
+    #[cfg(test)]
+    compose_count: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    compose_delay_ms: Arc<AtomicU64>,
+}
+
+impl StatusCompose {
+    #[cfg(test)]
+    pub(crate) fn compose_count(&self) -> usize {
+        self.compose_count.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_compose_delay_ms(&self, ms: u64) {
+        self.compose_delay_ms.store(ms, Ordering::SeqCst);
+    }
+
+    /// Singleflight `x-aac-feed` Status read: strict `feed.now` fidelity (`share_concurrent_window`
+    /// is false so an `x-aac-feed` follower only reuses a leader when `FedTrace` proves equality).
+    #[cfg(unix)]
+    pub(crate) async fn answer_fed(
+        &self,
+        feeds: &Feeds,
+        limits: &crate::limits::Limits,
+        feed: &str,
+    ) -> Result<(Vec<u8>, String), Decline> {
+        let (feed, held) = resolve_fed(feeds, feed)?;
+        self.answer_generations_async(Some(limits), held, feed.now, feed.clock, feed.day, false)
+            .await
+    }
+
+    /// Singleflight Status compose over six resolved generations. Waiters hold zero pool permits.
+    pub(crate) async fn answer_generations_async(
+        &self,
+        limits: Option<&crate::limits::Limits>,
+        held: [Arc<Generation>; 6],
+        now_ms: i64,
+        clock: String,
+        day: String,
+        share_concurrent_window: bool,
+    ) -> Result<(Vec<u8>, String), Decline> {
+        let date = Date::of_now(now_ms, clock.clone(), day.clone()).ok_or(Decline::Date)?;
+        let ids: [String; 6] = std::array::from_fn(|i| held[i].id.clone());
+        if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms)
+            && let Some(bytes) = crate::status_cache::fill(&hit.bytes, hit.at, date.iso_text())
+        {
+            return Ok((bytes, hit.etag));
+        }
+        validate_prepared(&held)?;
+        let key = ComposeKey {
+            ids: ids.clone(),
+            clock: clock.clone(),
+            day: day.clone(),
+        };
+        for _ in 0..2 {
+            enum Role {
+                Follow(tokio::sync::watch::Receiver<Option<Result<Composed, Decline>>>),
+                Lead {
+                    id: u64,
+                    tx: tokio::sync::watch::Sender<Option<Result<Composed, Decline>>>,
+                    rx: tokio::sync::watch::Receiver<Option<Result<Composed, Decline>>>,
+                },
+            }
+            let role = {
+                let mut map = self.inflight.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(existing) = map.get(&key) {
+                    Role::Follow(existing.rx.clone())
+                } else {
+                    let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+                    let (tx, rx) = tokio::sync::watch::channel(None);
+                    map.insert(key.clone(), Flight { id, rx: rx.clone() });
+                    Role::Lead { id, tx, rx }
+                }
+            };
+            let mut rx = match role {
+                Role::Follow(rx) => rx,
+                Role::Lead { id, tx, rx } => {
+                    let inflight = Arc::clone(&self.inflight);
+                    let flight_key = key.clone();
+                    let limits = limits.cloned();
+                    let held_clone = held.clone();
+                    let clock_clone = clock.clone();
+                    let day_clone = day.clone();
+                    #[cfg(test)]
+                    let compose_count = Arc::clone(&self.compose_count);
+                    #[cfg(test)]
+                    let compose_delay_ms = Arc::clone(&self.compose_delay_ms);
+                    tokio::spawn(async move {
+                        let guard = FlightGuard {
+                            inflight,
+                            key: flight_key,
+                            id,
+                        };
+                        let work = move || {
+                            #[cfg(test)]
+                            {
+                                compose_count.fetch_add(1, Ordering::SeqCst);
+                                let delay = compose_delay_ms.load(Ordering::SeqCst);
+                                if delay > 0 {
+                                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                                }
+                            }
+                            compose_generations(&held_clone, now_ms, clock_clone, day_clone)
+                        };
+                        let outcome = match limits {
+                            Some(limits) => limits.blocking_status(work).await,
+                            None => tokio::task::spawn_blocking(work)
+                                .await
+                                .unwrap_or(Err(Decline::Internal)),
+                        };
+                        // Remove before waking waiters so a waiter that needs a fresh compose
+                        // for a different millisecond cannot re-join this completed flight.
+                        drop(guard);
+                        let _ = tx.send(Some(outcome));
+                    });
+                    rx
+                }
+            };
+            let outcome = loop {
+                if let Some(result) = rx.borrow_and_update().clone() {
+                    break result;
+                }
+                if rx.changed().await.is_err() {
+                    break Err(Decline::Internal);
+                }
+            };
+            let composed = outcome?;
+            if composed.composed_now == now_ms {
+                return Ok(((*composed.bytes).clone(), composed.etag));
+            }
+            if composed
+                .trace
+                .as_ref()
+                .is_some_and(|trace| trace.keep() && trace.matches(now_ms))
+                && let Some(at) = composed.at
+                && let Some(bytes) = crate::status_cache::fill(&composed.bytes, at, date.iso_text())
+            {
+                return Ok((bytes, composed.etag));
+            }
+            if share_concurrent_window && now_ms.abs_diff(composed.composed_now) <= 1_000 {
+                return Ok(((*composed.bytes).clone(), composed.etag));
+            }
+            if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms)
+                && let Some(bytes) = crate::status_cache::fill(&hit.bytes, hit.at, date.iso_text())
+            {
+                return Ok((bytes, hit.etag));
+            }
+        }
+        // Final fallback if a second-boundary race required a fresh compose directly.
+        let work = move || compose_generations(&held, now_ms, clock, day);
+        let composed = match limits {
+            Some(limits) => limits.blocking_status(work).await?,
+            None => tokio::task::spawn_blocking(work)
+                .await
+                .unwrap_or(Err(Decline::Internal))?,
+        };
+        Ok(((*composed.bytes).clone(), composed.etag))
+    }
 }
 
 #[cfg(test)]

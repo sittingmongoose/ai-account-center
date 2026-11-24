@@ -245,15 +245,16 @@ impl OwnerHost {
                 owner.seed().await;
                 owner.prepare_local().await;
             }
+            if let Some(produce) = owners.status_produce.clone() {
+                produce.warm().await;
+                let stop = self.local_stop.clone();
+                tokio::spawn(produce.jobs(stop));
+            }
             if let Some(owner) = &owners.status_owned {
                 let owner = owner.clone();
                 let produce = owners.status_produce.clone();
                 let stop = self.local_stop.clone();
                 tokio::spawn(async move { crate::status_owned::jobs(owner, produce, stop).await });
-            }
-            if let Some(produce) = owners.status_produce.clone() {
-                let stop = self.local_stop.clone();
-                tokio::spawn(produce.jobs(stop));
             }
             if let Some(owner) = &owners.scoreboard_owned {
                 let catalog = owner.clone();

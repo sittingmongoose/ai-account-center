@@ -12,51 +12,75 @@
 use aac_num::intl;
 use indexmap::IndexSet;
 use serde_json::{Map, Value};
+#[cfg(test)]
 use std::cmp::Ordering;
+
+type CollationKey = (Vec<u32>, Vec<u32>);
 
 /// Primary weight base for characters outside printable ASCII (above every ASCII primary).
 const NON_ASCII_PRIMARY: u32 = 256;
 
-/// `(primary, tertiary)` of a printable ASCII byte from `intl::ASCII_ORDER`: one primary per
-/// letter pair (lowercase first), else its rank. The weights `intl::ascii_compare` uses.
-fn ascii_weights(c: u8) -> Option<(u32, u32)> {
+/// Precomputed `(primary, tertiary)` table for printable ASCII bytes from `intl::ASCII_ORDER`:
+/// one primary per letter pair (lowercase first), else its rank. The weights `intl::ascii_compare`
+/// uses, resolved in O(1) instead of scanning `ASCII_ORDER` per character comparison.
+const ASCII_WEIGHTS: [Option<(u32, u32)>; 128] = {
     let order = intl::ASCII_ORDER.as_bytes();
-    let at = u32::try_from(order.iter().position(|&o| o == c)?).ok()?;
-    let digits_end = u32::try_from(order.iter().position(|&o| o == b'a')?).ok()?;
-    Some(if c.is_ascii_alphabetic() {
-        (
-            digits_end + (at - digits_end) / 2,
-            u32::from(c.is_ascii_uppercase()),
-        )
-    } else {
-        (at, 0)
-    })
+    let mut digits_end = 0u32;
+    let mut i = 0;
+    while i < order.len() {
+        if order[i] == b'a' {
+            digits_end = i as u32;
+            break;
+        }
+        i += 1;
+    }
+    let mut table: [Option<(u32, u32)>; 128] = [None; 128];
+    let mut at = 0;
+    while at < order.len() {
+        let c = order[at];
+        if (c as usize) < 128 {
+            let entry = if c.is_ascii_alphabetic() {
+                (
+                    digits_end + (at as u32 - digits_end) / 2,
+                    if c.is_ascii_uppercase() { 1 } else { 0 },
+                )
+            } else {
+                (at as u32, 0)
+            };
+            table[c as usize] = Some(entry);
+        }
+        at += 1;
+    }
+    table
+};
+
+/// `(primary, tertiary)` collation key for one string, computed once per word before sorting.
+fn collation_key(s: &str) -> CollationKey {
+    let mut primary = Vec::with_capacity(s.len());
+    let mut tertiary = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        let (p, t) = if ('\u{20}'..='\u{7e}').contains(&c) {
+            ASCII_WEIGHTS[c as usize].unwrap_or((NON_ASCII_PRIMARY + c as u32, 0))
+        } else {
+            (NON_ASCII_PRIMARY + c as u32, 0)
+        };
+        primary.push(p);
+        tertiary.push(t);
+    }
+    (primary, tertiary)
 }
 
 /// A total order for any two strings that is exactly `intl::ascii_compare` when both are
 /// printable ASCII: primary weights left to right (a prefix first), then tertiary weights.
+#[cfg(test)]
 pub(crate) fn collate(a: &str, b: &str) -> Ordering {
-    fn keys(s: &str) -> (Vec<u32>, Vec<u32>) {
-        let mut primary = Vec::with_capacity(s.len());
-        let mut tertiary = Vec::with_capacity(s.len());
-        for c in s.chars() {
-            let printable = ('\u{20}'..='\u{7e}').contains(&c);
-            let (p, t) = match printable.then(|| ascii_weights(c as u8)).flatten() {
-                Some(w) => w,
-                None => (NON_ASCII_PRIMARY + c as u32, 0),
-            };
-            primary.push(p);
-            tertiary.push(t);
-        }
-        (primary, tertiary)
-    }
-    let (pa, ta) = keys(a);
-    let (pb, tb) = keys(b);
+    let (pa, ta) = collation_key(a);
+    let (pb, tb) = collation_key(b);
     pa.cmp(&pb).then_with(|| ta.cmp(&tb))
 }
 
 /// The facts text with `order` holding a rank for every word the sources' data carries
-/// (`facts::words_of`, the producer's own word set), ranked by [`collate`]. `None` when a text
+/// (`facts::words_of`, the producer's own word set), ranked by `collation_key`. `None` when a text
 /// does not parse (the caller keeps the facts it has).
 pub(crate) fn complete_order(sources: &[&str], facts: &str) -> Option<String> {
     let mut values = Vec::with_capacity(sources.len());
@@ -73,12 +97,15 @@ pub(crate) fn complete_order_of(values: &[&Value], facts: &str) -> Option<String
         words.extend(aac_status::produce::facts::words_of(value));
     }
     let mut facts: Value = serde_json::from_str(facts).ok()?;
-    let mut sorted: Vec<&String> = words.iter().collect();
-    sorted.sort_by(|a, b| collate(a, b));
-    let order: Map<String, Value> = sorted
+    let mut keyed: Vec<(CollationKey, &String)> = words
+        .iter()
+        .map(|word| (collation_key(word), word))
+        .collect();
+    keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let order: Map<String, Value> = keyed
         .into_iter()
         .enumerate()
-        .map(|(rank, word)| (word.clone(), Value::from(rank)))
+        .map(|(rank, (_, word))| (word.clone(), Value::from(rank)))
         .collect();
     *facts.as_object_mut()?.get_mut("order")? = Value::Object(order);
     serde_json::to_string(&facts).ok()

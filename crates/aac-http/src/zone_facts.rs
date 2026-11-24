@@ -32,6 +32,21 @@ pub(crate) fn server_zone_facts(time_zone: &str, now: i64) -> Option<ZoneOffsets
     window_facts(time_zone, from, to)
 }
 
+/// The display zone the Status producers format in: the saved preference, else the reference's
+/// default (`America/New_York`). A zone the database does not hold declines (`None`).
+pub(crate) fn status_zone(root: &std::path::Path, now: i64) -> Option<(String, ZoneOffsets)> {
+    let name = crate::account_reads::preferences(root)
+        .and_then(|preferences| {
+            preferences
+                .get("timeZone")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "America/New_York".to_owned());
+    let facts = server_zone_facts(&name, now)?;
+    Some((name, facts))
+}
+
 pub(crate) fn canonical_name(name: &str) -> String {
     aac_files::zoneinfo::canonical_name(name).unwrap_or_else(|| match name {
         "US/Eastern" => "America/New_York".to_owned(),

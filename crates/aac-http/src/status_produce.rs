@@ -25,7 +25,9 @@
 //! answers with its own producers, which it restarts on the first decline.
 
 use crate::answers_owned::AnswersOwned;
-use crate::feed::Feeds;
+use crate::feed::{Feeds, Generation};
+use crate::limits::Limits;
+use crate::status_fed::StatusCompose;
 use crate::status_owned::Scan;
 use crate::status_run::{find_executable, run, ssh_argv};
 use aac_num::intl::Zone;
@@ -77,8 +79,8 @@ use aac_status::share::status_docs::StatusDocsState;
 use aac_views::decline::Decline;
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -96,7 +98,6 @@ const COLLECTED: &str = "status-collected";
 const ANSWERS: &str = "status-answers";
 const FACTS: &str = "status-facts";
 const OWNED_PINS: &str = "owned-pins";
-const SOURCES: [&str; 6] = [REPORTS, QUOTA, PINNED, COLLECTED, ANSWERS, FACTS];
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -127,58 +128,135 @@ struct Pins {
     collected: bool,
 }
 
-/// The display zone a request named, kept between requests.
+/// The display zone a request (or boot preference) named, kept between requests.
 #[derive(Clone)]
 struct RequestZone {
     name: String,
     zone: Zone,
-    offset_now: i64,
+    /// Fallback instant inside `zone`'s proved window when a caller/test sends a synthetic
+    /// historical clock whose window does not contain wall-clock `now_ms()`.
+    sample_now: u64,
 }
 
-struct Inner {
-    reports: Json,
-    quota: Json,
-    docs: Json,
-    registry: Json,
-    reports_rows: AgentReportsState,
-    docs_rows: StatusDocsState,
+/// One immutable, atomically swapped generation set of all six fed Status sources.
+/// Readers clone this `Arc` in nanoseconds and never wait on a producer pass.
+#[derive(Clone)]
+struct Published {
+    zone_name: String,
+    zone: Zone,
+    generations: [Arc<Generation>; 6],
+}
+
+#[derive(Clone)]
+enum PublishedState {
+    Ready(Arc<Published>),
+    /// A finished producer pass whose inputs could not be proved: decline honestly by name.
+    Declined {
+        zone_name: String,
+        zone: Zone,
+        reason: Decline,
+    },
+}
+
+impl PublishedState {
+    fn matches_zone(&self, time_zone: &str, zone: &Zone) -> bool {
+        match self {
+            PublishedState::Ready(published) => {
+                published.zone_name == time_zone && published.zone == *zone
+            }
+            PublishedState::Declined {
+                zone_name,
+                zone: held,
+                ..
+            } => zone_name == time_zone && held == zone,
+        }
+    }
+}
+
+/// Mutable producer inputs, held under `Produce::state` ONLY for quick Arc clones/swaps.
+/// Never held across I/O, answers refresh, pinned composition, source building, or feed puts.
+struct State {
+    reports: Arc<Json>,
+    quota: Arc<Json>,
+    docs: Arc<Json>,
+    registry: Arc<Json>,
+    reports_rows: Arc<AgentReportsState>,
+    docs_rows: Arc<StatusDocsState>,
     machines: BTreeMap<String, Collected<Sample>>,
     browsers: Collected<Vec<BrowserMachine>>,
     simlock: Collected<SimlockStatus>,
     simlock_workers: Option<Vec<&'static str>>,
-    usage: Option<UsageInput>,
-    answers: AnswersFeed,
-    pins: Pins,
-    pinned: Json,
+    usage: Option<Arc<UsageInput>>,
+    answers: Arc<AnswersFeed>,
+    pins: Arc<Pins>,
+    pinned: Arc<Json>,
     pinned_at: u64,
     pinned_offset: Option<i64>,
     pinned_dirty: bool,
     answers_dirty: bool,
     sources_dirty: bool,
+    answers_gen: u64,
+    reports_gen: u64,
+    pinned_gen: u64,
+    sources_gen: u64,
     zone: Option<RequestZone>,
-    held: HashMap<&'static str, String>,
-    held_sources: HashMap<&'static str, (String, String)>,
-    last_collect: u64,
-    last_demand: u64,
-    collecting: bool,
     hinted_at: u64,
 }
 
-impl Inner {
-    fn new() -> Self {
+/// Cheap snapshot taken from `State` under a microsecond lock so `publish_once` can compute
+/// completely outside `Produce::state` and `Produce::published`.
+struct PublishSnapshot {
+    reports: Arc<Json>,
+    quota: Arc<Json>,
+    registry: Arc<Json>,
+    reports_rows: Arc<AgentReportsState>,
+    docs_rows: Arc<StatusDocsState>,
+    machines: BTreeMap<String, Collected<Sample>>,
+    browsers: Collected<Vec<BrowserMachine>>,
+    simlock: Collected<SimlockStatus>,
+    usage: Option<Arc<UsageInput>>,
+    answers: Arc<AnswersFeed>,
+    pins: Arc<Pins>,
+    pinned: Arc<Json>,
+    pinned_offset: Option<i64>,
+    pinned_dirty: bool,
+    answers_dirty: bool,
+    sources_dirty: bool,
+    answers_gen: u64,
+    reports_gen: u64,
+    pinned_gen: u64,
+    sources_gen: u64,
+    zone: Option<RequestZone>,
+}
+
+/// Owned exclusively by the serialized publisher (`Produce::publisher`); readers never touch it.
+#[derive(Default)]
+struct PublisherCache {
+    held: HashMap<&'static str, (String, String, Arc<Generation>)>,
+}
+
+struct CollectingGuard<'a>(&'a AtomicBool);
+impl Drop for CollectingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl State {
+    fn new(default_zone: Option<RequestZone>) -> Self {
         let empty = empty_reports();
         Self {
-            reports: aac_status::share::reports::state_json(&empty),
-            reports_rows: empty,
-            quota: Json::Null,
-            docs: Json::Null,
-            registry: json!({"data": null, "asOf": null, "error": null}),
-            docs_rows: StatusDocsState {
+            reports: Arc::new(aac_status::share::reports::state_json(&empty)),
+            reports_rows: Arc::new(empty),
+            quota: Arc::new(Json::Null),
+            docs: Arc::new(Json::Null),
+            registry: Arc::new(json!({"data": null, "asOf": null, "error": null})),
+            docs_rows: Arc::new(StatusDocsState {
                 state: "missing",
                 scanned_at: None,
                 docs: Vec::new(),
                 problems: Vec::new(),
-            },
+            }),
             machines: aac_status::computers::machine_ids()
                 .into_iter()
                 .map(|machine| (machine.to_owned(), Collected::empty()))
@@ -187,25 +265,50 @@ impl Inner {
             simlock: Collected::empty(),
             simlock_workers: None,
             usage: None,
-            answers: AnswersFeed {
+            answers: Arc::new(AnswersFeed {
                 answers: Vec::new(),
                 sends: Vec::new(),
                 problem: None,
-            },
-            pins: Pins::default(),
-            pinned: json!({"unavailable": "the pinned threads have not been read yet"}),
+            }),
+            pins: Arc::new(Pins::default()),
+            pinned: Arc::new(json!({"unavailable": "the pinned threads have not been read yet"})),
             pinned_at: 0,
             pinned_offset: None,
             pinned_dirty: true,
             answers_dirty: true,
             sources_dirty: true,
-            zone: None,
-            held: HashMap::new(),
-            held_sources: HashMap::new(),
-            last_collect: 0,
-            last_demand: 0,
-            collecting: false,
+            answers_gen: 0,
+            reports_gen: 0,
+            pinned_gen: 0,
+            sources_gen: 0,
+            zone: default_zone,
             hinted_at: 0,
+        }
+    }
+
+    fn snapshot(&self) -> PublishSnapshot {
+        PublishSnapshot {
+            reports: Arc::clone(&self.reports),
+            quota: Arc::clone(&self.quota),
+            registry: Arc::clone(&self.registry),
+            reports_rows: Arc::clone(&self.reports_rows),
+            docs_rows: Arc::clone(&self.docs_rows),
+            machines: self.machines.clone(),
+            browsers: self.browsers.clone(),
+            simlock: self.simlock.clone(),
+            usage: self.usage.clone(),
+            answers: Arc::clone(&self.answers),
+            pins: Arc::clone(&self.pins),
+            pinned: Arc::clone(&self.pinned),
+            pinned_offset: self.pinned_offset,
+            pinned_dirty: self.pinned_dirty,
+            answers_dirty: self.answers_dirty,
+            sources_dirty: self.sources_dirty,
+            answers_gen: self.answers_gen,
+            reports_gen: self.reports_gen,
+            pinned_gen: self.pinned_gen,
+            sources_gen: self.sources_gen,
+            zone: self.zone.clone(),
         }
     }
 }
@@ -224,25 +327,63 @@ fn empty_reports() -> AgentReportsState {
     }
 }
 
+fn default_request_zone(ccs_dir: &Path, now: u64) -> Option<RequestZone> {
+    let now_i64 = clamp_i64(now);
+    let (name, offsets) = crate::zone_facts::status_zone(ccs_dir, now_i64)?;
+    Some(RequestZone {
+        name,
+        zone: offsets.zone,
+        sample_now: now,
+    })
+}
+
 pub(crate) struct Produce {
     feeds: Feeds,
     answers: Arc<AnswersOwned>,
-    inner: Mutex<Inner>,
+    ccs_dir: PathBuf,
+    state: Mutex<State>,
+    publisher: Mutex<PublisherCache>,
+    published: Mutex<Option<PublishedState>>,
+    published_tx: tokio::sync::watch::Sender<u64>,
+    published_rx: tokio::sync::watch::Receiver<u64>,
+    compose: StatusCompose,
     clock: AtomicU64,
+    last_demand: AtomicU64,
+    last_collect: AtomicU64,
+    collecting: AtomicBool,
+    publish_requested: AtomicBool,
+    publish_running: AtomicBool,
+    #[cfg(test)]
+    publish_delay_ms: AtomicU64,
 }
 
 impl Produce {
-    pub(crate) fn new(feeds: Feeds, answers: Arc<AnswersOwned>) -> Arc<Self> {
+    pub(crate) fn new(feeds: Feeds, answers: Arc<AnswersOwned>, ccs_dir: PathBuf) -> Arc<Self> {
+        let default_zone = default_request_zone(&ccs_dir, now_ms());
+        let (published_tx, published_rx) = tokio::sync::watch::channel(0u64);
         Arc::new(Self {
             feeds,
             answers,
-            inner: Mutex::new(Inner::new()),
+            ccs_dir,
+            state: Mutex::new(State::new(default_zone)),
+            publisher: Mutex::new(PublisherCache::default()),
+            published: Mutex::new(None),
+            published_tx,
+            published_rx,
+            compose: StatusCompose::default(),
             clock: AtomicU64::new(0),
+            last_demand: AtomicU64::new(0),
+            last_collect: AtomicU64::new(0),
+            collecting: AtomicBool::new(false),
+            publish_requested: AtomicBool::new(false),
+            publish_running: AtomicBool::new(false),
+            #[cfg(test)]
+            publish_delay_ms: AtomicU64::new(0),
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn next_generation(&self, now: u64) -> u64 {
@@ -259,39 +400,117 @@ impl Produce {
         }
     }
 
-    /// A page read: demand for the process-starting collectors.
+    /// Warm the initial six sources (and composed cache) for the saved display zone before the
+    /// first read arrives.
+    pub(crate) async fn warm(self: &Arc<Self>) {
+        let owner = Arc::clone(self);
+        let _ = tokio::task::spawn_blocking(move || owner.publish_once_and_hint(true)).await;
+    }
+
+    /// A page read: demand for the process-starting collectors (lock-free).
     pub(crate) fn touch(&self) {
-        self.lock().last_demand = now_ms();
+        self.last_demand.store(now_ms(), Ordering::Relaxed);
     }
 
-    /// A new usage sample (`recordUsage`'s built input) or none.
-    pub(crate) fn set_usage(&self, usage: Option<UsageInput>) {
-        let mut inner = self.lock();
-        inner.usage = usage;
-        inner.sources_dirty = true;
+    /// A new usage sample (`recordUsage`'s built input) or none. Stages the sample and schedules
+    /// a background publish so the next Status read never pays `push_sources` inline.
+    pub(crate) fn set_usage(self: &Arc<Self>, usage: Option<UsageInput>) {
+        {
+            let mut state = self.state();
+            state.usage = usage.map(Arc::new);
+            state.sources_dirty = true;
+            state.sources_gen = state.sources_gen.wrapping_add(1);
+        }
+        self.trigger_publish();
     }
 
-    /// The answer store recorded something (a forwarded send): the history member may change.
-    pub(crate) fn mark_answers(&self) {
-        let mut inner = self.lock();
-        inner.answers_dirty = true;
-        inner.pinned_dirty = true;
+    /// The answer store recorded something (a forwarded send): stage dirty flags and schedule a
+    /// background publish outside the request path.
+    pub(crate) fn mark_answers(self: &Arc<Self>) {
+        {
+            let mut state = self.state();
+            state.answers_dirty = true;
+            state.pinned_dirty = true;
+            state.sources_dirty = true;
+            state.answers_gen = state.answers_gen.wrapping_add(1);
+            state.pinned_gen = state.pinned_gen.wrapping_add(1);
+            state.sources_gen = state.sources_gen.wrapping_add(1);
+        }
+        self.trigger_publish();
+    }
+
+    /// Schedule one coalesced background publish pass on the blocking pool.
+    fn trigger_publish(self: &Arc<Self>) {
+        self.publish_requested.store(true, Ordering::SeqCst);
+        if self
+            .publish_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let owner = Arc::clone(self);
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn_blocking(move || owner.run_publish_loop());
+            } else {
+                std::thread::spawn(move || owner.run_publish_loop());
+            }
+        }
+    }
+
+    fn run_publish_loop(self: &Arc<Self>) {
+        loop {
+            self.publish_requested.store(false, Ordering::SeqCst);
+            let prewarm = self.current_published().is_some();
+            self.publish_once_and_hint(prewarm);
+            if self.publish_requested.load(Ordering::SeqCst) {
+                continue;
+            }
+            self.publish_running.store(false, Ordering::SeqCst);
+            if self.publish_requested.load(Ordering::SeqCst)
+                && self
+                    .publish_running
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                continue;
+            }
+            return;
+        }
     }
 
     /// One producer pass every 5 s: collect when a page has been read recently and the minute
-    /// is up (the TypeScript 60 s timer's rule).
+    /// is up (the TypeScript 60 s timer's rule), and keep the display zone window rolled across
+    /// UTC midnight.
     pub(crate) async fn jobs(self: Arc<Self>, stop: Arc<std::sync::atomic::AtomicBool>) {
         loop {
             if stop.load(Ordering::Acquire) {
                 return;
             }
             let now = now_ms();
-            let wanted = {
-                let inner = self.lock();
-                now.saturating_sub(inner.last_demand) < DEMAND_WINDOW_MS
-                    && now.saturating_sub(inner.last_collect) >= COLLECT_EVERY_MS
-                    && !inner.collecting
-            };
+            if let Some(next_zone) = default_request_zone(&self.ccs_dir, now) {
+                let rolled = {
+                    let mut state = self.state();
+                    if state.zone.as_ref().is_some_and(|held| {
+                        held.name == next_zone.name && held.zone != next_zone.zone
+                    }) {
+                        state.zone = Some(next_zone);
+                        state.pinned_dirty = true;
+                        state.sources_dirty = true;
+                        state.pinned_gen = state.pinned_gen.wrapping_add(1);
+                        state.sources_gen = state.sources_gen.wrapping_add(1);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if rolled {
+                    self.trigger_publish();
+                }
+            }
+            let demand = self.last_demand.load(Ordering::Relaxed);
+            let collected = self.last_collect.load(Ordering::Relaxed);
+            let wanted = now.saturating_sub(demand) < DEMAND_WINDOW_MS
+                && now.saturating_sub(collected) >= COLLECT_EVERY_MS
+                && !self.collecting.load(Ordering::Acquire);
             if wanted {
                 let owner = Arc::clone(&self);
                 tokio::spawn(async move { owner.collect().await });
@@ -300,41 +519,45 @@ impl Produce {
         }
     }
 
-    /// Start a collect now when the page has been read recently and nothing is running.
+    /// Start a collect now when the page has been read recently and nothing is running (lock-free).
     fn maybe_collect(self: &Arc<Self>) {
         let now = now_ms();
-        let start = {
-            let mut inner = self.lock();
-            let wanted = now.saturating_sub(inner.last_demand) < DEMAND_WINDOW_MS;
-            let due = now.saturating_sub(inner.last_collect) >= COLLECT_EVERY_MS;
-            if wanted && due && !inner.collecting {
-                inner.collecting = true;
-                inner.last_collect = now;
-                true
-            } else {
-                false
-            }
+        let demand = self.last_demand.load(Ordering::Relaxed);
+        let collected = self.last_collect.load(Ordering::Relaxed);
+        if now.saturating_sub(demand) >= DEMAND_WINDOW_MS
+            || now.saturating_sub(collected) < COLLECT_EVERY_MS
+        {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
         };
-        if start {
+        if self
+            .collecting
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.last_collect.store(now, Ordering::Relaxed);
             let owner = Arc::clone(self);
-            tokio::spawn(async move { owner.collect_running().await });
+            handle.spawn(async move { owner.collect_running().await });
         }
     }
 
     /// One collect pass; overlapping calls share the running one.
     pub(crate) async fn collect(self: &Arc<Self>) {
+        if self
+            .collecting
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
         {
-            let mut inner = self.lock();
-            if inner.collecting {
-                return;
-            }
-            inner.collecting = true;
-            inner.last_collect = now_ms();
+            return;
         }
+        self.last_collect.store(now_ms(), Ordering::Relaxed);
         self.collect_running().await;
     }
 
     async fn collect_running(self: &Arc<Self>) {
+        let _guard = CollectingGuard(&self.collecting);
         let rows = computers_rows();
         let local = local_machine();
         let now = now_ms();
@@ -365,131 +588,147 @@ impl Produce {
                 (machine, sample)
             });
         }
-        let results: Vec<(String, Result<Sample, String>)> =
-            futures_util::future::join_all(pending).await;
-        let simlock = find_executable("simlock");
-        let simlock_result = read_simlock(&simlock).await;
-        let fresh_workers = simlock_result
-            .as_ref()
-            .ok()
-            .and_then(|(_, _, workers)| workers.clone());
-        let workers = fresh_workers
-            .clone()
-            .or_else(|| self.lock().simlock_workers.clone());
-        let browsers_result = read_browsers(workers.as_deref()).await;
-        let previous_pins = self.lock().pins.machines.clone();
-        let pins = read_pins(&rows, local, previous_pins).await;
+        let cached_workers = self.state().simlock_workers.clone();
+        let previous_pins = self.state().pins.machines.clone();
+        // Machines, simlock+browsers, and pins are independent I/O groups; run them together.
+        let machines_fut = futures_util::future::join_all(pending);
+        let simlock_and_browsers_fut = async move {
+            let simlock = find_executable("simlock");
+            let simlock_result = read_simlock(&simlock).await;
+            let fresh_workers = simlock_result
+                .as_ref()
+                .ok()
+                .and_then(|(_, _, workers)| workers.clone());
+            let workers = fresh_workers.or(cached_workers);
+            let browsers_result = read_browsers(workers.as_deref()).await;
+            (simlock_result, browsers_result)
+        };
+        let pins_fut = read_pins(&rows, local, previous_pins);
+        let (results, (simlock_result, browsers_result), pins) =
+            tokio::join!(machines_fut, simlock_and_browsers_fut, pins_fut);
         let now_i64 = clamp_i64(now);
         {
-            let mut inner = self.lock();
+            let mut state = self.state();
             for (machine, result) in results {
-                let before = inner
+                let before = state
                     .machines
                     .get(&machine)
                     .cloned()
                     .unwrap_or_else(Collected::empty);
-                inner
+                state
                     .machines
                     .insert(machine, apply_machine(before, result, now_i64));
             }
             match browsers_result {
                 Ok(rows) => {
                     let merged =
-                        browsers::merge_rows(inner.browsers.data.as_deref(), rows, now_i64);
+                        browsers::merge_rows(state.browsers.data.as_deref(), rows, now_i64);
                     let problems = browsers::problems(&merged);
-                    inner.browsers = Collected::succeeded(merged, now_i64).with_problems(problems);
+                    state.browsers = Collected::succeeded(merged, now_i64).with_problems(problems);
                 }
                 Err((reason, missing)) => {
-                    let before = inner.browsers.clone();
-                    inner.browsers = before.failed(&reason, now_i64, missing);
+                    let before = state.browsers.clone();
+                    state.browsers = before.failed(&reason, now_i64, missing);
                 }
             }
             match simlock_result {
                 Ok((status, worker_only, workers)) => {
                     if let Some(workers) = workers {
-                        inner.simlock_workers = Some(workers);
+                        state.simlock_workers = Some(workers);
                     }
                     let problems = simlock_problems(
                         &status,
                         worker_only,
-                        inner.simlock.problems.as_deref(),
+                        state.simlock.problems.as_deref(),
                         now_i64,
                     );
-                    inner.simlock = Collected::succeeded(status, now_i64).with_problems(problems);
+                    state.simlock = Collected::succeeded(status, now_i64).with_problems(problems);
                 }
                 Err((reason, missing)) => {
-                    let before = inner.simlock.clone();
-                    inner.simlock = before.failed(&reason, now_i64, missing);
+                    let before = state.simlock.clone();
+                    state.simlock = before.failed(&reason, now_i64, missing);
                 }
             }
-            inner.pins = pins;
-            inner.pinned_dirty = true;
-            inner.sources_dirty = true;
-            inner.collecting = false;
-            drop(inner);
+            state.pins = Arc::new(pins);
+            state.pinned_dirty = true;
+            state.sources_dirty = true;
+            state.pinned_gen = state.pinned_gen.wrapping_add(1);
+            state.sources_gen = state.sources_gen.wrapping_add(1);
         }
         let owner = Arc::clone(self);
-        tokio::task::spawn_blocking(move || owner.publish(None))
-            .await
-            .ok();
-        self.hint();
+        let _ = tokio::task::spawn_blocking(move || owner.publish_once_and_hint(true)).await;
     }
 
-    /// The 10 s report scan's snapshots: shared answers into the store, then the sources.
+    /// The 10 s report scan's snapshots: shared answers into the store and JSON projection
+    /// outside the state lock, then an atomic swap and background-style publish.
     pub(crate) async fn after_scan(self: &Arc<Self>, scan: Scan) {
-        let cards: Vec<(Json, String)> = scan
-            .reports
-            .cards
-            .iter()
-            .map(|row| (row.doc.clone(), row.sha256.clone()))
-            .collect();
         let answers = Arc::clone(&self.answers);
-        let feed = tokio::task::spawn_blocking(move || answers.feed(&cards))
-            .await
-            .unwrap_or_else(|_| AnswersFeed::unavailable(Vec::new()));
+        let (scan, feed, reports_json, docs_json) = tokio::task::spawn_blocking(move || {
+            let cards: Vec<(Json, String)> = scan
+                .reports
+                .cards
+                .iter()
+                .map(|row| (row.doc.clone(), row.sha256.clone()))
+                .collect();
+            let feed = answers.feed(&cards);
+            let reports_json = resolved_reports(&scan.reports, &feed);
+            let docs_json = aac_status::share::status_docs::state_json(&scan.docs);
+            (scan, feed, reports_json, docs_json)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            let empty = empty_reports();
+            let feed = AnswersFeed::unavailable(Vec::new());
+            let reports_json = aac_status::share::reports::state_json(&empty);
+            let docs_rows = StatusDocsState {
+                state: "missing",
+                scanned_at: None,
+                docs: Vec::new(),
+                problems: Vec::new(),
+            };
+            let docs_json = aac_status::share::status_docs::state_json(&docs_rows);
+            (
+                Scan {
+                    reports: empty,
+                    docs: docs_rows,
+                    quota: Json::Null,
+                    registry: json!({"data": null, "asOf": null, "error": null}),
+                },
+                feed,
+                reports_json,
+                docs_json,
+            )
+        });
         {
-            let mut inner = self.lock();
-            inner.reports_rows = scan.reports.clone();
-            inner.docs_rows = scan.docs.clone();
-            inner.reports = resolved_reports(&scan.reports, &feed);
-            inner.quota = scan.quota;
-            inner.docs = aac_status::share::status_docs::state_json(&scan.docs);
-            inner.registry = scan.registry;
-            inner.answers = feed;
-            inner.answers_dirty = false;
-            inner.pinned_dirty = true;
-            inner.sources_dirty = true;
+            let mut state = self.state();
+            state.reports_rows = Arc::new(scan.reports);
+            state.docs_rows = Arc::new(scan.docs);
+            state.reports = Arc::new(reports_json);
+            state.quota = Arc::new(scan.quota);
+            state.docs = Arc::new(docs_json);
+            state.registry = Arc::new(scan.registry);
+            state.answers = Arc::new(feed);
+            state.answers_dirty = false;
+            state.pinned_dirty = true;
+            state.sources_dirty = true;
+            state.answers_gen = state.answers_gen.wrapping_add(1);
+            state.reports_gen = state.reports_gen.wrapping_add(1);
+            state.pinned_gen = state.pinned_gen.wrapping_add(1);
+            state.sources_gen = state.sources_gen.wrapping_add(1);
         }
         let owner = Arc::clone(self);
-        tokio::task::spawn_blocking(move || owner.publish(None))
-            .await
-            .ok();
-        self.hint();
-    }
-
-    /// The answer store's shared copies for these cards, or the fixed unavailable answer.
-    fn refresh_answers(&self, inner: &mut Inner) {
-        let cards: Vec<(Json, String)> = inner
-            .reports_rows
-            .cards
-            .iter()
-            .map(|row| (row.doc.clone(), row.sha256.clone()))
-            .collect();
-        inner.answers = self.answers.feed(&cards);
-        inner.answers_dirty = false;
-        inner.sources_dirty = true;
+        let _ = tokio::task::spawn_blocking(move || owner.publish_once_and_hint(true)).await;
     }
 
     /// The pins the readers-check writer matches reports against (`owned-pins`).
-    fn push_owned_pins(&self, inner: &Inner, now: u64) {
-        let pins: Vec<Json> = inner
-            .pins
+    fn push_owned_pins(&self, pins: &Pins, now: u64) {
+        let rows: Vec<Json> = pins
             .merged
             .iter()
             .map(|pin| json!({"id": pin.id, "title": pin.title}))
             .collect();
         let generation = self.next_generation(now);
-        let data = aac_views::js_json::write(&Json::Array(pins));
+        let data = aac_views::js_json::write(&Json::Array(rows));
         let body = format!(
             "{{\"generation\":\"{generation}\",\"data\":{},\"facts\":null}}",
             String::from_utf8_lossy(&data)
@@ -497,76 +736,158 @@ impl Produce {
         let _ = self.feeds.put(OWNED_PINS, body.as_bytes());
     }
 
-    /// Rebuild every source the current state makes, push what changed, and compose the panel
-    /// when a zone is known. Called on the blocking pool or with no await inside.
-    fn publish(&self, zone_override: Option<(&str, &ZoneFacts, &Zone)>) {
-        let mut inner = self.lock();
-        if inner.answers_dirty {
-            self.refresh_answers(&mut inner);
-        }
-        let zone = match zone_override {
-            Some((name, _facts, zone)) => {
-                if inner
+    fn current_published(&self) -> Option<PublishedState> {
+        self.published
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    fn set_published(&self, next: PublishedState) {
+        *self.published.lock().unwrap_or_else(|p| p.into_inner()) = Some(next);
+        self.published_tx.send_modify(|seq| {
+            *seq = seq.wrapping_add(1);
+        });
+    }
+
+    /// Rebuild every source from a snapshot of the state completely outside `self.state` and
+    /// `self.published`, then commit to `Feeds` and swap `self.published` atomically.
+    /// Readers keep answering from the last good generation throughout this pass.
+    fn publish(&self, zone_override: Option<(&str, &Zone, u64)>, prewarm_compose: bool) -> bool {
+        let mut cache = self.publisher.lock().unwrap_or_else(|p| p.into_inner());
+        let snap = {
+            let mut state = self.state();
+            if let Some((name, zone, sample_now)) = zone_override
+                && state
                     .zone
                     .as_ref()
                     .is_none_or(|held| held.name != name || held.zone != *zone)
-                {
-                    inner.zone = Some(RequestZone {
-                        name: name.to_owned(),
-                        zone: zone.clone(),
-                        offset_now: zone.offset_minutes(clamp_i64(now_ms())).unwrap_or(0),
-                    });
-                    inner.pinned_dirty = true;
-                    inner.sources_dirty = true;
+            {
+                state.zone = Some(RequestZone {
+                    name: name.to_owned(),
+                    zone: zone.clone(),
+                    sample_now,
+                });
+                state.pinned_dirty = true;
+                state.sources_dirty = true;
+                state.pinned_gen = state.pinned_gen.wrapping_add(1);
+                state.sources_gen = state.sources_gen.wrapping_add(1);
+            }
+            state.snapshot()
+        };
+        let mut reports = snap.reports;
+        let mut answers = snap.answers;
+        let mut need_sources = snap.sources_dirty;
+        if snap.answers_dirty {
+            let cards: Vec<(Json, String)> = snap
+                .reports_rows
+                .cards
+                .iter()
+                .map(|row| (row.doc.clone(), row.sha256.clone()))
+                .collect();
+            let fresh = Arc::new(self.answers.feed(&cards));
+            let resolved = Arc::new(resolved_reports(&snap.reports_rows, &fresh));
+            {
+                let mut state = self.state();
+                if state.answers_gen == snap.answers_gen {
+                    state.answers = Arc::clone(&fresh);
+                    state.answers_dirty = false;
+                    if state.reports_gen == snap.reports_gen {
+                        state.reports = Arc::clone(&resolved);
+                    }
                 }
-                inner.zone.clone()
             }
-            None => inner.zone.clone(),
+            answers = fresh;
+            reports = resolved;
+            need_sources = true;
+        }
+        let Some(zone) = snap.zone else {
+            return false;
         };
-        let now = now_ms();
-        if zone.is_some() && inner.pinned_dirty {
-            let offset = zone
-                .as_ref()
-                .map(|zone| zone.zone.offset_minutes(clamp_i64(now)).unwrap_or(0))
-                .unwrap_or(0);
-            if let Some(panel) = pinned_panel(&inner, clamp_i64(now)) {
-                inner.pinned = panel;
-                inner.pinned_at = now;
-                inner.pinned_offset = Some(offset);
-                inner.pinned_dirty = false;
-                self.push_owned_pins(&inner, now);
+        let wall_now = now_ms();
+        let now = if zone.zone.words(clamp_i64(wall_now)).is_some() {
+            wall_now
+        } else {
+            zone.sample_now
+        };
+        let offset = zone.zone.offset_minutes(clamp_i64(now)).unwrap_or(0);
+        let mut pinned = snap.pinned;
+        if snap.pins.collected
+            && (snap.pinned_dirty || snap.pinned_offset != Some(offset))
+            && let Some(panel) = pinned_panel(
+                &snap.reports_rows,
+                &snap.docs_rows,
+                &snap.pins,
+                &answers,
+                clamp_i64(now),
+            )
+        {
+            let panel = Arc::new(panel);
+            self.push_owned_pins(&snap.pins, now);
+            {
+                let mut state = self.state();
+                if state.pinned_gen == snap.pinned_gen {
+                    state.pinned = Arc::clone(&panel);
+                    state.pinned_at = now;
+                    state.pinned_offset = Some(offset);
+                    state.pinned_dirty = false;
+                }
+            }
+            pinned = panel;
+            need_sources = true;
+        }
+        let matches_published = self
+            .current_published()
+            .as_ref()
+            .is_some_and(|held| held.matches_zone(&zone.name, &zone.zone));
+        if !need_sources && matches_published {
+            return false;
+        }
+        if reports.as_object().is_none() {
+            return false;
+        }
+        #[cfg(test)]
+        {
+            let delay = self.publish_delay_ms.load(Ordering::SeqCst);
+            if delay > 0 {
+                std::thread::sleep(Duration::from_millis(delay));
             }
         }
-        if inner.sources_dirty {
-            self.push_sources(&mut inner, zone.as_ref(), now);
-            inner.sources_dirty = false;
-        }
-    }
-
-    /// Build and push the six fed generations (facts included) from the state and the zone.
-    fn push_sources(&self, inner: &mut Inner, zone: Option<&RequestZone>, now: u64) {
-        let Some(zone) = zone.filter(|_| inner.reports.as_object().is_some()) else {
-            return;
-        };
-        let machines = machines_json(&inner.machines);
-        let sources =
-            aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
-                reports: &inner.reports,
-                quota: &inner.quota,
-                pinned: &inner.pinned,
-                registry: &inner.registry,
-                machines: &machines,
-                browsers: &json!(inner.browsers),
-                simlock: &json!(inner.simlock),
-                usage: inner.usage.as_ref(),
-                answers: &inner.answers,
-                time_zone: &zone.name,
-                now: clamp_i64(now),
-                offset_minutes: zone.offset_now,
-                zone: &zone.zone,
-            });
-        let Ok(mut sources) = sources else {
-            return;
+        let machines = machines_json(&snap.machines);
+        let built = aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
+            reports: &reports,
+            quota: &snap.quota,
+            pinned: &pinned,
+            registry: &snap.registry,
+            machines: &machines,
+            browsers: &json!(snap.browsers),
+            simlock: &json!(snap.simlock),
+            usage: snap.usage.as_deref(),
+            answers: &answers,
+            time_zone: &zone.name,
+            now: clamp_i64(now),
+            offset_minutes: offset,
+            zone: &zone.zone,
+        });
+        let mut sources = match built {
+            Ok(sources) => sources,
+            Err(why) => {
+                let reason = match why {
+                    "zone" => Decline::Locale,
+                    "date" | "facts" => Decline::Date,
+                    _ => Decline::Unsupported,
+                };
+                self.set_published(PublishedState::Declined {
+                    zone_name: zone.name,
+                    zone: zone.zone,
+                    reason,
+                });
+                let mut state = self.state();
+                if state.sources_gen == snap.sources_gen {
+                    state.sources_dirty = false;
+                }
+                return false;
+            }
         };
         // Every word ranked, not only printable ASCII (a middle-dot usage label is compared).
         if let Some(facts) = crate::status_collate::complete_order(
@@ -590,137 +911,270 @@ impl Produce {
             (ANSWERS, sources.answers, None),
             (FACTS, sources.facts_data, Some(sources.facts)),
         ];
-        for (source, text, facts) in pushed {
+        // Prepare every changed source completely outside `Feeds::held`, then commit atomically.
+        let mut existing: [Option<Arc<Generation>>; 6] = [None, None, None, None, None, None];
+        let mut changed_meta: Vec<(usize, &'static str, String, String, Arc<Generation>)> =
+            Vec::new();
+        for (index, (source, text, facts)) in pushed.into_iter().enumerate() {
             let facts_text = facts.unwrap_or_else(|| "{}".to_owned());
-            let unchanged = inner
-                .held_sources
-                .get(source)
-                .is_some_and(|(held, held_facts)| held == &text && held_facts == &facts_text);
-            if unchanged {
+            if let Some((held_text, held_facts, held_gen)) = cache.held.get(source)
+                && held_text == &text
+                && held_facts == &facts_text
+            {
+                existing[index] = Some(Arc::clone(held_gen));
                 continue;
             }
-            let generation = self.next_generation(now);
+            let generation_id = self.next_generation(now);
             let body = format!(
-                "{{\"generation\":\"{generation}\",\"data\":{text},\"facts\":{facts_text}}}"
+                "{{\"generation\":\"{generation_id}\",\"data\":{text},\"facts\":{facts_text}}}"
             );
-            if let Ok(value) = self.feeds.put(source, body.as_bytes()) {
-                if let Some(held) = value.get("generation").and_then(Json::as_str) {
-                    inner.held.insert(source, held.to_owned());
+            let prepared = match self.feeds.prepare_generation(source, body.as_bytes()) {
+                Ok(generation) => generation,
+                Err(reason) => {
+                    self.set_published(PublishedState::Declined {
+                        zone_name: zone.name,
+                        zone: zone.zone,
+                        reason,
+                    });
+                    let mut state = self.state();
+                    if state.sources_gen == snap.sources_gen {
+                        state.sources_dirty = false;
+                    }
+                    return false;
                 }
-                inner.held_sources.insert(source, (text, facts_text));
+            };
+            changed_meta.push((index, source, text, facts_text, prepared));
+        }
+        let any_changed = !changed_meta.is_empty();
+        if any_changed {
+            let commit_input: Vec<(&str, Arc<Generation>)> = changed_meta
+                .iter()
+                .map(|(_, source, _, _, generation)| (*source, Arc::clone(generation)))
+                .collect();
+            let committed = match self.feeds.commit_generations(&commit_input) {
+                Ok(committed) => committed,
+                Err(reason) => {
+                    self.set_published(PublishedState::Declined {
+                        zone_name: zone.name,
+                        zone: zone.zone,
+                        reason,
+                    });
+                    let mut state = self.state();
+                    if state.sources_gen == snap.sources_gen {
+                        state.sources_dirty = false;
+                    }
+                    return false;
+                }
+            };
+            for ((index, source, text, facts_text, _), held_gen) in
+                changed_meta.into_iter().zip(committed)
+            {
+                cache
+                    .held
+                    .insert(source, (text, facts_text, Arc::clone(&held_gen)));
+                existing[index] = Some(held_gen);
             }
+        }
+        let generations: Option<[Arc<Generation>; 6]> = existing
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .and_then(|vec| vec.try_into().ok());
+        if let Some(generations) = generations {
+            if prewarm_compose
+                && (any_changed || !matches_published)
+                && let Some((clock, day)) = zone.zone.words(clamp_i64(now))
+            {
+                crate::status_fed::prewarm_generations(&generations, clamp_i64(now), clock, day);
+            }
+            self.set_published(PublishedState::Ready(Arc::new(Published {
+                zone_name: zone.name,
+                zone: zone.zone,
+                generations,
+            })));
+        }
+        {
+            let mut state = self.state();
+            if state.sources_gen == snap.sources_gen {
+                state.sources_dirty = false;
+            }
+        }
+        any_changed
+    }
+
+    fn publish_once_and_hint(&self, prewarm_compose: bool) {
+        if self.publish(None, prewarm_compose) {
+            self.hint();
         }
     }
 
-    /// The request path: demand, a collect if due, the sources at this zone, and the feed header.
-    pub(crate) fn prepare(
+    fn set_request_zone(&self, now: u64, time_zone: &str, zone: &Zone) {
+        let mut state = self.state();
+        if state
+            .zone
+            .as_ref()
+            .is_none_or(|held| held.name != time_zone || held.zone != *zone)
+        {
+            state.zone = Some(RequestZone {
+                name: time_zone.to_owned(),
+                zone: zone.clone(),
+                sample_now: now,
+            });
+            state.pinned_dirty = true;
+            state.sources_dirty = true;
+            state.pinned_gen = state.pinned_gen.wrapping_add(1);
+            state.sources_gen = state.sources_gen.wrapping_add(1);
+        }
+    }
+
+    async fn published_for_async(
         self: &Arc<Self>,
         now: u64,
         time_zone: &str,
+        zone: &Zone,
+    ) -> Result<Arc<Published>, Decline> {
+        // Fast path: 10 ns lock, never waits on a producer pass.
+        if let Some(current) = self.current_published()
+            && current.matches_zone(time_zone, zone)
+        {
+            return match current {
+                PublishedState::Ready(published) => Ok(published),
+                PublishedState::Declined { reason, .. } => Err(reason),
+            };
+        }
+        // Cold start or zone change: share one background publish without holding any pool permit.
+        let mut rx = self.published_rx.clone();
+        loop {
+            let _ = rx.borrow_and_update();
+            if let Some(current) = self.current_published()
+                && current.matches_zone(time_zone, zone)
+            {
+                return match current {
+                    PublishedState::Ready(published) => Ok(published),
+                    PublishedState::Declined { reason, .. } => Err(reason),
+                };
+            }
+            self.set_request_zone(now, time_zone, zone);
+            self.trigger_publish();
+            if rx.changed().await.is_err() {
+                return Err(Decline::Internal);
+            }
+        }
+    }
+
+    /// One owned Status request (async, singleflight): reads from the last good generation while
+    /// producers recompute outside the lock, and shares one compose across concurrent reads.
+    pub(crate) async fn view_async(
+        self: &Arc<Self>,
+        limits: Option<&Limits>,
+        now: u64,
+        time_zone: &str,
         zone_facts: &ZoneFacts,
-    ) -> Result<String, Decline> {
+    ) -> Result<(Vec<u8>, String), Decline> {
         self.touch();
         self.maybe_collect();
         let zone = zone_facts.zone().ok_or(Decline::Locale)?;
-        let mut inner = self.lock();
-        if inner.answers_dirty {
-            self.refresh_answers(&mut inner);
-        }
-        let offset_changed = inner
-            .zone
-            .as_ref()
-            .is_none_or(|held| held.name != time_zone || held.zone != zone);
-        if offset_changed {
-            inner.zone = Some(RequestZone {
-                name: time_zone.to_owned(),
-                zone: zone.clone(),
-                offset_now: zone.offset_minutes(clamp_i64(now)).unwrap_or(0),
-            });
-            inner.pinned_dirty = true;
-            inner.sources_dirty = true;
-        }
-        if inner.pinned_dirty
-            || inner.zone.as_ref().map(|zone| zone.offset_now) != inner.pinned_offset
-        {
-            let offset = zone.offset_minutes(clamp_i64(now)).unwrap_or(0);
-            if let Some(panel) = pinned_panel(&inner, clamp_i64(now)) {
-                inner.pinned = panel;
-                inner.pinned_at = now;
-                inner.pinned_offset = Some(offset);
-                inner.pinned_dirty = false;
-                inner.sources_dirty = true;
-                self.push_owned_pins(&inner, now);
-            }
-        }
-        if inner.sources_dirty
-            || inner
-                .zone
-                .as_ref()
-                .is_some_and(|held| held.name != time_zone || held.zone != zone)
-        {
-            let zone = inner.zone.clone();
-            self.push_sources(&mut inner, zone.as_ref(), now);
-            inner.sources_dirty = false;
-        }
-        let mut parts = Vec::with_capacity(SOURCES.len());
-        for source in SOURCES {
-            parts.push(
-                inner
-                    .held
-                    .get(source)
-                    .cloned()
-                    .ok_or(Decline::Unsupported)?,
-            );
-        }
-        let now_words = zone.words(clamp_i64(now)).ok_or(Decline::Locale)?;
-        let header = json!({
-            "now": clamp_i64(now),
-            "clock": now_words.0,
-            "day": now_words.1,
-            "reports": parts[0],
-            "quota": parts[1],
-            "pinned": parts[2],
-            "collected": parts[3],
-            "answers": parts[4],
-            "facts": parts[5],
-        });
-        Ok(header.to_string())
+        let now_i64 = clamp_i64(now);
+        let (clock, day) = zone.words(now_i64).ok_or(Decline::Locale)?;
+        let published = self.published_for_async(now, time_zone, &zone).await?;
+        self.compose
+            .answer_generations_async(
+                limits,
+                published.generations.clone(),
+                now_i64,
+                clock,
+                day,
+                true,
+            )
+            .await
     }
 
-    /// One owned Status request: the composed view's bytes and its ETag.
+    /// Synchronous owned Status read: answers from the last good generation without waiting on
+    /// an in-flight producer pass; builds synchronously only when cold or on a zone mismatch.
+    #[cfg(test)]
     pub(crate) fn view(
         self: &Arc<Self>,
         now: u64,
         time_zone: &str,
         zone_facts: &ZoneFacts,
     ) -> Result<(Vec<u8>, String), Decline> {
-        let header = self.prepare(now, time_zone, zone_facts)?;
-        crate::status_fed::answer(&self.feeds, &header)
+        self.touch();
+        self.maybe_collect();
+        let zone = zone_facts.zone().ok_or(Decline::Locale)?;
+        let now_i64 = clamp_i64(now);
+        let (clock, day) = zone.words(now_i64).ok_or(Decline::Locale)?;
+        let published = match self.current_published() {
+            Some(PublishedState::Ready(published))
+                if published.zone_name == time_zone && published.zone == zone =>
+            {
+                published
+            }
+            Some(PublishedState::Declined {
+                zone_name,
+                zone: held,
+                reason,
+            }) if zone_name == time_zone && held == zone => return Err(reason),
+            _ => {
+                self.publish(Some((time_zone, &zone, now)), false);
+                match self.current_published() {
+                    Some(PublishedState::Ready(published))
+                        if published.zone_name == time_zone && published.zone == zone =>
+                    {
+                        published
+                    }
+                    Some(PublishedState::Declined { reason, .. }) => return Err(reason),
+                    _ => return Err(Decline::Unsupported),
+                }
+            }
+        };
+        crate::status_fed::answer_generations(&published.generations, now_i64, clock, day)
     }
 
     /// `GET /api/status/answers`: the page's answer history from the owned feed (newest first,
-    /// at most `limit`). A dirty feed is scanned here first, as a Status read would.
+    /// at most `limit`). Refreshes outside the state lock when dirty.
     pub(crate) fn answers_view(&self, limit: usize) -> Json {
-        let mut inner = self.lock();
-        if inner.answers_dirty {
-            self.refresh_answers(&mut inner);
-        }
-        crate::status_answers_route::history_json(
-            &inner.answers.answers,
-            &inner.answers.sends,
-            limit,
-        )
+        let (answers, dirty_inputs) = {
+            let state = self.state();
+            let dirty = state.answers_dirty.then(|| {
+                (
+                    Arc::clone(&state.reports_rows),
+                    state.answers_gen,
+                    state.reports_gen,
+                )
+            });
+            (Arc::clone(&state.answers), dirty)
+        };
+        let answers = if let Some((reports_rows, answers_gen, reports_gen)) = dirty_inputs {
+            let cards: Vec<(Json, String)> = reports_rows
+                .cards
+                .iter()
+                .map(|row| (row.doc.clone(), row.sha256.clone()))
+                .collect();
+            let fresh = Arc::new(self.answers.feed(&cards));
+            let resolved = Arc::new(resolved_reports(&reports_rows, &fresh));
+            let mut state = self.state();
+            if state.answers_gen == answers_gen {
+                state.answers = Arc::clone(&fresh);
+                state.answers_dirty = false;
+                if state.reports_gen == reports_gen {
+                    state.reports = resolved;
+                }
+            }
+            fresh
+        } else {
+            answers
+        };
+        crate::status_answers_route::history_json(&answers.answers, &answers.sends, limit)
     }
 
     /// The producers' hint: one `status-changed` per window, once anything changed.
     fn hint(&self) {
         let now = now_ms();
         let send = {
-            let mut inner = self.lock();
-            if now.saturating_sub(inner.hinted_at) < HINT_GAP_MS {
+            let mut state = self.state();
+            if now.saturating_sub(state.hinted_at) < HINT_GAP_MS {
                 false
             } else {
-                inner.hinted_at = now;
+                state.hinted_at = now;
                 true
             }
         };
@@ -1246,7 +1700,9 @@ async fn read_pins(
         let local_machine = machine == local;
         pending.push(async move {
             let outcome = if local_machine {
-                local_pins()
+                tokio::task::spawn_blocking(local_pins)
+                    .await
+                    .unwrap_or_else(|_| Err("io".to_owned()))
             } else {
                 match (os, alias) {
                     (Some(host), Some(alias)) => remote_pins(&machine, host, &alias).await,
@@ -1446,15 +1902,20 @@ fn machines_json(machines: &BTreeMap<String, Collected<Sample>>) -> Json {
 }
 
 /// The pinned panel for these readings, or `None` when the projection refuses a document.
-fn pinned_panel(inner: &Inner, now: i64) -> Option<Json> {
+fn pinned_panel(
+    reports_rows: &AgentReportsState,
+    docs_rows: &StatusDocsState,
+    pins: &Pins,
+    answers: &AnswersFeed,
+    now: i64,
+) -> Option<Json> {
     // Before the first collect there are no pins to compose over; the panel says it has not
     // been read yet, as the collector's view did.
-    if !inner.pins.collected {
+    if !pins.collected {
         return None;
     }
-    let closed = closing_card_versions(&inner.answers.answers);
-    let cards: Vec<aac_status::produce::answered::CardRow<'_>> = inner
-        .reports_rows
+    let closed = closing_card_versions(&answers.answers);
+    let cards: Vec<aac_status::produce::answered::CardRow<'_>> = reports_rows
         .cards
         .iter()
         .map(|row| aac_status::produce::answered::CardRow {
@@ -1465,14 +1926,403 @@ fn pinned_panel(inner: &Inner, now: i64) -> Option<Json> {
         .collect();
     let waits: ResolvedWaits = resolved_card_waits(&cards, &closed);
     let input = pinned_input::compose_input(
-        &inner.reports_rows,
-        &inner.docs_rows,
-        &inner.pins.merged,
-        &inner.pins.problems,
+        reports_rows,
+        docs_rows,
+        &pins.merged,
+        &pins.problems,
         now,
         &closed,
         &waits,
     )?;
     let output = aac_status::pinned::compose(&input);
     serde_json::to_value(output).ok()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod flicker_tests {
+    use super::*;
+    use crate::limits::Limits;
+    use aac_status::share::reports::SeenReport;
+
+    fn utc_zone(now: u64) -> ZoneFacts {
+        let now = clamp_i64(now);
+        let span = 30 * 86_400_000;
+        ZoneFacts {
+            from: now - span,
+            to: now + span,
+            offsets: vec![[now - span, 0]],
+        }
+    }
+
+    fn scan_with_thread(writer: &str, now: u64) -> Scan {
+        let mut reports = empty_reports();
+        reports.state = "ok";
+        reports.scanned_at = Some(now);
+        reports.complete = true;
+        reports.threads.push(SeenReport {
+            file: format!("writers/{writer}/thread.json"),
+            writer: writer.to_owned(),
+            doc: json!({
+                "schema": "agent-reports/thread@1",
+                "writer": writer,
+                "seq": 1,
+                "writtenAt": "2026-11-24T00:00:00.000Z",
+                "project": "aac",
+                "stream": "status",
+                "state": "active",
+                "summary": format!("Thread {writer}"),
+                "blockedOn": null,
+                "ttlSeconds": 3600,
+                "links": [],
+            }),
+            sha256: "a".repeat(64),
+            first_seen_at: now,
+            written_at_ms: clamp_i64(now),
+            problem: None,
+        });
+        Scan {
+            reports,
+            docs: StatusDocsState {
+                state: "ok",
+                scanned_at: Some(now),
+                docs: Vec::new(),
+                problems: Vec::new(),
+            },
+            quota: Json::Null,
+            registry: json!({"data": null, "asOf": null, "error": null}),
+        }
+    }
+
+    /// Reproduces the live 503 flicker: a slow producer pass (`publish`) must not block
+    /// Status reads past the 400 ms route budget or fill the status pool.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_read_does_not_decline_during_a_slow_producer_pass() {
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let reports = scratch.path().join("reports");
+        std::fs::create_dir_all(&ccs).unwrap();
+        std::fs::create_dir_all(&reports).unwrap();
+
+        let feeds = Feeds::new();
+        let answers = AnswersOwned::new(ccs.clone(), reports);
+        let produce = Produce::new(feeds, Arc::clone(&answers), ccs);
+        let limits = Limits::new();
+        let now = 1_795_000_000_000_u64;
+        let zone = utc_zone(now);
+
+        // Establish a last good generation.
+        let initial = {
+            let produce = Arc::clone(&produce);
+            let zone = zone.clone();
+            limits
+                .blocking_status(move || produce.view(now, "UTC", &zone))
+                .await
+        };
+        assert!(initial.is_ok(), "initial read failed: {initial:?}");
+
+        // Hold the answers engine lock for 700 ms to make the background producer pass slow
+        // (matching `answers_owned::jobs` / slow share I/O during `publish`).
+        let (hold_ready_tx, hold_ready_rx) = std::sync::mpsc::channel();
+        let hold_answers = Arc::clone(&answers);
+        let holder = std::thread::spawn(move || {
+            let _guard = hold_answers.lock_engine_for_test();
+            let _ = hold_ready_tx.send(());
+            std::thread::sleep(Duration::from_millis(700));
+        });
+        hold_ready_rx.recv().unwrap();
+
+        // Trigger a background producer pass that must refresh answers and republish.
+        produce.mark_answers();
+        let publisher = {
+            let produce = Arc::clone(&produce);
+            tokio::task::spawn_blocking(move || produce.publish(None, true))
+        };
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        // While the slow producer pass is running, Status reads must answer within the
+        // 400 ms route budget from the last good generation (never `deadline` or `busy`).
+        for attempt in 0..5 {
+            let produce = Arc::clone(&produce);
+            let zone = zone.clone();
+            let read_now = now + attempt * 10;
+            let outcome = tokio::time::timeout(
+                Duration::from_millis(400),
+                limits.blocking_status(move || produce.view(read_now, "UTC", &zone)),
+            )
+            .await;
+            match outcome {
+                Ok(Ok((bytes, etag))) => {
+                    assert!(!bytes.is_empty());
+                    assert!(etag.starts_with("W/\""));
+                }
+                Ok(Err(reason)) => panic!("attempt {attempt} declined with {reason:?}"),
+                Err(_) => panic!("attempt {attempt} hit 400ms deadline during slow producer pass"),
+            }
+        }
+
+        let _ = holder.join();
+        let _ = publisher.await;
+    }
+
+    /// Reads answer from the last good generation while `after_scan` recomputes sources outside
+    /// the lock, then see the swapped generation once the producer pass completes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_read_answers_from_last_good_generation_during_slow_source_build_then_swaps() {
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let reports = scratch.path().join("reports");
+        std::fs::create_dir_all(&ccs).unwrap();
+        std::fs::create_dir_all(&reports).unwrap();
+
+        let feeds = Feeds::new();
+        let answers = AnswersOwned::new(ccs.clone(), reports);
+        let produce = Produce::new(feeds, Arc::clone(&answers), ccs);
+        let limits = Limits::new();
+        let now = 1_795_000_000_000_u64;
+        let zone = utc_zone(now);
+
+        produce.after_scan(scan_with_thread("vm.first", now)).await;
+        let (first_bytes, _) = produce
+            .view_async(Some(&limits), now, "UTC", &zone)
+            .await
+            .expect("first view");
+        let first_text = String::from_utf8(first_bytes).unwrap();
+        assert!(
+            first_text.contains("\"writer\":\"vm.first\""),
+            "{first_text}"
+        );
+
+        // Make the next source build take 600 ms (longer than the 400 ms route budget).
+        produce.publish_delay_ms.store(600, Ordering::SeqCst);
+        let scan_task = {
+            let produce = Arc::clone(&produce);
+            tokio::spawn(async move {
+                produce
+                    .after_scan(scan_with_thread("vm.second", now + 1000))
+                    .await;
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // Concurrent reads during the slow producer pass answer from `vm.first` within 400 ms.
+        for i in 0..6 {
+            let read = tokio::time::timeout(
+                Duration::from_millis(400),
+                produce.view_async(Some(&limits), now + 100 + i * 5, "UTC", &zone),
+            )
+            .await
+            .expect("read must not hit 400ms deadline")
+            .expect("read must not decline");
+            let text = String::from_utf8(read.0).unwrap();
+            assert!(
+                text.contains("\"writer\":\"vm.first\""),
+                "expected last good generation: {text}"
+            );
+        }
+
+        scan_task.await.unwrap();
+        produce.publish_delay_ms.store(0, Ordering::SeqCst);
+
+        // Once swapped, reads immediately reflect `vm.second`.
+        let (swapped_bytes, _) = produce
+            .view_async(Some(&limits), now + 2000, "UTC", &zone)
+            .await
+            .expect("swapped view");
+        let swapped_text = String::from_utf8(swapped_bytes).unwrap();
+        assert!(
+            swapped_text.contains("\"writer\":\"vm.second\""),
+            "{swapped_text}"
+        );
+    }
+
+    /// Concurrent Status reads beyond `STATUS_PERMITS` (4) share one singleflight compose instead
+    /// of filling the pool and declining `busy`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_status_reads_share_one_compose_singleflight() {
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let reports = scratch.path().join("reports");
+        std::fs::create_dir_all(&ccs).unwrap();
+        std::fs::create_dir_all(&reports).unwrap();
+
+        let feeds = Feeds::new();
+        let answers = AnswersOwned::new(ccs.clone(), reports);
+        let produce = Produce::new(feeds, Arc::clone(&answers), ccs);
+        let limits = Limits::new();
+        let now = 1_795_000_000_000_u64;
+        let zone = utc_zone(now);
+
+        // Warm the generation first so all 12 concurrent reads hit compose together.
+        produce.after_scan(scan_with_thread("vm.sf", now)).await;
+        produce
+            .view_async(Some(&limits), now, "UTC", &zone)
+            .await
+            .expect("prime zone");
+        let before = produce.compose.compose_count();
+
+        // Slow each compose to 120 ms and fire 12 concurrent reads at a fresh second (cache miss).
+        produce.compose.set_compose_delay_ms(120);
+        let base_now = now + 5_000;
+        let mut tasks = Vec::new();
+        for offset in 0..12_u64 {
+            let produce = Arc::clone(&produce);
+            let limits = limits.clone();
+            let zone = zone.clone();
+            tasks.push(tokio::spawn(async move {
+                tokio::time::timeout(
+                    Duration::from_millis(400),
+                    produce.view_async(Some(&limits), base_now + offset, "UTC", &zone),
+                )
+                .await
+            }));
+        }
+        for (idx, task) in tasks.into_iter().enumerate() {
+            let result = task.await.unwrap();
+            match result {
+                Ok(Ok((bytes, etag))) => {
+                    assert!(!bytes.is_empty(), "reader {idx}");
+                    assert!(etag.starts_with("W/\""), "reader {idx}");
+                }
+                Ok(Err(reason)) => panic!("reader {idx} declined with {reason:?}"),
+                Err(_) => panic!("reader {idx} hit 400ms deadline"),
+            }
+        }
+        produce.compose.set_compose_delay_ms(0);
+        assert_eq!(
+            produce.compose.compose_count() - before,
+            1,
+            "all 12 concurrent reads must share one singleflight compose"
+        );
+    }
+
+    /// Cold start: `warm()` prepares the default display zone before the first read arrives, and
+    /// concurrent cold reads share one in-flight publish without filling `Pool::Status`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cold_start_warm_and_concurrent_cold_reads_succeed_within_budget() {
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let reports = scratch.path().join("reports");
+        std::fs::create_dir_all(&ccs).unwrap();
+        std::fs::create_dir_all(&reports).unwrap();
+
+        let now = now_ms();
+        let (tz_name, offsets) =
+            crate::zone_facts::status_zone(&ccs, clamp_i64(now)).expect("default zone");
+        let zone = ZoneFacts {
+            from: offsets.from,
+            to: offsets.to,
+            offsets: offsets.offsets,
+        };
+
+        // Warmed startup serves the very first read immediately.
+        let produce = Produce::new(
+            Feeds::new(),
+            AnswersOwned::new(ccs.clone(), reports.clone()),
+            ccs.clone(),
+        );
+        produce.warm().await;
+        let limits = Limits::new();
+        let started = std::time::Instant::now();
+        let first = tokio::time::timeout(
+            Duration::from_millis(400),
+            produce.view_async(Some(&limits), now, &tz_name, &zone),
+        )
+        .await
+        .expect("warmed first read must not time out")
+        .expect("warmed first read must succeed");
+        assert!(!first.0.is_empty());
+        assert!(started.elapsed() < Duration::from_millis(400));
+
+        // Un-warmed cold start with 8 concurrent readers shares one publish and zero pool fills.
+        let cold = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        cold.publish_delay_ms.store(120, Ordering::SeqCst);
+        let mut tasks = Vec::new();
+        for i in 0..8_u64 {
+            let cold = Arc::clone(&cold);
+            let limits = limits.clone();
+            let zone = zone.clone();
+            let tz_name = tz_name.clone();
+            tasks.push(tokio::spawn(async move {
+                tokio::time::timeout(
+                    Duration::from_millis(400),
+                    cold.view_async(Some(&limits), now + i, &tz_name, &zone),
+                )
+                .await
+            }));
+        }
+        for (idx, task) in tasks.into_iter().enumerate() {
+            let reply = task
+                .await
+                .unwrap()
+                .unwrap_or_else(|_| panic!("cold reader {idx} timed out"))
+                .unwrap_or_else(|reason| panic!("cold reader {idx} declined {reason:?}"));
+            assert!(!reply.0.is_empty());
+        }
+    }
+
+    /// Real failures are never hidden: invalid zones and unprovable inputs still decline by name.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn real_failures_still_decline_by_name() {
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        let reports = scratch.path().join("reports");
+        std::fs::create_dir_all(&ccs).unwrap();
+        std::fs::create_dir_all(&reports).unwrap();
+
+        let produce = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let limits = Limits::new();
+        let now = 1_795_000_000_000_u64;
+        let zone = utc_zone(now);
+
+        // Invalid zone declines `locale`.
+        let bad_zone = ZoneFacts {
+            from: 100,
+            to: 50,
+            offsets: vec![],
+        };
+        assert_eq!(
+            produce
+                .view_async(Some(&limits), now, "UTC", &bad_zone)
+                .await
+                .unwrap_err(),
+            Decline::Locale
+        );
+
+        // Start from a valid generation.
+        produce.after_scan(scan_with_thread("vm.good", now)).await;
+        assert!(
+            produce
+                .view_async(Some(&limits), now, "UTC", &zone)
+                .await
+                .is_ok()
+        );
+
+        // An unprovable report containing an exact `Object.prototype` member name declines `shape`
+        // once published (never silently masked by the earlier good generation).
+        let mut bad_scan = scan_with_thread("vm.bad", now + 1000);
+        bad_scan.reports.threads[0].doc["summary"] = json!("constructor");
+        produce.after_scan(bad_scan).await;
+        assert_eq!(
+            produce
+                .view_async(Some(&limits), now + 1000, "UTC", &zone)
+                .await
+                .unwrap_err(),
+            Decline::Shape
+        );
+
+        // Recovering with valid inputs clears the decline.
+        produce
+            .after_scan(scan_with_thread("vm.recovered", now + 2000))
+            .await;
+        let (bytes, _) = produce
+            .view_async(Some(&limits), now + 2000, "UTC", &zone)
+            .await
+            .expect("recovered view");
+        assert!(
+            String::from_utf8(bytes)
+                .unwrap()
+                .contains("\"writer\":\"vm.recovered\"")
+        );
+    }
 }

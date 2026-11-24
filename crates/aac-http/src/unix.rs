@@ -151,6 +151,8 @@ struct Shared {
     answers_owned: Option<Arc<crate::answers_owned::AnswersOwned>>,
     /// G16c: the Status feed's producers, with the owned Status readers.
     status_produce: Option<Arc<crate::status_produce::Produce>>,
+    /// Singleflight for fed Status composition (`x-aac-feed`).
+    status_compose: crate::status_fed::StatusCompose,
     /// R5/A2: whether the Analytics activity pass is in flight (the read's `refreshing`).
     analytics_live: Arc<crate::analytics_live::Live>,
 }
@@ -1090,9 +1092,8 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let (Some(now), Some(zone), false, true) = (now, zone, query, body.is_empty()) else {
                 return decline(row.handler, Decline::Shape);
             };
-            match shared
-                .limits
-                .blocking_status(move || produce.view(now, &zone.time_zone, &zone.facts()))
+            match produce
+                .view_async(Some(&shared.limits), now, &zone.time_zone, &zone.facts())
                 .await
             {
                 Ok((bytes, etag)) => crate::view_reply::respond_tagged(
@@ -1115,10 +1116,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let (Some(feed), false, true) = (feed, query, body.is_empty()) else {
                 return decline(row.handler, Decline::Shape);
             };
-            let feeds = shared.feeds.clone();
             match shared
-                .limits
-                .blocking_status(move || crate::status_fed::answer(&feeds, &feed))
+                .status_compose
+                .answer_fed(&shared.feeds, &shared.limits, &feed)
                 .await
             {
                 Ok((bytes, etag)) => crate::view_reply::respond_tagged(
@@ -1905,6 +1905,7 @@ async fn serve_inner(
         claude_open,
         answers_owned: answers_owned.clone(),
         status_produce: status_produce.clone(),
+        status_compose: crate::status_fed::StatusCompose::default(),
         analytics_live: Arc::new(crate::analytics_live::Live::default()),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
@@ -2015,16 +2016,19 @@ async fn serve_inner(
     if let Some(root) = owned_reports_root {
         crate::status_owned::initialize_reports(root).await;
     }
+    if let Some(owner) = &status_produce {
+        // Warm the initial sources for the display zone before the first read arrives
+        // and before background answer retries can hold the answers engine.
+        owner.warm().await;
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::status_produce::Produce::jobs(jobs, stop).await });
+    }
     if let Some(owner) = &status_owned {
         let jobs = Arc::clone(owner);
         let stop = Arc::clone(&jobs_stop);
         let produce = status_produce.clone();
         tokio::spawn(async move { crate::status_owned::jobs(jobs, produce, stop).await });
-    }
-    if let Some(owner) = &status_produce {
-        let jobs = Arc::clone(owner);
-        let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(async move { crate::status_produce::Produce::jobs(jobs, stop).await });
     }
     if let Some(owner) = &answers_owned {
         let jobs = Arc::clone(owner);

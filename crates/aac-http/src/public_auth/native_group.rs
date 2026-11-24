@@ -604,17 +604,8 @@ async fn answers_post(
 fn status_zone(root: &Path) -> Option<(String, crate::zone_facts::ZoneOffsets)> {
     // The preferences reader answers the saved zone; an absent file is the reference's default
     // (the TypeScript reader falls back the same way), never a missing zone.
-    let name = crate::account_reads::preferences(root)
-        .and_then(|preferences| {
-            preferences
-                .get("timeZone")
-                .and_then(Json::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "America/New_York".to_owned());
     let now = i64::try_from(now_ms()).ok()?;
-    let facts = crate::zone_facts::server_zone_facts(&name, now)?;
-    Some((name, facts))
+    crate::zone_facts::status_zone(root, now)
 }
 
 /// `GET /api/status`: the service's own fed generations, with this request's clock and the
@@ -647,7 +638,7 @@ async fn status(
             to: offsets.to,
             offsets: offsets.offsets.clone(),
         };
-        return match produce.view(now_ms(), &time_zone, &zone) {
+        return match produce.view_async(None, now_ms(), &time_zone, &zone).await {
             Ok((bytes, etag)) => {
                 fed_bytes(bytes, &etag, "status@1", facts.if_none_match.as_deref())
             }

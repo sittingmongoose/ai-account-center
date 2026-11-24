@@ -289,6 +289,88 @@ impl Feeds {
         Ok(reply)
     }
 
+    /// Validate and prepare one generation outside `self.held`, with the same rules `put` uses.
+    pub(crate) fn prepare_generation(
+        &self,
+        source: &str,
+        body: &[u8],
+    ) -> Result<Arc<Generation>, Decline> {
+        if !source_word(source) {
+            return Err(Decline::Unsupported);
+        }
+        let put: Put = crate::json_object::from_slice(body, &["generation", "data", "facts"])
+            .map_err(|_| Decline::Shape)?;
+        let ordered = home_source(source) || crate::status_fed::source(source);
+        if !generation_word(&put.generation)
+            || (source.starts_with("home-") && !home_source(source))
+            || (source.starts_with("status-") && !crate::status_fed::source(source))
+            || (ordered && number(&put.generation).is_none())
+        {
+            return Err(Decline::Shape);
+        }
+        let prepared = prepare(source, &put.data, &put.facts);
+        Ok(Arc::new(Generation {
+            prepared,
+            digest: digest(&put.data, &put.facts),
+            id: put.generation,
+            data: put.data,
+            facts: put.facts,
+        }))
+    }
+
+    /// Commit prepared generations atomically under one `self.held` lock, returning the
+    /// generation held for each source (a newer existing generation stays, as in `put`).
+    pub(crate) fn commit_generations(
+        &self,
+        entries: &[(&str, Arc<Generation>)],
+    ) -> Result<Vec<Arc<Generation>>, Decline> {
+        let mut out = Vec::with_capacity(entries.len());
+        let mut need_facts: Vec<(String, String)> = Vec::new();
+        {
+            let mut held = self.held.lock().map_err(|_| Decline::Internal)?;
+            let mut new_sources = std::collections::HashSet::new();
+            for (source, generation) in entries {
+                if Self::newer(
+                    held.get(*source),
+                    &generation.id,
+                    generation.data.get(),
+                    generation.facts.get(),
+                )? && !held.contains_key(*source)
+                {
+                    new_sources.insert(*source);
+                }
+            }
+            if held.len() + new_sources.len() > SOURCES {
+                return Err(Decline::Busy);
+            }
+            for (source, generation) in entries {
+                if Self::newer(
+                    held.get(*source),
+                    &generation.id,
+                    generation.data.get(),
+                    generation.facts.get(),
+                )? {
+                    if !generation.has_facts() && !without_facts(source) {
+                        need_facts.push(((*source).to_owned(), generation.id.clone()));
+                    }
+                    held.insert((*source).to_owned(), Arc::clone(generation));
+                    out.push(Arc::clone(generation));
+                } else {
+                    let current = held.get(*source).ok_or(Decline::Internal)?;
+                    out.push(Arc::clone(current));
+                }
+            }
+        }
+        for (source, generation) in need_facts {
+            self.publish(json!({
+                "event": "facts-needed",
+                "source": source,
+                "generation": generation,
+            }));
+        }
+        Ok(out)
+    }
+
     pub(crate) fn latest(&self, source: &str) -> Result<Arc<Generation>, Decline> {
         self.held
             .lock()

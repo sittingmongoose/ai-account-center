@@ -177,6 +177,11 @@ impl AnswersOwned {
         lock(&self.engine).flush_completions();
         aac_status::writer_lock::release_writer_locks();
     }
+
+    #[cfg(test)]
+    pub(crate) fn lock_engine_for_test(&self) -> std::sync::MutexGuard<'_, AnswersEngine> {
+        lock(&self.engine)
+    }
 }
 
 /// The retry timer: at once, then every minute, single-flight.
