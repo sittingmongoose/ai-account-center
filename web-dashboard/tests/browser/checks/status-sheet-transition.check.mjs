@@ -53,7 +53,9 @@ export const tests = {
 		await t.check('background row reports unreadable', /Could not be read/.test(await t.page.locator(ROW).textContent()));
 		await t.text(SHEET, /Could not be read since 8:33 PM/);
 		await t.text(SHEET, /cached/i);
-		await t.text(SHEET, /1 of 2 tasks done/);
+		// Concept A: the cached rows themselves, open work and what finished, instead of a "1 of 2" count.
+		await t.text(`${SHEET} .c2-work`, /Tray icon sharp at 125% scale/);
+		await t.text(`${SHEET} .c2-fin`, /1 more finished earlier/);
 		await t.check('the cached figures are dimmed', (await opacity(t, '.c2-sheet-host .c2-cols')) < 0.6);
 		const text = await t.page.locator(SHEET).textContent();
 		await t.check('no line says it was just updated', !/Updated 3 min ago/.test(text), text);

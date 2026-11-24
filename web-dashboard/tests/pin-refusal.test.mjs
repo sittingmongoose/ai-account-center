@@ -10,7 +10,7 @@ test('the shared pin heading points to report problems and identifies cached cop
   assert.match(heading, /p\.u\.refusal\.is_some\(\).*See Report problems/s);
   assert.match(heading, /cached_notice\(&p\.u\)/);
   const body = src.slice(src.indexOf('fn LivePinBody('), src.indexOf('// ---- The plate'));
-  assert.match(body, /map\(sheet_heading\)[\s\S]*?<Show when=/);
+  assert.match(body, /sheet_heading\(p, live\.elapsed_seconds\(\)\)[\s\S]*?<Show when=/);
 });
 
 test('the pane and overlay share the live pin body', () => {

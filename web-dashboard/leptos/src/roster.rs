@@ -369,12 +369,6 @@ pub fn kind_words(kind: &str) -> &'static str {
     }
 }
 
-/// The model part of the composer's who line ("Project · name · Model effort"), only when all three parts are there.
-pub fn model_of(who: Option<&str>) -> Option<String> {
-    let parts: Vec<&str> = who?.split(" · ").collect();
-    (parts.len() == 3).then(|| parts[2].to_string())
-}
-
 // ---- Things to open ------------------------------------------------------------------------------------------------
 
 /// The share-relative path the read-only deliverable route serves, when `path` is under a recognised share root and
@@ -504,13 +498,15 @@ pub fn mark(version: &str, opened: &Opened) -> Mark {
 
 // ---- Tasks ---------------------------------------------------------------------------------------------------------
 
+/// The open-work groups in the order the sheet lists them (concept A, 2026-11-18): what is stuck first, then what
+/// moves, then what waits and what has not started.
 pub const GROUPS: [&str; 7] = [
-    "Waiting",
     "Blocked",
-    "In work",
-    "State not recognised",
-    "To do",
+    "Working",
     "In review",
+    "Waiting",
+    "State not recognised",
+    "Not started",
     "Done",
 ];
 
@@ -523,6 +519,10 @@ pub struct TaskRow {
     pub needs_you: Option<String>,
     /// The raw state of an item whose state is not one of the nine.
     pub odd_state: Option<String>,
+    /// When a closed row finished (ISO), as the server passed it on.
+    pub done_at: Option<String>,
+    /// What an open row waits on, by name (`row_wait`).
+    pub wait: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -569,8 +569,8 @@ fn group_of(state: &str) -> &'static str {
     match state {
         "blocked" => "Blocked",
         "waiting" => "Waiting",
-        "working" => "In work",
-        "todo" => "To do",
+        "working" => "Working",
+        "todo" => "Not started",
         "review" => "In review",
         "done" => "Done",
         _ => "State not recognised",
@@ -652,6 +652,8 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: (!KNOWN.contains(&state)).then(|| state.to_string()),
+                    done_at: item.done_at.clone(),
+                    wait: (state != "done").then(|| row_wait(u, &item.id)).flatten(),
                 },
             );
         }
@@ -674,6 +676,8 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: odd,
+                    done_at: item.done_at.clone(),
+                    wait: (state != "done").then(|| row_wait(u, &item.id)).flatten(),
                 },
             );
         }
@@ -694,6 +698,8 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: odd,
+                    done_at: None,
+                    wait: row_wait(u, &item.id),
                 },
             );
         }
@@ -707,6 +713,8 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: None,
+                    done_at: item.done_at.clone(),
+                    wait: None,
                 },
             );
         }
@@ -715,7 +723,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
         GROUPS
             .iter()
             .position(|g| *g == l)
-            .unwrap_or(if l == "Left" { 2 } else { 9 })
+            .unwrap_or(if l == "Left" { 1 } else { 9 })
     };
     groups.sort_by_key(|g| order(g.label));
     groups
@@ -905,6 +913,246 @@ pub fn shared_board_words(u: &PinnedUpdate) -> Option<String> {
 /// "1 thing to open", "4 things to open".
 pub fn things(n: usize) -> String {
     plural(n, "thing to open", "things to open")
+}
+
+// ---- Concept A with Coming up (SR2 = C, 2026-11-18): counts by state, a row's wait, finished today, Coming up ------
+
+/// The roster strip's key and words for an open-work group: one segment and one count per state.
+pub fn group_key(label: &str) -> Option<(&'static str, &'static str)> {
+    Some(match label {
+        "Blocked" => ("blocked", "blocked"),
+        "Working" => ("working", "working"),
+        "In review" => ("review", "in review"),
+        "Waiting" => ("waiting", "waiting"),
+        "State not recognised" => ("unknown", "state not recognised"),
+        "Not started" => ("todo", "not started"),
+        "Left" => ("left", "not done"),
+        _ => return None,
+    })
+}
+
+/// A thread's open rows counted by state, in the sheet's group order: `(key, count, words)`. Done rows are not open.
+pub fn work_counts(groups: &[TaskGroup]) -> Vec<(&'static str, usize, &'static str)> {
+    groups
+        .iter()
+        .filter(|g| !g.rows.is_empty())
+        .filter_map(|g| group_key(g.label).map(|(key, words)| (key, g.rows.len(), words)))
+        .collect()
+}
+
+/// "5 working · 2 waiting · 1 not started".
+pub fn counts_words(counts: &[(&'static str, usize, &'static str)]) -> String {
+    counts
+        .iter()
+        .map(|(_, n, words)| format!("{n} {words}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// What one open row waits on, from the waits the server matched to that task: "Event Authority: its harness steps".
+pub fn row_wait(u: &PinnedUpdate, id: &str) -> Option<String> {
+    let w = u.waits.iter().find(|w| w.task.as_deref() == Some(id))?;
+    let words = wait_words(w);
+    let who = w
+        .who
+        .clone()
+        .filter(|who| !who.trim().is_empty())
+        .or_else(|| match w.on.as_str() {
+            "unknown" | "" => None,
+            on => Some(who_words(on).to_string()),
+        });
+    Some(match who {
+        Some(who) if !words.trim().is_empty() => format!("{who}: {}", words.trim()),
+        Some(who) => who,
+        None => words,
+    })
+    .filter(|text| !text.trim().is_empty())
+}
+
+/// The calendar day in EST (UTC-05:00, as every pinned time on this page), counted from 1970-01-01.
+pub fn est_day(ms: f64) -> i64 {
+    ((ms - 18_000_000.0) / 86_400_000.0).floor() as i64
+}
+
+/// "7 PM", "9:30 AM": the EST clock of an instant, in the server's own way of writing a time.
+pub fn est_hm(ms: f64) -> String {
+    let minutes = ((ms - 18_000_000.0) / 60_000.0).floor() as i64;
+    let of_day = minutes.rem_euclid(1_440);
+    let (h, m) = (of_day / 60, of_day % 60);
+    let half = if h < 12 { "AM" } else { "PM" };
+    let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+    if m == 0 {
+        format!("{h12} {half}")
+    } else {
+        format!("{h12}:{m:02} {half}")
+    }
+}
+
+/// Days since 1970-01-01 of a civil date (Howard Hinnant's algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+/// A "2026-11-19" day, as the day number `est_day` counts.
+pub fn day_number(day: &str) -> Option<i64> {
+    let mut parts = day.trim().splitn(3, '-');
+    let y = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let d: i64 = parts.next()?.parse().ok()?;
+    ((1..=12).contains(&m) && (1..=31).contains(&d)).then(|| days_from_civil(y, m, d))
+}
+
+/// "Today", "Tomorrow", else "Thu Nov 19".
+pub fn day_label(day: i64, today: i64) -> String {
+    match day - today {
+        0 => "Today".into(),
+        1 => "Tomorrow".into(),
+        _ => {
+            const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+            const MONTHS: [&str; 12] = [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            ];
+            let (_, m, d) = civil_from_days(day);
+            format!(
+                "{} {} {d}",
+                DAYS[(day + 4).rem_euclid(7) as usize],
+                MONTHS[(m - 1) as usize]
+            )
+        }
+    }
+}
+
+/// The closed rows that finished today (EST), newest first, and the rest in their own order. A row without a finish
+/// time is never called today's.
+pub fn finished_today(
+    rows: &[TaskRow],
+    now_ms: f64,
+    parse: impl Fn(&str) -> Option<f64>,
+) -> (Vec<TaskRow>, Vec<TaskRow>) {
+    let today = est_day(now_ms);
+    let mut todays: Vec<(f64, TaskRow)> = Vec::new();
+    let mut earlier = Vec::new();
+    for row in rows {
+        match row.done_at.as_deref().and_then(&parse) {
+            Some(at) if est_day(at) == today => todays.push((at, row.clone())),
+            _ => earlier.push(row.clone()),
+        }
+    }
+    todays.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    (todays.into_iter().map(|(_, row)| row).collect(), earlier)
+}
+
+/// One thread's next step, as Coming up reads it: the server's time words and, when the report gave one, the instant
+/// (`nextBy`) or the day (`nextByDay`) it is due.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NextStep {
+    pub id: String,
+    pub title: String,
+    pub next: Option<String>,
+    pub time: Option<PinnedTime>,
+    pub at_ms: Option<f64>,
+    pub day: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ComingItem {
+    pub id: String,
+    pub title: String,
+    pub next: String,
+    /// "7 PM", or the server's words for a day-only or late time.
+    pub when: String,
+    pub late: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ComingDay {
+    pub label: String,
+    pub items: Vec<ComingItem>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Coming {
+    pub days: Vec<ComingDay>,
+    /// Threads that report but give no time for a next step (none said, `after:` or `unknown:`).
+    pub untimed: usize,
+}
+
+/// Coming up: every thread's next step that has a time, in time order and grouped by day, late ones first under
+/// today. Nothing is invented: a step without an instant or a day is counted, never placed.
+pub fn coming_up(steps: &[NextStep], now_ms: f64) -> Coming {
+    let today = est_day(now_ms);
+    let mut placed: Vec<(i64, u8, f64, ComingItem)> = Vec::new();
+    let mut untimed = 0;
+    for s in steps {
+        let Some(next) = s.next.clone().filter(|n| !n.trim().is_empty()) else {
+            untimed += 1;
+            continue;
+        };
+        let late = s.time.as_ref().is_some_and(|t| t.late);
+        let words = s.time.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        let item = |when: String| ComingItem {
+            id: s.id.clone(),
+            title: s.title.clone(),
+            next: next.clone(),
+            when,
+            late,
+        };
+        match (s.at_ms, s.day) {
+            _ if late => placed.push((today, 0, s.at_ms.unwrap_or(0.0), item(words))),
+            (Some(at), _) => placed.push((est_day(at).max(today), 1, at, item(est_hm(at)))),
+            (None, Some(day)) => placed.push((day.max(today), 2, 0.0, item(words))),
+            (None, None) => untimed += 1,
+        }
+    }
+    placed.sort_by(|a, b| {
+        (a.0, a.1)
+            .cmp(&(b.0, b.1))
+            .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    let mut days: Vec<(i64, ComingDay)> = Vec::new();
+    for (day, _, _, item) in placed {
+        match days.last_mut() {
+            Some((d, group)) if *d == day => group.items.push(item),
+            _ => days.push((
+                day,
+                ComingDay {
+                    label: day_label(day, today),
+                    items: vec![item],
+                },
+            )),
+        }
+    }
+    Coming {
+        days: days.into_iter().map(|(_, d)| d).collect(),
+        untimed,
+    }
+}
+
+/// "1 thread gives no time", "3 threads give no time".
+pub fn untimed_words(n: usize) -> String {
+    if n == 1 {
+        "1 thread gives no time".into()
+    } else {
+        format!("{n} threads give no time")
+    }
 }
 
 #[cfg(test)]
@@ -1107,7 +1355,8 @@ mod tests {
         let grouped = task_groups(&u, board);
         assert_eq!(
             grouped.iter().map(|g| g.label).collect::<Vec<_>>(),
-            vec!["In work", "State not recognised", "Done"]
+            // "queued" is an old word for not started (contract v3, section 3), not an unknown state
+            vec!["Working", "Not started", "Done"]
         );
         // two boards that both match say nothing about states
         let twice = vec![projects[0].clone(), projects[0].clone()];
@@ -1135,9 +1384,9 @@ mod tests {
         let groups = task_groups(&u, None);
         assert_eq!(
             groups.iter().map(|g| g.label).collect::<Vec<_>>(),
-            vec!["In work", "To do", "In review", "Done"]
+            vec!["Working", "In review", "Not started", "Done"]
         );
-        assert!(groups[1].rows.iter().all(|row| row.odd_state.is_none()));
+        assert!(groups[2].rows.iter().all(|row| row.odd_state.is_none()));
         // the writer the server matched finds that thread's open cards
         let r = Reported {
             writer: Some("vm.a".into()),
@@ -1173,7 +1422,7 @@ mod tests {
         };
         assert!(d.folds());
         let s = TaskGroup {
-            label: "To do",
+            label: "Not started",
             warn: false,
             rows: vec![TaskRow::default(); 6],
         };
@@ -1406,5 +1655,194 @@ mod tests {
         assert!(loop_lines(&u).unwrap().0.starts_with("Looping: P-BATCH2"));
         u.looping.answer = "no".into();
         assert_eq!(loop_lines(&u), None);
+    }
+
+    // ---- Concept A with Coming up (SR2 = C) ----
+
+    fn row(id: &str, done_at: Option<&str>) -> TaskRow {
+        TaskRow {
+            id: id.into(),
+            title: format!("Task {id}"),
+            done_at: done_at.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn open_rows_count_by_state_in_the_sheets_order() {
+        let item = |id: &str, state: &str| PinnedItem {
+            id: id.into(),
+            title: format!("Task {id}"),
+            state: Some(state.into()),
+            ..Default::default()
+        };
+        let u = PinnedUpdate {
+            left: vec![
+                item("a", "waiting"),
+                item("b", "working"),
+                item("c", "queued"),
+                item("d", "landing"),
+                item("e", "blocked"),
+            ],
+            done: vec![item("f", "done")],
+            ..Default::default()
+        };
+        let groups = task_groups(&u, None);
+        assert_eq!(
+            groups.iter().map(|g| g.label).collect::<Vec<_>>(),
+            ["Blocked", "Working", "Waiting", "Not started", "Done"]
+        );
+        let counts = work_counts(&groups);
+        assert_eq!(
+            counts_words(&counts),
+            "1 blocked · 2 working · 1 waiting · 1 not started"
+        );
+        assert_eq!(
+            counts.iter().map(|c| c.0).collect::<Vec<_>>(),
+            ["blocked", "working", "waiting", "todo"]
+        );
+        assert!(work_counts(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_row_shows_what_it_waits_on_by_name() {
+        let u: PinnedUpdate = serde_json::from_value(json!({
+            "waits": [
+                { "on": "agent", "who": "Event Authority", "text": "Its harness steps.", "short": "its harness steps", "task": "P-RESEAL", "from": "tasks" },
+                { "on": "resource", "text": "Browsers are reserved.", "task": "SWEEP", "from": "tasks" },
+                { "on": "unknown", "text": "Blocked; the report does not say on what.", "task": "LAND", "from": "tasks" },
+                { "on": "owner", "text": "Answer card SM-0", "from": "thread" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            row_wait(&u, "P-RESEAL").as_deref(),
+            Some("Event Authority: its harness steps")
+        );
+        assert_eq!(
+            row_wait(&u, "SWEEP").as_deref(),
+            Some("A machine: Browsers are reserved.")
+        );
+        assert_eq!(
+            row_wait(&u, "LAND").as_deref(),
+            Some("Blocked; the report does not say on what.")
+        );
+        // a thread-level wait belongs to no row
+        assert_eq!(row_wait(&u, "OTHER"), None);
+    }
+
+    #[test]
+    fn times_and_days_read_in_est() {
+        // 2026-11-18 19:00 EST is 2026-11-19 00:00 UTC.
+        let seven_pm = 1_795_046_400_000.0;
+        assert_eq!(est_hm(seven_pm), "7 PM");
+        assert_eq!(
+            est_hm(seven_pm + 9.0 * 3_600_000.0 + 1_800_000.0),
+            "4:30 AM"
+        );
+        assert_eq!(est_hm(seven_pm - 7.0 * 3_600_000.0), "12 PM");
+        let today = est_day(seven_pm);
+        assert_eq!(day_number("2026-11-18"), Some(today));
+        assert_eq!(day_label(today, today), "Today");
+        assert_eq!(day_label(today + 1, today), "Tomorrow");
+        assert_eq!(day_label(today + 2, today), "Fri Nov 20");
+        assert_eq!(day_number("2026-13-01"), None);
+        assert_eq!(day_number("soon"), None);
+    }
+
+    #[test]
+    fn only_rows_finished_today_are_todays_newest_first() {
+        let now = 1_795_046_400_000.0; // 7 PM EST Wed Nov 18
+        let parse = |iso: &str| match iso {
+            "noon" => Some(now - 7.0 * 3_600_000.0),
+            "ten" => Some(now - 9.0 * 3_600_000.0),
+            "last-night" => Some(now - 20.0 * 3_600_000.0),
+            _ => None,
+        };
+        let rows = vec![
+            row("a", Some("ten")),
+            row("b", Some("last-night")),
+            row("c", Some("noon")),
+            row("d", None),
+        ];
+        let (today, earlier) = finished_today(&rows, now, parse);
+        assert_eq!(
+            today.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["c", "a"]
+        );
+        assert_eq!(
+            earlier.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["b", "d"]
+        );
+    }
+
+    #[test]
+    fn coming_up_orders_next_steps_by_time_and_counts_the_untimed() {
+        let now = 1_795_046_400_000.0 - 5.0 * 3_600_000.0; // 2 PM EST Wed Nov 18
+        let hour = 3_600_000.0;
+        let step = |id: &str, at: Option<f64>, day: Option<i64>, text: &str, late: bool| NextStep {
+            id: id.into(),
+            title: format!("Thread {id}"),
+            next: Some(format!("Next of {id}")),
+            time: Some(PinnedTime {
+                text: text.into(),
+                late,
+            }),
+            at_ms: at,
+            day,
+        };
+        let today = est_day(now);
+        let steps = vec![
+            step("seven", Some(now + 5.0 * hour), None, "7 PM", false),
+            step("half-four", Some(now + 2.5 * hour), None, "4:30 PM", false),
+            step("thu", Some(now + 19.5 * hour), None, "Thu 9:30 AM", false),
+            step("by-fri", None, Some(today + 2), "by Fri", false),
+            step("late", Some(now - hour), None, "late, was due 1 PM", true),
+            step("after", None, None, "after the merge lands", false),
+            NextStep {
+                id: "silent".into(),
+                ..Default::default()
+            },
+        ];
+        let c = coming_up(&steps, now);
+        type Day = (String, Vec<(String, String, bool)>);
+        let drawn: Vec<Day> = c
+            .days
+            .iter()
+            .map(|d| {
+                (
+                    d.label.clone(),
+                    d.items
+                        .iter()
+                        .map(|i| (i.id.clone(), i.when.clone(), i.late))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            drawn,
+            vec![
+                (
+                    "Today".to_string(),
+                    vec![
+                        ("late".to_string(), "late, was due 1 PM".to_string(), true),
+                        ("half-four".to_string(), "4:30 PM".to_string(), false),
+                        ("seven".to_string(), "7 PM".to_string(), false),
+                    ]
+                ),
+                (
+                    "Tomorrow".to_string(),
+                    vec![("thu".to_string(), "9:30 AM".to_string(), false)]
+                ),
+                (
+                    "Fri Nov 20".to_string(),
+                    vec![("by-fri".to_string(), "by Fri".to_string(), false)]
+                ),
+            ]
+        );
+        assert_eq!(c.untimed, 2);
+        assert_eq!(untimed_words(c.untimed), "2 threads give no time");
+        assert_eq!(untimed_words(1), "1 thread gives no time");
+        assert_eq!(coming_up(&[], now), Coming::default());
     }
 }

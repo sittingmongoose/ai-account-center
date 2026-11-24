@@ -254,23 +254,25 @@ export const tests = {
     await openStatus(t, view);
     const pane = t.page.locator('.c2-pane');
     const left = pane.locator('.c2-tg').filter({ hasText: 'Not done' });
-    const done = pane.locator('.c2-tg').filter({ hasText: 'Done 4' });
+    // Concept A: closed rows are under Finished; these four give no finish time, so they fold as finished earlier.
+    const done = pane.locator('.c2-fin');
     await left.getByRole('button', { name: 'Show all 8' }).click();
-    await done.getByRole('button', { name: 'Show all 4' }).click();
+    await t.text('.c2-pane .c2-fin-more', /4 more finished earlier/);
+    await done.getByRole('button', { name: 'Show' }).click();
 
     for (const n of [1, 2]) {
       pin.now = `Live poll ${n} updated this report.`;
       await t.page.waitForFunction((text) => document.querySelector('.c2-pane')?.textContent.includes(text), pin.now, { timeout: 16000 });
       if (n === 1) {
-        await t.equal('all four completed tasks still show after the first poll', await done.locator('.c2-tg-t').count(), 4);
-        const fewer = done.getByRole('button', { name: 'Fewer' });
+        await t.equal('all four completed tasks still show after the first poll', await done.locator('.c2-fin-earlier li').count(), 4);
+        const fewer = done.getByRole('button', { name: 'Hide' });
         if (await fewer.count()) await fewer.click();
       }
     }
     await t.equal('all eight pending tasks still show after the second poll', await left.locator('.c2-tg-t').count(), 8);
-    await t.equal('Done is still folded after selecting Fewer', await done.getByRole('button', { name: 'Show all 4' }).count(), 1);
+    await t.equal('Finished earlier is still folded after selecting Hide', await done.getByRole('button', { name: 'Show' }).count(), 1);
     await pane.evaluate((el) => el.scrollIntoView({ block: 'center' }));
-    await t.crop('status-tasks-after-two-polls', '.c2-pane', 'Pinned thread after two real Status polls, with Not done expanded and Done folded');
+    await t.crop('status-tasks-after-two-polls', '.c2-pane', 'Pinned thread after two real Status polls, with Not done expanded and Finished earlier folded');
   },
 
   async 'status report regression: one collapsed report problem count'(t) {
@@ -1068,7 +1070,8 @@ export const tests = {
     await t.text('.c2-sheet-host .c2-sheet', /F-07 has gone back for fixes 3 times/);
   },
 
-  // Concept C v2 (owner S1): the roster, the five fixed facts, stages, things to open, grouped tasks, one problem line.
+  // Concept C v2 (owner S1), laid out as concept A (SR2 = C): the roster, Needs you, Now and Next, stages, things to
+  // open, open work grouped by state, one problem line.
   async 'status concept C v2 pinned threads'(t) {
     const c2 = fixture('status-c2-pins.json');
     const view = { ...fixture('status-design-view.json'), pinned: c2.pinned, projects: c2.projects };
@@ -1087,10 +1090,12 @@ export const tests = {
     await t.check('Needs you is the first group', /^Needs you/.test(await t.page.locator('.c2-group').first().textContent()));
     await t.text('.c2-row.sel .c2-l2', /^Waiting on you Sign in to the second Claude account on the Mac/);
     await t.text('.c2-pane .c2-state', /^Waiting on you/);
-    await t.check('five fixed facts, in order', async () =>
+    await t.check('the facts, in order', async () =>
       JSON.stringify(await t.page.$$eval('.c2-pane .fx dt', (d) => d.map((x) => x.textContent))) ===
-      JSON.stringify(['For you', 'Waiting on', 'Now', 'Next', 'Updated'])
+      JSON.stringify(['Needs you', 'Waiting on', 'Now', 'Next'])
     );
+    await t.text('.c2-pane .c2-state .c2-said', /^(said|updated) /);
+    await t.count('.c2-pane .fx .c2-answer', 1);
     await t.text('.c2-pane .fx', /was due/);
     await t.text('.c2-pane', /Reviews, round 2, 3 of 6/);
     await t.count('.c2-pane .c2-stages li', 6);
@@ -1107,14 +1112,14 @@ export const tests = {
     await t.text('.c2-pane .to-row.main .to-mark', /^Opened /);
     await t.page.click('.c2-pane .to-row.main .to-sub button.link');
     await t.text('.c2-pane .to-older', /Superseded by v2/);
-    // Legacy queued rows go under To do.
-    await t.text('.c2-pane', /To do/i);
+    // Legacy queued rows go under Not started.
+    await t.text('.c2-pane', /Not started/);
     await t.text('.c2-pane .fx', /Thu 9:30 AM/);
     const timedTask = '.c2-pane .c2-tg-rows li:has-text("The last browser check is running")';
     await t.text(timedTask, /before the batch can land/);
     await t.text(`${timedTask} [data-tone="warn"]`, /late, was due 6:30 PM/);
     await t.text('.c2-pane', /Show all 8/);
-    await t.text('.c2-pane', /in work/i);
+    await t.text('.c2-pane .c2-work', /Working/);
     // The README flag shows on its closed row only.
     await t.text('.c2-roster', /Questions in a README, not filed as cards\./);
     await t.check('the Progress section is gone', (await t.page.locator('text=Progress').count()) === 0);
@@ -1141,7 +1146,10 @@ export const tests = {
         if (w === 390) await t.shot('c2-roster-390', '390 px: pinned threads as separate plates (C2 phone)');
         await t.page.locator('.c2-row').first().click();
         await t.page.waitForSelector('.c2-sheet-host .c2-sheet');
-        await t.check(`${w}: the sheet opens with the five facts`, (await t.page.locator('.c2-sheet-host .fx dt').count()) === 5);
+        await t.check(`${w}: the sheet opens with Needs you, Now and Next`, async () => {
+          const facts = await t.page.$$eval('.c2-sheet-host .fx dt', (d) => d.map((x) => x.textContent));
+          return ['Needs you', 'Now', 'Next'].every((label) => facts.includes(label));
+        });
         await t.check(`${w}: the sheet fits the width`, await t.page.evaluate(() => document.querySelector('.c2-sheet-host .sheet').getBoundingClientRect().right <= innerWidth + 1));
         await t.crop(`c2-sheet-${w}`, '.c2-sheet-host .sheet', `${w} px: a pinned thread opened as a sheet (C2 phone)`);
       } else {

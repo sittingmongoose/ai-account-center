@@ -353,6 +353,19 @@ fn Deck(
             id.and_then(|id| shown.with_untracked(|cards| cards.iter().position(|c| c.id == id)));
         go_card(at_shown.unwrap_or(i));
     };
+    // A pinned thread's Answer (pins.rs): show that card, then bring the deck into view wherever the page is.
+    if let Some(jump) = use_context::<crate::pins::CardJump>() {
+        Effect::new(move |_| {
+            let Some(id) = jump.0.get() else { return };
+            jump.0.set(None);
+            if let Some(i) = open.with_untracked(|cards| cards.iter().position(|c| c.id == id)) {
+                go_open(i);
+            }
+            if let Some(el) = document().query_selector(".sec-questions").ok().flatten() {
+                el.scroll_into_view();
+            }
+        });
+    }
     let go_review = move || {
         deck_view.set(DeckView::Review);
         to_top();

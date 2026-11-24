@@ -243,6 +243,8 @@ pub struct PinnedItem {
     pub needs_you: Option<String>,
     /// The item's own state, when the server passes it on.
     pub state: Option<String>,
+    /// When a closed row finished (ISO), so the sheet can say what finished today.
+    pub done_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]

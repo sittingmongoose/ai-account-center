@@ -149,6 +149,13 @@ export const tests = {
   },
   async 'duo polling: same pin keeps its sheet and reading position'(t) {
     const view = fixture();
+    // Concept A's sheet is denser than C2's: give the witness enough open work to scroll past 250 px on the folded Duo.
+    const pin = view.pinned.updates[0];
+    for (const item of pin.left ?? []) item.state ??= 'working';
+    for (const item of pin.done ?? []) item.state ??= 'done';
+    for (const [state, n] of [['working', 5], ['waiting', 5], ['todo', 5]])
+      for (let i = 0; i < n; i++)
+        (pin.left ??= []).push({ id: `${state}-${i}`, title: `Overflow witness ${state} ${i + 1}`, state, note: 'A line of what is happening, long enough to wrap on a folded Duo.' });
     await open(t, view, true);
     await t.page.locator('.sheet-close').focus();
     await t.page.locator('.c2-sheet-host .sheet').evaluate((e) => {
@@ -161,7 +168,9 @@ export const tests = {
       JSON.stringify(before)
     );
     await remember(t);
-    await update(t, view, 'A new status update while this sheet stays open.');
+    // One line, like the Now it replaces: in concept A's denser sheet Now sits above the reading point, and a Now that
+    // grows a line moves scrollTop by that line (Chrome's scroll anchoring keeps the rows read still).
+    await update(t, view, 'A new update, sheet open.');
     const after = await state(t);
     await t.check(
       'poll retains sheet and host DOM identity',

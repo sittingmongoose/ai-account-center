@@ -369,8 +369,8 @@ export const tests = {
       await t.page.waitForSelector(`${sheet} .fx`);
       const facts = await t.page.$$eval(`${sheet} .fx > *`, (els) => els.map((e) => e.textContent.trim()));
       const at = (label) => facts[facts.indexOf(label) + 1] ?? '';
-      await t.check(`${format.name}: For you does not repeat a legacy blocker`, !at('For you').includes(OWNER_WAIT), at('For you'));
-      await t.check(`${format.name}: For you holds no one else's wait`, !/Browsers|reviewer|rebuild/i.test(at('For you')), at('For you'));
+      await t.check(`${format.name}: Needs you does not repeat a legacy blocker`, !at('Needs you').includes(OWNER_WAIT), at('Needs you'));
+      await t.check(`${format.name}: Needs you holds no one else's wait`, !/Browsers|reviewer|rebuild/i.test(at('Needs you')), at('Needs you'));
       const waiting = at('Waiting on');
       await t.check(`${format.name}: Waiting on keeps the reported wait`, waiting.includes(OWNER_WAIT), waiting);
       for (const [head, words] of [['A machine (SWEEP)', 'Browsers on the VM and Nas1'], ['A review (PAGE-FRAME)', 'Second reviewer pass'], ['An agent (GLM-FIXES)', 'Rebuild after the GLM fixes']])
@@ -398,8 +398,12 @@ export const tests = {
       await t.page.locator('.c2-row', { hasText: 'Settings managers' }).click();
       await t.page.waitForSelector(`${sheet} .fx`);
       const facts = await t.page.$$eval(`${sheet} .fx > *`, (els) => els.map((e) => e.textContent.trim()));
-      const i = facts.indexOf('Updated');
-      await t.check(`${format.name}: Updated says both ages, the human update first`, /^updated 35 h ago · active 2 min ago$/.test(facts[i + 1]), facts[i + 1]);
+      // Concept A: the thread's head says when its words changed (a clock) and when it was last active.
+      const said = t.page.locator(`${sheet} .c2-state .c2-said`);
+      const saidText = (await said.textContent()).replace(/\s+/g, ' ').trim();
+      await t.check(`${format.name}: the head says both times, the human update first`, /^updated \S.* · active 2 min ago$/.test(saidText), saidText);
+      await t.equal(`${format.name}: the head's ages, as words`, await said.getAttribute('title'), 'updated 35 h ago · active 2 min ago');
+      await t.equal(`${format.name}: old words are amber`, await said.getAttribute('data-tone'), 'warn');
       const n = facts.indexOf('Now');
       await t.check(`${format.name}: the carried Now line says its age`, /^as of 35 h ago$/.test(facts[n + 2]), facts[n + 2]);
       if (format.mobile) await t.shot('waits-and-ages-phone', 'phone: the waits and the two ages in the sheet');
@@ -413,8 +417,11 @@ export const tests = {
       if (format.mobile) await t.page.keyboard.press('Escape');
       // The roster row's corner says the summary's age, never the heartbeat's 2 min.
       if (format.mobile) await t.page.keyboard.press('Escape');
-      const corner = (await t.page.locator('.c2-row', { hasText: 'Settings managers' }).locator('.c2-age').textContent()).trim();
-      await t.equal(`${format.name}: the roster row says the summary's age`, corner, '35 h');
+      const cornerEl = t.page.locator('.c2-row', { hasText: 'Settings managers' }).locator('.c2-age');
+      const corner = (await cornerEl.textContent()).trim();
+      await t.check(`${format.name}: the roster row says when the summary was written`, /^updated \S/.test(corner) && !/2 min/.test(corner), corner);
+      await t.equal(`${format.name}: an old summary's corner is amber`, await cornerEl.getAttribute('data-tone'), 'warn');
+      await t.check(`${format.name}: the corner's title says the summary's age`, /^updated 35 h ago/.test(await t.page.locator('.c2-row', { hasText: 'Settings managers' }).locator('.c2-ages').getAttribute('title')));
     }
   },
 
@@ -427,7 +434,7 @@ export const tests = {
       await t.text(`${sheet} .c2-quiet`, /No status update for 2 days\./);
       await t.text(`${sheet} .c2-quiet`, new RegExp(`Its last doing line, 2 d ago: ${DOING.replace(/[.']/g, '.')}`));
       // Quiet hides nothing it reported (2026-11-13): its tasks and progress stay under the note, the doing line once.
-      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Tasks' }).last().innerText().catch(() => '');
+      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Open work' }).last().innerText().catch(() => '');
       await t.check(`${format.name}: a quiet sheet still lists its tasks`, tasks.includes('Scout batch 3'), tasks);
       await t.check(`${format.name}: a quiet sheet still shows its progress`, (await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Stages' }).innerText().catch(() => '')).includes('1 of 2 tasks done'));
       const said = await t.page.locator(sheet).innerText();
@@ -492,7 +499,9 @@ export const tests = {
       const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
       const row = t.page.locator('.c2-row', { hasText: 'Background build' });
       // The roster: the words' age, and under it that the thread was active 20 min ago (the old corner's news).
-      await t.equal(`${format.name}: the corner says the words' age`, (await row.locator('.c2-age').textContent()).trim(), '2 h');
+      await t.check(`${format.name}: the corner says when the words were written`, /^updated \S/.test((await row.locator('.c2-age').textContent()).trim()));
+      await t.check(`${format.name}: the corner's title says the words' age`, /^updated 2 h ago/.test(await row.locator('.c2-ages').getAttribute('title')));
+      await t.check(`${format.name}: the row says its next step`, (await row.locator('.c2-next').textContent()).includes('Land batch 2 once its review passes.'));
       await t.equal(`${format.name}: the corner says when it was last active`, (await row.locator('.c2-active').textContent().catch(() => '')).trim(), 'active 20 min');
       await t.check(`${format.name}: the row leads with its doing line`, (await row.locator('.c2-l2').textContent()).includes('Morning: PM7 12a is on main'));
       await t.check(`${format.name}: the row shows its stage progress`, /2 of 3/.test(await row.locator('.c2-stage').textContent()));
@@ -503,17 +512,21 @@ export const tests = {
       await t.equal(`${format.name}: Now keeps the doing line`, at('Now'), ALIVE_DOING);
       await t.equal(`${format.name}: Now says how old the words are`, at('Now', 2), 'as of 2 h ago');
       await t.equal(`${format.name}: Next is shown`, at('Next'), 'Land batch 2 once its review passes.');
-      await t.equal(`${format.name}: Updated says both ages`, at('Updated'), 'updated 2 h ago · active 20 min ago');
+      await t.equal(`${format.name}: the head says both ages`, await t.page.locator(`${sheet} .c2-said`).getAttribute('title'), 'updated 2 h ago · active 20 min ago');
+      await t.check(`${format.name}: the head says when it was active`, /· active 20 min ago$/.test((await t.page.locator(`${sheet} .c2-said`).textContent()).replace(/\s+/g, ' ').trim()));
       const stages = await t.page.$$eval(`${sheet} .c2-stages .lab`, (l) => l.map((x) => x.textContent.trim()));
       await t.check(`${format.name}: every stage is drawn`, JSON.stringify(stages) === JSON.stringify(['Build', 'Review, round 2', 'Land']), JSON.stringify(stages));
-      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Tasks' }).last().innerText();
+      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Open work' }).last().innerText();
       for (const title of ['Background activity sweep', 'Land batch 2'])
-        await t.check(`${format.name}: Tasks lists ${title}`, tasks.includes(title), tasks);
+        await t.check(`${format.name}: Open work lists ${title}`, tasks.includes(title), tasks);
+      const finished = await t.page.locator(`${sheet} .c2-fin`).innerText();
+      await t.check(`${format.name}: closed rows are under Finished`, /2 more finished earlier/.test(finished), finished);
       await t.check(`${format.name}: the task list says how old it is`, /as of .*, 2 h old/.test(tasks), tasks);
       if (format.mobile) await t.page.keyboard.press('Escape');
-      // A thread with no stages still shows its progress in the row (Settings managers: 14 of 15 tasks done).
+      // A thread with no stages shows its open work by state in the row (concept A), not a percent.
       const settings = t.page.locator('.c2-row', { hasText: 'Settings managers' });
-      await t.check(`${format.name}: a row without stages shows its task progress`, /14 of 15 tasks done/.test(await settings.locator('.c2-stage').textContent()));
+      await t.equal(`${format.name}: a row without stages counts its open work`, (await settings.locator('.c2-stage').textContent()).trim(), '1 blocked · 1 in review');
+      await t.count(`.c2-row:has-text("Settings managers") .c2-strip i.fill`, 2, `${format.name}: one strip segment per state`);
       await t.equal(`${format.name}: Settings managers says it was active 2 min ago`, (await settings.locator('.c2-active').textContent().catch(() => '')).trim(), 'active 2 min');
       if (!format.mobile) await t.shot('regression-alive-desktop', 'desktop: a live thread with a 2 h old summary: corner 2 h over active 20 min, Now dated, stages and tasks');
     }
@@ -526,16 +539,108 @@ export const tests = {
       const row = t.page.locator('.c2-row', { hasText: 'Split v3' });
       const problem = (await row.locator('.c2-prob').textContent()).trim();
       await t.check(`${format.name}: the row's loop line keeps the task and its rounds`, problem.includes('P-BATCH2') && problem.includes('4 times') && /shared board/.test(problem), problem);
-      await t.check(`${format.name}: the row shows the worker's task progress`, /0 of 1 tasks done/.test(await row.locator('.c2-stage').textContent()));
+      await t.equal(`${format.name}: the row counts the worker's open work`, (await row.locator('.c2-stage').textContent()).trim(), '1 in review');
       await row.click();
       await t.page.waitForFunction((s) => document.querySelector(`${s} .c2-name`)?.textContent === 'Split v3', sheet);
       const head = (await t.page.locator(`${sheet} .c2-sec-end[data-board="shared"]`).innerText()).replace(/\s+/g, ' ').trim();
-      await t.check(`${format.name}: the Tasks head names the board's keeper`, head.includes('Shared Projects board, kept by vm.projects-lead'), head);
-      await t.check(`${format.name}: the Tasks head keeps the list's own time`, /as of .*20 h old/.test(head), head);
-      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Tasks' }).last().innerText();
+      await t.check(`${format.name}: the Open work head names the board's keeper`, head.includes('Shared Projects board, kept by vm.projects-lead'), head);
+      await t.check(`${format.name}: the Open work head keeps the list's own time`, /as of .*20 h old/.test(head), head);
+      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Open work' }).last().innerText();
       await t.check(`${format.name}: the worker still lists its tasks`, tasks.includes('Batch 2'), tasks);
       await t.text(`${sheet} .c2-prob`, /On the shared Projects board kept by vm\.projects-lead, P-BATCH2 has gone back for fixes 4 times/);
       if (format.mobile) await t.shot('regression-shared-phone', 'phone: a worker on a shared board: its loop, its tasks, the keeper and the list time');
+    }
+  },
+
+  // SR2 = C (Jared, 2026-11-18): concept A with Coming up. Every thread's next step with a time sits in Coming up,
+  // soonest first; a row says Next with its time in bold and its open work by state; the opened thread has Needs you,
+  // Now and Next, Finished today with times, and its open work as one table (task, what is happening, waits on, due).
+  // A thread that needs the owner answers from its row.
+  async 'status concept A with Coming up'(t) {
+    for (const format of [FORMATS[2], FORMATS[0]]) {
+      const data = view();
+      const now = Date.now();
+      const at = (s) => new Date(now + s * 1000).toISOString();
+      const est = (iso) => new Date(iso).toLocaleTimeString('en-US', { timeZone: 'Etc/GMT+5', hour: 'numeric', minute: '2-digit' });
+      const alive = data.pinned.updates.find((u) => u.id === 'pin-alive');
+      alive.reported.nextBy = at(2 * 3600);
+      alive.reported.saidAt = at(-7200);
+      alive.nextTime = { text: est(alive.reported.nextBy), late: false };
+      alive.done[0].doneAt = at(-30);
+      alive.done[0].outcome = 'The idle timer now waits for the last frame.';
+      alive.left[0].note = 'Second review round on the sweep.';
+      alive.left[0].time = { text: '6:30 PM, was 6 PM', late: false };
+      alive.waits = [{ on: 'review', who: 'Sol review', text: 'Its second pass.', task: 'BG-3', from: 'tasks' }];
+      const split = data.pinned.updates.find((u) => u.id === 'pin-split');
+      split.reported.next = 'Batch 2 passes its review';
+      split.nextTime = { text: 'no time: the Projects lead has given no date', late: false };
+      const carried = data.pinned.updates.find((u) => u.id === 'pin-carried');
+      carried.reported.writer = 'vm.lanes';
+      carried.displayState = 'needsYou';
+      await openStatus(t, format, data);
+      const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
+
+      // Coming up: the timed next step, as a time, a step and its thread; the rest counted, not placed.
+      await t.page.waitForSelector('.c2-coming:not([hidden])');
+      const chip = t.page.locator('.c2-cu', { hasText: 'Land batch 2 once its review passes.' });
+      await t.check(`${format.name}: Coming up names the thread`, (await chip.textContent()).includes('Background build'));
+      await t.check(`${format.name}: Coming up gives the time`, /^\d{1,2}(:\d\d)? (AM|PM)$/.test((await chip.locator('b').textContent()).trim()), await chip.locator('b').textContent());
+      await t.check(`${format.name}: Coming up counts the threads with no time`, /^\d+ threads? gives? no time$/.test((await t.page.locator('.c2-cu-rest').textContent()).trim()), await t.page.locator('.c2-cu-rest').textContent());
+      await t.count('.c2-cu', 1, `${format.name}: only a step with a time is placed`);
+
+      // The row: Next with its time, the open work by state, what finished today.
+      const row = t.page.locator('.c2-row', { hasText: 'Background build' });
+      await t.equal(`${format.name}: the row's Next time`, (await row.locator('.c2-next .c2-when').textContent()).trim(), alive.nextTime.text);
+      await t.check(`${format.name}: the row's corner says when it said it`, /^said \S/.test((await row.locator('.c2-age').textContent()).trim()));
+      await t.equal(`${format.name}: the row counts finished today`, (await row.locator('.c2-fin-n').textContent()).trim(), '1 done today');
+      const splitRow = t.page.locator('.c2-row', { hasText: 'Split v3' });
+      await t.check(`${format.name}: words for a time go under the Next line`, await splitRow.locator('.c2-next.wrap .c2-when.soft').count() === 1);
+      const noOrphans = await t.page.evaluate(() => [...document.querySelectorAll('.c2-row .c2-next, .c2-row .c2-l3')].every((el) => el.scrollWidth <= el.clientWidth + 1));
+      await t.check(`${format.name}: no row line runs past its plate`, noOrphans);
+      await t.page.locator('.sec-pinned').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+      if (format.mobile) await t.shot('concept-a-roster-phone', 'phone: Coming up as rows, then each thread its own plate with Next, its time and the open work by state');
+      else await t.shot('concept-a-desktop', 'desktop: Coming up above the roster; the opened thread with Needs you, Now, Next, Finished today and the open work table');
+
+      // Picking a step in Coming up opens its thread.
+      await chip.click();
+      await t.page.waitForFunction((s) => document.querySelector(`${s} .c2-name`)?.textContent === 'Background build', sheet);
+      const facts = await t.page.$$eval(`${sheet} .fx dt`, (d) => d.map((x) => x.textContent.trim()));
+      // The row's wait on Sol review also sits under Waiting on, as every wait did before.
+      await t.check(`${format.name}: Needs you, Waiting on, Now and Next`, JSON.stringify(facts) === JSON.stringify(['Needs you', 'Waiting on', 'Now', 'Next']), JSON.stringify(facts));
+      await t.text(`${sheet} .fx`, /Nothing/);
+      await t.check(`${format.name}: the head says said and active`, /^said \S.* · active 20 min ago$/.test((await t.page.locator(`${sheet} .c2-said`).textContent()).replace(/\s+/g, ' ').trim()));
+      const fin = await t.page.locator(`${sheet} .c2-fin-rows li`).first().innerText();
+      await t.check(`${format.name}: Finished today gives the time and what changed`, fin.includes('The idle timer now waits for the last frame.'), fin);
+      await t.text(`${sheet} .c2-fin-more`, /1 more finished earlier/);
+      const groups = await t.page.$$eval(`${sheet} .c2-wg-h`, (h) => h.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
+      await t.check(`${format.name}: open work grouped by state, in order`, JSON.stringify(groups) === JSON.stringify(['In review 1', 'Not started 1']), JSON.stringify(groups));
+      const bg3 = t.page.locator(`${sheet} .c2-wr`, { hasText: 'Background activity sweep' });
+      await t.equal(`${format.name}: the row's id is printed beside its title`, (await bg3.locator('.c2-id').textContent()).trim(), 'BG-3');
+      await t.equal(`${format.name}: the row says what it waits on`, (await bg3.locator('.c2-w-wait').textContent()).trim(), 'Sol review: Its second pass.');
+      await t.equal(`${format.name}: the row says when it is due`, (await bg3.locator('.c2-w-due').textContent()).trim(), '6:30 PM, was 6 PM');
+      await t.equal(`${format.name}: the table head shows only where there is room`, await t.page.locator(`${sheet} .c2-wt-h`).isVisible(), !format.mobile);
+      const fits = await t.page.evaluate((s) => {
+        const root = document.querySelector(s);
+        return [...root.querySelectorAll('.c2-wr > *, .fx dd')].every((el) => el.scrollWidth <= el.clientWidth + 1);
+      }, sheet);
+      await t.check(`${format.name}: no cell in the thread overflows`, fits);
+      if (format.mobile) {
+        await t.crop('concept-a-thread-phone', '.c2-sheet-host .sheet', 'phone: the opened thread: Needs you, Now, Next, open work stacked, Finished today');
+        await t.page.keyboard.press('Escape');
+        await t.page.waitForSelector('.c2-sheet-host', { state: 'detached' });
+      } else {
+        await t.crop('concept-a-pinned-desktop', '.sec-pinned', 'desktop: the Pinned threads plate as concept A with Coming up');
+      }
+
+      // A thread that needs the owner: its row asks, and Answer shows that thread's card in the deck.
+      const ask = t.page.locator('.c2-item', { hasText: 'Carried doing line' });
+      await t.text('.c2-item:has-text("Carried doing line") .c2-ask', /stopped until you answer/);
+      await ask.locator('.c2-answer').click();
+      await t.page.waitForFunction((card) => document.querySelector(`${card} .q-title`)?.textContent.includes('Keep the work lanes'), CARD);
+      await t.check(`${format.name}: Answer brings the deck into view`, await t.page.evaluate(() => {
+        const r = document.querySelector('.sec-questions').getBoundingClientRect();
+        return r.top < innerHeight && r.bottom > 0;
+      }));
     }
   },
 

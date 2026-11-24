@@ -350,17 +350,18 @@ export const tests = {
   'duo lists: task-group membership changes preserve a focused group control': async (t) => {
     const view = report([]);
     const pin = view.pinned.updates[0];
-    for (const item of pin.left) item.state = 'working';
-    for (const item of pin.done) item.state = 'done';
+    // Concept A: closed rows are under Finished, so the folding group here is Working (more than six rows fold).
+    pin.left = Array.from({ length: 7 }, (_, i) => ({ id: `work-${i}`, title: `Working task ${i + 1}`, state: 'working' }));
+    pin.done = [];
     await setup(t, view);
-    const done = t.page
+    const working = t.page
       .locator('.c2-sheet-host .c2-tg')
-      .filter({ has: t.page.locator('h5').filter({ hasText: /^Done/ }) });
-    await done.getByRole('button', { name: /^Show all/ }).click();
-    await done.getByRole('button', { name: 'Fewer', exact: true }).focus();
+      .filter({ has: t.page.locator('h5').filter({ hasText: /^Working/ }) });
+    await working.getByRole('button', { name: /^Show all/ }).click();
+    await working.getByRole('button', { name: 'Fewer', exact: true }).focus();
     await watch(t, '.c2-sheet-host .c2-col:last-child');
-    pin.left = [{ id: 'new-todo', title: 'New todo task', state: 'todo' }];
-    pin.done[0].note = 'Done task updated live';
+    pin.left = [...pin.left, { id: 'new-blocked', title: 'New blocked task', state: 'blocked' }];
+    pin.left[0].note = 'Working task updated live';
     await update(t, view, 'Task groups changed');
     await t.page.waitForFunction(
       () => document.querySelectorAll('.c2-sheet-host .c2-tg').length === 2
@@ -368,8 +369,8 @@ export const tests = {
     await t.check('surviving group Fewer keeps focus and its subtree', await stable(t));
     await t.check(
       'group data stays live while a mixed membership change is held',
-      (await done.getByText('Done task updated live', { exact: true }).isVisible()) &&
-        (await t.page.locator('.c2-sheet-host .c2-tg').first().textContent()).includes('Done')
+      (await working.getByText('Working task updated live', { exact: true }).isVisible()) &&
+        (await t.page.locator('.c2-sheet-host .c2-tg').first().textContent()).includes('Working')
     );
     await blurToClose(t);
     await t.check(
@@ -379,7 +380,7 @@ export const tests = {
           .locator('.c2-sheet-host .c2-tg')
           .first()
           .textContent()
-          .then((s) => s.includes('To do')))
+          .then((s) => s.includes('Blocked')))
     );
   },
 };

@@ -144,7 +144,7 @@ fn lead(p: &Pin) -> String {
         Word::Quiet => p.u.stale_note.clone(),
         _ => now_text(p),
     };
-    text.map(|line| first_sentence(&line, 60))
+    text.map(|line| first_sentence(&line, 140))
         .unwrap_or_default()
 }
 
@@ -485,8 +485,23 @@ fn fact(label: &'static str, main: AnyView, right: Option<AnyView>) -> impl Into
     view! { <dt>{label}</dt><dd>{main}</dd><dd class="t">{right}</dd> }
 }
 
+/// The Answer button: brings the question deck into view on this thread's first open card.
+fn answer_button(p: &Pin) -> Option<AnyView> {
+    let card = p.cards.first()?.id.clone();
+    let jump = use_context::<CardJump>();
+    Some(
+        view! {
+            <button class="btn sm primary c2-answer" on:click=move |e| {
+                e.stop_propagation();
+                if let Some(jump) = jump { jump.0.set(Some(card.clone())); }
+            }>"Answer"</button>
+        }
+        .into_any(),
+    )
+}
+
 fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
-    // Ready deliverables and open questions use the existing For you row.
+    // Needs you: the open question itself, and ready deliverables (concept A). Always said, "Nothing" when nothing.
     let mut for_you: Vec<AnyView> = Vec::new();
     let mut for_you_when: Option<String> = None;
     let ready = p.ready();
@@ -499,6 +514,7 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
         for_you.push(view! { <p><b data-tone="warn">"Ready"</b>{format!(" {}, below", things(ready.len()))}{then.map(|then| view! { <small>{then}</small> })}</p> }.into_any());
         for_you_when = ready_since(p).map(|t| format!("since {t}"));
     }
+    let mut answer = None;
     if p.word == Word::WaitingOnYou {
         if let Some(title) =
             p.u.card_title
@@ -510,8 +526,16 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
         for_you_when = cards_since(p)
             .map(|t| format!("since {t}"))
             .or(for_you_when);
+        answer = answer_button(p);
     }
-    let for_you_view = (!for_you.is_empty()).then(|| for_you.into_iter().collect_view().into_any());
+    let needs_you = !for_you.is_empty();
+    let for_you_view = if needs_you {
+        for_you.into_iter().collect_view().into_any()
+    } else {
+        view! { <span class="q3">"Nothing"</span> }.into_any()
+    };
+    let for_you_right = (for_you_when.is_some() || answer.is_some())
+        .then(|| view! { {for_you_when.map(|w| view! { <span>{w}</span> })}{answer} }.into_any());
 
     // Waiting on: every wait that is not the owner's, shown beside an owner wait, never behind it.
     let now = js_sys::Date::now();
@@ -588,37 +612,32 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     });
     let now_when = ages
         .map(|(human, _)| view! { <span data-tone={(human > 6 * 3_600).then_some("warn")}>{format!("as of {}", update_ago(human + elapsed))}</span> }.into_any());
-    let next_view =
-        p.r.next
-            .clone()
-            .map(|n| view! { <span>{n}</span> }.into_any());
+    // Next always has a line: a thread that gives none says so, never a blank row (contract v3, section 8).
+    let next_view = match p.r.next.clone() {
+        Some(n) => view! { <span>{n}</span> }.into_any(),
+        None => view! { <span class="q3">"Not said"</span> }.into_any(),
+    };
     let next_when = p.u.next_time.clone().map(|time| {
-        view! { <span data-tone=time.late.then_some("warn")>{time.text}</span> }.into_any()
-    });
-    let time = p.u.status_updated.as_ref().or(p.u.updated.as_ref());
-    let updated = time.map(|u| {
-        let clock = u.clock.clone().unwrap_or_else(|| est_clock(&u.at));
-        match ages {
-            Some((human, beat)) => fact("Updated",
-                view! { <span class="fx-ages" data-tone={(human > 6 * 3_600).then_some("warn")}><span class="nw">{format!("{} {}", if p.u.reported.as_ref().is_some_and(|r| r["saidAt"].is_string()) { "said" } else { "updated" }, update_ago(human + elapsed))}</span>" · "<span class="nw">{format!("active {}", update_ago(beat + elapsed))}</span></span> }.into_any(),
-                Some(view! { <span>{clock}</span> }.into_any())).into_any(),
-            None => fact("Updated",
-                view! { <span>{clock}</span> }.into_any(),
-                u.age_seconds.map(|a| view! { <span>{fmt::long_age(a + elapsed)}</span> }.into_any())).into_any(),
-        }
+        let soft = soft_time(&time.text).then_some("1");
+        view! { <span class="c2-when" data-soft=soft data-tone=time.late.then_some("warn")>{time.text}</span> }.into_any()
     });
     let thin = p.u.thin_report.clone();
     view! {
         <dl class="fx">
-            {for_you_view.map(|v| fact("For you", v, for_you_when.map(|w| view! { <span>{w}</span> }.into_any())).into_any())}
+            <dt data-k=needs_you.then_some("you")>"Needs you"</dt><dd data-k=needs_you.then_some("you")>{for_you_view}</dd><dd class="t" data-k=needs_you.then_some("you")>{for_you_right}</dd>
             {waiting_view.map(|v| fact("Waiting on", v, (!wait_when.is_empty()).then(|| wait_when.into_iter().map(|w| view! { <span class="fx-when">{w}</span> }).collect_view().into_any())).into_any())}
-            {p.r.goal.clone().map(|goal| fact("Goal", view! { <span>{goal}</span> }.into_any(), None).into_any())}
             {now_view.map(|v| fact("Now", v, now_when).into_any())}
-            {next_view.map(|v| fact("Next", v, next_when).into_any())}
-            {updated}
+            {fact("Next", next_view, next_when)}
         </dl>
-        {thin.map(|line| view! { <p class="q3 c2-sub">{line}</p> })}
+        {thin.map(|line| view! { <p class="q3 c2-sub c2-thin">{line}</p> })}
     }
+}
+
+/// A time that is words rather than a clock ("no time: Event Authority has given no date", "after the merge lands")
+/// sits under its line instead of in the narrow time column.
+fn soft_time(text: &str) -> bool {
+    let t = text.trim();
+    !t.starts_with("late") && (t.starts_with("no time") || t.chars().count() > 16)
 }
 
 // ---- Stages and tasks ------------------------------------------------------------------------------------------------
@@ -708,19 +727,22 @@ fn TaskGroupView(g: Signal<TaskGroup>, group: &'static str) -> impl IntoView {
     let (keys, order_id) = hold_order(available, None);
     view! {
         <div class="c2-tg" data-focus-key=move || g.with(|g| format!("task-group:{}", g.label))>
-            <h5 class="cap" data-tone=move || g.with(|g| g.warn.then_some("warn"))>{label}" "<span class="n">{move || n().to_string()}</span></h5>
+            <h5 class="c2-wg-h" data-tone=move || g.with(|g| g.warn.then_some("warn"))>{label}" "<span class="n">{move || n().to_string()}</span></h5>
             <Show when=move || folds() && !open.get() fallback=move || view! {
                     <ul class="c2-tg-rows" data-focus-list=order_id>
                         <For each=move || keys.get() key=|key| key.clone() children=move |(id, occurrence)| {
                             let identity = format!("task:{}", serde_json::to_string(&(id.clone(), occurrence)).unwrap_or_default());
+                            let shown_id = id.clone();
                             let r = Memo::new(move |_| rows.with(|rows| rows.iter().filter(|r| r.id == id).nth(occurrence).cloned().unwrap_or_default()));
-                            view! { <li data-focus-key=identity><span class="c2-tg-t">{move || r.with(|r| r.title.clone())}</span>
+                            view! { <li data-focus-key=identity class="c2-wr" data-due=move || r.with(|r| r.time.as_ref().is_some_and(|t| soft_time(&t.text)).then_some("soft"))>
+                                <span class="c2-w-title"><span class="c2-tg-t">{move || r.with(|r| r.title.clone())}</span>" "<span class="c2-id">{shown_id}</span></span>
                                 <span class="c2-tg-n">
                                     {move || r.with(|r| r.odd_state.clone().map(|state| view! { <span data-tone="warn">{format!("reported as \"{state}\"")}</span>{r.note.is_some().then(|| view! { <br/> })} }))}
                                     {move || r.with(|r| r.note.clone().map(|note| view! { <span>{note}</span> }))}
-                                    {move || r.with(|r| r.time.clone().map(|time| view! { {(r.note.is_some() || r.odd_state.is_some()).then(|| view! { <br/> })}<span data-tone=time.late.then_some("warn")>{time.text}</span> }))}
-                                    {move || r.with(|r| r.needs_you.clone().map(|title| view! { {(r.note.is_some() || r.odd_state.is_some() || r.time.is_some()).then(|| view! { <br/> })}<span data-tone="warn">{format!("Needs you: {title}")}</span> }))}
+                                    {move || r.with(|r| r.needs_you.clone().map(|title| view! { {(r.note.is_some() || r.odd_state.is_some()).then(|| view! { <br/> })}<span data-tone="warn">{format!("Needs you: {title}")}</span> }))}
                                 </span>
+                                <span class="c2-w-wait">{move || r.with(|r| r.wait.clone())}</span>
+                                <span class="c2-w-due">{move || r.with(|r| r.time.clone().map(|time| view! { <span data-tone=time.late.then_some("warn")>{time.text}</span> }))}</span>
                             </li> }
                         }/>
                         <Show when=folds><li class="c2-tg-less"><button class="link" on:click=move |_| toggle.run(())>"Fewer"</button></li></Show>
@@ -769,6 +791,24 @@ fn tasks_as_of(p: &Pin) -> Option<AnyView> {
     }
 }
 
+/// The open rows of a pin, in the sheet's groups (Done rows are under Finished today).
+fn open_groups(p: &Pin) -> Vec<TaskGroup> {
+    task_groups(&p.u, p.board.as_ref())
+        .into_iter()
+        .filter(|g| g.label != "Done")
+        .collect()
+}
+
+/// The finished rows of a pin: those finished today (EST), newest first, and the earlier ones.
+fn finished_rows(p: &Pin) -> (Vec<TaskRow>, Vec<TaskRow>) {
+    let done = task_groups(&p.u, p.board.as_ref())
+        .into_iter()
+        .find(|g| g.label == "Done")
+        .map(|g| g.rows)
+        .unwrap_or_default();
+    finished_today(&done, js_sys::Date::now(), iso_ms)
+}
+
 #[component]
 fn LiveTasks(pin: Memo<Option<Pin>>) -> impl IntoView {
     let count = Memo::new(move |_| {
@@ -778,24 +818,24 @@ fn LiveTasks(pin: Memo<Option<Pin>>) -> impl IntoView {
                 .unwrap_or(0)
         })
     });
-    let groups = Memo::new(move |_| {
-        pin.with(|p| {
-            p.as_ref()
-                .map(|p| task_groups(&p.u, p.board.as_ref()))
-                .unwrap_or_default()
-        })
-    });
+    let groups = Memo::new(move |_| pin.with(|p| p.as_ref().map(open_groups).unwrap_or_default()));
+    let open_n = Memo::new(move |_| groups.with(|g| g.iter().map(|g| g.rows.len()).sum::<usize>()));
+    let counts = Memo::new(move |_| groups.with(|g| counts_words(&work_counts(g))));
     let available = Memo::new(move |_| {
         groups.with(|groups| groups.iter().map(|g| g.label).collect::<Vec<_>>())
     });
     let (keys, order_id) = hold_order(available, None);
     view! {
-        <section class="c2-sec" data-focus-list=order_id>
-            <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4><Show when={move || count.get() > 0}><span class="n">{move || count.get().to_string()}</span></Show>
+        <section class="c2-sec c2-work" data-focus-list=order_id>
+            <div class="c2-sec-head"><h4 class="cap">"Open work"</h4><Show when={move || count.get() > 0}><span class="n">{move || open_n.get().to_string()}</span></Show>
+                <span class="c2-sec-end c2-counts">{move || counts.get()}</span>
                 {move || pin.with(|p| p.as_ref().and_then(tasks_as_of))}</div>
             <Show when={move || count.get() > 0} fallback=move || view! {
                 <p class="q3 c2-none">{move || pin.with(|p| p.as_ref().and_then(|p| p.u.percent_note.clone()).unwrap_or_else(|| "No task list reported.".into()))}</p>
             }>
+                <Show when={move || open_n.get() > 0} fallback=|| view! { <p class="q3 c2-none">"Nothing open."</p> }>
+                    <div class="c2-wt-h cap" aria-hidden="true"><span>"Task"</span><span>"What is happening"</span><span>"Waits on"</span><span>"Due"</span></div>
+                </Show>
                 <For each=move || keys.get() key=|label| *label children=move |label| {
                     let group = Memo::new(move |_| groups.with(|groups| groups.iter().find(|g| g.label == label).cloned().unwrap_or_default()));
                     view! { <TaskGroupView g=group.into() group=label/> }
@@ -805,9 +845,72 @@ fn LiveTasks(pin: Memo<Option<Pin>>) -> impl IntoView {
     }
 }
 
+#[component]
+fn LiveFinished(pin: Memo<Option<Pin>>) -> impl IntoView {
+    let split = Memo::new(move |_| pin.with(|p| p.as_ref().map(finished_rows).unwrap_or_default()));
+    let (all, toggle) = expect_context::<PinDisclosures>().bind(PinDisclosure::Tasks("Finished"));
+    let row = |r: TaskRow| {
+        let words = r.note.clone().unwrap_or_else(|| r.title.clone());
+        // The server's time words; else the finish time itself, in EST.
+        let when = r.time.map(|t| t.text).or_else(|| {
+            r.done_at
+                .as_deref()
+                .map(est_clock)
+                .filter(|c| !c.is_empty())
+        });
+        view! { <li><span class="c2-fin-t">{when}</span><span class="c2-fin-w">{words}</span></li> }
+    };
+    view! {
+        <Show when=move || split.with(|(today, earlier)| !today.is_empty() || !earlier.is_empty())>
+            <section class="c2-sec c2-fin">
+                <div class="c2-sec-head"><h4 class="cap">"Finished today"</h4><span class="n">{move || split.with(|(t, _)| t.len().to_string())}</span></div>
+                <Show when=move || split.with(|(t, _)| !t.is_empty()) fallback=|| view! { <p class="q3 c2-none">"Nothing finished today."</p> }>
+                    <ul class="c2-fin-rows">{move || split.with(|(t, _)| t.clone()).into_iter().map(row).collect_view()}</ul>
+                </Show>
+                <Show when=move || split.with(|(_, e)| !e.is_empty())>
+                    <p class="c2-fin-more q3">
+                        <span>{move || split.with(|(_, e)| if e.len() == 1 { "1 more finished earlier".to_string() } else { format!("{} more finished earlier", e.len()) })}</span>
+                        " "<button class="link" aria-expanded=move || all.get().to_string() on:click=move |_| toggle.run(())>{move || if all.get() { "Hide" } else { "Show" }}</button>
+                    </p>
+                    <Show when=move || all.get()>
+                        <ul class="c2-fin-rows c2-fin-earlier">{move || split.with(|(_, e)| e.clone()).into_iter().map(row).collect_view()}</ul>
+                    </Show>
+                </Show>
+            </section>
+        </Show>
+    }
+}
+
 // ---- The sheet (wide pane, or the phone's bottom sheet) ----------------------------------------------------------------
 
-fn sheet_heading(p: &Pin) -> impl IntoView + use<> {
+/// "said 1:18 PM · active 1 min ago": when the words last changed, and when the thread was last active when that is
+/// later (contract v3, section 8: two times). Amber when the words are six hours older than the heartbeat.
+fn said_line(p: &Pin, elapsed: i64) -> Option<AnyView> {
+    let said =
+        p.u.reported
+            .as_ref()
+            .and_then(|r| r["saidAt"].as_str().map(str::to_string));
+    let time = p.u.status_updated.as_ref().or(p.u.updated.as_ref())?;
+    let clock = said
+        .as_deref()
+        .map(est_clock)
+        .filter(|c| !c.is_empty())
+        .or_else(|| time.clock.clone())
+        .unwrap_or_else(|| est_clock(&time.at));
+    let verb = if said.is_some() { "said" } else { "updated" };
+    Some(match two_ages(&p.u) {
+        Some((human, beat)) => view! {
+            <span class="c2-said" data-tone={(human > 6 * 3_600).then_some("warn")} title=two_ages_words(human + elapsed, beat + elapsed)>
+                <span class="nw">{format!("{verb} {clock}")}</span>" · "<span class="nw">{format!("active {}", update_ago(beat + elapsed))}</span>
+            </span>
+        }.into_any(),
+        None => view! {
+            <span class="c2-said" title=time.age_seconds.map(|a| fmt::long_age(a + elapsed))><span class="nw">{format!("{verb} {clock}")}</span></span>
+        }.into_any(),
+    })
+}
+
+fn sheet_heading(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     let since = match p.word {
         Word::WaitingOnYou => cards_since(p).map(|t| format!("since {t}")),
         _ => None,
@@ -821,11 +924,15 @@ fn sheet_heading(p: &Pin) -> impl IntoView + use<> {
     .flatten()
     .collect::<Vec<_>>();
     let problems = p.problems();
+    let said = (!matches!(p.word, Word::NotReporting))
+        .then(|| said_line(p, elapsed))
+        .flatten();
     view! {
         <header class="c2-head">
-            <p class="c2-state"><b data-tone=p.word.tone()>{p.word.text()}</b>{since.map(|s| view! { " "<span class="q3">{s}</span> })}</p>
+            <p class="c2-state"><b data-tone=p.word.tone()>{p.word.text()}</b>{since.map(|s| view! { " "<span class="q3">{s}</span> })}{said.map(|s| view! { " "{s} })}</p>
             <h3 class="c2-name">{p.title()}</h3>
             {(!meta.is_empty()).then(|| view! { <p class="c2-meta">{meta.join("  ·  ")}</p> })}
+            {p.r.goal.clone().map(|goal| view! { <p class="c2-goal"><span class="cap">"Goal"</span>" "{goal}</p> })}
         </header>
         {(p.u.refusal.is_some() && !cached).then(|| view! {
             <p class="pin-cached" data-tone="warn">"This report could not be read. See Report problems above the pinned list."</p>
@@ -886,17 +993,31 @@ fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
                 .unwrap_or_default()
         })
     });
+    let has_stages = Memo::new(move |_| {
+        pin.with(|p| {
+            p.as_ref().is_some_and(|p| {
+                p.r.stages.iter().filter(|s| s.state != "skipped").count() >= 2
+                    || (p.u.left.is_empty()
+                        && p.u.done.is_empty()
+                        && (p.u.percent.is_some() || p.r.progress.is_some()))
+                    || (quiet_has_lists(p) && matches!(p.word, Word::Quiet))
+            })
+        })
+    });
     view! {
-        {move || pin.with(|p| p.as_ref().map(sheet_heading))}
+        {move || pin.with(|p| p.as_ref().map(|p| sheet_heading(p, live.elapsed_seconds())))}
         <Show when=move || quiet.get()>{move || pin.with(|p| p.as_ref().map(quiet_body))}</Show>
         <Show when=move || !silent.get() fallback=move || pin.with(|p| p.as_ref().map(quiet_body))>
             <div class="c2-cols" class:dim=move || pin.with(|p| p.as_ref().is_some_and(|p| p.u.report_state == "unreadable"))>
-                <div class="c2-col">
+                <div class="c2-col c2-col-facts">
                     {move || pin.with(|p| p.as_ref().filter(|_| !quiet.get()).map(|p| facts(p, live.elapsed_seconds())))}
+                    <Show when=move || has_stages.get()><LiveStages pin=pin/></Show>
+                </div>
+                <div class="c2-col c2-col-side">
+                    <LiveFinished pin=pin/>
                     <LiveToOpenSection pin=pin_id.clone() list=deliverables/>
                 </div>
-                <div class="c2-col">
-                    <LiveStages pin=pin/>
+                <div class="c2-col c2-col-work">
                     <LiveTasks pin=pin/>
                 </div>
             </div>
@@ -949,6 +1070,63 @@ fn is_silent(p: &Pin) -> bool {
     p.u.report_state == "none" && p.u.refusal.is_none()
 }
 
+/// The roster corner: "said 1:18 PM", or "asked Wed 3:00 PM" for a question; amber when the words are old.
+fn corner_words(p: &Pin) -> Option<String> {
+    if p.word == Word::WaitingOnYou
+        && let Some(asked) = cards_since(p)
+    {
+        return Some(format!("asked {asked}"));
+    }
+    let said =
+        p.u.reported
+            .as_ref()
+            .and_then(|r| r["saidAt"].as_str().map(str::to_string));
+    let time = p.u.status_updated.as_ref().or(p.u.updated.as_ref());
+    let clock = said
+        .as_deref()
+        .map(est_clock)
+        .filter(|c| !c.is_empty())
+        .or_else(|| time.and_then(|t| t.clock.clone()))
+        .or_else(|| time.map(|t| est_clock(&t.at)))
+        .filter(|c| !c.is_empty())?;
+    Some(format!(
+        "{} {clock}",
+        if said.is_some() { "said" } else { "updated" }
+    ))
+}
+
+/// The roster's small bar of open work: one segment per state, as wide as its count.
+fn work_strip(counts: &[(&'static str, usize, &'static str)]) -> AnyView {
+    let total: usize = counts.iter().map(|c| c.1).sum();
+    view! {
+        <span class="c2-strip" aria-hidden="true">
+            {counts.iter().map(|(key, n, _)| view! { <i class="fill" data-st=*key style=format!("flex:{n} 1 0")></i> }).collect_view()}
+            {(total == 0).then(|| view! { <i class="fill" data-st="todo" style="flex:1 1 0"></i> })}
+        </span>
+    }
+    .into_any()
+}
+
+/// The roster foot: the thread's stages when it has them, else its open work by state, else its progress words.
+fn foot_view(p: &Pin) -> (Option<AnyView>, String) {
+    if let Some((text, at, of)) = stage_line(&p.r.stages) {
+        return (mini_track(&p.r.stages), format!("{at} of {of}  {text}"));
+    }
+    let counts = work_counts(&open_groups(p));
+    if !counts.is_empty() {
+        return (Some(work_strip(&counts)), counts_words(&counts));
+    }
+    let words = foot_words(p);
+    (
+        None,
+        if words == "No stages reported" {
+            String::new()
+        } else {
+            words
+        },
+    )
+}
+
 #[component]
 fn RosterRow(
     p: Pin,
@@ -957,27 +1135,138 @@ fn RosterRow(
     on_pick: Callback<String>,
 ) -> impl IntoView {
     let id = p.u.id.clone();
-    // The words' age, not a heartbeat's: a hook keeps thread.json fresh while the summary stays as old as it is.
+    // The words' time, not a heartbeat's: a hook keeps thread.json fresh while the summary stays as old as it is.
     let age = roster_age(&p.u);
     let age_tone = age.as_ref().is_some_and(|(_, old)| *old).then_some("warn");
-    let age_title = two_ages(&p.u).map(|(human, beat)| two_ages_words(human, beat));
-    // And when a heartbeat is newer, how long ago it was last active, under the words' age: the old corner's news.
+    let age_title = two_ages(&p.u)
+        .map(|(human, beat)| two_ages_words(human, beat))
+        .or_else(|| age.as_ref().map(|(a, _)| format!("updated {a} ago")));
+    let corner = corner_words(&p).or_else(|| age.map(|(a, _)| a));
+    // And when a heartbeat is newer, how long ago it was last active, under the words' time.
     let active = roster_active(&p.u);
-    let model = model_of(p.u.who.as_deref());
     let problem = p.problems().into_iter().next().map(|(short, _)| short);
     let late = (p.u.late_count > 0).then(|| format!("{} late", p.u.late_count));
     let mute = matches!(p.word, Word::Quiet);
+    let reporting = !matches!(p.word, Word::Quiet | Word::NotReporting);
+    let needs = p.word == Word::WaitingOnYou;
+    // Next, with its time in bold (late in amber); a thread that gives none says "not said".
+    let next = (reporting && !needs).then(|| {
+        let time = p.u.next_time.clone();
+        let soft = time.as_ref().is_some_and(|t| soft_time(&t.text));
+        view! {
+            <span class="c2-next" class:wrap=soft>
+                <span class="k">"Next"</span>
+                {match p.r.next.clone() {
+                    Some(n) => view! { <span class="v">{n}</span> }.into_any(),
+                    None => view! { <span class="v q3">"not said"</span> }.into_any(),
+                }}
+                {time.map(|t| view! { <span class="c2-when" class:soft=soft data-tone=t.late.then_some("warn")>{t.text}</span> })}
+            </span>
+        }
+    });
+    let waited = needs.then(|| {
+        p.cards
+            .iter()
+            .filter_map(|c| iso_ms(&c.asked_at))
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|at| format!("{}; the thread is stopped until you answer", since_ms(at)))
+            .unwrap_or_else(|| "The thread is stopped until you answer".into())
+    });
+    let answer = needs.then(|| answer_button(&p)).flatten();
+    let (strip, foot) = foot_view(&p);
+    let done_today = (!needs)
+        .then(|| finished_rows(&p).0.len())
+        .filter(|n| *n > 0);
+    let thin = (reporting && !needs && p.u.thin_report.is_some()).then_some("Thin report");
     view! {
-        <li class="c2-item">
+        <li class="c2-item" class:needs=needs class:sel=move || selected.get()>
             <button class="c2-row" class:sel=move || selected.get() class:open=move || open.get() class:quiet=mute aria-current=move || selected.get().then_some("true")
                 on:click=move |_| on_pick.run(id.clone())>
-                <span class="c2-l1"><span class="c2-title">{p.title()}</span><span class="c2-ages" title=age_title><span class="c2-age" data-tone=age_tone>{age.map(|(a, _)| a)}</span>{active.map(|a| view! { <span class="c2-active">{a}</span> })}</span></span>
+                <span class="c2-l1"><span class="c2-title">{p.title()}</span><span class="c2-ages" title=age_title><span class="c2-age" data-tone=age_tone>{corner}</span>{active.map(|a| view! { <span class="c2-active">{a}</span> })}</span></span>
                 <span class="c2-l2"><b data-tone=p.word.tone()>{p.word.text()}</b>{format!(" {}", lead(&p))}</span>
-                <span class="c2-l3">{mini_track(&p.r.stages)}<span class="c2-stage">{foot_words(&p)}</span><span class="c2-model">{model}</span></span>
+                {next}
+                {(!needs).then(|| view! {
+                    <span class="c2-l3">{strip}<span class="c2-stage">{foot}</span>
+                        {done_today.map(|n| view! { <span class="c2-fin-n">{format!("{n} done today")}</span> })}
+                        {thin.map(|t| view! { <span class="c2-thin-n" data-tone="warn">{t}</span> })}
+                    </span>
+                })}
                 {late.map(|t| view! { <span class="c2-prob" data-tone="warn">{t}</span> })}
                 {problem.map(|t| view! { <span class="c2-prob" data-tone="warn">{t}</span> })}
             </button>
+            {waited.map(|w| view! { <div class="c2-ask"><span class="k">"Waiting"</span><span class="v">{w}</span>{answer}</div> })}
         </li>
+    }
+}
+
+/// The question deck's jump: a pin's Answer sets the card to show; the deck shows it and comes into view.
+#[derive(Clone, Copy)]
+pub struct CardJump(pub RwSignal<Option<String>>);
+
+fn next_step(p: &Pin) -> NextStep {
+    let field = |key: &str| {
+        p.u.reported
+            .as_ref()
+            .and_then(|r| r[key].as_str().map(str::to_string))
+    };
+    NextStep {
+        id: p.u.id.clone(),
+        title: p.title(),
+        next: p.r.next.clone(),
+        time: p.u.next_time.clone(),
+        at_ms: field("nextBy").as_deref().and_then(iso_ms),
+        day: field("nextByDay").as_deref().and_then(day_number),
+    }
+}
+
+/// Coming up (concept B's strip on concept A, SR2 = C): every thread's next step with a time, soonest first, by day.
+#[component]
+fn ComingUp(
+    data: Memo<Option<(PinnedPanel, Vec<Pin>)>>,
+    on_pick: Callback<String>,
+) -> impl IntoView {
+    let coming = Memo::new(move |_| {
+        data.with(|d| {
+            let (_, pins) = d.as_ref()?;
+            let steps: Vec<NextStep> = pins
+                .iter()
+                .filter(|p| {
+                    !is_silent(p)
+                        && matches!(
+                            p.word,
+                            Word::Working | Word::Waiting | Word::Blocked | Word::WaitingOnYou
+                        )
+                })
+                .map(next_step)
+                .collect();
+            Some(coming_up(&steps, js_sys::Date::now()))
+        })
+        .unwrap_or_default()
+    });
+    view! {
+        <section class="c2-coming" aria-label="Coming up" hidden=move || coming.with(|c| c.days.is_empty() && c.untimed == 0)>
+            <h3 class="cap c2-cu-h">"Coming up"</h3>
+            <div class="c2-cu-days">
+                {move || coming.get().days.into_iter().map(|day| view! {
+                    <div class="c2-cu-day">
+                        <h4 class="cap">{day.label}</h4>
+                        <ol class="c2-cu-list">
+                            {day.items.into_iter().map(|item| {
+                                let id = item.id.clone();
+                                view! {
+                                    <li><button class="c2-cu" on:click=move |_| on_pick.run(id.clone())>
+                                        <b data-tone=item.late.then_some("warn")>{item.when}</b>
+                                        <span class="c2-cu-next">{item.next}</span>
+                                        <small>{item.title}</small>
+                                    </button></li>
+                                }
+                            }).collect_view()}
+                        </ol>
+                    </div>
+                }).collect_view()}
+                {move || coming.with(|c| (c.untimed > 0).then(|| view! { <p class="c2-cu-rest q3">{untimed_words(c.untimed)}</p> }))}
+            </div>
+        </section>
     }
 }
 
@@ -1058,6 +1347,7 @@ pub fn PinnedPanelView() -> impl IntoView {
                 }}</summary>
                 <ul>{move || report_problems.get().into_iter().map(|line| view! { <li>{line}</li> }).collect_view()}</ul>
             </details>
+            <ComingUp data=data on_pick=on_pick/>
             {move || data.with(|d| match d {
                 None => Some("Pinned threads are unavailable: this server doesn't send them yet.".to_string()),
                 Some((p, pins)) => p.unavailable.clone().or_else(|| pins.is_empty().then(|| "No threads are pinned in T3.".to_string())),

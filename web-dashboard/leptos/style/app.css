@@ -2778,8 +2778,11 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 }
 
 /* ==========================================================================
-   Status concept C v2 (S1): pinned threads as a roster and a sheet. Wide (900 px of content and up) the sheet sits
-   beside the roster; narrow, each pinned thread is its own plate and the sheet rises from the bottom.
+   Status, concept A with Coming up (SR2 = C, chosen 2026-11-18, built 2026-11-24). The pinned threads as a roster by
+   state, and one opened thread: Needs you, Now and Next, Finished today, then its open work as one table grouped by
+   state. Coming up, above the roster, lists every thread's next step that has a time. Wide (900 px of content and
+   up) the opened thread sits beside the roster; narrow, each pinned thread is its own plate and the thread rises as
+   a sheet. The opened thread lays itself out by its own width (container "pin"), so the pane and the sheet agree.
    ========================================================================== */
 .sec-pinned.c2 .c2-body { border-top: 1px solid var(--rule-2); }
 .c2-report-problems { padding: 0 16px 6px; font-size: var(--fs-small); }
@@ -2789,24 +2792,53 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-group { display: flex; align-items: baseline; gap: 6px; padding: 14px 16px 6px; }
 .c2-group .n, .c2-sec-head .n, .c2-tg .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .c2-rows { list-style: none; margin: 0; padding: 0; }
-.c2-row { display: grid; gap: 3px; width: 100%; text-align: left; padding: 10px 16px 11px; background: none; border: 0; border-top: 1px solid var(--rule-2); font: inherit; color: inherit; cursor: pointer; }
+.c2-item { border-top: 1px solid var(--rule-2); min-width: 0; }
+.c2-row { display: grid; gap: 3px; width: 100%; text-align: left; padding: 11px 16px 12px; background: none; border: 0; font: inherit; color: inherit; cursor: pointer; min-width: 0; }
+.c2-item.needs .c2-row { padding-bottom: 5px; }
 .c2-row:hover { background: var(--row-hover); }
 .c2-l1 { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
-.c2-title { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 640; font-variation-settings: 'wght' 640; line-height: 1.3; }
+.c2-title { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 650; font-variation-settings: 'wght' 650; line-height: 1.3; }
+/* When the words last changed ("said 1:18 PM"), and under it how long ago the thread was last active when a heartbeat
+   is newer (2026-11-13). */
 .c2-age { color: var(--ink-3); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-/* The words' age, and under it how long ago the thread was last active when a heartbeat is newer (2026-11-13). */
 .c2-ages { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
 .c2-active { color: var(--ink-3); font-size: 11.5px; line-height: 1.3; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.c2-l2 { font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
-.c2-l2 b, .c2-state b { font-weight: 640; font-variation-settings: 'wght' 640; color: var(--ink); }
-.c2-l3 { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-3); min-width: 0; }
+.c2-l2 { font-size: 13.5px; line-height: 1.42; color: var(--ink-2); min-width: 0; }
+.c2-l2 b, .c2-state b { font-weight: 670; font-variation-settings: 'wght' 670; color: var(--ink); }
+.c2-l2 b[data-tone='warn'], .c2-state b[data-tone='warn'] { color: var(--warn-text); }
+.c2-l2 b[data-tone='mute'], .c2-state b[data-tone='mute'] { color: var(--ink-3); }
+.c2-l2 b[data-tone='good'], .c2-state b[data-tone='good'] { color: var(--good-text); }
+/* Next and its time: the time in bold at the right; words instead of a time go under the line. */
+.c2-next, .c2-ask { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 1.38; min-width: 0; }
+.c2-next { margin-top: 1px; }
+.c2-next .k, .c2-ask .k { color: var(--ink-3); }
+.c2-next .v { color: var(--ink); min-width: 0; }
+.c2-next.wrap { grid-template-columns: auto minmax(0, 1fr); }
+.c2-next.wrap .c2-when { grid-column: 2; }
+.c2-when { font-weight: 680; font-variation-settings: 'wght' 680; font-size: 13.5px; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.c2-when.soft, .c2-when[data-soft] { font-weight: 500; font-variation-settings: 'wght' 500; font-size: 12px; color: var(--ink-3); white-space: normal; }
+.c2-when[data-tone='warn'] { color: var(--warn-text); }
+.c2-ask { padding: 0 16px 12px; color: var(--ink-2); align-items: center; }
+.c2-ask .btn { justify-self: end; }
+.c2-l3 { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--ink-3); min-width: 0; margin-top: 3px; }
 .c2-stage { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.c2-model { margin-left: auto; white-space: nowrap; }
+.c2-fin-n, .c2-thin-n { margin-left: auto; white-space: nowrap; font-weight: 600; font-variation-settings: 'wght' 600; }
+.c2-fin-n { color: var(--good-text); }
+.c2-fin-n + .c2-thin-n { margin-left: 0; }
+/* The open work by state: one segment per state, as wide as its count. Segments are fills, not meters. */
+.c2-strip { display: flex; gap: 2px; width: 76px; height: 6px; flex: none; }
+.c2-strip i.fill { display: block; height: 100%; min-width: 3px; border-radius: 2px; background: var(--track); }
+.c2-strip i.fill[data-st='blocked'] { background: var(--crit); }
+.c2-strip i.fill:is([data-st='working'], [data-st='left']) { background: var(--accent); }
+.c2-strip i.fill[data-st='review'] { background: color-mix(in srgb, var(--accent) 48%, var(--track)); }
+.c2-strip i.fill[data-st='waiting'] { background: var(--ink-4); }
+.c2-strip i.fill[data-st='todo'] { background: var(--track); box-shadow: inset 0 0 0 1px var(--rule-strong); }
+.c2-strip i.fill[data-st='unknown'] { background: var(--track); background-image: repeating-linear-gradient(135deg, var(--ink-4) 0 2px, transparent 2px 4px); }
 .c2-row.quiet .c2-title { color: var(--ink-2); }
 .c2-prob { display: block; font-size: 12.5px; line-height: 1.4; }
 .c2-mini { display: inline-flex; gap: 3px; flex: none; }
 /* Stage segments carry .fill (the style rules allow state colours only on fills); they are not meter fills. */
-.c2-mini i.fill, .c2-track i.fill, .c2-stages .seg.fill { position: static; background-image: none; }
+.c2-mini i.fill, .c2-track i.fill, .c2-stages .seg.fill, .c2-strip i.fill { position: static; background-image: none; }
 .c2-mini i { display: block; width: 14px; height: 4px; border-radius: 2px; background: var(--track); }
 .c2-mini i.fill[data-st='done'], .c2-stages .seg.fill[data-st='done'] { background: var(--ink-3); }
 .c2-mini i.fill[data-st='now'], .c2-stages li[data-st='now'] .seg.fill { background: var(--accent); }
@@ -2820,38 +2852,118 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-silent li b { font-weight: 620; font-variation-settings: 'wght' 620; min-width: 0; }
 .c2-silent li .q3 { white-space: nowrap; font-size: 12px; }
 .c2-note { padding: 10px 16px 12px; font-size: 12.5px; color: var(--ink-3); border-top: 1px solid var(--rule-2); }
-/* The sheet: the wide pane and the phone's bottom sheet draw the same contents. */
-.c2-sheet { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.c2-state { font-size: 13px; color: var(--ink-2); }
-.c2-name { font-size: 20px; font-weight: 660; font-variation-settings: 'wght' 660; line-height: 1.25; }
+
+/* Coming up: each thread's next step with a time, by day, soonest first. Flat rows, never chips. */
+.c2-coming { margin: 0 16px 14px; padding: 10px 14px 10px; border: 1px solid var(--rule); border-radius: var(--r-card); min-width: 0; }
+.c2-cu-h { margin: 0 0 4px; }
+.c2-cu-days { display: flex; flex-wrap: wrap; gap: 6px 30px; align-items: flex-start; min-width: 0; }
+.c2-cu-day { display: grid; gap: 2px; min-width: 0; }
+.c2-cu-day h4 { margin: 0; }
+.c2-cu-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0 22px; }
+.c2-cu { display: grid; gap: 1px; width: 196px; text-align: left; padding: 4px 0 2px; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; min-width: 0; }
+.c2-cu b { font-size: 15px; font-weight: 690; font-variation-settings: 'wght' 690; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.c2-cu b[data-tone='warn'] { font-size: 13px; color: var(--warn-text); }
+.c2-cu-next { font-size: 13px; line-height: 1.3; color: var(--ink); }
+.c2-cu small { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c2-cu:hover .c2-cu-next { text-decoration: underline; text-underline-offset: 2px; }
+.c2-cu-rest { font-size: 12.5px; align-self: center; margin: 0; }
+
+/* The opened thread: the wide pane and the phone's bottom sheet draw the same contents. */
+.c2-sheet { container: pin / inline-size; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.c2-state { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; font-size: 13px; color: var(--ink-3); }
+.c2-state b { font-size: 14px; }
+.c2-said { font-size: 12.5px; color: var(--ink-3); }
+.c2-said[data-tone='warn'] { color: var(--warn-text); }
+.c2-name { font-size: 21px; font-weight: 660; font-variation-settings: 'wght' 660; line-height: 1.22; letter-spacing: -.012em; }
 .c2-meta { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.c2-goal { margin-top: 6px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+.c2-goal .cap { margin-right: 6px; }
 .c2-sheet .c2-prob { font-size: 13px; }
 .c2-quiet { font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
-.c2-cols { display: grid; gap: 4px 28px; grid-template-columns: minmax(0, 1fr); }
+.c2-cols { display: grid; gap: 16px 34px; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .c2-cols.dim { opacity: .55; }
-.c2-col { min-width: 0; }
-.fx { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; margin: 4px 0 0; font-size: 13.5px; line-height: 1.4; }
-.fx dt, .fx dd { margin: 0; padding: 8px 0; border-top: 1px solid var(--rule-2); }
-.fx dt { color: var(--ink-3); font-size: 12.5px; }
+.c2-col { min-width: 0; display: grid; gap: 14px; align-content: start; }
+.c2-col:empty { display: none; }
+.c2-col-facts { order: 1; }
+.c2-col-work { order: 2; }
+.c2-col-side { order: 3; }
+.fx { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; margin: 0; font-size: 14px; line-height: 1.4; border-bottom: 1px solid var(--rule-2); }
+.fx dt, .fx dd { margin: 0; padding: 9px 0; border-top: 1px solid var(--rule-2); }
+.fx dt { padding-top: 12px; font-family: var(--mono); font-stretch: 87.5%; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.fx dt[data-k='you'] { color: var(--warn-text); }
 .fx dd.t { text-align: right; color: var(--ink-3); font-size: 12.5px; padding-left: 12px; white-space: nowrap; }
 .fx dd.t .fx-when { display: block; }
+.fx dd.t .c2-answer { display: inline-flex; margin-left: 10px; vertical-align: baseline; }
+.fx dd.t .c2-when[data-soft] { display: block; max-width: 210px; text-align: right; }
 .fx dd p + p { margin-top: 6px; }
 .fx small { display: block; color: var(--ink-3); font-size: 12px; margin-top: 2px; }
 /* A wait's own time under its words when several waits are listed; amber once it is past due. */
 .fx small[data-tone='warn'] { color: var(--warn-text); }
 .fx dd b { font-weight: 640; font-variation-settings: 'wght' 640; }
-/* The phone sheet is drawn outside the content container, so the narrow rule further down never reaches it: on a
-   narrow screen its times go under their fact instead of squeezing the fact to a word a line (folded Duo). */
-@media (max-width: 559.98px) {
-  .c2-sheet-host .fx { grid-template-columns: 84px minmax(0, 1fr); }
-  .c2-sheet-host .fx dd.t { grid-column: 2; text-align: left; padding: 0 0 8px; border-top: 0; margin-top: -6px; white-space: normal; }
-  .c2-sheet-host .fx dd.t:empty { display: none; }
-}
-.c2-sec { margin-top: 14px; min-width: 0; }
-.c2-sec-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--rule-2); }
-.c2-sec-end { margin-left: auto; font-size: 12.5px; color: var(--ink-3); text-align: right; }
+.c2-thin { padding-top: 0; }
+.c2-sec { min-width: 0; }
+.c2-sec-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+.c2-sec-end { margin-left: auto; font-size: 12px; color: var(--ink-3); text-align: right; }
+.c2-sec-end + .c2-sec-end { margin-left: 10px; }
 .c2-sec-end b { color: var(--ink); font-weight: 640; font-variation-settings: 'wght' 640; }
 .c2-none, .c2-sub { font-size: 12.5px; padding-top: 8px; }
+/* Finished today: the time in green, then what changed. */
+.c2-fin-rows { list-style: none; margin: 0; padding: 0; }
+.c2-fin-rows li { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; padding: 7px 0; border-top: 1px solid var(--rule-2); font-size: 13.5px; line-height: 1.4; }
+.c2-fin-rows li:first-child { border-top: 0; }
+.c2-fin-earlier { border-top: 1px solid var(--rule-2); }
+.c2-fin-t { color: var(--good-text); font-weight: 640; font-variation-settings: 'wght' 640; font-size: 12.5px; font-variant-numeric: tabular-nums; padding-top: 1px; }
+.c2-fin-earlier .c2-fin-t { color: var(--ink-3); }
+.c2-fin-more { padding-top: 7px; font-size: 12.5px; }
+/* Open work: one table grouped by state. Narrow, each row is its title and due time, then its line and its wait. */
+.c2-wt-h { display: none; }
+.c2-wg-h { display: flex; gap: 8px; align-items: baseline; margin: 12px 0 3px; font-size: 13.5px; font-weight: 640; font-variation-settings: 'wght' 640; }
+.c2-wg-h[data-tone='warn'] { color: var(--warn-text); }
+.c2-wg-h .n { font-size: 12px; font-weight: 400; font-variation-settings: 'wght' 400; }
+.c2-tg-rows { list-style: none; margin: 0; padding: 0; }
+.c2-wr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 14px; padding: 8px 0; border-top: 1px solid var(--rule-2); font-size: 13.5px; line-height: 1.4; align-items: baseline; }
+.c2-w-title { grid-column: 1; grid-row: 1; min-width: 0; font-weight: 620; font-variation-settings: 'wght' 620; }
+.c2-id { font-family: var(--mono); font-stretch: 87.5%; font-size: 10px; color: var(--ink-4); font-weight: 400; font-variation-settings: 'wght' 400; white-space: nowrap; margin-left: 4px; }
+.c2-tg-n { grid-column: 1 / -1; min-width: 0; color: var(--ink-2); }
+.c2-w-wait { grid-column: 1 / -1; min-width: 0; color: var(--ink-2); font-size: 12.5px; }
+.c2-w-wait:not(:empty)::before { content: 'Waits on '; color: var(--ink-3); }
+.c2-w-due { grid-column: 2; grid-row: 1; text-align: right; font-weight: 680; font-variation-settings: 'wght' 680; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.c2-wr[data-due='soft'] .c2-w-due { grid-column: 1 / -1; grid-row: auto; text-align: left; font-weight: 500; font-variation-settings: 'wght' 500; font-size: 12.5px; color: var(--ink-3); white-space: normal; }
+.c2-tg-n:empty, .c2-w-wait:empty, .c2-w-due:empty { display: none; }
+.c2-tg-less { display: flex; justify-content: end; padding: 7px 0; border-top: 1px solid var(--rule-2); font-size: 13.5px; }
+@container pin (min-width: 640px) {
+  .c2-wt-h { display: grid; padding: 8px 0 0; color: var(--ink-3); }
+  .c2-wt-h, .c2-wr { grid-template-columns: minmax(0, 29fr) minmax(0, 45fr) minmax(0, 22fr) minmax(96px, 17fr); gap: 3px 18px; }
+  .c2-wt-h span:last-child { text-align: right; }
+  .c2-w-title { grid-column: 1; grid-row: 1; }
+  .c2-tg-n { grid-column: 2; grid-row: 1; }
+  .c2-w-wait { grid-column: 3; grid-row: 1; }
+  .c2-w-wait:not(:empty)::before { content: none; }
+  .c2-w-due, .c2-wr[data-due='soft'] .c2-w-due { grid-column: 4; grid-row: 1; text-align: right; white-space: normal; }
+  .c2-tg-n:empty, .c2-w-wait:empty, .c2-w-due:empty { display: block; }
+}
+@container pin (min-width: 820px) {
+  .c2-cols { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .c2-col-side { order: 2; }
+  .c2-col-work { order: 3; grid-column: 1 / -1; }
+}
+/* A narrow thread (the phone sheet, the folded Duo): its times go under their fact instead of squeezing the fact to a
+   word a line. */
+@container pin (max-width: 559.98px) {
+  .fx { grid-template-columns: 84px minmax(0, 1fr); }
+  .fx dd.t { grid-column: 2; text-align: left; padding: 0 0 9px; border-top: 0; margin-top: -5px; white-space: normal; }
+  .fx dd.t:empty { display: none; }
+  .fx dd.t .c2-answer { margin-left: 8px; }
+  .fx dd.t .c2-when[data-soft] { text-align: left; max-width: none; }
+  .c2-name { font-size: 19px; }
+  /* Dense on a phone (Jared, 2026-11-24): smaller type, and a section head never splits its words. */
+  .fx { font-size: 13px; }
+  .fx dt { font-size: 10px; }
+  .c2-wr, .c2-fin-rows li { font-size: 13px; }
+  .c2-sec-head { flex-wrap: wrap; row-gap: 2px; }
+  .c2-sec-head h4 { white-space: nowrap; }
+  .c2-sec-head .c2-counts { order: 3; flex-basis: 100%; margin-left: 0; text-align: left; }
+}
 .c2-fold, .c2-tg-fold { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 8px 0; font-size: 13.5px; border-top: 1px solid var(--rule-2); }
 .to-list { list-style: none; margin: 0; padding: 0; }
 .to-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--rule-2); }
@@ -2886,35 +2998,38 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-track i.fill[data-st='now'] { background: var(--accent); }
 .c2-track i.fill[data-st='you'] { background: var(--warn); }
 .c2-track i.fill[data-st='wait'] { background: var(--ink-4); }
-.c2-tg h5 { margin: 12px 0 2px; display: flex; gap: 6px; align-items: baseline; }
-.c2-tg-rows { list-style: none; margin: 0; padding: 0; }
-.c2-tg-rows li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--rule-2); font-size: 13.5px; line-height: 1.4; }
-.c2-tg-t { min-width: 0; }
-.c2-tg-n { color: var(--ink-3); font-size: 12.5px; text-align: right; flex: none; max-width: 48%; }
-.c2-tg-less { justify-content: end !important; }
 @container content (min-width: 900px) {
-  .sec-pinned.c2 .c2-body { display: grid; grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); }
+  .sec-pinned.c2 .c2-body { display: grid; grid-template-columns: minmax(330px, 440px) minmax(0, 1fr); }
   .c2-roster { border-right: 1px solid var(--rule-2); min-width: 0; }
   .c2-roster .c2-group:first-child { padding-top: 12px; }
-  .c2-row.sel { background: var(--sel-fill); box-shadow: inset 0 0 0 1px var(--sel-line); }
+  .c2-item.sel { background: var(--sel-fill); box-shadow: inset 0 0 0 1px var(--sel-line); }
+  .c2-item.sel .c2-row:hover { background: none; }
   .c2-row.sel .c2-prob { display: none; }
-  .c2-pane { display: block; padding: 18px 24px 22px; min-width: 0; }
+  .c2-roster .c2-l2 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .c2-pane { display: block; padding: 18px 22px 22px; min-width: 0; }
   .c2-sheet-host { display: none; }
 }
-@container content (min-width: 1280px) {
-  .c2-pane .c2-cols { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); }
-  .c2-pane .c2-col + .c2-col .c2-sec:first-child { margin-top: 4px; }
-}
 @container content (max-width: 899.98px) {
-  /* Each pinned thread its own plate, with a gap; the group heads sit on the page. */
+  /* Each pinned thread its own plate, with a gap; the group heads sit on the page. Dense: small type, no orphaned
+     words (Jared, 2026-11-24). */
   .sec-pinned.c2 { background: transparent; border: 0; box-shadow: none; }
   .sec-pinned.c2 > .plate-head { padding: 4px 2px 6px; }
   .sec-pinned.c2 .c2-body, .sec-pinned.c2 .c2-silent { border-top: 0; }
-  .c2-group { padding: 12px 2px 8px; }
-  .c2-rows { display: grid; gap: 10px; }
-  .c2-row { border: 1px solid var(--rule); border-radius: var(--r-card); background: var(--paper); box-shadow: var(--shadow-1); padding: 12px 14px; gap: 4px; }
-  .c2-row:hover { background: var(--paper); }
-  .c2-l3 { border-top: 1px solid var(--rule-2); padding-top: 8px; margin-top: 4px; }
+  .c2-report-problems { padding: 0 2px 6px; }
+  .c2-group { padding: 10px 2px 7px; }
+  .c2-rows { display: grid; gap: 8px; }
+  .c2-item { border: 1px solid var(--rule); border-radius: var(--r-card); background: var(--paper); box-shadow: var(--shadow-1); }
+  .c2-item.needs { border-color: color-mix(in srgb, var(--warn) 55%, var(--rule)); }
+  .c2-row { padding: 10px 12px 11px; gap: 2px; border-radius: var(--r-card); }
+  .c2-row:hover { background: none; }
+  .c2-item.needs .c2-row { padding-bottom: 4px; }
+  .c2-ask { padding: 0 12px 10px; font-size: 12px; }
+  .c2-title { font-size: 14px; }
+  .c2-l2 { font-size: 12.5px; line-height: 1.38; }
+  .c2-next { font-size: 12px; }
+  .c2-when { font-size: 12.5px; }
+  .c2-l3 { font-size: 11px; gap: 7px; }
+  .c2-strip { width: 60px; height: 5px; }
   /* Keep the background row height while its modal is open, so locking/unlocking at the page bottom cannot clamp the saved scroll. */
   .c2-row.open .c2-prob { visibility: hidden; }
   .c2-silent ul { display: block; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-1); }
@@ -2923,9 +3038,16 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .c2-silent li .q3 { white-space: normal; text-align: right; }
   .c2-note { border-top: 0; padding: 10px 2px 2px; }
   .sec-pinned.c2 > .plate-note { border-radius: var(--r-card); }
-  .fx { grid-template-columns: 84px minmax(0, 1fr); }
-  .fx dd.t { grid-column: 2; text-align: left; padding: 0 0 8px; border-top: 0; margin-top: -6px; white-space: normal; }
-  .fx dd.t:empty { display: none; }
+  /* Coming up as rows: the time, then the step and its thread. */
+  .c2-coming { margin: 0 0 8px; padding: 8px 12px 6px; background: var(--paper); box-shadow: var(--shadow-1); }
+  .c2-cu-days { display: grid; gap: 4px; }
+  .c2-cu-list { display: grid; gap: 0; }
+  .c2-cu { width: auto; grid-template-columns: 62px minmax(0, 1fr); gap: 0 10px; border-top: 1px solid var(--rule-2); padding: 6px 0; }
+  .c2-cu b { grid-row: span 2; font-size: 13px; }
+  .c2-cu b[data-tone='warn'] { font-size: 11.5px; }
+  .c2-cu-next { font-size: 12.5px; }
+  .c2-cu small { grid-column: 2; font-size: 11px; }
+  .c2-cu-rest { padding: 4px 0 2px; font-size: 11.5px; }
   .to-row { grid-template-columns: minmax(0, 1fr) auto; }
   .to-kind { grid-column: 1 / -1; padding-top: 0; }
   .c2-track { display: flex; }

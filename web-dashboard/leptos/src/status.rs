@@ -43,6 +43,8 @@ fn headline_runs(view: &StatusView) -> Vec<Run> {
 pub fn StatusPage(embedded: bool) -> impl IntoView {
     let live = expect_context::<Live>();
     let summary_open = RwSignal::new(None::<String>);
+    // A pinned thread's Answer shows its card in the question deck (pins.rs, cards.rs).
+    provide_context(crate::pins::CardJump(RwSignal::new(None)));
     // The summary counts (summary.rs); None from a server older than the strip, which keeps the sentence.
     let strip = Memo::new(move |_| live.view.with(|v| v.as_ref().and_then(headline_strip)));
     let info = ChromeInfo {
