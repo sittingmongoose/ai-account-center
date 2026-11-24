@@ -69,6 +69,25 @@ export function updateJob() {
 	return { id: '0123abcd-0000-4000-8000-00000000abcd', state: 'succeeded', startedAt: at(-190), finishedAt: at(-182), expectedResults: results.length, results };
 }
 
+/** The retry of updateJob(): only the failed row, on its computer. */
+export function retryJob() {
+	return {
+		id: '0123abcd-1111-4000-8000-00000000abcd',
+		state: 'completed',
+		startedAt: at(-2),
+		finishedAt: at(-1),
+		activePlatform: null,
+		expectedResults: 1,
+		scope: { nas1: ['antigravity-cli'] },
+		hosts: { nas1: { state: 'done', currentApp: null, phase: null } },
+		results: [{
+			platform: 'nas1', appId: 'antigravity-cli', appLabel: 'Antigravity CLI',
+			status: 'updated', previousVersion: '1.5.8', version: '1.5.9',
+			message: 'Updated and restarted running instances.',
+		}],
+	};
+}
+
 const regAccount = (id, provider, more = {}) => ({ id, provider, actions: { remove: true, signInAgain: true, replaceKey: true, recheck: true }, removeRefusal: null, ...more });
 
 /** The fake server's state and every request the page made to it. */
@@ -97,7 +116,13 @@ export function fakeServer(over = {}) {
 	const routes = [
 		['GET', /^\/api\/accounts\/dashboard$/, () => { const d = dashboard({ rich: s.rich }); d.accounts = d.accounts.filter((a) => !s.removed.has(a.id)); return json(200, d); }],
 		['GET', /^\/api\/accounts\/registry$/, () => json(200, registry())],
+		// Accounts reads these two at entry; an empty fixture home has no native profile store.
+		['GET', /^\/api\/claude\/desktop-profiles$/, () => json(200, { profiles: [] })],
+		['GET', /^\/api\/antigravity\/profiles$/, () => json(200, { schemaVersion: 1, hostId: 'ubuntu', activationSupported: false, profiles: [] })],
+		// Details reads the account's reset inventory; these fixture accounts hold none.
+		['GET', /^\/api\/accounts\/[^/]+\/reset-claims$/, () => json(200, { status: 'ok', observedAtMs: Date.now(), grants: [], history: [], pendingAttempt: null })],
 		['GET', /^\/api\/app-updates\/status$/, () => json(200, { job: s.update })],
+		['POST', /^\/api\/app-updates\/retry$/, () => { s.update = retryJob(); return json(202, { job: s.update }); }],
 		['GET', /^\/api\/auth\/devices$/, () => json(200, { devices: s.rich ? [
 			{ id: 'dev-mac-1', name: 'MacBook tray', platform: 'mac', appVersion: '3.2.0', pairedAt: at(-60 * 24 * 9), lastSeenAt: at(-3), lastSeenAddress: '192.168.10.31', idleExpiresAt: at(60 * 24 * 80) },
 			{ id: 'dev-win-1', name: 'Windows PC tray', platform: 'windows', appVersion: '3.2.0', pairedAt: at(-60 * 24 * 20), lastSeenAt: at(-60 * 5), lastSeenAddress: '192.168.10.40' },

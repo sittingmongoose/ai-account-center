@@ -5,7 +5,7 @@ use aac_files::{
     presence::{self, Presence},
     read::{self, Read, ReadPolicy},
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::{path::Path, time::Duration};
 
 const LEGACY: &str = "dashboard-job.json";
@@ -96,12 +96,32 @@ impl Writer {
         legacy.active_platform = legacy
             .active_platform
             .filter(|id| hosts().any(|host| host.id == id && host.legacy));
-        legacy.expected_results = legacy.expected_results.map(|n| {
-            n.min(
+        let legacy_scope = job.scope.as_ref().map_or_else(
+            || {
                 hosts().filter(|host| host.legacy).count()
-                    * rows::app_ids().filter(|app| rows::legacy(app)).count(),
-            )
-        });
+                    * rows::app_ids().filter(|app| rows::legacy(app)).count()
+            },
+            |scope| {
+                hosts()
+                    .filter(|host| host.legacy)
+                    .map(|host| {
+                        scope
+                            .get(host.id)
+                            .and_then(Value::as_array)
+                            .map_or(0, |apps| {
+                                apps.iter()
+                                    .filter(|app| {
+                                        app.as_str().is_some_and(|app| {
+                                            rows::legacy(app) && rows::app_known(app)
+                                        })
+                                    })
+                                    .count()
+                            })
+                    })
+                    .sum()
+            },
+        );
+        legacy.expected_results = job.expected_results.map(|n| n.min(legacy_scope));
         let bytes = serde_json::to_vec(&json!({"job":legacy})).map_err(|_| damaged())?;
         let expanded = serde_json::to_vec(&json!({"legacyDigest":sha256_hex(&bytes),"job":job}))
             .map_err(|_| damaged())?;
@@ -163,6 +183,10 @@ fn decode(saved: Value) -> Option<Job> {
         return None;
     }
     let started_at = date(&raw["startedAt"])?;
+    let scope = match raw.get("scope") {
+        None => None,
+        Some(value) => Some(decode_scope(value)?),
+    };
     let raw_results = raw["results"]
         .as_array()
         .filter(|rows| rows.len() <= expected_results())?;
@@ -174,32 +198,83 @@ fn decode(saved: Value) -> Option<Job> {
         let Some(app) = row["appId"].as_str().filter(|app| rows::app_known(app)) else {
             continue;
         };
+        if scope
+            .as_ref()
+            .is_some_and(|scope| !scope_owns(scope, host.id, app))
+        {
+            continue;
+        }
         results.push(rows::restore(host, app, row));
     }
+    let scoped_results = scope.as_ref().map_or_else(expected_results, |scope| {
+        scope
+            .values()
+            .filter_map(Value::as_array)
+            .map(Vec::len)
+            .sum()
+    });
     let expected_results = raw["expectedResults"]
         .as_u64()
         .map(|count| count as usize)
-        .filter(|count| *count >= results.len() && *count <= expected_results());
+        .filter(|count| {
+            *count >= results.len() && *count <= expected_results() && *count <= scoped_results
+        });
     Some(Job {
         id: id.into(), state: state.into(), started_at, finished_at: date(&raw["finishedAt"]),
         active_platform: hosts().find(|host| raw["activePlatform"] == host.id).map(|host| host.id.into()),
         hosts: raw["hosts"].as_object().map(|saved| {
-            hosts().map(|host| {
-                let state = &saved[host.id];
-                let progress = match state["state"].as_str() {
-                    Some("done") => host_progress("done"),
-                    Some("running") => {
-                        let app = state["currentApp"].as_str().filter(|app|rows::app_known(app));
-                        let phase = state["phase"].as_str().filter(|phase|["checking","updating","downloading"].contains(phase));
-                        json!({"state":"running","currentApp":app,"phase":phase,"phaseSince":date(&state["phaseSince"])})
-                    }
-                    _ => host_progress("waiting"),
-                };
-                (host.id.into(),progress)
-            }).collect()
+            hosts()
+                .filter(|host| scope.as_ref().is_none_or(|scope| scope.contains_key(host.id)))
+                .map(|host| {
+                    let state = &saved[host.id];
+                    let progress = match state["state"].as_str() {
+                        Some("done") => host_progress("done"),
+                        Some("running") => {
+                            let app = state["currentApp"]
+                                .as_str()
+                                .filter(|app| rows::app_known(app));
+                            let phase = state["phase"].as_str().filter(|phase| {
+                                ["checking", "updating", "downloading"].contains(phase)
+                            });
+                            json!({"state":"running","currentApp":app,"phase":phase,"phaseSince":date(&state["phaseSince"])})
+                        }
+                        _ => host_progress("waiting"),
+                    };
+                    (host.id.into(), progress)
+                })
+                .collect()
         }),
-        cancel_requested: raw["cancelRequested"] == true, results, expected_results,
+        cancel_requested: raw["cancelRequested"] == true, results, expected_results, scope,
     })
+}
+
+fn decode_scope(value: &Value) -> Option<Map<String, Value>> {
+    let saved = value.as_object().filter(|saved| !saved.is_empty())?;
+    let mut scope = Map::new();
+    for (id, apps) in saved {
+        let host = hosts().find(|host| host.id == id)?;
+        let apps = apps.as_array()?;
+        if apps.is_empty() || apps.len() > rows::app_ids().count() {
+            return None;
+        }
+        let mut kept = Vec::with_capacity(apps.len());
+        for app in apps {
+            let app = app.as_str().filter(|app| rows::app_known(app))?;
+            if kept.iter().any(|saved: &String| saved.as_str() == app) {
+                return None;
+            }
+            kept.push(app.to_owned());
+        }
+        scope.insert(host.id.to_owned(), json!(kept));
+    }
+    Some(scope)
+}
+
+fn scope_owns(scope: &Map<String, Value>, host: &str, app: &str) -> bool {
+    scope
+        .get(host)
+        .and_then(Value::as_array)
+        .is_some_and(|apps| apps.iter().any(|saved| saved.as_str() == Some(app)))
 }
 
 fn date(value: &Value) -> Option<String> {

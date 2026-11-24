@@ -42,20 +42,52 @@ pub(crate) async fn run(
     let Some(job) = request.args["jobId"].as_str().filter(|job| valid_job(job)) else {
         return Err(refused());
     };
-    if request.args.as_object().is_none_or(|args| args.len() != 3) {
+    let scope = match request.args.get("apps") {
+        Some(value) => Some(scope(value).ok_or_else(refused)?),
+        None => None,
+    };
+    let args = if scope.is_some() { 4 } else { 3 };
+    if request
+        .args
+        .as_object()
+        .is_none_or(|object| object.len() != args)
+    {
         return Err(refused());
     }
     let Some(worker) = Worker::open(platform) else {
         return Ok(crate::proof::fallback());
     };
     match request.args["action"].as_str() {
-        Some("update") => worker.update(request, out, platform, job).await,
-        Some("cancel") => worker.cancel(platform, job),
-        Some("acp-follow-up") if platform == Platform::Ubuntu => {
+        Some("update") => {
+            worker
+                .update(request, out, platform, job, scope.as_deref())
+                .await
+        }
+        Some("cancel") if scope.is_none() => worker.cancel(platform, job),
+        Some("acp-follow-up") if scope.is_none() && platform == Platform::Ubuntu => {
             worker.follow_up(job, request.deadline_ms).await
         }
         _ => Err(refused()),
     }
+}
+
+/// The optional app subset older dashboards never send. It is deliberately a
+/// closed list of known app IDs, never an argument for the installer.
+fn scope(value: &Value) -> Option<Vec<&'static str>> {
+    let listed = value.as_array()?;
+    if listed.is_empty() || listed.len() > APPS.len() {
+        return None;
+    }
+    let mut apps: Vec<&'static str> = Vec::with_capacity(listed.len());
+    for app in listed {
+        let app = app.as_str()?;
+        let app = APPS.iter().copied().find(|known| *known == app)?;
+        if apps.contains(&app) {
+            return None;
+        }
+        apps.push(app);
+    }
+    Some(apps)
 }
 
 impl Worker {
@@ -109,6 +141,7 @@ impl Worker {
         out: &mut (impl AsyncWrite + Unpin),
         platform: Platform,
         job: &str,
+        scope: Option<&[&'static str]>,
     ) -> Result<Value, Failure> {
         // The same kernel lease as the old helper covers all Python children
         // and the deferred T3 restarter. The journal has its own writer lease.
@@ -126,15 +159,16 @@ impl Worker {
         if self.fixture() {
             self.clear_partial()?;
         }
+        let expected = expected(platform, scope);
         if let Some(mut journal) = saved
             && journal.job == job
         {
-            if journal.platform != platform.name() {
+            if journal.platform != platform.name() || !journal.same_scope(scope) {
                 return Err(refused());
             }
             // A foreground owner disappeared. Preserve known results and
             // close missing rows as unknown. An explicit new job can try again.
-            for app in ordered(platform) {
+            for &app in &expected {
                 if !journal.results.contains_key(app) {
                     journal.finish(
                         app,
@@ -160,6 +194,7 @@ impl Worker {
             platform: platform.name().into(),
             results: serde_json::Map::new(),
             running: Vec::new(),
+            apps: scope.map(|_| expected.iter().map(|app| (*app).to_owned()).collect()),
         };
         journal.save(&journal_store)?;
         let mut progress = Progress {
@@ -180,7 +215,7 @@ impl Worker {
                     .min(1_800_000),
             );
         let (phase_tx, mut phases) = mpsc::channel(24);
-        let mut pending = ordered(platform);
+        let mut pending = expected;
         let mut workers = JoinSet::new();
         while !pending.is_empty() || !workers.is_empty() {
             let mut position = 0;
@@ -317,7 +352,12 @@ impl Worker {
                 None,
             )
         } else {
-            let version = follow_up_version(&journal.results["t3-code"]);
+            // A deferred ACP row only follows a T3 restart this host journal
+            // recorded. A subset without T3 cannot supply that version.
+            let Some(t3) = journal.results.get("t3-code") else {
+                return Err(refused());
+            };
+            let version = follow_up_version(t3);
             let budget = Duration::from_millis(deadline_ms.saturating_sub(12_000));
             let outcome = match &self.installer {
                 Installer::Python(python) => {
@@ -474,7 +514,7 @@ impl Worker {
         let active = self.journal()?.is_some_and(|journal| {
             journal.job == job
                 && journal.platform == platform.name()
-                && (journal.results.len() < APPS.len() || journal.acp_pending())
+                && (!journal.complete(platform) || journal.acp_pending())
         });
         if active {
             claim(&self.root, &self.name(&format!("cancel-{job}.json")))?.write(b"true")?;
@@ -548,8 +588,25 @@ fn ordered(platform: Platform) -> Vec<&'static str> {
     order
 }
 
+/// The requested apps in dispatch order. Without a request scope (older dashboards)
+/// this is the fixed full sweep, exactly as before.
+fn expected(platform: Platform, scope: Option<&[&'static str]>) -> Vec<&'static str> {
+    ordered(platform)
+        .into_iter()
+        .filter(|app| scope.is_none_or(|scope| scope.contains(app)))
+        .collect()
+}
+
 fn ready_to_start(app: &str, platform: Platform, journal: &Journal) -> bool {
-    let done = |id: &str| journal.results.contains_key(id);
+    // A prerequisite outside this job's scope was not asked to run again, so it
+    // must not hold the requested apps back. Within the scope the order stays.
+    let scoped = |id: &str| {
+        journal
+            .apps
+            .as_ref()
+            .is_none_or(|apps| apps.iter().any(|saved| saved.as_str() == id))
+    };
+    let done = |id: &str| !scoped(id) || journal.results.contains_key(id);
     match app {
         DESKTOP => done("codex-cli"),
         "t3-acp-adapters" => done("zcode"),
@@ -591,14 +648,48 @@ struct Journal {
     platform: String,
     results: serde_json::Map<String, Value>,
     running: Vec<String>,
+    /// The requested apps in the platform's dispatch order. A journal saved by an
+    /// older agent (or a full sweep) has none, and that keeps the full sweep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apps: Option<Vec<String>>,
 }
 
 impl Journal {
+    fn same_scope(&self, scope: Option<&[&'static str]>) -> bool {
+        match (&self.apps, scope) {
+            (None, None) => true,
+            (Some(saved), Some(incoming)) => {
+                saved.len() == incoming.len()
+                    && incoming
+                        .iter()
+                        .all(|app| saved.iter().any(|saved| saved.as_str() == *app))
+            }
+            _ => false,
+        }
+    }
+
+    fn expected(&self, platform: Platform) -> Vec<&'static str> {
+        let recorded = self.apps.as_deref();
+        ordered(platform)
+            .into_iter()
+            .filter(|app| {
+                recorded.is_none_or(|apps| apps.iter().any(|saved| saved.as_str() == *app))
+            })
+            .collect()
+    }
+
+    fn complete(&self, platform: Platform) -> bool {
+        self.expected(platform)
+            .iter()
+            .all(|app| self.results.contains_key(*app))
+    }
+
     fn acp_pending(&self) -> bool {
         self.platform == "ubuntu"
             && self.running.is_empty()
-            && self.results.len() == APPS.len()
-            && APPS.iter().all(|app| self.results.contains_key(*app))
+            && self.expected(Platform::Ubuntu).contains(&ACP)
+            && self.complete(Platform::Ubuntu)
+            && self.results.contains_key("t3-code")
             && self.results.get(ACP).is_some_and(|row| {
                 row["status"] == "action_required" && row["messageCode"] == "t3_restart_pending"
             })
@@ -614,7 +705,7 @@ impl Journal {
     }
 
     fn payload(&self, platform: Platform) -> Value {
-        json!({"results":ordered(platform).into_iter().filter_map(|app| self.results.get(app)).collect::<Vec<_>>()})
+        json!({"results": self.expected(platform).into_iter().filter_map(|app| self.results.get(app)).collect::<Vec<_>>()})
     }
 }
 
@@ -683,5 +774,126 @@ impl<W: AsyncWrite + Unpin> Progress<'_, W> {
             self.app(Some(app), phase).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(platform: Platform, app: &str, status: &str, code: &str) -> Value {
+        result(platform, app, status, code, None, None, None)
+    }
+
+    fn saved(platform: Platform, apps: Option<&[&str]>) -> Journal {
+        Journal {
+            job: "job".into(),
+            platform: platform.name().into(),
+            results: serde_json::Map::new(),
+            running: Vec::new(),
+            apps: apps.map(|apps| apps.iter().map(|app| (*app).to_owned()).collect()),
+        }
+    }
+
+    #[test]
+    fn a_scope_is_a_closed_nonempty_unique_app_list() {
+        assert_eq!(scope(&json!([])), None);
+        assert_eq!(scope(&json!(["omp", "omp"])), None);
+        assert_eq!(scope(&json!(["not-an-app"])), None);
+        assert_eq!(scope(&json!(["omp", 8])), None);
+        assert_eq!(scope(&json!(["zcode", "omp"])), Some(vec!["zcode", "omp"]));
+    }
+
+    #[test]
+    fn a_subset_journal_completes_on_its_own_apps() {
+        let mut journal = saved(Platform::Ubuntu, Some(&["zcode", "antigravity-cli"]));
+        assert!(!journal.complete(Platform::Ubuntu));
+        journal.finish(
+            "zcode",
+            row(Platform::Ubuntu, "zcode", "current", "current"),
+        );
+        assert!(!journal.complete(Platform::Ubuntu));
+        journal.finish(
+            "antigravity-cli",
+            row(Platform::Ubuntu, "antigravity-cli", "updated", "updated"),
+        );
+        assert!(journal.complete(Platform::Ubuntu));
+        let rows = journal.payload(Platform::Ubuntu);
+        assert_eq!(rows["results"].as_array().expect("rows").len(), 2);
+        assert_eq!(rows["results"][0]["appId"], "antigravity-cli");
+    }
+
+    #[test]
+    fn acp_follow_up_requires_acp_inside_the_scope() {
+        let mut journal = saved(Platform::Ubuntu, Some(&["t3-code"]));
+        journal.finish(
+            "t3-code",
+            row(
+                Platform::Ubuntu,
+                "t3-code",
+                "updated",
+                "t3_restart_scheduled",
+            ),
+        );
+        assert!(!journal.acp_pending());
+        journal.apps = Some(vec!["t3-code".into(), ACP.into()]);
+        journal.finish(
+            ACP,
+            row(
+                Platform::Ubuntu,
+                ACP,
+                "action_required",
+                "t3_restart_pending",
+            ),
+        );
+        assert!(journal.acp_pending());
+        journal.apps = None;
+        assert!(
+            !journal.acp_pending(),
+            "a full journal still needs every app"
+        );
+        for app in APPS {
+            if !journal.results.contains_key(app) {
+                journal.finish(app, row(Platform::Ubuntu, app, "current", "current"));
+            }
+        }
+        journal.finish(
+            ACP,
+            row(
+                Platform::Ubuntu,
+                ACP,
+                "action_required",
+                "t3_restart_pending",
+            ),
+        );
+        assert!(journal.acp_pending());
+    }
+
+    #[test]
+    fn subset_readiness_ignores_prerequisites_outside_it() {
+        let journal = saved(Platform::Mac, Some(&[DESKTOP]));
+        assert!(ready_to_start(DESKTOP, Platform::Mac, &journal));
+        let mut journal = saved(Platform::Mac, Some(&[DESKTOP, "codex-cli"]));
+        assert!(!ready_to_start(DESKTOP, Platform::Mac, &journal));
+        journal.finish(
+            "codex-cli",
+            row(Platform::Mac, "codex-cli", "current", "current"),
+        );
+        assert!(ready_to_start(DESKTOP, Platform::Mac, &journal));
+        let journal = saved(Platform::Ubuntu, Some(&["t3-code"]));
+        assert!(ready_to_start("t3-code", Platform::Ubuntu, &journal));
+        let journal = saved(Platform::Ubuntu, Some(&["t3-code", ACP]));
+        assert!(!ready_to_start(ACP, Platform::Ubuntu, &journal));
+    }
+
+    #[test]
+    fn a_recovery_request_must_repeat_the_same_scope() {
+        let journal = saved(Platform::Ubuntu, Some(&["zcode"]));
+        assert!(journal.same_scope(Some(&["zcode"])));
+        assert!(!journal.same_scope(Some(&["omp"])));
+        assert!(!journal.same_scope(None));
+        let full = saved(Platform::Ubuntu, None);
+        assert!(full.same_scope(None));
+        assert!(!full.same_scope(Some(&["zcode"])));
     }
 }

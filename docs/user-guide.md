@@ -327,15 +327,15 @@ The [Mac guide](../macos-bar/README.md) and [Windows guide](../windows-bar/READM
 describe private storage, startup preferences, compatibility aliases and
 rollback.
 
-## Update apps and Cancel
+## Update apps, Retry failed and Cancel
 
 **Update apps** (the header button, with results in Accounts & Settings)
-starts one allowlisted, asynchronous job for ten installed apps: Antigravity
-CLI, Muse Code, OMP, Codex CLI, Codex Desktop, Claude Code, Claude Desktop,
-ZCode, the T3 ACP adapters and T3 Code with its installed server runtime. The
-dashboard computer runs its helper locally; each remote computer runs its own
-synced helper over SSH. Every run reports one result row per app on every
-computer (ten rows per computer). Helper deployment and, on Windows, the
+starts one allowlisted, asynchronous job for twelve apps: Antigravity CLI,
+Muse Code, OMP, Codex CLI, Codex Desktop, Claude Code, Claude Desktop, ZCode,
+the T3 ACP adapters, T3 Code with its installed server runtime, Cursor CLI and
+Antigravity ACP. The dashboard computer runs its helper locally; each remote
+computer runs its own synced helper over SSH. Every run reports one result row
+per app on every computer (twelve rows per computer). Helper deployment and, on Windows, the
 existing interactive task are required for remote updates. Absent apps are
 skipped; per-app readiness checks tell unknown from failure, and an
 unreachable computer reports Unknown rows. Only CLI instances running in a
@@ -361,6 +361,13 @@ nothing running is killed: each computer finishes its active apps, then
 reports every app it has not started as skipped ("Skipped: cancelled"). A
 computer still preparing its helper skips all its apps. Cancel never promises
 an undo.
+
+**Retry failed** is offered when the last finished run left any row failed or
+unknown. It starts a new job for only those rows, on the computers where they
+failed, through the same agent, helper sync and guards as Update apps; every
+other app and computer is left alone. The Update apps line counts the run:
+for example "84 results, 64 updated, 8 current, 3 failed, 1 unknown". A retry
+job's table lists only the computers it reruns.
 
 ## The optional second Linux computer
 

@@ -155,6 +155,15 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                     </button>
                 </div>
             </Show>
+            <Show when=move || update.with(|u| u.shown && u.retry && !u.running)>
+                <div class="upd-retry">
+                    <button type="button" class="btn sm" data-probe="update-retry"
+                        title="Runs only the apps that failed or were not checked in the last run, on the computers where they failed."
+                        on:click=move |_| page.send("update-retry", "")>
+                        "Retry failed"
+                    </button>
+                </div>
+            </Show>
             <Show when=move || open.get() && update.with(|u| u.shown && !u.hosts.is_empty())>
                 <div class="upd-table" role="table" aria-label="Update apps results"
                     style=move || format!("--hosts:{}", hosts.with(|h| h.len()))>

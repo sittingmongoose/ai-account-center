@@ -22,7 +22,7 @@ export const PAGE_ACTIONS = Object.freeze(new Set([
   'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
   'pw-toggle', 'pw-typing', 'pw-submit', 'device-revoke', 'devices-revoke-all',
   // Settings
-  'refresh-interval', 'update-cancel', 'install-app',
+  'refresh-interval', 'update-cancel', 'update-retry', 'install-app',
   // Analytics (frame-analytics.mjs, analytics-page.mjs). analytics-layout reports the chart boxes
   // ("trend|daily|heat|focus,w,h" or "heat-cell,w"); the charts are laid out in those pixels.
   'analytics-range', 'analytics-custom', 'analytics-provider', 'analytics-split', 'analytics-cache',

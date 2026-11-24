@@ -32,6 +32,7 @@
   { "method": "GET", "path": "/api/antigravity/profiles/quotas", "owner": "rust", "group": "profiles", "roles": ["admin"], "budgetMs": 400, "handler": "profiles" },
   { "method": "GET", "path": "/api/app-updates/status", "owner": "rust", "group": "app-updates", "roles": ["admin"], "budgetMs": 400, "handler": "app-updates" },
   { "method": "POST", "path": "/api/app-updates/start", "owner": "rust", "group": "app-updates", "roles": ["admin"], "budgetMs": 400, "handler": "app-updates" },
+  { "method": "POST", "path": "/api/app-updates/retry", "owner": "rust", "group": "app-updates", "roles": ["admin"], "budgetMs": 400, "handler": "app-updates" },
   { "method": "POST", "path": "/api/app-updates/cancel", "owner": "rust", "group": "app-updates", "roles": ["admin"], "budgetMs": 400, "handler": "app-updates" },
   { "method": "GET", "path": "/api/views/home", "owner": "rust", "group": "home", "roles": ["admin"], "budgetMs": 400, "handler": "home" },
   { "method": "PUT", "path": "/internal/feed/{source}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "feed" },

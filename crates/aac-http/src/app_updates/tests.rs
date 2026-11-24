@@ -233,3 +233,82 @@ fn saved_acp_deferral_restores_with_current_words() {
             .contains("by itself")
     );
 }
+
+#[test]
+fn a_retry_scope_is_exactly_the_failed_and_unknown_rows() {
+    let ubuntu = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    let mac = hosts().find(|host| host.id == "mac").expect("Mac");
+    let windows = hosts().find(|host| host.id == "windows").expect("Windows");
+    let mut job = Job::new("01234567-0123-4123-8123-0123456789ab".into(), clock());
+    for host in hosts() {
+        job.fill(host, "current", "current");
+    }
+    for (host, app, status) in [
+        (ubuntu, "zcode", "failed"),
+        (ubuntu, "antigravity-cli", "unknown"),
+        (mac, "omp", "restart_failed"),
+    ] {
+        let index = job.has(host, app).expect("filled row");
+        job.results[index]["status"] = json!(status);
+    }
+    let scope = retry_scope(&job).expect("retry scope");
+    assert_eq!(
+        Value::Object(scope.clone()),
+        json!({"mac":["omp"],"ubuntu":["antigravity-cli","zcode"]})
+    );
+    let retry = Job::retry(
+        "01234567-0123-4123-8123-0123456789ab".into(),
+        clock(),
+        scope,
+    );
+    assert_eq!(retry.expected_results, Some(3));
+    assert_eq!(retry.hosts.as_ref().expect("retry hosts").len(), 2);
+    assert_eq!(retry.apps(ubuntu), ["antigravity-cli", "zcode"]);
+    assert!(retry.owns(mac, "omp"));
+    assert!(!retry.owns(mac, "zcode"));
+    assert!(!retry.in_scope(windows));
+    let clean = {
+        let mut job = Job::new("01234567-0123-4123-8123-0123456789ab".into(), clock());
+        for host in hosts() {
+            job.fill(host, "current", "current");
+        }
+        job.finish();
+        job
+    };
+    assert!(retry_scope(&clean).is_none());
+}
+
+#[tokio::test]
+async fn retry_refuses_while_a_job_runs() {
+    let dir = tempfile::tempdir().expect("fixture root");
+    let root = dir.path().join("work");
+    let lease = storage::Writer::claim(&root).expect("job lease");
+    let service = AppUpdates::new(root);
+    *service.active.lock().await = Some(Active {
+        job: Job::new("01234567-0123-4123-8123-0123456789ab".into(), clock()),
+        cancel: CancellationToken::new(),
+        lease,
+    });
+    let reply = service.retry().await;
+    assert_eq!(reply.status, 409);
+    assert_eq!(reply.body["error"], "An app update is already running.");
+}
+
+#[tokio::test]
+async fn retry_refuses_when_the_last_job_has_nothing_to_retry() {
+    let dir = tempfile::tempdir().expect("fixture root");
+    let root = dir.path().join("work");
+    // AppUpdates owns `<root>/app-updates`; the direct writer must use that folder.
+    let writer = storage::Writer::claim(&root.join("app-updates")).expect("job lease");
+    let mut job = Job::new("01234567-0123-4123-8123-0123456789ab".into(), clock());
+    for host in hosts() {
+        job.fill(host, "current", "current");
+    }
+    job.finish();
+    writer.save(&job).expect("save completed job");
+    drop(writer);
+    let reply = AppUpdates::new(root).retry().await;
+    assert_eq!(reply.status, 409);
+    assert_eq!(reply.body["error"], "There is nothing to retry.");
+    assert_eq!(reply.body["job"]["id"], job.id);
+}

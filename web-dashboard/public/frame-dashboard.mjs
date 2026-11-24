@@ -549,6 +549,16 @@ export function createFrameDashboard({
         }
         renderUpdate(false); return;
       }
+      if (action === 'update-retry') {
+        try {
+          const result = await mutation('/api/app-updates/retry', {}); updateJob = result.job;
+        } catch (error) {
+          const job = error?.payload?.job;
+          if (error?.status !== 409 || !job || typeof job.id !== 'string' || !UPDATE_JOB_ID.test(job.id) || !Number.isFinite(Date.parse(job.startedAt)) || !Array.isArray(job.results)) throw error;
+          updateJob = job;
+        }
+        renderUpdate(false); return;
+      }
       if (action === 'update-cancel') {
         const result = await mutation('/api/app-updates/cancel', {}); updateJob = result.job;
         renderUpdate(false); return;

@@ -787,6 +787,7 @@ export function updateResultsView(job, now = Date.now()) {
   const cancelling = running && job.cancelRequested === true;
   const count = status => results.filter(row => row.status === status).length;
   const failed = count('failed') + count('restart_failed');
+  const unknown = count('unknown');
   const total = updateTotal(job);
   let headRuns;
   if (!job) headRuns = [run('No run yet. '), run('Update apps'), run(' in the header runs one.')];
@@ -796,13 +797,16 @@ export function updateResultsView(job, now = Date.now()) {
   else {
     const when = validDate(job.finishedAt) ? job.finishedAt : job.startedAt;
     const parts = [`${results.length} ${results.length === 1 ? 'result' : 'results'}`];
+    const updated = count('updated');
+    if (updated) parts.push(`${updated} updated`);
+    if (count('current')) parts.push(`${count('current')} current`);
     if (failed) parts.push(`${failed} failed`);
     if (count('action_required')) parts.push(`${count('action_required')} need action`);
     const catalog = results.filter(isCatalogPending).length;
     if (catalog) parts.push(`${catalog} ${catalog === 1 ? 'model' : 'models'} not yet registered`);
     if (count('held')) parts.push(`${count('held')} held`);
     if (count('skipped')) parts.push(`${count('skipped')} skipped`);
-    if (count('unknown')) parts.push(`${count('unknown')} unknown`);
+    if (unknown) parts.push(`${unknown} unknown`);
     if (job.cancelRequested === true) parts.push('cancelled');
     headRuns = [run('Last run '), run(validDate(when) ? relative(when, now) : 'time unknown', true),
       run(` · ${parts.join(', ')}`)];
@@ -812,7 +816,9 @@ export function updateResultsView(job, now = Date.now()) {
   const progress = job?.hosts && typeof job.hosts === 'object' ? job.hosts : null;
   const order = ['ubuntu', 'mac', 'windows'];   // the order a legacy job ran the hosts in
   const activeIndex = running ? order.indexOf(job.activePlatform) : -1;
-  const hosts = job ? UPDATE_HOSTS.map(([id, label, platform]) => {
+  // A retry job names only the computers it reruns; the others are not "no results".
+  const scope = job?.scope && typeof job.scope === 'object' ? job.scope : null;
+  const hosts = job ? UPDATE_HOSTS.filter(([id]) => !scope || Array.isArray(scope[id])).map(([id, label, platform]) => {
     const rows = results.filter(row => row.platform === id);
     const items = rows.map((row, index) => {
       const [word, tone] = rowWord(row, label);
@@ -850,7 +856,7 @@ export function updateResultsView(job, now = Date.now()) {
     }
     return { id, label, platform, items };
   }) : [];
-  return { shown: !!job, running, cancelling, headRuns, hosts };
+  return { shown: !!job, running, cancelling, retry: !running && (failed > 0 || unknown > 0), headRuns, hosts };
 }
 
 // ---------------------------------------------------------------- connection, the trusted local network and sign-in

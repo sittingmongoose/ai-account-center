@@ -1,4 +1,4 @@
-//! The app-update job routes on the public listener: status, start and cancel.
+//! The app-update job routes on the public listener: status, start, retry and cancel.
 //!
 //! Admission is the retired TypeScript route's, in order: a browser session, the dashboard
 //! origin and JSON content type for the two writes, an empty query and empty JSON object, and
@@ -114,7 +114,7 @@ impl Owner {
             let path = requested.path().to_owned();
             let method = match operation {
                 Operation::Status => "GET",
-                Operation::Start | Operation::Cancel => "POST",
+                Operation::Start | Operation::Retry | Operation::Cancel => "POST",
             };
             let body = (!matches!(operation, Operation::Status)).then_some(&b"{}"[..]);
             if let Some(host) = self.host.as_ref()
@@ -141,7 +141,9 @@ impl Owner {
                 Operation::Status => {
                     super::plain(503, "App update status could not be read safely.")
                 }
-                Operation::Start => super::plain(500, "App updates could not start safely."),
+                Operation::Start | Operation::Retry => {
+                    super::plain(500, "App updates could not start safely.")
+                }
                 Operation::Cancel => {
                     super::plain(503, "App update cancellation could not be confirmed.")
                 }
@@ -200,7 +202,7 @@ mod tests {
     use axum::http::Method;
 
     #[test]
-    fn the_three_routes_match_head_and_trailing_slashes() {
+    fn the_four_routes_match_head_and_trailing_slashes() {
         assert_eq!(
             operation(&Method::GET, "/api/app-updates/status"),
             Some(Operation::Status)
@@ -212,6 +214,10 @@ mod tests {
         assert_eq!(
             operation(&Method::POST, "/api/app-updates/start"),
             Some(Operation::Start)
+        );
+        assert_eq!(
+            operation(&Method::POST, "/api/app-updates/retry"),
+            Some(Operation::Retry)
         );
         assert_eq!(
             operation(&Method::POST, "/api/app-updates/cancel"),

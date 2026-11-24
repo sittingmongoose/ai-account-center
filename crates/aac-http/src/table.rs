@@ -233,10 +233,12 @@ fn app_update_route(
 
 #[cfg(not(unix))]
 fn app_update_route(method: &axum::http::Method, path: &str) -> Option<()> {
-    // The same three rows, without the Unix job owner's route parser.
+    // The same four rows, without the Unix job owner's route parser.
     let expected = match path {
         "/api/app-updates/status" => axum::http::Method::GET,
-        "/api/app-updates/start" | "/api/app-updates/cancel" => axum::http::Method::POST,
+        "/api/app-updates/start" | "/api/app-updates/retry" | "/api/app-updates/cancel" => {
+            axum::http::Method::POST
+        }
         _ => return None,
     };
     (*method == expected).then_some(())

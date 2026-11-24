@@ -1,5 +1,5 @@
 {
-  "config/rust-service-routes.json": "07fe967427cfb7f14246ce4c022bdf165aef39cef1d9e32cb73fed6d8a4be671",
+  "config/rust-service-routes.json": "b271655b6a46fd8b471bbc7fca329562f3be1d922089cc8d95ab2af051f37fe3",
   "crates/aac-http/src/public_auth/analytics_routes.rs": "7c228d2b2f5bbb97877b0a1161deb11816b4c78f0b6d8eca75bd3b2a16c690a4",
   "crates/aac-http/src/public_auth/home_group.rs": "710e8a69954931eaaaa7b1b53f397a6674f2887d099a8bea5ab5770cb8dbb515",
   "crates/aac-http/src/public_auth/native_group.rs": "c8331d494c1a07398540d21dd42f0044b3c6d0f67b14cfa8a3bba2aab4890cc4",

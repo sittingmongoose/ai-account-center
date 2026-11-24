@@ -68,6 +68,30 @@ fn expected_results() -> usize {
     hosts().count() * rows::app_ids().count()
 }
 
+/// The failed and unknown rows of one finished job, per computer and app. This is
+/// the retry job's whole scope, so no other row is asked to run again.
+fn retry_scope(job: &Job) -> Option<Map<String, Value>> {
+    let mut scope = Map::new();
+    for host in hosts() {
+        let apps: Vec<&str> = rows::app_ids()
+            .filter(|app| {
+                job.results.iter().any(|row| {
+                    row["platform"] == host.id
+                        && row["appId"] == *app
+                        && matches!(
+                            row["status"].as_str(),
+                            Some("failed" | "restart_failed" | "unknown")
+                        )
+                })
+            })
+            .collect();
+        if !apps.is_empty() {
+            scope.insert(host.id.to_owned(), json!(apps));
+        }
+    }
+    (!scope.is_empty()).then_some(scope)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Job {
@@ -80,6 +104,9 @@ struct Job {
     cancel_requested: bool,
     results: Vec<Value>,
     expected_results: Option<usize>,
+    /// A retry job's apps per computer; absent means the fixed full sweep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<Map<String, Value>>,
 }
 
 impl Job {
@@ -98,7 +125,55 @@ impl Job {
             cancel_requested: false,
             results: vec![],
             expected_results: Some(expected_results()),
+            scope: None,
         }
+    }
+
+    fn retry(id: String, now: String, scope: Map<String, Value>) -> Self {
+        let expected = scope
+            .values()
+            .filter_map(Value::as_array)
+            .map(Vec::len)
+            .sum();
+        Self {
+            id,
+            state: "running".into(),
+            started_at: now,
+            finished_at: None,
+            active_platform: None,
+            hosts: Some(
+                scope
+                    .keys()
+                    .map(|host| (host.clone(), host_progress("waiting")))
+                    .collect(),
+            ),
+            cancel_requested: false,
+            results: vec![],
+            expected_results: Some(expected),
+            scope: Some(scope),
+        }
+    }
+
+    /// The apps this job runs on one computer, in the contract's order. A full job
+    /// has every app; a retry has only the rows it was asked to rerun.
+    fn apps(&self, host: Host) -> Vec<&'static str> {
+        rows::app_ids().filter(|app| self.owns(host, app)).collect()
+    }
+
+    fn owns(&self, host: Host, app: &str) -> bool {
+        let Some(scope) = &self.scope else {
+            return true;
+        };
+        scope
+            .get(host.id)
+            .and_then(Value::as_array)
+            .is_some_and(|apps| apps.iter().any(|saved| saved.as_str() == Some(app)))
+    }
+
+    fn in_scope(&self, host: Host) -> bool {
+        self.scope
+            .as_ref()
+            .is_none_or(|scope| scope.contains_key(host.id))
     }
 
     fn running(&self) -> bool {
@@ -127,7 +202,7 @@ impl Job {
     }
 
     fn fill(&mut self, host: Host, status: &str, code: &str) {
-        for app in rows::app_ids() {
+        for app in self.apps(host) {
             if self.has(host, app).is_none() {
                 self.results.push(rows::blank(host, app, status, code));
             }
@@ -135,7 +210,7 @@ impl Job {
     }
 
     fn fill_sync_failure(&mut self, host: Host, reason: &str, cause: &str) {
-        for app in rows::app_ids() {
+        for app in self.apps(host) {
             if self.has(host, app).is_none() {
                 self.results
                     .push(rows::sync_failure(host, app, reason, cause));
@@ -148,7 +223,10 @@ impl Job {
             Some("app") => {
                 let id = &data["appId"];
                 let phase = data["phase"].as_str();
-                if !(id.is_null() || id.as_str().is_some_and(rows::app_known))
+                if !(id.is_null()
+                    || id
+                        .as_str()
+                        .is_some_and(|app| rows::app_known(app) && self.owns(host, app)))
                     || !matches!(phase, Some("checking" | "updating" | "downloading"))
                 {
                     return;
@@ -163,7 +241,11 @@ impl Job {
             }
             Some("result") => {
                 let row = &data["result"];
-                let Some(app) = row["appId"].as_str().filter(|app| rows::app_known(app)) else {
+                let Some(app) = row["appId"]
+                    .as_str()
+                    .filter(|app| rows::app_known(app))
+                    .filter(|app| self.owns(host, app))
+                else {
                     return;
                 };
                 if self.has(host, app).is_none() {
@@ -189,7 +271,7 @@ impl Job {
                 self.fill_sync_failure(host, "helper_capability_missing", "unknown")
             }
             Some(Event::Result { value, .. }) => {
-                for app in rows::app_ids() {
+                for app in self.apps(host) {
                     let mut candidates = value["results"]
                         .as_array()
                         .into_iter()
@@ -238,8 +320,11 @@ impl Job {
     }
 
     fn pending_acp(&self, host: Host) -> Option<usize> {
-        self.has(host, ACP)
-            .filter(|&index| host.os == "ubuntu" && rows::is_acp_deferred(&self.results[index]))
+        self.has(host, ACP).filter(|&index| {
+            host.os == "ubuntu"
+                && self.owns(host, ACP)
+                && rows::is_acp_deferred(&self.results[index])
+        })
     }
 
     fn finish_acp(&mut self, host: Host, terminal: &HostCall) {
@@ -367,7 +452,10 @@ impl HostCall {
             self.event(),
             Some(Event::Failure { failure, .. })
                 if failure.cause == aac_core::Cause::Refused
-                    && failure.detail.as_str() == "invalid apps action"
+                    && matches!(
+                        failure.detail.as_str(),
+                        "invalid apps action" | "invalid app update request"
+                    )
         ) {
             Some("agent_update_required")
         } else {
@@ -515,7 +603,62 @@ impl AppUpdates {
         });
         let this = self.clone();
         tokio::spawn(async move {
-            this.execute(id, cancel).await;
+            this.execute(id, cancel, None).await;
+        });
+        result
+    }
+
+    /// Save a job that reruns only the last finished job's failed and unknown rows.
+    /// The stored job is the last one; a running job refuses instead.
+    pub async fn retry(self: &Arc<Self>) -> AppUpdateReply {
+        let mut active = self.active.lock().await;
+        if let Some(state) = active.as_ref() {
+            return busy(Some(&state.job));
+        }
+        let Some(last) = storage::load(&self.directory) else {
+            return reply(
+                409,
+                json!({"error":"There is nothing to retry.","job":null}),
+            );
+        };
+        if last.running() {
+            return busy(Some(&last));
+        }
+        let Some(scope) = retry_scope(&last) else {
+            return reply(
+                409,
+                json!({"error":"There is nothing to retry.","job":last}),
+            );
+        };
+        let started = match (job_id(), storage::Writer::claim(&self.directory)) {
+            (Ok((public_id, id)), Ok(lease)) => {
+                let job = Job::retry(public_id, clock(), scope);
+                match lease.save(&job) {
+                    Ok(()) => Ok((job, id, lease)),
+                    Err(error) => Err(error),
+                }
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error),
+        };
+        let (job, id, lease) = match started {
+            Ok(values) => values,
+            Err(error) if error.cause == aac_core::Cause::Busy => {
+                return busy(storage::load(&self.directory).as_ref());
+            }
+            Err(_) => return reply(500, json!({"error":"App updates could not start safely."})),
+        };
+        let cancel = CancellationToken::new();
+        self.publish(&job);
+        let result = reply(202, json!({"job":job}));
+        let scope = job.scope.clone();
+        *active = Some(Active {
+            job,
+            cancel: cancel.clone(),
+            lease,
+        });
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.execute(id, cancel, scope).await;
         });
         result
     }
@@ -552,7 +695,12 @@ impl AppUpdates {
         }
     }
 
-    async fn execute(self: Arc<Self>, id: String, cancel: CancellationToken) {
+    async fn execute(
+        self: Arc<Self>,
+        id: String,
+        cancel: CancellationToken,
+        scope: Option<Map<String, Value>>,
+    ) {
         // One read of the package's helper set serves every computer in this job.
         let helpers = Arc::new(
             tokio::task::spawn_blocking(|| {
@@ -571,24 +719,35 @@ impl AppUpdates {
         );
         let mut work = JoinSet::new();
         for host in hosts() {
+            let apps = scope.as_ref().and_then(|scope| scope.get(host.id));
+            if scope.is_some() && apps.is_none() {
+                continue;
+            }
+            let apps = apps.and_then(Value::as_array).map(|apps| {
+                apps.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            });
             let this = self.clone();
             let id = id.clone();
             let cancel = cancel.clone();
             let helpers = helpers.clone();
             work.spawn(async move {
-                this.host_job(host, id, cancel, &helpers).await;
+                this.host_job(host, id, cancel, &helpers, apps).await;
             });
         }
         while work.join_next().await.is_some() {}
         if let Some(mut active) = self.active.lock().await.take() {
             let missing = hosts()
                 .filter(|host| {
-                    active
-                        .job
-                        .hosts
-                        .as_ref()
-                        .and_then(|v| v.get(host.id))
-                        .is_none_or(|state| state["state"] != "done")
+                    active.job.in_scope(*host)
+                        && active
+                            .job
+                            .hosts
+                            .as_ref()
+                            .and_then(|v| v.get(host.id))
+                            .is_none_or(|state| state["state"] != "done")
                 })
                 .collect::<Vec<_>>();
             for host in missing {
@@ -606,6 +765,7 @@ impl AppUpdates {
         id: String,
         cancel: CancellationToken,
         helpers: &Result<helpers::HelperSet, helpers::SyncError>,
+        apps: Option<Vec<String>>,
     ) {
         if cancel.is_cancelled() {
             self.change(|job| {
@@ -643,7 +803,9 @@ impl AppUpdates {
                 return;
             }
         }
-        let call = self.call_host(host, &id, &cancel, false, started).await;
+        let call = self
+            .call_host(host, &id, &cancel, false, started, apps.as_deref())
+            .await;
         if !call.admitted && cancel.is_cancelled() {
             self.change(|job| {
                 job.fill(host, "skipped", "skipped_cancelled");
@@ -672,7 +834,7 @@ impl AppUpdates {
             // The saved host boundary releases the restart. The overall job
             // stays active for cancellation and the one final ACP replacement.
             let call = self
-                .call_host(host, &id, &cancel, true, Instant::now())
+                .call_host(host, &id, &cancel, true, Instant::now(), None)
                 .await;
             self.change(|job| job.finish_acp(host, &call)).await;
         }
@@ -705,6 +867,7 @@ impl AppUpdates {
         cancel: &CancellationToken,
         follow_up: bool,
         started: Instant,
+        apps: Option<&[String]>,
     ) -> HostCall {
         let (progress, mut events) = mpsc::channel(8);
         let (admission, controls) = mpsc::channel(1);
@@ -717,13 +880,17 @@ impl AppUpdates {
             });
         let until = options.deadline;
         let transport_cancel = options.cancel.clone();
+        let mut args = json!({
+            "action": if follow_up { "prepare-acp-follow-up" } else { "prepare-update" },
+            "platform": host.os, "jobId": id,
+        });
+        if !follow_up && let Some(apps) = apps {
+            args["apps"] = json!(apps);
+        }
         let work = self.agents.app_call(
             Selector::usage(host.os, host.alias),
             format!("{id}-{}{}", host.id, if follow_up { "-acp" } else { "" }),
-            json!({
-                "action": if follow_up { "prepare-acp-follow-up" } else { "prepare-update" },
-                "platform": host.os, "jobId": id,
-            }),
+            args,
             options,
             controls,
             progress,

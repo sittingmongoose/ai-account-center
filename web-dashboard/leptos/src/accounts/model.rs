@@ -346,6 +346,8 @@ pub struct Update {
     pub shown: bool,
     pub running: bool,
     pub cancelling: bool,
+    /// The last run has failed or unknown rows that Retry failed would rerun.
+    pub retry: bool,
     #[serde(deserialize_with = "nullable")]
     pub head_runs: Vec<Run>,
     #[serde(deserialize_with = "nullable")]

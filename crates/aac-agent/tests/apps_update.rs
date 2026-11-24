@@ -50,6 +50,41 @@ async fn spawn_agent(
     action: &str,
     extra: &[(&str, &Path)],
 ) -> (Child, LinesFromAgent) {
+    spawn_request(root, platform, job, action, None, extra).await
+}
+
+async fn spawn_scoped(
+    root: &Path,
+    platform: &str,
+    job: &str,
+    action: &str,
+    apps: &[&str],
+) -> (Child, LinesFromAgent) {
+    spawn_request(root, platform, job, action, Some(apps), &[]).await
+}
+
+async fn spawn_request(
+    root: &Path,
+    platform: &str,
+    job: &str,
+    action: &str,
+    apps: Option<&[&str]>,
+    extra: &[(&str, &Path)],
+) -> (Child, LinesFromAgent) {
+    let mut args = json!({"action":action,"platform":platform,"jobId":job});
+    if let Some(apps) = apps {
+        args["apps"] = json!(apps);
+    }
+    spawn_raw(root, args, action, extra).await
+}
+
+async fn spawn_raw(
+    root: &Path,
+    args: Value,
+    action: &str,
+    extra: &[(&str, &Path)],
+) -> (Child, LinesFromAgent) {
+    let job = args["jobId"].as_str().expect("fixture job id");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_aac-agent"));
     cmd.kill_on_drop(true)
         .env_clear()
@@ -67,8 +102,7 @@ async fn spawn_agent(
     let mut child = cmd.spawn().expect("spawn fixture agent");
     let mut stdin = child.stdin.take().expect("agent stdin");
     let request = json!({
-        "protocol":1,"verb":"apps","id":job,"deadlineMs":15000,
-        "args":{"action":action,"platform":platform,"jobId":job}
+        "protocol":1,"verb":"apps","id":job,"deadlineMs":15000,"args":args
     });
     stdin
         .write_all(format!("{request}\n").as_bytes())
@@ -193,6 +227,141 @@ async fn update_and_next_run_match_python_on_three_platforms() {
             assert_eq!(stored.to_string(), payload.to_string());
         }
     }
+}
+
+#[tokio::test]
+async fn without_apps_keeps_the_full_sweep() {
+    for platform in ["ubuntu", "mac", "windows"] {
+        let root = root();
+        let (mut child, mut lines) = agent(root.path(), platform, JOB, "update").await;
+        let (events, payload) = terminal(&mut child, &mut lines).await;
+        compare(events, &payload, platform, "update");
+        assert_eq!(payload["results"].as_array().expect("rows").len(), 12);
+        let journal: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("fixture-journal.json"))
+                .expect("fixture journal"),
+        )
+        .expect("journal JSON");
+        assert!(
+            journal.get("apps").is_none(),
+            "{platform}: an unscoped request keeps the full sweep"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_requested_subset_runs_only_those_apps() {
+    let root = root();
+    put(&root, "fixture-install-all", "");
+    let (mut child, mut lines) = spawn_scoped(
+        root.path(),
+        "ubuntu",
+        JOB,
+        "update",
+        &["zcode", "antigravity-cli"],
+    )
+    .await;
+    let (events, payload) = terminal(&mut child, &mut lines).await;
+    let ids: Vec<_> = payload["results"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| row["appId"].as_str().expect("app id").to_owned())
+        .collect();
+    assert_eq!(ids, ["antigravity-cli", "zcode"]);
+    for event in &events {
+        let app = event["appId"]
+            .as_str()
+            .or_else(|| event["result"]["appId"].as_str());
+        if let Some(app) = app {
+            assert!(
+                ["antigravity-cli", "zcode"].contains(&app),
+                "{app} ran outside the requested scope"
+            );
+        }
+    }
+    let journal: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("fixture-journal.json"))
+            .expect("fixture journal"),
+    )
+    .expect("journal JSON");
+    assert_eq!(journal["apps"], json!(["antigravity-cli", "zcode"]));
+    for app in ["antigravity-cli", "zcode"] {
+        assert!(
+            root.path()
+                .join(format!("fixture-installed-{app}.txt"))
+                .is_file(),
+            "{app} ran"
+        );
+    }
+    assert!(!root.path().join("fixture-installed-omp.txt").exists());
+}
+
+#[tokio::test]
+async fn a_subset_cancel_covers_its_own_apps_only() {
+    let root = root();
+    put(&root, "fixture-hold-download", "");
+    let (mut child, mut lines) = spawn_scoped(
+        root.path(),
+        "ubuntu",
+        JOB,
+        "update",
+        &["codex-desktop", "t3-code"],
+    )
+    .await;
+    let _ = downloading(&mut lines).await;
+    assert_eq!(
+        other_call(&root, "ubuntu", JOB, "cancel").await,
+        json!({"cancelled":true})
+    );
+    put(&root, "fixture-release-download", "");
+    let (_, payload) = terminal(&mut child, &mut lines).await;
+    let rows = payload["results"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter()
+            .find(|row| row["appId"] == "codex-desktop")
+            .expect("desktop row")["status"],
+        "updated"
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|row| row["appId"] == "t3-code")
+            .expect("t3-code row")["messageCode"],
+        "skipped_cancelled"
+    );
+    assert_eq!(
+        other_call(&root, "ubuntu", JOB, "cancel").await,
+        json!({"cancelled":false})
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_scope_is_refused_before_any_work() {
+    for apps in [
+        json!([]),
+        json!(["omp", "omp"]),
+        json!(["not-an-app"]),
+        json!(["omp", 8]),
+    ] {
+        let root = root();
+        let args = json!({"action":"update","platform":"ubuntu","jobId":JOB,"apps":apps});
+        let (mut child, mut lines) = spawn_raw(root.path(), args, "update", &[]).await;
+        assert!(matches!(
+            event(&mut lines).await,
+            Event::Failure { failure, .. } if failure.cause == aac_core::Cause::Refused
+        ));
+        assert!(!child.wait().await.expect("reap refusing agent").success());
+        assert!(!root.path().join("fixture-journal.json").exists());
+    }
+    let root = root();
+    let args = json!({"action":"cancel","platform":"ubuntu","jobId":JOB,"apps":["omp"]});
+    let (mut child, mut lines) = spawn_raw(root.path(), args, "cancel", &[]).await;
+    assert!(matches!(
+        event(&mut lines).await,
+        Event::Failure { failure, .. } if failure.cause == aac_core::Cause::Refused
+    ));
+    assert!(!child.wait().await.expect("reap refusing agent").success());
 }
 
 #[tokio::test]

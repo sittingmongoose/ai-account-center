@@ -85,16 +85,25 @@ def messages(host, request):
         return
 
     marker.touch()
-    emit("progress", data={"event": "app", "appId": "codex-desktop", "phase": "downloading"})
-    if (ROOT / "hold").exists():
-        until = time.monotonic() + 8
-        while not flag.exists() and time.monotonic() < until:
-            time.sleep(0.01)
+    requested = request["args"].get("apps")
+    selected = [app for app in APPS if requested is None or app in requested]
+    failed = set()
+    fail_file = ROOT / "fail-apps"
+    if fail_file.exists():
+        failed = {line.strip() for line in fail_file.read_text(encoding="utf-8").splitlines() if line.strip()}
+    if "codex-desktop" in selected:
+        emit("progress", data={"event": "app", "appId": "codex-desktop", "phase": "downloading"})
+        if (ROOT / "hold").exists():
+            until = time.monotonic() + 8
+            while not flag.exists() and time.monotonic() < until:
+                time.sleep(0.01)
 
     rows = []
-    for app in APPS:
+    for app in selected:
         status, code, extra = "not_installed", "not_installed", {}
-        if app == "codex-desktop":
+        if host == "ubuntu" and app in failed:
+            status, code = "failed", "update_failed"
+        elif app == "codex-desktop":
             status, code = "updated", "updated"
             manager = {"ubuntu": "apt", "mac": "official-download", "windows": "msix"}[os_name]
             extra = {"version":"3.4.5", "manager":manager, "updateAttempted":True}

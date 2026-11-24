@@ -8,7 +8,7 @@ import { MUTATING_ACTIONS } from '../public/accounts-controller.mjs';
 test('the allowlist covers every Accounts & Settings change and never sign-in, the frame\'s commands or the canvas', () => {
   for (const kind of MUTATING_ACTIONS) assert.ok(PAGE_ACTIONS.has(kind), `${kind} is a page action`);
   for (const kind of ['details', 'details-closed', 'launch',
-    'flow-submit', 'flow-copy', 'flow-open-url', 'refuse', 'line-cancel', 'pw-toggle', 'pw-typing', 'refresh-interval', 'update-cancel',
+    'flow-submit', 'flow-copy', 'flow-open-url', 'refuse', 'line-cancel', 'pw-toggle', 'pw-typing', 'refresh-interval', 'update-cancel', 'update-retry',
     'install-app']) {
     assert.ok(PAGE_ACTIONS.has(kind), `${kind} is a page action`);
   }

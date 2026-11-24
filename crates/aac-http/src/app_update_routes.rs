@@ -29,6 +29,8 @@ pub trait AppUpdateJobs: Send + Sync {
     fn status(&self) -> AppUpdateCall<'_>;
     /// Acknowledge a new job or report why the owner could not start one.
     fn start(&self) -> AppUpdateCall<'_>;
+    /// Acknowledge a job for the last job's failed rows, or report why it could not start.
+    fn retry(&self) -> AppUpdateCall<'_>;
     /// Acknowledge cancellation or report why the owner could not cancel.
     fn cancel(&self) -> AppUpdateCall<'_>;
 }
@@ -42,6 +44,10 @@ impl AppUpdateJobs for LaneHJobs {
 
     fn start(&self) -> AppUpdateCall<'_> {
         Box::pin(async { to_route_reply(self.0.start().await) })
+    }
+
+    fn retry(&self) -> AppUpdateCall<'_> {
+        Box::pin(async { to_route_reply(self.0.retry().await) })
     }
 
     fn cancel(&self) -> AppUpdateCall<'_> {
@@ -95,6 +101,7 @@ impl BoundJobs {
 pub(crate) enum Operation {
     Status,
     Start,
+    Retry,
     Cancel,
 }
 
@@ -105,6 +112,7 @@ impl Operation {
         match (method, path) {
             (&Method::GET, "/api/app-updates/status") => Some(Self::Status),
             (&Method::POST, "/api/app-updates/start") => Some(Self::Start),
+            (&Method::POST, "/api/app-updates/retry") => Some(Self::Retry),
             (&Method::POST, "/api/app-updates/cancel") => Some(Self::Cancel),
             _ => None,
         }
@@ -114,6 +122,7 @@ impl Operation {
         match self {
             Self::Status => jobs.status().await,
             Self::Start => jobs.start().await,
+            Self::Retry => jobs.retry().await,
             Self::Cancel => jobs.cancel().await,
         }
     }
@@ -148,6 +157,10 @@ impl AppUpdateJobs for M0Jobs {
                 }),
             }
         })
+    }
+
+    fn retry(&self) -> AppUpdateCall<'_> {
+        self.start()
     }
 
     fn cancel(&self) -> AppUpdateCall<'_> {
@@ -188,6 +201,30 @@ mod tests {
                     "busy" => reply(
                         409,
                         json!({ "error": "An app update is already running.", "job": self.job }),
+                    ),
+                    _ => reply(202, json!({ "job": self.job })),
+                }
+            })
+        }
+
+        fn retry(&self) -> AppUpdateCall<'_> {
+            Box::pin(async {
+                match self.outcome.as_str() {
+                    "failed" => reply(
+                        500,
+                        json!({ "error": "App updates could not start safely." }),
+                    ),
+                    "busy" => reply(
+                        409,
+                        json!({ "error": "An app update is already running.", "job": self.job }),
+                    ),
+                    "empty" => reply(
+                        409,
+                        json!({ "error": "There is nothing to retry.", "job": null }),
+                    ),
+                    "nothing" => reply(
+                        409,
+                        json!({ "error": "There is nothing to retry.", "job": self.job }),
                     ),
                     _ => reply(202, json!({ "job": self.job })),
                 }

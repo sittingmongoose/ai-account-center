@@ -332,6 +332,7 @@ async fn service_fixture_child() {
     );
     acp_follow_up(&root, &owner).await;
     helper_sync_failure(&root, &owner).await;
+    retry_failed_rows(&root, &owner).await;
 
     // Start a fresh boot with no Mac pin and a pinned Windows binary missing on the host.
     let mut catalog = serde_json::from_slice::<Value>(
@@ -392,6 +393,69 @@ async fn service_fixture_child() {
             .iter()
             .any(|row| row["platform"] == "alexis" && row["status"] == "updated")
     );
+}
+
+/// Retry runs exactly the last job's failed rows, on their computers only.
+async fn retry_failed_rows(root: &Path, owner: &std::sync::Arc<AppUpdates>) {
+    fs::write(root.join("fail-apps"), "zcode\nantigravity-cli\n").expect("fail two apps");
+    assert_eq!(owner.start().await.status, 202);
+    let failed = until(owner, |job| job["state"] == "failed").await;
+    let rows = failed["results"].as_array().expect("failed job rows");
+    let retryable = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row["status"].as_str(),
+                Some("failed" | "restart_failed" | "unknown")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(retryable.len(), 2, "two rows failed: {failed}");
+    assert!(retryable.iter().all(|row| row["platform"] == "ubuntu"));
+    let before = hosts()
+        .into_iter()
+        .map(|(machine, alias)| {
+            (
+                machine,
+                trace(root, alias)
+                    .iter()
+                    .filter(|row| row["stage"] == "update")
+                    .count(),
+            )
+        })
+        .collect::<Vec<_>>();
+    fs::remove_file(root.join("fail-apps")).expect("let the retry rows succeed");
+    let retry = owner.retry().await;
+    assert_eq!(retry.status, 202, "{}", retry.body);
+    assert_eq!(retry.body["job"]["expectedResults"], 2);
+    assert_eq!(
+        retry.body["job"]["scope"],
+        json!({"ubuntu":["antigravity-cli","zcode"]})
+    );
+    let done = until(owner, |job| job["state"] == "completed").await;
+    let rows = done["results"].as_array().expect("retry rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["appId"].as_str().expect("app id"))
+            .collect::<Vec<_>>(),
+        ["antigravity-cli", "zcode"]
+    );
+    assert!(rows.iter().all(|row| row["platform"] == "ubuntu"));
+    for (machine, count) in before {
+        let updates = trace(root, host_alias(machine))
+            .iter()
+            .filter(|row| row["stage"] == "update")
+            .count();
+        if machine == "ubuntu" {
+            assert_eq!(updates, count + 1, "the retry reached Ubuntu once");
+        } else {
+            assert_eq!(updates, count, "the retry never reached {machine}");
+        }
+    }
+    let nothing = owner.retry().await;
+    assert_eq!(nothing.status, 409);
+    assert_eq!(nothing.body["error"], "There is nothing to retry.");
 }
 
 /// A refused helper set dispatches nothing on that computer and says why on every row.

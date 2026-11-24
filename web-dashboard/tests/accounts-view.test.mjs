@@ -986,7 +986,7 @@ test('Update apps results are grouped by computer, never invented', () => {
     },
     now
   );
-  assert.equal(done.headRuns.map((r) => r.text).join(''), 'Last run 20m ago · 3 results, 1 failed');
+  assert.equal(done.headRuns.map((r) => r.text).join(''), 'Last run 20m ago · 3 results, 1 updated, 1 current, 1 failed');
   assert.deepEqual(
     done.hosts.map((h) => h.id),
     ['mac', 'windows', 'ubuntu', 'nas1', 'alexis', 'odroid', '1070ti']
@@ -1028,6 +1028,71 @@ test('Update apps results are grouped by computer, never invented', () => {
   );
   assert.equal(running.hosts[0].items[0].running, true);
   assert.equal(running.hosts[1].items[0].app, 'Waiting for its turn');
+});
+
+test('Update apps offers Retry failed only for failed or unknown rows of a finished run', () => {
+  const result = (platform, appLabel, status, extra = {}) => ({
+    appId: appLabel.toLowerCase().replace(/ /g, '-'),
+    appLabel,
+    platform,
+    status,
+    previousVersion: null,
+    version: null,
+    message: 'Done',
+    ...extra,
+  });
+  const job = (results, state = 'failed') => ({
+    state,
+    startedAt: at(-30),
+    finishedAt: state === 'running' ? null : at(-20),
+    activePlatform: null,
+    results,
+  });
+  assert.equal(updateResultsView(null, now).retry, false);
+  for (const status of ['failed', 'restart_failed', 'unknown']) {
+    assert.equal(
+      updateResultsView(job([result('ubuntu', 'ZCode', 'failed', { status })]), now).retry,
+      true,
+      status
+    );
+  }
+  for (const status of ['updated', 'current', 'not_installed', 'skipped', 'action_required', 'held']) {
+    assert.equal(
+      updateResultsView(job([result('ubuntu', 'ZCode', status)]), now).retry,
+      false,
+      status
+    );
+  }
+  assert.equal(
+    updateResultsView(
+      job([result('ubuntu', 'ZCode', 'failed')], 'running'),
+      now
+    ).retry,
+    false,
+    'a running job has no Retry failed action'
+  );
+  // A retry job's panel lists only the computers it reruns.
+  const scoped = updateResultsView(
+    {
+      state: 'completed',
+      startedAt: at(-30),
+      finishedAt: at(-20),
+      activePlatform: null,
+      expectedResults: 2,
+      scope: { ubuntu: ['antigravity-cli', 'zcode'] },
+      results: [
+        result('ubuntu', 'Antigravity CLI', 'updated', { version: '1.5.9' }),
+        result('ubuntu', 'ZCode', 'updated', { version: '0.65.1' }),
+      ],
+    },
+    now
+  );
+  assert.deepEqual(scoped.hosts.map((h) => h.id), ['ubuntu']);
+  assert.equal(scoped.retry, false);
+  assert.equal(
+    scoped.headRuns.map((r) => r.text).join(''),
+    'Last run 20m ago · 2 results, 2 updated'
+  );
 });
 
 test('Update apps Muse catalog-pending row reads as updated-but-not-clean', () => {
@@ -1127,7 +1192,7 @@ test('Update apps cancel and readiness states read as plain text', () => {
   );
   assert.equal(
     done.headRuns.map((r) => r.text).join(''),
-    'Last run 20m ago · 4 results, 1 skipped, 2 unknown, cancelled'
+    'Last run 20m ago · 4 results, 1 current, 1 skipped, 2 unknown, cancelled'
   );
   assert.deepEqual(
     done.hosts[0].items.map((i) => i.result),
@@ -1453,7 +1518,7 @@ test('Update apps shows ZCode and T3 ACP adapters, names each adapter part and r
   );
   assert.equal(
     done.headRuns.map((r) => r.text).join(''),
-    'Last run 20m ago · 3 results, 1 need action'
+    'Last run 20m ago · 3 results, 2 updated, 1 need action'
   );
   // An adapters row says Updated and lists each part's own version after the message.
   assert.deepEqual(

@@ -11,6 +11,15 @@ The server invokes only Ubuntu locally and the fixed Mac, Windows, Nas1, Alexis 
 Odroid and 1070ti SSH aliases (`APP_UPDATE_SSH_HOSTS`); callers cannot supply hosts, commands, app IDs, paths or download URLs.
 Nas1 is a second Ubuntu computer reached as `nas1-agent`, Odroid a third reached as `odroid`, and 1070ti a fourth reached as `1070ti` (see [Nas1](#nas1-the-fourth-computer)).
 
+`POST /api/app-updates/retry` accepts exactly `{}` too. It starts a new job for
+only the failed and unknown rows of the last finished job, per computer and
+app. Each computer's agent request keeps the same `action`, `platform` and
+`jobId` and adds `apps: [ids]`; a request without `apps` is the fixed full
+sweep an older dashboard sends. The agent filters its platform order to the
+requested IDs, journals that scope, and refuses a recovery request that
+changes it, so cancellation and the deferred Antigravity ACP follow-up see the
+same set.
+
 ## Every computer at once, and never stuck
 
 Ubuntu, Mac, Windows, Nas1, Alexis PC, Odroid and 1070ti run **at the same time**; each computer runs up to

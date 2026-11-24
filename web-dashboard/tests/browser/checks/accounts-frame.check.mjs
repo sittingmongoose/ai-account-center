@@ -287,8 +287,34 @@ export const tests = {
 		await t.check('rows without diagnostics keep their old words', await t.page.evaluate(() => [...document.querySelectorAll('.ut-cell')].some((c) => c.textContent.trim() === 'quit to finish')));
 	},
 
+	async 'accounts: Retry failed reruns only the last run\'s failed rows'(t) {
+		const server = fakeServer({ update: updateJob() });
+		await open(t, server);
+		await t.until('the Update apps table is open', () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 15000, hard: true });
+		await t.check('the head counts updated, current and failed rows', await t.page.evaluate(() => {
+			const line = document.querySelector('[data-probe="update-card"] .uh-line')?.textContent || '';
+			return /3 updated, 32 current, 1 failed/.test(line);
+		}));
+		await t.check('Retry failed is offered for the failed row', await t.page.evaluate(() => {
+			const button = document.querySelector('[data-probe="update-retry"]');
+			return !!button && !button.disabled && button.textContent.trim() === 'Retry failed';
+		}));
+		await t.shot('update-retry-before', 'Update apps counts and Retry failed before the retry');
+		await t.page.click('[data-probe="update-retry"]');
+		await t.until('the retry job draws only the failed computer', () => {
+			const hosts = [...document.querySelectorAll('[data-probe="update-card"] .ut-host .cap')].map((h) => h.textContent.trim());
+			return hosts.length === 1 && hosts[0] === 'Nas1';
+		}, null, { timeout: 15000 });
+		await t.check('the retried row is updated and Retry failed is gone', await t.page.evaluate(() => {
+			const cell = document.querySelector('[data-probe="update-card"] .ut-cell');
+			return cell?.textContent.trim() === '→ 1.5.9' && !document.querySelector('[data-probe="update-retry"]');
+		}));
+		await t.check('the page sent the retry action', changes(server).some((r) => r.path === '/api/app-updates/retry'));
+		await t.shot('update-retry-after', 'After Retry failed: only Nas1 and Antigravity CLI, no retry offered');
+	},
+
 	async 'accounts: on a phone the cards stack, Update apps folds to its line, nothing runs sideways'(t) {
-		const server = fakeServer();
+		const server = fakeServer({ update: updateJob() });
 		await open(t, server, { width: 390, height: 844, phone: true });
 		await t.check('one column', await t.page.evaluate(() => document.querySelectorAll('.ac-col').length === 1));
 		await t.check('Update apps first and folded', await t.page.evaluate(() => {
@@ -296,6 +322,13 @@ export const tests = {
 			return card?.dataset.probe === 'update-card' && card.querySelector('.upd-head')?.getAttribute('aria-expanded') === 'false';
 		}));
 		await t.check('no sideways page scroll', await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+		await t.check('Retry failed is offered and fits the phone', await t.page.evaluate(() => {
+			const button = document.querySelector('[data-probe="update-retry"]');
+			if (!button || !button.offsetParent) return false;
+			const rect = button.getBoundingClientRect();
+			return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth;
+		}));
+		await t.shot('update-retry-phone', 'Update apps on a 390 px phone: the counts line and Retry failed fit');
 		await t.audit('accounts phone');
 		await t.page.click(`${row('codex:two')} .acc-email`);
 		await t.until('Details is a bottom sheet', () => {
