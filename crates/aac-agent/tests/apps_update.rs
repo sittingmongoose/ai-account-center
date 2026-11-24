@@ -160,6 +160,11 @@ async fn other_call(root: &TempDir, platform: &str, job: &str, action: &str) -> 
     terminal(&mut child, &mut lines).await.1
 }
 
+async fn scoped_call(root: &TempDir, platform: &str, job: &str, apps: &[&str]) -> Value {
+    let (mut child, mut lines) = spawn_scoped(root.path(), platform, job, "update", apps).await;
+    terminal(&mut child, &mut lines).await.1
+}
+
 fn reference(platform: &str, scenario: &str) -> Value {
     let python = std::env::var_os("AAC_TEST_PYTHON").unwrap_or_else(|| {
         if cfg!(windows) {
@@ -334,6 +339,43 @@ async fn a_subset_cancel_covers_its_own_apps_only() {
         other_call(&root, "ubuntu", JOB, "cancel").await,
         json!({"cancelled":false})
     );
+}
+
+#[tokio::test]
+async fn a_killed_scoped_worker_recovers_only_its_scope_and_refuses_a_changed_one() {
+    let root = root();
+    put(&root, "fixture-hold-download", "");
+    let (mut child, mut lines) = spawn_scoped(
+        root.path(),
+        "ubuntu",
+        JOB,
+        "update",
+        &["codex-desktop", "t3-code"],
+    )
+    .await;
+    let _ = downloading(&mut lines).await;
+    child
+        .kill()
+        .await
+        .expect("kill only the scoped fixture agent");
+
+    let (mut changed, mut replies) =
+        spawn_scoped(root.path(), "ubuntu", JOB, "update", &["codex-desktop"]).await;
+    assert!(matches!(
+        event(&mut replies).await,
+        Event::Failure { failure, .. } if failure.cause == aac_core::Cause::Refused
+    ));
+    assert!(!changed.wait().await.expect("reap changed agent").success());
+
+    let recovered = scoped_call(&root, "ubuntu", JOB, &["codex-desktop", "t3-code"]).await;
+    let rows = recovered["results"].as_array().expect("recovered rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["appId"], "codex-desktop");
+    assert_eq!(rows[1]["appId"], "t3-code");
+    for row in rows {
+        assert_eq!(row["status"], "unknown");
+        assert_eq!(row["messageCode"], "host_unknown");
+    }
 }
 
 #[tokio::test]

@@ -569,6 +569,31 @@ else:
         json!({"job":null,"cancelling":false})
     );
 
+    // Retry keeps the same public admission: session, origin, JSON, empty {}.
+    let retry_url = format!("{base}/api/app-updates/retry");
+    let retry = origin(retry_url.clone()).send().await.unwrap();
+    assert_eq!(
+        json_reply(retry, StatusCode::CONFLICT, true).await,
+        json!({"error":"There is nothing to retry.","job":null})
+    );
+    let retry_no_origin = signed(retry_url.clone()).send().await.unwrap();
+    assert_eq!(retry_no_origin.status(), StatusCode::FORBIDDEN);
+    let retry_no_type = client
+        .post(retry_url.clone())
+        .header(header::COOKIE, cookie)
+        .header(header::ORIGIN, &base)
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retry_no_type.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let retry_bad_body = origin(retry_url)
+        .body(r#"{"host":"foreign"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retry_bad_body.status(), StatusCode::BAD_REQUEST);
+
     // The transport is disabled in this fixture. Start still owns the durable
     // acknowledgement and publishes progress through the public event bus.
     let mut request = format!("ws://{address}/ws").into_client_request().unwrap();

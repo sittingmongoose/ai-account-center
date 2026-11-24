@@ -166,6 +166,72 @@ test('Update apps: a validated 409 job is adopted and its finish reported once; 
   } finally { c.c.stop(); }
 });
 
+test('Retry failed posts once, publishes busy, and adopts its 202 job', async () => {
+  const id = '22222222-2222-4222-8222-222222222222';
+  let posts = 0;
+  let release;
+  const { server } = fixtureServer({ routes: {
+    'POST /api/app-updates/retry': () => {
+      posts++;
+      return new Promise((resolve) => {
+        release = () => resolve({ status: 202, payload: { job: {
+          id, state: 'running', startedAt: new Date().toISOString(), results: [],
+          scope: { ubuntu: ['zcode'] },
+        } } });
+      });
+    },
+  } });
+  const ctl = await loadController(server, { page: 'accounts' });
+  try {
+    assert.equal(ctl.c.act('update-retry', ''), true);
+    assert.equal(ctl.c.act('update-retry', ''), true);
+    await flush(16);
+    assert.equal(posts, 1, 'the second click while the POST is in flight is ignored');
+    assert.equal(ctl.last('busy'), 'true');
+    assert.ok(release, 'the retry POST is in flight');
+    release();
+    await flush(16);
+    assert.equal(ctl.last('busy'), 'false');
+    assert.equal(JSON.parse(ctl.last('update')).running, true);
+    assert.deepEqual(JSON.parse(ctl.last('accounts')).update.hosts.map((h) => h.id), ['ubuntu']);
+  } finally { ctl.c.stop(); }
+});
+
+test('Retry failed adopts only a valid 409 job and refuses job:null or a malformed state', async () => {
+  const id = '22222222-2222-4222-8222-222222222222';
+  const startedAt = new Date().toISOString();
+  for (const [state, running] of [['running', true], ['failed', false]]) {
+    const { server } = fixtureServer({ routes: {
+      'POST /api/app-updates/retry': () => ({
+        status: 409,
+        payload: { error: 'Already answered', job: { id, state, startedAt, results: [] } },
+      }),
+    } });
+    const ctl = await loadController(server);
+    try {
+      assert.equal(ctl.c.act('update-retry', ''), true);
+      await flush(16);
+      const update = JSON.parse(ctl.last('update'));
+      assert.equal(update.running, running, state);
+      if (state === 'failed') assert.match(update.tip, /Last run failed/, 'the 409 job is adopted');
+      assert.equal(ctl.toasts().some((t) => t.kind === 'err'), false, state);
+    } finally { ctl.c.stop(); }
+  }
+  for (const [name, payload] of [
+    ['null', { error: 'Nothing', job: null }],
+    ['state', { error: 'Bad', job: { id, state: 'unexpected', startedAt, results: [] } }],
+    ['length', { error: 'Bad', job: { id, state: 'x'.repeat(17), startedAt, results: [] } }],
+  ]) {
+    const { server } = fixtureServer({ routes: { 'POST /api/app-updates/retry': () => ({ status: 409, payload }) } });
+    const ctl = await loadController(server);
+    try {
+      assert.equal(ctl.c.act('update-retry', ''), true);
+      await flush(16);
+      assert.ok(ctl.toasts().some((t) => t.kind === 'err'), `${name} is refused`);
+    } finally { ctl.c.stop(); }
+  }
+});
+
 test('the timers bridge.js kept: the interval read, Accounts reads on entry', async () => {
   const { server } = fixtureServer();
   const ctl = await loadController(server);

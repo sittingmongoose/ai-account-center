@@ -159,6 +159,7 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                 <div class="upd-retry">
                     <button type="button" class="btn sm" data-probe="update-retry"
                         title="Runs only the apps that failed or were not checked in the last run, on the computers where they failed."
+                        disabled=move || page.busy.get()
                         on:click=move |_| page.send("update-retry", "")>
                         "Retry failed"
                     </button>

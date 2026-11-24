@@ -93,6 +93,23 @@ impl Writer {
                 }
             }
         }
+        let mut empty_scope = false;
+        if let Some(scope) = legacy.scope.as_mut() {
+            scope.retain(|id, _| hosts().any(|host| host.id == id && host.legacy));
+            for apps in scope.values_mut() {
+                if let Some(list) = apps.as_array_mut() {
+                    list.retain(|app| {
+                        app.as_str()
+                            .is_some_and(|app| rows::legacy(app) && rows::app_known(app))
+                    });
+                }
+            }
+            scope.retain(|_, apps| apps.as_array().is_some_and(|apps| !apps.is_empty()));
+            empty_scope = scope.is_empty();
+        }
+        if empty_scope {
+            legacy.scope = None;
+        }
         legacy.active_platform = legacy
             .active_platform
             .filter(|id| hosts().any(|host| host.id == id && host.legacy));
@@ -168,6 +185,13 @@ pub(super) fn load(root: &Path) -> Option<Job> {
         job.finished_at = Some(clock());
         job.active_platform = None;
         job.hosts = None;
+        // The owner disappeared. Rows it never reported are unknown, so the
+        // dashboard can show them and Retry failed can rerun the entire scope.
+        for host in hosts() {
+            if job.in_scope(host) {
+                job.fill(host, "unknown", "host_unknown");
+            }
+        }
     }
     Some(job)
 }
@@ -183,10 +207,20 @@ fn decode(saved: Value) -> Option<Job> {
         return None;
     }
     let started_at = date(&raw["startedAt"])?;
-    let scope = match raw.get("scope") {
+    let mut scope = match raw.get("scope") {
         None => None,
         Some(value) => Some(decode_scope(value)?),
     };
+    // The legacy rollback view of a retry with no legacy hosts/apps has an
+    // empty host map and no expected rows. It is still a retry, not a full job.
+    if scope.is_none()
+        && raw["expectedResults"].as_u64() == Some(0)
+        && raw["hosts"]
+            .as_object()
+            .is_some_and(|hosts| hosts.is_empty())
+    {
+        scope = Some(Map::new());
+    }
     let raw_results = raw["results"]
         .as_array()
         .filter(|rows| rows.len() <= expected_results())?;

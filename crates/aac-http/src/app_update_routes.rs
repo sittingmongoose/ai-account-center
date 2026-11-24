@@ -291,11 +291,27 @@ mod tests {
             }
         })
         .await?;
-        for (key, principal, body, expected) in [
-            ("wrong", "session", "{}", "401"),
-            (secret.as_str(), "device", "{}", "401"),
-            (secret.as_str(), "session", r#"{"host":"foreign"}"#, "400"),
-            (secret.as_str(), "session", "{}", "202"),
+        for (path, key, principal, body, expected) in [
+            ("start", "wrong", "session", "{}", "401"),
+            ("start", secret.as_str(), "device", "{}", "401"),
+            (
+                "start",
+                secret.as_str(),
+                "session",
+                r#"{"host":"foreign"}"#,
+                "400",
+            ),
+            ("start", secret.as_str(), "session", "{}", "202"),
+            ("retry", "wrong", "session", "{}", "401"),
+            ("retry", secret.as_str(), "device", "{}", "401"),
+            (
+                "retry",
+                secret.as_str(),
+                "session",
+                r#"{"host":"foreign"}"#,
+                "400",
+            ),
+            ("retry", secret.as_str(), "session", "{}", "202"),
         ] {
             let mut client = tokio::net::UnixStream::connect(&socket).await?;
             let role = if principal == "session" {
@@ -305,7 +321,7 @@ mod tests {
             };
             let envelope = json!({"kind": principal, "id": "fixture", "role": role});
             let request = format!(
-                "POST /api/app-updates/start HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {key}\r\nx-aac-principal: {envelope}\r\nContent-Length: {}\r\n\r\n{body}",
+                "POST /api/app-updates/{path} HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {key}\r\nx-aac-principal: {envelope}\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len(),
             );
             client.write_all(request.as_bytes()).await?;

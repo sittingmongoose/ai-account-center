@@ -333,6 +333,7 @@ async fn service_fixture_child() {
     acp_follow_up(&root, &owner).await;
     helper_sync_failure(&root, &owner).await;
     retry_failed_rows(&root, &owner).await;
+    old_agent_after_admission(&root, &owner).await;
 
     // Start a fresh boot with no Mac pin and a pinned Windows binary missing on the host.
     let mut catalog = serde_json::from_slice::<Value>(
@@ -456,6 +457,38 @@ async fn retry_failed_rows(root: &Path, owner: &std::sync::Arc<AppUpdates>) {
     let nothing = owner.retry().await;
     assert_eq!(nothing.status, 409);
     assert_eq!(nothing.body["error"], "There is nothing to retry.");
+}
+
+/// The deployed agent admits prepare-update and only then refuses the scoped key.
+async fn old_agent_after_admission(root: &Path, owner: &std::sync::Arc<AppUpdates>) {
+    fs::write(root.join("fail-apps"), "zcode\nantigravity-cli\n").expect("fail two apps");
+    assert_eq!(owner.start().await.status, 202);
+    until(owner, |job| job["state"] == "failed").await;
+    fs::remove_file(root.join("fail-apps")).expect("let the retry rows be requested");
+    let marker = root.join("old-agent-after-admission-ubuntu");
+    fs::write(&marker, "").expect("select the post-admission refusal");
+    let retry = owner.retry().await;
+    assert_eq!(retry.status, 202, "{}", retry.body);
+    assert_eq!(retry.body["job"]["expectedResults"], 2);
+    let done = until(owner, |job| job["state"] == "failed").await;
+    let rows = done["results"].as_array().expect("retry rows");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["platform"], "ubuntu");
+        assert_eq!(row["status"], "failed");
+        assert_eq!(
+            row["message"],
+            "This computer's AAC agent needs an update before Update apps can run here."
+        );
+        assert_eq!(row["updateAttempted"], false);
+    }
+    assert!(
+        trace(root, "ubuntu")
+            .iter()
+            .any(|row| row["stage"] == "old-agent-after-admission"),
+        "the fixture admitted first, then refused"
+    );
+    fs::remove_file(marker).expect("restore the fixture agent");
 }
 
 /// A refused helper set dispatches nothing on that computer and says why on every row.

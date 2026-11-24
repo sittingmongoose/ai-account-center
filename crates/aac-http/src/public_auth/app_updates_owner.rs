@@ -1,7 +1,7 @@
 //! The app-update job routes on the public listener: status, start, retry and cancel.
 //!
 //! Admission is the retired TypeScript route's, in order: a browser session, the dashboard
-//! origin and JSON content type for the two writes, an empty query and empty JSON object, and
+//! origin and JSON content type for the three writes, an empty query and empty JSON object, and
 //! `no-store` on every answer. The job owner (Lane H) runs beside the front door on Unix and
 //! Windows; the M0 fixture owner replaces it only in a `parity-fixtures` build.
 
@@ -65,7 +65,7 @@ impl Owner {
         }
     }
 
-    /// The three exact routes, including the trailing-slash spelling the TypeScript router
+    /// The four exact routes, including the trailing-slash spelling the TypeScript router
     /// accepts and HEAD over GET for the status read.
     pub(super) fn owns(method: &Method, path: &str) -> bool {
         operation(method, path).is_some()

@@ -86,6 +86,7 @@ export function createFrameDashboard({
   let serverHome = null;
   let updateJob = null;
   let updateStatusPending = false;
+  let retryPending = false;
   let updateCompletionId = null;
   let updateDoneTimer = 0;
   let refreshing = null;
@@ -550,13 +551,19 @@ export function createFrameDashboard({
         renderUpdate(false); return;
       }
       if (action === 'update-retry') {
+        if (retryPending) return;
+        retryPending = true;
+        setBusy(true);
         try {
           const result = await mutation('/api/app-updates/retry', {}); updateJob = result.job;
         } catch (error) {
           const job = error?.payload?.job;
-          if (error?.status !== 409 || !job || typeof job.id !== 'string' || !UPDATE_JOB_ID.test(job.id) || !Number.isFinite(Date.parse(job.startedAt)) || !Array.isArray(job.results)) throw error;
+          const state = job?.state;
+          if (error?.status !== 409 || !job || typeof job.id !== 'string' || !UPDATE_JOB_ID.test(job.id)
+            || typeof state !== 'string' || state.length > 16 || !['running', 'completed', 'failed'].includes(state)
+            || !Number.isFinite(Date.parse(job.startedAt)) || !Array.isArray(job.results) || job.results.length > 84) throw error;
           updateJob = job;
-        }
+        } finally { retryPending = false; setBusy(false); }
         renderUpdate(false); return;
       }
       if (action === 'update-cancel') {

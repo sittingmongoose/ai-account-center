@@ -211,6 +211,14 @@ def main():
             if not grant:
                 return
             assert json.loads(grant) == {"admit": True}, grant
+            if (ROOT / f"old-agent-after-admission-{host}").exists():
+                # The deployed 54f17f2f4 agent accepts admission, then rejects the
+                # fourth "apps" key in apps::update::run.
+                trace(host, "old-agent-after-admission", True)
+                print(json.dumps({"type":"failure","protocol":1,"id":request["id"],
+                                  "failure":{"cause":"refused","reason":None,
+                                             "detail":"invalid app update request","retry":{"kind":"never"},"at":None}}), flush=True)
+                sys.exit(1)
             start = request["args"]["action"] = start.removeprefix("prepare-")
         trace(host, start, True)
         messages(host, request)

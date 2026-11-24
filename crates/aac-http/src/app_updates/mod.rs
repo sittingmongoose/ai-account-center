@@ -429,6 +429,9 @@ fn reply(status: u16, body: Value) -> AppUpdateReply {
 
 struct HostCall {
     admitted: bool,
+    /// This call asked the agent for a scoped subset (`apps`). An older agent
+    /// admits `prepare-update` first and only then refuses the fourth key.
+    scoped: bool,
     terminal: Result<Vec<Event>, aac_core::Failure>,
     until: Instant,
 }
@@ -438,8 +441,21 @@ impl HostCall {
         self.terminal.as_ref().ok()?.last()
     }
 
+    fn refused(&self, detail: &str) -> bool {
+        matches!(
+            self.event(),
+            Some(Event::Failure { failure, .. })
+                if failure.cause == aac_core::Cause::Refused
+                    && failure.detail.as_str() == detail
+        )
+    }
+
     fn setup_message(&self) -> Option<&'static str> {
-        if self.admitted {
+        if self.scoped && self.refused("invalid app update request") {
+            // The deployed agent accepted admission and then rejected the scope:
+            // it predates Retry failed and needs the rebuilt agent.
+            Some("agent_update_required")
+        } else if self.admitted {
             None
         } else if self.terminal.as_ref().is_err_and(|error| {
             matches!(
@@ -448,15 +464,7 @@ impl HostCall {
             )
         }) {
             Some("agent_setup_required")
-        } else if matches!(
-            self.event(),
-            Some(Event::Failure { failure, .. })
-                if failure.cause == aac_core::Cause::Refused
-                    && matches!(
-                        failure.detail.as_str(),
-                        "invalid apps action" | "invalid app update request"
-                    )
-        ) {
+        } else if self.refused("invalid apps action") {
             Some("agent_update_required")
         } else {
             None
@@ -879,6 +887,7 @@ impl AppUpdates {
                 APP_UPDATE_HOST_TIMEOUT_MS
             });
         let until = options.deadline;
+        let scoped = !follow_up && apps.is_some();
         let transport_cancel = options.cancel.clone();
         let mut args = json!({
             "action": if follow_up { "prepare-acp-follow-up" } else { "prepare-update" },
@@ -927,6 +936,7 @@ impl AppUpdates {
         }
         HostCall {
             admitted,
+            scoped,
             terminal,
             until,
         }

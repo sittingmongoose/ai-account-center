@@ -192,6 +192,88 @@ fn effective_and_rollback_journals_keep_their_own_bounds_and_recover() {
 }
 
 #[test]
+fn a_scoped_retry_job_round_trips_through_storage() {
+    let dir = tempfile::tempdir().expect("fixture root");
+    let root = dir.path().join("work");
+    let writer = storage::Writer::claim(&root).expect("job lease");
+    let ubuntu = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    let mut scope = Map::new();
+    scope.insert("ubuntu".into(), json!(["antigravity-cli", "zcode"]));
+    scope.insert("alexis".into(), json!(["zcode"]));
+    let mut job = Job::retry(
+        "01234567-0123-4123-8123-0123456789ab".into(),
+        clock(),
+        scope.clone(),
+    );
+    job.results
+        .push(rows::blank(ubuntu, "zcode", "current", "current"));
+    job.finish();
+    writer.save(&job).expect("save scoped job");
+    drop(writer);
+    let loaded = storage::load(&root).expect("scoped job");
+    assert_eq!(loaded.scope, Some(scope));
+    assert_eq!(loaded.expected_results, Some(3));
+    assert_eq!(loaded.results.len(), 1);
+    let hosts = loaded.hosts.expect("scoped hosts");
+    assert_eq!(hosts.len(), 2);
+    assert!(hosts.contains_key("alexis"));
+}
+
+#[test]
+fn the_legacy_view_drops_non_legacy_scopes() {
+    let dir = tempfile::tempdir().expect("fixture root");
+    let root = dir.path().join("work");
+    let writer = storage::Writer::claim(&root).expect("job lease");
+    let mut scope = Map::new();
+    for host in ["alexis", "odroid", "1070ti"] {
+        scope.insert(host.into(), json!(["zcode"]));
+    }
+    let job = Job::retry(
+        "01234567-0123-4123-8123-0123456789ab".into(),
+        clock(),
+        scope,
+    );
+    writer.save(&job).expect("save scoped job");
+    drop(writer);
+    let legacy: Value = serde_json::from_slice(
+        &aac_files::read_bounded(&root.join("dashboard-job.json"), 65_536).expect("legacy bytes"),
+    )
+    .expect("legacy JSON");
+    assert!(legacy["job"].get("scope").is_none());
+    assert_eq!(legacy["job"]["expectedResults"], 0);
+    assert_eq!(legacy["job"]["hosts"], json!({}));
+    std::fs::remove_file(root.join("dashboard-job-expanded.json")).expect("drop expanded job");
+    let loaded = storage::load(&root).expect("legacy retry");
+    assert!(loaded.results.is_empty());
+    assert_eq!(loaded.hosts.as_ref().map_or(0, |hosts| hosts.len()), 0);
+    assert!(loaded.scope.as_ref().is_some_and(|scope| scope.is_empty()));
+}
+
+#[test]
+fn a_crashed_retry_job_recovers_its_missing_scoped_rows() {
+    let dir = tempfile::tempdir().expect("fixture root");
+    let root = dir.path().join("work");
+    let writer = storage::Writer::claim(&root).expect("job lease");
+    let mut scope = Map::new();
+    scope.insert("ubuntu".into(), json!(["antigravity-cli", "zcode"]));
+    let job = Job::retry(
+        "01234567-0123-4123-8123-0123456789ab".into(),
+        clock(),
+        scope,
+    );
+    writer.save(&job).expect("save running retry");
+    drop(writer);
+    let loaded = storage::load(&root).expect("orphaned retry");
+    assert_eq!(loaded.state, "failed");
+    assert_eq!(loaded.results.len(), 2);
+    for row in &loaded.results {
+        assert_eq!(row["status"], "unknown");
+    }
+    let scope = retry_scope(&loaded).expect("the missing rows are retryable");
+    assert_eq!(scope["ubuntu"], json!(["antigravity-cli", "zcode"]));
+}
+
+#[test]
 fn older_agents_that_refuse_acp_follow_up_are_reported_as_needing_an_update() {
     let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
     let mut job = Job::new("acp-follow-up-fixture".into(), clock());
@@ -203,6 +285,7 @@ fn older_agents_that_refuse_acp_follow_up_are_reported_as_needing_an_update() {
     ));
     let call = HostCall {
         admitted: false,
+        scoped: false,
         terminal: Ok(vec![Event::Failure {
             protocol: 1,
             id: job.id.clone(),
@@ -216,6 +299,41 @@ fn older_agents_that_refuse_acp_follow_up_are_reported_as_needing_an_update() {
         job.results[0],
         rows::blank(host, ACP, "failed", "agent_update_required")
     );
+}
+
+#[test]
+fn an_old_agent_that_admits_then_refuses_the_scope_needs_an_update() {
+    let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    let mut scope = Map::new();
+    scope.insert("ubuntu".into(), json!(["zcode"]));
+    let mut job = Job::retry("retry-fixture-1".into(), clock(), scope);
+    let refusal = |id: &str| Event::Failure {
+        protocol: 1,
+        id: id.to_owned(),
+        failure: aac_core::Failure::new(aac_core::Cause::Refused, "invalid app update request"),
+    };
+    // The real 54f17f2f4 agent admits prepare-update first, then refuses the
+    // fourth key, so admitted is true by the time the failure arrives.
+    let call = HostCall {
+        admitted: true,
+        scoped: true,
+        terminal: Ok(vec![refusal(&job.id)]),
+        until: Instant::now() + Duration::from_secs(30),
+    };
+    assert_eq!(call.setup_message(), Some("agent_update_required"));
+    job.fill(host, "failed", call.setup_message().expect("setup message"));
+    assert_eq!(
+        job.results[0],
+        rows::blank(host, "zcode", "failed", "agent_update_required")
+    );
+    // A post-admission follow-up refusal is not evidence of an old update agent.
+    let follow_up = HostCall {
+        admitted: true,
+        scoped: false,
+        terminal: Ok(vec![refusal("follow-up")]),
+        until: Instant::now() + Duration::from_secs(30),
+    };
+    assert_eq!(follow_up.setup_message(), None);
 }
 
 #[test]
