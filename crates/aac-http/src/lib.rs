@@ -1,10 +1,6 @@
 //! Private service HTTP core and opt-in M6 dashboard front door.
 //! The collection, settings and account-read owners build on every platform the dashboard does;
 //! the private Unix protocol and the services it alone serves stay on Unix.
-/// Test binaries use the shipped binaries' allocator so RSS measurements match them.
-#[cfg(test)]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod account_approvals;
 mod account_reads;
