@@ -589,6 +589,20 @@ export const tests = {
       const carried = data.pinned.updates.find((u) => u.id === 'pin-carried');
       carried.reported.writer = 'vm.lanes';
       carried.displayState = 'needsYou';
+      // A clock time on a later day: the server says "<weekday> 9:30 AM", wider than the phone's 58 px time column.
+      const tomorrow930 = (estDay(now) + 1) * 86_400_000 + (5 + 9.5) * 3600_000;
+      const clockWords = `${new Date(tomorrow930).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'Etc/GMT+5' })} 9:30 AM`;
+      data.pinned.updates.push({
+        ...split,
+        id: 'pin-clock',
+        title: 'Real clock thread',
+        looping: { answer: 'no', text: 'No.' },
+        board: null,
+        left: [],
+        done: [],
+        reported: { state: 'working', writer: 'vm.real-clock', next: 'Real clock step', nextBy: new Date(tomorrow930).toISOString(), nextByDay: null },
+        nextTime: { text: clockWords, late: false },
+      });
       // A late next step: the server's words are "late, was due <time>".
       carried.reported.next = 'The lanes decision is filed';
       carried.reported.nextBy = at(-3 * 3600);
@@ -603,7 +617,16 @@ export const tests = {
       await t.check(`${format.name}: Coming up names the thread`, (await chip.textContent()).includes('Background build'));
       await t.check(`${format.name}: Coming up gives the time`, /^\d{1,2}(:\d\d)? (AM|PM)$/.test((await chip.locator('b').textContent()).trim()), await chip.locator('b').textContent());
       await t.check(`${format.name}: Coming up counts the threads with no time`, /^\d+ threads? gives? no time$/.test((await t.page.locator('.c2-cu-rest').textContent()).trim()), await t.page.locator('.c2-cu-rest').textContent());
-      await t.count('.c2-cu', 3, `${format.name}: only the steps with a time are placed`);
+      await t.count('.c2-cu', 4, `${format.name}: only the steps with a time are placed`);
+      await t.equal(`${format.name}: a later day's clock says the server's words`, (await t.page.locator('.c2-cu', { hasText: 'Real clock step' }).locator('b').textContent()).trim(), clockWords);
+      if (format.mobile) {
+        // Each step starts clear of its time, however wide the time (review M2: "Thu 9:30 AMReal clock step").
+        const gaps = await t.page.$$eval('.c2-cu', (cs) => cs.map((c) => ({
+          time: c.querySelector('b').textContent.trim(),
+          gap: Math.round(c.querySelector('.c2-cu-next').getBoundingClientRect().left - c.querySelector('b').getBoundingClientRect().right),
+        })));
+        await t.check(`${format.name}: every Coming up step starts at least 8 px after its time`, gaps.every((g) => g.gap >= 8), JSON.stringify(gaps));
+      }
       // A day-only step says the server's words under its day, never an end-of-day clock time (review H1).
       const dayOnly = t.page.locator('.c2-cu', { hasText: 'Settings managers land on main' });
       await t.equal(`${format.name}: a day-only step says its day`, (await dayOnly.locator('b').textContent()).trim(), `by ${weekday}`);

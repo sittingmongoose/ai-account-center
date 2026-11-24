@@ -3046,7 +3046,8 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   /* One time column per day, as wide as its widest time (subgrid), so a time never breaks inside its words. */
   .c2-cu-list { display: grid; grid-template-columns: minmax(58px, max-content) minmax(0, 1fr); column-gap: 10px; }
   .c2-cu-list > li { display: contents; }
-  .c2-cu { width: auto; grid-column: 1 / -1; grid-template-columns: subgrid; row-gap: 0; border-top: 1px solid var(--rule-2); padding: 6px 0; }
+  /* A subgrid keeps its own gap, so the 10 px between time and step is set here too (review M2). */
+  .c2-cu { width: auto; grid-column: 1 / -1; grid-template-columns: subgrid; gap: 0 10px; border-top: 1px solid var(--rule-2); padding: 6px 0; }
   .c2-cu b { grid-row: span 2; font-size: 13px; line-height: 1.3; }
   .c2-cu b .nw { white-space: nowrap; }
   .c2-cu b .c2-cu-late { display: block; }
