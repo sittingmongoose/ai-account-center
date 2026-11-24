@@ -14,7 +14,6 @@
 //! headers and lengths.
 
 use super::{DashboardAccess, DashboardPrincipal, Reply, owner_host::ServiceReply, set_header};
-use crate::scoreboard_owned::ScoreboardOwned;
 use aac_views::decline::Decline;
 use axum::{
     body::{Body, to_bytes},
@@ -31,10 +30,6 @@ pub(super) struct Routes {
     host: std::sync::Arc<super::owner_host::OwnerHost>,
     cut: bool,
     legacy_switch: bool,
-    /// The Scoreboard snapshot this door last read from the service's inputs: (runs
-    /// generation, catalog hash, catalog scan stamp). The owner answers `stale` when it
-    /// moves, and only then is the inputs body fetched again.
-    scoreboard_snapshot: std::sync::Mutex<Option<(u64, String, String)>>,
 }
 
 impl Routes {
@@ -47,7 +42,6 @@ impl Routes {
             host,
             cut,
             legacy_switch,
-            scoreboard_snapshot: std::sync::Mutex::new(None),
         }
     }
 
@@ -701,8 +695,6 @@ async fn status(
     decline_because("status")
 }
 
-/// The service principal internal routes admit (`VerifiedPrincipal::valid`).
-const SERVICE: &str = r#"{"kind":"session","id":"front-door","role":"service"}"#;
 struct ScoreboardQuery {
     from: Option<String>,
     to: Option<String>,
@@ -782,95 +774,6 @@ fn scoreboard_query(raw: Option<&str>) -> Result<ScoreboardQuery, (&'static str,
     })
 }
 
-/// The facts generation id for one read snapshot: its runs generation, its catalog hash
-/// and its catalog scan stamp (see `Routes::scoreboard_snapshot`).
-fn scoreboard_facts_id(generation: u64, catalog_hash: &str, catalog_scanned_at: &str) -> String {
-    let short: String = catalog_hash.chars().take(12).collect();
-    format!("{generation}:{short}:{catalog_scanned_at}")
-}
-
-/// The Scoreboard snapshot the answer names: (runs generation, catalog hash, facts
-/// generation id). The service keeps the facts itself (computed over its held snapshot,
-/// in the request's zone): this door no longer fetches the whole run set to compute and
-/// push them per request. It reads only the snapshot's identity from the inputs — cached
-/// until the owner answers `stale` (`refresh`) — and names the deterministic facts id for
-/// it. `None` declines to the route's 503; every step that can fail logs its reason.
-async fn scoreboard_facts(
-    routes: &Routes,
-    local: Option<&ScoreboardOwned>,
-    refresh: bool,
-) -> Option<(u64, String, String)> {
-    if !refresh
-        && let Some((generation, catalog_hash, scanned_at)) = routes
-            .scoreboard_snapshot
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-    {
-        let facts_id = scoreboard_facts_id(generation, &catalog_hash, &scanned_at);
-        return Some((generation, catalog_hash, facts_id));
-    }
-    let input = if let Some(owner) = local {
-        match owner.inputs().await {
-            Ok(input) => input,
-            Err(reason) => {
-                eprintln!("aac-http: scoreboard inputs declined ({})", reason.as_str());
-                return None;
-            }
-        }
-    } else {
-        match routes
-            .request("GET", "/internal/scoreboard/inputs", SERVICE, &[], None)
-            .await
-        {
-            Some(reply) if reply.status == 200 => match json_of(&reply) {
-                Some(input) => input,
-                None => {
-                    eprintln!("aac-http: scoreboard inputs reply is not JSON");
-                    return None;
-                }
-            },
-            Some(reply) => {
-                eprintln!(
-                    "aac-http: scoreboard inputs answered {} (decline {})",
-                    reply.status,
-                    decline_reason(&reply).unwrap_or("none")
-                );
-                return None;
-            }
-            None => {
-                eprintln!("aac-http: scoreboard inputs got no reply from the service");
-                return None;
-            }
-        }
-    };
-    let Some(generation) = input.get("generation").and_then(Json::as_u64) else {
-        eprintln!("aac-http: scoreboard inputs carry no generation");
-        return None;
-    };
-    let Some(catalog_hash) = input
-        .get("catalogHash")
-        .and_then(Json::as_str)
-        .map(str::to_owned)
-    else {
-        eprintln!("aac-http: scoreboard inputs carry no catalog hash");
-        return None;
-    };
-    let scanned_at = input
-        .get("catalog")
-        .and_then(|catalog| catalog.get("scannedAt"))
-        .and_then(Json::as_u64)
-        .map(|at| at.to_string())
-        .unwrap_or_else(|| "0".to_string());
-    *routes
-        .scoreboard_snapshot
-        .lock()
-        .unwrap_or_else(|p| p.into_inner()) =
-        Some((generation, catalog_hash.clone(), scanned_at.clone()));
-    let facts_id = scoreboard_facts_id(generation, &catalog_hash, &scanned_at);
-    Some((generation, catalog_hash, facts_id))
-}
-
 /// `GET /api/scoreboard`: the filters, the snapshot the service holds (its facts stay in
 /// the service), and the owned answer (bytes, ETag, view).
 async fn scoreboard(
@@ -922,41 +825,27 @@ async fn scoreboard(
         }
         None => Json::Null,
     };
-    // The service may ingest or rescan between the snapshot read and the answer; its
-    // `stale` decline means read the snapshot identity again (the service keeps the facts;
-    // the cached identity is refetched only then). `busy` and `deadline` mean a compose is
-    // still running and filling the owner's view cache. A cold boot's first seed, or a
-    // store that is off or lock-held while the share scan starts, can take a moment: retry
-    // briefly, then answer honestly.
-    let mut refresh_snapshot = false;
+    // The feed names no snapshot: the service answers for the snapshot it holds and keeps
+    // its facts there, so the inputs body (the whole run set, past the service link's
+    // reply cap at real size) never crosses to this door. `stale` means the snapshot
+    // moved under the compose (retry reads the new one); `busy` and `deadline` mean a
+    // compose is still running and filling the owner's view cache. A cold boot's first
+    // seed, or a store that is off or lock-held while the share scan starts, can take a
+    // moment: retry briefly, then answer honestly.
+    let feed = json!({
+        "now": now,
+        "clock": clock,
+        "day": day,
+        "timeZone": time_zone,
+        "from": query.from,
+        "to": query.to,
+        "source": query.source,
+        "taskType": query.task_type,
+        "fromMs": from_ms,
+        "toMs": to_ms,
+    })
+    .to_string();
     for attempt in 0..6 {
-        let Some((generation, catalog_hash, held)) =
-            scoreboard_facts(routes, local.as_deref(), refresh_snapshot).await
-        else {
-            if attempt < 5 {
-                refresh_snapshot = true;
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                continue;
-            }
-            return decline_because("facts");
-        };
-        refresh_snapshot = false;
-        let feed = json!({
-            "now": now,
-            "clock": clock.clone(),
-            "day": day.clone(),
-            "timeZone": time_zone.clone(),
-            "from": query.from.clone(),
-            "to": query.to.clone(),
-            "source": query.source.clone(),
-            "taskType": query.task_type.clone(),
-            "fromMs": from_ms.clone(),
-            "toMs": to_ms.clone(),
-            "generation": generation,
-            "catalogHash": catalog_hash,
-            "facts": held,
-        })
-        .to_string();
         let reason = if let Some(owner) = local.as_deref() {
             match owner.answer(&feed).await {
                 Ok((bytes, etag)) => {
@@ -995,15 +884,11 @@ async fn scoreboard(
             }
         };
         match reason {
-            Some(Decline::Stale) if attempt < 5 => {
-                refresh_snapshot = true;
+            Some(Decline::Stale | Decline::Busy | Decline::Deadline) if attempt < 5 => {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
-            Some(Decline::Busy | Decline::Deadline) if attempt < 5 => {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-            Some(Decline::Stale | Decline::Busy | Decline::Deadline) => {
-                return decline_because("answer");
+            Some(retryable @ (Decline::Stale | Decline::Busy | Decline::Deadline)) => {
+                return decline_because(retryable.as_str());
             }
             Some(Decline::Unsupported) => return decline_because("unsupported"),
             Some(Decline::Shape) => return decline_because("shape"),
