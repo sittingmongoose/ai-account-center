@@ -261,7 +261,11 @@ describe('route table (L1)', () => {
         'collection-cache': 450,
         'agent-control': 2500,
         'status-inputs': 5000,
-        'scoreboard-inputs': 5000,
+        // The Scoreboard's cold compose and cold inputs build over a real-size run set
+        // (8,915 runs) take seconds, not 400 ms (deadline declines, live 503); the warm
+        // paths answer from held snapshots well inside the budget, under the 10 s link deadline.
+        scoreboard: 8000,
+        'scoreboard-inputs': 8000,
         // Monday hotfix: the native Analytics read and the Store status read on a real-size
         // store take longer than 400 ms (deadline declines); budgets stay under the 10 s link deadline.
         analytics: 8000,
