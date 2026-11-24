@@ -177,6 +177,10 @@ jobs:
           name: dist
           path: dist/
 
+      # upload/download-artifact drop the executable bit; restore it on the shipped binaries.
+      - name: Restore executable bits on native binaries
+        run: find dist/native dist/agent -type f ! -name '*.node' ! -name '*.json' ! -name '*.md' ! -name '*.txt' -exec chmod +x {} + 2>/dev/null || true
+
       - name: Test
         run: bun run test:all
 

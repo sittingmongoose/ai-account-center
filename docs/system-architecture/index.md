@@ -73,7 +73,7 @@ requests and route explicit user actions; they do not collect credentials or ren
 second UI framework.
 
 [Account service](../../src/web-server/services/account-dashboard-service.ts)
-consolidates existing account sources. [Analytics](../../src/web-server/services/account-analytics-service.ts)
+consolidates existing account sources. [Analytics](../../crates/aac-http/src/analytics_route.rs)
 owns authentic history and source activity; helper models preserve unknown,
 zero, signed balances, overages, units, resets and separate expiration. Quota
 snapshots are not additive token totals.
@@ -156,7 +156,7 @@ writer overlapped is dropped and done again on the next scan.
 [Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts) and
 [saved-login renewal](../../src/codex-auth/codex-profile-renewal.ts). Account switching (activation and
 auto-switch) was removed on 2026-11-14.
-[App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
+[App updates](../../crates/aac-http/src/app_updates/mod.rs) are allowlisted
 jobs triggered explicitly, never from startup or routine polling. One job covers
 the seven computers above (84 result rows: seven computers x twelve apps); each
 computer updates its own apps while the others run in parallel.
@@ -223,7 +223,7 @@ A Claude Open whose profile has a verified [history policy](../claude-history-sy
 is tracked as an operation, and the profile list reports its progress as
 `openOperation` (counts and fixed sentences only). A request that sends
 `Prefer: respond-async` gets 202 at once and polls; any other request waits and
-gets the old 200 or refusal. [Operations](../../src/web-server/services/claude-open-operations.ts)
+gets the old 200 or refusal. [Operations](../../crates/aac-http/src/claude_open/operations.rs)
 live in memory, so a restart never resumes one, and a repeated click joins the
 running one. One Open copies for a bounded time (45 s or 50 records), then opens
 Claude with `confirmedCount` below `totalCount`; the next Open copies the rest.

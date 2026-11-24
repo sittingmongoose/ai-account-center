@@ -750,6 +750,10 @@
           "loc": 1337
         },
         {
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 1235
+        },
+        {
           "file": "src/antigravity/registry.ts",
           "loc": 1206
         },
@@ -758,12 +762,12 @@
           "loc": 1203
         },
         {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1186
-        },
-        {
           "file": "src/web-server/rust-service-transport.ts",
           "loc": 1124
+        },
+        {
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 1048
         },
         {
           "file": "src/web-server/rust-service.ts",
@@ -774,8 +778,8 @@
           "loc": 1023
         },
         {
-          "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 991
+          "file": "src/web-server/services/additional-account-service.ts",
+          "loc": 930
         },
         {
           "file": "src/web-server/status/status-view.ts",
@@ -784,10 +788,6 @@
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
           "loc": 815
-        },
-        {
-          "file": "src/web-server/usage/codex-quota/quota-fetcher-codex.ts",
-          "loc": 798
         }
       ]
     }

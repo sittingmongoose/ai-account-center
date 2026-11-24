@@ -160,6 +160,13 @@ jobs:
           name: dist
           path: dist/
 
+      # upload/download-artifact drop the executable bit, so the native launcher the tests spawn
+      # fails with EACCES (every Push CI run since the Rust cut). Restore it on the shipped binaries.
+      - name: Restore executable bits on native binaries
+        run: |
+          find dist/native dist/agent -type f ! -name '*.node' ! -name '*.json' ! -name '*.md' ! -name '*.txt' -exec chmod +x {} + 2>/dev/null || true
+          ls -l dist/native | head -20
+
       - name: Test fast bucket with perf budget
         shell: bash
         run: |

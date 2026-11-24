@@ -12,7 +12,7 @@ the account and private-state contracts from the original CCS fork.
 | Account projection | [native producer](../crates/aac-http/src/account_usage/producer.rs), [compatibility collection](../src/web-server/services/account-dashboard-service.ts) |
 | Codex saved logins | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [renewal](../src/codex-auth/codex-profile-renewal.ts), [quota reader](../src/web-server/usage/codex-quota/quota-fetcher-codex.ts) |
 | Analytics | [native routes](../crates/aac-http/src/public_auth/analytics_routes.rs), [native writers](../crates/aac-http/src/analytics_writers.rs) |
-| Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
+| Explicit app updates | [app-update service](../crates/aac-http/src/app_updates/mod.rs), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
 | Leptos app frame | [lib.rs](../web-dashboard/leptos/src/lib.rs), [frame.rs](../web-dashboard/leptos/src/frame.rs) and the pages beside them; map of pages, controllers, view models and rules: [UI architecture](../web-dashboard/README-ARCHITECTURE.md) |
 | Browser controllers | [frame-dashboard.mjs](../web-dashboard/public/frame-dashboard.mjs), [frame-session.mjs](../web-dashboard/public/frame-session.mjs), [frame-analytics.mjs](../web-dashboard/public/frame-analytics.mjs) |
 | Native clients | [macos-bar](../macos-bar/), [windows-bar](../windows-bar/) |

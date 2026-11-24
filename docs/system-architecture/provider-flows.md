@@ -13,7 +13,7 @@ and [usage transport](../../src/web-server/services/additional-usage-transport.t
 | Additional desktop/plan usage | [Python collectors](../../scripts/account-usage/) |
 | OpenCode/Muse browser session bridge | [bridge source](../../browser-bridge/opencode-muse/) |
 | Qwen browser/native host bridge | [bridge source](../../browser-bridge/qwen/) |
-| Historical observations | [Analytics service](../../src/web-server/services/account-analytics-service.ts) |
+| Historical observations | [Analytics service](../../crates/aac-http/src/analytics_route.rs) |
 
 Credentials, browser sessions and private capsules stay on their configured
 owner host. Existing approved SSH aliases are transport configuration, not an

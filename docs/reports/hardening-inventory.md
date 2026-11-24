@@ -86,14 +86,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/status/answers.ts` | 2069 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1791 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
+| `src/web-server/services/usage-failover-service.ts` | 1235 |
 | `src/antigravity/registry.ts` | 1206 |
 | `src/web-server/status/status-collectors.ts` | 1203 |
-| `src/web-server/services/usage-failover-service.ts` | 1186 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
+| `src/web-server/services/account-dashboard-service.ts` | 1048 |
 | `src/web-server/rust-service.ts` | 1035 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
-| `src/web-server/services/account-dashboard-service.ts` | 991 |
+| `src/web-server/services/additional-account-service.ts` | 930 |
 | `src/web-server/status/status-view.ts` | 903 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
-| `src/web-server/usage/codex-quota/quota-fetcher-codex.ts` | 798 |
 
