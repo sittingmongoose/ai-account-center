@@ -4,9 +4,8 @@
 //! `runsRecord` request and the same pass problems as the TS ingest (`RunsStore.pass`) from the
 //! same `runsScan` output, for every pass in `tests/spec/runs-ingest-vectors.json` (made by the
 //! real TS ingest over fixture runs and the real store module).
-use crate::scoreboard_owned::ingest_request;
+use crate::scoreboard_owned::{SafePaths, ingest_request};
 use serde_json::Value as Json;
-use std::collections::HashMap;
 
 #[test]
 fn the_rust_ingest_builds_the_ts_record_request_for_every_pass() {
@@ -17,7 +16,7 @@ fn the_rust_ingest_builds_the_ts_record_request_for_every_pass() {
     let passes = vectors["passes"].as_array().expect("passes");
     assert!(passes.len() >= 3);
     // One owner across the passes, as the service keeps its remembered safe paths.
-    let mut safe_paths = HashMap::new();
+    let mut safe_paths = SafePaths::new();
     let mut refusals = 0;
     for pass in passes {
         let name = pass["name"].as_str().unwrap_or_default();

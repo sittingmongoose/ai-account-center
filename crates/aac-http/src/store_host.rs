@@ -183,10 +183,17 @@ struct State {
 
 /// One queued store call: the method contract plus the channel that carries its answer back
 /// to the async handler. The reply is dropped (the caller hung up) without disturbing the run.
-struct StoreCall {
-    method: String,
-    args: String,
-    reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+enum StoreCall {
+    Json {
+        method: String,
+        args: String,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+    /// The Scoreboard's typed snapshot read: the store's resident resolved history,
+    /// shared by `Arc` instead of serialized through `runsQuery` text.
+    RunsHistory {
+        reply: tokio::sync::oneshot::Sender<Result<Arc<aac_store::runs::ResolvedHistory>, String>>,
+    },
 }
 
 /// The hosted store: one Engine slot behind the NAPI method contract, plus its jobs. Calls run
@@ -251,8 +258,20 @@ impl StoreHost {
                             }
                         };
                         let Some(host) = weak.upgrade() else { return };
-                        let result = host.call_blocking(&call.method, &call.args);
-                        let _ = call.reply.send(result);
+                        match call {
+                            StoreCall::Json {
+                                method,
+                                args,
+                                reply,
+                            } => {
+                                let result = host.call_blocking(&method, &args);
+                                let _ = reply.send(result);
+                            }
+                            StoreCall::RunsHistory { reply } => {
+                                let result = host.runs_history_blocking();
+                                let _ = reply.send(result);
+                            }
+                        }
                     }
                 });
             if spawned.is_err() {
@@ -327,7 +346,7 @@ impl StoreHost {
     pub(crate) async fn call(&self, method: String, args: String) -> Result<String, String> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         self.sender
-            .send(StoreCall {
+            .send(StoreCall::Json {
                 method,
                 args,
                 reply,
@@ -336,6 +355,32 @@ impl StoreHost {
         answer
             .await
             .map_err(|_| "service_down: the store host is stopping".to_string())?
+    }
+
+    /// The store's resident resolved run history, shared by `Arc` with the Scoreboard
+    /// owner: queued on the store pool like a method call, but the answer never becomes
+    /// `runsQuery` text for the owner to re-parse into a second resident copy.
+    pub(crate) async fn runs_history(
+        &self,
+    ) -> Result<Arc<aac_store::runs::ResolvedHistory>, String> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(StoreCall::RunsHistory { reply })
+            .map_err(|_| "service_down: the store host is stopping".to_string())?;
+        answer
+            .await
+            .map_err(|_| "service_down: the store host is stopping".to_string())?
+    }
+
+    fn runs_history_blocking(&self) -> Result<Arc<aac_store::runs::ResolvedHistory>, String> {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.wait_ready();
+            let engine = self
+                .engine()
+                .ok_or_else(|| "service_down: the store host is closed".to_string())?;
+            aac_store::runs::resolved_history_snapshot(&engine).map_err(|e| e.to_string())
+        }));
+        outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }
 
     fn record_dashboard(&self, args: &str) -> Result<String, String> {

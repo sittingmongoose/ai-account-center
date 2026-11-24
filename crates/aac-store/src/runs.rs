@@ -1955,14 +1955,57 @@ fn hide_cursors(page: &mut Json) {
         }
     }
 }
-/// One immutable resolved history, keyed by the same database snapshot's run generation and catalog.
-struct ResolvedHistory {
+/// One immutable resolved history, keyed by the same database snapshot's run generation and
+/// catalog. The HTTP owner's Scoreboard holds this same `Arc` instead of re-parsing a second
+/// resident copy out of `runsQuery` text (service-memory plan item 3).
+pub struct ResolvedHistory {
     key: (u64, Option<Vec<u8>>),
     rows: Vec<Json>,
     cursors: Vec<(u64, u32)>,
     problems: Vec<Json>,
     skipped: usize,
     accepted: Vec<Json>,
+}
+
+impl ResolvedHistory {
+    /// The runs ledger generation this snapshot was resolved at.
+    pub fn generation(&self) -> u64 {
+        self.key.0
+    }
+
+    /// The catalog hash this snapshot was resolved under, as `runsQuery` pages name it.
+    pub fn catalog_hash(&self) -> Option<String> {
+        self.key
+            .1
+            .as_ref()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+    }
+
+    /// The effective rows (corrections resolved), each with its `_cursor`.
+    pub fn rows(&self) -> &[Json] {
+        &self.rows
+    }
+
+    /// Each row's `[endedMs, r]` cursor, aligned with `rows`.
+    pub fn cursors(&self) -> &[(u64, u32)] {
+        &self.cursors
+    }
+
+    /// The correction refusals, as the first `runsQuery` page carries them.
+    pub fn problems(&self) -> &[Json] {
+        &self.problems
+    }
+
+    /// The accepted revisions (readers-check receipts), without cursors.
+    pub fn accepted(&self) -> &[Json] {
+        &self.accepted
+    }
+}
+
+/// The engine's resident resolved-history snapshot: built once per generation and the
+/// same `Arc` on every call until the runs ledger or catalog moves.
+pub fn resolved_history_snapshot(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> {
+    resolved_history(engine)
 }
 
 /// Per-engine cache: no cross-store sharing, and at most one resident generation.
