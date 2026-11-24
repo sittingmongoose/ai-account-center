@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
+const releaseProfile = require('./release-profile');
 const CRATE = path.join(ROOT, 'crates', 'aac-status');
 const PREBUILT = path.join(CRATE, 'prebuilt');
 const DIST = path.join(ROOT, 'dist', 'native');
@@ -154,7 +155,7 @@ function build() {
   const result = spawnSync('cargo', ['build', '-p', 'aac-status', '--release', '--locked'], {
     cwd: CRATE,
     stdio: 'inherit',
-    env: { ...process.env, CARGO_TARGET_DIR: target },
+    env: { ...process.env, ...releaseProfile, CARGO_TARGET_DIR: target },
   });
   if (result.status !== 0) process.exit(result.status || 1);
   const artifact = path.join(target, 'release', cdylibName());

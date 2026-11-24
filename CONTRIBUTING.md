@@ -103,6 +103,15 @@ dashboard's node tests, the source and shell fingerprints and the packaged WASM.
 TypeScript and bundles the Codex update runtime into `dist/app-updates/`; it does
 not refresh dashboard assets.
 
+The shipped native binaries build with the release profile in
+`scripts/release-profile.js` (thin LTO, 16 codegen units), applied as
+`CARGO_PROFILE_RELEASE_*` overrides by the native build scripts. The root
+`Cargo.toml` keeps its pinned profile: `scripts/build-agent.js` hashes that file
+into the agent source fingerprint, so a profile edit there breaks the approved
+agent pins. `build-dashboard-native.js` builds the `aac-http` service and one
+`ccs` CLI binary; every compatibility name (`ai-account-center`, the retired
+bins) is staged from `ccs`, whose `cli::run` dispatches on `argv[0]`.
+
 For documentation:
 
 ```bash
