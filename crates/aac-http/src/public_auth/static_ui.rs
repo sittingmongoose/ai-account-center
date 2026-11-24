@@ -164,6 +164,10 @@ impl StaticUi {
 
     fn variant(&self, variant: &Variant) -> Option<Asset> {
         let asset = self.read(&variant.file, variant.bytes as u64).ok()?;
+        if self.root.is_none() {
+            // Static `EMBEDDED_UI` slices were verified against manifest SHA-256 at startup.
+            return (asset.bytes.len() == variant.bytes).then_some(asset);
+        }
         (asset.bytes.len() == variant.bytes && hex(&Sha256::digest(&asset.bytes)) == variant.sha256)
             .then_some(asset)
     }

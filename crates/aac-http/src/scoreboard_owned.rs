@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 /// A read within this long of the last view gets that view (the TS service's cache time).
 const CACHE_MS: u64 = 60_000;
 /// Filtered views kept at once.
-const CACHE_ENTRIES: usize = 16;
+const CACHE_ENTRIES: usize = 4;
 /// A pass every two minutes; again within a second while a backfill has more.
 pub(crate) const PASS_MS: u64 = 120_000;
 pub(crate) const MORE_MS: u64 = 1_000;
@@ -188,21 +188,29 @@ impl RunEntry {
         )
     }
 
-    /// The entry for one row of the store's resident resolved history: typed fields
-    /// only — the doc stays in the shared snapshot, parsed back transiently on demand.
+    /// The entry for one row of the store's resident resolved history: typed fields copied
+    /// directly from CompactRun — the doc stays compact UTF-8 JSON bytes, parsed on demand.
     fn from_store_row(history: &Arc<aac_store::runs::ResolvedHistory>, index: usize) -> Self {
-        let row = &history.rows()[index];
-        Self::from_parts(
-            history.cursors()[index].0,
-            row["file"].as_str().unwrap_or_default().to_string(),
-            row["firstSeenAt"].as_u64().unwrap_or(0),
-            row["sha256"].as_str().unwrap_or_default().to_string(),
-            &row["doc"],
-            DocSource::Store {
+        let row = &history.compact_rows()[index];
+        Self {
+            at: row.cursor.0,
+            file: row.file.to_string(),
+            first_seen_at: row.first_seen_at,
+            sha256: row.sha256.to_string(),
+            doc_source: DocSource::Store {
                 history: Arc::clone(history),
                 index,
             },
-        )
+            id: row.id.to_string(),
+            writer: row.writer.to_string(),
+            source: row.source.as_deref().map(str::to_string),
+            task_type: row.task_type.as_deref().map(str::to_string),
+            has_review: row.has_review,
+            seq: row.seq,
+            written_at: row.written_at.to_string(),
+            corrects: row.corrects.as_deref().map(str::to_string),
+            has_void: row.has_void,
+        }
     }
 
     fn from_parts(
@@ -247,7 +255,7 @@ impl RunEntry {
     fn doc(&self) -> Json {
         match &self.doc_source {
             DocSource::Text(text) => serde_json::from_str(text).unwrap_or(Json::Null),
-            DocSource::Store { history, index } => history.rows()[*index]["doc"].clone(),
+            DocSource::Store { history, index } => history.compact_rows()[*index].doc(),
         }
     }
 
@@ -390,13 +398,46 @@ impl HeldRuns {
         self
     }
 
-    /// The accepted revisions (readers-check receipts), from the store snapshot when
-    /// this snapshot came from it, else the ones carried in.
-    fn accepted_slice(&self) -> Option<&[Json]> {
+    fn has_accepted_receipts(&self) -> bool {
+        self.store_history.is_some() || self.accepted.is_some()
+    }
+
+    fn build_accepted_run_rows(&self) -> Vec<RunRow> {
         if let Some(history) = &self.store_history {
-            Some(history.accepted())
+            history
+                .accepted_receipts()
+                .iter()
+                .map(|r| RunRow {
+                    file: r.file.to_string(),
+                    seq: r.seq,
+                    sha256: r.sha256.to_string(),
+                    first_seen_at: r.first_seen_at,
+                })
+                .collect()
         } else {
-            self.accepted.as_deref()
+            check_rows(self.accepted.as_deref().unwrap_or(&[]))
+        }
+    }
+
+    /// Accepted receipts as JSON (only materialized if legacy `state_rows(..., receipts=true)` asks).
+    fn accepted_json(&self) -> Option<Vec<Json>> {
+        if let Some(history) = &self.store_history {
+            Some(
+                history
+                    .accepted_receipts()
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "file": &*r.file,
+                            "sha256": &*r.sha256,
+                            "firstSeenAt": r.first_seen_at,
+                            "doc": { "id": &*r.id, "seq": r.seq },
+                        })
+                    })
+                    .collect(),
+            )
+        } else {
+            self.accepted.clone()
         }
     }
 
@@ -495,18 +536,45 @@ struct CachedView {
     /// The held-snapshot sequence this view was composed from: a newer snapshot makes
     /// the view stale however young it is.
     seq: u64,
-    view: Json,
+    /// Pre-serialized view bytes (with `"cacheAgeSeconds":0`), shared by `Arc` between
+    /// `views` and `last_good` — ~3 MiB bytes instead of 2x ~25 MiB `serde_json::Value` trees.
+    bytes: Vec<u8>,
+    /// Start byte offset of the `0` value in `"cacheAgeSeconds":0` (fast splice on fresh hits).
+    age_value_offset: Option<usize>,
     etag: String,
 }
 
+fn find_age_zero_offset(bytes: &[u8]) -> Option<usize> {
+    const NEEDLE: &[u8] = b"\"cacheAgeSeconds\":0";
+    if bytes.len() < NEEDLE.len() {
+        return None;
+    }
+    // `cacheAgeSeconds` is written near the tail of the view; search from the end.
+    for i in (0..=bytes.len() - NEEDLE.len()).rev() {
+        if &bytes[i..i + NEEDLE.len()] == NEEDLE {
+            let after = bytes.get(i + NEEDLE.len()).copied();
+            if matches!(after, Some(b'}' | b',')) {
+                return Some(i + NEEDLE.len() - 1);
+            }
+        }
+    }
+    None
+}
+
 /// A served view's bytes at `now`: the view itself with only `cacheAgeSeconds` filled.
-/// A stale serve (stale-while-revalidate, or the last good view during a compose) also
-/// says so where the page reads it: `refreshing`, each source's age advanced by the
-/// cache age with `ok` turned `stale` past its own `staleAfterSeconds`, and an ETag
-/// recomputed over the changed bytes. A fresh hit keeps the composed ETag, as before.
-fn cached_bytes(view: &Json, at: u64, etag: &str, now: u64, stale: bool) -> (Vec<u8>, String) {
-    let age_seconds = now.saturating_sub(at) as f64 / 1000.0;
-    let mut view = view.clone();
+/// Fresh hits splice the formatted number directly into the cached byte buffer (zero JSON clone,
+/// zero re-serialization). Rare stale serves parse the cached bytes and apply the stale markers.
+fn cached_bytes(cached: &CachedView, now: u64, stale: bool) -> (Vec<u8>, String) {
+    let age_seconds = now.saturating_sub(cached.at) as f64 / 1000.0;
+    if !stale && let Some(pos) = cached.age_value_offset {
+        let age_bytes = aac_views::js_json::write(&json!(age_seconds));
+        let mut out = Vec::with_capacity(cached.bytes.len() + age_bytes.len());
+        out.extend_from_slice(&cached.bytes[..pos]);
+        out.extend_from_slice(&age_bytes);
+        out.extend_from_slice(&cached.bytes[pos + 1..]);
+        return (out, cached.etag.clone());
+    }
+    let mut view: Json = serde_json::from_slice(&cached.bytes).unwrap_or(Json::Null);
     view["cacheAgeSeconds"] = json!(age_seconds);
     if stale {
         view["refreshing"] = json!(true);
@@ -524,7 +592,7 @@ fn cached_bytes(view: &Json, at: u64, etag: &str, now: u64, stale: bool) -> (Vec
             }
         }
     }
-    let mut writer = Writer::with_capacity(64 * 1024);
+    let mut writer = Writer::with_capacity(cached.bytes.len() + 256);
     writer.value(&view);
     let (bytes, identity_bytes) = writer.finish();
     if stale {
@@ -532,7 +600,7 @@ fn cached_bytes(view: &Json, at: u64, etag: &str, now: u64, stale: bool) -> (Vec
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         (bytes, format!("W/\"{hex}\""))
     } else {
-        (bytes, etag.to_string())
+        (bytes, cached.etag.clone())
     }
 }
 
@@ -627,9 +695,9 @@ pub(crate) struct ScoreboardOwned {
     store_facts: Mutex<Option<(u64, Arc<StoreFacts>)>>,
     /// The newest snapshot generation whose readers-check rows were recorded.
     recorded: Arc<Mutex<u64>>,
-    views: Mutex<IndexMap<String, CachedView>>,
+    views: Mutex<IndexMap<String, Arc<CachedView>>>,
     /// The last good view per filter, across generations: served while its refresh runs.
-    last_good: Mutex<IndexMap<String, CachedView>>,
+    last_good: Mutex<IndexMap<String, Arc<CachedView>>>,
     /// The last pushed facts generation, parsed once: (its id, its presentation). Only
     /// generations pushed into the feed land here; computed facts never do (they would
     /// shadow a newer snapshot under an old snapshot-blind id).
@@ -742,7 +810,7 @@ impl ScoreboardOwned {
         }
         let problems = check_problems(runs);
         // Without receipts the rows are the picked runs' (as `record_check` reads `runs`).
-        let picked: Option<Vec<usize>> = held.accepted_slice().is_none().then(|| picked.to_vec());
+        let picked: Option<Vec<usize>> = (!held.has_accepted_receipts()).then(|| picked.to_vec());
         let held = Arc::clone(held);
         let check = Arc::clone(&self.check);
         let recorded = Arc::clone(&self.recorded);
@@ -759,7 +827,7 @@ impl ScoreboardOwned {
                 let rows: &[RunRow] = match &picked {
                     None => held
                         .accepted_rows
-                        .get_or_init(|| check_rows(held.accepted_slice().unwrap_or(&[]))),
+                        .get_or_init(|| held.build_accepted_run_rows()),
                     Some(picked) => {
                         made = picked
                             .iter()
@@ -840,11 +908,19 @@ impl ScoreboardOwned {
             let mut safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
             ingest_request(&scan, now, &mut safe_paths)
         };
-        self.store_epoch.fetch_add(1, Ordering::SeqCst);
+        let has_writes = !request.record["runs"].as_array().is_none_or(Vec::is_empty)
+            || !request.record["refused"]
+                .as_array()
+                .is_none_or(Vec::is_empty);
+        if has_writes {
+            self.store_epoch.fetch_add(1, Ordering::SeqCst);
+        }
         let record = store
             .call("runsRecord".to_string(), request.record.to_string())
             .await;
-        self.store_epoch.fetch_add(1, Ordering::SeqCst);
+        if has_writes {
+            self.store_epoch.fetch_add(1, Ordering::SeqCst);
+        }
         let record: Json = match record {
             Ok(text) => serde_json::from_str(&text).unwrap_or(Json::Null),
             Err(_) => return,
@@ -928,7 +1004,7 @@ impl ScoreboardOwned {
         match store.runs_history().await {
             Ok(snapshot) => {
                 self.share_fallback.store(false, Ordering::SeqCst);
-                let rows: Vec<Arc<RunEntry>> = (0..snapshot.rows().len())
+                let rows: Vec<Arc<RunEntry>> = (0..snapshot.compact_rows().len())
                     .map(|index| Arc::new(RunEntry::from_store_row(&snapshot, index)))
                     .collect();
                 let held = Arc::new(
@@ -1230,9 +1306,10 @@ impl ScoreboardOwned {
         out.insert("correctionsResolved".to_string(), Json::Bool(true));
         out.insert(
             "accepted".to_string(),
-            match (receipts, held.accepted_slice()) {
-                (true, Some(accepted)) => Json::Array(accepted.to_vec()),
-                _ => Json::Null,
+            if receipts {
+                held.accepted_json().map(Json::Array).unwrap_or(Json::Null)
+            } else {
+                Json::Null
             },
         );
         out.insert("state".to_string(), json!(state));
@@ -1520,63 +1597,99 @@ impl ScoreboardOwned {
         let catalog_owned = catalog.clone();
         let runs_owned = runs.clone();
         let rows = held.rows.clone();
-        let facts_held = Arc::clone(held);
         let prepared_owned = Arc::clone(&prepared);
 
         let (facts_text, presentation) =
             tokio::task::spawn_blocking(move || -> Result<(String, Presentation), Decline> {
                 let offsets = crate::zone_facts::server_zone_facts(&time_zone, feed_now)
                     .ok_or(Decline::Shape)?;
-                // Walk one row at a time into the accumulator: the full state-row set
-                // is never materialized for the facts pass.
+                // Collect full facts only from the small metadata objects (`skeleton`, `catalog`,
+                // `runs`, `patch_words`), and extract ONLY the compared words + parsed timestamps
+                // from each run row (skipping prose, evidence, notes, sha256, and `accepted`).
                 let mut acc = aac_status::produce::facts::Acc::default();
-                let mut words = indexmap::IndexSet::new();
+                let mut words: indexmap::IndexSet<String> = indexmap::IndexSet::new();
                 for value in [&skeleton, &catalog_owned, &runs_owned, &patch_words] {
                     acc.read(value, true);
                     words.extend(aac_status::produce::facts::words_of(value));
                 }
-                for (index, entry) in rows.iter().enumerate() {
-                    let state = entry.state_row();
-                    acc.read(&state, true);
-                    words.extend(aac_status::produce::facts::words_of(&state));
-                    let doc = &state["doc"];
-                    // Synthesized row keys (`base_rows` -> `judged_rows` tie-breaker) and
-                    // normalized unknown outcomes (`runs_source_of` -> `counted`): both are
-                    // compared via `ctx.compare` and do not appear verbatim in the raw docs.
-                    if let Some(patch) = prepared_owned.patches.get(index).and_then(Option::as_ref)
-                        && !patch.id.is_empty()
+                let mut extra_epochs: Map<String, Json> = Map::new();
+                let mut add_epoch = |text: &str| {
+                    if aac_num::ecma::iso_prefixed(text)
+                        && !extra_epochs.contains_key(text)
+                        && let Some(ms) = aac_num::ecma::parse_instant(text)
                     {
+                        extra_epochs.insert(text.to_owned(), Json::from(ms));
+                    }
+                };
+                for (index, entry) in rows.iter().enumerate() {
+                    if !entry.id.is_empty() {
+                        words.insert(entry.id.clone());
+                    }
+                    if let Some(tt) = &entry.task_type {
+                        words.insert(tt.clone());
+                    }
+                    if !entry.written_at.is_empty() {
+                        add_epoch(&entry.written_at);
+                    }
+                    let doc = entry.doc();
+                    if let Some(ended) = doc["endedAt"].as_str() {
+                        add_epoch(ended);
+                    }
+                    if let Some(bench) = doc["benchmark"].as_str()
+                        && !bench.is_empty()
+                    {
+                        words.insert(bench.to_owned());
+                    }
+                    if let Some(raw_model) = doc["model"]["id"].as_str()
+                        && !raw_model.is_empty()
+                    {
+                        words.insert(raw_model.to_owned());
+                    }
+                    let patch = prepared_owned.patches.get(index).and_then(Option::as_ref);
+                    let model_id = patch
+                        .map(|p| p.id.as_str())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| doc["model"]["id"].as_str())
+                        .unwrap_or("");
+                    if !model_id.is_empty() {
                         let harness = doc["model"]["harness"].as_str().unwrap_or("");
-                        let effort = patch.effort.as_deref().unwrap_or("");
-                        let base_key = format!("{}|{harness}|{effort}", patch.id);
+                        let effort = patch
+                            .and_then(|p| p.effort.as_deref())
+                            .or_else(|| doc["model"]["effort"].as_str())
+                            .unwrap_or("");
+                        let base_key = format!("{model_id}|{harness}|{effort}");
                         let proc_id = doc["process"]["id"].as_str().unwrap_or("");
                         let proc_ver = doc["process"]["version"].as_str().unwrap_or("");
                         let proc_key = format!("{base_key}|{proc_id}|{proc_ver}");
-                        for extra in [base_key, proc_key] {
-                            if words.insert(extra.clone()) {
-                                acc.read(&Json::String(extra), true);
-                            }
-                        }
+                        words.insert(base_key);
+                        words.insert(proc_key);
                     }
-                    if aac_status::read_measures::outcome(doc) == 0 {
-                        let word = normalized_unknown_outcome(doc);
-                        if words.insert(word.clone()) {
-                            acc.read(&Json::String(word), true);
-                        }
+                    if aac_status::read_measures::outcome(&doc) == 0 {
+                        words.insert(normalized_unknown_outcome(&doc));
                     }
                 }
-                for accepted in facts_held.accepted_slice().unwrap_or(&[]) {
-                    acc.read(accepted, true);
-                    words.extend(aac_status::produce::facts::words_of(accepted));
+                let base = aac_status::produce::facts::Facts::build(&acc, Some(&offsets.zone));
+                let mut dates = Map::with_capacity(base.dates.len());
+                for (ms, date) in &base.dates {
+                    dates.insert(
+                        ms.to_string(),
+                        json!({"iso": date.iso, "clock": date.clock, "day": date.day}),
+                    );
                 }
-                let facts = aac_status::produce::facts::Facts::build(&acc, Some(&offsets.zone));
-                let words = Json::Array(words.into_iter().map(Json::String).collect());
-                let values: Vec<&Json> =
-                    vec![&skeleton, &catalog_owned, &runs_owned, &patch_words, &words];
-                // Every word ranked, as the front door completed them (`status_collate`).
+                let mut epochs = Map::with_capacity(base.epochs.len() + extra_epochs.len());
+                for (k, ms) in base.epochs {
+                    epochs.insert(k, Json::from(ms));
+                }
+                for (k, v) in extra_epochs {
+                    epochs.entry(k).or_insert(v);
+                }
+                let order = crate::status_collate::rank_words(words.iter());
+                let mut facts_obj = Map::with_capacity(3);
+                facts_obj.insert("dates".to_string(), Json::Object(dates));
+                facts_obj.insert("epochs".to_string(), Json::Object(epochs));
+                facts_obj.insert("order".to_string(), Json::Object(order));
                 let facts_text =
-                    crate::status_collate::complete_order_of(&values, &facts.to_text())
-                        .unwrap_or_else(|| facts.to_text());
+                    serde_json::to_string(&Json::Object(facts_obj)).map_err(|_| Decline::Shape)?;
                 let presentation: Presentation =
                     serde_json::from_str(&facts_text).map_err(|_| Decline::Shape)?;
                 Ok((facts_text, presentation))
@@ -1747,19 +1860,17 @@ impl ScoreboardOwned {
         // it; a refresh itself composes.
         let hit = {
             let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
-            views
-                .get(&cache_key)
-                .map(|hit| (hit.at, hit.seq, hit.view.clone(), hit.etag.clone()))
+            views.get(&cache_key).cloned()
         };
-        if let Some((at, view_seq, view, etag)) = hit {
+        if let Some(hit) = hit {
             // Fresh only on the snapshot it was composed from: a landed rescan makes
             // even a young view stale (served marked, refreshed behind).
-            if view_seq == seq && now.saturating_sub(at) < CACHE_MS {
-                return Ok(cached_bytes(&view, at, &etag, now, false));
+            if hit.seq == seq && now.saturating_sub(hit.at) < CACHE_MS {
+                return Ok(cached_bytes(&hit, now, false));
             }
             if !refresh {
                 self.spawn_refresh(feed_text, &cache_key);
-                return Ok(cached_bytes(&view, at, &etag, now, true));
+                return Ok(cached_bytes(&hit, now, true));
             }
         }
         // One compose per view-cache key. A request that finds its key being composed (its
@@ -1776,17 +1887,14 @@ impl ScoreboardOwned {
                 drop(composing);
                 let hit = {
                     let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
-                    views
-                        .get(&cache_key)
-                        .map(|hit| (hit.at, hit.view.clone(), hit.etag.clone()))
+                    views.get(&cache_key).cloned()
                 }
                 .or_else(|| {
                     let good = self.last_good.lock().unwrap_or_else(|p| p.into_inner());
-                    good.get(&filter_key)
-                        .map(|hit| (hit.at, hit.view.clone(), hit.etag.clone()))
+                    good.get(&filter_key).cloned()
                 });
-                if let Some((at, view, etag)) = hit {
-                    return Ok(cached_bytes(&view, at, &etag, now, true));
+                if let Some(hit) = hit {
+                    return Ok(cached_bytes(&hit, now, true));
                 }
                 return Err(Decline::Busy);
             } else {
@@ -1856,13 +1964,17 @@ impl ScoreboardOwned {
         for &index in &picked {
             let entry = &held.rows[index];
             let raw = entry.doc();
-            docs_owned.push(normalized_doc(raw.clone(), &prepared.patches[index]));
+            // `compose_core` reads only `id`, `model.id`, `task.type`, and `endedAt` from `rows[i]["doc"]`
+            // (for unscored examples); avoid cloning the entire raw run document.
             rows_owned.push(json!({
-                "file": entry.file,
-                "doc": raw,
-                "firstSeenAt": entry.first_seen_at,
-                "sha256": entry.sha256,
+                "doc": {
+                    "id": raw["id"],
+                    "model": { "id": raw["model"]["id"] },
+                    "task": { "type": raw["task"]["type"] },
+                    "endedAt": raw["endedAt"],
+                },
             }));
+            docs_owned.push(normalized_doc(raw, &prepared.patches[index]));
         }
         let rows: Vec<&Json> = rows_owned.iter().collect();
         let docs: Vec<&Json> = docs_owned.iter().collect();
@@ -1957,24 +2069,31 @@ impl ScoreboardOwned {
                 return Err(Decline::Stale);
             }
         };
+        drop(rows);
+        drop(docs);
+        drop(rows_owned);
+        drop(docs_owned);
+        drop(data);
         let mut writer = Writer::with_capacity(64 * 1024);
         writer.value(&view);
+        drop(view);
         let (bytes, identity_bytes) = writer.finish();
         let digest = Sha256::digest(&identity_bytes);
+        drop(identity_bytes);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let etag = format!("W/\"{hex}\"");
+        let age_value_offset = find_age_zero_offset(&bytes);
+        let cached = Arc::new(CachedView {
+            at: now,
+            seq,
+            bytes: bytes.clone(),
+            age_value_offset,
+            etag: etag.clone(),
+        });
         {
             let mut views = self.views.lock().unwrap_or_else(|p| p.into_inner());
             views.shift_remove(&cache_key);
-            views.insert(
-                cache_key,
-                CachedView {
-                    at: now,
-                    seq,
-                    view: view.clone(),
-                    etag: etag.clone(),
-                },
-            );
+            views.insert(cache_key, Arc::clone(&cached));
             while views.len() > CACHE_ENTRIES {
                 views.shift_remove_index(0);
             }
@@ -1982,15 +2101,7 @@ impl ScoreboardOwned {
         {
             let mut good = self.last_good.lock().unwrap_or_else(|p| p.into_inner());
             good.shift_remove(&filter_key);
-            good.insert(
-                filter_key,
-                CachedView {
-                    at: now,
-                    seq,
-                    view,
-                    etag: etag.clone(),
-                },
-            );
+            good.insert(filter_key, cached);
             while good.len() > CACHE_ENTRIES {
                 good.shift_remove_index(0);
             }
@@ -3882,7 +3993,15 @@ mod tests {
                 {"id": "scoreboard-catalog", "ageSeconds": 10, "staleAfterSeconds": 180, "state": "ok"}
             ]
         });
-        let (bytes, _) = super::cached_bytes(&view, 1_000_000, "W/\"x\"", 1_300_000, true);
+        let bytes = serde_json::to_vec(&view).expect("view bytes");
+        let cached = super::CachedView {
+            at: 1_000_000,
+            seq: 1,
+            age_value_offset: super::find_age_zero_offset(&bytes),
+            bytes,
+            etag: "W/\"x\"".to_string(),
+        };
+        let (bytes, _) = super::cached_bytes(&cached, 1_300_000, true);
         let served: serde_json::Value = serde_json::from_slice(&bytes).expect("view");
         assert!(
             served["sources"][0]["ageSeconds"].is_null(),

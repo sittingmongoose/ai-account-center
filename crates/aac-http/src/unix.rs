@@ -155,6 +155,24 @@ struct Shared {
     status_compose: crate::status_fed::StatusCompose,
     /// R5/A2: whether the Analytics activity pass is in flight (the read's `refreshing`).
     analytics_live: Arc<crate::analytics_live::Live>,
+    /// Bounded 4-entry generation-keyed Analytics response cache (eliminates per-poll recompute).
+    analytics_cache: Arc<std::sync::Mutex<std::collections::VecDeque<AnalyticsCacheEntry>>>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct AnalyticsCacheKey {
+    query: String,
+    write_seq: u64,
+    refreshing: bool,
+    mac_gen: Option<String>,
+    win_gen: Option<String>,
+}
+
+struct AnalyticsCacheEntry {
+    key: AnalyticsCacheKey,
+    at_ms: i64,
+    status: u16,
+    bytes: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -1462,6 +1480,34 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let cache = shared.account_usage.clone();
             let feeds = shared.feeds.clone();
             let live = Arc::clone(&shared.analytics_live);
+            let force_refresh =
+                url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
+                    .any(|(key, value)| key == "refresh" && value == "true");
+            let now_check = aac_store::engine::now_ms() as i64;
+            let cache_key = if !force_refresh {
+                store.analytics_engine().map(|engine| AnalyticsCacheKey {
+                    query: query.clone().unwrap_or_default(),
+                    write_seq: engine.write_seq(),
+                    refreshing: live.refreshing(),
+                    mac_gen: cache.generation(crate::account_usage::Desktop::Mac, false),
+                    win_gen: cache.generation(crate::account_usage::Desktop::Windows, false),
+                })
+            } else {
+                None
+            };
+            if let Some(key) = &cache_key
+                && let Ok(guard) = shared.analytics_cache.lock()
+                && let Some(hit) = guard
+                    .iter()
+                    .find(|e| e.key == *key && now_check.saturating_sub(e.at_ms) < 30_000)
+            {
+                return (
+                    StatusCode::from_u16(hit.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    hit.bytes.clone(),
+                )
+                    .into_response();
+            }
             let result = shared
                 .limits
                 .blocking(row.pool, move || {
@@ -1486,29 +1532,52 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                         == Some(registry::Role::RustService)
                         && let Ok(value) = &mut answer
                         && let Some(activity) = value["activity"].as_object_mut()
-                    {
-                        let force = url::form_urlencoded::parse(
-                            query.as_deref().unwrap_or_default().as_bytes(),
-                        )
-                        .any(|(key, value)| key == "refresh" && value == "true");
-                        if let Some(status) = Arc::clone(&shared.cursor)
-                            .analytics(cursor_root, shared.owners.clone(), engine, now, force)
+                        && let Some(status) = Arc::clone(&shared.cursor)
+                            .analytics(
+                                cursor_root,
+                                shared.owners.clone(),
+                                engine,
+                                now,
+                                force_refresh,
+                            )
                             .await
-                        {
-                            activity.insert("cursorAccount".into(), status);
-                        }
+                    {
+                        activity.insert("cursorAccount".into(), status);
                     }
-                    crate::analytics_route::encode(answer, query.as_deref())
+                    let encode_query = query.clone();
+                    shared
+                        .limits
+                        .blocking(row.pool, move || {
+                            crate::analytics_route::encode(answer, encode_query.as_deref())
+                        })
+                        .await
                 }
                 Err(reason) => Err(reason),
             };
             match result {
-                Ok((status, bytes)) => (
-                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    bytes,
-                )
-                    .into_response(),
+                Ok((status, bytes)) => {
+                    if let Some(key) = cache_key
+                        && status == 200
+                        && let Ok(mut guard) = shared.analytics_cache.lock()
+                    {
+                        guard.retain(|e| e.key != key);
+                        guard.push_back(AnalyticsCacheEntry {
+                            key,
+                            at_ms: now_check,
+                            status,
+                            bytes: bytes.clone(),
+                        });
+                        while guard.len() > 4 {
+                            guard.pop_front();
+                        }
+                    }
+                    (
+                        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        bytes,
+                    )
+                        .into_response()
+                }
                 Err(reason) => decline(row.handler, reason),
             }
         }
@@ -1907,6 +1976,7 @@ async fn serve_inner(
         status_produce: status_produce.clone(),
         status_compose: crate::status_fed::StatusCompose::default(),
         analytics_live: Arc::new(crate::analytics_live::Live::default()),
+        analytics_cache: Arc::default(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();

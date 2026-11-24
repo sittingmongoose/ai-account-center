@@ -1955,16 +1955,70 @@ fn hide_cursors(page: &mut Json) {
         }
     }
 }
+/// One accepted revision's readers-check receipt fields (5 tiny fields instead of a full Json doc).
+#[derive(Clone, Debug)]
+pub struct AcceptedReceipt {
+    /// Relative path of the run file under the reports share.
+    pub file: Box<str>,
+    /// Run identifier recorded in the run doc (`doc.id`).
+    pub id: Box<str>,
+    /// Revision sequence number recorded in the run doc.
+    pub seq: u64,
+    /// Hex SHA-256 of the run file bytes.
+    pub sha256: Box<str>,
+    /// Epoch milliseconds when the revision was first ingested.
+    pub first_seen_at: u64,
+}
+
+/// One resolved run held compactly as UTF-8 JSON bytes + typed filter fields instead of a
+/// bloated `serde_json::Value` IndexMap tree (~1 KiB vs ~18 KiB per row).
+#[derive(Clone, Debug)]
+pub struct CompactRun {
+    /// `[endedMs, r]` cursor ordering this row in resolved history.
+    pub cursor: (u64, u32),
+    /// Relative path of the run file under the reports share.
+    pub file: Box<str>,
+    /// Hex SHA-256 of the run file bytes.
+    pub sha256: Box<str>,
+    /// Epoch milliseconds when the revision was first ingested.
+    pub first_seen_at: u64,
+    /// Compact serialized UTF-8 JSON of the resolved run `doc`.
+    pub doc_json: Box<str>,
+    /// Run identifier (`doc.id`).
+    pub id: Box<str>,
+    /// Writer identifier (`doc.writer`).
+    pub writer: Box<str>,
+    /// Optional run source (`doc.source`).
+    pub source: Option<Box<str>>,
+    /// Optional task type (`doc.task.type`).
+    pub task_type: Option<Box<str>>,
+    /// Whether the run carries a `review` object.
+    pub has_review: bool,
+    /// Revision sequence number (`doc.seq`).
+    pub seq: u64,
+    /// ISO timestamp string when the run was written (`doc.writtenAt`).
+    pub written_at: Box<str>,
+    /// Optional target run ID corrected by this run (`doc.corrects`).
+    pub corrects: Option<Box<str>>,
+    /// Whether the run carries a `void` object.
+    pub has_void: bool,
+}
+
+impl CompactRun {
+    /// Parse this row's compact JSON document on demand.
+    pub fn doc(&self) -> Json {
+        serde_json::from_str(&self.doc_json).unwrap_or(Json::Null)
+    }
+}
+
 /// One immutable resolved history, keyed by the same database snapshot's run generation and
-/// catalog. The HTTP owner's Scoreboard holds this same `Arc` instead of re-parsing a second
-/// resident copy out of `runsQuery` text (service-memory plan item 3).
+/// catalog. Compact UTF-8 doc storage + typed receipts eliminates the 256 MiB Value tree bloat.
 pub struct ResolvedHistory {
     key: (u64, Option<Vec<u8>>),
-    rows: Vec<Json>,
-    cursors: Vec<(u64, u32)>,
+    rows: Vec<CompactRun>,
     problems: Vec<Json>,
     skipped: usize,
-    accepted: Vec<Json>,
+    accepted: Vec<AcceptedReceipt>,
 }
 
 impl ResolvedHistory {
@@ -1981,14 +2035,9 @@ impl ResolvedHistory {
             .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
     }
 
-    /// The effective rows (corrections resolved), each with its `_cursor`.
-    pub fn rows(&self) -> &[Json] {
+    /// The effective rows (corrections resolved), compactly stored.
+    pub fn compact_rows(&self) -> &[CompactRun] {
         &self.rows
-    }
-
-    /// Each row's `[endedMs, r]` cursor, aligned with `rows`.
-    pub fn cursors(&self) -> &[(u64, u32)] {
-        &self.cursors
     }
 
     /// The correction refusals, as the first `runsQuery` page carries them.
@@ -1996,8 +2045,8 @@ impl ResolvedHistory {
         &self.problems
     }
 
-    /// The accepted revisions (readers-check receipts), without cursors.
-    pub fn accepted(&self) -> &[Json] {
+    /// The accepted revisions' receipts (readers-check fields only).
+    pub fn accepted_receipts(&self) -> &[AcceptedReceipt] {
         &self.accepted
     }
 }
@@ -2049,13 +2098,14 @@ fn resolved_history(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> 
         let mut after = None;
         let mut skipped = 0;
         loop {
-            let page = query_snapshot(
+            let page = query_snapshot_inner(
                 &read,
                 &QueryArgs {
                     after,
                     limit: Some(20_000),
                     ..Default::default()
                 },
+                false,
             )?;
             rows.extend(page["runs"].as_array().cloned().unwrap_or_default());
             skipped += page["skipped"].as_u64().unwrap_or(0) as usize;
@@ -2074,25 +2124,45 @@ fn resolved_history(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> 
                     .map(|reason| json!({"file":r["file"],"reason":reason,"since":r["firstSeenAt"]}))
             })
             .collect();
-        let accepted = rows
+        let accepted: Vec<AcceptedReceipt> = rows
             .into_iter()
             .filter(|r| !result.refused.contains_key(r["doc"]["id"].as_str().unwrap_or("")))
-            .map(|mut row| {
-                if let Some(obj) = row.as_object_mut() {
-                    obj.remove("_cursor");
-                }
-                row
+            .map(|row| AcceptedReceipt {
+                file: row["file"].as_str().unwrap_or_default().into(),
+                id: row["doc"]["id"].as_str().unwrap_or_default().into(),
+                seq: row["doc"]["seq"].as_u64().unwrap_or(0),
+                sha256: row["sha256"].as_str().unwrap_or_default().into(),
+                first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
             })
             .collect();
-        let cursors = result
+        let compact_rows: Vec<CompactRun> = result
             .rows
-            .iter()
-            .map(|r| serde_json::from_value(r["_cursor"].clone()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .into_iter()
+            .map(|row| -> Result<CompactRun> {
+                let cursor: (u64, u32) = serde_json::from_value(row["_cursor"].clone())?;
+                let doc = &row["doc"];
+                let doc_json: Box<str> = serde_json::to_string(doc)?.into_boxed_str();
+                Ok(CompactRun {
+                    cursor,
+                    file: row["file"].as_str().unwrap_or_default().into(),
+                    sha256: row["sha256"].as_str().unwrap_or_default().into(),
+                    first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
+                    doc_json,
+                    id: doc["id"].as_str().unwrap_or_default().into(),
+                    writer: doc["writer"].as_str().unwrap_or_default().into(),
+                    source: doc["source"].as_str().map(Into::into),
+                    task_type: doc["task"]["type"].as_str().map(Into::into),
+                    has_review: doc["review"].is_object(),
+                    seq: doc["seq"].as_u64().unwrap_or(0),
+                    written_at: doc["writtenAt"].as_str().unwrap_or_default().into(),
+                    corrects: doc["corrects"].as_str().map(Into::into),
+                    has_void: doc["void"].is_object(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let snapshot = std::sync::Arc::new(ResolvedHistory {
             key,
-            rows: result.rows,
-            cursors,
+            rows: compact_rows,
             problems,
             skipped,
             accepted,
@@ -2116,40 +2186,61 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
     }
     let snapshot = resolved_history(engine)?;
     let limit = args.limit.unwrap_or(5000).clamp(1, 20_000);
-    let start = snapshot.cursors.partition_point(|cursor| {
-        args.after.is_some_and(|a| *cursor <= a) || args.from_ms.is_some_and(|a| cursor.0 < a)
+    let start = snapshot.rows.partition_point(|row| {
+        args.after.is_some_and(|a| row.cursor <= a) || args.from_ms.is_some_and(|a| row.cursor.0 < a)
     });
-    let mut out = Vec::new();
+    let mut picked: Vec<&CompactRun> = Vec::new();
     let mut next = Json::Null;
     let mut last = Json::Null;
-    for (index, row) in snapshot.rows.iter().enumerate().skip(start) {
-        let cursor = snapshot.cursors[index];
+    for row in snapshot.rows.iter().skip(start) {
+        let cursor = row.cursor;
         if args.to_ms.is_some_and(|a| cursor.0 > a) {
             break;
         }
-        let doc = &row["doc"];
-        if args.source.as_ref().is_some_and(|a| doc["source"].as_str() != Some(a))
+        if args.source.as_deref().is_some_and(|a| row.source.as_deref() != Some(a))
             || args
                 .task_type
-                .as_ref()
-                .is_some_and(|a| doc["task"]["type"].as_str() != Some(a))
-            || (args.reviews_only == Some(true) && !doc["review"].is_object())
+                .as_deref()
+                .is_some_and(|a| row.task_type.as_deref() != Some(a))
+            || (args.reviews_only == Some(true) && !row.has_review)
         {
             continue;
         }
-        if out.len() == limit {
+        if picked.len() == limit {
             next = last;
             break;
         }
         last = json!(cursor);
-        let mut row = row.clone();
-        if args.include_cursors != Some(true)
-            && let Some(obj) = row.as_object_mut()
-        {
-            obj.remove("_cursor");
-        }
-        out.push(row);
+        picked.push(row);
     }
+    let out: Vec<Json> = engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let heads = read.open_table(RUN_HEAD)?;
+        let dict_table = read.open_table(RUN_DICT)?;
+        let mut dict = Dict::new(&dict_table);
+        let mut rows_out = Vec::with_capacity(picked.len());
+        for row in picked {
+            let (ended, r) = row.cursor;
+            let (identity, ids) = if let Some(value) = heads.get(Key::new().u32(r).as_slice())? {
+                let head = Head::decode(value.value())?;
+                (identity_json(&mut dict, &head)?, ids_json(&mut dict, r, &head)?)
+            } else {
+                (Json::Null, Json::Null)
+            };
+            let mut obj = serde_json::Map::new();
+            if args.include_cursors == Some(true) {
+                obj.insert("_cursor".into(), json!([ended, r]));
+            }
+            obj.insert("file".into(), json!(&*row.file));
+            obj.insert("sha256".into(), json!(&*row.sha256));
+            obj.insert("firstSeenAt".into(), json!(row.first_seen_at));
+            obj.insert("doc".into(), row.doc());
+            obj.insert("identity".into(), identity);
+            obj.insert("ids".into(), ids);
+            rows_out.push(Json::Object(obj));
+        }
+        Ok(rows_out)
+    })?;
     let problems = if args.after.is_none() {
         snapshot.problems.clone()
     } else {
@@ -2165,7 +2256,12 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
         "correctionsResolved":true,"generation":snapshot.key.0,"catalogHash":catalog
     });
     if args.include_receipts == Some(true) && args.after.is_none() {
-        page["accepted"] = json!(snapshot.accepted);
+        let accepted_json: Vec<Json> = snapshot
+            .accepted
+            .iter()
+            .map(|r| json!({"file": &*r.file, "sha256": &*r.sha256, "firstSeenAt": r.first_seen_at, "doc": {"id": &*r.id, "seq": r.seq}}))
+            .collect();
+        page["accepted"] = Json::Array(accepted_json);
     }
     Ok(page)
 }
@@ -2200,6 +2296,10 @@ fn query_uncorrected(engine: &Engine, args: &QueryArgs) -> Result<Option<Json>> 
 }
 
 fn query_snapshot(read: &redb::ReadTransaction, args: &QueryArgs) -> Result<Json> {
+    query_snapshot_inner(read, args, true)
+}
+
+fn query_snapshot_inner(read: &redb::ReadTransaction, args: &QueryArgs, include_meta: bool) -> Result<Json> {
     let limit = args.limit.unwrap_or(5000).clamp(1, 20_000);
     let by_time = read.open_table(RUN_BY_TIME)?;
     let heads = read.open_table(RUN_HEAD)?;
@@ -2252,12 +2352,15 @@ fn query_snapshot(read: &redb::ReadTransaction, args: &QueryArgs) -> Result<Json
             break;
         }
         let block_key = (head.loc.day, head.loc.block);
-        if let std::collections::hash_map::Entry::Vacant(slot) = blocks.entry(block_key) {
+        if !blocks.contains_key(&block_key) {
+            if blocks.len() >= 16 {
+                blocks.clear();
+            }
             let Some(bytes) = payloads.get(Key::new().u32(head.loc.day).u32(head.loc.block).as_slice())? else {
                 skipped += 1;
                 continue;
             };
-            slot.insert(block_decode(bytes.value())?.1);
+            blocks.insert(block_key, block_decode(bytes.value())?.1);
         }
         let Some(doc) = blocks[&block_key].get(head.loc.slot as usize) else {
             skipped += 1;
@@ -2270,24 +2373,39 @@ fn query_snapshot(read: &redb::ReadTransaction, args: &QueryArgs) -> Result<Json
             skipped += 1;
             continue;
         };
-        let identity = identity_json(&mut dict, &head)?;
-        let shown = identity["modelId"]
-            .as_str()
-            .or(identity["modelRaw"].as_str())
-            .map(str::to_string);
-        run["model"]["id"] = opt_json(shown);
-        run["model"]["effort"] = identity["effort"].clone();
-        run["model"]["harness"] = identity["harness"].clone();
-        run["model"]["provider"] = Json::Null;
-        out.push(json!({
-            "_cursor": [ended, r],
-            "file": dict.field(&head, at::PATH)?,
-            "sha256": hex(&head.sha),
-            "firstSeenAt": head.ingested_ms,
-            "doc": run,
-            "identity": identity,
-            "ids": ids_json(&mut dict, r, &head)?,
-        }));
+        if include_meta {
+            let identity = identity_json(&mut dict, &head)?;
+            let shown = identity["modelId"]
+                .as_str()
+                .or(identity["modelRaw"].as_str())
+                .map(str::to_string);
+            run["model"]["id"] = opt_json(shown);
+            run["model"]["effort"] = identity["effort"].clone();
+            run["model"]["harness"] = identity["harness"].clone();
+            run["model"]["provider"] = Json::Null;
+            out.push(json!({
+                "_cursor": [ended, r],
+                "file": dict.field(&head, at::PATH)?,
+                "sha256": hex(&head.sha),
+                "firstSeenAt": head.ingested_ms,
+                "doc": run,
+                "identity": identity,
+                "ids": ids_json(&mut dict, r, &head)?,
+            }));
+        } else {
+            let shown = dict.field(&head, at::MODEL)?.or(dict.field(&head, at::MODEL_RAW)?);
+            run["model"]["id"] = opt_json(shown);
+            run["model"]["effort"] = opt_json(dict.field(&head, at::EFFORT)?);
+            run["model"]["harness"] = opt_json(dict.field(&head, at::HARNESS)?);
+            run["model"]["provider"] = Json::Null;
+            out.push(json!({
+                "_cursor": [ended, r],
+                "file": dict.field(&head, at::PATH)?,
+                "sha256": hex(&head.sha),
+                "firstSeenAt": head.ingested_ms,
+                "doc": run,
+            }));
+        }
         last = Some((ended, r));
     }
     Ok(json!({ "runs": out, "next": next, "skipped": skipped }))
@@ -2426,10 +2544,11 @@ pub fn audit(engine: &Engine) -> Result<Json> {
     } else {
         None
     };
-    let effective: std::collections::HashSet<_> = history
+    let effective: std::collections::HashSet<&str> = history
         .iter()
         .flat_map(|h| &h.rows)
-        .filter_map(|r| r["doc"]["id"].as_str())
+        .filter(|r| !r.id.is_empty())
+        .map(|r| r.id.as_ref())
         .collect();
     engine.with_db(|db| {
         let read = db.begin_read()?;

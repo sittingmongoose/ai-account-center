@@ -47,7 +47,8 @@ pub(super) async fn record(State(audit): State<Audit>, mut request: Request, nex
     let status = reply.status().as_u16();
     let failure = reply.extensions().get::<RequestFailure>().copied();
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let _ = tokio::task::spawn_blocking(move || {
+    // Fire-and-forget log append off the HTTP reply critical path (never block response flush on flock).
+    tokio::task::spawn_blocking(move || {
         if let Some(RequestFailure(kind)) = failure {
             let context = Map::from_iter([
                 ("status".into(), json!(status)),
@@ -93,7 +94,6 @@ pub(super) async fn record(State(audit): State<Audit>, mut request: Request, nex
             via,
             user_agent: header(&headers, "user-agent"),
         });
-    })
-    .await;
+    });
     reply
 }

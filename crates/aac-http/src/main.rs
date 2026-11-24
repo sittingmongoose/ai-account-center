@@ -9,6 +9,7 @@ mod provider_write;
 mod registered_write;
 
 fn main() {
+    aac_http::allocator::tune_mimalloc();
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--build-commit")) {
         println!("{}", env!("AAC_BUILD_COMMIT"));
         return;

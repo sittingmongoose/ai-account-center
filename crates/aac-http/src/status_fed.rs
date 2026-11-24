@@ -152,22 +152,23 @@ struct Feed {
     facts: String,
 }
 
-/// The last ETag, keyed by the generations and the second of `now`; served again only for the same identity bytes.
-type Tagged = (String, Vec<u8>, String);
+/// The last ETag, keyed by the generations and the second of `now`; verified by SHA-256 digest
+/// instead of retaining a full copy of the 450 KB identity bytes.
+type Tagged = (String, [u8; 32], String);
 static ETAG: Mutex<Option<Tagged>> = Mutex::new(None);
 
 fn etag(key: String, identity: &[u8]) -> String {
+    let digest: [u8; 32] = Sha256::digest(identity).into();
     if let Ok(held) = ETAG.lock()
-        && let Some((k, i, tag)) = held.as_ref()
+        && let Some((k, d, tag)) = held.as_ref()
         && *k == key
-        && i.as_slice() == identity
+        && *d == digest
     {
         return tag.clone();
     }
-    let digest: [u8; 32] = Sha256::digest(identity).into();
     let tag = format!("W/\"{}\"", crate::view_reply::hex_digest(&digest));
     if let Ok(mut held) = ETAG.lock() {
-        *held = Some((key, identity.to_vec(), tag.clone()));
+        *held = Some((key, digest, tag.clone()));
     }
     tag
 }

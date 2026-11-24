@@ -224,8 +224,18 @@ impl Producer {
         let initial = read_refresh(&root) * 1000;
         let (settings, interval) = watch::channel(initial);
         let monitor = async move {
+            let mut last_mtime = std::fs::metadata(root.join("account-refresh-settings.json"))
+                .and_then(|m| m.modified())
+                .ok();
             loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                let mtime = std::fs::metadata(root.join("account-refresh-settings.json"))
+                    .and_then(|m| m.modified())
+                    .ok();
+                if mtime == last_mtime {
+                    continue;
+                }
+                last_mtime = mtime;
                 let scope = root.clone();
                 let next = tokio::task::spawn_blocking(move || read_refresh(&scope) * 1000).await;
                 if let Ok(next) = next {

@@ -257,6 +257,7 @@ fn presentation(records: &[Value], table: &[Value], instants: &[f64]) -> R<Prese
 
 /// The store's plain window objects as the entry lists the composition port spreads. JSON carries
 /// no undefined members, so the entries reproduce each object exactly.
+#[allow(dead_code)]
 fn record_entries(records: &Value) -> R<Vec<Value>> {
     let mut out = Vec::new();
     for record in arr(records)? {
@@ -624,7 +625,6 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
         Some(value @ Value::String(_)) => value.clone(),
         _ => json!(iso(now)?),
     };
-    let history_records = record_entries(&records_value)?;
 
     // The composition input, in the part-3 envelope's shape, with the facts built from the store.
     let mut instants = vec![now, range.from, range.to, available_from];
@@ -640,22 +640,33 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
             Value::Null
         }
     };
-    let data = json!({
-        "query": query,
-        "now": now,
-        "retainedFrom": retained_from,
-        "bounds": { "oldest": oldest },
-        "oldestQuota": finite_or_null(oldest_quota),
-        "coverageOldestHourAt": finite_or_null(coverage),
-        "provisional": {
+    let mut history_map = Object::new();
+    history_map.insert("collectedSince".into(), collected_since);
+    history_map.insert("records".into(), records_value);
+    let mut data_map = Object::new();
+    data_map.insert("query".into(), Value::Object(query));
+    data_map.insert("now".into(), json!(now));
+    data_map.insert("retainedFrom".into(), json!(retained_from));
+    data_map.insert("bounds".into(), json!({ "oldest": oldest }));
+    data_map.insert("oldestQuota".into(), finite_or_null(oldest_quota));
+    data_map.insert("coverageOldestHourAt".into(), finite_or_null(coverage));
+    data_map.insert(
+        "provisional".into(),
+        json!({
             "preset": provisional.preset,
             "from": provisional.from,
             "to": provisional.to,
             "tz": provisional.tz,
             "bucketMinutes": provisional.bucket_minutes,
-        },
-        "todayMidnight": today_midnight.map(|ms| json!(ms)).unwrap_or(Value::Null),
-        "expected": {
+        }),
+    );
+    data_map.insert(
+        "todayMidnight".into(),
+        today_midnight.map(|ms| json!(ms)).unwrap_or(Value::Null),
+    );
+    data_map.insert(
+        "expected".into(),
+        json!({
             "availableFrom": available_from,
             "range": {
                 "preset": range.preset,
@@ -664,18 +675,22 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
                 "tz": range.tz,
                 "bucketMinutes": range.bucket_minutes,
             },
-        },
-        "tz": tz,
-        "resolution": resolution,
-        "available": available,
-        "stored": true,
-        "history": { "collectedSince": collected_since, "records": history_records },
-        "dashboard": dashboard,
-        "providerTable": table,
-        "providersWithActivity": providers_with_activity,
-    });
-    let mut composed = analytics::compose_data(&ctx, data.as_object().ok_or(Decline::Shape)?)
-        .map_err(|_| Decline::Unsupported)?;
+        }),
+    );
+    data_map.insert("tz".into(), Value::String(tz));
+    data_map.insert("resolution".into(), json!(resolution));
+    data_map.insert("available".into(), Value::Bool(available));
+    data_map.insert("stored".into(), Value::Bool(true));
+    data_map.insert("history".into(), Value::Object(history_map));
+    data_map.insert("dashboard".into(), Value::Object(dashboard));
+    data_map.insert("providerTable".into(), Value::Array(table));
+    data_map.insert(
+        "providersWithActivity".into(),
+        json!(providers_with_activity),
+    );
+    let mut composed =
+        analytics::compose_data(&ctx, &data_map).map_err(|_| Decline::Unsupported)?;
+    drop(data_map);
     if !ctx.valid() {
         return Err(Decline::Locale);
     }

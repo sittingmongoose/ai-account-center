@@ -12,7 +12,7 @@ use crate::store_host::StoreHost;
 use aac_files::registry::{Owners, Role};
 use aac_status::share::NodeFs;
 use aac_status::share::check::ReadersCheckWriter;
-use aac_status::share::quota::{self, QuotaReportReader, QuotaReportState};
+use aac_status::share::quota::{self, QuotaReportReader};
 use aac_status::share::registry::PmMailRegistryReader;
 use aac_status::share::reports::{self, AgentReportsReader, AgentReportsState, Limits};
 use aac_status::share::status_docs::{self, StatusDocsReader, StatusDocsState};
@@ -36,14 +36,15 @@ struct Readers {
 #[derive(Default)]
 struct OwnedState {
     generation: u64,
-    reports: Json,
+    reports_rows: Option<Arc<AgentReportsState>>,
     quota: Json,
     registry: Json,
-    docs: Json,
+    docs_rows: Option<Arc<StatusDocsState>>,
 }
 
 /// G16c: one pass's snapshots for the producers. The front door's `GET
-/// /internal/status/inputs` still reads the JSON the state holds; the producers read these.
+/// /internal/status/inputs` still reads the JSON lazily from the held rows; the producers read these.
+#[cfg(test)]
 pub(crate) struct Scan {
     pub reports: AgentReportsState,
     pub docs: StatusDocsState,
@@ -51,15 +52,18 @@ pub(crate) struct Scan {
     pub registry: Json,
 }
 
-/// One pass's outcome: the typed snapshots the check writer rows, and the JSON the front
-/// door forwards.
+/// One pass's outcome: the shared typed snapshots the check writer rows and producers read.
 struct Outcome {
     changed: bool,
-    reports: AgentReportsState,
-    docs: StatusDocsState,
-    quota: QuotaReportState,
+    reports: Arc<AgentReportsState>,
+    docs: Arc<StatusDocsState>,
+    quota: Json,
     registry: Json,
 }
+
+/// Refresh `scannedAt` at most once every 45 s when nothing on disk changed (well inside the
+/// 60 s staleness window of `read_status_cards.rs:262`, cutting idle Status churn by ~5x).
+const QUIET_REFRESH_MS: u64 = 45_000;
 
 pub(crate) struct StatusOwned {
     readers: Mutex<Readers>,
@@ -73,6 +77,7 @@ pub(crate) struct StatusOwned {
     owners: Owners,
     flushing: Arc<AtomicBool>,
     generation_clock: AtomicU64,
+    last_published_at: AtomicU64,
 }
 
 fn now_ms() -> u64 {
@@ -103,9 +108,9 @@ impl StatusOwned {
             }),
             state: Mutex::new(OwnedState {
                 registry: json!({"data": null, "asOf": null, "error": null}),
-                reports: Json::Null,
+                reports_rows: None,
                 quota: Json::Null,
-                docs: Json::Null,
+                docs_rows: None,
                 generation: 0,
             }),
             accepted: Mutex::new(IndexMap::new()),
@@ -113,6 +118,7 @@ impl StatusOwned {
             feeds,
             owners,
             generation_clock: AtomicU64::new(0),
+            last_published_at: AtomicU64::new(0),
         })
     }
 
@@ -132,8 +138,9 @@ impl StatusOwned {
         }
     }
 
-    /// One scan pass on the blocking pool: the four readers, the registry's collected wrapper.
-    fn scan_blocking(&self, now: u64, registry_due: bool) -> Outcome {
+    /// One scan pass on the blocking pool: returns `None` when nothing changed and the last
+    /// publish is still fresh (< 45 s), avoiding cloning all 2,600+ report docs on idle ticks.
+    fn scan_blocking(&self, now: u64, registry_due: bool) -> Option<Outcome> {
         let fs = NodeFs;
         let mut readers = self.readers.lock().unwrap_or_else(|p| p.into_inner());
         let mut changed = readers.reports.scan(&fs, now);
@@ -143,9 +150,6 @@ impl StatusOwned {
         if readers.docs.scan(&fs, now) {
             changed = true;
         }
-        let reports = readers.reports.snapshot();
-        let docs = readers.docs.snapshot();
-        let quota = readers.quota.snapshot();
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let registry = if registry_due {
             match readers.registry.scan(&fs, now) {
@@ -169,62 +173,40 @@ impl StatusOwned {
             state.registry.clone()
         };
         state.registry = registry.clone();
+        let has_published = state.generation > 0;
         drop(state);
-        Outcome {
+        let last_pub = self.last_published_at.load(Ordering::Relaxed);
+        if has_published && !changed && now.saturating_sub(last_pub) < QUIET_REFRESH_MS {
+            return None;
+        }
+        let reports = Arc::new(readers.reports.snapshot());
+        let docs = Arc::new(readers.docs.snapshot());
+        let quota = quota::state_json(&readers.quota.snapshot());
+        Some(Outcome {
             changed,
             reports,
             docs,
             quota,
             registry,
-        }
+        })
     }
 
-    /// One full pass: scan, hold the snapshots and tell the front door, returning the raw
-    /// outcome for [`Self::finish_pass`] and the [`Scan`] for the producers. Running the
-    /// capture and check-flush after [`crate::status_produce::Produce::after_scan`] lets a
-    /// cold start publish real reports before waiting on store open or share writes.
-    async fn scan_pass(self: &Arc<Self>, registry_due: bool) -> (Outcome, u64, Scan) {
+    /// One full pass: scan, hold shared Arc snapshots and tell the front door. Returns `None`
+    /// on quiet unchanged ticks so neither producers nor capture/check writers churn at idle.
+    async fn scan_pass(self: &Arc<Self>, registry_due: bool) -> Option<(Outcome, u64)> {
         let now = now_ms();
         let owner = Arc::clone(self);
-        let (outcome, reports_json, quota_json, docs_json) =
-            tokio::task::spawn_blocking(move || {
-                let outcome = owner.scan_blocking(now, registry_due);
-                let reports_json = reports::state_json(&outcome.reports);
-                let quota_json = quota::state_json(&outcome.quota);
-                let docs_json = status_docs::state_json(&outcome.docs);
-                (outcome, reports_json, quota_json, docs_json)
-            })
+        let outcome = tokio::task::spawn_blocking(move || owner.scan_blocking(now, registry_due))
             .await
-            .unwrap_or_else(|_| {
-                let outcome = Outcome {
-                    changed: false,
-                    reports: empty_reports(),
-                    docs: StatusDocsState {
-                        state: "missing",
-                        scanned_at: None,
-                        docs: Vec::new(),
-                        problems: Vec::new(),
-                    },
-                    quota: QuotaReportState {
-                        state: "missing",
-                        scanned_at: None,
-                        good: None,
-                        problem: None,
-                    },
-                    registry: json!({"data": null, "asOf": null, "error": null}),
-                };
-                let reports_json = reports::state_json(&outcome.reports);
-                let quota_json = quota::state_json(&outcome.quota);
-                let docs_json = status_docs::state_json(&outcome.docs);
-                (outcome, reports_json, quota_json, docs_json)
-            });
+            .unwrap_or(None)?;
         let generation = self.next_generation(now);
+        self.last_published_at.store(now, Ordering::Relaxed);
         {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             state.generation = generation;
-            state.reports = reports_json;
-            state.quota = quota_json.clone();
-            state.docs = docs_json;
+            state.reports_rows = Some(Arc::clone(&outcome.reports));
+            state.quota = outcome.quota.clone();
+            state.docs_rows = Some(Arc::clone(&outcome.docs));
             state.registry = outcome.registry.clone();
         }
         if outcome.changed {
@@ -233,13 +215,7 @@ impl StatusOwned {
                 "generation": generation,
             }));
         }
-        let scan = Scan {
-            reports: outcome.reports.clone(),
-            docs: outcome.docs.clone(),
-            quota: quota_json,
-            registry: outcome.registry.clone(),
-        };
-        (outcome, now, scan)
+        Some((outcome, now))
     }
 
     /// Capture the scan's new revisions into the hosted store and flush the readers-check rows.
@@ -251,15 +227,33 @@ impl StatusOwned {
         let _ = tokio::task::spawn_blocking(move || owner.flush_check(&reports, &docs, now)).await;
     }
 
-    /// The snapshots the front door forwards (and its fallback composer reads).
+    /// The snapshots the front door forwards (and its fallback composer reads), materialized
+    /// lazily from the held shared rows only if this legacy endpoint is called.
     pub(crate) fn inputs(&self) -> Json {
-        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let (generation, reports_rows, quota, registry, docs_rows) = {
+            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                state.generation,
+                state.reports_rows.clone(),
+                state.quota.clone(),
+                state.registry.clone(),
+                state.docs_rows.clone(),
+            )
+        };
+        let reports = reports_rows
+            .as_deref()
+            .map(reports::state_json)
+            .unwrap_or(Json::Null);
+        let docs = docs_rows
+            .as_deref()
+            .map(status_docs::state_json)
+            .unwrap_or(Json::Null);
         json!({
-            "generation": state.generation,
-            "reports": state.reports,
-            "quota": state.quota,
-            "registry": state.registry,
-            "docs": state.docs,
+            "generation": generation,
+            "reports": reports,
+            "quota": quota,
+            "registry": registry,
+            "docs": docs,
         })
     }
 
@@ -296,71 +290,30 @@ impl StatusOwned {
         self.flushing.store(false, Ordering::Relaxed);
     }
 
-    /// Report captures into the hosted store (`StatusService.captureReportHistory`): the
-    /// accepted revisions this server has not acknowledged yet, in batches of four; a policy
-    /// refusal retries the batch's rows one by one, a storage outage stops the pass.
+    /// Report captures into the hosted store (`StatusService.captureReportHistory`): check
+    /// `self.accepted` BEFORE cloning any report doc, and send batches of 64 instead of 4.
     async fn capture(&self, reports: &AgentReportsState, docs: &StatusDocsState) {
         let Some(store) = &self.store else {
             return;
         };
-        let mut input: Vec<(String, String, Json, i64, u64, String)> = Vec::new(); // kind, writer, doc, writtenAtMs, firstSeenAt, sha
-        for row in &reports.threads {
-            input.push((
-                "thread".into(),
-                row.writer.clone(),
-                row.doc.clone(),
-                row.written_at_ms,
-                row.first_seen_at,
-                row.sha256.clone(),
-            ));
-        }
-        for row in &reports.tasks {
-            input.push((
-                "tasks".into(),
-                row.writer.clone(),
-                row.doc.clone(),
-                row.written_at_ms,
-                row.first_seen_at,
-                row.sha256.clone(),
-            ));
-        }
-        for row in &reports.cards {
-            input.push((
-                "card".into(),
-                row.writer.clone(),
-                row.doc.clone(),
-                row.written_at_ms,
-                row.first_seen_at,
-                row.sha256.clone(),
-            ));
-        }
-        for row in &docs.docs {
-            let sha = row["sha256"].as_str().unwrap_or_default();
-            if sha.is_empty() {
-                continue;
-            }
-            input.push((
-                "status".into(),
-                row["writer"].as_str().unwrap_or_default().to_string(),
-                row["doc"].clone(),
-                row["writtenAtMs"].as_i64().unwrap_or(0),
-                row["firstSeenAt"].as_u64().unwrap_or(0),
-                sha.to_string(),
-            ));
-        }
         let (captures, keys) = {
             let accepted = self.accepted.lock().unwrap_or_else(|p| p.into_inner());
             let mut captures: Vec<Json> = Vec::new();
             let mut keys: Vec<String> = Vec::new();
-            for (kind, writer, doc, written_at_ms, first_seen_at, sha) in input {
+            let mut push_if_new = |kind: &str,
+                                   writer: &str,
+                                   doc: &Json,
+                                   written_at_ms: i64,
+                                   first_seen_at: u64,
+                                   sha: &str| {
                 let object_id = if kind == "card" {
-                    doc["id"].as_str().unwrap_or_default().to_string()
+                    doc["id"].as_str().unwrap_or_default()
                 } else {
-                    writer.clone()
+                    writer
                 };
                 let key = json!([kind, writer, object_id]).to_string();
-                if accepted.get(&key).map(String::as_str) == Some(sha.as_str()) {
-                    continue;
+                if accepted.get(&key).map(String::as_str) == Some(sha) {
+                    return;
                 }
                 let agent = doc
                     .get("agent")
@@ -414,18 +367,64 @@ impl StatusOwned {
                     "doc": doc,
                 }));
                 keys.push(key);
+            };
+            for row in &reports.threads {
+                push_if_new(
+                    "thread",
+                    &row.writer,
+                    &row.doc,
+                    row.written_at_ms,
+                    row.first_seen_at,
+                    &row.sha256,
+                );
+            }
+            for row in &reports.tasks {
+                push_if_new(
+                    "tasks",
+                    &row.writer,
+                    &row.doc,
+                    row.written_at_ms,
+                    row.first_seen_at,
+                    &row.sha256,
+                );
+            }
+            for row in &reports.cards {
+                push_if_new(
+                    "card",
+                    &row.writer,
+                    &row.doc,
+                    row.written_at_ms,
+                    row.first_seen_at,
+                    &row.sha256,
+                );
+            }
+            for row in &docs.docs {
+                let sha = row["sha256"].as_str().unwrap_or_default();
+                if sha.is_empty() {
+                    continue;
+                }
+                push_if_new(
+                    "status",
+                    row["writer"].as_str().unwrap_or_default(),
+                    &row["doc"],
+                    row["writtenAtMs"].as_i64().unwrap_or(0),
+                    row["firstSeenAt"].as_u64().unwrap_or(0),
+                    sha,
+                );
             }
             (captures, keys)
         };
+        const BATCH: usize = 64;
         let mut index = 0;
         while index < captures.len() {
-            let batch: Vec<Json> = captures[index..captures.len().min(index + 4)].to_vec();
-            let batch_keys: Vec<String> = keys[index..captures.len().min(index + 4)].to_vec();
+            let end = captures.len().min(index + BATCH);
+            let batch: Vec<Json> = captures[index..end].to_vec();
+            let batch_keys: Vec<String> = keys[index..end].to_vec();
             let batch_shas: Vec<String> = batch
                 .iter()
                 .map(|row| row["sourceSha256"].as_str().unwrap_or_default().to_string())
                 .collect();
-            index += 4;
+            index = end;
             let args = Json::Array(batch.clone()).to_string();
             match store.call("captureReports".to_string(), args).await {
                 Ok(_) => acknowledge(&self.accepted, &batch_keys, &batch_shas),
@@ -503,6 +502,7 @@ fn failed_registry(before: &Json, reason: &str, now: u64) -> Json {
     Json::Object(out)
 }
 
+#[allow(dead_code)]
 fn empty_reports() -> AgentReportsState {
     AgentReportsState {
         root: String::new(),
@@ -529,13 +529,26 @@ pub(crate) async fn jobs(
         if stop.load(Ordering::Acquire) {
             return;
         }
-        let (outcome, now, scan) = owner
+        if let Some((outcome, now)) = owner
             .scan_pass(tick.is_multiple_of(REGISTRY_EVERY_PASSES))
-            .await;
-        if let Some(produce) = &produce {
-            produce.after_scan(scan).await;
+            .await
+        {
+            let emit_hint = tick == 0 || outcome.changed;
+            if let Some(produce) = &produce {
+                produce
+                    .after_scan_shared(
+                        Arc::clone(&outcome.reports),
+                        Arc::clone(&outcome.docs),
+                        outcome.quota.clone(),
+                        outcome.registry.clone(),
+                        emit_hint,
+                    )
+                    .await;
+            }
+            if tick == 0 || outcome.changed {
+                owner.finish_pass(outcome, now).await;
+            }
         }
-        owner.finish_pass(outcome, now).await;
         tick = tick.wrapping_add(1);
         tokio::time::sleep(std::time::Duration::from_millis(SCAN_EVERY_MS)).await;
     }

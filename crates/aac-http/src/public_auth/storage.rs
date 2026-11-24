@@ -97,10 +97,19 @@ pub(super) fn same(left: &str, right: &str) -> bool {
     left.as_bytes().ct_eq(right.as_bytes()).into()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ConfigStat {
+    len: u64,
+    mtime: Option<SystemTime>,
+    #[cfg(unix)]
+    ino: u64,
+}
+
 pub(super) struct Files {
     root: PathBuf,
     entries: BTreeMap<&'static str, OwnedStore>,
     session_owner: SessionOwner,
+    config_cache: std::sync::Mutex<Option<(Option<ConfigStat>, Value)>>,
 }
 
 impl Files {
@@ -139,6 +148,7 @@ impl Files {
             root,
             entries,
             session_owner,
+            config_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -202,8 +212,41 @@ impl Files {
     }
 
     pub(super) fn config(&self) -> Result<Value, StoreError> {
+        let path = self.root.join(CONFIG);
+        let stat = match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_file() => {
+                #[cfg(unix)]
+                let stat = {
+                    use std::os::unix::fs::MetadataExt;
+                    ConfigStat {
+                        len: meta.len(),
+                        mtime: meta.modified().ok(),
+                        ino: meta.ino(),
+                    }
+                };
+                #[cfg(not(unix))]
+                let stat = ConfigStat {
+                    len: meta.len(),
+                    mtime: meta.modified().ok(),
+                };
+                Some(Some(stat))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(None),
+            _ => None,
+        };
+        if let Some(stat_key) = stat
+            && let Ok(guard) = self.config_cache.lock()
+            && let Some((cached_key, cached_val)) = guard.as_ref()
+            && *cached_key == stat_key
+        {
+            return Ok(cached_val.clone());
+        }
         let Some(bytes) = self.bytes(CONFIG, 4 * 1024 * 1024, false)? else {
-            return Ok(json!({}));
+            let empty = json!({});
+            if let Ok(mut guard) = self.config_cache.lock() {
+                *guard = Some((None, empty.clone()));
+            }
+            return Ok(empty);
         };
         let source = std::str::from_utf8(&bytes).map_err(|_| StoreError)?;
         let (value, _) = aac_config::split_active(source).or_else(|error| {
@@ -216,7 +259,13 @@ impl Files {
                 Err(error)
             }
         })?;
-        value.is_object().then_some(value).ok_or(StoreError)
+        let value = value.is_object().then_some(value).ok_or(StoreError)?;
+        if let Some(stat_key) = stat
+            && let Ok(mut guard) = self.config_cache.lock()
+        {
+            *guard = Some((stat_key, value.clone()));
+        }
+        Ok(value)
     }
 
     pub(super) fn config_writer(&self) -> Result<OwnedStore, StoreError> {

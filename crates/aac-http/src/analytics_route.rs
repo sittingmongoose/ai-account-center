@@ -311,8 +311,19 @@ pub(crate) fn compose(
                 })
                 .unwrap_or_default()
         };
-        let mut resolver = aac_views::pricing::Resolver::new(root);
-        let pricing = resolver.facts_table(&names("models"), &names("routes"));
+        let pricing = {
+            static RESOLVERS: std::sync::OnceLock<
+                std::sync::Mutex<
+                    std::collections::HashMap<std::path::PathBuf, aac_views::pricing::Resolver>,
+                >,
+            > = std::sync::OnceLock::new();
+            let map = RESOLVERS.get_or_init(Default::default);
+            let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+            let resolver = guard
+                .entry(root.to_path_buf())
+                .or_insert_with(|| aac_views::pricing::Resolver::new(root));
+            resolver.facts_table(&names("models"), &names("routes"))
+        };
         let table = aac_providers::analytics_provider_table()
             .into_iter()
             .map(|(id, label, order)| json!({ "id": id, "label": label, "order": order }))

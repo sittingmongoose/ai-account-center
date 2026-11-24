@@ -6,6 +6,7 @@ mod account_approvals;
 mod account_reads;
 pub mod account_usage;
 mod agent_transport;
+pub mod allocator;
 mod analytics_live;
 mod analytics_route;
 mod analytics_storage;

@@ -23,6 +23,22 @@ pub fn req<T>(value: Option<T>) -> Admit<T> {
 pub struct Spread(Vec<(String, Option<Value>)>);
 
 impl Spread {
+    /// Decode a plain JSON object (native path, zero `[[k, v]]` round-trip) or fall back to
+    /// `Spread::decode` for TS entry lists.
+    pub(crate) fn decode_or_object(value: &Value) -> Admit<Self> {
+        if let Some(map) = value.as_object() {
+            let mut object = Self(Vec::with_capacity(map.len()));
+            for (key, val) in map {
+                if key == "__proto__" {
+                    return Err(Refuse);
+                }
+                object.0.push((key.clone(), Some(val.clone())));
+            }
+            return Ok(object);
+        }
+        Self::decode(value)
+    }
+
     /// Decode a TS entry list.
     pub fn decode(value: &Value) -> Admit<Self> {
         let mut object = Self::default();

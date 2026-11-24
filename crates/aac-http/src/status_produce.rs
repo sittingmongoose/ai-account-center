@@ -28,6 +28,7 @@ use crate::answers_owned::AnswersOwned;
 use crate::feed::{Feeds, Generation};
 use crate::limits::Limits;
 use crate::status_fed::StatusCompose;
+#[cfg(test)]
 use crate::status_owned::Scan;
 use crate::status_run::{find_executable, run, ssh_argv};
 use aac_num::intl::Zone;
@@ -40,6 +41,7 @@ use aac_status::produce::machines::{self as machines_produce, HostOs, Platform, 
 use aac_status::produce::pinned_input;
 use aac_status::produce::simlock::{self, Status as SimlockStatus};
 pub(crate) use aac_status::produce::usage::UsageInput;
+use sha2::Digest;
 
 /// The Status usage input uses the same snapshot projection as the share publisher.
 #[derive(Default)]
@@ -176,9 +178,7 @@ impl PublishedState {
 /// Mutable producer inputs, held under `Produce::state` ONLY for quick Arc clones/swaps.
 /// Never held across I/O, answers refresh, pinned composition, source building, or feed puts.
 struct State {
-    reports: Arc<Json>,
     quota: Arc<Json>,
-    docs: Arc<Json>,
     registry: Arc<Json>,
     reports_rows: Arc<AgentReportsState>,
     docs_rows: Arc<StatusDocsState>,
@@ -196,7 +196,6 @@ struct State {
     answers_dirty: bool,
     sources_dirty: bool,
     answers_gen: u64,
-    reports_gen: u64,
     pinned_gen: u64,
     sources_gen: u64,
     zone: Option<RequestZone>,
@@ -206,7 +205,6 @@ struct State {
 /// Cheap snapshot taken from `State` under a microsecond lock so `publish_once` can compute
 /// completely outside `Produce::state` and `Produce::published`.
 struct PublishSnapshot {
-    reports: Arc<Json>,
     quota: Arc<Json>,
     registry: Arc<Json>,
     reports_rows: Arc<AgentReportsState>,
@@ -223,16 +221,19 @@ struct PublishSnapshot {
     answers_dirty: bool,
     sources_dirty: bool,
     answers_gen: u64,
-    reports_gen: u64,
     pinned_gen: u64,
     sources_gen: u64,
     zone: Option<RequestZone>,
 }
 
+type HeldSource = ([u8; 32], [u8; 32], Arc<Generation>);
+type ChangedSource = (usize, &'static str, [u8; 32], [u8; 32], Arc<Generation>);
+
 /// Owned exclusively by the serialized publisher (`Produce::publisher`); readers never touch it.
+/// Stores SHA-256 digests of the last published text & facts instead of raw multi-MB Strings.
 #[derive(Default)]
 struct PublisherCache {
-    held: HashMap<&'static str, (String, String, Arc<Generation>)>,
+    held: HashMap<&'static str, HeldSource>,
 }
 
 struct CollectingGuard<'a>(&'a AtomicBool);
@@ -256,10 +257,8 @@ impl State {
     fn new(default_zone: Option<RequestZone>) -> Self {
         let empty = empty_reports();
         Self {
-            reports: Arc::new(aac_status::share::reports::state_json(&empty)),
             reports_rows: Arc::new(empty),
             quota: Arc::new(Json::Null),
-            docs: Arc::new(Json::Null),
             registry: Arc::new(json!({"data": null, "asOf": null, "error": null})),
             docs_rows: Arc::new(StatusDocsState {
                 state: "missing",
@@ -288,7 +287,6 @@ impl State {
             answers_dirty: true,
             sources_dirty: true,
             answers_gen: 0,
-            reports_gen: 0,
             pinned_gen: 0,
             sources_gen: 0,
             zone: default_zone,
@@ -298,7 +296,6 @@ impl State {
 
     fn snapshot(&self) -> PublishSnapshot {
         PublishSnapshot {
-            reports: Arc::clone(&self.reports),
             quota: Arc::clone(&self.quota),
             registry: Arc::clone(&self.registry),
             reports_rows: Arc::clone(&self.reports_rows),
@@ -315,7 +312,6 @@ impl State {
             answers_dirty: self.answers_dirty,
             sources_dirty: self.sources_dirty,
             answers_gen: self.answers_gen,
-            reports_gen: self.reports_gen,
             pinned_gen: self.pinned_gen,
             sources_gen: self.sources_gen,
             zone: self.zone.clone(),
@@ -743,65 +739,61 @@ impl Produce {
         let _ = tokio::task::spawn_blocking(move || owner.publish_once_and_hint(true)).await;
     }
 
-    /// The 10 s report scan's snapshots: shared answers into the store and JSON projection
-    /// outside the state lock, then an atomic swap and background-style publish.
+    /// The 10 s report scan's snapshots: shared answers into the store outside the state lock,
+    /// then an atomic swap and publish (without cloning report docs or keeping redundant JSON).
+    #[cfg(test)]
     pub(crate) async fn after_scan(self: &Arc<Self>, scan: Scan) {
+        self.after_scan_shared(
+            Arc::new(scan.reports),
+            Arc::new(scan.docs),
+            scan.quota,
+            scan.registry,
+            true,
+        )
+        .await;
+    }
+
+    pub(crate) async fn after_scan_shared(
+        self: &Arc<Self>,
+        reports: Arc<AgentReportsState>,
+        docs: Arc<StatusDocsState>,
+        quota: Json,
+        registry: Json,
+        emit_hint: bool,
+    ) {
         let answers = Arc::clone(&self.answers);
-        let (scan, feed, reports_json, docs_json) = tokio::task::spawn_blocking(move || {
-            let cards: Vec<(Json, String)> = scan
-                .reports
+        let reports_for_feed = Arc::clone(&reports);
+        let feed = tokio::task::spawn_blocking(move || {
+            let cards: Vec<(Json, String)> = reports_for_feed
                 .cards
                 .iter()
                 .map(|row| (row.doc.clone(), row.sha256.clone()))
                 .collect();
-            let feed = answers.feed(&cards);
-            let reports_json = resolved_reports(&scan.reports, &feed);
-            let docs_json = aac_status::share::status_docs::state_json(&scan.docs);
-            (scan, feed, reports_json, docs_json)
+            answers.feed(&cards)
         })
         .await
-        .unwrap_or_else(|_| {
-            let empty = empty_reports();
-            let feed = AnswersFeed::unavailable(Vec::new());
-            let reports_json = aac_status::share::reports::state_json(&empty);
-            let docs_rows = StatusDocsState {
-                state: "missing",
-                scanned_at: None,
-                docs: Vec::new(),
-                problems: Vec::new(),
-            };
-            let docs_json = aac_status::share::status_docs::state_json(&docs_rows);
-            (
-                Scan {
-                    reports: empty,
-                    docs: docs_rows,
-                    quota: Json::Null,
-                    registry: json!({"data": null, "asOf": null, "error": null}),
-                },
-                feed,
-                reports_json,
-                docs_json,
-            )
-        });
+        .unwrap_or_else(|_| AnswersFeed::unavailable(Vec::new()));
         {
             let mut state = self.state();
-            state.reports_rows = Arc::new(scan.reports);
-            state.docs_rows = Arc::new(scan.docs);
-            state.reports = Arc::new(reports_json);
-            state.quota = Arc::new(scan.quota);
-            state.docs = Arc::new(docs_json);
-            state.registry = Arc::new(scan.registry);
+            state.reports_rows = reports;
+            state.docs_rows = docs;
+            state.quota = Arc::new(quota);
+            state.registry = Arc::new(registry);
             state.answers = Arc::new(feed);
             state.answers_dirty = false;
             state.pinned_dirty = true;
             state.sources_dirty = true;
             state.answers_gen = state.answers_gen.wrapping_add(1);
-            state.reports_gen = state.reports_gen.wrapping_add(1);
             state.pinned_gen = state.pinned_gen.wrapping_add(1);
             state.sources_gen = state.sources_gen.wrapping_add(1);
         }
         let owner = Arc::clone(self);
-        let _ = tokio::task::spawn_blocking(move || owner.publish_once_and_hint(true)).await;
+        let _ = tokio::task::spawn_blocking(move || {
+            if owner.publish(None, true) && emit_hint {
+                owner.hint();
+            }
+        })
+        .await;
     }
 
     /// The pins the readers-check writer matches reports against (`owned-pins`).
@@ -865,7 +857,6 @@ impl Produce {
             }
             state.snapshot()
         };
-        let mut reports = snap.reports;
         let mut answers = snap.answers;
         let mut need_sources = snap.sources_dirty;
         if snap.answers_dirty {
@@ -876,19 +867,14 @@ impl Produce {
                 .map(|row| (row.doc.clone(), row.sha256.clone()))
                 .collect();
             let fresh = Arc::new(self.answers.feed(&cards));
-            let resolved = Arc::new(resolved_reports(&snap.reports_rows, &fresh));
             {
                 let mut state = self.state();
                 if state.answers_gen == snap.answers_gen {
                     state.answers = Arc::clone(&fresh);
                     state.answers_dirty = false;
-                    if state.reports_gen == snap.reports_gen {
-                        state.reports = Arc::clone(&resolved);
-                    }
                 }
             }
             answers = fresh;
-            reports = resolved;
             need_sources = true;
         }
         let Some(zone) = snap.zone else {
@@ -933,6 +919,7 @@ impl Produce {
         if !need_sources && matches_published {
             return false;
         }
+        let reports = resolved_reports(&snap.reports_rows, &answers);
         if reports.as_object().is_none() {
             return false;
         }
@@ -959,6 +946,8 @@ impl Produce {
             offset_minutes: offset,
             zone: &zone.zone,
         });
+        drop(reports);
+        drop(machines);
         let mut sources = match built {
             Ok(sources) => sources,
             Err(why) => {
@@ -1003,13 +992,14 @@ impl Produce {
         ];
         // Prepare every changed source completely outside `Feeds::held`, then commit atomically.
         let mut existing: [Option<Arc<Generation>>; 6] = [None, None, None, None, None, None];
-        let mut changed_meta: Vec<(usize, &'static str, String, String, Arc<Generation>)> =
-            Vec::new();
+        let mut changed_meta: Vec<ChangedSource> = Vec::new();
         for (index, (source, text, facts)) in pushed.into_iter().enumerate() {
             let facts_text = facts.unwrap_or_else(|| "{}".to_owned());
+            let text_hash: [u8; 32] = sha2::Sha256::digest(text.as_bytes()).into();
+            let facts_hash: [u8; 32] = sha2::Sha256::digest(facts_text.as_bytes()).into();
             if let Some((held_text, held_facts, held_gen)) = cache.held.get(source)
-                && held_text == &text
-                && held_facts == &facts_text
+                && *held_text == text_hash
+                && *held_facts == facts_hash
             {
                 existing[index] = Some(Arc::clone(held_gen));
                 continue;
@@ -1018,6 +1008,8 @@ impl Produce {
             let body = format!(
                 "{{\"generation\":\"{generation_id}\",\"data\":{text},\"facts\":{facts_text}}}"
             );
+            drop(text);
+            drop(facts_text);
             let prepared = match self.feeds.prepare_generation(source, body.as_bytes()) {
                 Ok(generation) => generation,
                 Err(reason) => {
@@ -1033,7 +1025,7 @@ impl Produce {
                     return false;
                 }
             };
-            changed_meta.push((index, source, text, facts_text, prepared));
+            changed_meta.push((index, source, text_hash, facts_hash, prepared));
         }
         let any_changed = !changed_meta.is_empty();
         if any_changed {
@@ -1064,18 +1056,26 @@ impl Produce {
                     return false;
                 }
             };
-            for ((index, source, _text, _facts_text, _prepared), held_gen) in
+            for ((index, source, text_hash, facts_hash, prepared), held_gen) in
                 changed_meta.into_iter().zip(committed)
             {
-                // Keep the text and generation paired atomically: record the committed
-                // generation's own text, not Produce's, so an external PUT that outran this
-                // commit (a newer generation kept) is never paired with Produce's text
-                // (review L4).
+                // Keep the digests paired atomically with the committed generation: if an external
+                // PUT outran this commit (a newer generation kept), hash `held_gen`'s own data and
+                // facts instead of recording Produce's digests (review L4).
+                let (committed_text_hash, committed_facts_hash) =
+                    if Arc::ptr_eq(&held_gen, &prepared) {
+                        (text_hash, facts_hash)
+                    } else {
+                        (
+                            sha2::Sha256::digest(held_gen.data.get().as_bytes()).into(),
+                            sha2::Sha256::digest(held_gen.facts.get().as_bytes()).into(),
+                        )
+                    };
                 cache.held.insert(
                     source,
                     (
-                        held_gen.data.get().to_owned(),
-                        held_gen.facts.get().to_owned(),
+                        committed_text_hash,
+                        committed_facts_hash,
                         Arc::clone(&held_gen),
                     ),
                 );
@@ -1241,30 +1241,22 @@ impl Produce {
     pub(crate) fn answers_view(&self, limit: usize) -> Json {
         let (answers, dirty_inputs) = {
             let state = self.state();
-            let dirty = state.answers_dirty.then(|| {
-                (
-                    Arc::clone(&state.reports_rows),
-                    state.answers_gen,
-                    state.reports_gen,
-                )
-            });
+            let dirty = state
+                .answers_dirty
+                .then(|| (Arc::clone(&state.reports_rows), state.answers_gen));
             (Arc::clone(&state.answers), dirty)
         };
-        let answers = if let Some((reports_rows, answers_gen, reports_gen)) = dirty_inputs {
+        let answers = if let Some((reports_rows, answers_gen)) = dirty_inputs {
             let cards: Vec<(Json, String)> = reports_rows
                 .cards
                 .iter()
                 .map(|row| (row.doc.clone(), row.sha256.clone()))
                 .collect();
             let fresh = Arc::new(self.answers.feed(&cards));
-            let resolved = Arc::new(resolved_reports(&reports_rows, &fresh));
             let mut state = self.state();
             if state.answers_gen == answers_gen {
                 state.answers = Arc::clone(&fresh);
                 state.answers_dirty = false;
-                if state.reports_gen == reports_gen {
-                    state.reports = resolved;
-                }
             }
             fresh
         } else {
@@ -2584,15 +2576,15 @@ mod low_tests {
             "the external generation stays"
         );
         let cache = produce.publisher.lock().unwrap_or_else(|p| p.into_inner());
-        let (text, _facts, arc) = cache.held.get(REPORTS).unwrap();
+        let (text_hash, _facts_hash, arc) = cache.held.get(REPORTS).unwrap();
         assert!(
             Arc::ptr_eq(arc, &held_gen),
             "cache holds the committed generation"
         );
+        let expected_hash: [u8; 32] = sha2::Sha256::digest(held_gen.data.get().as_bytes()).into();
         assert_eq!(
-            text,
-            held_gen.data.get(),
-            "L4: cache text must be the committed generation's data, not Produce's text"
+            *text_hash, expected_hash,
+            "L4: cache digest must match the committed generation's data, not Produce's text"
         );
     }
 

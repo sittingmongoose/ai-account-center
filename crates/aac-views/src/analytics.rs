@@ -169,7 +169,7 @@ fn decode_account(value: &Value) -> Admit<Account> {
     let value = Spread::decode(value)?;
     let windows = req(value.get("windows").and_then(Value::as_array))?
         .iter()
-        .map(Spread::decode)
+        .map(Spread::decode_or_object)
         .collect::<Admit<Vec<_>>>()?;
     req(value.get("provider").and_then(Value::as_str))?;
     req(value.get("id").and_then(Value::as_str))?;
@@ -192,13 +192,19 @@ fn decode_record(value: &Value) -> Admit<Record> {
     let object = req(value.as_object())?;
     let windows = req(object.get("windows").and_then(Value::as_array))?
         .iter()
-        .map(Spread::decode)
+        .map(Spread::decode_or_object)
         .collect::<Admit<Vec<_>>>()?;
     text(object, "source")?;
+    let mut meta = Object::with_capacity(object.len().saturating_sub(1));
+    for (k, v) in object {
+        if k != "windows" {
+            meta.insert(k.clone(), v.clone());
+        }
+    }
     Ok(Record {
         identity: text(object, "identity")?.to_owned(),
         sampled_at: text(object, "sampledAt")?.to_owned(),
-        value: object.clone(),
+        value: meta,
         windows,
     })
 }
@@ -443,30 +449,42 @@ fn antigravity_series_order(window: &Spread) -> u8 {
     }
 }
 
+fn point_sampled_at(record: &Record, window: Option<&Spread>) -> Option<Value> {
+    let cached = window.and_then(|w| w.get("status")).and_then(Value::as_str) == Some("cached");
+    if cached {
+        Some(match window.and_then(|w| w.get("sampledAt")) {
+            None | Some(Value::Null) => json!(""),
+            Some(value) => value.clone(),
+        })
+    } else {
+        Some(json!(record.sampled_at))
+    }
+}
+
 fn account_series(
     ctx: &Context,
     account: &Account,
-    records: &[Record],
+    identity_records: &[&Record],
     range: &Range,
     hidden: bool,
 ) -> Admit<Series> {
-    let identity = account_identity(account)?;
-    let mut selected: Vec<&Record> = Vec::new();
-    for record in records {
-        if record.identity != identity.as_ref() {
-            continue;
-        }
+    let mut selected: Vec<(&Record, Vec<(String, &Spread)>)> = Vec::new();
+    for &record in identity_records {
         let Some(sampled) = parse_time(ctx, Some(&json!(record.sampled_at)))? else {
             continue;
         };
         if sampled >= range.from && sampled <= range.to {
-            selected.push(record);
+            let mut win_ids = Vec::with_capacity(record.windows.len());
+            for window in &record.windows {
+                win_ids.push((window_identity(window)?, window));
+            }
+            selected.push((record, win_ids));
         }
     }
     let mut windows: OrderedMap<Spread> = OrderedMap::new();
-    for record in &selected {
-        for window in &record.windows {
-            windows.set(window_identity(window)?, window.clone());
+    for (_, win_ids) in &selected {
+        for (id, window) in win_ids {
+            windows.set(id.clone(), (*window).clone());
         }
     }
     for window in &account.windows {
@@ -492,27 +510,31 @@ fn account_series(
         entries.sort_by_key(|(_, window)| antigravity_series_order(window));
     }
     for (identity_key, window) in entries.into_iter().take(MAX_WINDOWS) {
-        let mut buckets: OrderedMap<(f64, Spread)> = OrderedMap::new();
-        for record in &selected {
-            let mut matching = None;
-            for candidate in &record.windows {
-                if window_identity(candidate)? == identity_key {
-                    matching = Some(candidate);
-                    break;
-                }
-            }
-            let actual = point(record, matching);
-            let Some(at) = parse_time(ctx, actual.get("sampledAt"))? else {
+        let mut bucket_keys: Vec<i64> = Vec::new();
+        let mut buckets: HashMap<i64, (f64, &Record, Option<&Spread>)> = HashMap::new();
+        for (record, win_ids) in &selected {
+            let matching = win_ids
+                .iter()
+                .find(|(id, _)| id == &identity_key)
+                .map(|(_, w)| *w);
+            let sampled_val = point_sampled_at(record, matching);
+            let Some(at) = parse_time(ctx, sampled_val.as_ref())? else {
                 continue;
             };
             if at < range.from || at > range.to {
                 continue;
             }
-            let bucket = (at / bucket_ms).floor();
-            buckets.set(format!("{bucket}"), (at, actual));
+            #[allow(clippy::cast_possible_truncation)]
+            let bucket = (at / bucket_ms).floor() as i64;
+            if !buckets.contains_key(&bucket) {
+                bucket_keys.push(bucket);
+            }
+            buckets.insert(bucket, (at, *record, matching));
         }
-        let mut points: Vec<(f64, Spread)> =
-            buckets.entries().into_iter().map(|(_, v)| v).collect();
+        let mut points: Vec<(f64, &Record, Option<&Spread>)> = bucket_keys
+            .into_iter()
+            .filter_map(|k| buckets.remove(&k))
+            .collect();
         points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
         let skip = points.len().saturating_sub(MAX_POINTS_PER_WINDOW);
         let mut out = window.clone();
@@ -529,14 +551,14 @@ fn account_series(
                 points
                     .into_iter()
                     .skip(skip)
-                    .map(|(_, point)| point.into_value())
+                    .map(|(_, record, matching)| point(record, matching).into_value())
                     .collect(),
             )),
         );
         out_windows.push(out.into_value());
     }
-    let first = selected.first().map(|r| r.sampled_at.clone());
-    let last = selected.last().map(|r| r.sampled_at.clone());
+    let first = selected.first().map(|(r, _)| r.sampled_at.clone());
+    let last = selected.last().map(|(r, _)| r.sampled_at.clone());
     let mut out = account.value.clone();
     out.set("hidden", Some(json!(hidden)));
     out.set("firstSampleAt", Some(json!(first)));
@@ -677,12 +699,24 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
                     || field(account, "id").as_deref() == Some(account_filter))
         })
         .collect();
+    let mut records_by_identity: HashMap<&str, Vec<&Record>> = HashMap::new();
+    for record in record_list {
+        records_by_identity
+            .entry(record.identity.as_str())
+            .or_default()
+            .push(record);
+    }
     let mut series = Vec::new();
     let mut sample_count = 0usize;
     let mut stamps = Vec::new();
     for account in &accounts {
         let hidden = registry.hidden(&account.value)?;
-        let one = account_series(ctx, account, record_list, &range, hidden)?;
+        let identity = account_identity(account)?;
+        let matching_records = records_by_identity
+            .get(identity.as_ref())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let one = account_series(ctx, account, matching_records, &range, hidden)?;
         sample_count += one.count;
         stamps.extend(one.first);
         stamps.extend(one.last);

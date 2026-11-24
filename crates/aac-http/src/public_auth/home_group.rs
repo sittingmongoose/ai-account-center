@@ -172,7 +172,6 @@ impl Home {
         // names it. The TS route parses the answer, adds the field and serializes again; the same
         // parse-and-insert keeps the per-response pass and the key order.
         let dashboard = offered_views(dashboard);
-        let dashboard_bytes = aac_views::js_json::write(&dashboard);
         // The profile owner distinguishes an absent runtime from a failed inventory read.
         let root = self.root.clone();
         let antigravity =
@@ -195,7 +194,8 @@ impl Home {
         {
             return Some(answer);
         }
-        // The legacy shape: the same reads, no view (`home-read-parity`'s fed path declined).
+        // The legacy shape: serialize `dashboard_bytes` lazily only when fed path declined.
+        let dashboard_bytes = aac_views::js_json::write(&inputs.dashboard);
         Some(super::json_bytes(
             200,
             legacy(&dashboard_bytes, &inputs, &self.root)?,

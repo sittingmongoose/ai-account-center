@@ -267,11 +267,16 @@ pub(crate) fn antigravity_envelope(inventory: &Value) -> Result<Vec<u8>, Decline
     Ok(js_json::write(&Value::Object(envelope)))
 }
 
-/// What one source holds: its latest change key and the generation the service holds for it (or the refusal).
+/// What one source holds: its SHA-256 change digest and the generation the service holds (or refusal).
 struct Held {
-    key: String,
+    key: [u8; 32],
     generation: Option<String>,
     refused: Option<Decline>,
+}
+
+fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
 }
 
 #[derive(Default)]
@@ -320,15 +325,11 @@ impl HomeProducer {
             return Err(Decline::Shape);
         }
         let dashboard_data = dashboard_text(&inputs.dashboard)?;
-        let dashboard_key =
-            String::from_utf8(dashboard_data.clone()).map_err(|_| Decline::Internal)?;
-        let opens_key =
-            String::from_utf8(js_json::write(&inputs.opens)).map_err(|_| Decline::Internal)?;
-        let inventory_key = format!(
-            "inventory:{}",
-            String::from_utf8(js_json::write(&inputs.antigravity))
-                .map_err(|_| Decline::Internal)?
-        );
+        let dashboard_key = sha256_bytes(&dashboard_data);
+        let opens_bytes = js_json::write(&inputs.opens);
+        let opens_key = sha256_bytes(&opens_bytes);
+        let inventory_bytes = js_json::write(&inputs.antigravity);
+        let inventory_key = sha256_bytes(&inventory_bytes);
         let source = format!(
             "{HOME_DASHBOARD}{}-{}",
             inputs.platform,
@@ -337,10 +338,10 @@ impl HomeProducer {
         let mut state = self.state.lock().map_err(|_| Decline::Internal)?;
         let dashboard = ensure_source(&mut state, feeds, &source, dashboard_key, || {
             let facts = dashboard_facts(&inputs.dashboard)?;
-            Ok((dashboard_data.clone(), facts))
+            Ok((dashboard_data, facts))
         })?;
         let opens = ensure_source(&mut state, feeds, HOME_OPENS, opens_key, || {
-            Ok((js_json::write(&inputs.opens), b"null".to_vec()))
+            Ok((opens_bytes, b"null".to_vec()))
         })?;
         let antigravity =
             ensure_source(&mut state, feeds, HOME_ANTIGRAVITY, inventory_key, || {
@@ -360,7 +361,7 @@ fn ensure_source(
     state: &mut State,
     feeds: &Feeds,
     source: &str,
-    key: String,
+    key: [u8; 32],
     build: impl FnOnce() -> Result<(Vec<u8>, Vec<u8>), Decline>,
 ) -> Result<String, Decline> {
     if let Some(held) = state.sources.get(source)

@@ -608,15 +608,15 @@ fn attribute_activity_sources(sources: &[SourceData]) -> R<Vec<AttributedSource>
                         .push((part, session.clone(), index == best));
                 }
             }
-            // Append this data item's results to their providers, in first-appearance order.
+            // Append this data item's results to their providers, in first-appearance order (move, no clone).
             for (provider, index) in seen.entries() {
-                let result = results.get(*index).ok_or(Decline::Shape)?;
+                let result = results.get_mut(*index).ok_or(Decline::Shape)?;
                 let source_entry = by_provider.get_mut(provider).ok_or(Decline::Shape)?;
                 let slot = source_entry.data.last_mut().ok_or(Decline::Shape)?;
                 *slot = AttributedResult {
-                    tool: result.tool.clone(),
-                    hourly: result.hourly.clone(),
-                    session: result.session.clone(),
+                    tool: std::mem::take(&mut result.tool),
+                    hourly: std::mem::take(&mut result.hourly),
+                    session: std::mem::take(&mut result.session),
                 };
             }
         }
@@ -624,8 +624,12 @@ fn attribute_activity_sources(sources: &[SourceData]) -> R<Vec<AttributedSource>
     let order = usage_provider_order();
     let mut out: Vec<AttributedSource> = Vec::new();
     for provider in &order {
-        if let Some(source) = by_provider.get(provider) {
-            out.push(clone_source(source));
+        if let Some(source) = by_provider.get_mut(provider) {
+            out.push(AttributedSource {
+                provider: std::mem::take(&mut source.provider),
+                fetched_at: std::mem::take(&mut source.fetched_at),
+                data: std::mem::take(&mut source.data),
+            });
         }
     }
     let mut rest: Vec<String> = by_provider
@@ -636,13 +640,18 @@ fn attribute_activity_sources(sources: &[SourceData]) -> R<Vec<AttributedSource>
         .collect();
     rest.sort();
     for provider in rest {
-        if let Some(source) = by_provider.get(&provider) {
-            out.push(clone_source(source));
+        if let Some(source) = by_provider.get_mut(&provider) {
+            out.push(AttributedSource {
+                provider: std::mem::take(&mut source.provider),
+                fetched_at: std::mem::take(&mut source.fetched_at),
+                data: std::mem::take(&mut source.data),
+            });
         }
     }
     Ok(out)
 }
 
+#[allow(dead_code)]
 fn clone_source(source: &AttributedSource) -> AttributedSource {
     AttributedSource {
         provider: source.provider.clone(),

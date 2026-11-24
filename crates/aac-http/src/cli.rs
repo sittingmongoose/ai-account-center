@@ -333,7 +333,7 @@ fn launch(args: &[String], root: Option<PathBuf>) -> Result<(), String> {
         .ok_or("Rust dashboard mode requires an absolute CCS_DIR, CCS_HOME or --config-dir.")?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
-        .max_blocking_threads(20)
+        .max_blocking_threads(8)
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;

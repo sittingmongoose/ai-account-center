@@ -16,9 +16,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// Generation-sets kept at once.
-pub(crate) const GENERATIONS: usize = 8;
+pub(crate) const GENERATIONS: usize = 2;
 /// Filled views (clock and day words) one generation-set keeps.
-pub(crate) const SLOTS: usize = 4;
+pub(crate) const SLOTS: usize = 2;
 
 /// `Date#toISOString` inside the admitted domain.
 pub(crate) const ISO_LEN: usize = 24;

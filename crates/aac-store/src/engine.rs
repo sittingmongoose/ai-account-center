@@ -78,7 +78,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            cache_bytes: 32 << 20,
+            cache_bytes: 8 << 20,
             integrity_max_bytes: 512 << 20,
             retention_days: 0,
             activity_retention_days: None,
@@ -129,8 +129,18 @@ pub struct Engine {
     pub opened_ms: u64,
     pub integrity: Mutex<Json>,
     pub(crate) runs_history: Mutex<crate::runs::HistoryCache>,
+    pub(crate) write_seq: std::sync::atomic::AtomicU64,
+    pub(crate) db_stats_cache: Mutex<Option<(u64, Json)>>,
+    pub(crate) capture_health_cache: Mutex<Option<(u64, Json)>>,
     /// Last, so it is released after the logs and redb (fields drop in declaration order).
     _lock: fsx::StoreLock,
+}
+
+impl Engine {
+    /// Monotonic counter bumped after committed log/compaction writes to invalidate cached stats.
+    pub fn write_seq(&self) -> u64 {
+        self.write_seq.load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 pub fn now_ms() -> u64 {
@@ -320,6 +330,9 @@ impl Engine {
             opened_ms: now_ms(),
             integrity: Mutex::new(integrity),
             runs_history: Mutex::new(crate::runs::HistoryCache::default()),
+            write_seq: std::sync::atomic::AtomicU64::new(1),
+            db_stats_cache: Mutex::new(None),
+            capture_health_cache: Mutex::new(None),
             _lock: lock,
         };
         let replay_findings = engine.replay()?;
@@ -645,6 +658,7 @@ impl Engine {
                 db::write_checkpoint(&txn, &Self::checkpoint_name(self.projectors[*i].as_ref(), log_id), cp)?;
             }
             txn.commit()?;
+            self.write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
             Ok(result)
         })
     }
@@ -657,19 +671,34 @@ impl Engine {
             .any(|log| log.manifest().segments.iter().any(|s| s.state != "sealed"));
         drop(logs);
         let db_bytes = fs::metadata(self.dir.join(REDB_FILE)).map(|m| m.len()).unwrap_or(0);
-        let db_stats = self.with_db(|db| {
-            let txn = db.begin_write()?;
-            let stats = txn.stats()?;
-            let out = json!({
-                "allocatedPages": stats.allocated_pages(),
-                "pageSize": stats.page_size(),
-                "storedBytes": stats.stored_bytes(),
-                "metadataBytes": stats.metadata_bytes(),
-                "fragmentedBytes": stats.fragmented_bytes(),
-            });
-            txn.abort()?;
-            Ok(out)
-        })?;
+        let seq = self.write_seq();
+        let cached_stats = self
+            .db_stats_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .filter(|(cached_seq, _)| *cached_seq == seq)
+            .map(|(_, val)| val.clone());
+        let db_stats = match cached_stats {
+            Some(stats) => stats,
+            None => {
+                let fresh = self.with_db(|db| {
+                    let txn = db.begin_write()?;
+                    let stats = txn.stats()?;
+                    let out = json!({
+                        "allocatedPages": stats.allocated_pages(),
+                        "pageSize": stats.page_size(),
+                        "storedBytes": stats.stored_bytes(),
+                        "metadataBytes": stats.metadata_bytes(),
+                        "fragmentedBytes": stats.fragmented_bytes(),
+                    });
+                    txn.abort()?;
+                    Ok(out)
+                })?;
+                *self.db_stats_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((seq, fresh.clone()));
+                fresh
+            }
+        };
         let (checkpoints, meta) = self.with_db(|db| {
             let read = db.begin_read()?;
             let table = read.open_table(db::CHECKPOINT)?;
@@ -879,6 +908,9 @@ impl Engine {
         }
         drop(guard);
         drop(_logs);
+        if done {
+            self.write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
         self.set_meta("last_compact_ms", &now_ms().to_string())?;
         Ok(done)
     }

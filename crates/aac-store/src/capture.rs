@@ -242,7 +242,17 @@ pub fn history(engine: &Engine, query: Query) -> Result<Json> {
 }
 
 pub fn health(engine: &Engine) -> Result<Json> {
-    engine.with_db(|database| {
+    let seq = engine.write_seq.load(std::sync::atomic::Ordering::Acquire);
+    if let Some((cached_seq, cached)) = engine
+        .capture_health_cache
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        && *cached_seq == seq
+    {
+        return Ok(cached.clone());
+    }
+    let out = engine.with_db(|database| {
         let read = database.begin_read()?;
         let revisions = read.open_table(REVISION)?;
         let contents = read.open_table(CONTENT)?;
@@ -250,5 +260,7 @@ pub fn health(engine: &Engine) -> Result<Json> {
         let last = meta.get("capture_last_ingested_ms")?.and_then(|v| String::from_utf8_lossy(v.value()).parse::<u64>().ok());
         Ok(json!({ "policy":"forever", "lastIngestedAtMs":last, "objects":read.open_table(HEAD)?.len()?, "revisions":revisions.len()?,
             "contents":contents.len()?, "revisionBytes":revisions.stats()?.stored_bytes(), "contentBytes":contents.stats()?.stored_bytes(), }))
-    })
+    })?;
+    *engine.capture_health_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((seq, out.clone()));
+    Ok(out)
 }

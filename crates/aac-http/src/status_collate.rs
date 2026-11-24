@@ -90,6 +90,20 @@ pub(crate) fn complete_order(sources: &[&str], facts: &str) -> Option<String> {
     complete_order_of(&values.iter().collect::<Vec<_>>(), facts)
 }
 
+/// Rank a deduplicated word set into a JSON `{word: rank}` object using `collation_key`.
+pub(crate) fn rank_words<'a>(words: impl IntoIterator<Item = &'a String>) -> Map<String, Value> {
+    let mut keyed: Vec<(CollationKey, &String)> = words
+        .into_iter()
+        .map(|word| (collation_key(word), word))
+        .collect();
+    keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+    keyed
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (_, word))| (word.clone(), Value::from(rank)))
+        .collect()
+}
+
 /// [`complete_order`] over parsed values (the one data object of the Scoreboard facts).
 pub(crate) fn complete_order_of(values: &[&Value], facts: &str) -> Option<String> {
     let mut words: IndexSet<String> = IndexSet::new();
@@ -97,16 +111,7 @@ pub(crate) fn complete_order_of(values: &[&Value], facts: &str) -> Option<String
         words.extend(aac_status::produce::facts::words_of(value));
     }
     let mut facts: Value = serde_json::from_str(facts).ok()?;
-    let mut keyed: Vec<(CollationKey, &String)> = words
-        .iter()
-        .map(|word| (collation_key(word), word))
-        .collect();
-    keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
-    let order: Map<String, Value> = keyed
-        .into_iter()
-        .enumerate()
-        .map(|(rank, (_, word))| (word.clone(), Value::from(rank)))
-        .collect();
+    let order = rank_words(words.iter());
     *facts.as_object_mut()?.get_mut("order")? = Value::Object(order);
     serde_json::to_string(&facts).ok()
 }
