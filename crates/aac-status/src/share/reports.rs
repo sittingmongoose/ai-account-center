@@ -71,27 +71,10 @@ pub struct AgentReportsState {
     pub boards: Map<String, Json>,
 }
 
-/// At most `limit` names: all of them when they fit, else those whose folder changed most
-/// recently (never read, 0, last), the tie in `localeCompare` order.
-fn newest_folders(names: Vec<String>, limit: usize, fs: &dyn ShareFs, dir: &Path) -> Vec<String> {
-    if names.len() <= limit {
-        return names;
-    }
-    let mut dated: Vec<(String, f64)> = names
-        .into_iter()
-        .map(|name| {
-            let mtime = fs.stat(&dir.join(&name)).map(|stat| stat.mtime_ms).unwrap_or(0.0);
-            (name, mtime)
-        })
-        .collect();
-    dated.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| compare(&a.0, &b.0))
-    });
-    dated.truncate(limit);
-    dated.into_iter().map(|(name, _)| name).collect()
-}
+/// How many passes a full re-dating of the writers past the limit takes: each pass
+/// re-stats one rotating slice of them, so a folder past the limit that changes is
+/// dated (and can re-enter) within this many passes instead of the next one.
+const REDATE_PASSES: usize = 6;
 
 pub struct AgentReportsReader {
     root: PathBuf,
@@ -107,6 +90,13 @@ pub struct AgentReportsReader {
     over_bytes: u64,
     misses: TransientMisses,
     listing_misses: TransientMisses,
+    /// Writer folder dates (folder mtime) as last statted, for the over-limit selection:
+    /// statting every folder every pass once past the writer limit was most of the scan's
+    /// idle cost. A kept writer is re-dated when its scan changed anything; writers past
+    /// the limit are re-dated in rotating slices ([`REDATE_PASSES`]).
+    folder_dates: std::collections::HashMap<String, f64>,
+    kept_writers: HashSet<String>,
+    date_cursor: usize,
 }
 
 impl AgentReportsReader {
@@ -125,11 +115,81 @@ impl AgentReportsReader {
             over_bytes: 0,
             misses: TransientMisses::default(),
             listing_misses: TransientMisses::default(),
+            folder_dates: std::collections::HashMap::new(),
+            kept_writers: HashSet::new(),
+            date_cursor: 0,
         }
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// At most the writer limit of `names`: all of them when they fit, else those whose
+    /// folder changed most recently (never dated, 0, last), the tie in `localeCompare`
+    /// order — the selection the stat-every-folder pass made, now over held folder dates:
+    /// a folder never dated is statted at once (so the first over-limit scan stats all,
+    /// as before), kept folders are re-dated by the scan when they change, and folders
+    /// past the limit are re-dated one rotating slice per pass ([`REDATE_PASSES`]).
+    fn select_writers(&mut self, names: Vec<String>, fs: &dyn ShareFs, dir: &Path) -> Vec<String> {
+        let listed: HashSet<&str> = names.iter().map(String::as_str).collect();
+        self.folder_dates.retain(|name, _| listed.contains(name.as_str()));
+        self.kept_writers.retain(|name| listed.contains(name.as_str()));
+        if names.len() <= self.limits.writers {
+            self.kept_writers = names.iter().cloned().collect();
+            return names;
+        }
+        let mut fresh: HashSet<&str> = HashSet::new();
+        for name in &names {
+            if !self.folder_dates.contains_key(name) {
+                let mtime = fs.stat(&dir.join(name)).map(|stat| stat.mtime_ms).unwrap_or(0.0);
+                self.folder_dates.insert(name.clone(), mtime);
+                fresh.insert(name.as_str());
+            }
+        }
+        // Folders dated just above are current: the rotation re-dates only the rest.
+        let mut unkept: Vec<&String> = names
+            .iter()
+            .filter(|name| !self.kept_writers.contains(*name) && !fresh.contains(name.as_str()))
+            .collect();
+        unkept.sort_by(|a, b| compare(a, b));
+        if !unkept.is_empty() {
+            let slice = unkept.len().div_ceil(REDATE_PASSES).max(1);
+            let start = self.date_cursor % unkept.len();
+            for step in 0..slice {
+                let name = unkept[(start + step) % unkept.len()];
+                let mtime = fs.stat(&dir.join(name)).map(|stat| stat.mtime_ms).unwrap_or(0.0);
+                self.folder_dates.insert(name.clone(), mtime);
+            }
+            self.date_cursor = (start + slice) % unkept.len();
+        }
+        let mut dated: Vec<(String, f64)> = names
+            .into_iter()
+            .map(|name| {
+                let mtime = self.folder_dates.get(&name).copied().unwrap_or(0.0);
+                (name, mtime)
+            })
+            .collect();
+        dated.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| compare(&a.0, &b.0))
+        });
+        dated.truncate(self.limits.writers);
+        let kept: Vec<String> = dated.into_iter().map(|(name, _)| name).collect();
+        self.kept_writers = kept.iter().cloned().collect();
+        kept
+    }
+
+    /// Refresh one kept writer's held folder date after its scan changed something: its
+    /// folder's mtime moved with the change, and the next selection must rank it by the
+    /// new date. A stat that fails keeps the held date (the folder was just listed).
+    fn redate(&mut self, fs: &dyn ShareFs, dir: &Path, name: &str) {
+        if self.folder_dates.contains_key(name)
+            && let Ok(stat) = fs.stat(&dir.join(name))
+        {
+            self.folder_dates.insert(name.to_string(), stat.mtime_ms);
+        }
     }
 
     fn set_problem(
@@ -425,7 +485,7 @@ impl AgentReportsReader {
             }
             names.push(name.clone());
         }
-        let kept = newest_folders(names.clone(), self.limits.writers, fs, &writers_dir);
+        let kept = self.select_writers(names.clone(), fs, &writers_dir);
         if kept.len() < names.len() {
             self.scan_partial = true;
             put_folder_problem(
@@ -442,7 +502,17 @@ impl AgentReportsReader {
         }
         let mut cards_visited = 0usize;
         let mut cards_over = 0usize;
+        // The previous kept writer and the changed flag as its scan started: a writer
+        // whose scan changed anything is re-dated as the next one starts (and after the
+        // loop), so every exit path of the per-writer body is covered once.
+        let mut previous: Option<(&String, bool)> = None;
         for name in &kept {
+            if let Some((done, was)) = previous.take()
+                && changed != was
+            {
+                self.redate(fs, &writers_dir, done);
+            }
+            previous = Some((name, changed));
             let base = writers_dir.join(name);
             // List the folder first, then read: a listing refreshes the NFS view of a rename-over.
             let listed: HashSet<String> = match fs.list(&base) {
@@ -536,6 +606,11 @@ impl AgentReportsReader {
                     changed = true;
                 }
             }
+        }
+        if let Some((done, was)) = previous.take()
+            && changed != was
+        {
+            self.redate(fs, &writers_dir, done);
         }
         if cards_over > 0 {
             self.scan_partial = true;
@@ -820,4 +895,135 @@ fn problem_json_ref(problem: &Problem) -> Json {
 /// The digest helper the readers share (re-exported for the check writer).
 pub fn digest(bytes: &[u8]) -> String {
     sha256_hex(bytes)
+}
+
+#[cfg(test)]
+mod folder_date_tests {
+    use super::super::{Dirent, ReadError, ShareFs};
+    use super::*;
+    use aac_files::read::Stat;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::io;
+
+    /// A share of empty writer folders with settable folder mtimes, counting folder
+    /// stats and recording which writer folders a scan listed (the kept set).
+    struct StubFs {
+        mtimes: RefCell<HashMap<String, f64>>,
+        folder_stats: RefCell<usize>,
+        listed: RefCell<Vec<String>>,
+    }
+
+    impl StubFs {
+        fn new(mtimes: &[(&str, f64)]) -> Self {
+            Self {
+                mtimes: RefCell::new(mtimes.iter().map(|(name, at)| (name.to_string(), *at)).collect()),
+                folder_stats: RefCell::new(0),
+                listed: RefCell::new(Vec::new()),
+            }
+        }
+        fn reset_counts(&self) {
+            *self.folder_stats.borrow_mut() = 0;
+            self.listed.borrow_mut().clear();
+        }
+        fn kept(&self) -> Vec<String> {
+            let mut listed = self.listed.borrow().clone();
+            listed.sort();
+            listed
+        }
+    }
+
+    impl ShareFs for StubFs {
+        fn list(&self, dir: &Path) -> io::Result<Vec<Dirent>> {
+            let name = dir
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if name == "writers" {
+                return Ok(self
+                    .mtimes
+                    .borrow()
+                    .keys()
+                    .map(|writer| Dirent {
+                        name: writer.clone(),
+                        is_dir: true,
+                        is_file: false,
+                    })
+                    .collect());
+            }
+            self.listed.borrow_mut().push(name);
+            Ok(Vec::new())
+        }
+
+        fn stat(&self, file: &Path) -> io::Result<Stat> {
+            *self.folder_stats.borrow_mut() += 1;
+            let name = file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mtime = self.mtimes.borrow().get(&name).copied().unwrap_or(0.0);
+            Ok(Stat {
+                size: 0,
+                mtime_ms: mtime,
+                ctime_ms: mtime,
+                device: 1,
+                inode: 0,
+                file: false,
+                dir: true,
+            })
+        }
+
+        fn read(&self, _file: &Path, _cap: usize) -> Result<Vec<u8>, ReadError> {
+            Err(ReadError::Io(io::Error::from_raw_os_error(2)))
+        }
+    }
+
+    /// Row status-scan-cpu: past the writer limit the scan statted every writer folder
+    /// every pass. The first scan still dates all (the same selection as before); a
+    /// quiet second scan re-stats only its rotating slice, keeps the same writers, and
+    /// a folder past the limit that changes re-enters within REDATE_PASSES scans. On
+    /// the base the second scan stats all five folders again, so it fails here.
+    #[test]
+    fn over_limit_selection_holds_folder_dates_instead_of_statting_every_pass() {
+        let fs = StubFs::new(&[
+            ("vm.a", 1.0),
+            ("vm.b", 2.0),
+            ("vm.c", 3.0),
+            ("vm.d", 4.0),
+            ("vm.e", 5.0),
+        ]);
+        let mut reader = AgentReportsReader::new(
+            PathBuf::from("/reports"),
+            Limits {
+                writers: 2,
+                cards: 500,
+                bytes: 64 * 1024 * 1024,
+            },
+        );
+        reader.scan(&fs, 1_000);
+        assert_eq!(*fs.folder_stats.borrow(), 5, "first scan dates every folder");
+        assert_eq!(fs.kept(), ["vm.d", "vm.e"], "newest two folders are kept");
+
+        fs.reset_counts();
+        reader.scan(&fs, 2_000);
+        assert!(
+            *fs.folder_stats.borrow() < 5,
+            "quiet scan statted {} folders",
+            fs.folder_stats.borrow()
+        );
+        assert_eq!(fs.kept(), ["vm.d", "vm.e"], "the kept set stands on held dates");
+
+        // The oldest folder changes: it re-enters within the rotation bound.
+        fs.mtimes.borrow_mut().insert("vm.a".to_string(), 99.0);
+        let mut entered = false;
+        for step in 0..6 {
+            fs.reset_counts();
+            reader.scan(&fs, 3_000 + step);
+            if fs.kept().contains(&"vm.a".to_string()) {
+                entered = true;
+                break;
+            }
+        }
+        assert!(entered, "a changed folder past the limit re-enters");
+    }
 }
