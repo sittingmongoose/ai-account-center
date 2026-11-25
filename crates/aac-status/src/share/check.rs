@@ -10,6 +10,7 @@ use crate::validate::is_writer_name;
 use aac_files::registry::{self, Owners, Role};
 use indexmap::IndexMap;
 use serde_json::{Map, Value as Json, json};
+use sha2::Digest;
 use std::path::{Path, PathBuf};
 
 pub const READERS_CHECK_SCHEMA: &str = "agent-reports/reader@1";
@@ -137,6 +138,11 @@ pub fn match_pin(id: Option<&str>, pins: &[(String, String)]) -> Json {
 pub struct ReadersCheckWriter {
     root: PathBuf,
     rows: IndexMap<String, IndexMap<String, CheckRow>>,
+    /// Each writer's `files` as last written (a digest of its rows' JSON), so a flush
+    /// rewrites only the writers whose rows changed. A check file's `writtenAt` therefore
+    /// stands still while its rows do; `agent-report check` matches rows by file and seq
+    /// and never reads that time.
+    written: std::collections::HashMap<String, [u8; 32]>,
 }
 
 impl ReadersCheckWriter {
@@ -144,6 +150,7 @@ impl ReadersCheckWriter {
         Self {
             root,
             rows: IndexMap::new(),
+            written: std::collections::HashMap::new(),
         }
     }
 
@@ -321,10 +328,13 @@ impl ReadersCheckWriter {
         rows
     }
 
-    /// Writes every writer's check file atomically, through the registry's leased writer.
+    /// Writes each changed writer's check file atomically, through the registry's leased
+    /// writer; a writer whose rows are as last written keeps its file (and its
+    /// `writtenAt`) untouched, so an idle share takes no synced writes per pass.
     /// Never creates the reports root (an unmounted share must not grow a local folder);
-    /// a write that fails is logged once per flush, never thrown.
-    pub fn flush(&self, owners: &Owners, now: u64) {
+    /// a write that fails is logged once per flush, never thrown, and is retried next
+    /// flush (its rows still count as unwritten).
+    pub fn flush(&mut self, owners: &Owners, now: u64) {
         if owners.owner("readers-check") != Some(Role::RustService) {
             return;
         }
@@ -342,6 +352,12 @@ impl ReadersCheckWriter {
         for (writer, files) in &self.rows {
             let mut sorted: Vec<&CheckRow> = files.values().collect();
             sorted.sort_by(|a, b| compare(&a.file, &b.file));
+            let files_json: Vec<Json> = sorted.iter().map(|row| row.json()).collect();
+            let print: [u8; 32] =
+                sha2::Sha256::digest(serde_json::to_string(&files_json).unwrap_or_default().as_bytes()).into();
+            if self.written.get(writer) == Some(&print) {
+                continue;
+            }
             let body = format!(
                 "{}\n",
                 serde_json::to_string_pretty(&json!({
@@ -349,7 +365,7 @@ impl ReadersCheckWriter {
                     "reader": "aac",
                     "writer": writer,
                     "writtenAt": written_at,
-                    "files": sorted.iter().map(|row| row.json()).collect::<Vec<_>>(),
+                    "files": files_json,
                 }))
                 .unwrap_or_default()
             );
@@ -358,6 +374,8 @@ impl ReadersCheckWriter {
                 Ok(store) => {
                     if store.write(body.as_bytes()).is_err() {
                         failed = true;
+                    } else {
+                        self.written.insert(writer.clone(), print);
                     }
                 }
                 Err(_) => failed = true,

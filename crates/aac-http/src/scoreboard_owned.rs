@@ -886,7 +886,7 @@ impl ScoreboardOwned {
             if flushing.swap(true, Ordering::Relaxed) {
                 return;
             }
-            let check = check.lock().unwrap_or_else(|p| p.into_inner());
+            let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
             check.flush(&owners, now_ms());
             flushing.store(false, Ordering::Relaxed);
         });

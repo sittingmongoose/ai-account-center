@@ -109,3 +109,89 @@ fn the_rust_check_files_equal_the_ts_ones() {
         assert_eq!(&got[name], body, "{name}");
     }
 }
+
+fn read_check_files(root: &std::path::Path) -> BTreeMap<String, String> {
+    let check = root.join("v1").join("readers").join("aac");
+    let mut got = BTreeMap::new();
+    for entry in std::fs::read_dir(&check).unwrap().flatten() {
+        let name = entry.file_name().into_string().unwrap();
+        if name.ends_with(".json") {
+            got.insert(name, std::fs::read_to_string(entry.path()).unwrap());
+        }
+    }
+    got
+}
+
+/// Per-writer tracking: a flush whose rows are unchanged rewrites nothing (the file,
+/// `writtenAt` included, is byte-identical), and changing one writer's rows rewrites
+/// only that writer's file. On the base the second flush rewrites every file with the
+/// later `writtenAt`, so the first assertion fails there.
+#[test]
+fn a_flush_rewrites_only_the_writers_whose_rows_changed() {
+    let v = vectors();
+    let now = v["now"].as_u64().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for (rel, content) in v["share"].as_object().unwrap() {
+        let file = root.join(rel);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, content.as_str().unwrap()).unwrap();
+    }
+    let mut reports = AgentReportsReader::new(root.clone(), Limits::default());
+    reports.scan(&NodeFs, now);
+    let docs = StatusDocsReader::new(root.clone(), STATUS_DOCS_LIMITS);
+    let runs: Vec<RunRow> = v["runs"]["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| RunRow {
+            file: r["file"].as_str().unwrap().into(),
+            seq: r["doc"]["seq"].as_u64().unwrap(),
+            sha256: r["sha256"].as_str().unwrap().into(),
+            first_seen_at: r["firstSeenAt"].as_u64().unwrap(),
+        })
+        .collect();
+    let (_rows, owners) = rust_owns_readers_check();
+    let mut writer = ReadersCheckWriter::new(root.clone());
+    writer.record_status_scan(&reports.snapshot(), &docs.snapshot(), &[]);
+    writer.record_runs(&runs, &[]);
+    writer.flush(&owners, now);
+    let first = read_check_files(&root);
+    assert_eq!(first.len(), 2, "{first:?}");
+
+    // Same rows recorded again, flushed a minute later: nothing is rewritten.
+    writer.record_status_scan(&reports.snapshot(), &docs.snapshot(), &[]);
+    writer.record_runs(&runs, &[]);
+    writer.flush(&owners, now + 60_000);
+    assert_eq!(read_check_files(&root), first, "unchanged rows rewrite nothing");
+
+    // One new run for vm.lead: only vm.lead's file moves, with the new row in it.
+    let mut more = runs
+        .iter()
+        .map(|r| RunRow {
+            file: r.file.clone(),
+            seq: r.seq,
+            sha256: r.sha256.clone(),
+            first_seen_at: r.first_seen_at,
+        })
+        .collect::<Vec<_>>();
+    more.push(RunRow {
+        file: "writers/vm.lead/runs/2026-11-07/r2.json".to_string(),
+        seq: 2,
+        sha256: "0".repeat(64),
+        first_seen_at: now,
+    });
+    writer.record_runs(&more, &[]);
+    writer.flush(&owners, now + 120_000);
+    let third = read_check_files(&root);
+    assert_eq!(
+        third["mac.worker.json"], first["mac.worker.json"],
+        "the untouched writer keeps its file"
+    );
+    assert_ne!(third["vm.lead.json"], first["vm.lead.json"]);
+    assert!(
+        third["vm.lead.json"].contains("runs/2026-11-07/r2.json"),
+        "{}",
+        third["vm.lead.json"]
+    );
+}
