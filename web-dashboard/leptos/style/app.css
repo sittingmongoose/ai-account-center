@@ -1082,31 +1082,29 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 :root[data-chrome='desk'] .upd-note .by-header, :root[data-chrome='none'] .upd-note .by-header, :root[data-chrome='band'] .upd-note .by-header { display: inline; }
 :root[data-chrome='phone'] .upd-note .by-topbar, :root[data-chrome='rail'] .upd-note .by-rail { display: inline; }
 /* A wide table (Update apps across the page from two columns up): every row on one line. */
-@container card (min-width: 600px) {
-  .ut-row { grid-template-columns: minmax(130px, 1.3fr) repeat(var(--hosts), minmax(0, 1fr)); gap: 0 12px; padding: 4px 16px; font-size: 12px; }
-  .ut-cell, .ut-app, .ut-hstate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ut-details { padding-left: 34px; }
-}
-/* A narrow table (phones, the folded Duo; device pass 2026-11-25: seven computers ran their heads together and broke
-   "current" mid-word): each app's name on its own line over a line of short computer columns. Heads and cells show
-   their short forms, one token each that never wraps (a failure or a step for the user is a colored chip); the full
+/* It is wide only while every computer column holds its full words (update.rs `compact_table` measures the card), and
+   then a state never ends in an ellipsis: a rare longer one wraps between words, never inside one. */
+.upd-table:not(.compact) .ut-row { grid-template-columns: minmax(130px, 1.3fr) repeat(var(--hosts), minmax(0, 1fr)); gap: 0 12px; padding: 4px 16px; font-size: 12px; }
+.upd-table:not(.compact) :is(.ut-cell, .ut-app, .ut-hstate) { overflow-wrap: normal; word-break: normal; }
+.upd-table:not(.compact) .ut-details { padding-left: 34px; }
+/* The compact table (phones, the Duo, a narrow window; device pass 2026-11-25: seven computers ran their heads
+   together and broke "current" mid-word): each app's name on its own line over a line of short computer columns. Heads
+   and cells show their short forms, one token each that never wraps (a failure or a step for the user is a colored chip); the full
    words stay in the cell, hidden but read aloud, and in its tip and the row's details. */
 .ut-hs, .ut-hst, .ut-t { display: none; }
-@container card (max-width: 599.98px) {
-  .ut-row { grid-template-columns: repeat(var(--hosts), minmax(0, 1fr)); gap: 1px 4px; padding: 4px 10px; font-size: 11px; }
-  .ut-row > .ut-app { grid-column: 1 / -1; }
-  .ut-host { position: relative; }
-  .ut-head > .ut-app, .ut-hname .cap, .ut-hstate, .ut-cell > .ut-w {
-    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .ut-hname { display: block; min-width: 0; }
-  .ut-hname .glyph { display: none; }
-  .ut-hs { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-stretch: 87.5%;
-    font-size: 10px; letter-spacing: .02em; line-height: 1.35; text-transform: uppercase; color: var(--ink-2); }
-  .ut-hst { display: block; font-size: 10.5px; line-height: 1.25; overflow: hidden; overflow-wrap: normal; word-break: normal; }
-  .ut-t { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .ut-cell.w-crit .ut-t, .ut-cell.w-warn .ut-t { display: inline-block; max-width: 100%; vertical-align: top; padding: 0 3px;
-    border-radius: 4px; background: color-mix(in oklab, currentColor 15%, transparent); }
-}
+.upd-table.compact .ut-row { grid-template-columns: repeat(var(--hosts), minmax(0, 1fr)); gap: 1px 4px; padding: 4px 10px; font-size: 11px; }
+.upd-table.compact .ut-row > .ut-app { grid-column: 1 / -1; }
+.upd-table.compact .ut-host { position: relative; }
+.upd-table.compact :is(.ut-head > .ut-app, .ut-hname .cap, .ut-hstate, .ut-cell > .ut-w) {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.upd-table.compact .ut-hname { display: block; min-width: 0; }
+.upd-table.compact .ut-hname .glyph { display: none; }
+.upd-table.compact .ut-hs { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-stretch: 87.5%;
+  font-size: 10px; letter-spacing: .02em; line-height: 1.35; text-transform: uppercase; color: var(--ink-2); }
+.upd-table.compact .ut-hst { display: block; font-size: 10.5px; line-height: 1.25; overflow: hidden; overflow-wrap: normal; word-break: normal; }
+.upd-table.compact .ut-t { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.upd-table.compact :is(.ut-cell.w-crit, .ut-cell.w-warn) .ut-t { display: inline-block; max-width: 100%; vertical-align: top; padding: 0 3px;
+  border-radius: 4px; background: color-mix(in oklab, currentColor 15%, transparent); }
 
 /* ---------- the settings cards ---------- */
 .set-body, .set-item { padding: 8px 12px 10px; display: grid; gap: 7px; min-width: 0; }

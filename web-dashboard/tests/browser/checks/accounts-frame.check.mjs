@@ -60,7 +60,11 @@ function measureUpdateTable() {
 			return { text: shown(c), full: c.querySelector('.ut-w')?.textContent.trim() || '', host: head?.title || '', crit: c.classList.contains('w-crit'), warn: c.classList.contains('w-warn'), tip: c.title };
 		}),
 	}));
-	return { broken, spill, overlap, hosts, rows, sideways: document.documentElement.scrollWidth > innerWidth + 1, appHead: shown(table.querySelector('.ut-head .ut-app')) };
+	// a drawn head, name or state its box cuts off (an ellipsis or a clip, sideways or below)
+	const cut = [...table.querySelectorAll('.ut-host *, .ut-app *, .ut-app, .ut-cell, .ut-cell *')]
+		.filter((el) => drawn(el) && el.textContent.trim() && getComputedStyle(el).overflow !== 'visible' && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1))
+		.map((el) => el.textContent.trim());
+	return { broken, spill, overlap, cut, hosts, rows, compact: table.classList.contains('compact'), sideways: document.documentElement.scrollWidth > innerWidth + 1, appHead: shown(table.querySelector('.ut-head .ut-app')) };
 }
 
 // What each app x computer cell must say, from the fixture job: the phone's short word or the desktop's words, and its
@@ -403,15 +407,21 @@ export const tests = {
 	// and cells broke inside words ("curren/t", "install/er failed"). At phone and folded-Duo widths every head and
 	// state stays inside its own column and no word is broken; every app x computer state is still shown, failures as
 	// words. Desktop keeps its full words.
+	// Fix round 2 (device recheck): the open Duo (669 px, a 640 px card) drew the wide table and cut its failures with an
+	// ellipsis ("installer …", "quit to fi…"); a 760 px window did the same. Below the width where every computer column
+	// holds its full words the table is compact, and no head, name or state is ever cut.
 	async 'accounts: Update apps on a phone: no head overlap, no word broken, every state shown'(t) {
-		for (const [width, height, duo] of [[390, 844, false], [402, 874, false], [466, 678, true]]) {
+		const sizes = [[390, 844, true, false, 'phone'], [402, 874, true, false, 'phone'], [466, 678, true, true, 'folded Duo'], [669, 869, true, false, 'open Duo'], [760, 900, false, false, 'window']];
+		for (const [width, height, phone, duo, what] of sizes) {
 			const at = `${width} px`;
 			const job = updateJob({ restartFailed: true });
-			await open(t, fakeServer({ update: job }), { width, height, phone: true, duo });
+			await open(t, fakeServer({ update: job }), { width, height, phone, duo });
 			await t.page.click('[data-probe="update-card"] .upd-head');
 			await t.until(`${at}: the Update apps table opens`, () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 10000, hard: true });
 			await t.until(`${at}: the card has stopped moving`, () => document.querySelector('[data-probe="update-card"]').getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), null, { timeout: 5000 });
 			const m = await t.page.evaluate(measureUpdateTable);
+			await t.check(`${at}: seven computers are too many for full words here, so the table is compact`, m?.compact === true);
+			await t.check(`${at}: no head, name or state is cut off`, !!m && m.cut.length === 0, m && `cut: ${m.cut.join(', ')}`);
 			await t.check(`${at}: no word in the table is broken across lines`, !!m && m.broken.length === 0, m && `broken: ${m.broken.join(', ')}`);
 			await t.check(`${at}: every word stays inside its own column`, !!m && m.spill.length === 0, m && `spills: ${m.spill.join(', ')}`);
 			await t.check(`${at}: the computer heads do not overlap`, !!m && !m.overlap && m.hosts.length === 7 && m.hosts.every(Boolean), m && JSON.stringify(m.hosts));
@@ -424,7 +434,7 @@ export const tests = {
 			await t.check(`${at}: no sideways page scroll`, !!m && !m.sideways);
 			// Review r1 (Medium): each cell is judged under the computer whose head it is drawn beneath, so a failure
 			// under the wrong computer fails; the check proves it catches two swapped cells.
-			const want = expectedUpdateCells(job, true);
+			const want = expectedUpdateCells(job, m?.compact !== false);
 			const bad = updateCellMismatches(m, want);
 			await t.check(`${at}: every cell says what the run reported for its app on the computer above it`, bad.length === 0, bad.slice(0, 6).join('; '));
 			const swap = () => t.page.evaluate(() => {
@@ -452,26 +462,34 @@ export const tests = {
 				const ul = document.querySelector('.ut-details');
 				return !!ul && ul.scrollWidth <= ul.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth + 1;
 			}));
-			await t.shot(`update-apps-phone-${width}-restart-details`, `Codex Desktop's details open on a ${width} px ${duo ? 'folded Duo' : 'phone'}: Windows says its restart failed`);
+			await t.shot(`update-apps-phone-${width}-restart-details`, `Codex Desktop's details open on a ${width} px ${what}: Windows says its restart failed`);
 			await t.page.evaluate(() => [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Codex Desktop')?.querySelector('button.ut-row')?.click());
 			await t.until(`${at}: the details close`, () => !document.querySelector('.ut-details'), null, { timeout: 5000 });
-			await t.shot(`update-apps-phone-${width}`, `Update apps open on a ${width} px ${duo ? 'folded Duo' : 'phone'}`);
+			await t.shot(`update-apps-phone-${width}`, `Update apps open on a ${width} px ${what}`);
 		}
 	},
 
+	// 1920 stays as it was; 1280 is the narrowest common desktop where seven computers still get the wide table, whose
+	// longer words (the no-results line) wrap between words instead of being cut.
 	async 'accounts: Update apps on a 1920 desktop keeps its full words in one line per app'(t) {
-		const job = updateJob({ restartFailed: true });
-		await open(t, fakeServer({ update: job }), { width: 1920, height: 1080 });
-		await t.until('the Update apps table is open', () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 15000, hard: true });
-		const m = await t.page.evaluate(measureUpdateTable);
-		const bad = updateCellMismatches(m, expectedUpdateCells(job, false));
-		await t.check('every cell says its full words under the computer above it ("restart failed" on Windows)', bad.length === 0, bad.slice(0, 6).join('; '));
-		await t.check('the App column head is shown', m?.appHead === 'App');
-		await t.check('the computers keep their full names', !!m && m.hosts.slice(0, 2).join('|') === 'Mac|Windows' && m.hosts.some((h) => h.startsWith('Alexis PC')));
-		await t.check('cells keep their full words', !!m && m.rows.some((r) => r.cells.some((c) => c.text === 'current')) && m.rows.some((r) => r.cells.some((c) => c.text === 'quit to finish')));
-		await t.check('no word broken and nothing spills', !!m && m.broken.length === 0 && m.spill.length === 0 && !m.overlap, m && `${m.broken} | ${m.spill}`);
-		await t.shot('update-apps-desktop-1920', 'Update apps on a 1920 desktop');
+		for (const [width, height] of [[1920, 1080], [1280, 800]]) {
+			const at = `${width} px`;
+			const job = updateJob({ restartFailed: true });
+			await open(t, fakeServer({ update: job }), { width, height });
+			await t.until(`${at}: the Update apps table is open`, () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 15000, hard: true });
+			const m = await t.page.evaluate(measureUpdateTable);
+			const bad = updateCellMismatches(m, expectedUpdateCells(job, false));
+			await t.check(`${at}: every cell says its full words under the computer above it ("restart failed" on Windows)`, bad.length === 0, bad.slice(0, 6).join('; '));
+			await t.check(`${at}: the App column head is shown`, m?.appHead === 'App');
+			await t.check(`${at}: a desktop has room for every full word, so the table is wide`, m?.compact === false);
+			await t.check(`${at}: no head, name or state is cut off`, !!m && m.cut.length === 0, m && `cut: ${m.cut.join(', ')}`);
+			await t.check(`${at}: the computers keep their full names`, !!m && m.hosts.slice(0, 2).join('|') === 'Mac|Windows' && m.hosts.some((h) => h.startsWith('Alexis PC')));
+			await t.check(`${at}: cells keep their full words`, !!m && m.rows.some((r) => r.cells.some((c) => c.text === 'current')) && m.rows.some((r) => r.cells.some((c) => c.text === 'quit to finish')));
+			await t.check(`${at}: no word broken and nothing spills`, !!m && m.broken.length === 0 && m.spill.length === 0 && !m.overlap, m && `${m.broken} | ${m.spill}`);
+			await t.shot(`update-apps-desktop-${width}`, `Update apps on a ${width} desktop`);
+		}
 	},
+
 
 	async 'accounts: on a phone the cards stack, Update apps folds to its line, nothing runs sideways'(t) {
 		const server = fakeServer({ update: updateJob() });

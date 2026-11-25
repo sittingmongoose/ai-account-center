@@ -2,9 +2,11 @@
 //! with one row per app and a column per computer, first on the page. The head line and every result word come from
 //! `updateResultsView` (accounts-view.mjs); this only arranges them. A row opens to each computer's details (the
 //! message and versions the Slint page showed as a tip). The table is open on wide pages and folded to its head line on
-//! narrow ones. On a narrow card (a phone, the folded Duo) each app's name gets its own line over a line of short
-//! computer columns: every head and cell also carries a short form (`short_label`, `tiny_word`, `host_tiny`) that the
-//! stylesheet shows there instead of the words, which stay in the cell for screen readers, its tip and the details.
+//! narrow ones. On a card too narrow for every computer's column to hold its full words (`compact`, measured from the
+//! card's width and the number of computers: phones, the Duo, a narrow window) each app's name gets its own line over
+//! a line of short computer columns: every head and cell also carries a short form (`short_label`, `tiny_word`,
+//! `host_tiny`) that the stylesheet shows there instead of the words, which stay in the cell for screen readers, its
+//! tip and the details. The wide table never cuts a word with an ellipsis: a rare longer one wraps between words.
 
 use super::Page;
 use super::model::{UpdHost, UpdItem};
@@ -182,6 +184,19 @@ pub fn short_labels(labels: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The narrowest computer column that holds the usual full state words ("installer failed", "quit to finish", the
+/// computer's name) on one line at the wide table's 12 px; rarer longer words wrap between words, never inside one.
+const WIDE_COLUMN_MIN: f64 = 100.0;
+
+/// Whether a card `width` px wide must use the compact table for `hosts` computer columns: the wide table gives the app
+/// column 1.3 shares and each computer one share of what is left after its 16 px sides and 12 px gaps (app.css), and
+/// below `WIDE_COLUMN_MIN` a share would cut its words (device recheck 2026-11-25: the open Duo's 640 px card showed
+/// "installer …").
+pub fn compact_table(width: f64, hosts: usize) -> bool {
+    let hosts = hosts as f64;
+    (width - 32.0 - 12.0 * hosts) / (1.3 + hosts) < WIDE_COLUMN_MIN
+}
+
 /// A cell's tip: its full result and what the computer said.
 fn full_words(item: &UpdItem) -> String {
     [item.result.clone(), item.tip.clone()]
@@ -225,8 +240,17 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
     let expanded = RwSignal::new(Vec::<String>::new());
     let rows = Memo::new(move |_| update.with(|u| table(&u.hosts)));
     let hosts = Memo::new(move |_| update.with(|u| u.hosts.clone()));
+    // the card's measured width decides the layout (the observer reports before the first paint)
+    let card = NodeRef::<leptos::html::Section>::new();
+    let card_width = RwSignal::new(0.0f64);
+    Effect::new(move |_| {
+        if let Some(el) = card.get() {
+            crate::ui::charts::observe_size(&el, move |w, _| card_width.set(w.round()));
+        }
+    });
+    let compact = Memo::new(move |_| compact_table(card_width.get(), hosts.with(|h| h.len())));
     view! {
-        <section class="plate ac-card upd" data-probe="update-card">
+        <section class="plate ac-card upd" data-probe="update-card" node_ref=card>
             <button type="button" class="upd-head" aria-expanded=move || if open.get() { "true" } else { "false" }
                 on:click=move |_| open.update(|o| *o = !*o)>
                 <span class="uh-title"><Icon name="download"/><h2>"Update apps"</h2></span>
@@ -256,7 +280,7 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                 </div>
             </Show>
             <Show when=move || open.get() && update.with(|u| u.shown && !u.hosts.is_empty())>
-                <div class="upd-table" role="table" aria-label="Update apps results"
+                <div class="upd-table" class:compact=move || compact.get() role="table" aria-label="Update apps results"
                     style=move || format!("--hosts:{}", hosts.with(|h| h.len()))>
                     <div class="ut-row ut-head" role="row">
                         <span class="ut-app cap" role="columnheader">"App"</span>
@@ -446,5 +470,21 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(host_tiny(&none), "no results");
+    }
+
+    #[test]
+    fn the_table_is_compact_whenever_a_computer_column_would_cut_its_words() {
+        // seven computers: the open Duo's 640 px card and a 760 px window are compact, a 1920 desktop is wide
+        assert!(compact_table(374.0, 7));
+        assert!(compact_table(640.0, 7));
+        assert!(compact_table(730.0, 7));
+        assert!(!compact_table(1840.0, 7));
+        // wide from about 946 px: 100 px per computer
+        assert!(compact_table(945.0, 7));
+        assert!(!compact_table(947.0, 7));
+        // a retry on one computer fits a phone's card wide
+        assert!(!compact_table(374.0, 1));
+        // before the first measurement (0 px) nothing is drawn wide
+        assert!(compact_table(0.0, 7));
     }
 }
