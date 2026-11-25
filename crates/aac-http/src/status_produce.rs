@@ -947,7 +947,7 @@ impl Produce {
         });
         drop(reports);
         drop(machines);
-        let mut sources = match built {
+        let sources = match built {
             Ok(sources) => sources,
             Err(why) => {
                 let reason = match why {
@@ -967,20 +967,8 @@ impl Produce {
                 return false;
             }
         };
-        // Every word ranked, not only printable ASCII (a middle-dot usage label is compared).
-        if let Some(facts) = crate::status_collate::complete_order(
-            &[
-                &sources.reports,
-                &sources.quota,
-                &sources.pinned,
-                &sources.collected,
-                &sources.answers,
-                &sources.facts_data,
-            ],
-            &sources.facts,
-        ) {
-            sources.facts = facts;
-        }
+        // The producer ranks every word once, with the total collation (a middle-dot usage
+        // label is compared): the facts publish as built, with no completing second sort.
         let pushed = [
             (REPORTS, sources.reports, None),
             (QUOTA, sources.quota, None),

@@ -1725,16 +1725,19 @@ impl ScoreboardOwned {
                         words.insert(normalized_unknown_outcome(&doc));
                     }
                 }
-                let base = aac_status::produce::facts::Facts::build(&acc, Some(&offsets.zone));
-                let mut dates = Map::with_capacity(base.dates.len());
-                for (ms, date) in &base.dates {
+                // Dates and epochs only: the order below ranks the compared words, so the
+                // accumulator's own ranking would sort a subset and be thrown away.
+                let (base_dates, base_epochs) =
+                    aac_status::produce::facts::Facts::dates_epochs(&acc, Some(&offsets.zone));
+                let mut dates = Map::with_capacity(base_dates.len());
+                for (ms, date) in &base_dates {
                     dates.insert(
                         ms.to_string(),
                         json!({"iso": date.iso, "clock": date.clock, "day": date.day}),
                     );
                 }
-                let mut epochs = Map::with_capacity(base.epochs.len() + extra_epochs.len());
-                for (k, ms) in base.epochs {
+                let mut epochs = Map::with_capacity(base_epochs.len() + extra_epochs.len());
+                for (k, ms) in base_epochs {
                     epochs.insert(k, Json::from(ms));
                 }
                 for (k, v) in extra_epochs {
@@ -3286,8 +3289,7 @@ mod tests {
         let offsets = crate::zone_facts::server_zone_facts("UTC", i64::try_from(now).expect("now"))
             .expect("zone");
         let facts = aac_status::produce::facts::Facts::of(&[&data], Some(&offsets.zone));
-        let facts_text = crate::status_collate::complete_order_of(&[&data], &facts.to_text())
-            .unwrap_or_else(|| facts.to_text());
+        let facts_text = facts.to_text();
         format!(
             "{{\"generation\":{},\"data\":{},\"facts\":{}}}",
             serde_json::Value::String(facts_id.to_string()),

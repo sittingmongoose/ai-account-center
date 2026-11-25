@@ -10,9 +10,10 @@
 //! then written from them (`aac_num::intl::Zone`, the layer Home's fed path already uses).
 //!
 //! Domains, as everywhere in this crate: a time whose ISO text or zone word is outside the
-//! proved window keeps no date fact, and a word outside printable ASCII keeps no rank. A
-//! composer that then reads that fact declines, and the TypeScript handler answers. No fact
-//! is guessed and none is defaulted.
+//! proved window keeps no date fact, and a composer that then reads that fact declines, and
+//! the TypeScript handler answers. Every word ranks, by the one total collation
+//! (`aac_num::intl::collate`): printable ASCII in its proved `localeCompare` order, any other
+//! word past it by code point. No fact is guessed and none is defaulted.
 
 use aac_num::ecma;
 use aac_num::intl::Zone;
@@ -125,6 +126,19 @@ impl Facts {
     /// its domain, or a zone word outside the offsets' window) keeps no date fact.
     #[must_use]
     pub fn build(acc: &Acc, zone: Option<&Zone>) -> Facts {
+        let (dates, epochs) = Self::dates_epochs(acc, zone);
+        Facts {
+            dates,
+            epochs,
+            order: ranks(acc.words.iter()),
+        }
+    }
+
+    /// The date and epoch facts alone, for a caller that ranks its own word set (the
+    /// Scoreboard facts rank the compared words extracted per row, not every word the
+    /// accumulator read, so ranking here too would sort twice and keep neither).
+    #[must_use]
+    pub fn dates_epochs(acc: &Acc, zone: Option<&Zone>) -> (IndexMap<i64, DateWords>, IndexMap<String, i64>) {
         let mut dates = IndexMap::new();
         for ms in &acc.times {
             let (Some(iso), Some((clock, day))) = (ecma::to_iso_string(*ms), zone.and_then(|z| z.words(*ms))) else {
@@ -132,11 +146,7 @@ impl Facts {
             };
             dates.insert(*ms, DateWords { iso, clock, day });
         }
-        Facts {
-            dates,
-            epochs: acc.epochs.clone(),
-            order: ranks(acc.words.iter()),
-        }
+        (dates, acc.epochs.clone())
     }
 
     /// The facts object (`status-facts`' facts text). Written here, in this order, so the
@@ -215,23 +225,25 @@ fn quote(text: &str) -> String {
     Json::String(text.to_owned()).to_string()
 }
 
-/// `localeRanks`: the words sorted by `localeCompare`, equal words sharing a rank. Only
-/// printable ASCII has a proved order (`aac_num::intl::ascii_compare`, checked against
-/// Node); any other word keeps no rank, and a composer that compares it declines.
+/// `localeRanks`: every word ranked once, by the one total collation
+/// (`aac_num::intl::collation_key`): printable ASCII in its proved `localeCompare` order
+/// (`aac_num::intl::ascii_compare`, checked against Node), any other word past it by code
+/// point. Each word is weighed once (its key), not twice per comparison, and no second
+/// ranking overwrites this one: the service publishes these ranks as they are.
 #[must_use]
 pub fn ranks<'a>(words: impl IntoIterator<Item = &'a String>) -> IndexMap<String, usize> {
     let mut seen = IndexSet::new();
-    let mut provable: Vec<&String> = Vec::new();
+    let mut keyed: Vec<(aac_num::intl::CollationKey, &String)> = Vec::new();
     for word in words {
-        if seen.insert(word.as_str()) && aac_num::intl::ascii_compare(word, word).is_some() {
-            provable.push(word);
+        if seen.insert(word.as_str()) {
+            keyed.push((aac_num::intl::collation_key(word), word));
         }
     }
-    provable.sort_by(|a, b| aac_num::intl::ascii_compare(a, b).unwrap_or(std::cmp::Ordering::Equal));
-    provable
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    keyed
         .into_iter()
         .enumerate()
-        .map(|(rank, word)| (word.clone(), rank))
+        .map(|(rank, (_, word))| (word.clone(), rank))
         .collect()
 }
 
@@ -287,15 +299,26 @@ mod tests {
     }
 
     #[test]
-    fn ranks_order_like_locale_compare_and_skip_unprovable_words() {
-        let data = json!(["b", "a-b", "a_1", "A", "é"]);
+    fn ranks_order_like_locale_compare_and_rank_every_word() {
+        let weekly = "Claude and GPT models \u{b7} Weekly \u{b7} In T3";
+        let hourly = "Claude and GPT models \u{b7} 5-hour \u{b7} In T3";
+        let data = json!(["b", "a-b", "a_1", "A", "é", weekly, hourly]);
         let facts = Facts::of(&[&data], Some(&zone()));
         let order = &facts.order;
-        assert!(!order.contains_key("é"));
         // A < a_1 < a-b < b in the reference's ASCII order (`_` precedes `-`, a prefix first).
         assert!(order["A"] < order["a_1"]);
         assert!(order["a_1"] < order["a-b"]);
         assert!(order["a-b"] < order["b"]);
+        // Every word ranks: past printable ASCII the total collation orders by code point,
+        // so a composer comparing a middle-dot usage label no longer declines.
+        assert!(order["b"] < order["é"], "{order:?}");
+        assert!(order[hourly] < order[weekly], "{order:?}");
+        // The dates/epochs split the Scoreboard facts use carries the same facts.
+        let mut acc = Acc::default();
+        acc.read(&data, true);
+        let (dates, epochs) = Facts::dates_epochs(&acc, Some(&zone()));
+        assert_eq!(dates, facts.dates);
+        assert_eq!(epochs, facts.epochs);
     }
 
     #[test]
