@@ -453,9 +453,14 @@ class Dribble(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        for byte in body:
-            self.wfile.write(bytes([byte])); self.wfile.flush()
-            time.sleep(0.3)
+        try:
+            for byte in body:
+                self.wfile.write(bytes([byte])); self.wfile.flush()
+                time.sleep(0.3)
+        except (BrokenPipeError, ConnectionResetError):
+            # The client left at its deadline; that disconnect is the test's subject, not a
+            # server fault (cl-singles-3-deadline-fixture). Stop dribbling quietly.
+            pass
 
     def log_message(self, *args):
         pass
