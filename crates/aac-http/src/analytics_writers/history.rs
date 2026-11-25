@@ -334,7 +334,8 @@ impl Job {
             if let Ok(answer) = answer
                 && super::valid_scan_answer(&answer, &kinds)
             {
-                let state = super::scan_state(&answer, tool).0;
+                let readable = super::has_readable_records(&answer, &cache, tool);
+                let state = super::scan_state(&answer, tool, readable).0;
                 let complete = matches!(state, "ok" | "no_usage" | "not_installed")
                     && !overflow.contains(tool)
                     && !experiments.is_some_and(|snapshot| snapshot.limited(tool));

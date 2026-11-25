@@ -550,7 +550,8 @@ mod tests {
                 assert!(cursor > last_cursor, "pass {pass} returned an old cursor");
                 last_cursor = cursor;
             }
-            let complete = super::super::scan_state(&answer, "codex").0 == "ok";
+            let readable = super::super::has_readable_records(&answer, &sliced, "codex");
+            let complete = super::super::scan_state(&answer, "codex", readable).0 == "ok";
             assert_eq!(sliced.apply("codex", &answer, complete, 0), complete);
             sliced.save(&store, "fixture").expect("save sliced cache");
             if complete {
@@ -607,7 +608,8 @@ mod tests {
                 &aac_usage::discover::Env::default(),
             );
             assert!(super::super::valid_scan_answer(&answer, &batch));
-            let (state, cause) = source_state(&answer, "codex");
+            let readable = super::super::has_readable_records(&answer, cache, "codex");
+            let (state, cause) = source_state(&answer, "codex", readable);
             assert!(cache.apply("codex", &answer, state == "ok", cutoff));
             let source = scan_source_state(&answer, "codex", "mac", now, state, cause);
             let worker = aac_store::collect::worker_from_scan(

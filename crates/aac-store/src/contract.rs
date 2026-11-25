@@ -97,6 +97,10 @@ pub struct Counts {
     /// (wave 82's `estimatedClock`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_clock: Option<bool>,
+    /// Records the reader could not read in a scan that still returned readable usage: the
+    /// readable numbers stand, the source is partial, and the page names the count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable_records: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freshness: Option<Freshness>,
 }
@@ -474,6 +478,7 @@ fn counts_ok(c: &Counts) -> bool {
         c.files_failed,
         c.future_dated,
         c.unmeasured_files,
+        c.unreadable_records,
     ]
     .into_iter()
     .flatten()

@@ -1142,6 +1142,27 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
                 None => note,
             });
         }
+        // Records the reader could not read beside readable ones: the readable numbers stand
+        // and the page names the count (the Devin case). Whole-source failures carry their own
+        // failure text already, so they keep it alone.
+        let unreadable_records = source
+            .get("unreadableRecords")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0);
+        if let Some(count) = unreadable_records
+            && !matches!(state, "unreadable" | "scan_failed" | "unavailable")
+        {
+            let records = if count == 1 {
+                "record unreadable"
+            } else {
+                "records unreadable"
+            };
+            let note = format!("{count} {records}; readable usage included");
+            detail = Some(match detail {
+                Some(detail) => format!("{detail}; {note}"),
+                None => note,
+            });
+        }
         let mut row = json!({
             "tool": tool,
             "host": text(source.get("host"))?,
@@ -1157,6 +1178,9 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
         }
         if let Some(count) = unmeasured {
             row["unmeasuredFiles"] = json!(count);
+        }
+        if let Some(count) = unreadable_records {
+            row["unreadableRecords"] = json!(count);
         }
         grid.push(row);
     }
@@ -1234,6 +1258,9 @@ fn coverage_of(sources_state: &Value) -> R<Value> {
             }
             if let Some(count) = counts.get("unmeasured_files") {
                 row["unmeasuredFiles"] = count.clone();
+            }
+            if let Some(count) = counts.get("unreadable_records") {
+                row["unreadableRecords"] = count.clone();
             }
             // Wave 82's coverage disclosures: a usage-shaped record the reader could not decode,
             // and a date it estimated from a file time. Only true is evidence.

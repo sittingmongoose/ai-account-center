@@ -483,6 +483,10 @@ pub struct CountsRow {
     /// The numbers include a date the reader estimated from a file time, never a logged event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_clock: Option<bool>,
+    /// Records the reader could not read in a scan that still returned readable usage. Kept
+    /// with the read so the page can name the evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable_records: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freshness: Option<contract::Freshness>,
 }
@@ -521,7 +525,7 @@ pub struct ReadRow {
 
 impl ReadRow {
     /// The parts that make a scan-history row worth keeping when they change.
-    fn signature(&self) -> (String, Option<String>, bool, bool, Option<u64>, bool, bool) {
+    fn signature(&self) -> (String, Option<String>, bool, bool, Option<u64>, bool, bool, Option<u64>) {
         (
             self.state.clone(),
             self.cause.clone(),
@@ -530,6 +534,7 @@ impl ReadRow {
             self.counts.as_ref().and_then(|c| c.unmeasured_files),
             self.counts.as_ref().is_some_and(|c| c.unread_usage == Some(true)),
             self.counts.as_ref().is_some_and(|c| c.estimated_clock == Some(true)),
+            self.counts.as_ref().and_then(|c| c.unreadable_records),
         )
     }
 }
@@ -1388,6 +1393,7 @@ fn counts_row(c: &contract::Counts) -> CountsRow {
         unmeasured_files: c.unmeasured_files.filter(|n| *n > 0),
         unread_usage: c.unread_usage.filter(|on| *on),
         estimated_clock: c.estimated_clock.filter(|on| *on),
+        unreadable_records: c.unreadable_records.filter(|n| *n > 0),
         freshness: c.freshness.clone(),
     }
 }

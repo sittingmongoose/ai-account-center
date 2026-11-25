@@ -352,17 +352,27 @@ fn extra_roots(preferences: Option<&Value>, host: &str) -> (Value, HashSet<&'sta
     (Value::Object(roots), overflow, generic)
 }
 
-fn scan_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>) {
+/// A scan's source state. `readable` says the kind has readable usage worth keeping: rows in
+/// the answer or rows the cache already holds for it. A few unreadable records beside readable
+/// rows stay partial (the Devin case); only a scan with no readable records, or a read
+/// failure, is unreadable.
+fn scan_state(answer: &Value, kind: &str, readable: bool) -> (&'static str, Option<&'static str>) {
     let read = &answer["kinds"][kind];
     let state = read["state"].as_str();
     if read["unreadable"] == true
-        || ["readFailures", "unreadableFolders", "unreadableRecords"]
+        || ["readFailures", "unreadableFolders"]
             .iter()
             .any(|key| read[key].as_u64().is_some_and(|count| count > 0))
     {
         return ("unreadable", Some("read_failed"));
     }
-    if read["partial"] == true || state == Some("pending") {
+    let unreadable_records = read["unreadableRecords"]
+        .as_u64()
+        .is_some_and(|count| count > 0);
+    if unreadable_records && !readable {
+        return ("unreadable", Some("read_failed"));
+    }
+    if read["partial"] == true || unreadable_records || state == Some("pending") {
         return ("scanning", None);
     }
     match state {
@@ -372,6 +382,19 @@ fn scan_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>
         Some("unreadable") => ("unreadable", Some("read_failed")),
         _ => ("scan_failed", None),
     }
+}
+
+/// Whether the kind has readable rows: in the answer or in the cache's hold.
+fn has_readable_records(answer: &Value, cache: &scan_state::Cache, kind: &str) -> bool {
+    ["rows", "srows"].iter().any(|key| {
+        answer[key]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["k"].as_str() == Some(kind)))
+    }) || cache
+        .rows
+        .iter()
+        .chain(cache.srows.iter())
+        .any(|row| row["k"].as_str() == Some(kind))
 }
 
 /// One tool of a valid scanner answer: its source state and the cached rows the writer reports.
@@ -384,7 +407,8 @@ fn scanned_kind(
     (packed, limited, discovering): (bool, bool, bool),
     cache: &mut scan_state::Cache,
 ) -> (Value, Vec<Value>, Vec<Value>) {
-    let (mut state, mut cause) = source_state(answer, kind);
+    let readable = has_readable_records(answer, cache, kind);
+    let (mut state, mut cause) = source_state(answer, kind, readable);
     if limited {
         (state, cause) = ("unreadable", Some("source_limit"));
     } else if matches!(state, "ok" | "not_installed" | "no_usage") && discovering {
@@ -435,6 +459,9 @@ fn scan_source_state(
         .filter(|count| (1..=MAX_FILE_COUNT).contains(count));
     let unread_usage = (discovery["unreadUsage"] == true).then_some(true);
     let estimated_clock = (discovery["estimatedClock"] == true).then_some(true);
+    let unreadable_records = answer["kinds"][kind]["unreadableRecords"]
+        .as_u64()
+        .filter(|count| (1..=MAX_FILE_COUNT).contains(count));
     let mut source = json!({
         "tool": kind,
         "host": host,
@@ -446,12 +473,14 @@ fn scan_source_state(
         || unmeasured_files.is_some()
         || unread_usage.is_some()
         || estimated_clock.is_some()
+        || unreadable_records.is_some()
     {
         source["counts"] = json!(Counts {
             freshness,
             unmeasured_files,
             unread_usage,
             estimated_clock,
+            unreadable_records,
             ..Counts::default()
         });
     }
@@ -470,8 +499,12 @@ fn presence_state(answer: &Value, kind: &str) -> Option<(&'static str, Option<&'
     }
 }
 
-fn source_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>) {
-    let (state, cause) = scan_state(answer, kind);
+fn source_state(
+    answer: &Value,
+    kind: &str,
+    readable: bool,
+) -> (&'static str, Option<&'static str>) {
+    let (state, cause) = scan_state(answer, kind, readable);
     if matches!(state, "not_installed")
         && let Some(presence) = presence_state(answer, kind)
     {
@@ -1161,7 +1194,10 @@ mod tests {
         });
         let pass = |answer: &Value, now| {
             assert!(valid_scan_answer(answer, &["cursor".into()]));
-            let (state, cause) = scan_state(answer, "cursor");
+            let readable = answer["rows"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["k"].as_str() == Some("cursor")));
+            let (state, cause) = scan_state(answer, "cursor", readable);
             let source = scan_source_state(answer, "cursor", "ubuntu", now, state, cause);
             let worker = collect::worker_from_scan(
                 answer["rows"].as_array().expect("scanner hourly rows"),
@@ -1309,6 +1345,106 @@ mod tests {
         assert!(detail.contains("no numeric usage"));
     }
 
+    /// A few unreadable records keep the readable usage: the source is partial and the page
+    /// names how many records were unreadable (the Devin case).
+    #[test]
+    fn unreadable_records_project_to_a_partial_source_with_the_count() {
+        let dir = tempfile::tempdir().expect("fixture home");
+        let engine = Arc::new(
+            aac_store::ops::open_engine(dir.path().to_str().expect("fixture path"), None, None)
+                .expect("open activity store"),
+        );
+        let now = aac_store::engine::now_ms() as i64 - 60_000;
+        let data_at = now - 3_600_000;
+        let hour = aac_num::ecma::to_iso_string(data_at).expect("hour");
+        let answer = json!({
+            "version": 2, "reader": {"name": "aac-usage-scan"},
+            "rows": [{"f": "sdk", "k": "cursor", "p": "anthropic", "m": "claude-opus-4-5",
+                "h": hour[..13].replace('T', " ") + ":00", "i": 100, "o": 0, "n": 1}],
+            "srows": [],
+            "kinds": {"cursor": {"state":"ok", "partial":true, "unreadableRecords":2}},
+            "discovery": {"kinds": {"cursor": {
+                "freshness": {"state":"current", "newestDataMs":data_at,
+                    "newestActivityMs":data_at, "activityComplete":true}
+            }}}
+        });
+        assert!(valid_scan_answer(&answer, &["cursor".into()]));
+        let (state, cause) = scan_state(&answer, "cursor", true);
+        let source = scan_source_state(&answer, "cursor", "ubuntu", now, state, cause);
+        let worker = collect::worker_from_scan(
+            answer["rows"].as_array().expect("scanner hourly rows"),
+            &[],
+            "cursor",
+            "ubuntu",
+            now,
+            &ResolverPricing::new(dir.path()),
+        );
+        let reports = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &[json!({"tool":"cursor", "host":"ubuntu", "data":worker})],
+            states: &[source],
+            window_from_ms: now - DAY,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &["cursor".into()].into_iter().collect(),
+        });
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            reports[0]["state"], "partial",
+            "readable usage stays partial"
+        );
+        assert_eq!(reports[0]["cause"], Value::Null);
+        assert_eq!(
+            reports[0]["counts"]["unreadableRecords"],
+            json!(2),
+            "the unreadable count reaches the report"
+        );
+        assert_eq!(
+            reports[0]["cells"].as_array().expect("report cells").len(),
+            1,
+            "the readable hour is kept"
+        );
+        let receipt = ingest_reports(&engine, &reports).expect("ingest scanner report");
+        assert_eq!(receipt["refused"], json!([]));
+        let activity = crate::analytics_route::compose(
+            engine.clone(),
+            dir.path(),
+            None,
+            &crate::analytics_live::Live::default(),
+            Some("range=7d&tz=UTC"),
+            now,
+        )
+        .expect("native Analytics answer")["activity"]
+            .clone();
+        assert_eq!(activity["sources"][0]["state"], "cached");
+        assert_eq!(activity["sources"][0]["cause"], Value::Null);
+        let detail = activity["sources"][0]["detail"]
+            .as_str()
+            .expect("partial disclosure");
+        assert!(
+            detail.contains("2 records unreadable"),
+            "the page names the count: {detail}"
+        );
+        assert_eq!(activity["history"]["sources"][0]["state"], "partial");
+        assert_eq!(
+            activity["history"]["sources"][0]["unreadableRecords"],
+            json!(2)
+        );
+        let range = aac_store::ops::call(
+            &engine,
+            "activityRange",
+            &json!({"fromMs": now - DAY, "toMs": now}).to_string(),
+        )
+        .expect("stored activity range");
+        let tokens: u64 = range["rows"]
+            .as_array()
+            .expect("range rows")
+            .iter()
+            .map(|row| row[5].as_u64().expect("input tokens"))
+            .sum();
+        assert_eq!(tokens, 100, "the readable usage is still counted");
+    }
+
     #[test]
     fn an_installed_cursor_cli_with_chats_is_not_uninstalled() {
         let home = tempfile::tempdir().expect("fixture home");
@@ -1341,10 +1477,13 @@ mod tests {
             "no_local_usage_records"
         );
         assert_eq!(
-            source_state(&answer, "cursor"),
+            source_state(&answer, "cursor", false),
             ("no_reader", Some("no_local_usage_records"))
         );
-        assert_eq!(scan_state(&answer, "cursor"), ("not_installed", None));
+        assert_eq!(
+            scan_state(&answer, "cursor", false),
+            ("not_installed", None)
+        );
     }
 
     #[test]
@@ -1609,16 +1748,67 @@ mod tests {
             "antigravity": {"state":"unreadable"},
             "omp": {"state":"ok"},
         }});
-        assert_eq!(scan_state(&answer, "claude"), ("scanning", None));
+        assert_eq!(scan_state(&answer, "claude", true), ("scanning", None));
         assert_eq!(
-            scan_state(&answer, "codex"),
+            scan_state(&answer, "codex", true),
             ("unreadable", Some("read_failed"))
         );
         assert_eq!(
-            scan_state(&answer, "antigravity"),
+            scan_state(&answer, "antigravity", false),
             ("unreadable", Some("read_failed"))
         );
-        assert_eq!(scan_state(&answer, "omp"), ("ok", None));
+        assert_eq!(scan_state(&answer, "omp", false), ("ok", None));
+    }
+
+    /// Some records unreadable beside readable ones: the scan is partial, not a read failure,
+    /// and the source counts carry how many records were unreadable (the Devin case).
+    #[test]
+    fn unreadable_records_with_readable_rows_is_partial() {
+        let answer = json!({
+            "rows": [{"k": "devin", "f": "sessions.db"}],
+            "srows": [],
+            "kinds": {"devin": {"state": "ok", "partial": true, "unreadableRecords": 2}},
+            "discovery": {"kinds": {"devin": {}}},
+        });
+        assert_eq!(scan_state(&answer, "devin", true), ("scanning", None));
+        let source = scan_source_state(
+            &answer,
+            "devin",
+            "ubuntu",
+            1_700_000_000_000,
+            "scanning",
+            None,
+        );
+        assert_eq!(source["state"], "scanning");
+        assert_eq!(source["counts"]["unreadableRecords"], json!(2));
+    }
+
+    /// Every record unreadable and nothing readable: the scan is unreadable.
+    #[test]
+    fn unreadable_records_without_readable_rows_is_unreadable() {
+        let answer = json!({
+            "rows": [],
+            "srows": [],
+            "kinds": {"devin": {"state": "ok", "partial": true, "unreadableRecords": 5}},
+        });
+        assert_eq!(
+            scan_state(&answer, "devin", false),
+            ("unreadable", Some("read_failed"))
+        );
+    }
+
+    /// A file-level read failure stays unreadable even beside readable rows.
+    #[test]
+    fn a_read_failure_stays_unreadable() {
+        let answer = json!({
+            "rows": [{"k": "cursor", "f": "store.db"}],
+            "srows": [],
+            "kinds": {"cursor": {"state": "ok", "partial": true, "unreadableRecords": 2, "readFailures": 1}},
+        });
+        assert_eq!(
+            scan_state(&answer, "cursor", true),
+            ("unreadable", Some("read_failed"))
+        );
     }
 
     #[test]
