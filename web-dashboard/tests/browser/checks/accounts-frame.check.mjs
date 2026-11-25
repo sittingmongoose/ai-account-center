@@ -17,6 +17,45 @@ async function open(t, server, { width = 1440, height = 900, phone = false, duo 
 
 const row = (id) => `.acc-item[data-row="${id}"]`;
 
+// What the Update apps table shows, as a reader sees it: every text that is drawn (not the 1 px words kept for screen
+// readers), each word's line boxes and the column it must stay inside (its cell, computer head or app name).
+function measureUpdateTable() {
+	const table = document.querySelector('[data-probe="update-card"] .upd-table');
+	if (!table) return null;
+	const drawn = (el) => { const r = el.getBoundingClientRect(); return r.width > 1 && r.height > 1 && el.checkVisibility({ visibilityProperty: true }); };
+	const broken = [];
+	const spill = [];
+	const walker = document.createTreeWalker(table, NodeFilter.SHOW_TEXT);
+	for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+		const el = node.parentElement;
+		if (!el || !drawn(el)) continue;
+		const box = el.closest('.ut-cell, .ut-host, .ut-app')?.getBoundingClientRect();
+		for (const m of node.data.matchAll(/\S+/g)) {
+			const range = document.createRange();
+			range.setStart(node, m.index);
+			range.setEnd(node, m.index + m[0].length);
+			const rects = [...range.getClientRects()].filter((r) => r.width > 0);
+			const lines = new Set(rects.map((r) => Math.round(r.top)));
+			if (lines.size > 1) broken.push(m[0]);
+			if (box && rects.some((r) => r.left < box.left - 0.5 || r.right > box.right + 0.5)) spill.push(m[0]);
+		}
+	}
+	const heads = [...table.querySelectorAll('.ut-host')].map((h) => h.getBoundingClientRect());
+	const overlap = heads.some((a, i) => heads.some((b, j) => j > i && a.left < b.right - 0.5 && b.left < a.right - 0.5));
+	const shown = (el) => {
+		const out = [];
+		const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+		for (let n = w.nextNode(); n; n = w.nextNode()) if (n.parentElement && drawn(n.parentElement)) out.push(n.data.trim());
+		return out.filter(Boolean).join(' ');
+	};
+	const hosts = [...table.querySelectorAll('.ut-host')].map((h) => shown(h));
+	const rows = [...table.querySelectorAll('.ut-item')].map((item) => ({
+		app: shown(item.querySelector('.ut-app')),
+		cells: [...item.querySelectorAll('.ut-cell')].map((c) => ({ text: shown(c), crit: c.classList.contains('w-crit'), warn: c.classList.contains('w-warn'), tip: c.title })),
+	}));
+	return { broken, spill, overlap, hosts, rows, sideways: document.documentElement.scrollWidth > innerWidth + 1, appHead: shown(table.querySelector('.ut-head .ut-app')) };
+}
+
 export const tests = {
 	// Astra max M1 (post-landing fix): the frame's dashboard controller stays in the window after sign-out, unlike the
 	// old iframe, so a save queued behind a held reply must die with its session. Ordinary clicks; synthetic answers.
@@ -271,7 +310,7 @@ export const tests = {
 		const cell = await t.page.evaluate(() => {
 			const item = [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Antigravity CLI');
 			const cells = item ? [...item.querySelectorAll('.ut-cell')] : [];
-			const failed = cells.find((c) => c.textContent.trim() === 'installer failed');
+			const failed = cells.find((c) => c.innerText.trim() === 'installer failed');
 			return failed ? { title: failed.getAttribute('title') || '', crit: failed.classList.contains('w-crit') } : null;
 		});
 		await t.check('the failed cell says "installer failed" in red, not just "failed"', !!cell && cell.crit);
@@ -284,7 +323,7 @@ export const tests = {
 		await t.until('its details show the diagnostic summary for Nas1', (text) => [...document.querySelectorAll('.ut-details li')].some((li) => li.textContent.includes('Nas1') && li.textContent.includes(text)), summary, { timeout: 5000 });
 		await t.check('its details hide saved command text and raw output', await t.page.$eval('.ut-details', (el) =>
 			!el.textContent.includes('agy update') && !el.textContent.includes('Error: connection reset by peer')));
-		await t.check('rows without diagnostics keep their old words', await t.page.evaluate(() => [...document.querySelectorAll('.ut-cell')].some((c) => c.textContent.trim() === 'quit to finish')));
+		await t.check('rows without diagnostics keep their old words', await t.page.evaluate(() => [...document.querySelectorAll('.ut-cell')].some((c) => c.innerText.trim() === 'quit to finish')));
 	},
 
 	async 'accounts: Retry failed reruns only the last run\'s failed rows'(t) {
@@ -307,10 +346,47 @@ export const tests = {
 		}, null, { timeout: 15000 });
 		await t.check('the retried row is updated and Retry failed is gone', await t.page.evaluate(() => {
 			const cell = document.querySelector('[data-probe="update-card"] .ut-cell');
-			return cell?.textContent.trim() === '→ 1.5.9' && !document.querySelector('[data-probe="update-retry"]');
+			return cell?.innerText.trim() === '→ 1.5.9' && !document.querySelector('[data-probe="update-retry"]');
 		}));
 		await t.check('the page sent the retry action', changes(server).some((r) => r.path === '/api/app-updates/retry'));
 		await t.shot('update-retry-after', 'After Retry failed: only Nas1 and Antigravity CLI, no retry offered');
+	},
+
+	// Device pass 2026-11-25 (item 5): on a 402 px iPhone the seven computer heads ran together ("WINDOWSUBUNTUNAS1")
+	// and cells broke inside words ("curren/t", "install/er failed"). At phone and folded-Duo widths every head and
+	// state stays inside its own column and no word is broken; every app x computer state is still shown, failures as
+	// words. Desktop keeps its full words.
+	async 'accounts: Update apps on a phone: no head overlap, no word broken, every state shown'(t) {
+		for (const [width, height, duo] of [[390, 844, false], [402, 874, false], [466, 678, true]]) {
+			const at = `${width} px`;
+			await open(t, fakeServer({ update: updateJob() }), { width, height, phone: true, duo });
+			await t.page.click('[data-probe="update-card"] .upd-head');
+			await t.until(`${at}: the Update apps table opens`, () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 10000, hard: true });
+			await t.until(`${at}: the card has stopped moving`, () => document.querySelector('[data-probe="update-card"]').getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), null, { timeout: 5000 });
+			const m = await t.page.evaluate(measureUpdateTable);
+			await t.check(`${at}: no word in the table is broken across lines`, !!m && m.broken.length === 0, m && `broken: ${m.broken.join(', ')}`);
+			await t.check(`${at}: every word stays inside its own column`, !!m && m.spill.length === 0, m && `spills: ${m.spill.join(', ')}`);
+			await t.check(`${at}: the computer heads do not overlap`, !!m && !m.overlap && m.hosts.length === 7 && m.hosts.every(Boolean), m && JSON.stringify(m.hosts));
+			await t.check(`${at}: every app shows a state on every computer`, !!m && m.rows.length >= 10 && m.rows.every((r) => r.app && r.cells.length === 7 && r.cells.every((c) => c.text)),
+				m && JSON.stringify(m.rows.filter((r) => !r.app || r.cells.length !== 7 || r.cells.some((c) => !c.text)).map((r) => r.app)));
+			const agy = m?.rows.find((r) => r.app === 'Antigravity CLI');
+			await t.check(`${at}: the failed update is shown as a red word with its cause in the tip`, !!agy && agy.cells.some((c) => c.crit && c.text === 'failed' && c.tip.startsWith('Installer failed')));
+			await t.check(`${at}: the step for the user is shown as a word`, !!m && m.rows.some((r) => r.app === 'Codex Desktop' && r.cells.some((c) => c.warn && c.text === 'quit')));
+			await t.check(`${at}: a computer without results says so once, under its head`, !!m && m.hosts.filter((h) => /no results$/.test(h)).length === 3);
+			await t.check(`${at}: no sideways page scroll`, !!m && !m.sideways);
+			await t.shot(`update-apps-phone-${width}`, `Update apps open on a ${width} px ${duo ? 'folded Duo' : 'phone'}`);
+		}
+	},
+
+	async 'accounts: Update apps on a 1920 desktop keeps its full words in one line per app'(t) {
+		await open(t, fakeServer({ update: updateJob() }), { width: 1920, height: 1080 });
+		await t.until('the Update apps table is open', () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 15000, hard: true });
+		const m = await t.page.evaluate(measureUpdateTable);
+		await t.check('the App column head is shown', m?.appHead === 'App');
+		await t.check('the computers keep their full names', !!m && m.hosts.slice(0, 2).join('|') === 'Mac|Windows' && m.hosts.some((h) => h.startsWith('Alexis PC')));
+		await t.check('cells keep their full words', !!m && m.rows.some((r) => r.cells.some((c) => c.text === 'current')) && m.rows.some((r) => r.cells.some((c) => c.text === 'quit to finish')));
+		await t.check('no word broken and nothing spills', !!m && m.broken.length === 0 && m.spill.length === 0 && !m.overlap, m && `${m.broken} | ${m.spill}`);
+		await t.shot('update-apps-desktop-1920', 'Update apps on a 1920 desktop');
 	},
 
 	async 'accounts: on a phone the cards stack, Update apps folds to its line, nothing runs sideways'(t) {

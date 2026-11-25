@@ -1069,14 +1069,12 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 .ut-hname .glyph { display: inline-flex; width: 12px; height: 12px; }
 .ut-hname .glyph svg { width: 12px; height: 12px; }
 .ut-hstate { font-size: 11px; line-height: 1.3; }
-/* narrow tables: the computer's name alone, so the four heads never touch */
-@container card (max-width: 439.98px) { .ut-hname .glyph { display: none; } .ut-hname .cap { letter-spacing: .02em; } }
 .ut-cell { position: relative; min-width: 0; overflow-wrap: break-word; }
 .ut-cell.q3 { color: var(--ink-3); }
-.ut-bar, .ut-hstate.running::after { display: block; height: 3px; border-radius: 2px; margin-top: 3px; background: linear-gradient(90deg, var(--track) 0 35%, var(--accent) 35% 65%, var(--track) 65%); background-size: 200% 100%; animation: ac-run 1.4s linear infinite; }
-.ut-hstate.running::after { content: ''; }
+.ut-bar, .ut-hstate.running::after, .ut-hst.running::after { display: block; height: 3px; border-radius: 2px; margin-top: 3px; background: linear-gradient(90deg, var(--track) 0 35%, var(--accent) 35% 65%, var(--track) 65%); background-size: 200% 100%; animation: ac-run 1.4s linear infinite; }
+.ut-hstate.running::after, .ut-hst.running::after { content: ''; }
 @keyframes ac-run { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-@media (prefers-reduced-motion: reduce) { .ut-bar, .ut-hstate.running::after { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ut-bar, .ut-hstate.running::after, .ut-hst.running::after { animation: none; } }
 .ut-details { padding: 0 12px 8px 28px; display: grid; gap: 3px; color: var(--ink-2); font-size: var(--fs-small); line-height: 1.45; }
 .ut-details b { color: var(--ink); font-weight: 600; font-variation-settings: 'wght' 600; }
 .upd-note { padding: 6px 12px 9px; font-size: 11.5px; border-top: 1px solid var(--rule-2); }
@@ -1088,6 +1086,26 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
   .ut-row { grid-template-columns: minmax(130px, 1.3fr) repeat(var(--hosts), minmax(0, 1fr)); gap: 0 12px; padding: 4px 16px; font-size: 12px; }
   .ut-cell, .ut-app, .ut-hstate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ut-details { padding-left: 34px; }
+}
+/* A narrow table (phones, the folded Duo; device pass 2026-11-25: seven computers ran their heads together and broke
+   "current" mid-word): each app's name on its own line over a line of short computer columns. Heads and cells show
+   their short forms, one token each that never wraps (a failure or a step for the user is a colored chip); the full
+   words stay in the cell, hidden but read aloud, and in its tip and the row's details. */
+.ut-hs, .ut-hst, .ut-t { display: none; }
+@container card (max-width: 599.98px) {
+  .ut-row { grid-template-columns: repeat(var(--hosts), minmax(0, 1fr)); gap: 1px 4px; padding: 4px 10px; font-size: 11px; }
+  .ut-row > .ut-app { grid-column: 1 / -1; }
+  .ut-host { position: relative; }
+  .ut-head > .ut-app, .ut-hname .cap, .ut-hstate, .ut-cell > .ut-w {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .ut-hname { display: block; min-width: 0; }
+  .ut-hname .glyph { display: none; }
+  .ut-hs { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-stretch: 87.5%;
+    font-size: 10px; letter-spacing: .02em; line-height: 1.35; text-transform: uppercase; color: var(--ink-2); }
+  .ut-hst { display: block; font-size: 10.5px; line-height: 1.25; overflow: hidden; overflow-wrap: normal; word-break: normal; }
+  .ut-t { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .ut-cell.w-crit .ut-t, .ut-cell.w-warn .ut-t { display: inline-block; max-width: 100%; vertical-align: top; padding: 0 3px;
+    border-radius: 4px; background: color-mix(in oklab, currentColor 15%, transparent); }
 }
 
 /* ---------- the settings cards ---------- */

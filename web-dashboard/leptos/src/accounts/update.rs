@@ -2,7 +2,9 @@
 //! with one row per app and a column per computer, first on the page. The head line and every result word come from
 //! `updateResultsView` (accounts-view.mjs); this only arranges them. A row opens to each computer's details (the
 //! message and versions the Slint page showed as a tip). The table is open on wide pages and folded to its head line on
-//! narrow ones.
+//! narrow ones. On a narrow card (a phone, the folded Duo) each app's name gets its own line over a line of short
+//! computer columns: every head and cell also carries a short form (`short_label`, `tiny_word`, `host_tiny`) that the
+//! stylesheet shows there instead of the words, which stay in the cell for screen readers, its tip and the details.
 
 use super::Page;
 use super::model::{UpdHost, UpdItem};
@@ -92,6 +94,93 @@ pub fn short_word(result: &str) -> String {
     }
 }
 
+/// A narrow table's word for a cell: one short token that never wraps in a column a seventh of a phone wide. A failure
+/// or a step for the user stays a word (drawn as a colored chip), never just a mark; the full result stays in the
+/// cell's tip and the row's details. Unknown words keep their own text (clipped, never broken).
+pub fn tiny_word(result: &str) -> String {
+    let r = result.trim();
+    if let Some(version) = r.strip_prefix("Updated to ") {
+        return format!("→{version}");
+    }
+    // a running cell: "Checking · 45s" says its step; the time stays in the tip
+    let step = r.split(" · ").next().unwrap_or(r);
+    let tiny = match step {
+        "Already current" => "✓",
+        "Updated" => "updated",
+        "Not installed" => "absent",
+        "Failed" | "Installer failed" => "failed",
+        "Updated, restart failed" => "restart",
+        "Quit to finish update" => "quit",
+        "Needs action" => "action",
+        "Codex busy, try later" => "busy",
+        "In use, try later" => "in use",
+        "Update it in the app" => "in app",
+        "Update held" => "held",
+        "Skipped: cancelled" => "skipped",
+        "Models not registered yet" | "Updated, models not registered yet" => "models",
+        "Check timed out" | "Timed out" => "timeout",
+        "Unknown" | "Unknown result" => "unknown",
+        "Sign-in needed" => "sign-in",
+        "Blocked by policy" => "policy",
+        "Another copy runs" => "copy",
+        "Updated the wrong copy" => "wrong",
+        "Folder not writable" => "locked",
+        "T3 reply lost" => "lost",
+        "T3 not installed" => "no T3",
+        "T3 not ready" => "T3 slow",
+        "After T3 restarts" => "pending",
+        "Running" => "running",
+        "Checking" => "check",
+        "Downloading" => "fetch",
+        "Updating" => "update",
+        _ if r.starts_with("Unknown: ") && r.ends_with("not reachable") => "offline",
+        _ => "",
+    };
+    if tiny.is_empty() {
+        short_word(r)
+    } else {
+        tiny.to_string()
+    }
+}
+
+/// A narrow table's word under a computer's head (its state line): a word or two that wrap only between words.
+pub fn host_tiny(state: &UpdItem) -> String {
+    match state.app.as_str() {
+        "No results from this computer" => "no results".into(),
+        "Waiting for its turn" => "waiting".into(),
+        "Starting" => "starting".into(),
+        "Checking the apps" | "More apps" => "running".into(),
+        other => short_word(other),
+    }
+}
+
+/// Each computer's short head for a narrow table: its first word, or the first three letters of a long one
+/// ("Windows" → "Win", "Alexis PC" → "Alexis"). Two computers that would share a head keep their full names.
+pub fn short_labels(labels: &[String]) -> Vec<String> {
+    let short: Vec<String> = labels
+        .iter()
+        .map(|label| {
+            let first = label.split_whitespace().next().unwrap_or("");
+            if first.chars().count() > 6 {
+                first.chars().take(3).collect()
+            } else {
+                first.to_string()
+            }
+        })
+        .collect();
+    short
+        .iter()
+        .zip(labels)
+        .map(|(s, full)| {
+            if s.is_empty() || short.iter().filter(|o| *o == s).count() > 1 {
+                full.clone()
+            } else {
+                s.clone()
+            }
+        })
+        .collect()
+}
+
 /// A cell's tip: its full result and what the computer said.
 fn full_words(item: &UpdItem) -> String {
     [item.result.clone(), item.tip.clone()]
@@ -170,18 +259,26 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                     style=move || format!("--hosts:{}", hosts.with(|h| h.len()))>
                     <div class="ut-row ut-head" role="row">
                         <span class="ut-app cap" role="columnheader">"App"</span>
-                        {move || hosts.get().into_iter().map(|h| {
-                            let state = host_state(&h);
-                            view! {
-                                <span class="ut-host" role="columnheader">
-                                    <span class="ut-hname"><PlatformGlyph id=glyph_id(&h.platform)/><span class="cap">{h.label.clone()}</span></span>
-                                    {state.map(|s| {
-                                        let words = if s.result.is_empty() { s.app.clone() } else { format!("{} · {}", s.app, s.result) };
-                                        view! { <span class=format!("ut-hstate {}", tone_class(&s.tone)) class:running=s.running>{words}</span> }
-                                    })}
-                                </span>
-                            }
-                        }).collect_view()}
+                        {move || {
+                            let hosts = hosts.get();
+                            let short = short_labels(&hosts.iter().map(|h| h.label.clone()).collect::<Vec<_>>());
+                            hosts.into_iter().zip(short).map(|(h, short)| {
+                                let state = host_state(&h);
+                                view! {
+                                    <span class="ut-host" role="columnheader" title=h.label.clone()>
+                                        <span class="ut-hname"><PlatformGlyph id=glyph_id(&h.platform)/><span class="cap">{h.label.clone()}</span><span class="ut-hs" aria-hidden="true">{short}</span></span>
+                                        {state.map(|s| {
+                                            let words = if s.result.is_empty() { s.app.clone() } else { format!("{} · {}", s.app, s.result) };
+                                            let tone = tone_class(&s.tone);
+                                            view! {
+                                                <span class=format!("ut-hstate {tone}") class:running=s.running>{words}</span>
+                                                <span class=format!("ut-hst {tone}") class:running=s.running aria-hidden="true">{host_tiny(&s)}</span>
+                                            }
+                                        })}
+                                    </span>
+                                }
+                            }).collect_view()
+                        }}
                     </div>
                     <For each=move || rows.get() key=|r| format!("{r:?}") children=move |r: AppRow| {
                         let app = r.app.clone();
@@ -210,7 +307,8 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                                     {r.cells.into_iter().map(|c| match c {
                                         Some(c) => view! {
                                             <span class=format!("ut-cell {}", tone_class(&c.tone)) class:running=c.running role="cell" title=full_words(&c)>
-                                                {short_word(&c.result)}
+                                                <span class="ut-w">{short_word(&c.result)}</span>
+                                                <span class="ut-t" aria-hidden="true">{tiny_word(&c.result)}</span>
                                                 {c.running.then(|| view! { <span class="ut-bar"></span> })}
                                             </span>
                                         }.into_any(),
@@ -304,5 +402,45 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(full_words(&item), "Failed · The download stopped.");
+    }
+
+    #[test]
+    fn narrow_tables_use_short_words_that_never_break() {
+        assert_eq!(tiny_word("Already current"), "✓");
+        assert_eq!(tiny_word("Updated to 2.1.3"), "→2.1.3");
+        assert_eq!(tiny_word("Quit to finish update"), "quit");
+        assert_eq!(tiny_word("Installer failed"), "failed");
+        assert_eq!(tiny_word("Unknown: Nas1 not reachable"), "offline");
+        assert_eq!(tiny_word("Checking · 45s"), "check");
+        assert_eq!(
+            tiny_word("A word from a newer server"),
+            "a word from a newer server"
+        );
+        let labels: Vec<String> = [
+            "Mac",
+            "Windows",
+            "Ubuntu",
+            "Nas1",
+            "Alexis PC",
+            "Odroid",
+            "1070ti",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(
+            short_labels(&labels),
+            ["Mac", "Win", "Ubuntu", "Nas1", "Alexis", "Odroid", "1070ti"]
+        );
+        let twins: Vec<String> = ["Alexis PC", "Alexis Mac"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(short_labels(&twins), twins);
+        let none = UpdItem {
+            app: "No results from this computer".into(),
+            ..Default::default()
+        };
+        assert_eq!(host_tiny(&none), "no results");
     }
 }
