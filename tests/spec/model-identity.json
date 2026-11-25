@@ -30,6 +30,14 @@
       ]
     },
     {
+      "model": "openai/gpt-6.2-sol",
+      "efforts": [
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
       "model": "openai/gpt-6-astra",
       "efforts": [
         "max"
@@ -102,16 +110,27 @@
       "efforts": []
     },
     {
+      "model": "alibaba/qwen4-max",
+      "efforts": []
+    },
+    {
       "model": "alibaba/qwen4-max-preview",
       "efforts": []
     },
     {
       "model": "google/gemini-4-hydrogen",
       "efforts": []
+    },
+    {
+      "model": "opencode-go/hungerg-free",
+      "efforts": []
     }
   ],
   "aliases": {
+    "account:zai-individual-coding-plan/GLM-5.3": "zai/glm-5.3",
+    "account:zai-individual-coding-plan\\GLM-5.3": "zai/glm-5.3",
     "alibaba-token-plan/qwen3.8-max": "alibaba/qwen3.8-max",
+    "alibaba-token-plan/qwen4-max": "alibaba/qwen4-max",
     "alibaba-token-plan/qwen4-max-preview": "alibaba/qwen4-max-preview",
     "builtin:bigmodel-coding-plan\\GLM-5.3": "zai/glm-5.3",
     "builtin:zai-coding-plan\\GLM-5.3": "zai/glm-5.3",
@@ -132,6 +151,7 @@
     "codex/gpt-6.1-sol": "openai/gpt-6.1-sol",
     "codex/gpt-6.1-terra": "openai/gpt-6.1-terra",
     "codex/gpt-6.2-astra": "openai/gpt-6.2-astra",
+    "codex/gpt-6.2-sol": "openai/gpt-6.2-sol",
     "codex/grok-4.7": "xai/grok-4.7",
     "codex/muse-ember-1.0": "muse/muse-ember-1.0",
     "codex/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
@@ -151,6 +171,7 @@
     "cursor/gpt-6.1-sol": "openai/gpt-6.1-sol",
     "cursor/gpt-6.1-terra": "openai/gpt-6.1-terra",
     "cursor/gpt-6.2-astra": "openai/gpt-6.2-astra",
+    "cursor/gpt-6.2-sol": "openai/gpt-6.2-sol",
     "cursor/grok-4.7": "xai/grok-4.7",
     "cursor/muse-ember-1.0": "muse/muse-ember-1.0",
     "cursor/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
@@ -166,13 +187,16 @@
     "gpt-6.1-sol": "openai/gpt-6.1-sol",
     "gpt-6.1-terra": "openai/gpt-6.1-terra",
     "gpt-6.2-astra": "openai/gpt-6.2-astra",
+    "gpt-6.2-sol": "openai/gpt-6.2-sol",
     "grok-4.7": "xai/grok-4.7",
+    "hungerg-free": "opencode-go/hungerg-free",
     "muse-ember-1.0": "muse/muse-ember-1.0",
     "muse-spark-1.3": "muse/muse-spark-1.3-contributor",
     "muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
     "muse-wonder-1.0": "muse/muse-wonder-1.0",
     "muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
     "omp/alibaba-token-plan/qwen3.8-max": "alibaba/qwen3.8-max",
+    "omp/alibaba-token-plan/qwen4-max": "alibaba/qwen4-max",
     "omp/alibaba-token-plan/qwen4-max-preview": "alibaba/qwen4-max-preview",
     "omp/claude-fable-5-1": "anthropic/claude-fable-5-1",
     "omp/claude-fable-5-2": "anthropic/claude-fable-5-2",
@@ -186,12 +210,14 @@
     "omp/gpt-6.1-sol": "openai/gpt-6.1-sol",
     "omp/gpt-6.1-terra": "openai/gpt-6.1-terra",
     "omp/gpt-6.2-astra": "openai/gpt-6.2-astra",
+    "omp/gpt-6.2-sol": "openai/gpt-6.2-sol",
     "omp/grok-4.7": "xai/grok-4.7",
     "omp/muse-ember-1.0": "muse/muse-ember-1.0",
     "omp/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
     "omp/muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
     "omp/muse-wonder-1.0": "muse/muse-wonder-1.0",
     "omp/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+    "omp/opencode-go/hungerg-free": "opencode-go/hungerg-free",
     "opencode-go/claude-fable-5-1": "anthropic/claude-fable-5-1",
     "opencode-go/claude-fable-5-2": "anthropic/claude-fable-5-2",
     "opencode-go/claude-haiku-5-5": "anthropic/claude-haiku-5-5",
@@ -205,6 +231,7 @@
     "opencode-go/gpt-6.1-sol": "openai/gpt-6.1-sol",
     "opencode-go/gpt-6.1-terra": "openai/gpt-6.1-terra",
     "opencode-go/gpt-6.2-astra": "openai/gpt-6.2-astra",
+    "opencode-go/gpt-6.2-sol": "openai/gpt-6.2-sol",
     "opencode-go/grok-4.7": "xai/grok-4.7",
     "opencode-go/muse-ember-1.0": "muse/muse-ember-1.0",
     "opencode-go/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
@@ -212,6 +239,7 @@
     "opencode-go/muse-wonder-1.0": "muse/muse-wonder-1.0",
     "opencode-go/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
     "qwen3.8-max": "alibaba/qwen3.8-max",
+    "qwen4-max": "alibaba/qwen4-max",
     "qwen4-max-preview": "alibaba/qwen4-max-preview",
     "zcode/claude-fable-5-1": "anthropic/claude-fable-5-1",
     "zcode/claude-fable-5-2": "anthropic/claude-fable-5-2",
@@ -225,6 +253,7 @@
     "zcode/gpt-6.1-sol": "openai/gpt-6.1-sol",
     "zcode/gpt-6.1-terra": "openai/gpt-6.1-terra",
     "zcode/gpt-6.2-astra": "openai/gpt-6.2-astra",
+    "zcode/gpt-6.2-sol": "openai/gpt-6.2-sol",
     "zcode/grok-4.7": "xai/grok-4.7",
     "zcode/muse-ember-1.0": "muse/muse-ember-1.0",
     "zcode/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
@@ -3208,6 +3237,600 @@
       "useTable": true,
       "want": {
         "id": "gpt-6.1-sol-unknownsuffix",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": ""
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-unknownsuffix",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol-unknownsuffix",
+        "effort": null
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-unknownsuffix",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "gpt-6.2-sol-unknownsuffix",
         "effort": "max"
       }
     },
@@ -11528,6 +12151,600 @@
       }
     },
     {
+      "id": "alibaba/qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "qwen4-max-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "qwen4-max-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "qwen4-max-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "qwen4-max-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "qwen4-max-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "qwen4-max-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": ""
+      }
+    },
+    {
+      "id": "alibaba/qwen4-max-unknownsuffix",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max-unknownsuffix",
+        "effort": null
+      }
+    },
+    {
+      "id": "qwen4-max-unknownsuffix",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "qwen4-max-unknownsuffix",
+        "effort": "max"
+      }
+    },
+    {
       "id": "alibaba/qwen4-max-preview",
       "effort": null,
       "useTable": true,
@@ -12716,6 +13933,696 @@
       }
     },
     {
+      "id": "opencode-go/hungerg-free",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "hungerg-free-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "hungerg-free-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "hungerg-free-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "hungerg-free-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "hungerg-free-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "hungerg-free-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": ""
+      }
+    },
+    {
+      "id": "opencode-go/hungerg-free-unknownsuffix",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free-unknownsuffix",
+        "effort": null
+      }
+    },
+    {
+      "id": "hungerg-free-unknownsuffix",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "hungerg-free-unknownsuffix",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan/GLM-5.3",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": null
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan/GLM-5.3",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan/GLM-5.3",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "account:zai-individual-coding-plan/GLM-5.3",
+        "effort": null
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan/GLM-5.3-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan/GLM-5.3",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "account:zai-individual-coding-plan/GLM-5.3",
+        "effort": null
+      },
+      "overrideAliases": {
+        "account:zai-individual-coding-plan/GLM-5.3": "unlisted/model"
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan\\GLM-5.3",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": null
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan\\GLM-5.3",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan\\GLM-5.3",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "account:zai-individual-coding-plan\\GLM-5.3",
+        "effort": null
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan\\GLM-5.3-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "account:zai-individual-coding-plan\\GLM-5.3",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "account:zai-individual-coding-plan\\GLM-5.3",
+        "effort": null
+      },
+      "overrideAliases": {
+        "account:zai-individual-coding-plan\\GLM-5.3": "unlisted/model"
+      }
+    },
+    {
       "id": "alibaba-token-plan/qwen3.8-max",
       "effort": null,
       "useTable": true,
@@ -12761,6 +14668,54 @@
       },
       "overrideAliases": {
         "alibaba-token-plan/qwen3.8-max": "unlisted/model"
+      }
+    },
+    {
+      "id": "alibaba-token-plan/qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "alibaba-token-plan/qwen4-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "alibaba-token-plan/qwen4-max",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "alibaba-token-plan/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "alibaba-token-plan/qwen4-max-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "alibaba-token-plan/qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba-token-plan/qwen4-max",
+        "effort": null
+      },
+      "overrideAliases": {
+        "alibaba-token-plan/qwen4-max": "unlisted/model"
       }
     },
     {
@@ -13724,6 +15679,54 @@
       }
     },
     {
+      "id": "codex/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "codex/gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "codex/gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "codex/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "codex/gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "codex/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "codex/gpt-6.2-sol",
+        "effort": null
+      },
+      "overrideAliases": {
+        "codex/gpt-6.2-sol": "unlisted/model"
+      }
+    },
+    {
       "id": "codex/grok-4.7",
       "effort": null,
       "useTable": true,
@@ -14636,6 +16639,54 @@
       }
     },
     {
+      "id": "cursor/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "cursor/gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "cursor/gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "cursor/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "cursor/gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "cursor/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "cursor/gpt-6.2-sol",
+        "effort": null
+      },
+      "overrideAliases": {
+        "cursor/gpt-6.2-sol": "unlisted/model"
+      }
+    },
+    {
       "id": "cursor/grok-4.7",
       "effort": null,
       "useTable": true,
@@ -15356,6 +17407,54 @@
       }
     },
     {
+      "id": "gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      },
+      "overrideAliases": {
+        "gpt-6.2-sol": "unlisted/model"
+      }
+    },
+    {
       "id": "grok-4.7",
       "effort": null,
       "useTable": true,
@@ -15401,6 +17500,54 @@
       },
       "overrideAliases": {
         "grok-4.7": "unlisted/model"
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "hungerg-free-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "hungerg-free",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      },
+      "overrideAliases": {
+        "hungerg-free": "unlisted/model"
       }
     },
     {
@@ -15689,6 +17836,54 @@
       },
       "overrideAliases": {
         "omp/alibaba-token-plan/qwen3.8-max": "unlisted/model"
+      }
+    },
+    {
+      "id": "omp/alibaba-token-plan/qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/alibaba-token-plan/qwen4-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "omp/alibaba-token-plan/qwen4-max",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "omp/alibaba-token-plan/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/alibaba-token-plan/qwen4-max-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "omp/alibaba-token-plan/qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "omp/alibaba-token-plan/qwen4-max",
+        "effort": null
+      },
+      "overrideAliases": {
+        "omp/alibaba-token-plan/qwen4-max": "unlisted/model"
       }
     },
     {
@@ -16316,6 +18511,54 @@
       }
     },
     {
+      "id": "omp/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "omp/gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "omp/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "omp/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "omp/gpt-6.2-sol",
+        "effort": null
+      },
+      "overrideAliases": {
+        "omp/gpt-6.2-sol": "unlisted/model"
+      }
+    },
+    {
       "id": "omp/grok-4.7",
       "effort": null,
       "useTable": true,
@@ -16601,6 +18844,54 @@
       },
       "overrideAliases": {
         "omp/muse-wonder-full-1.0": "unlisted/model"
+      }
+    },
+    {
+      "id": "omp/opencode-go/hungerg-free",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/opencode-go/hungerg-free",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "omp/opencode-go/hungerg-free",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "omp/opencode-go/hungerg-free",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/opencode-go/hungerg-free-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/hungerg-free",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "omp/opencode-go/hungerg-free",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "omp/opencode-go/hungerg-free",
+        "effort": null
+      },
+      "overrideAliases": {
+        "omp/opencode-go/hungerg-free": "unlisted/model"
       }
     },
     {
@@ -17228,6 +19519,54 @@
       }
     },
     {
+      "id": "opencode-go/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "opencode-go/gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "opencode-go/gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "opencode-go/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "opencode-go/gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opencode-go/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "opencode-go/gpt-6.2-sol",
+        "effort": null
+      },
+      "overrideAliases": {
+        "opencode-go/gpt-6.2-sol": "unlisted/model"
+      }
+    },
+    {
       "id": "opencode-go/grok-4.7",
       "effort": null,
       "useTable": true,
@@ -17561,6 +19900,54 @@
       },
       "overrideAliases": {
         "qwen3.8-max": "unlisted/model"
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      }
+    },
+    {
+      "id": "qwen4-max-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "qwen4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "alibaba/qwen4-max",
+        "effort": null
+      },
+      "overrideAliases": {
+        "qwen4-max": "unlisted/model"
       }
     },
     {
@@ -18185,6 +20572,54 @@
       },
       "overrideAliases": {
         "zcode/gpt-6.2-astra": "unlisted/model"
+      }
+    },
+    {
+      "id": "zcode/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "zcode/gpt-6.2-sol",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zcode/gpt-6.2-sol",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "zcode/gpt-6.2-sol",
+        "effort": null
+      }
+    },
+    {
+      "id": "zcode/gpt-6.2-sol-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "openai/gpt-6.2-sol",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zcode/gpt-6.2-sol",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zcode/gpt-6.2-sol",
+        "effort": null
+      },
+      "overrideAliases": {
+        "zcode/gpt-6.2-sol": "unlisted/model"
       }
     },
     {

@@ -280,6 +280,17 @@
       "efforts": [],
       "prices": null,
       "notes": ""
+    },
+    {
+      "model": "opencode-go/hungerg-free",
+      "label": "HungerG Free",
+      "family": "HungerG",
+      "runtimes": [
+        "opencode-go"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": "Free trial model via OpenCode Go (owner, 2026-11-24, a few days)."
     }
   ]
 }
