@@ -298,6 +298,36 @@ fn devin_replies_count_once_each_and_no_text_leaves() {
     assert_eq!(answer["kinds"]["devin"]["state"], "not_installed");
 }
 
+#[test]
+fn devin_unreadable_replies_count_only_inside_the_requested_window() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let db = devin_fixture(h);
+    let connection = Connection::open(db).unwrap();
+    let message = json!({"message_id": "m-unreadable", "role": "assistant", "content": "",
+        "metadata": {"created_at": AT, "generation_model": "swe-2-max",
+                     "metrics": {"input_tokens": null, "output_tokens": 0}}});
+    connection
+        .execute(
+            "INSERT INTO message_nodes VALUES (5, 'devin-session-1', 'node-5', NULL, ?1, 1789771814, NULL)",
+            [message.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut ask = request(&["devin"], false);
+    ask.min_date_ms = 1_788_000_000_000;
+    let answer = protocol::scan(&ask, h, &env(h));
+    assert_eq!(answer["kinds"]["devin"]["unreadableRecords"], 1);
+    assert_eq!(sums(&answer, "devin"), [1500, 80, 110_000, 0, 2]);
+
+    ask.min_date_ms = 1_800_000_000_000;
+    let answer = protocol::scan(&ask, h, &env(h));
+    assert_eq!(answer["kinds"]["devin"]["state"], "ok");
+    assert!(answer["kinds"]["devin"].get("unreadableRecords").is_none());
+    assert_eq!(sums(&answer, "devin"), [0, 0, 0, 0, 0]);
+}
+
 #[cfg(unix)]
 fn rollout(session: &str, input: u64) -> String {
     [

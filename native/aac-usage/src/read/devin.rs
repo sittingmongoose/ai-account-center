@@ -127,6 +127,12 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
         let Some(session) = sqlite::text(&reply[0]) else {
             continue;
         };
+        // A record outside the requested window cannot make that window incomplete. An undated
+        // record stays unreadable below because its window is unknown.
+        let at = epoch_ms(&reply[3], &reply[4]);
+        if at.is_some_and(|at| at < collector.min_date_ms) {
+            continue;
+        }
         let Some(id) = sqlite::text(&reply[1]).or_else(|| sqlite::text(&reply[2])) else {
             unreadable += 1;
             continue;
@@ -143,13 +149,10 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
             unreadable += 1;
             continue;
         };
-        let Some(at) = epoch_ms(&reply[3], &reply[4]) else {
+        let Some(at) = at else {
             unreadable += 1;
             continue;
         };
-        if at < collector.min_date_ms {
-            continue;
-        }
         let Some(hour) = util::hour_label(at, collector.now_ms) else {
             continue;
         };
