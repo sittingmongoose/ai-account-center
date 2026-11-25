@@ -239,7 +239,7 @@ impl RegistryCache {
             let cached = match shared {
                 Some(cached) => cached,
                 None => {
-                    let text = fs::read_to_string(&self.path).ok()?;
+                    let text = read_cache_text(&self.path)?;
                     let payload: Value = serde_json::from_str(&text).ok()?;
                     let (fetched_at, providers) = normalize_cache_payload(&payload)?;
                     let cached = Arc::new(CachedRegistry::new(fetched_at, providers));
@@ -339,11 +339,17 @@ fn inode(_metadata: &fs::Metadata) -> u64 {
     0
 }
 
+/// The one read of the models.dev cache file (the memo refresh and the full refresh payload share
+/// it, so the file keeps the single read the one-file policy admits).
+fn read_cache_text(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok()
+}
+
 /// The full normalized payload re-read from the cache file: the refresh flow returns it (the
 /// returned registry keeps every extra field), while the resident memo holds only the fields
 /// resolution reads. Transient — the caller drops it.
 fn full_providers(path: &Path) -> Option<Map<String, Value>> {
-    let text = fs::read_to_string(path).ok()?;
+    let text = read_cache_text(path)?;
     let payload: Value = serde_json::from_str(&text).ok()?;
     normalize_cache_payload(&payload).map(|(_, providers)| providers)
 }

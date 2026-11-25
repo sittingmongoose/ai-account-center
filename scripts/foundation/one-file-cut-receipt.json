@@ -185,7 +185,7 @@
   "crates/aac-views/src/pricing/models_dev.rs": {
     "reason": "The Models.dev pricing cache preserves its existing on-disk fallback and update format.",
     "uses": [
-      "fs::read_to_string:149a220e63c62a9b3cd2dbc154195ba871b844d894ee75d5ee1a897c5725d10d",
+      "fs::read_to_string:4a56b9f02f05e51eba27e8501b1b8bcdd56b7faf1e8ddf3d3aed9d7f3aea0f0e",
       "fs::write:6d8b37f4b81bc101b8e80fc1d4929e01f3282ec5681853b964ab5d86f1d4f5aa"
     ]
   }
