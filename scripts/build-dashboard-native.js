@@ -46,7 +46,10 @@ if (require.main === module) {
     stageManifest(path.resolve(value));
   } else {
     const target = path.resolve(root, process.env.CARGO_TARGET_DIR || 'target');
-    if (option !== '--copy-only') {
+    // Same opt-in as build-ui.js: a machine that must not compile Rust (the shared VM)
+    // copies existing artifacts instead of building; with none, it skips the stage.
+    const noLocalRust = process.env.AAC_NO_LOCAL_RUST_BUILD === '1';
+    if (option !== '--copy-only' && !noLocalRust) {
       execFileSync(
         'cargo',
         [
@@ -69,7 +72,11 @@ if (require.main === module) {
         }
       );
     }
-    stageDashboard(path.join(root, 'dist/native'), path.join(target, 'release'));
+    if (noLocalRust && !fs.existsSync(path.join(target, 'release', 'aac-http' + extension))) {
+      console.warn('[!] AAC_NO_LOCAL_RUST_BUILD=1 and no prebuilt dashboard binaries: skipping the native dashboard stage. Build on a build host (the landing gate) instead.');
+    } else {
+      stageDashboard(path.join(root, 'dist/native'), path.join(target, 'release'));
+    }
   }
 }
 

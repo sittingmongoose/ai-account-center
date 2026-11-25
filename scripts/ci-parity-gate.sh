@@ -58,18 +58,42 @@ node scripts/hardening-inventory.js --check
 # prefixes) must not come back into tracked files. Hash-based, about 2 s.
 node scripts/personal-detail-guard.js
 
+
+# Rust never compiles on the VM (ubuntuserver): the Rust/wasm steps belong to the Nas1/1070ti
+# landing gate. On that host they are skipped by name and the bun checks stay. Nested builds
+# the bun checks may trigger refuse Rust through AAC_NO_LOCAL_RUST_BUILD=1, the same opt-in
+# the build scripts honor.
+RUST_STEPS=on
+if [[ "$(hostname)" == "ubuntuserver" ]]; then
+  RUST_STEPS=off
+  export AAC_NO_LOCAL_RUST_BUILD=1
+  echo "[!] VM host (ubuntuserver): skipping the Rust/wasm steps (ui:build, the native dashboard, store/status cargo)."
+  echo "    They run on the Nas1/1070ti landing gate; a push from the VM never compiles Rust."
+fi
 echo "[i] Running CI-parity local checks..."
 # `set -euo pipefail` above makes every step fail fast. Keep these commands
 # explicit so parity drift is visible when CI changes.
 bun run typecheck
 bun run lint
 bun run format:check
-bun run build:all
-bun run ui:validate
+if [[ "$RUST_STEPS" == "off" ]]; then
+  # TypeScript server only; build-dashboard-native copies existing artifacts and never cargos.
+  bun run build:server
+  if [[ -f dist/ui/app/index.html ]]; then
+    bun run ui:validate
+  else
+    echo "[!] No built dist/ui on the VM: ui:validate is NOT CHECKED here (the landing gate validates it)."
+  fi
+else
+  bun run build:all
+  bun run ui:validate
+fi
 # The history store's Rust crate (docs/store.md 9.4): format, lints, the crash-cut and
 # corruption suites, then this computer's module into dist/native. AAC_STORE_RUST=off skips it
 # on a machine that may not run Rust builds; the dashboard then builds without the module.
-if [[ "${AAC_STORE_RUST:-on}" == "off" ]]; then
+if [[ "$RUST_STEPS" == "off" ]]; then
+  echo "[!] VM host: skipping the history store's Rust checks (the landing gate runs them)."
+elif [[ "${AAC_STORE_RUST:-on}" == "off" ]]; then
   echo "[!] AAC_STORE_RUST=off: skipping the history store's Rust checks."
 elif command -v cargo >/dev/null 2>&1; then
   bun run store:check
@@ -81,7 +105,9 @@ fi
 # The status readers' Rust crate (crates/aac-status): format, lints, the reader suites,
 # then this computer's module into dist/native. AAC_STATUS_RUST=off skips it on a machine
 # that may not run Rust builds; the dashboard then builds without the module.
-if [[ "${AAC_STATUS_RUST:-on}" == "off" ]]; then
+if [[ "$RUST_STEPS" == "off" ]]; then
+  echo "[!] VM host: skipping the status readers' Rust checks (the landing gate runs them)."
+elif [[ "${AAC_STATUS_RUST:-on}" == "off" ]]; then
   echo "[!] AAC_STATUS_RUST=off: skipping the status readers' Rust checks."
 elif command -v cargo >/dev/null 2>&1; then
   bun run status:check
@@ -101,6 +127,7 @@ run_fixture_check() {
     CCS_HOME="$TEST_FIXTURE_ROOT" XDG_CONFIG_HOME="$TEST_FIXTURE_ROOT/.config" \
     XDG_CACHE_HOME="$TEST_FIXTURE_ROOT/.cache" XDG_STATE_HOME="$TEST_FIXTURE_ROOT/.state" \
     TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" TZ=UTC NODE_ENV=test \
+    AAC_NO_LOCAL_RUST_BUILD="${AAC_NO_LOCAL_RUST_BUILD:-}" \
     PYTHONDONTWRITEBYTECODE=1 "$@"
 }
 run_fixture_check bun run test:fast
