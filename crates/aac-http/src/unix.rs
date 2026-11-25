@@ -2087,9 +2087,6 @@ async fn serve_inner(
         crate::status_owned::initialize_reports(root).await;
     }
     if let Some(owner) = &status_produce {
-        // Warm the initial sources for the display zone before the first read arrives
-        // and before background answer retries can hold the answers engine.
-        owner.warm().await;
         let jobs = Arc::clone(owner);
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { crate::status_produce::Produce::jobs(jobs, stop).await });

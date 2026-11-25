@@ -246,7 +246,6 @@ impl OwnerHost {
                 owner.prepare_local().await;
             }
             if let Some(produce) = owners.status_produce.clone() {
-                produce.warm().await;
                 let stop = self.local_stop.clone();
                 tokio::spawn(produce.jobs(stop));
             }

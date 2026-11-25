@@ -406,7 +406,7 @@ impl Produce {
     pub(crate) fn new(feeds: Feeds, answers: Arc<AnswersOwned>, ccs_dir: PathBuf) -> Arc<Self> {
         let default_zone = default_request_zone(&ccs_dir, now_ms());
         let (published_tx, published_rx) = tokio::sync::watch::channel(0u64);
-        Arc::new(Self {
+        let produce = Arc::new(Self {
             feeds,
             answers,
             ccs_dir,
@@ -437,7 +437,13 @@ impl Produce {
             jobs_now_override: Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
             zone_walk_threads: Arc::new(Mutex::new(Vec::new())),
-        })
+        });
+        // Publish the honest empty/starting state now, without touching the answers store. A
+        // producer is readable from construction; startup cannot lose this invariant by
+        // forgetting a separate warm-up call before the first poll.
+        produce.state().answers_dirty = false;
+        produce.publish(None, true);
+        produce
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -456,13 +462,6 @@ impl Produce {
                 Err(held) => last = held,
             }
         }
-    }
-
-    /// Warm the initial six sources (and composed cache) for the saved display zone before the
-    /// first read arrives.
-    pub(crate) async fn warm(self: &Arc<Self>) {
-        let owner = Arc::clone(self);
-        let _ = tokio::task::spawn_blocking(move || owner.publish_once_and_hint(true)).await;
     }
 
     /// A page read: demand for the process-starting collectors (lock-free).
@@ -2328,14 +2327,11 @@ mod flicker_tests {
         );
     }
 
-    /// Cold start: `warm()` prepares the default display zone, so the very first read is served
-    /// from the warm state without a producer pass. That is asserted structurally (no publish
-    /// runs during the read); a wall-clock bound here only measures machine load. Concurrent
-    /// cold reads all succeed while a publish is in flight: none declines busy or deadline, so
-    /// the pool is never filled. The 400 ms route budget during a slow pass is asserted by the
-    /// two barrier tests above, where the slow pass is guaranteed by the injected delay.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cold_start_warm_and_concurrent_cold_reads_succeed() {
+    /// A producer is safe to read from the moment it is constructed: the first poll gets the
+    /// honest "waiting for the first scan" view, never a route deadline while a slow first
+    /// publish runs. Startup must not depend on a separate warm-up call staying in place.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_new_producer_answers_the_first_poll_with_a_starting_state() {
         let scratch = tempfile::tempdir().unwrap();
         let ccs = scratch.path().join("ccs");
         let reports = scratch.path().join("reports");
@@ -2350,57 +2346,22 @@ mod flicker_tests {
             to: offsets.to,
             offsets: offsets.offsets,
         };
-
-        // Warmed startup serves the very first read from the warm state.
-        let produce = Produce::new(
-            Feeds::new(),
-            AnswersOwned::new(ccs.clone(), reports.clone()),
-            ccs.clone(),
-        );
-        produce.warm().await;
+        let produce = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        produce.publish_delay_ms.store(600, Ordering::SeqCst);
         let limits = Limits::new();
-        let entered = Arc::clone(&produce.publish_entered);
-        let before = entered.load(Ordering::SeqCst);
         let first = tokio::time::timeout(
             Duration::from_secs(5),
             produce.view_async(Some(&limits), now, &tz_name, &zone),
         )
         .await
-        .expect("warmed first read must not hang")
-        .expect("warmed first read must succeed");
-        assert!(!first.0.is_empty());
-        assert_eq!(
-            entered.load(Ordering::SeqCst),
-            before,
-            "the warmed first read must be served from the warm state, not a producer pass"
+        .expect("the first poll must not wait for a slow publish")
+        .expect("the first poll must answer");
+        let text = String::from_utf8(first.0).unwrap();
+        assert!(text.contains("\"complete\":false"), "{text}");
+        assert!(
+            text.contains("Waiting for the first scan."),
+            "the starting view must name the missing scan honestly: {text}"
         );
-
-        // Un-warmed cold start: 8 concurrent readers while a publish is in flight (120 ms
-        // injected delay). Every read succeeds; a pool fill would decline busy or deadline.
-        let cold = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
-        cold.publish_delay_ms.store(120, Ordering::SeqCst);
-        let mut tasks = Vec::new();
-        for i in 0..8_u64 {
-            let cold = Arc::clone(&cold);
-            let limits = limits.clone();
-            let zone = zone.clone();
-            let tz_name = tz_name.clone();
-            tasks.push(tokio::spawn(async move {
-                tokio::time::timeout(
-                    Duration::from_secs(5),
-                    cold.view_async(Some(&limits), now + i, &tz_name, &zone),
-                )
-                .await
-            }));
-        }
-        for (idx, task) in tasks.into_iter().enumerate() {
-            let reply = task
-                .await
-                .unwrap()
-                .unwrap_or_else(|_| panic!("cold reader {idx} hung"))
-                .unwrap_or_else(|reason| panic!("cold reader {idx} declined {reason:?}"));
-            assert!(!reply.0.is_empty());
-        }
     }
 
     /// Real failures are never hidden: invalid zones and unprovable inputs still decline by name.
