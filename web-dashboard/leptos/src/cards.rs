@@ -1462,6 +1462,7 @@ mod tests {
         );
         assert_eq!(problem_sentence(""), "");
         assert_eq!(problem_sentence("   "), "");
+    }
 
     #[test]
     fn copy_words_passes_the_exact_stored_note() {

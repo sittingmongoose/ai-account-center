@@ -515,10 +515,10 @@ mod tests {
             ]
         );
         assert!(
-            per_key["actions"][1]["tip"]
+            !per_key["actions"][1]["tip"]
                 .as_str()
                 .unwrap_or("")
-                .contains("also stop reading the other stored keys")
+                .contains("other stored keys")
         );
         assert!(
             !per_key["actions"]

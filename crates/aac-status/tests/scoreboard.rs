@@ -1040,6 +1040,7 @@ fn why_only_fine_names_benchmark_runs_when_that_is_the_ranked_basis() {
         !compare.contains("enough real "),
         "a benchmark-only row must not claim real runs: {compare}"
     );
+}
 
 #[test]
 fn untraced_damaged_source_leaves_all_rows_unmarked() {

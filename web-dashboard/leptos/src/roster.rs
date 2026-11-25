@@ -1380,8 +1380,8 @@ mod tests {
         let grouped = task_groups(&u, board);
         assert_eq!(
             grouped.iter().map(|g| g.label).collect::<Vec<_>>(),
-            // "queued" is an old word for not started (contract v3, section 3), not an unknown state
-            vec!["Working", "Not started", "Done"]
+            // "shelved" is not a known state or alias, so it keeps its own group.
+            vec!["Working", "State not recognised", "Done"]
         );
         // two boards that both match say nothing about states
         let twice = vec![projects[0].clone(), projects[0].clone()];

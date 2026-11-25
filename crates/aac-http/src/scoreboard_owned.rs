@@ -948,7 +948,7 @@ impl ScoreboardOwned {
             let mut safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
             ingest_request(&scan, now, &mut safe_paths)
         };
-        let has_writes = !request.record["runs"].as_array().is_none_or(Vec::is_empty)
+        let has_writes = !request.record["files"].as_array().is_none_or(Vec::is_empty)
             || !request.record["refused"]
                 .as_array()
                 .is_none_or(Vec::is_empty);
@@ -1293,11 +1293,11 @@ impl ScoreboardOwned {
         // After a restart the scan's path map starts empty, but a refused file that shares its
         // path with a retained run is still that run's file: the refusal names it again so the
         // row's warning matches. Other refused paths stay withheld (M2).
-        let retained_paths: HashMap<String, &str> = held
-            .state_rows
-            .iter()
-            .filter_map(|row| row["file"].as_str().map(|file| (path_hash(file), file)))
-            .collect();
+        let mut retained_paths: HashMap<String, &str> = HashMap::new();
+        for row in &held.rows {
+            let file = row.file.as_str();
+            retained_paths.insert(path_hash(file), file);
+        }
         let mut problems: Vec<Json> = if held.share.is_some() {
             Vec::new()
         } else {
@@ -2013,7 +2013,7 @@ impl ScoreboardOwned {
                         return Err(Decline::Unsupported);
                     }
                     joined.push(join_review_doc(&raw));
-                    joined_files.push(json!(held.rows[index].file.as_ref()));
+                    joined_files.push(json!(held.rows[index].file.as_str()));
                 }
             }
             (joined, joined_files)
@@ -4617,6 +4617,8 @@ mod tests {
                 (now, date())
             ),
             "missing-outcome-rank"
+        );
+    }
 
     /// The runs state of the owner's held snapshot at `clock`, as the page reads it.
     async fn held_state(owner: &ScoreboardOwned, clock: u64) -> (serde_json::Value, bool) {
@@ -4874,7 +4876,7 @@ mod tests {
             .expect("held")
             .rows
             .iter()
-            .any(|(_, row)| row["doc"]["id"].as_str() == Some("mac.reviews--R1"));
+            .any(|row| row.id == "mac.reviews--R1");
         assert!(review, "the review under the unlistable folder is retained");
         let since = |state: &serde_json::Value| {
             state["problems"]

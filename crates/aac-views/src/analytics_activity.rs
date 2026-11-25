@@ -2947,6 +2947,7 @@ mod tests {
                 }
             }
         }
+    }
 
     #[test]
     fn an_empty_session_id_is_counted_but_not_sampled() {

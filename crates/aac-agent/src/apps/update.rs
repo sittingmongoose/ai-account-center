@@ -76,13 +76,13 @@ pub(crate) async fn run(
 /// closed list of known app IDs, never an argument for the installer.
 fn scope(value: &Value) -> Option<Vec<&'static str>> {
     let listed = value.as_array()?;
-    if listed.is_empty() || listed.len() > APPS.len() {
+    if listed.is_empty() || listed.len() > APP_INVENTORY.len() {
         return None;
     }
     let mut apps: Vec<&'static str> = Vec::with_capacity(listed.len());
     for app in listed {
         let app = app.as_str()?;
-        let app = APPS.iter().copied().find(|known| *known == app)?;
+        let app = APP_INVENTORY.iter().copied().find(|known| *known == app)?;
         if apps.contains(&app) {
             return None;
         }
@@ -853,7 +853,7 @@ mod tests {
             !journal.acp_pending(),
             "a full journal still needs every app"
         );
-        for app in APPS {
+        for app in APP_INVENTORY {
             if !journal.results.contains_key(app) {
                 journal.finish(app, row(Platform::Ubuntu, app, "current", "current"));
             }
