@@ -89,9 +89,12 @@ async function update(t, view, text) {
   if (pin.reported) pin.reported.now = text;
   else pin.now = text;
   // Wait for the real ten-second safety poll. No synthetic resize, reload, hint or product signal mutation.
+  // The poll comes every 10 s, so a 10 s default cap can miss one under load (TOOL-ISSUES 38);
+  // 25 s covers two poll periods. The condition is the real event, the cap only a hang guard.
   await t.page.waitForFunction(
     (text) => document.querySelector('.c2-sheet-host')?.textContent.includes(text),
-    text
+    text,
+    { timeout: 25000 }
   );
 }
 
