@@ -1677,8 +1677,42 @@ mod tests {
         );
     }
 
+    /// Run the lease-sensitive cases in a child process that runs only this test. A sibling
+    /// test's fork inherits any lease descriptor held at fork time and keeps it until exec, so
+    /// the final open here can see a transient busy lease after the owner dropped it
+    /// (session-owner-second-writer-flake-T1). The child has no sibling forks. It must actually
+    /// run and pass the cases: a filter that matches nothing fails here instead of passing.
+    fn isolated_lease_case(name: &str, cases: fn()) {
+        const CHILD: &str = "AAC_TOOL_BATCH_AUTH_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            cases();
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(name)
+            .arg("--test-threads=1")
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && text.contains("test result: ok. 1 passed"),
+            "the isolated lease case did not run and pass:\n{text}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     #[test]
     fn public_auth_refuses_a_second_writer_and_a_typescript_session_owner() {
+        isolated_lease_case(
+            "public_auth::tests::public_auth_refuses_a_second_writer_and_a_typescript_session_owner",
+            public_auth_refuses_a_second_writer_cases,
+        );
+    }
+
+    fn public_auth_refuses_a_second_writer_cases() {
         let home = tempfile::tempdir().unwrap();
         let root = home.path();
         let first =
