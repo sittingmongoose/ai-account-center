@@ -1546,3 +1546,233 @@ fn uncorrected_pages_name_their_snapshot_too() {
     fs::remove_dir_all(db).unwrap();
     fs::remove_dir_all(share.root).unwrap();
 }
+
+#[test]
+fn scoreboard_aggregates_update_atomically_and_migrate_from_existing_runs() {
+    use aac_store::scoreboard_agg::{self, ScoreboardFilter};
+
+    let share = Share::new("sb-agg-lifecycle");
+    let day = &iso(T0 + 2 * DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.agg/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+
+    // 1. Review arrives BEFORE its target (simulating newest-days-first backfill).
+    let rev_early = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.agg--rev-1",
+        "writer": "vm.agg",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 60_000),
+        "source": "observed",
+        "task": { "id": "t-rev-1", "type": "review", "title": "Review target-1" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY + 60_000),
+        "outcome": "done",
+        "review": {
+            "of": "vm.agg--target-1",
+            "verdict": "pass",
+            "findings": { "high": 0, "medium": 0, "low": 0 },
+            "overturned": false,
+            "disputed": false
+        }
+    });
+    fs::write(dir.join("vm.agg--rev-1.json"), rev_early.to_string()).unwrap();
+
+    let db = temp_dir("sb-agg-lifecycle-store");
+    let engine = open(&db);
+    pass(&engine, &share, T0 + 3 * DAY, 1000, true);
+
+    // 2. Now target-1 arrives (plus a correction fixture with supersedes + void + refused).
+    let target = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.agg--target-1",
+        "writer": "vm.agg",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY),
+        "source": "observed",
+        "task": { "id": "t-1", "type": "build", "title": "Build 1", "size": { "tasks": 1 } },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY),
+        "wallSeconds": 42,
+        "outcome": "done",
+        "cost": { "credits": 2.5, "usd": 0.4 }
+    });
+    fs::write(dir.join("vm.agg--target-1.json"), target.to_string()).unwrap();
+    // Correction chain: target-2 -> target-2-fix (retains review on target-2), and target-3 -> void.
+    let target2 = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.agg--target-2",
+        "writer": "vm.agg",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 1000),
+        "source": "observed",
+        "task": { "id": "t-2", "type": "build", "title": "Build 2" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY + 1000),
+        "outcome": "failed"
+    });
+    let target2_fix = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.agg--target-2-fix",
+        "writer": "vm.agg",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 2000),
+        "source": "observed",
+        "corrects": "vm.agg--target-2",
+        "task": { "id": "t-2", "type": "build", "title": "Build 2 fixed" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY + 2000),
+        "outcome": "done"
+    });
+    let target3 = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.agg--target-3",
+        "writer": "vm.agg",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 3000),
+        "source": "observed",
+        "task": { "id": "t-3", "type": "build", "title": "Build 3" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY + 3000),
+        "outcome": "done"
+    });
+    let target3_void = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.agg--target-3-void",
+        "writer": "vm.agg",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 4000),
+        "source": "observed",
+        "corrects": "vm.agg--target-3",
+        "void": { "reason": "duplicate" },
+        "task": { "id": "t-3", "type": "build", "title": "Void 3" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY + 4000),
+        "outcome": "done"
+    });
+    let bad_corr = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.agg--bad-corr",
+        "writer": "vm.agg",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 5000),
+        "source": "observed",
+        "corrects": "vm.agg--missing-target",
+        "task": { "id": "t-bad", "type": "build", "title": "Missing target" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY + 5000),
+        "outcome": "done"
+    });
+    for (name, doc) in [
+        ("vm.agg--target-2.json", target2),
+        ("vm.agg--target-2-fix.json", target2_fix),
+        ("vm.agg--target-3.json", target3),
+        ("vm.agg--target-3-void.json", target3_void),
+        ("vm.agg--bad-corr.json", bad_corr),
+    ] {
+        fs::write(dir.join(name), doc.to_string()).unwrap();
+    }
+    pass(&engine, &share, T0 + 4 * DAY, 1000, true);
+
+    // Effective runs: rev-1, target-1, target-2-fix (3 total).
+    // `runsStatus` and `read_for_scoreboard` must NOT trigger `resolved_history`.
+    assert_eq!(call(&engine, "runsStatus", json!({}))["runs"], json!(3));
+    let before = scoreboard_agg::read_for_scoreboard(
+        &engine,
+        &ScoreboardFilter::default(),
+        &[],
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        runs::correction_resolution_count(&engine),
+        0,
+        "status + aggregate read must never build ResolvedHistory"
+    );
+    assert!(before.used_precomputed_buckets);
+    assert_eq!(before.effective_runs_total, 3);
+    assert_eq!(before.correction_problems.len(), 1);
+    assert_eq!(before.correction_problems[0].reason, "corrects names a missing run");
+    // Build bucket has target-1 (done, joined with rev-1!) + target-2-fix (done) = 2 runs, 1 joined review.
+    let build_bucket = before
+        .buckets
+        .iter()
+        .find(|(k, _)| k.task_type == "build")
+        .expect("build bucket");
+    assert_eq!(build_bucket.1.n, 2);
+    assert_eq!(build_bucket.1.outcome_done, 2);
+    assert_eq!(build_bucket.1.joined_reviews.len(), 1);
+    assert_eq!(build_bucket.1.joined_reviews[0].review_id, "vm.agg--rev-1");
+
+    // 3. Simulate a pre-migration v3 store: wipe all `run_sb_*` tables + meta keys, close, reopen.
+    engine
+        .with_db(|db_ref| {
+            let txn = aac_store::engine::begin(db_ref)?;
+            scoreboard_agg::delete_tables(&txn)?;
+            scoreboard_agg::create_tables(&txn)?;
+            {
+                let mut meta = txn.open_table(runs::RUN_META)?;
+                meta.remove("sb_agg_version")?;
+                meta.remove("sb_agg_seq")?;
+                meta.remove("sb_agg_effective_count")?;
+            }
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    engine.close().unwrap();
+    drop(engine);
+
+    // Reopen triggers one-time migration from existing `run_head`/`run_payload`.
+    let migrated = open(&db);
+    let after = scoreboard_agg::read_for_scoreboard(
+        &migrated,
+        &ScoreboardFilter::default(),
+        &[],
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(after.effective_runs_total, before.effective_runs_total);
+    assert_eq!(
+        after.buckets, before.buckets,
+        "migrated buckets must match incremental buckets"
+    );
+    assert_eq!(after.correction_problems.len(), before.correction_problems.len());
+
+    // Confirm metadata version/seq stamped and a second reopen does not re-migrate.
+    let seq_after = migrated
+        .with_db(|db_ref| {
+            let read = db_ref.begin_read()?;
+            let meta = read.open_table(runs::RUN_META)?;
+            let ver = meta
+                .get("sb_agg_version")?
+                .map(|v| String::from_utf8_lossy(v.value()).into_owned());
+            let seq = meta
+                .get("sb_agg_seq")?
+                .map(|v| String::from_utf8_lossy(v.value()).into_owned());
+            Ok((ver, seq))
+        })
+        .unwrap();
+    assert_eq!(seq_after.0.as_deref(), Some("1"));
+    assert_eq!(
+        seq_after.1.as_deref().and_then(|s| s.parse::<u64>().ok()),
+        Some(runs::generation(&migrated).unwrap())
+    );
+    migrated.close().unwrap();
+    drop(migrated);
+
+    // Second reopen preserves identical aggregates.
+    let reopened = open(&db);
+    let after2 = scoreboard_agg::read_for_scoreboard(
+        &reopened,
+        &ScoreboardFilter::default(),
+        &[],
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(after2.buckets, before.buckets);
+    reopened.close().unwrap();
+    drop(reopened);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}

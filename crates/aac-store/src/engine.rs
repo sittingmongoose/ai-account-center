@@ -188,6 +188,7 @@ pub struct Engine {
     pub integrity: Mutex<Json>,
     pub(crate) runs_history: Mutex<crate::runs::HistoryCache>,
     pub(crate) write_seq: std::sync::atomic::AtomicU64,
+    pub(crate) runs_write_seq: std::sync::atomic::AtomicU64,
     pub(crate) db_stats_cache: Mutex<Option<(u64, Json)>>,
     pub(crate) capture_health_cache: Mutex<Option<(u64, Json)>>,
     /// Last, so it is released after the logs and redb (fields drop in declaration order).
@@ -198,6 +199,11 @@ impl Engine {
     /// Monotonic counter bumped after committed log/compaction writes to invalidate cached stats.
     pub fn write_seq(&self) -> u64 {
         self.write_seq.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Monotonic counter bumped only when `run.*` events or run file-state repairs commit.
+    pub fn runs_write_seq(&self) -> u64 {
+        self.runs_write_seq.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -391,6 +397,7 @@ impl Engine {
             integrity: Mutex::new(integrity),
             runs_history: Mutex::new(crate::runs::HistoryCache::default()),
             write_seq: std::sync::atomic::AtomicU64::new(1),
+            runs_write_seq: std::sync::atomic::AtomicU64::new(1),
             db_stats_cache: Mutex::new(None),
             capture_health_cache: Mutex::new(None),
             _lock: lock,
@@ -714,6 +721,7 @@ impl Engine {
                 checkpoints,
                 events: Vec::new(),
             };
+            let _dirty_batch = crate::scoreboard_agg::DirtyBatchGuard::enter();
             let result = build(&mut batch)?;
             let Batch {
                 events,
@@ -725,6 +733,8 @@ impl Engine {
                 drop(txn);
                 return Ok(result);
             }
+            crate::scoreboard_agg::flush_dirty_buckets(&txn)?;
+            let touches_runs = log_id == LogId::Ledger && events.iter().any(|e| e.event_type.starts_with("run."));
             log.write(&events)?;
             #[cfg(feature = "parity-fixtures")]
             self.drill_checkpoint("append-synced");
@@ -734,6 +744,9 @@ impl Engine {
             }
             txn.commit()?;
             self.write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            if touches_runs {
+                self.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            }
             Ok(result)
         })
     }

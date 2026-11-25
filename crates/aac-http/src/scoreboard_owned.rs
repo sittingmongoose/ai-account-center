@@ -766,6 +766,8 @@ pub(crate) struct ScoreboardOwned {
     check: Arc<Mutex<ReadersCheckWriter>>,
     owners: Owners,
     flushing: Arc<AtomicBool>,
+    /// Number of store-backed aggregate composes run by this owner (no timer recomputes).
+    compose_count: AtomicU64,
 }
 
 impl ScoreboardOwned {
@@ -808,6 +810,7 @@ impl ScoreboardOwned {
             check,
             owners,
             flushing,
+            compose_count: AtomicU64::new(0),
         });
         let _ = owner.me.set(Arc::downgrade(&owner));
         owner
@@ -889,6 +892,65 @@ impl ScoreboardOwned {
             let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
             check.flush(&owners, now_ms());
             flushing.store(false, Ordering::Relaxed);
+        });
+    }
+
+    /// Record accepted run receipts and problems into the readers-check file from the store's
+    /// lightweight `run_head` + `run_dict` + `run_sb_correction_refused` read (off the request
+    /// path, zero `run_payload` reads, zero `ResolvedHistory`).
+    fn record_check_store(&self, store: Arc<StoreHost>, problems: Vec<Json>, generation: u64) {
+        if self.owners.owner("readers-check") != Some(Role::RustService) {
+            return;
+        }
+        {
+            let newest = self.recorded.lock().unwrap_or_else(|p| p.into_inner());
+            if generation < *newest {
+                return;
+            }
+        }
+        let check_probs: Vec<Problem> = problems
+            .iter()
+            .map(|problem| Problem {
+                file: problem["file"].as_str().unwrap_or_default().to_string(),
+                reason: problem["reason"].as_str().unwrap_or_default().to_string(),
+                since: problem["since"].as_u64().unwrap_or(0),
+            })
+            .collect();
+        let check = Arc::clone(&self.check);
+        let recorded = Arc::clone(&self.recorded);
+        let owners = self.owners.clone();
+        let flushing = Arc::clone(&self.flushing);
+        tokio::spawn(async move {
+            let Ok((gen_read, receipts)) = store.accepted_receipts().await else {
+                return;
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                {
+                    let mut newest = recorded.lock().unwrap_or_else(|p| p.into_inner());
+                    if gen_read < *newest {
+                        return;
+                    }
+                    *newest = gen_read;
+                    let rows: Vec<RunRow> = receipts
+                        .into_iter()
+                        .map(|r| RunRow {
+                            file: r.file.into_string(),
+                            seq: r.seq,
+                            sha256: r.sha256.into_string(),
+                            first_seen_at: r.first_seen_at,
+                        })
+                        .collect();
+                    let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
+                    check.record_runs(&rows, &check_probs);
+                }
+                if flushing.swap(true, Ordering::Relaxed) {
+                    return;
+                }
+                let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
+                check.flush(&owners, now_ms());
+                flushing.store(false, Ordering::Relaxed);
+            })
+            .await;
         });
     }
 
@@ -1865,6 +1927,26 @@ impl ScoreboardOwned {
         }
         let query = Json::Object(query);
         let now = feed.now.max(0) as u64;
+        // Store-backed aggregate fast path: compose from pre-aggregated `run_sb_*` tables +
+        // bounded recent windows, recomposing ONLY when run generation, catalog content/health,
+        // pass problems, or filter changes (no 60 s timer recompute on unchanged data).
+        if feed.facts.is_none()
+            && let Some(store) = &self.store
+            && let Some(store_write_seq) = store.runs_write_seq()
+            && let Some(result) = self
+                .answer_store_aggregate(
+                    store,
+                    store_write_seq,
+                    &feed,
+                    generation,
+                    &catalog_hash,
+                    now,
+                    refresh,
+                )
+                .await
+        {
+            return result;
+        }
         let now_date =
             Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Shape)?;
         // The held snapshot answers every filter: the store is read once per generation,
@@ -2160,6 +2242,236 @@ impl ScoreboardOwned {
         });
         self.keep_view(cache_key, filter_key, cached);
         Ok((bytes, etag))
+    }
+
+    /// Store-backed aggregate answer path. Returns `None` when the store is unavailable
+    /// (falling back to the bounded share scan), or `Some(Result)` once handled.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_store_aggregate(
+        &self,
+        store: &Arc<StoreHost>,
+        store_write_seq: u64,
+        feed: &Feed,
+        generation: u64,
+        catalog_hash: &str,
+        now: u64,
+        refresh: bool,
+    ) -> Option<Result<(Vec<u8>, String), Decline>> {
+        self.ensure_catalog(now);
+        let catalog = self
+            .catalog_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if catalog.is_null() {
+            return Some(Err(Decline::Stale));
+        }
+        let (pass_state, pass_more, pass_problems) = {
+            let pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
+            (pass.state.clone(), pass.more, pass.problems.clone())
+        };
+        let seed_failures = self
+            .seed_failures
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let catalog_fp = catalog_fingerprint(&catalog);
+        let catalog_stale = catalog["scannedAt"]
+            .as_i64()
+            .is_some_and(|at| aac_num::ecma::math_round((feed.now - at) as f64 / 1000.0) > 180.0);
+        let pass_problems_hash = sha256_text(&Json::Array(pass_problems.clone()).to_string());
+        let seed_hash = sha256_text(&Json::Array(seed_failures.clone()).to_string());
+        let cache_key = json!([
+            "agg",
+            feed.from,
+            feed.to,
+            feed.source,
+            feed.task_type,
+            feed.time_zone,
+            generation,
+            catalog_hash,
+            store_write_seq,
+            catalog_fp,
+            catalog_stale,
+            pass_state,
+            pass_more,
+            pass_problems_hash,
+            seed_hash,
+        ])
+        .to_string();
+        let filter_key = json!([
+            feed.from,
+            feed.to,
+            feed.source,
+            feed.task_type,
+            feed.time_zone,
+        ])
+        .to_string();
+
+        // Warm hit: no 60 s timer expiry on unchanged store generation / catalog / problems.
+        if !refresh {
+            let hit = {
+                let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
+                views.get(&cache_key).cloned()
+            };
+            if let Some(hit) = hit {
+                return Some(Ok(cached_bytes(&hit, now, false)));
+            }
+        }
+
+        // Singleflight compose per cache key; concurrent callers receive the last good view.
+        let _composing: Option<Composing<'_>> = {
+            let mut composing = self.composing.lock().unwrap_or_else(|p| p.into_inner());
+            let owned = if composing.contains(&cache_key) && refresh {
+                false
+            } else if !composing.insert(cache_key.clone()) {
+                drop(composing);
+                let hit = {
+                    let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
+                    views.get(&cache_key).cloned()
+                }
+                .or_else(|| {
+                    let good = self.last_good.lock().unwrap_or_else(|p| p.into_inner());
+                    good.get(&filter_key).cloned()
+                });
+                if let Some(hit) = hit {
+                    return Some(Ok(cached_bytes(&hit, now, true)));
+                }
+                return Some(Err(Decline::Busy));
+            } else {
+                true
+            };
+            if owned {
+                Some(Composing {
+                    set: &self.composing,
+                    key: cache_key.clone(),
+                })
+            } else {
+                None
+            }
+        };
+
+        let (from_ms, to_ms) = if feed.to_ms.is_some_and(|t| t < 0) {
+            // Empty range when `toMs < 0` (all stored cursors are non-negative `u64`).
+            (Some(1u64), Some(0u64))
+        } else {
+            (
+                feed.from_ms.and_then(|v| u64::try_from(v).ok()),
+                feed.to_ms.and_then(|v| u64::try_from(v).ok()),
+            )
+        };
+        let filter = aac_store::scoreboard_agg::ScoreboardFilter {
+            from_ms,
+            to_ms,
+            source_benchmark: match feed.source.as_str() {
+                "real" => Some(false),
+                "benchmark" => Some(true),
+                _ => None,
+            },
+            task_type: feed.task_type.clone(),
+        };
+        let extra_problems: Vec<(String, Option<i64>)> = pass_problems
+            .iter()
+            .filter_map(|p| {
+                let file = p["file"].as_str()?.to_string();
+                let since = p["since"]
+                    .as_i64()
+                    .or_else(|| p["since"].as_str().and_then(aac_num::ecma::parse_instant));
+                Some((file, since))
+            })
+            .collect();
+        let safe_paths_map: HashMap<String, String> = {
+            let guard = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
+            guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        };
+
+        let read = match store
+            .scoreboard_read(filter.clone(), extra_problems, safe_paths_map.clone())
+            .await
+        {
+            Ok(read) => read,
+            // Store unavailable (closed / lock_held): fall through to share-only fallback.
+            Err(_) => return None,
+        };
+        self.share_fallback.store(false, Ordering::SeqCst);
+        self.compose_count.fetch_add(1, Ordering::Relaxed);
+
+        let read_gen = read.generation;
+        let feed_now = feed.now;
+        let feed_clock = feed.clock.clone();
+        let feed_tz = feed.time_zone.clone();
+        let feed_from = feed.from.clone();
+        let feed_to = feed.to.clone();
+        let feed_source = feed.source.clone();
+        let feed_task_type = feed.task_type.clone();
+        let root_str = self.root.to_string_lossy().into_owned();
+
+        struct ComposedBytes {
+            bytes: Vec<u8>,
+            etag: String,
+            age_value_offset: Option<usize>,
+            problems: Vec<Json>,
+        }
+
+        let composed = tokio::task::spawn_blocking(move || -> Result<ComposedBytes, Decline> {
+            let input = crate::scoreboard_compose::ComposeInput {
+                now: feed_now,
+                now_clock: &feed_clock,
+                time_zone: &feed_tz,
+                root: &root_str,
+                catalog: &catalog,
+                read: &read,
+                filter: &filter,
+                filter_from: feed_from.as_deref(),
+                filter_to: feed_to.as_deref(),
+                filter_source: &feed_source,
+                filter_task_type: feed_task_type.as_deref(),
+                pass_state: &pass_state,
+                pass_problems: &pass_problems,
+                safe_paths: &safe_paths_map,
+                seed_failures: &seed_failures,
+                importing: pass_more,
+            };
+            let composed = crate::scoreboard_compose::compose(&input)?;
+            let mut writer = Writer::with_capacity(64 * 1024);
+            writer.value(&composed.view);
+            drop(composed.view);
+            let (bytes, identity_bytes) = writer.finish();
+            let digest = Sha256::digest(&identity_bytes);
+            drop(identity_bytes);
+            let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+            let etag = format!("W/\"{hex}\"");
+            let age_value_offset = find_age_zero_offset(&bytes);
+            Ok(ComposedBytes {
+                bytes,
+                etag,
+                age_value_offset,
+                problems: composed.problems,
+            })
+        })
+        .await;
+
+        let ComposedBytes {
+            bytes,
+            etag,
+            age_value_offset,
+            problems,
+        } = match composed {
+            Ok(Ok(out)) => out,
+            Ok(Err(decline)) => return Some(Err(decline)),
+            Err(_) => return Some(Err(Decline::Internal)),
+        };
+
+        self.record_check_store(Arc::clone(store), problems, read_gen);
+        let cached = Arc::new(CachedView {
+            at: now,
+            seq: store_write_seq,
+            bytes: bytes.clone(),
+            age_value_offset,
+            etag: etag.clone(),
+        });
+        self.keep_view(cache_key, filter_key, cached);
+        Some(Ok((bytes, etag)))
     }
 
     /// The service's unfiltered input (a superset of every filter's rows), the catalog,
@@ -4910,6 +5222,512 @@ mod tests {
                 .iter()
                 .all(|p| p["file"] != json!(folder)),
             "a successful listing clears the writer folder problem: {state}"
+        );
+    }
+
+    /// Helper: run the exact legacy `compose_fed_parts` pipeline on a store-backed owner for
+    /// byte-for-byte parity comparison against the new aggregate-backed path.
+    async fn answer_legacy_for_parity(
+        owner: &ScoreboardOwned,
+        feed_text: &str,
+    ) -> (Vec<u8>, String) {
+        use super::{
+            Date, Digest, Feed, Json, Map, Sha256, Writer, join_review_doc, normalized_doc,
+        };
+        let feed: Feed = serde_json::from_str(feed_text).expect("feed");
+        let now = feed.now.max(0) as u64;
+        let now_date =
+            Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).expect("now_date");
+        let held = owner.held(Some(now)).await.expect("held");
+        let catalog = owner
+            .catalog_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let (_, catalog_hash) = owner.generation();
+        let mut query = Map::new();
+        if let Some(from_ms) = feed.from_ms {
+            query.insert("fromMs".to_string(), json!(from_ms));
+        }
+        if let Some(to_ms) = feed.to_ms {
+            query.insert("toMs".to_string(), json!(to_ms));
+        }
+        if feed.source == "real" {
+            query.insert("source".to_string(), json!("observed"));
+        } else if feed.source == "benchmark" {
+            query.insert("source".to_string(), json!("benchmark"));
+        }
+        if let Some(task_type) = &feed.task_type {
+            query.insert("taskType".to_string(), json!(task_type));
+        }
+        let query = Json::Object(query);
+        let picked = held.pick(&query);
+        let filtered = feed.from.is_some()
+            || feed.to.is_some()
+            || feed.source != "all"
+            || feed.task_type.is_some();
+        let runs = owner
+            .state_rows(&held, &picked, now, false, false)
+            .await
+            .expect("state_rows");
+        let (presentation, order_key) = owner
+            .presentation(&feed, &held, &catalog, &runs)
+            .await
+            .expect("presentation");
+        let prepared = owner.held_docs(&held, &catalog, &catalog_hash);
+        let (join_reviews, join_review_files) = if filtered {
+            let picked_ids: std::collections::HashSet<&str> = picked
+                .iter()
+                .map(|&index| held.rows[index].id.as_str())
+                .collect();
+            let mut reviews_query = Map::new();
+            if let Some(from_ms) = feed.from_ms {
+                reviews_query.insert("fromMs".to_string(), json!(from_ms));
+            }
+            reviews_query.insert("reviewsOnly".to_string(), json!(true));
+            let mut joined = Vec::new();
+            let mut joined_files = Vec::new();
+            for index in held.pick(&Json::Object(reviews_query)) {
+                if picked_ids.contains(held.rows[index].id.as_str()) {
+                    continue;
+                }
+                let raw = held.rows[index].doc();
+                if raw["review"]["of"]
+                    .as_str()
+                    .is_some_and(|target| picked_ids.contains(target))
+                {
+                    joined.push(join_review_doc(&raw));
+                    joined_files.push(json!(held.rows[index].file.as_str()));
+                }
+            }
+            (joined, joined_files)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let mut rows_owned = Vec::with_capacity(picked.len());
+        let mut docs_owned = Vec::with_capacity(picked.len());
+        for &index in &picked {
+            let raw = held.rows[index].doc();
+            rows_owned.push(json!({
+                "doc": {
+                    "id": raw["id"],
+                    "model": { "id": raw["model"]["id"] },
+                    "task": { "type": raw["task"]["type"] },
+                    "endedAt": raw["endedAt"],
+                },
+            }));
+            docs_owned.push(normalized_doc(raw, &prepared.patches[index]));
+        }
+        let rows: Vec<&Json> = rows_owned.iter().collect();
+        let docs: Vec<&Json> = docs_owned.iter().collect();
+        let row_facts: Vec<&aac_status::read_scoreboard::RowFacts> =
+            picked.iter().map(|&index| &prepared.facts[index]).collect();
+        let positions = prepared.positions(&held.rows, &order_key, &presentation);
+        let order: Option<Vec<usize>> =
+            positions.map(|positions| picked.iter().map(|&index| positions[index]).collect());
+        let store_facts = owner.store_facts().await;
+        let task_types: Vec<Json> = catalog["taskTypes"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| json!({"id": row["id"], "label": row["label"]}))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let importing = owner.pass.lock().unwrap_or_else(|p| p.into_inner()).more;
+        let seed_failures = owner
+            .seed_failures
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let data = json!({
+            "now": feed.now,
+            "timeZone": feed.time_zone,
+            "root": owner.root.to_string_lossy(),
+            "catalog": catalog,
+            "runs": runs,
+            "joinReviews": join_reviews,
+            "joinReviewFiles": join_review_files,
+            "seedFailures": seed_failures,
+            "finish": {
+                "filters": {
+                    "from": feed.from,
+                    "to": feed.to,
+                    "source": feed.source,
+                    "taskType": feed.task_type,
+                    "available": true,
+                    "taskTypes": task_types,
+                },
+                "identity": store_facts.identity,
+                "history": {
+                    "store": "on",
+                    "runs": store_facts.status_runs,
+                    "importing": importing,
+                },
+                "native": true,
+            },
+        });
+        let view = aac_status::read_scoreboard::compose_fed_parts(
+            &data,
+            &rows,
+            &docs,
+            &row_facts,
+            order.as_deref(),
+            presentation,
+            (feed.now, now_date),
+        )
+        .expect("legacy compose");
+        let mut writer = Writer::with_capacity(64 * 1024);
+        writer.value(&view);
+        let (bytes, identity_bytes) = writer.finish();
+        let digest = Sha256::digest(&identity_bytes);
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        (bytes, format!("W/\"{hex}\""))
+    }
+
+    /// Phase 4 Step 2: the store-backed aggregate composer must emit the exact same bytes and
+    /// ETag as the legacy `compose_fed_parts` composer across every filter the page uses.
+    #[tokio::test]
+    async fn store_aggregate_composer_matches_legacy_composer_byte_for_byte_across_filters() {
+        use super::Json;
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        let d1 = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+        let d2 = root.path().join("v1/writers/vm.lead/runs/2026-11-05");
+        let drev = root.path().join("v1/writers/mac.reviews/runs/2026-11-05");
+        std::fs::create_dir_all(&d1).expect("d1");
+        std::fs::create_dir_all(&d2).expect("d2");
+        std::fs::create_dir_all(&drev).expect("drev");
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog");
+
+        // Build runs covering done, failed, unknown outcome, cost (credits/usd/quota/negative quota/estimate),
+        // scope, flags, custom metrics, benchmark, unscored (no-model, no-type, unknown-model, unknown-type),
+        // reviews (pass, fail, cannot-verify, overturned, disputed), and corrections (valid, void, refused).
+        let base: Json = serde_json::from_str(BENCH).expect("base");
+        let write_doc = |dir: &Path, id: &str, doc: &Json| {
+            std::fs::write(dir.join(format!("{id}.json")), doc.to_string()).expect("write doc");
+        };
+
+        for i in 0..6u64 {
+            let mut r = base.clone();
+            let id = format!("vm.lead--b-{i}");
+            r["id"] = json!(id);
+            r["source"] = json!("observed");
+            r["benchmark"] = Json::Null;
+            r["project"] = json!("aac");
+            r["task"] = json!({"id": format!("t-{i}"), "type": "build", "title": format!("Build {i}"), "size": {"tasks": 1, "files": 4}});
+            r["model"] = json!({
+                "id": if i % 2 == 0 { "openai/gpt-6.1-sol" } else { "anthropic/claude-opus-5-5" },
+                "provider": if i % 2 == 0 { "openai" } else { "anthropic" },
+                "harness": if i % 2 == 0 { "codex" } else { "claude-code" },
+                "effort": "high"
+            });
+            r["endedAt"] = json!(format!(
+                "2026-11-0{}T12:0{i}:00Z",
+                if i < 3 { 4 } else { 5 }
+            ));
+            r["writtenAt"] = r["endedAt"].clone();
+            r["wallSeconds"] = json!(100 + i * 15);
+            r["outcome"] = json!(if i == 5 { "failed" } else { "done" });
+            r["scope"] = json!({"filesAssigned": 4, "filesRead": if i == 1 { 2 } else { 4 }});
+            r["cost"] = json!({
+                "credits": 1.5 + (i as f64) * 0.25,
+                "usd": 0.2 + (i as f64) * 0.05,
+                "quota": { "account": "acct-1", "window": "five_hour", "deltaPct": if i == 2 { -1.5 } else { 2.0 } },
+                "estimate": {
+                    "source": "model-meter",
+                    "method": "tokens-v1",
+                    "credits": 1.2,
+                    "quota": { "account": "acct-1", "window": "weekly", "deltaPct": 0.5 }
+                }
+            });
+            if i == 1 {
+                r["flags"] = json!([{
+                    "kind": "incomplete-read",
+                    "detail": "Skipped two files",
+                    "evidence": "diff.txt",
+                    "reportedBy": "mac.reviews"
+                }]);
+            }
+            if i == 3 {
+                r["flags"] = json!([{
+                    "kind": "shortcut",
+                    "detail": "Weakened check",
+                    "evidence": "check.txt",
+                    "reportedBy": "mac.reviews"
+                }]);
+            }
+            write_doc(if i < 3 { &d1 } else { &d2 }, &id, &r);
+        }
+
+        // Reviews (pass, overturned, disputed, cannot-verify, and one targeting unknown run -> ignored).
+        for (idx, (target, verdict, overturned, disputed)) in [
+            ("vm.lead--b-0", "pass", false, false),
+            ("vm.lead--b-1", "fail", true, false),
+            ("vm.lead--b-2", "pass", true, true),
+            ("vm.lead--b-3", "cannot-verify", false, false),
+            ("vm.lead--b-4", "pass", false, false),
+            ("vm.lead--does-not-exist", "pass", false, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut rev = base.clone();
+            let id = format!("mac.reviews--rev-{idx}");
+            rev["id"] = json!(id);
+            rev["writer"] = json!("mac.reviews");
+            rev["source"] = json!("observed");
+            rev["benchmark"] = Json::Null;
+            rev["task"] = json!({"id": format!("rev-{idx}"), "type": "review", "title": format!("Rev {idx}")});
+            rev["model"] = json!({"id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max"});
+            rev["endedAt"] = json!(format!("2026-11-05T15:0{idx}:00Z"));
+            rev["writtenAt"] = rev["endedAt"].clone();
+            rev["outcome"] = json!("done");
+            rev["evidence"] = json!([{"label": "review", "path": format!("rev-{idx}.md")}]);
+            rev["review"] = json!({
+                "of": target,
+                "verdict": verdict,
+                "findings": {"high": 0, "medium": 0, "low": 0},
+                "overturned": overturned,
+                "disputed": disputed,
+            });
+            write_doc(&drev, &id, &rev);
+        }
+
+        // Benchmark run, unknown-outcome run, unscored runs, correction + void + refused correction, invalid file.
+        write_bench(root.path());
+        let mut unk_out = base.clone();
+        unk_out["id"] = json!("vm.lead--unk-out");
+        unk_out["source"] = json!("observed");
+        unk_out["benchmark"] = Json::Null;
+        unk_out["task"] = json!({"id": "t-unk", "type": "build", "title": "Unknown outcome"});
+        unk_out["outcome"] = json!("In   Progress");
+        write_doc(&d2, "vm.lead--unk-out", &unk_out);
+
+        for (id, model_id, task_type) in [
+            ("vm.lead--u-nomodel", Json::Null, json!("build")),
+            ("vm.lead--u-notype", json!("openai/gpt-6.1-sol"), Json::Null),
+            (
+                "vm.lead--u-unkmodel",
+                json!("mystery/model-9"),
+                json!("build"),
+            ),
+            (
+                "vm.lead--u-unktype",
+                json!("openai/gpt-6.1-sol"),
+                json!("mystery-task"),
+            ),
+        ] {
+            let mut u = base.clone();
+            u["id"] = json!(id);
+            u["source"] = json!("observed");
+            u["benchmark"] = Json::Null;
+            u["model"]["id"] = model_id;
+            u["task"]["type"] = task_type;
+            write_doc(&d2, id, &u);
+        }
+
+        // Valid correction replacing b-4, plus refused correction naming missing target, plus invalid JSON file.
+        let mut corr = base.clone();
+        corr["id"] = json!("vm.lead--b-4-corr");
+        corr["source"] = json!("observed");
+        corr["benchmark"] = Json::Null;
+        corr["corrects"] = json!("vm.lead--b-4");
+        corr["task"] = json!({"id": "t-4", "type": "build", "title": "Build 4 corrected"});
+        corr["endedAt"] = json!("2026-11-05T12:04:30Z");
+        corr["writtenAt"] = json!("2026-11-05T12:04:30Z");
+        write_doc(&d2, "vm.lead--b-4-corr", &corr);
+
+        let mut bad_corr = base.clone();
+        bad_corr["id"] = json!("vm.lead--corr-missing");
+        bad_corr["source"] = json!("observed");
+        bad_corr["benchmark"] = Json::Null;
+        bad_corr["corrects"] = json!("vm.lead--never-existed");
+        bad_corr["task"] = json!({"id": "t-bad", "type": "build", "title": "Bad corr"});
+        write_doc(&d2, "vm.lead--corr-missing", &bad_corr);
+        std::fs::write(d2.join("vm.lead--corrupt.json"), "{not-json").expect("bad file");
+
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let store = StoreHost::new(boot(store_dir));
+        store.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        owner.seed().await;
+        owner.catalog_pass(now);
+        owner.ingest_pass_at(true, now).await;
+
+        let make_feed = |zone: &str,
+                         from: Option<&str>,
+                         to: Option<&str>,
+                         from_ms: Option<i64>,
+                         to_ms: Option<i64>,
+                         source: &str,
+                         task_type: Option<&str>|
+         -> String {
+            let now_i64 = i64::try_from(now).expect("now");
+            let offsets = crate::zone_facts::server_zone_facts(zone, now_i64).expect("zone");
+            let (clock, day) = offsets.zone.words(now_i64).expect("words");
+            json!({
+                "now": now,
+                "clock": clock,
+                "day": day,
+                "timeZone": zone,
+                "from": from,
+                "to": to,
+                "source": source,
+                "taskType": task_type,
+                "fromMs": from_ms,
+                "toMs": to_ms,
+            })
+            .to_string()
+        };
+
+        let nov5_start = crate::zone_facts::local_midnight("2026-11-05", "UTC").expect("nov5");
+        let nov5_end = crate::zone_facts::local_midnight("2026-11-06", "UTC").expect("nov6") - 1000;
+        let cases = vec![
+            (
+                "unfiltered-utc",
+                make_feed("UTC", None, None, None, None, "all", None),
+            ),
+            (
+                "unfiltered-ny",
+                make_feed("America/New_York", None, None, None, None, "all", None),
+            ),
+            (
+                "source-real",
+                make_feed("UTC", None, None, None, None, "real", None),
+            ),
+            (
+                "source-benchmark",
+                make_feed("UTC", None, None, None, None, "benchmark", None),
+            ),
+            (
+                "task-build",
+                make_feed("UTC", None, None, None, None, "all", Some("build")),
+            ),
+            (
+                "task-review",
+                make_feed("UTC", None, None, None, None, "all", Some("review")),
+            ),
+            (
+                "date-nov5",
+                make_feed(
+                    "UTC",
+                    Some("2026-11-05"),
+                    Some("2026-11-05"),
+                    Some(nov5_start),
+                    Some(nov5_end),
+                    "all",
+                    None,
+                ),
+            ),
+            (
+                "date-nov5-real-build",
+                make_feed(
+                    "UTC",
+                    Some("2026-11-05"),
+                    Some("2026-11-05"),
+                    Some(nov5_start),
+                    Some(nov5_end),
+                    "real",
+                    Some("build"),
+                ),
+            ),
+        ];
+
+        for (label, feed_text) in cases {
+            let (agg_bytes, agg_etag) = owner
+                .answer(&feed_text)
+                .await
+                .unwrap_or_else(|e| panic!("aggregate answer failed for {label}: {e:?}"));
+            let (legacy_bytes, legacy_etag) = answer_legacy_for_parity(&owner, &feed_text).await;
+            assert_eq!(
+                String::from_utf8_lossy(&agg_bytes),
+                String::from_utf8_lossy(&legacy_bytes),
+                "byte mismatch for case {label}"
+            );
+            assert_eq!(agg_etag, legacy_etag, "etag mismatch for case {label}");
+        }
+    }
+
+    /// Phase 4 Step 2: store-backed Scoreboard does not recompose on a 60 s timer when the
+    /// store generation, catalog content/health, and pass problems have not changed; a new run
+    /// landing bumps generation and triggers exactly one recompose.
+    #[tokio::test]
+    async fn store_backed_scoreboard_does_not_recompose_after_60s_when_unchanged() {
+        use super::Json;
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog");
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let store = StoreHost::new(boot(store_dir));
+        store.open_at_boot();
+        let owner = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        owner.seed().await;
+        owner.catalog_pass(now);
+        owner.ingest_pass_at(true, now).await;
+
+        let (_, etag0) = owner
+            .answer(&feed_text_bare(now, "UTC"))
+            .await
+            .expect("first answer");
+        assert_eq!(owner.compose_count.load(Ordering::Relaxed), 1);
+
+        // Catalog ticks every 30 s with unchanged content, and polls arrive well past 60 s.
+        owner.catalog_pass(now + 30_000);
+        let (bytes1, etag1) = owner
+            .answer(&feed_text_bare(now + 65_000, "UTC"))
+            .await
+            .expect("65s answer");
+        assert_eq!(
+            owner.compose_count.load(Ordering::Relaxed),
+            1,
+            "65s poll on unchanged data must NOT recompose"
+        );
+        assert_eq!(etag1, etag0);
+        let view1: Json = serde_json::from_slice(&bytes1).expect("view1");
+        assert_eq!(view1["cacheAgeSeconds"].as_f64(), Some(65.0));
+        assert_eq!(view1["refreshing"], json!(false));
+
+        owner.catalog_pass(now + 180_000);
+        let (bytes2, etag2) = owner
+            .answer(&feed_text_bare(now + 200_000, "UTC"))
+            .await
+            .expect("200s answer");
+        assert_eq!(
+            owner.compose_count.load(Ordering::Relaxed),
+            1,
+            "200s poll on unchanged data must NOT recompose"
+        );
+        assert_eq!(etag2, etag0);
+        let view2: Json = serde_json::from_slice(&bytes2).expect("view2");
+        assert_eq!(view2["cacheAgeSeconds"].as_f64(), Some(200.0));
+
+        // Now ingest 1 new run: generation advances and triggers exactly one new compose.
+        let dir = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+        let added = BENCH
+            .replace("vm.lead--bench", "vm.lead--after-200s")
+            .replace("\"Task bench\"", "\"Task after200s\"");
+        std::fs::write(dir.join("vm.lead--after-200s.json"), added).expect("write new run");
+        owner.ingest_pass_at(true, now + 205_000).await;
+
+        let (bytes3, etag3) = owner
+            .answer(&feed_text_bare(now + 210_000, "UTC"))
+            .await
+            .expect("answer after new run");
+        assert_eq!(
+            owner.compose_count.load(Ordering::Relaxed),
+            2,
+            "a new run must trigger exactly one recompose"
+        );
+        assert_ne!(etag3, etag0);
+        assert!(
+            String::from_utf8_lossy(&bytes3).contains("after200s"),
+            "new run must appear in recomposed view"
         );
     }
 }

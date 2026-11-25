@@ -57,6 +57,7 @@ mod reset_claims;
 mod reset_source_route;
 #[cfg(all(unix, test))]
 mod runs_ingest_gate;
+mod scoreboard_compose;
 mod scoreboard_owned;
 pub mod signin_callbacks;
 mod signins;

@@ -71,7 +71,7 @@ const CATALOG_CAP_BYTES: u64 = 256 * 1024;
 const UNKNOWN: u64 = u64::MAX;
 
 /// Kinds of this projector's own dictionary.
-mod kind {
+pub(crate) mod kind {
     pub const RUN_ID: u8 = 1;
     pub const WRITER: u8 = 2;
     pub const MACHINE: u8 = 3;
@@ -107,6 +107,7 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
         txn.open_table(def)?;
     }
     txn.open_table(RUN_BY_TIME)?;
+    crate::scoreboard_agg::create_tables(txn)?;
     Ok(())
 }
 
@@ -117,11 +118,11 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn unhex32(text: &str) -> Option<[u8; 32]> {
+pub(crate) fn unhex32(text: &str) -> Option<[u8; 32]> {
     if text.len() != 64 {
         return None;
     }
@@ -132,7 +133,7 @@ fn unhex32(text: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-fn unhex16(text: &str) -> Option<[u8; 16]> {
+pub(crate) fn unhex16(text: &str) -> Option<[u8; 16]> {
     if text.len() != 32 {
         return None;
     }
@@ -145,7 +146,7 @@ fn unhex16(text: &str) -> Option<[u8; 16]> {
 
 /// A path's key in `run_file` and its hash in refusals: the first 16 bytes of
 /// `sha256("aac-run-path-v1:" + path)` (`pathHash` in `src/web-server/scoreboard/runs-store.ts`).
-fn path_key(path: &str) -> [u8; 16] {
+pub(crate) fn path_key(path: &str) -> [u8; 16] {
     let digest = sha256(format!("aac-run-path-v1:{path}").as_bytes());
     digest[..16].try_into().unwrap()
 }
@@ -161,15 +162,19 @@ fn put(txn: &WriteTransaction, def: Bytes, key: &[u8], value: &[u8]) -> Result<(
     Ok(())
 }
 
-fn meta_get(txn: &WriteTransaction, key: &str) -> Result<Option<String>> {
+pub(crate) fn meta_get(txn: &WriteTransaction, key: &str) -> Result<Option<String>> {
     let table = txn.open_table(RUN_META)?;
     let value = table.get(key)?.map(|v| String::from_utf8_lossy(v.value()).into_owned());
     Ok(value)
 }
 
-fn meta_set(txn: &WriteTransaction, key: &str, value: &str) -> Result<()> {
+pub(crate) fn meta_set(txn: &WriteTransaction, key: &str, value: &str) -> Result<()> {
     txn.open_table(RUN_META)?.insert(key, value.as_bytes())?;
     Ok(())
+}
+
+pub(crate) fn intern_run_id(txn: &WriteTransaction, run_id: &str) -> Result<u32> {
+    intern(txn, kind::RUN_ID, Some(run_id))
 }
 
 /// This projector's id for `text` under `kind` (0 means none). Ids start at 1 per kind.
@@ -194,26 +199,26 @@ fn intern(txn: &WriteTransaction, kind: u8, text: Option<&str>) -> Result<u32> {
     Ok(next)
 }
 
-fn lookup_id<T: ReadableTable<&'static [u8], u32>>(rev: &T, kind: u8, text: &str) -> Result<Option<u32>> {
+pub(crate) fn lookup_id<T: ReadableTable<&'static [u8], u32>>(rev: &T, kind: u8, text: &str) -> Result<Option<u32>> {
     Ok(rev
         .get(Key::new().u8(kind).bytes(text.as_bytes()).as_slice())?
         .map(|v| v.value()))
 }
 
 /// Reads dictionary text through a cache (queries read the same few strings many times).
-struct Dict<'a, T: ReadableTable<&'static [u8], &'static [u8]>> {
+pub(crate) struct Dict<'a, T: ReadableTable<&'static [u8], &'static [u8]>> {
     table: &'a T,
     cache: HashMap<(u8, u32), Option<String>>,
 }
 
 impl<'a, T: ReadableTable<&'static [u8], &'static [u8]>> Dict<'a, T> {
-    fn new(table: &'a T) -> Self {
+    pub(crate) fn new(table: &'a T) -> Self {
         Dict {
             table,
             cache: HashMap::new(),
         }
     }
-    fn text(&mut self, kind: u8, id: u32) -> Result<Option<String>> {
+    pub(crate) fn text(&mut self, kind: u8, id: u32) -> Result<Option<String>> {
         if id == 0 {
             return Ok(None);
         }
@@ -228,7 +233,7 @@ impl<'a, T: ReadableTable<&'static [u8], &'static [u8]>> Dict<'a, T> {
         Ok(text)
     }
     /// A head row's string field, by its index in `HEAD_IDS`.
-    fn field(&mut self, head: &Head, at: usize) -> Result<Option<String>> {
+    pub(crate) fn field(&mut self, head: &Head, at: usize) -> Result<Option<String>> {
         self.text(HEAD_IDS[at], head.ids[at])
     }
 }
@@ -365,13 +370,13 @@ impl Head {
         })
     }
 
-    fn id(&self, kind_at: usize) -> u32 {
+    pub(crate) fn id(&self, kind_at: usize) -> u32 {
         self.ids[kind_at]
     }
 }
 
 /// Index of a field in `HEAD_IDS`.
-mod at {
+pub(crate) mod at {
     pub const WRITER: usize = 0;
     pub const MACHINE: usize = 1;
     pub const COMPUTER: usize = 2;
@@ -404,15 +409,19 @@ mod at {
 /// row holds no path, file name or writer (it is keyed by the path's hash): only the reason and
 /// when it was refused.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct FileRow {
+pub(crate) struct FileRow {
     /// 1 stored, 2 refused.
-    state: u8,
-    size: u64,
-    mtime_ms: u64,
-    sha: [u8; 32],
-    run: u32,
-    reason: u32,
-    at_ms: u64,
+    pub(crate) state: u8,
+    pub(crate) size: u64,
+    pub(crate) mtime_ms: u64,
+    pub(crate) sha: [u8; 32],
+    pub(crate) run: u32,
+    pub(crate) reason: u32,
+    pub(crate) at_ms: u64,
+}
+
+pub(crate) fn decode_file_row(b: &[u8]) -> Result<FileRow> {
+    FileRow::decode(b)
 }
 
 const FILE_VERSION: u8 = 3;
@@ -474,7 +483,7 @@ fn block_encode(docs: &[Vec<u8>], compress: bool) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn block_decode(b: &[u8]) -> Result<(bool, Vec<Vec<u8>>)> {
+pub(crate) fn block_decode(b: &[u8]) -> Result<(bool, Vec<Vec<u8>>)> {
     if b.len() < 4 || b[0] != 1 {
         fail!("unsupported", "run payload block version");
     }
@@ -731,7 +740,11 @@ impl Projector for RunsProjector {
             "run.path" => project_path(txn, &serde_json::from_value(payload())?)?,
             _ => {}
         }
+        crate::scoreboard_agg::record_seq(txn, event.sequence_id)?;
         Ok(Vec::new())
+    }
+    fn finish_replay(&self, db: &redb::Database) -> Result<()> {
+        crate::scoreboard_agg::ensure_migrated(db)
     }
     fn reset(&self, txn: &WriteTransaction) -> Result<()> {
         for def in [RUN_HEAD, RUN_REV, RUN_PAYLOAD, RUN_FILE, RUN_CATALOG, RUN_DICT] {
@@ -740,6 +753,7 @@ impl Projector for RunsProjector {
         txn.delete_table(RUN_DICT_REV)?;
         txn.delete_table(RUN_BY_TIME)?;
         txn.delete_table(RUN_META)?;
+        crate::scoreboard_agg::delete_tables(txn)?;
         create_tables(txn)
     }
 }
@@ -815,11 +829,25 @@ fn text_of(txn: &WriteTransaction, kind: u8, id: u32) -> Result<Option<String>> 
     dict.text(kind, id)
 }
 
+fn head_affects_agg(old: &Head, new: &Head) -> bool {
+    old.sha != new.sha
+        || old.ids != new.ids
+        || old.ended_ms != new.ended_ms
+        || old.flags != new.flags
+        || old.verdict != new.verdict
+        || old.seq != new.seq
+        || old.written_ms != new.written_ms
+        || old.ingested_ms != new.ingested_ms
+        || old.loc != new.loc
+}
+
 /// Makes the head the winning revision (by `newer`) and keeps the time index on it.
-fn refresh_head(txn: &WriteTransaction, r: u32) -> Result<()> {
+/// Returns `Some(head)` when the winning revision changed in a way that affects Scoreboard
+/// aggregates (or was newly inserted).
+fn refresh_head(txn: &WriteTransaction, r: u32) -> Result<Option<Head>> {
     let revs = revisions(txn, r)?;
     if revs.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let mut paths = Vec::with_capacity(revs.len());
     {
@@ -839,14 +867,16 @@ fn refresh_head(txn: &WriteTransaction, r: u32) -> Result<()> {
     let mut head = revs[best].1.clone();
     head.revisions = revs.len().min(u16::MAX as usize) as u16;
     let key = Key::new().u32(r).0;
-    if let Some(held) = get(txn, RUN_HEAD, &key)?.map(|b| Head::decode(&b)).transpose()? {
+    let held = get(txn, RUN_HEAD, &key)?.map(|b| Head::decode(&b)).transpose()?;
+    if let Some(held) = &held {
         txn.open_table(RUN_BY_TIME)?
             .remove(Key::new().u64(held.ended_ms).u32(r).as_slice())?;
     }
     put(txn, RUN_HEAD, &key, &head.encode())?;
     txn.open_table(RUN_BY_TIME)?
         .insert(Key::new().u64(head.ended_ms).u32(r).as_slice(), ())?;
-    Ok(())
+    let agg_changed = held.as_ref().is_none_or(|old| head_affects_agg(old, &head));
+    Ok(agg_changed.then_some(head))
 }
 
 fn stored_file(
@@ -881,7 +911,9 @@ fn raise_path(txn: &WriteTransaction, r: u32, index: u16, mut row: Head, path: &
     if path > current.as_str() {
         row.ids[at::PATH] = intern(txn, kind::PATH, Some(path))?;
         put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
-        refresh_head(txn, r)?;
+        if let Some(head) = refresh_head(txn, r)? {
+            crate::scoreboard_agg::on_head_changed(txn, r, &head, None)?;
+        }
     }
     Ok(())
 }
@@ -949,7 +981,11 @@ fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64)
     identity_ids(txn, &mut row.ids, &p.identity)?;
     let index = revs.len().min(u16::MAX as usize) as u16;
     put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
-    refresh_head(txn, r)
+    if let Some(head) = refresh_head(txn, r)? {
+        let doc_bytes = (head.sha == sha).then_some(p.doc.as_bytes());
+        crate::scoreboard_agg::on_head_changed(txn, r, &head, doc_bytes)?;
+    }
+    Ok(())
 }
 
 fn project_path(txn: &WriteTransaction, p: &PathPayload) -> Result<()> {
@@ -991,7 +1027,10 @@ fn project_identity(txn: &WriteTransaction, p: &IdentityEventPayload) -> Result<
         }
         put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
     }
-    refresh_head(txn, r)
+    if let Some(head) = refresh_head(txn, r)? {
+        crate::scoreboard_agg::on_head_changed(txn, r, &head, None)?;
+    }
+    Ok(())
 }
 
 /// The reason words kept when a reason itself looks like a credential (it may quote a folder).
@@ -1332,28 +1371,33 @@ pub struct RecordArgs {
     pub now_ms: u64,
 }
 
+/// The catalog stored as current in an existing read transaction, if any.
+fn current_catalog_in_read(read: &redb::ReadTransaction) -> Result<Option<Catalog>> {
+    let meta = read.open_table(RUN_META)?;
+    let Some(hash) = meta
+        .get("catalog")?
+        .map(|v| String::from_utf8_lossy(v.value()).into_owned())
+    else {
+        return Ok(None);
+    };
+    let Some(key) = unhex32(&hash) else { return Ok(None) };
+    let table = read.open_table(RUN_CATALOG)?;
+    let Some(value) = table.get(&key[..16])? else {
+        return Ok(None);
+    };
+    let bytes = value.value();
+    if bytes.first() != Some(&1) || bytes.len() < 9 {
+        return Ok(None);
+    }
+    let texts: Json = msgpack::from_bytes(&zstd::stream::decode_all(&bytes[9..])?)?;
+    Ok(Catalog::from_texts(texts["models"].as_str(), texts["aliases"].as_str()))
+}
+
 /// The catalog stored as current, if any.
 fn current_catalog(engine: &Engine) -> Result<Option<Catalog>> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
-        let meta = read.open_table(RUN_META)?;
-        let Some(hash) = meta
-            .get("catalog")?
-            .map(|v| String::from_utf8_lossy(v.value()).into_owned())
-        else {
-            return Ok(None);
-        };
-        let Some(key) = unhex32(&hash) else { return Ok(None) };
-        let table = read.open_table(RUN_CATALOG)?;
-        let Some(value) = table.get(&key[..16])? else {
-            return Ok(None);
-        };
-        let bytes = value.value();
-        if bytes.first() != Some(&1) || bytes.len() < 9 {
-            return Ok(None);
-        }
-        let texts: Json = msgpack::from_bytes(&zstd::stream::decode_all(&bytes[9..])?)?;
-        Ok(Catalog::from_texts(texts["models"].as_str(), texts["aliases"].as_str()))
+        current_catalog_in_read(&read)
     })
 }
 
@@ -1769,6 +1813,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                 put(&txn, RUN_FILE, &path_key(path), &row.encode())?;
             }
             txn.commit()?;
+            engine.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
             Ok(())
         })?;
     }
@@ -2532,10 +2577,9 @@ pub fn refused(engine: &Engine) -> Result<Json> {
     })
 }
 
-/// The page's identity facts under the current catalog: families in order, each catalog
-/// model's family and order, and the effort order.
-pub fn identity_table(engine: &Engine) -> Result<Json> {
-    let catalog = current_catalog(engine)?.unwrap_or_default();
+/// The page's identity facts under the current catalog, read from an existing transaction.
+pub(crate) fn identity_table_in_read(read: &redb::ReadTransaction) -> Result<Json> {
+    let catalog = current_catalog_in_read(read)?.unwrap_or_default();
     let mut families: BTreeMap<String, run_identity::Family> = BTreeMap::new();
     let mut models = serde_json::Map::new();
     for (i, m) in catalog.models.iter().enumerate() {
@@ -2559,6 +2603,15 @@ pub fn identity_table(engine: &Engine) -> Result<Json> {
         "models": models,
         "efforts": run_identity::EFFORT_ORDER,
     }))
+}
+
+/// The page's identity facts under the current catalog: families in order, each catalog
+/// model's family and order, and the effort order.
+pub fn identity_table(engine: &Engine) -> Result<Json> {
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        identity_table_in_read(&read)
+    })
 }
 
 /// Every distinct written model, effort and harness with counts and what each maps to, the
@@ -2666,7 +2719,14 @@ pub fn audit(engine: &Engine) -> Result<Json> {
 /// Counts and sizes of the run tables, the current catalog and the generation.
 pub fn status(engine: &Engine) -> Result<Json> {
     let effective_count = if has_corrections(engine)? {
-        Some(resolved_history(engine)?.rows.len())
+        let from_agg = engine.with_db(|db| {
+            let read = db.begin_read()?;
+            crate::scoreboard_agg::effective_run_count_in_read(&read)
+        })?;
+        match from_agg {
+            Some(n) => Some(n),
+            None => Some(resolved_history(engine)?.rows.len() as u64),
+        }
     } else {
         None
     };
@@ -2692,7 +2752,7 @@ pub fn status(engine: &Engine) -> Result<Json> {
         }
         let meta = read.open_table(RUN_META)?;
         Ok(json!({
-            "runs": effective_count.map(|n| n as u64).unwrap_or(read.open_table(RUN_HEAD)?.len()?),
+            "runs": effective_count.unwrap_or(read.open_table(RUN_HEAD)?.len()?),
             "revisions": read.open_table(RUN_REV)?.len()?,
             "files": read.open_table(RUN_FILE)?.len()?,
             "refusedFiles": refused,

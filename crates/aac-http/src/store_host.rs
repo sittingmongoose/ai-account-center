@@ -211,6 +211,22 @@ enum StoreCall {
     RunsHistory {
         reply: tokio::sync::oneshot::Sender<Result<Arc<aac_store::runs::ResolvedHistory>, String>>,
     },
+    /// The Scoreboard's aggregate-backed read: precomputed per-model/per-task-type totals
+    /// plus bounded recent windows in one MVCC redb read transaction (no payload reads).
+    ScoreboardRead {
+        filter: aac_store::scoreboard_agg::ScoreboardFilter,
+        extra_problems: Vec<(String, Option<i64>)>,
+        safe_paths: std::collections::HashMap<String, String>,
+        reply:
+            tokio::sync::oneshot::Sender<Result<aac_store::scoreboard_agg::ScoreboardRead, String>>,
+    },
+    /// Accepted readers-check receipts straight from `run_head` + `run_dict` +
+    /// `run_sb_correction_refused` (no payload reads, no `ResolvedHistory`).
+    AcceptedReceipts {
+        reply: tokio::sync::oneshot::Sender<
+            Result<(u64, Vec<aac_store::runs::AcceptedReceipt>), String>,
+        >,
+    },
 }
 
 /// The hosted store: one Engine slot behind the NAPI method contract, plus its jobs. Calls run
@@ -300,6 +316,23 @@ impl StoreHost {
                                 let result = host.runs_history_blocking();
                                 let _ = reply.send(result);
                             }
+                            StoreCall::ScoreboardRead {
+                                filter,
+                                extra_problems,
+                                safe_paths,
+                                reply,
+                            } => {
+                                let result = host.scoreboard_read_blocking(
+                                    &filter,
+                                    &extra_problems,
+                                    &safe_paths,
+                                );
+                                let _ = reply.send(result);
+                            }
+                            StoreCall::AcceptedReceipts { reply } => {
+                                let result = host.accepted_receipts_blocking();
+                                let _ = reply.send(result);
+                            }
                         }
                     }
                 });
@@ -373,6 +406,11 @@ impl StoreHost {
         self.engine()
     }
 
+    /// Monotonic counter that bumps only when `run.*` events or run file-state repairs commit.
+    pub(crate) fn runs_write_seq(&self) -> Option<u64> {
+        self.engine().map(|engine| engine.runs_write_seq())
+    }
+
     /// Why [`Self::analytics_engine`] has no engine, as a reader's fixed cause: still opening or
     /// closed for a restore is a read in progress; a failed boot open is an unsafe store.
     pub(crate) fn engine_unavailable_cause(&self) -> &'static str {
@@ -433,6 +471,77 @@ impl StoreHost {
                 .engine()
                 .ok_or_else(|| "service_down: the store host is closed".to_string())?;
             aac_store::runs::resolved_history_snapshot(&engine).map_err(|e| e.to_string())
+        }));
+        outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
+    }
+
+    /// Read pre-aggregated Scoreboard buckets + metadata directly from `run_sb_*` tables in one
+    /// MVCC redb read transaction (zero `run_payload` reads, zero `ResolvedHistory`).
+    pub(crate) async fn scoreboard_read(
+        &self,
+        filter: aac_store::scoreboard_agg::ScoreboardFilter,
+        extra_problems: Vec<(String, Option<i64>)>,
+        safe_paths: std::collections::HashMap<String, String>,
+    ) -> Result<aac_store::scoreboard_agg::ScoreboardRead, String> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(StoreCall::ScoreboardRead {
+                filter,
+                extra_problems,
+                safe_paths,
+                reply,
+            })
+            .map_err(|_| "service_down: the store host is stopping".to_string())?;
+        answer
+            .await
+            .map_err(|_| "service_down: the store host is stopping".to_string())?
+    }
+
+    fn scoreboard_read_blocking(
+        &self,
+        filter: &aac_store::scoreboard_agg::ScoreboardFilter,
+        extra_problems: &[(String, Option<i64>)],
+        safe_paths: &std::collections::HashMap<String, String>,
+    ) -> Result<aac_store::scoreboard_agg::ScoreboardRead, String> {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.wait_ready();
+            let engine = self
+                .engine()
+                .ok_or_else(|| "service_down: the store host is closed".to_string())?;
+            aac_store::scoreboard_agg::read_for_scoreboard(
+                &engine,
+                filter,
+                extra_problems,
+                safe_paths,
+            )
+            .map_err(|e| e.to_string())
+        }));
+        outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
+    }
+
+    /// Read accepted readers-check receipts from `run_head` + `run_dict` +
+    /// `run_sb_correction_refused` without touching `run_payload` or `ResolvedHistory`.
+    pub(crate) async fn accepted_receipts(
+        &self,
+    ) -> Result<(u64, Vec<aac_store::runs::AcceptedReceipt>), String> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(StoreCall::AcceptedReceipts { reply })
+            .map_err(|_| "service_down: the store host is stopping".to_string())?;
+        answer
+            .await
+            .map_err(|_| "service_down: the store host is stopping".to_string())?
+    }
+
+    fn accepted_receipts_blocking(
+        &self,
+    ) -> Result<(u64, Vec<aac_store::runs::AcceptedReceipt>), String> {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.wait_ready();
+            let engine = self
+                .engine()
+                .ok_or_else(|| "service_down: the store host is closed".to_string())?;
+            aac_store::scoreboard_agg::accepted_receipts(&engine).map_err(|e| e.to_string())
         }));
         outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }
