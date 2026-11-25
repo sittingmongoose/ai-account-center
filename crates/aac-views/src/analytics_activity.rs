@@ -1621,7 +1621,11 @@ fn has_partial_hour_offset(tz: &str, from: f64, to: f64, zone: Option<&intl::Zon
     if tz == "UTC" {
         return Ok(false);
     }
-    for epoch in [from, to, from + (to - from) / 2.0] {
+    // JavaScript's Date and `zoneOffsetMs` truncate fractional milliseconds. The midpoint
+    // of an odd-millisecond range can be fractional; truncate it to the same instant instead
+    // of refusing the whole Analytics answer as an invalid date.
+    let middle = (from + (to - from) / 2.0).floor();
+    for epoch in [from, to, middle] {
         if offset_minutes(epoch, tz, zone)?.rem_euclid(60) != 0 {
             return Ok(true);
         }
@@ -3057,6 +3061,20 @@ mod tests {
         assert_eq!(
             usage_provider_for("omp", Some("moonshotai"), Some("moonshot-v1-8k")),
             "other"
+        );
+    }
+
+    #[test]
+    fn a_fractional_midpoint_does_not_decline_the_partial_hour_offset_check() {
+        let zone = intl::Zone::proven(0, 1, &[[0, -300]]).expect("whole-hour zone");
+        assert_eq!(
+            has_partial_hour_offset("America/New_York", 0.0, 1.0, Some(&zone)),
+            Ok(false)
+        );
+        let partial = intl::Zone::proven(0, 1, &[[0, 330]]).expect("half-hour zone");
+        assert_eq!(
+            has_partial_hour_offset("Asia/Kolkata", 0.0, 1.0, Some(&partial)),
+            Ok(true)
         );
     }
 }

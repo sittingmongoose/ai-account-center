@@ -34,7 +34,13 @@ async fn analytics_refuses_without_a_store_owner() {
     let (home, _auth, addr, handle) = server_with_analytics(true, None).await;
     let headers = headers(addr).await;
     let reply = request(addr, ANALYTICS, "GET", &headers, "").await;
-    assert_eq!(body(&reply, 500)["code"], "analytics_unavailable");
+    let value = body(&reply, 503);
+    assert_eq!(value["code"], "analytics_unavailable");
+    assert_eq!(
+        value["error"],
+        "Account analytics could not be read safely. Try again."
+    );
+    assert!(reply.contains("\r\nretry-after: 1\r\n"));
     assert!(!home.path().join("quota-history-v1.json").exists());
     handle.abort();
 }

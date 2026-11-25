@@ -77,6 +77,16 @@ fn refused(status: u16, code: &str, message: &str) -> Reply {
     no_store(super::error(status, code, message))
 }
 
+fn unavailable() -> Reply {
+    let mut reply = refused(
+        503,
+        "analytics_unavailable",
+        "Account analytics could not be read safely. Try again.",
+    );
+    super::set_header(&mut reply, "retry-after", "1");
+    reply
+}
+
 /// The request's admitted principal, or the reply the TypeScript route gives it.
 fn session(access: &DashboardAccess) -> Result<(), Reply> {
     match &access.principal {
@@ -452,15 +462,14 @@ async fn composed(
     };
     if let Some(hop) = hop
         && let Some((status, body)) = hop(uri, principal).await
-        && status != 503
     {
-        return no_store(super::json_bytes(status, body));
+        return if status == 503 {
+            unavailable()
+        } else {
+            no_store(super::json_bytes(status, body))
+        };
     }
-    refused(
-        500,
-        "analytics_unavailable",
-        "Account analytics could not be read safely.",
-    )
+    unavailable()
 }
 
 #[cfg(test)]
@@ -468,6 +477,59 @@ mod tests {
     use super::*;
 
     const PROVIDERS: [&str; 3] = ["claude", "codex", "zai"];
+
+    fn access() -> DashboardAccess {
+        DashboardAccess {
+            auth_enabled: true,
+            principal: DashboardPrincipal::Browser {
+                username: "fixture".into(),
+            },
+            secure_transport: true,
+            same_origin: true,
+            origin_present: true,
+            local_access: true,
+            session_id: Some("fixture".into()),
+            credential_transport: "direct-loopback",
+            direct_loopback: true,
+            lan_proxy: false,
+            client_address: None,
+        }
+    }
+
+    async fn assert_retryable_unavailable(hop: Option<Hop>) {
+        let reply = composed(access(), Some("range=all"), false, hop).await;
+        assert_eq!(reply.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(reply.headers()["cache-control"], "no-store");
+        assert_eq!(reply.headers()["retry-after"], "1");
+        let bytes = axum::body::to_bytes(reply.into_body(), 4096)
+            .await
+            .expect("unavailable body");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).expect("unavailable json"),
+            json!({
+                "error": "Account analytics could not be read safely. Try again.",
+                "code": "analytics_unavailable"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_owner_decline_is_a_retryable_public_unavailable_reply() {
+        let hop: Hop = Arc::new(|_, _| {
+            Box::pin(async {
+                Some((
+                    503,
+                    br#"{"error":"TypeScript read fallback required"}"#.to_vec(),
+                ))
+            })
+        });
+        assert_retryable_unavailable(Some(hop)).await;
+    }
+
+    #[tokio::test]
+    async fn a_missing_owner_is_a_retryable_public_unavailable_reply() {
+        assert_retryable_unavailable(None).await;
+    }
 
     #[test]
     fn the_guard_admits_the_route_defaults() {
