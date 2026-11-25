@@ -1519,10 +1519,9 @@
     },
     {
       "file": "crates/aac-status/src/read_status_panels.rs",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-status/src/read_status_trace.rs",
@@ -1544,6 +1543,12 @@
     },
     {
       "file": "crates/aac-status/src/share/mod.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/share/reports.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1727,6 +1732,13 @@
     },
     {
       "file": "crates/aac-status/tests/share_parity.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-status/tests/share_snapshot.rs",
       "kind": "table",
       "evidence": [
         "table"
