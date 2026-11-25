@@ -86,9 +86,12 @@ describeOnLinux('confirmed switch with disposable real process families', () => 
       }
     }
     async function ready(pid: number): Promise<void> {
-      for (let attempt = 0; attempt < 100; attempt++) {
+      // A loaded host can take seconds to schedule the real fixture child (TOOL-ISSUES 15:
+      // the old 100 x 10 ms budget timed out in full-suite runs). Poll the ready file it
+      // writes for up to 5 s; fake timers cannot advance a real child's I/O.
+      for (let attempt = 0; attempt < 250; attempt++) {
         if (fs.existsSync(path.join(directory, `process-${pid}.json`))) return;
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 20));
       }
       throw new Error('Fixture did not start');
     }
