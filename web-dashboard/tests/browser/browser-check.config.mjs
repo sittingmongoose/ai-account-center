@@ -14,16 +14,29 @@ export default (ctx) => {
 	const rustOwned = !!ctx.args.rustOwned && ctx.args.rustOwned !== '0';
 	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
 	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
-	const cut = rustHome || rustOwned || (!!ctx.args.cut && ctx.args.cut !== '0');
+	// The shipped product is the native launcher, so cut=1 is the default. `--set cut=0` runs the
+	// historical dist/ccs.js front door, which supervises the Rust service and no longer serves
+	// the product routes itself (every API 404s under it).
+	const cut = rustHome || rustOwned || !(ctx.args.cut === '0' || ctx.args.cut === 0 || ctx.args.cut === false);
 	const cli = cut
 		? path.join(root, 'dist', 'native', process.platform === 'win32' ? 'ai-account-center.exe' : 'ai-account-center')
 		: path.join(root, 'dist', 'ccs.js');
 	if (!fs.existsSync(cli) || !fs.existsSync(path.join(root, 'dist', 'ui', 'app', 'index.html'))) {
-		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
+		throw new Error(cut
+			? `no built native dashboard in ${root}/dist: run bun run build on a Rust build host (Nas1 or the 1070ti; never the VM), or copy a built dist/ (see web-dashboard/tests/browser/README.md)`
+			: `no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
 	}
 	if (ctx.fleet) throw new Error('--host: the dashboard listens on 127.0.0.1 and setup is loopback-only, so a browser on another machine can\'t use it. Run from a checkout on that machine.');
 	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
 	if (rustHome && !fs.existsSync(rustBinary)) throw new Error(`rustHome: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
+	if (cut) {
+		// A fresh checkout has no native reader modules; the dashboard then refuses Status cards
+		// and answer history it cannot read natively. Name the build step instead of failing silently.
+		for (const [crate, build] of [['aac-status', 'status:build'], ['aac-store', 'store:build']]) {
+			const module = path.join(root, 'dist', 'native', `${crate}.${process.platform}-${process.arch}.node`);
+			if (!fs.existsSync(module)) console.warn(`[!] ${module} is missing: run bun run ${build} on a Rust build host, or copy the packaged module (web-dashboard/tests/browser/README.md)`);
+		}
+	}
 	let builder = null;
 	/** Per page: the Home inputs a check stubbed (path -> JSON). */
 	const homeStubs = new WeakMap();
