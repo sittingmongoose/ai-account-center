@@ -1160,7 +1160,7 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
             } else {
                 "records unreadable"
             };
-            let note = format!("{count} {records}; readable usage included");
+            let note = format!("{count} {records}");
             detail = Some(match detail {
                 Some(detail) => format!("{detail}; {note}"),
                 None => note,
@@ -3013,6 +3013,23 @@ mod tests {
                 "{host}"
             );
         }
+    }
+
+    #[test]
+    fn a_mixed_reads_detail_is_exactly_the_unreadable_count() {
+        let grid = grid_from_store(&json!({"sources": [{
+            "host": "ubuntu", "tool": "codex", "state": "partial",
+            "unreadableRecords": 1,
+        }]}))
+        .expect("mixed grid");
+        assert_eq!(
+            grid,
+            json!([{
+                "host": "ubuntu", "tool": "codex", "state": "cached",
+                "detail": "1 record unreadable", "lastScanAt": Value::Null,
+                "rowCount": 0, "unreadableRecords": 1,
+            }])
+        );
     }
 
     #[test]

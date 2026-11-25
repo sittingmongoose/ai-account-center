@@ -443,7 +443,7 @@ fn scanned_kind(
     );
     // Whether readable usage survives is decided from the cache as the apply left it: a
     // changed file whose cached rows were replaced by none leaves nothing readable, so the
-    // scan is a read failure, never "Scanning" with "readable usage included" (r1 High).
+    // scan is a read failure, never "Scanning" with zero published cells (r1 High).
     let (mut state, mut cause) = settle(has_readable_records(answer, cache, kind));
     if !applied && complete {
         (state, cause) = ("scanning", None);
@@ -2078,7 +2078,7 @@ mod tests {
     /// r1 High: the last readable row must not be evicted into a "Scanning" state. Two real
     /// Devin scanner answers through the writer and the Store: the second replaces the only
     /// cached reply with an unreadable one, so the source is unreadable/read_failed with the
-    /// failure detail, never "Scanning" with "readable usage included".
+    /// failure detail, never "Scanning" with zero published cells.
     #[test]
     fn a_replaced_last_readable_row_is_a_read_failure_not_scanning() {
         let dir = tempfile::tempdir().expect("fixture home");
