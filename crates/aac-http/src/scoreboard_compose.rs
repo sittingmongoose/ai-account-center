@@ -11,7 +11,7 @@ use aac_status::read_context::{
     PROTO_NAMES, age, array, median, number, plural, proto_named, rounded, s,
 };
 use aac_store::scoreboard_agg::{
-    BucketAgg, BucketFlag, BucketJoinedReview, BucketKey, BucketRunSummary, CostAgg, RateAgg,
+    BucketAgg, BucketCostSample, BucketFlag, BucketJoinedReview, BucketKey, BucketRunSummary,
     ScoreboardFilter, ScoreboardRead, SpeedSample, newest_cmp,
 };
 use aac_views::decline::Decline;
@@ -482,144 +482,127 @@ fn collect_valid_reviews<'a>(
     Ok(out)
 }
 
-fn rate_json(rate: &RateAgg, label: &str, unit: &str) -> Option<V> {
-    let val = if rate.n > 0 && rate.accepted > 0 {
-        json!(view::precision(rate.total / (rate.accepted as f64), 4)?)
-    } else {
-        V::Null
-    };
-    Some(json!({
-        "value": val,
-        "unit": format!("{label}/{unit}"),
-        "n": rate.n,
-    }))
-}
-
-fn quotas_json(
-    map: &BTreeMap<String, [RateAgg; 5]>,
-    unit_idx: Option<usize>,
-    unit: &str,
-) -> Option<V> {
-    let mut windows: Vec<&String> = map.keys().collect();
-    windows.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-    let mut out = Vec::with_capacity(windows.len());
-    let zero = RateAgg::default();
-    for window in windows {
-        let rate = unit_idx
-            .and_then(|u| map.get(window).map(|arr| &arr[u]))
-            .unwrap_or(&zero);
-        let r = rate_json(rate, "%", unit)?;
-        let mut item = json!({"window": window});
-        for (k, v) in r.as_object()? {
-            item[k] = v.clone();
-        }
-        out.push(item);
-    }
-    Some(json!(out))
-}
-
 fn compute_cost(
     buckets: &[&BucketRef<'_>],
     unit: &str,
     valid_reviews: &[ValidJoinedReview<'_>],
 ) -> Option<V> {
-    let mut merged = CostAgg::default();
+    let mut samples: Vec<&BucketCostSample> = Vec::new();
     for b in buckets {
-        let c = &b.agg.cost_agg;
-        for u in 0..5 {
-            merged.credits[u].merge(&c.credits[u]);
-            merged.usd[u].merge(&c.usd[u]);
-            merged.estimate_credits[u].merge(&c.estimate_credits[u]);
-        }
-        for (win, arr) in &c.quotas {
-            let entry = merged.quotas.entry(win.clone()).or_default();
-            for u in 0..5 {
-                entry[u].merge(&arr[u]);
-            }
-        }
-        for (win, arr) in &c.estimate_quotas {
-            let entry = merged.estimate_quotas.entry(win.clone()).or_default();
-            for u in 0..5 {
-                entry[u].merge(&arr[u]);
-            }
-        }
-        merged.has_estimate |= c.has_estimate;
-        merged
-            .estimate_methods
-            .extend(c.estimate_methods.iter().cloned());
-        merged
-            .estimate_sources
-            .extend(c.estimate_sources.iter().cloned());
+        samples.extend(b.agg.cost_samples.iter());
     }
+    // Preserve exact legacy RUN_BY_TIME `(cursor_ms, r)` addition order across arrival orders
+    // and across buckets merged into one displayed column (IEEE-754 bit-exact with `read_measures`).
+    samples.sort_by(|a, b| a.cursor_ms.cmp(&b.cursor_ms).then_with(|| a.r.cmp(&b.r)));
+
     let u_opt = unit_index(unit);
-    if let Some(u) = u_opt {
-        let overturned_targets: HashSet<u32> = valid_reviews
-            .iter()
-            .filter(|vr| vr.rev.overturned && !vr.rev.disputed)
-            .map(|vr| vr.rev.target_r)
-            .collect();
-        if !overturned_targets.is_empty() {
-            for b in buckets {
-                for ov in &b.agg.overturned_cost_runs {
-                    if !overturned_targets.contains(&ov.target_r) {
-                        continue;
-                    }
-                    let Some(units) = units_for_size(&ov.task_size, u) else {
-                        continue;
-                    };
-                    if ov.has_credits {
-                        merged.credits[u].accepted =
-                            merged.credits[u].accepted.saturating_sub(units);
-                    }
-                    if ov.has_usd {
-                        merged.usd[u].accepted = merged.usd[u].accepted.saturating_sub(units);
-                    }
-                    if ov.has_estimate_credits {
-                        merged.estimate_credits[u].accepted =
-                            merged.estimate_credits[u].accepted.saturating_sub(units);
-                    }
-                    for win in &ov.quota_windows {
-                        if let Some(arr) = merged.quotas.get_mut(win) {
-                            arr[u].accepted = arr[u].accepted.saturating_sub(units);
-                        }
-                    }
-                    for win in &ov.estimate_quota_windows {
-                        if let Some(arr) = merged.estimate_quotas.get_mut(win) {
-                            arr[u].accepted = arr[u].accepted.saturating_sub(units);
-                        }
-                    }
-                }
+    let overturned_targets: HashSet<u32> = valid_reviews
+        .iter()
+        .filter(|vr| vr.rev.overturned && !vr.rev.disputed)
+        .map(|vr| vr.rev.target_r)
+        .collect();
+
+    let eval_rate = |read: &dyn Fn(&BucketCostSample) -> Option<f64>, label: &str| -> Option<V> {
+        let (mut total, mut accepted, mut n) = (0.0f64, 0.0f64, 0u64);
+        for sample in &samples {
+            let (Some(cost), Some(units)) = (
+                read(sample),
+                u_opt.and_then(|u| units_for_size(&sample.task_size, u)),
+            ) else {
+                continue;
+            };
+            n += 1;
+            total += cost;
+            if sample.outcome_done && !overturned_targets.contains(&sample.r) {
+                accepted += units as f64;
             }
         }
-    }
-    let zero = RateAgg::default();
-    let credits = rate_json(
-        u_opt.map(|u| &merged.credits[u]).unwrap_or(&zero),
+        Some(json!({
+            "value": if n > 0 && accepted > 0.0 {
+                json!(view::precision(total / accepted, 4)?)
+            } else {
+                V::Null
+            },
+            "unit": format!("{label}/{unit}"),
+            "n": n,
+        }))
+    };
+
+    let eval_quotas = |estimated: bool| -> Option<V> {
+        let mut windows: Vec<String> = samples
+            .iter()
+            .filter_map(|sample| {
+                let q = if estimated {
+                    sample.cost.estimate.as_ref()?.quota.as_ref()
+                } else {
+                    sample.cost.quota.as_ref()
+                };
+                q.map(|(w, _)| w.clone())
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        windows.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+        let mut out = Vec::with_capacity(windows.len());
+        for window in windows {
+            let r = eval_rate(
+                &|sample| {
+                    let (w, d) = if estimated {
+                        sample.cost.estimate.as_ref()?.quota.as_ref()?
+                    } else {
+                        sample.cost.quota.as_ref()?
+                    };
+                    (w == &window && *d >= 0.0).then_some(*d)
+                },
+                "%",
+            )?;
+            let mut item = json!({"window": window});
+            for (k, v) in r.as_object()? {
+                item[k] = v.clone();
+            }
+            out.push(item);
+        }
+        Some(json!(out))
+    };
+
+    let credits = eval_rate(&|sample| sample.cost.credits, "credits")?;
+    let usd = eval_rate(&|sample| sample.cost.usd, "usd")?;
+    let estimate_credits = eval_rate(
+        &|sample| sample.cost.estimate.as_ref().and_then(|e| e.credits),
         "credits",
-        unit,
     )?;
-    let usd = rate_json(u_opt.map(|u| &merged.usd[u]).unwrap_or(&zero), "usd", unit)?;
-    let estimate_credits = rate_json(
-        u_opt.map(|u| &merged.estimate_credits[u]).unwrap_or(&zero),
-        "credits",
-        unit,
-    )?;
+    let estimated: Vec<&BucketCostSample> = samples
+        .iter()
+        .copied()
+        .filter(|sample| sample.cost.estimate.is_some())
+        .collect();
+
     let mut out = blank_measure(s(&credits["unit"]));
     out["value"] = credits["value"].clone();
     out["n"] = credits["n"].clone();
-    out["quota"] = quotas_json(&merged.quotas, u_opt, unit)?;
+    out["quota"] = eval_quotas(false)?;
     out["usd"] = if usd["n"] != 0 { usd } else { V::Null };
-    out["estimate"] = if !merged.has_estimate {
+    out["estimate"] = if estimated.is_empty() {
         V::Null
     } else {
-        let mut methods: Vec<String> = merged.estimate_methods.into_iter().collect();
+        let mut methods: Vec<String> = estimated
+            .iter()
+            .filter_map(|sample| sample.cost.estimate.as_ref().map(|e| e.method.clone()))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
         methods.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-        let mut sources: Vec<String> = merged.estimate_sources.into_iter().collect();
+        let mut sources: Vec<String> = estimated
+            .iter()
+            .filter_map(|sample| sample.cost.estimate.as_ref().map(|e| e.source.clone()))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
         sources.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         json!({
             "label": "estimate",
             "credits": if estimate_credits["n"] != 0 { estimate_credits } else { V::Null },
-            "quota": quotas_json(&merged.estimate_quotas, u_opt, unit)?,
+            "quota": eval_quotas(true)?,
             "methods": methods,
             "sources": sources,
         })

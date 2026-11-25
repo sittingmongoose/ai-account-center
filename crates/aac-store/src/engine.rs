@@ -712,6 +712,10 @@ impl Engine {
                     }
                 }
             }
+            let prev_runs_seq = checkpoints
+                .iter()
+                .find(|(i, _)| self.projectors[*i].name() == "runs")
+                .map(|(_, cp)| cp.last_sequence_id);
             let log = logs.get(log_id);
             let mut batch = Batch {
                 txn: &txn,
@@ -721,7 +725,7 @@ impl Engine {
                 checkpoints,
                 events: Vec::new(),
             };
-            let _dirty_batch = crate::scoreboard_agg::DirtyBatchGuard::enter();
+            let _dirty_batch = crate::scoreboard_agg::DirtyBatchGuard::enter(&txn, prev_runs_seq)?;
             let result = build(&mut batch)?;
             let Batch {
                 events,
@@ -733,7 +737,11 @@ impl Engine {
                 drop(txn);
                 return Ok(result);
             }
-            crate::scoreboard_agg::flush_dirty_buckets(&txn)?;
+            let new_runs_seq = checkpoints
+                .iter()
+                .find(|(i, _)| self.projectors[*i].name() == "runs")
+                .map(|(_, cp)| cp.last_sequence_id);
+            crate::scoreboard_agg::finish_commit(&txn, new_runs_seq)?;
             let touches_runs = log_id == LogId::Ledger && events.iter().any(|e| e.event_type.starts_with("run."));
             log.write(&events)?;
             #[cfg(feature = "parity-fixtures")]

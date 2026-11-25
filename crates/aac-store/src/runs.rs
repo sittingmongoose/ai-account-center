@@ -731,16 +731,19 @@ impl Projector for RunsProjector {
         log == LogId::Ledger
     }
     fn apply(&self, txn: &WriteTransaction, _log: LogId, event: &Event) -> Result<Vec<Finding>> {
-        let payload = || msgpack::to_json(&event.payload);
-        match event.event_type.as_str() {
-            "run.catalog" => project_catalog(txn, &serde_json::from_value(payload())?)?,
-            "run.recorded" => project_recorded(txn, &serde_json::from_value(payload())?, event.sequence_id)?,
-            "run.identity" => project_identity(txn, &serde_json::from_value(payload())?)?,
-            "run.refused" => project_refused(txn, &serde_json::from_value(payload())?)?,
-            "run.path" => project_path(txn, &serde_json::from_value(payload())?)?,
-            _ => {}
-        }
-        crate::scoreboard_agg::record_seq(txn, event.sequence_id)?;
+        project_event(txn, event, true)?;
+        Ok(Vec::new())
+    }
+    fn apply_replay(
+        &self,
+        txn: &WriteTransaction,
+        _log: LogId,
+        event: &Event,
+        _readings: crate::engine::ReplayReadings,
+    ) -> Result<Vec<Finding>> {
+        // Never update or stamp Scoreboard aggregates during replay: `finish_replay` verifies
+        // the full trust stamp against post-replay heads and rebuilds once on any mismatch.
+        project_event(txn, event, false)?;
         Ok(Vec::new())
     }
     fn finish_replay(&self, db: &redb::Database) -> Result<()> {
@@ -756,6 +759,24 @@ impl Projector for RunsProjector {
         crate::scoreboard_agg::delete_tables(txn)?;
         create_tables(txn)
     }
+}
+
+fn project_event(txn: &WriteTransaction, event: &Event, update_agg: bool) -> Result<()> {
+    let payload = || msgpack::to_json(&event.payload);
+    match event.event_type.as_str() {
+        "run.catalog" => {
+            project_catalog(txn, &serde_json::from_value(payload())?)?;
+            if update_agg {
+                crate::scoreboard_agg::on_catalog_changed();
+            }
+        }
+        "run.recorded" => project_recorded(txn, &serde_json::from_value(payload())?, event.sequence_id, update_agg)?,
+        "run.identity" => project_identity(txn, &serde_json::from_value(payload())?, update_agg)?,
+        "run.refused" => project_refused(txn, &serde_json::from_value(payload())?, update_agg)?,
+        "run.path" => project_path(txn, &serde_json::from_value(payload())?, update_agg)?,
+        _ => {}
+    }
+    Ok(())
 }
 
 fn project_catalog(txn: &WriteTransaction, p: &CatalogPayload) -> Result<()> {
@@ -842,9 +863,9 @@ fn head_affects_agg(old: &Head, new: &Head) -> bool {
 }
 
 /// Makes the head the winning revision (by `newer`) and keeps the time index on it.
-/// Returns `Some(head)` when the winning revision changed in a way that affects Scoreboard
-/// aggregates (or was newly inserted).
-fn refresh_head(txn: &WriteTransaction, r: u32) -> Result<Option<Head>> {
+/// Returns `Some((head, had_prior_head))` when the winning revision changed in a way that affects
+/// Scoreboard aggregates (or was newly inserted).
+fn refresh_head(txn: &WriteTransaction, r: u32) -> Result<Option<(Head, bool)>> {
     let revs = revisions(txn, r)?;
     if revs.is_empty() {
         return Ok(None);
@@ -875,8 +896,9 @@ fn refresh_head(txn: &WriteTransaction, r: u32) -> Result<Option<Head>> {
     put(txn, RUN_HEAD, &key, &head.encode())?;
     txn.open_table(RUN_BY_TIME)?
         .insert(Key::new().u64(head.ended_ms).u32(r).as_slice(), ())?;
+    let had_prior_head = held.is_some();
     let agg_changed = held.as_ref().is_none_or(|old| head_affects_agg(old, &head));
-    Ok(agg_changed.then_some(head))
+    Ok(agg_changed.then_some((head, had_prior_head)))
 }
 
 fn stored_file(
@@ -906,19 +928,19 @@ fn stored_file(
 }
 
 /// The same content at another path: a greater path becomes the revision's tie-break.
-fn raise_path(txn: &WriteTransaction, r: u32, index: u16, mut row: Head, path: &str) -> Result<()> {
+fn raise_path(txn: &WriteTransaction, r: u32, index: u16, mut row: Head, path: &str, update_agg: bool) -> Result<()> {
     let current = text_of(txn, kind::PATH, row.id(at::PATH))?.unwrap_or_default();
     if path > current.as_str() {
         row.ids[at::PATH] = intern(txn, kind::PATH, Some(path))?;
         put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
-        if let Some(head) = refresh_head(txn, r)? {
-            crate::scoreboard_agg::on_head_changed(txn, r, &head, None)?;
+        if refresh_head(txn, r)?.is_some() && update_agg {
+            crate::scoreboard_agg::mark_full_rebuild();
         }
     }
     Ok(())
 }
 
-fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64) -> Result<()> {
+fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64, update_agg: bool) -> Result<()> {
     if serde_json::from_str::<Json>(&p.doc)?.get("corrects").is_some() {
         meta_set(txn, "corrections", "1")?;
     }
@@ -930,7 +952,7 @@ fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64)
     stored_file(txn, &p.path, p.size, p.mtime_ms, sha, r, p.ingested_at_ms)?;
     // Idempotent: a content already recorded under this run id is not a new revision.
     if let Some((index, row)) = revs.iter().find(|(_, row)| row.sha == sha) {
-        return raise_path(txn, r, *index, row.clone(), &p.path);
+        return raise_path(txn, r, *index, row.clone(), &p.path, update_agg);
     }
     let loc = append_doc(txn, (p.ingested_at_ms / DAY_MS) as u32, p.doc.as_bytes())?;
     let ids = &p.ids;
@@ -981,14 +1003,16 @@ fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64)
     identity_ids(txn, &mut row.ids, &p.identity)?;
     let index = revs.len().min(u16::MAX as usize) as u16;
     put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
-    if let Some(head) = refresh_head(txn, r)? {
+    if let Some((head, had_prior_head)) = refresh_head(txn, r)?
+        && update_agg
+    {
         let doc_bytes = (head.sha == sha).then_some(p.doc.as_bytes());
-        crate::scoreboard_agg::on_head_changed(txn, r, &head, doc_bytes)?;
+        crate::scoreboard_agg::on_head_recorded(txn, r, &head, had_prior_head, doc_bytes)?;
     }
     Ok(())
 }
 
-fn project_path(txn: &WriteTransaction, p: &PathPayload) -> Result<()> {
+fn project_path(txn: &WriteTransaction, p: &PathPayload, update_agg: bool) -> Result<()> {
     let Some(sha) = unhex32(&p.sha256) else {
         fail!("invalid", "run sha256");
     };
@@ -1002,10 +1026,10 @@ fn project_path(txn: &WriteTransaction, p: &PathPayload) -> Result<()> {
         return Ok(());
     };
     stored_file(txn, &p.path, p.size, p.mtime_ms, sha, r, row.ingested_ms)?;
-    raise_path(txn, r, index, row, &p.path)
+    raise_path(txn, r, index, row, &p.path, update_agg)
 }
 
-fn project_identity(txn: &WriteTransaction, p: &IdentityEventPayload) -> Result<()> {
+fn project_identity(txn: &WriteTransaction, p: &IdentityEventPayload, update_agg: bool) -> Result<()> {
     let Some(sha) = unhex32(&p.sha256) else {
         fail!("invalid", "run sha256");
     };
@@ -1027,8 +1051,8 @@ fn project_identity(txn: &WriteTransaction, p: &IdentityEventPayload) -> Result<
         }
         put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
     }
-    if let Some(head) = refresh_head(txn, r)? {
-        crate::scoreboard_agg::on_head_changed(txn, r, &head, None)?;
+    if refresh_head(txn, r)?.is_some() && update_agg {
+        crate::scoreboard_agg::mark_full_rebuild();
     }
     Ok(())
 }
@@ -1050,7 +1074,7 @@ fn secret_json(text: &str) -> bool {
     }
 }
 
-fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
+fn project_refused(txn: &WriteTransaction, p: &RefusedPayload, update_agg: bool) -> Result<()> {
     let key: [u8; 16] = match (&p.path_hash, &p.path) {
         (Some(hash), _) => match unhex16(hash) {
             Some(k) => k,
@@ -1073,7 +1097,11 @@ fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
         reason: intern(txn, kind::REASON, Some(reason))?,
         at_ms: p.ingested_at_ms,
     };
-    put(txn, RUN_FILE, &key, &row.encode())
+    put(txn, RUN_FILE, &key, &row.encode())?;
+    if update_agg {
+        crate::scoreboard_agg::on_refused_recorded(txn, &key)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------

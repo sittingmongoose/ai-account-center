@@ -1753,7 +1753,7 @@ fn scoreboard_aggregates_update_atomically_and_migrate_from_existing_runs() {
             Ok((ver, seq))
         })
         .unwrap();
-    assert_eq!(seq_after.0.as_deref(), Some("1"));
+    assert_eq!(seq_after.0.as_deref(), Some("2"));
     assert_eq!(
         seq_after.1.as_deref().and_then(|s| s.parse::<u64>().ok()),
         Some(runs::generation(&migrated).unwrap())
@@ -1773,6 +1773,849 @@ fn scoreboard_aggregates_update_atomically_and_migrate_from_existing_runs() {
     assert_eq!(after2.buckets, before.buckets);
     reopened.close().unwrap();
     drop(reopened);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+/// Regression for H1: removing a correction, retargeting a correction, or retargeting a review off
+/// an active correction chain via higher-sequence revisions must keep persisted aggregates and
+/// effective totals identical to full resolution (including after reopen).
+#[test]
+fn h1_removing_or_retargeting_correction_or_review_keeps_aggregate_in_sync() {
+    use aac_store::scoreboard_agg::{self, ScoreboardFilter};
+
+    let share = Share::new("sb-agg-h1");
+    let day = &iso(T0 + 2 * DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.h1/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+    let db = temp_dir("sb-agg-h1-store");
+    let engine = open(&db);
+
+    let make_build = |id: &str, seq: u64, ts_off: u64, corrects: Option<&str>| {
+        let mut doc = json!({
+            "schema": "agent-reports/run@1",
+            "id": id,
+            "writer": "vm.h1",
+            "seq": seq,
+            "writtenAt": iso(T0 + 2 * DAY + ts_off),
+            "source": "observed",
+            "task": { "id": format!("t-{id}"), "type": "build", "title": format!("Build {id}") },
+            "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+            "endedAt": iso(T0 + 2 * DAY + ts_off),
+            "outcome": "done"
+        });
+        if let Some(target) = corrects {
+            doc["corrects"] = json!(target);
+        }
+        doc
+    };
+
+    let assert_matches_full = |eng: &Engine, label: &str| {
+        let resolved = runs::resolved_history_snapshot(eng).unwrap();
+        let agg = scoreboard_agg::read_for_scoreboard(
+            eng,
+            &ScoreboardFilter::default(),
+            &[],
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let expected_eff = resolved.compact_rows().len() as u64;
+        assert_eq!(agg.effective_runs_total, expected_eff, "{label}: effective_runs_total");
+        let bucket_n: u64 = agg.buckets.iter().map(|(_, b)| b.n).sum();
+        assert_eq!(bucket_n, expected_eff, "{label}: sum of bucket n");
+        let resolved_build_n = resolved
+            .compact_rows()
+            .iter()
+            .filter(|r| r.task_type.as_deref() == Some("build"))
+            .count() as u64;
+        let agg_build_n: u64 = agg
+            .buckets
+            .iter()
+            .filter(|(k, _)| k.task_type == "build")
+            .map(|(_, b)| b.n)
+            .sum();
+        assert_eq!(agg_build_n, resolved_build_n, "{label}: build bucket n");
+    };
+
+    // 1a. Ingest build A, then same-writer build B with `corrects: A`. Effective count == 1.
+    fs::write(dir.join("a.json"), make_build("vm.h1--a", 1, 1000, None).to_string()).unwrap();
+    fs::write(
+        dir.join("b.json"),
+        make_build("vm.h1--b", 1, 2000, Some("vm.h1--a")).to_string(),
+    )
+    .unwrap();
+    pass(&engine, &share, T0 + 3 * DAY, 1000, true);
+    assert_matches_full(&engine, "after B corrects A");
+    assert_eq!(call(&engine, "runsStatus", json!({}))["runs"], json!(1));
+
+    // Ingest higher-seq revision of B with NO `corrects`: both A and B must now be effective!
+    fs::write(dir.join("b.json"), make_build("vm.h1--b", 2, 3000, None).to_string()).unwrap();
+    pass(&engine, &share, T0 + 3 * DAY + 5000, 1000, true);
+    assert_matches_full(&engine, "after removing corrects from B");
+    assert_eq!(call(&engine, "runsStatus", json!({}))["runs"], json!(2));
+
+    // 1b. Add build C and retarget B (seq 3) to `corrects: C`: A and B effective, C superseded.
+    fs::write(dir.join("c.json"), make_build("vm.h1--c", 1, 4000, None).to_string()).unwrap();
+    fs::write(
+        dir.join("b.json"),
+        make_build("vm.h1--b", 3, 5000, Some("vm.h1--c")).to_string(),
+    )
+    .unwrap();
+    pass(&engine, &share, T0 + 3 * DAY + 10_000, 1000, true);
+    assert_matches_full(&engine, "after retargeting B to correct C");
+    assert_eq!(call(&engine, "runsStatus", json!({}))["runs"], json!(2));
+
+    // 1c. Add build D and review R initially reviewing C (in active chain B -> C), then revise R
+    // to review unrelated effective target D instead.
+    fs::write(dir.join("d.json"), make_build("vm.h1--d", 1, 6000, None).to_string()).unwrap();
+    let make_rev = |seq: u64, ts_off: u64, target: &str| {
+        json!({
+            "schema": "agent-reports/run@1",
+            "id": "vm.h1--rev",
+            "writer": "vm.h1",
+            "seq": seq,
+            "writtenAt": iso(T0 + 2 * DAY + ts_off),
+            "source": "observed",
+            "task": { "id": "t-rev", "type": "review", "title": "Review" },
+            "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+            "endedAt": iso(T0 + 2 * DAY + ts_off),
+            "outcome": "done",
+            "review": {
+                "of": target,
+                "verdict": "pass",
+                "findings": { "high": 0, "medium": 0, "low": 0 },
+                "overturned": false,
+                "disputed": false
+            }
+        })
+    };
+    fs::write(dir.join("rev.json"), make_rev(1, 7000, "vm.h1--c").to_string()).unwrap();
+    pass(&engine, &share, T0 + 3 * DAY + 15_000, 1000, true);
+    assert_matches_full(&engine, "after review targeting C in correction chain");
+
+    fs::write(dir.join("rev.json"), make_rev(2, 8000, "vm.h1--d").to_string()).unwrap();
+    pass(&engine, &share, T0 + 3 * DAY + 20_000, 1000, true);
+    assert_matches_full(&engine, "after retargeting review off correction chain to D");
+    let agg_after = scoreboard_agg::read_for_scoreboard(
+        &engine,
+        &ScoreboardFilter::default(),
+        &[],
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+    let build_bucket = agg_after
+        .buckets
+        .iter()
+        .find(|(k, _)| k.task_type == "build")
+        .expect("build bucket");
+    assert_eq!(build_bucket.1.joined_reviews.len(), 1);
+    assert_eq!(build_bucket.1.joined_reviews[0].target_id, "vm.h1--d");
+    assert_eq!(build_bucket.1.joined_reviews[0].review_id, "vm.h1--rev");
+
+    // Reopen must preserve the exact same verified totals.
+    engine.close().unwrap();
+    drop(engine);
+    let reopened = open(&db);
+    assert_matches_full(&reopened, "after reopen");
+    reopened.close().unwrap();
+    drop(reopened);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+/// Regression for H2: replay after a rollback to an older binary with a pending ledger tail must
+/// never certify an incomplete aggregate; pre-serve trust check must also catch tampering.
+#[test]
+fn h2_replay_after_rollback_with_pending_ledger_tail_rebuilds_aggregates() {
+    use aac_store::scoreboard_agg::{self, ScoreboardFilter};
+    use redb::ReadableTable;
+
+    let share = Share::new("sb-agg-h2");
+    let day = &iso(T0 + 2 * DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.h2/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+    let db = temp_dir("sb-agg-h2-store");
+
+    let write_run = |name: &str, id: &str, ts_off: u64| {
+        let doc = json!({
+            "schema": "agent-reports/run@1",
+            "id": id,
+            "writer": "vm.h2",
+            "seq": 1,
+            "writtenAt": iso(T0 + 2 * DAY + ts_off),
+            "source": "observed",
+            "task": { "id": format!("t-{id}"), "type": "build", "title": format!("Build {id}") },
+            "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+            "endedAt": iso(T0 + 2 * DAY + ts_off),
+            "outcome": "done"
+        });
+        fs::write(dir.join(name), doc.to_string()).unwrap();
+    };
+
+    // 1. Open store with landed binary and ingest A (initializes aggregates + trust stamp).
+    let engine = open(&db);
+    write_run("a.json", "vm.h2--a", 1000);
+    pass(&engine, &share, T0 + 3 * DAY, 1000, true);
+
+    // Capture the post-A aggregate snapshot (tables + `sb_agg_*` meta) to simulate an older
+    // binary that does not update `run_sb_*` or `sb_agg_*` when committing B.
+    let saved_after_a = engine
+        .with_db(|db_ref| {
+            let read = db_ref.begin_read()?;
+            let dump_bytes =
+                |def: redb::TableDefinition<&[u8], &[u8]>| -> aac_store::error::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+                    let t = read.open_table(def)?;
+                    t.iter()?
+                        .map(|i| {
+                            let (k, v) = i?;
+                            Ok((k.value().to_vec(), v.value().to_vec()))
+                        })
+                        .collect()
+                };
+            let dump_idx = |def: redb::TableDefinition<&[u8], ()>| -> aac_store::error::Result<Vec<Vec<u8>>> {
+                let t = read.open_table(def)?;
+                t.iter()?.map(|i| Ok(i?.0.value().to_vec())).collect()
+            };
+            let meta_tbl = read.open_table(runs::RUN_META)?;
+            let mut sb_meta = Vec::new();
+            for item in meta_tbl.iter()? {
+                let (k, v) = item?;
+                if k.value().starts_with("sb_agg_") {
+                    sb_meta.push((k.value().to_string(), v.value().to_vec()));
+                }
+            }
+            Ok((
+                dump_bytes(scoreboard_agg::RUN_SB_FACT)?,
+                dump_bytes(scoreboard_agg::RUN_SB_BUCKET)?,
+                dump_bytes(scoreboard_agg::RUN_SB_CORRECTION_REFUSED)?,
+                dump_idx(scoreboard_agg::RUN_SB_REVIEWS_BY_TARGET)?,
+                dump_idx(scoreboard_agg::RUN_SB_CORRECTIONS)?,
+                dump_idx(scoreboard_agg::RUN_SB_PATH_RUNS)?,
+                dump_idx(scoreboard_agg::RUN_SB_BY_WRITER_DAY)?,
+                sb_meta,
+            ))
+        })
+        .unwrap();
+
+    // 2. Simulate rollback to old binary: ingest B so primary tables + ledger advance to B, then
+    // rewind ONLY `run_sb_*` and `sb_agg_*` back to post-A (exactly what old binary leaves).
+    write_run("b.json", "vm.h2--b", 2000);
+    pass(&engine, &share, T0 + 3 * DAY + 5000, 1000, true);
+    engine
+        .with_db(|db_ref| {
+            let txn = aac_store::engine::begin(db_ref)?;
+            scoreboard_agg::delete_tables(&txn)?;
+            scoreboard_agg::create_tables(&txn)?;
+            {
+                let mut t = txn.open_table(scoreboard_agg::RUN_SB_FACT)?;
+                for (k, v) in &saved_after_a.0 {
+                    t.insert(k.as_slice(), v.as_slice())?;
+                }
+            }
+            {
+                let mut t = txn.open_table(scoreboard_agg::RUN_SB_BUCKET)?;
+                for (k, v) in &saved_after_a.1 {
+                    t.insert(k.as_slice(), v.as_slice())?;
+                }
+            }
+            {
+                let mut t = txn.open_table(scoreboard_agg::RUN_SB_CORRECTION_REFUSED)?;
+                for (k, v) in &saved_after_a.2 {
+                    t.insert(k.as_slice(), v.as_slice())?;
+                }
+            }
+            {
+                let mut t = txn.open_table(scoreboard_agg::RUN_SB_REVIEWS_BY_TARGET)?;
+                for k in &saved_after_a.3 {
+                    t.insert(k.as_slice(), ())?;
+                }
+            }
+            {
+                let mut t = txn.open_table(scoreboard_agg::RUN_SB_CORRECTIONS)?;
+                for k in &saved_after_a.4 {
+                    t.insert(k.as_slice(), ())?;
+                }
+            }
+            {
+                let mut t = txn.open_table(scoreboard_agg::RUN_SB_PATH_RUNS)?;
+                for k in &saved_after_a.5 {
+                    t.insert(k.as_slice(), ())?;
+                }
+            }
+            {
+                let mut t = txn.open_table(scoreboard_agg::RUN_SB_BY_WRITER_DAY)?;
+                for k in &saved_after_a.6 {
+                    t.insert(k.as_slice(), ())?;
+                }
+            }
+            {
+                let mut meta = txn.open_table(runs::RUN_META)?;
+                let old_keys: Vec<String> = meta
+                    .iter()?
+                    .map(|i| Ok(i?.0.value().to_string()))
+                    .collect::<aac_store::error::Result<_>>()?;
+                for k in old_keys {
+                    if k.starts_with("sb_agg_") {
+                        meta.remove(k.as_str())?;
+                    }
+                }
+                for (k, v) in &saved_after_a.7 {
+                    meta.insert(k.as_str(), v.as_slice())?;
+                }
+            }
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    engine.close().unwrap();
+    drop(engine);
+
+    // Snapshot the post-B (lagging-aggregate) redb file before appending C to the ledger.
+    let saved_redb = db.join("aac.redb.post-b-old-bin");
+    fs::copy(db.join("aac.redb"), &saved_redb).unwrap();
+
+    // 3. Ingest C so C is durably written to the ledger, then restore the post-B redb file so C
+    // sits in the pending ledger tail (crash after ledger sync, before redb commit).
+    let engine2 = open(&db);
+    write_run("c.json", "vm.h2--c", 3000);
+    pass(&engine2, &share, T0 + 3 * DAY + 10_000, 1000, true);
+    engine2.close().unwrap();
+    drop(engine2);
+    fs::rename(&saved_redb, db.join("aac.redb")).unwrap();
+
+    // 4. Upgrade / reopen: replay applies C from ledger tail, then `finish_replay` verifies the
+    // trust stamp and MUST rebuild all three runs (A, B, and C), never certifying a missing B!
+    let upgraded = open(&db);
+    let agg = scoreboard_agg::read_for_scoreboard(
+        &upgraded,
+        &ScoreboardFilter::default(),
+        &[],
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+    let resolved = runs::resolved_history_snapshot(&upgraded).unwrap();
+    assert_eq!(resolved.compact_rows().len(), 3, "primary history has A, B, C");
+    assert_eq!(
+        agg.effective_runs_total, 3,
+        "rebuilt aggregate after rollback + replay tail must include A, B, and C"
+    );
+    let build_n: u64 = agg.buckets.iter().map(|(_, b)| b.n).sum();
+    assert_eq!(build_n, 3, "bucket count must include B, not omit it");
+
+    // 5. Pre-serve trust check: tamper `sb_agg_head_digest` and wipe buckets without reopening;
+    // `read_for_scoreboard` must detect the mismatch before serving and rebuild cleanly.
+    upgraded
+        .with_db(|db_ref| {
+            let txn = aac_store::engine::begin(db_ref)?;
+            txn.open_table(scoreboard_agg::RUN_SB_BUCKET)?;
+            txn.delete_table(scoreboard_agg::RUN_SB_BUCKET)?;
+            txn.open_table(scoreboard_agg::RUN_SB_BUCKET)?;
+            txn.open_table(runs::RUN_META)?.insert(
+                "sb_agg_head_digest",
+                b"0000000000000000000000000000000000000000000000000000000000000000".as_slice(),
+            )?;
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    let repaired = scoreboard_agg::read_for_scoreboard(
+        &upgraded,
+        &ScoreboardFilter::default(),
+        &[],
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(repaired.effective_runs_total, 3);
+    let repaired_n: u64 = repaired.buckets.iter().map(|(_, b)| b.n).sum();
+    assert_eq!(repaired_n, 3, "pre-serve trust mismatch must trigger rebuild");
+
+    // 6. Legacy v1 -> v2 upgrade path: seed legacy v1 `run_sb_path_hash` (&[u8] value) and
+    // `run_sb_bucket_members` tables with `sb_agg_version = "1"` and reopen; upgrade must drop
+    // legacy v1 tables cleanly without TableTypeMismatch and rebuild v2 aggregates.
+    upgraded
+        .with_db(|db_ref| {
+            const LEGACY_PATH: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("run_sb_path_hash");
+            const LEGACY_MEMBERS: redb::TableDefinition<&[u8], ()> =
+                redb::TableDefinition::new("run_sb_bucket_members");
+            let txn = aac_store::engine::begin(db_ref)?;
+            txn.open_table(LEGACY_PATH)?
+                .insert([0u8; 16].as_slice(), [0u8; 4].as_slice())?;
+            txn.open_table(LEGACY_MEMBERS)?.insert([0u8; 8].as_slice(), ())?;
+            txn.open_table(runs::RUN_META)?
+                .insert("sb_agg_version", b"1".as_slice())?;
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    upgraded.close().unwrap();
+    drop(upgraded);
+    let migrated_v2 = open(&db);
+    let agg_v2 = scoreboard_agg::read_for_scoreboard(
+        &migrated_v2,
+        &ScoreboardFilter::default(),
+        &[],
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(agg_v2.effective_runs_total, 3);
+    assert_eq!(agg_v2.buckets.iter().map(|(_, b)| b.n).sum::<u64>(), 3);
+    migrated_v2.close().unwrap();
+    drop(migrated_v2);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+/// Property-style test: ingest a deterministic pseudo-random sequence of runs, revisions,
+/// corrections (add/remove/retarget/void/refused), reviews (in-order/out-of-order/retargeted),
+/// same-path replacements, path refusals, and catalog rekeys, asserting aggregate totals match
+/// the full `ResolvedHistory` resolver after EVERY step.
+#[test]
+fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_resolver() {
+    use aac_store::scoreboard_agg::{self, ScoreboardFilter};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn pick(&mut self, n: usize) -> usize {
+            (self.next() as usize) % n
+        }
+    }
+
+    let mut rng = Rng(0x5eed_cafe_beef_1234);
+    let share = Share::new("sb-agg-prop");
+    let writers = ["vm.p1", "vm.p2"];
+    let models = ["openai/gpt-6.1-sol", "anthropic/claude-opus-5-5", "raw-alias"];
+    let task_types = ["build", "test", "fix"];
+    let day = &iso(T0 + 2 * DAY)[..10];
+    for w in writers {
+        fs::create_dir_all(share.root.join("v1/writers").join(w).join("runs").join(day)).unwrap();
+    }
+
+    let db = temp_dir("sb-agg-prop-store");
+    let mut engine = open(&db);
+
+    #[derive(Clone)]
+    struct KnownRun {
+        id: String,
+        writer: String,
+        path: String,
+        seq: u64,
+        ended_ms: u64,
+        is_review: bool,
+    }
+    let mut known: Vec<KnownRun> = Vec::new();
+    let mut next_id = 0usize;
+    let mut clock = T0 + 3 * DAY;
+
+    let assert_agg_equals_resolver = |eng: &Engine, step: usize| {
+        let resolved = runs::resolved_history_snapshot(eng).unwrap();
+        let all_rows = resolved.compact_rows();
+        let filters = [
+            ("all", ScoreboardFilter::default()),
+            (
+                "observed",
+                ScoreboardFilter {
+                    source_benchmark: Some(false),
+                    ..Default::default()
+                },
+            ),
+            (
+                "benchmark",
+                ScoreboardFilter {
+                    source_benchmark: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "build",
+                ScoreboardFilter {
+                    task_type: Some("build".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "review",
+                ScoreboardFilter {
+                    task_type: Some("review".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "narrow-window",
+                ScoreboardFilter {
+                    from_ms: Some(T0 + 2 * DAY + 100_000),
+                    to_ms: Some(T0 + 2 * DAY + 500_000),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (fname, filter) in &filters {
+            let agg = scoreboard_agg::read_for_scoreboard(eng, filter, &[], &std::collections::HashMap::new()).unwrap();
+            assert_eq!(
+                agg.effective_runs_total,
+                all_rows.len() as u64,
+                "step {step} ({fname}): effective_runs_total"
+            );
+
+            // Filter resolved rows identically.
+            let matched: Vec<_> = all_rows
+                .iter()
+                .filter(|r| {
+                    filter.from_ms.is_none_or(|f| r.cursor.0 >= f)
+                        && filter.to_ms.is_none_or(|t| r.cursor.0 <= t)
+                        && filter
+                            .source_benchmark
+                            .is_none_or(|b| (r.source.as_deref() == Some("benchmark")) == b)
+                        && filter
+                            .task_type
+                            .as_deref()
+                            .is_none_or(|tt| r.task_type.as_deref() == Some(tt))
+                })
+                .collect();
+
+            let agg_n: u64 = agg.buckets.iter().map(|(_, b)| b.n).sum();
+            assert_eq!(agg_n, matched.len() as u64, "step {step} ({fname}): filtered n");
+
+            let res_done: u64 = matched
+                .iter()
+                .filter(|r| r.doc()["outcome"].as_str() == Some("done"))
+                .count() as u64;
+            let agg_done: u64 = agg.buckets.iter().map(|(_, b)| b.outcome_done).sum();
+            assert_eq!(agg_done, res_done, "step {step} ({fname}): done count");
+
+            // Verify cost credits sum in exact RUN_BY_TIME order across all matched runs.
+            let mut res_credits = 0.0f64;
+            let mut res_credit_n = 0u64;
+            for r in &matched {
+                if let Some(c) = r.doc()["cost"]["credits"].as_f64() {
+                    res_credits += c;
+                    res_credit_n += 1;
+                }
+            }
+            let mut agg_samples: Vec<_> = agg.buckets.iter().flat_map(|(_, b)| b.cost_samples.iter()).collect();
+            agg_samples.sort_by(|a, b| a.cursor_ms.cmp(&b.cursor_ms).then_with(|| a.r.cmp(&b.r)));
+            let mut agg_credits = 0.0f64;
+            let mut agg_credit_n = 0u64;
+            for s in agg_samples {
+                if let Some(c) = s.cost.credits {
+                    agg_credits += c;
+                    agg_credit_n += 1;
+                }
+            }
+            assert_eq!(agg_credit_n, res_credit_n, "step {step} ({fname}): credit n");
+            assert_eq!(
+                agg_credits.to_bits(),
+                res_credits.to_bits(),
+                "step {step} ({fname}): IEEE-754 credit sum mismatch ({agg_credits} vs {res_credits})"
+            );
+
+            // Verify joined reviews targeting matched runs match resolved effective reviews.
+            let matched_ids: BTreeSet<&str> = matched.iter().map(|r| r.id.as_ref()).collect();
+            let mut res_joins: BTreeMap<(String, String), usize> = BTreeMap::new();
+            for r in all_rows {
+                let doc = r.doc();
+                if let Some(target) = doc["review"]["of"].as_str()
+                    && matched_ids.contains(target)
+                {
+                    *res_joins.entry((target.to_string(), r.id.to_string())).or_insert(0) += 1;
+                }
+            }
+            let mut agg_joins: BTreeMap<(String, String), usize> = BTreeMap::new();
+            for (_, b) in &agg.buckets {
+                for jr in &b.joined_reviews {
+                    *agg_joins
+                        .entry((jr.target_id.clone(), jr.review_id.clone()))
+                        .or_insert(0) += 1;
+                }
+            }
+            assert_eq!(agg_joins, res_joins, "step {step} ({fname}): joined reviews");
+
+            // Verify correction problems match `resolved.problems()`.
+            let res_probs: BTreeSet<(String, String)> = resolved
+                .problems()
+                .iter()
+                .map(|p| {
+                    (
+                        p["file"].as_str().unwrap_or_default().to_string(),
+                        p["reason"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect();
+            let agg_probs: BTreeSet<(String, String)> = agg
+                .correction_problems
+                .iter()
+                .map(|p| (p.file.clone(), p.reason.clone()))
+                .collect();
+            assert_eq!(agg_probs, res_probs, "step {step} ({fname}): correction problems");
+
+            // Verify every refused file with a retained effective run in `all_rows` resolves its path.
+            let retained_by_hash: BTreeMap<String, String> = all_rows
+                .iter()
+                .map(|r| {
+                    use sha2::{Digest, Sha256};
+                    let d = Sha256::digest(format!("aac-run-path-v1:{}", r.file).as_bytes());
+                    let h: String = d.iter().take(16).map(|b| format!("{b:02x}")).collect();
+                    (h, r.file.to_string())
+                })
+                .collect();
+            for rf in &agg.refused {
+                assert_eq!(
+                    rf.retained_file.as_deref(),
+                    retained_by_hash.get(&rf.path_hash).map(String::as_str),
+                    "step {step} ({fname}): refused retained_file for {}",
+                    rf.path_hash
+                );
+            }
+        }
+    };
+
+    for step in 0..70usize {
+        clock += 2000;
+        let op = if known.len() < 4 { 0 } else { rng.pick(10) };
+        match op {
+            // 0..3: brand-new plain run (random out-of-order endedAt, optional cost)
+            0..=3 => {
+                let w = writers[rng.pick(writers.len())];
+                let id = format!("{w}--run-{next_id}");
+                next_id += 1;
+                let ended_ms = T0 + 2 * DAY + (rng.pick(800) as u64) * 1000;
+                let source = if rng.pick(5) == 0 { "benchmark" } else { "observed" };
+                let tt = task_types[rng.pick(task_types.len())];
+                let model = models[rng.pick(models.len())];
+                let outcome = if rng.pick(4) == 0 { "failed" } else { "done" };
+                let path = format!("v1/writers/{w}/runs/{day}/{id}.json");
+                let mut doc = json!({
+                    "schema": "agent-reports/run@1",
+                    "id": id,
+                    "writer": w,
+                    "seq": 1,
+                    "writtenAt": iso(ended_ms),
+                    "source": source,
+                    "task": { "id": format!("t-{next_id}"), "type": tt, "title": "Prop", "size": { "tasks": 1 } },
+                    "model": { "id": model, "provider": "openai", "harness": "codex", "effort": "high" },
+                    "endedAt": iso(ended_ms),
+                    "outcome": outcome,
+                    "cost": { "credits": ((rng.pick(500) + 1) as f64) * 0.00015 }
+                });
+                if source == "benchmark" {
+                    doc["benchmark"] = json!("bench-a");
+                }
+                fs::write(share.root.join(&path), doc.to_string()).unwrap();
+                known.push(KnownRun {
+                    id,
+                    writer: w.to_string(),
+                    path,
+                    seq: 1,
+                    ended_ms,
+                    is_review: false,
+                });
+            }
+            // 4: brand-new review targeting a known run OR a not-yet-arrived future run
+            4 => {
+                let w = writers[rng.pick(writers.len())];
+                let id = format!("{w}--rev-{next_id}");
+                next_id += 1;
+                let target_id = if rng.pick(4) == 0 {
+                    format!("{w}--run-{}", next_id + 1)
+                } else {
+                    known[rng.pick(known.len())].id.clone()
+                };
+                let ended_ms = T0 + 2 * DAY + (rng.pick(800) as u64) * 1000 + 500;
+                let path = format!("v1/writers/{w}/runs/{day}/{id}.json");
+                let doc = json!({
+                    "schema": "agent-reports/run@1",
+                    "id": id,
+                    "writer": w,
+                    "seq": 1,
+                    "writtenAt": iso(ended_ms),
+                    "source": "observed",
+                    "task": { "id": format!("tr-{next_id}"), "type": "review", "title": "Rev" },
+                    "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+                    "endedAt": iso(ended_ms),
+                    "outcome": "done",
+                    "review": {
+                        "of": target_id,
+                        "verdict": if rng.pick(3) == 0 { "fail" } else { "pass" },
+                        "findings": { "high": 0, "medium": 0, "low": 0 },
+                        "overturned": rng.pick(4) == 0,
+                        "disputed": rng.pick(5) == 0
+                    }
+                });
+                fs::write(share.root.join(&path), doc.to_string()).unwrap();
+                known.push(KnownRun {
+                    id,
+                    writer: w.to_string(),
+                    path,
+                    seq: 1,
+                    ended_ms,
+                    is_review: true,
+                });
+            }
+            // 5: brand-new correction (valid same-writer, cross-writer refused, void, or missing target)
+            5 => {
+                let target = known[rng.pick(known.len())].clone();
+                let w = if rng.pick(4) == 0 {
+                    writers[rng.pick(writers.len())].to_string()
+                } else {
+                    target.writer.clone()
+                };
+                let id = format!("{w}--corr-{next_id}");
+                next_id += 1;
+                let corr_target = if rng.pick(5) == 0 {
+                    format!("{w}--missing-{next_id}")
+                } else {
+                    target.id.clone()
+                };
+                let ended_ms = target.ended_ms + 1000;
+                let path = format!("v1/writers/{w}/runs/{day}/{id}.json");
+                let mut doc = json!({
+                    "schema": "agent-reports/run@1",
+                    "id": id,
+                    "writer": w,
+                    "seq": 1,
+                    "writtenAt": iso(ended_ms),
+                    "source": "observed",
+                    "corrects": corr_target,
+                    "task": { "id": format!("tc-{next_id}"), "type": "build", "title": "Corr", "size": { "tasks": 1 } },
+                    "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+                    "endedAt": iso(ended_ms),
+                    "outcome": "done",
+                    "cost": { "credits": 0.01 }
+                });
+                if rng.pick(3) == 0 {
+                    doc["void"] = json!({ "reason": "duplicate" });
+                }
+                fs::write(share.root.join(&path), doc.to_string()).unwrap();
+                known.push(KnownRun {
+                    id,
+                    writer: w,
+                    path,
+                    seq: 1,
+                    ended_ms,
+                    is_review: false,
+                });
+            }
+            // 6: higher-seq revision of an existing run (toggle/retarget `corrects` or `review.of`)
+            6 => {
+                let idx = rng.pick(known.len());
+                let mut entry = known[idx].clone();
+                entry.seq += 1;
+                let new_ended = entry.ended_ms + 500;
+                let mut doc = json!({
+                    "schema": "agent-reports/run@1",
+                    "id": entry.id,
+                    "writer": entry.writer,
+                    "seq": entry.seq,
+                    "writtenAt": iso(new_ended),
+                    "source": "observed",
+                    "task": {
+                        "id": format!("trev-{}", entry.seq),
+                        "type": if entry.is_review { "review" } else { "build" },
+                        "title": "Revised",
+                        "size": { "tasks": 1 }
+                    },
+                    "model": { "id": "anthropic/claude-opus-5-5", "provider": "anthropic", "harness": "claude-code", "effort": "high" },
+                    "endedAt": iso(new_ended),
+                    "outcome": "done",
+                    "cost": { "credits": 0.002 }
+                });
+                if entry.is_review {
+                    let new_target = known[rng.pick(known.len())].id.clone();
+                    doc["review"] = json!({
+                        "of": new_target,
+                        "verdict": "pass",
+                        "findings": { "high": 0, "medium": 0, "low": 0 },
+                        "overturned": false,
+                        "disputed": false
+                    });
+                } else if rng.pick(2) == 0 {
+                    let cand = known[rng.pick(known.len())].clone();
+                    if cand.id != entry.id && cand.writer == entry.writer {
+                        doc["corrects"] = json!(cand.id);
+                    }
+                }
+                fs::write(share.root.join(&entry.path), doc.to_string()).unwrap();
+                entry.ended_ms = new_ended;
+                known[idx] = entry;
+            }
+            // 7: overwrite an EXISTING run's file path with a DIFFERENT run ID (H4 trigger!)
+            7 => {
+                let victim = known[rng.pick(known.len())].clone();
+                let id = format!("{}--samepath-{next_id}", victim.writer);
+                next_id += 1;
+                let ended_ms = T0 + 2 * DAY + (rng.pick(800) as u64) * 1000;
+                let tt = task_types[rng.pick(task_types.len())];
+                let doc = json!({
+                    "schema": "agent-reports/run@1",
+                    "id": id,
+                    "writer": victim.writer,
+                    "seq": 1,
+                    "writtenAt": iso(ended_ms),
+                    "source": "observed",
+                    "task": { "id": format!("tsp-{next_id}"), "type": tt, "title": "Same path", "size": { "tasks": 1 } },
+                    "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+                    "endedAt": iso(ended_ms),
+                    "outcome": "done"
+                });
+                fs::write(share.root.join(&victim.path), doc.to_string()).unwrap();
+                known.push(KnownRun {
+                    id,
+                    writer: victim.writer,
+                    path: victim.path,
+                    seq: 1,
+                    ended_ms,
+                    is_review: false,
+                });
+            }
+            // 8: corrupt/refuse either a known path OR a brand-new unknown path
+            8 => {
+                if rng.pick(2) == 0 {
+                    let victim = &known[rng.pick(known.len())];
+                    fs::write(share.root.join(&victim.path), "{not-valid-json").unwrap();
+                } else {
+                    let w = writers[rng.pick(writers.len())];
+                    let path = format!("v1/writers/{w}/runs/{day}/bad-{next_id}.json");
+                    next_id += 1;
+                    fs::write(share.root.join(&path), "{bad").unwrap();
+                }
+            }
+            // 9: catalog alias change (rekey!)
+            _ => {
+                let target = if step % 2 == 0 {
+                    "openai/gpt-6.1-sol"
+                } else {
+                    "anthropic/claude-opus-5-5"
+                };
+                share.set_aliases(&[("raw-alias", target)]);
+            }
+        }
+
+        pass(&engine, &share, clock, 1000, true);
+        assert_agg_equals_resolver(&engine, step);
+
+        if step == 35 {
+            engine.close().unwrap();
+            drop(engine);
+            engine = open(&db);
+            assert_agg_equals_resolver(&engine, step);
+        }
+    }
+
+    engine.close().unwrap();
+    drop(engine);
+    let final_eng = open(&db);
+    assert_agg_equals_resolver(&final_eng, 999);
+    final_eng.close().unwrap();
+    drop(final_eng);
     fs::remove_dir_all(db).unwrap();
     fs::remove_dir_all(share.root).unwrap();
 }

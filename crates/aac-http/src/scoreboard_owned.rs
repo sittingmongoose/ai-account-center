@@ -731,6 +731,10 @@ pub(crate) struct ScoreboardOwned {
     store_facts: Mutex<Option<(u64, Arc<StoreFacts>)>>,
     /// The newest snapshot generation whose readers-check rows were recorded.
     recorded: Arc<Mutex<u64>>,
+    /// Serializes async `record_check_store` tasks without consuming blocking threads or stalling
+    /// HTTP request workers, and deduplicates identical `(generation, problems_hash)` flushes.
+    check_gate: Arc<tokio::sync::Semaphore>,
+    recorded_store: Arc<Mutex<Option<(u64, String)>>>,
     views: Mutex<IndexMap<String, Arc<CachedView>>>,
     /// The last good view per filter, across generations: served while its refresh runs.
     last_good: Mutex<IndexMap<String, Arc<CachedView>>>,
@@ -768,6 +772,14 @@ pub(crate) struct ScoreboardOwned {
     flushing: Arc<AtomicBool>,
     /// Number of store-backed aggregate composes run by this owner (no timer recomputes).
     compose_count: AtomicU64,
+    /// Test-only one-shot barrier paused right after admission and before `store.scoreboard_read`.
+    #[cfg(test)]
+    before_store_read: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 impl ScoreboardOwned {
@@ -792,6 +804,8 @@ impl ScoreboardOwned {
             store_epoch: AtomicU64::new(0),
             store_facts: Mutex::new(None),
             recorded: Arc::new(Mutex::new(0)),
+            check_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+            recorded_store: Arc::new(Mutex::new(None)),
             views: Mutex::new(IndexMap::new()),
             last_good: Mutex::new(IndexMap::new()),
             parsed_facts: Mutex::new(None),
@@ -811,6 +825,8 @@ impl ScoreboardOwned {
             owners,
             flushing,
             compose_count: AtomicU64::new(0),
+            #[cfg(test)]
+            before_store_read: Mutex::new(None),
         });
         let _ = owner.me.set(Arc::downgrade(&owner));
         owner
@@ -902,12 +918,7 @@ impl ScoreboardOwned {
         if self.owners.owner("readers-check") != Some(Role::RustService) {
             return;
         }
-        {
-            let newest = self.recorded.lock().unwrap_or_else(|p| p.into_inner());
-            if generation < *newest {
-                return;
-            }
-        }
+        let probs_hash = sha256_text(&Json::Array(problems.clone()).to_string());
         let check_probs: Vec<Problem> = problems
             .iter()
             .map(|problem| Problem {
@@ -918,16 +929,30 @@ impl ScoreboardOwned {
             .collect();
         let check = Arc::clone(&self.check);
         let recorded = Arc::clone(&self.recorded);
+        let check_gate = Arc::clone(&self.check_gate);
+        let recorded_store = Arc::clone(&self.recorded_store);
         let owners = self.owners.clone();
         let flushing = Arc::clone(&self.flushing);
         tokio::spawn(async move {
+            let Ok(_permit) = check_gate.acquire().await else {
+                return;
+            };
+            {
+                let last = recorded_store.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some((last_gen, last_hash)) = last.as_ref()
+                    && (generation < *last_gen
+                        || (generation == *last_gen && *last_hash == probs_hash))
+                {
+                    return;
+                }
+            }
             let Ok((gen_read, receipts)) = store.accepted_receipts().await else {
                 return;
             };
             let _ = tokio::task::spawn_blocking(move || {
                 {
                     let mut newest = recorded.lock().unwrap_or_else(|p| p.into_inner());
-                    if gen_read < *newest {
+                    if gen_read < *newest || generation < *newest {
                         return;
                     }
                     *newest = gen_read;
@@ -942,6 +967,10 @@ impl ScoreboardOwned {
                         .collect();
                     let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
                     check.record_runs(&rows, &check_probs);
+                }
+                {
+                    let mut last = recorded_store.lock().unwrap_or_else(|p| p.into_inner());
+                    *last = Some((gen_read, probs_hash));
                 }
                 if flushing.swap(true, Ordering::Relaxed) {
                     return;
@@ -2258,7 +2287,7 @@ impl ScoreboardOwned {
         refresh: bool,
     ) -> Option<Result<(Vec<u8>, String), Decline>> {
         self.ensure_catalog(now);
-        let catalog = self
+        let mut catalog = self
             .catalog_state
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -2266,39 +2295,61 @@ impl ScoreboardOwned {
         if catalog.is_null() {
             return Some(Err(Decline::Stale));
         }
-        let (pass_state, pass_more, pass_problems) = {
+        let (mut pass_state, mut pass_more, mut pass_problems) = {
             let pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
             (pass.state.clone(), pass.more, pass.problems.clone())
         };
-        let seed_failures = self
+        let mut seed_failures = self
             .seed_failures
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        let catalog_fp = catalog_fingerprint(&catalog);
-        let catalog_stale = catalog["scannedAt"]
+        let mut catalog_fp = catalog_fingerprint(&catalog);
+        let mut catalog_stale = catalog["scannedAt"]
             .as_i64()
             .is_some_and(|at| aac_num::ecma::math_round((feed.now - at) as f64 / 1000.0) > 180.0);
-        let pass_problems_hash = sha256_text(&Json::Array(pass_problems.clone()).to_string());
-        let seed_hash = sha256_text(&Json::Array(seed_failures.clone()).to_string());
-        let cache_key = json!([
-            "agg",
-            feed.from,
-            feed.to,
-            feed.source,
-            feed.task_type,
-            feed.time_zone,
+        let mut pass_problems_hash = sha256_text(&Json::Array(pass_problems.clone()).to_string());
+        let mut seed_hash = sha256_text(&Json::Array(seed_failures.clone()).to_string());
+        let build_cache_key = |generation_id: u64,
+                               cat_hash: &str,
+                               wseq: u64,
+                               cat_fp: &str,
+                               cat_stale: bool,
+                               p_state: &str,
+                               p_more: bool,
+                               p_prob_hash: &str,
+                               s_hash: &str|
+         -> String {
+            json!([
+                "agg",
+                feed.from,
+                feed.to,
+                feed.source,
+                feed.task_type,
+                feed.time_zone,
+                generation_id,
+                cat_hash,
+                wseq,
+                cat_fp,
+                cat_stale,
+                p_state,
+                p_more,
+                p_prob_hash,
+                s_hash,
+            ])
+            .to_string()
+        };
+        let admitted_cache_key = build_cache_key(
             generation,
             catalog_hash,
             store_write_seq,
-            catalog_fp,
+            &catalog_fp,
             catalog_stale,
-            pass_state,
+            &pass_state,
             pass_more,
-            pass_problems_hash,
-            seed_hash,
-        ])
-        .to_string();
+            &pass_problems_hash,
+            &seed_hash,
+        );
         let filter_key = json!([
             feed.from,
             feed.to,
@@ -2312,7 +2363,7 @@ impl ScoreboardOwned {
         if !refresh {
             let hit = {
                 let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
-                views.get(&cache_key).cloned()
+                views.get(&admitted_cache_key).cloned()
             };
             if let Some(hit) = hit {
                 return Some(Ok(cached_bytes(&hit, now, false)));
@@ -2322,13 +2373,13 @@ impl ScoreboardOwned {
         // Singleflight compose per cache key; concurrent callers receive the last good view.
         let _composing: Option<Composing<'_>> = {
             let mut composing = self.composing.lock().unwrap_or_else(|p| p.into_inner());
-            let owned = if composing.contains(&cache_key) && refresh {
+            let owned = if composing.contains(&admitted_cache_key) && refresh {
                 false
-            } else if !composing.insert(cache_key.clone()) {
+            } else if !composing.insert(admitted_cache_key.clone()) {
                 drop(composing);
                 let hit = {
                     let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
-                    views.get(&cache_key).cloned()
+                    views.get(&admitted_cache_key).cloned()
                 }
                 .or_else(|| {
                     let good = self.last_good.lock().unwrap_or_else(|p| p.into_inner());
@@ -2344,7 +2395,7 @@ impl ScoreboardOwned {
             if owned {
                 Some(Composing {
                     set: &self.composing,
-                    key: cache_key.clone(),
+                    key: admitted_cache_key.clone(),
                 })
             } else {
                 None
@@ -2370,33 +2421,152 @@ impl ScoreboardOwned {
             },
             task_type: feed.task_type.clone(),
         };
-        let extra_problems: Vec<(String, Option<i64>)> = pass_problems
-            .iter()
-            .filter_map(|p| {
-                let file = p["file"].as_str()?.to_string();
-                let since = p["since"]
-                    .as_i64()
-                    .or_else(|| p["since"].as_str().and_then(aac_num::ecma::parse_instant));
-                Some((file, since))
-            })
-            .collect();
-        let safe_paths_map: HashMap<String, String> = {
+        let to_extra_problems = |probs: &[Json]| -> Vec<(String, Option<i64>)> {
+            probs
+                .iter()
+                .filter_map(|p| {
+                    let file = p["file"].as_str()?.to_string();
+                    let since = p["since"]
+                        .as_i64()
+                        .or_else(|| p["since"].as_str().and_then(aac_num::ecma::parse_instant));
+                    Some((file, since))
+                })
+                .collect()
+        };
+        let mut extra_problems = to_extra_problems(&pass_problems);
+        let mut safe_paths_map: HashMap<String, String> = {
             let guard = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
             guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
         };
 
-        let read = match store
-            .scoreboard_read(filter.clone(), extra_problems, safe_paths_map.clone())
-            .await
+        #[cfg(test)]
         {
-            Ok(read) => read,
-            // Store unavailable (closed / lock_held): fall through to share-only fallback.
-            Err(_) => return None,
-        };
+            let hook = self
+                .before_store_read
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            if let Some((entered, release)) = hook {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+        }
+
+        let named_request = feed.generation.is_some() || feed.catalog_hash.is_some();
+        let mut read_opt = None;
+        for attempt in 0..3 {
+            let read = match store
+                .scoreboard_read(
+                    filter.clone(),
+                    extra_problems.clone(),
+                    safe_paths_map.clone(),
+                )
+                .await
+            {
+                Ok(read) => read,
+                // Store unavailable (closed / lock_held): fall through to share-only fallback.
+                Err(_) => return None,
+            };
+            let read_cat = read.catalog_hash.as_deref().unwrap_or("");
+            if named_request {
+                if feed
+                    .generation
+                    .is_some_and(|named| named != read.generation)
+                    || feed
+                        .catalog_hash
+                        .as_deref()
+                        .is_some_and(|named| named != read_cat)
+                {
+                    return Some(Err(Decline::Stale));
+                }
+                read_opt = Some(read);
+                break;
+            }
+            let moved = read.generation != generation
+                || read_cat != catalog_hash
+                || read.write_seq != store_write_seq;
+            if !moved {
+                read_opt = Some(read);
+                break;
+            }
+            // Snapshot moved between admission and store read: re-snapshot coherent inputs and
+            // retry if pass problems / safe paths or the store moved again.
+            let fresh_catalog = self
+                .catalog_state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            if !fresh_catalog.is_null() {
+                catalog = fresh_catalog;
+                catalog_fp = catalog_fingerprint(&catalog);
+                catalog_stale = catalog["scannedAt"].as_i64().is_some_and(|at| {
+                    aac_num::ecma::math_round((feed.now - at) as f64 / 1000.0) > 180.0
+                });
+            }
+            let (new_pass_state, new_pass_more, new_pass_problems) = {
+                let pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
+                (pass.state.clone(), pass.more, pass.problems.clone())
+            };
+            let new_pass_problems_hash =
+                sha256_text(&Json::Array(new_pass_problems.clone()).to_string());
+            let new_seed_failures = self
+                .seed_failures
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            let new_seed_hash = sha256_text(&Json::Array(new_seed_failures.clone()).to_string());
+            let new_safe_paths: HashMap<String, String> = {
+                let guard = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
+                guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            };
+            let inputs_shifted =
+                new_pass_problems_hash != pass_problems_hash || new_safe_paths != safe_paths_map;
+            pass_state = new_pass_state;
+            pass_more = new_pass_more;
+            pass_problems = new_pass_problems;
+            pass_problems_hash = new_pass_problems_hash;
+            seed_failures = new_seed_failures;
+            seed_hash = new_seed_hash;
+            safe_paths_map = new_safe_paths;
+            extra_problems = to_extra_problems(&pass_problems);
+            let store_moved_again = store
+                .runs_write_seq()
+                .is_some_and(|seq| seq != read.write_seq);
+            if attempt < 2 && (inputs_shifted || store_moved_again) {
+                continue;
+            }
+            read_opt = Some(read);
+            break;
+        }
+        let read = read_opt?;
+        let read_gen = read.generation;
+        let read_cat = read.catalog_hash.as_deref().unwrap_or("");
+        let read_write_seq = read.write_seq;
+        // Cache under the snapshot the store read ACTUALLY returned, never the earlier admission key.
+        let final_cache_key = build_cache_key(
+            read_gen,
+            read_cat,
+            read_write_seq,
+            &catalog_fp,
+            catalog_stale,
+            &pass_state,
+            pass_more,
+            &pass_problems_hash,
+            &seed_hash,
+        );
+        if final_cache_key != admitted_cache_key && !refresh {
+            let hit = {
+                let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
+                views.get(&final_cache_key).cloned()
+            };
+            if let Some(hit) = hit {
+                return Some(Ok(cached_bytes(&hit, now, false)));
+            }
+        }
+
         self.share_fallback.store(false, Ordering::SeqCst);
         self.compose_count.fetch_add(1, Ordering::Relaxed);
 
-        let read_gen = read.generation;
         let feed_now = feed.now;
         let feed_clock = feed.clock.clone();
         let feed_tz = feed.time_zone.clone();
@@ -2465,12 +2635,12 @@ impl ScoreboardOwned {
         self.record_check_store(Arc::clone(store), problems, read_gen);
         let cached = Arc::new(CachedView {
             at: now,
-            seq: store_write_seq,
+            seq: read_write_seq,
             bytes: bytes.clone(),
             age_value_offset,
             etag: etag.clone(),
         });
-        self.keep_view(cache_key, filter_key, cached);
+        self.keep_view(final_cache_key, filter_key, cached);
         Some(Ok((bytes, etag)))
     }
 
@@ -5728,6 +5898,486 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&bytes3).contains("after200s"),
             "new run must appear in recomposed view"
+        );
+    }
+
+    /// Regression for H3: out-of-order ingestion (A, C, B) and cross-bucket column merges must
+    /// sum cost rates in exact end-time order so rounding boundaries match the legacy composer.
+    #[tokio::test]
+    async fn h3_out_of_order_and_cross_bucket_cost_rate_matches_legacy_at_rounding_boundary() {
+        use super::Json;
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        let d = root.path().join("v1/writers/vm.h3/runs/2026-11-05");
+        std::fs::create_dir_all(&d).expect("d");
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog");
+
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let store = StoreHost::new(boot(store_dir.clone()));
+        store.open_at_boot();
+        let own = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        own.seed().await;
+        own.catalog_pass(now);
+        own.ingest_pass_at(true, now).await;
+
+        let make_cost_run = |id: &str,
+                             model: &str,
+                             ended: &str,
+                             credits: f64,
+                             proc_id: Option<&str>|
+         -> Json {
+            let provider = model.split('/').next().unwrap_or("anthropic");
+            let harness = if provider == "openai" {
+                "codex"
+            } else {
+                "claude-code"
+            };
+            let mut r: Json = serde_json::from_str(BENCH).expect("base");
+            r["id"] = json!(id);
+            r["writer"] = json!("vm.h3");
+            r["source"] = json!("observed");
+            r["benchmark"] = Json::Null;
+            r["task"] = json!({"id": id, "type": "build", "title": id, "size": {"tasks": 1}});
+            r["model"] =
+                json!({"id": model, "provider": provider, "harness": harness, "effort": "high"});
+            if let Some(pid) = proc_id {
+                r["process"] = json!({"id": pid, "version": "1"});
+            } else {
+                r["process"] = Json::Null;
+            }
+            r["endedAt"] = json!(ended);
+            r["writtenAt"] = json!(ended);
+            r["outcome"] = json!("done");
+            r["cost"] = json!({"credits": credits});
+            r
+        };
+
+        let find_cost_value = |view: &Json, model: &str| -> f64 {
+            for u in view["uses"].as_array().expect("uses") {
+                for tt in u["taskTypes"].as_array().expect("taskTypes") {
+                    if tt["id"].as_str() == Some("build") {
+                        for row in tt["rows"].as_array().expect("rows") {
+                            if row["model"].as_str() == Some(model) {
+                                return row["observed"]["measures"]["cost"]["value"]
+                                    .as_f64()
+                                    .expect("cost value");
+                            }
+                        }
+                    }
+                }
+            }
+            panic!("model {model} build cost not found");
+        };
+
+        // Exact witness from review finding H3: end-time order A (0.0001), B (0.0002), C (0.29985),
+        // ingested out of order: A, then C, then B.
+        // Same-bucket test on `openai/gpt-6.1-sol`:
+        std::fs::write(
+            d.join("a.json"),
+            make_cost_run(
+                "vm.h3--a",
+                "openai/gpt-6.1-sol",
+                "2026-11-05T10:00:00Z",
+                0.0001,
+                None,
+            )
+            .to_string(),
+        )
+        .expect("write a");
+        own.ingest_pass_at(true, now + 1000).await;
+        std::fs::write(
+            d.join("c.json"),
+            make_cost_run(
+                "vm.h3--c",
+                "openai/gpt-6.1-sol",
+                "2026-11-05T12:00:00Z",
+                0.29985,
+                None,
+            )
+            .to_string(),
+        )
+        .expect("write c");
+        own.ingest_pass_at(true, now + 2000).await;
+        std::fs::write(
+            d.join("b.json"),
+            make_cost_run(
+                "vm.h3--b",
+                "openai/gpt-6.1-sol",
+                "2026-11-05T11:00:00Z",
+                0.0002,
+                None,
+            )
+            .to_string(),
+        )
+        .expect("write b");
+        own.ingest_pass_at(true, now + 3000).await;
+
+        // Cross-bucket test on `anthropic/claude-opus-5-5` (distinct `process.id` buckets merged
+        // into one displayed `build` column):
+        std::fs::write(
+            d.join("xa.json"),
+            make_cost_run(
+                "vm.h3--xa",
+                "anthropic/claude-opus-5-5",
+                "2026-11-05T10:00:00Z",
+                0.0001,
+                Some("proc-a"),
+            )
+            .to_string(),
+        )
+        .expect("write xa");
+        own.ingest_pass_at(true, now + 4000).await;
+        std::fs::write(
+            d.join("xc.json"),
+            make_cost_run(
+                "vm.h3--xc",
+                "anthropic/claude-opus-5-5",
+                "2026-11-05T12:00:00Z",
+                0.29985,
+                Some("proc-b"),
+            )
+            .to_string(),
+        )
+        .expect("write xc");
+        own.ingest_pass_at(true, now + 5000).await;
+        std::fs::write(
+            d.join("xb.json"),
+            make_cost_run(
+                "vm.h3--xb",
+                "anthropic/claude-opus-5-5",
+                "2026-11-05T11:00:00Z",
+                0.0002,
+                Some("proc-a"),
+            )
+            .to_string(),
+        )
+        .expect("write xb");
+        own.ingest_pass_at(true, now + 6000).await;
+
+        let feed = feed_text_bare(now + 10_000, "UTC");
+        let (agg_bytes, agg_etag) = own.answer(&feed).await.expect("agg answer");
+        let (legacy_bytes, legacy_etag) = answer_legacy_for_parity(&own, &feed).await;
+        assert_eq!(
+            String::from_utf8_lossy(&agg_bytes),
+            String::from_utf8_lossy(&legacy_bytes),
+            "out-of-order and cross-bucket cost rates must be byte-identical to legacy"
+        );
+        assert_eq!(agg_etag, legacy_etag);
+        let view: Json = serde_json::from_slice(&agg_bytes).expect("view json");
+        assert_eq!(
+            find_cost_value(&view, "openai/gpt-6.1-sol"),
+            0.1001,
+            "same-bucket out-of-order sum must report 0.1001, not 0.1"
+        );
+        assert_eq!(
+            find_cost_value(&view, "anthropic/claude-opus-5-5"),
+            0.1001,
+            "cross-bucket merged sum must report 0.1001, not 0.1"
+        );
+
+        // Trigger a full aggregate rebuild via a seq=2 revision of `vm.h3--b` with the same cost
+        // and confirm both models STILL report 0.1001 and match legacy byte-for-byte after rebuild.
+        let mut rev_b = make_cost_run(
+            "vm.h3--b",
+            "openai/gpt-6.1-sol",
+            "2026-11-05T11:00:00Z",
+            0.0002,
+            None,
+        );
+        rev_b["seq"] = json!(2);
+        std::fs::write(d.join("b.json"), rev_b.to_string()).expect("write b rev 2");
+        own.ingest_pass_at(true, now + 11_000).await;
+        let feed_after = feed_text_bare(now + 12_000, "UTC");
+        let (rebuilt_bytes, rebuilt_etag) = own.answer(&feed_after).await.expect("rebuilt answer");
+        let (rebuilt_legacy, rebuilt_legacy_etag) =
+            answer_legacy_for_parity(&own, &feed_after).await;
+        assert_eq!(
+            String::from_utf8_lossy(&rebuilt_bytes),
+            String::from_utf8_lossy(&rebuilt_legacy),
+            "post-rebuild cost rates must be byte-identical to legacy"
+        );
+        assert_eq!(rebuilt_etag, rebuilt_legacy_etag);
+        let rebuilt_view: Json = serde_json::from_slice(&rebuilt_bytes).expect("rebuilt view json");
+        assert_eq!(find_cost_value(&rebuilt_view, "openai/gpt-6.1-sol"), 0.1001);
+        assert_eq!(
+            find_cost_value(&rebuilt_view, "anthropic/claude-opus-5-5"),
+            0.1001
+        );
+    }
+
+    /// Regression for H4: a refused file that previously held two retained effective runs with
+    /// different IDs (e.g. a build run A and a test run B) must trace BOTH runs so filtering to
+    /// `taskType=build` warns on A and keeps `unscored.unreadable == 0` (warm and after restart).
+    #[tokio::test]
+    async fn h4_refused_file_with_two_retained_runs_traces_filtered_view_without_false_unscored() {
+        use super::Json;
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        let d = root.path().join("v1/writers/vm.agg/runs/2026-11-05");
+        std::fs::create_dir_all(&d).expect("d");
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog");
+        let shared_file = d.join("run.json");
+
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let store = StoreHost::new(boot(store_dir.clone()));
+        store.open_at_boot();
+        let own = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        own.seed().await;
+        own.catalog_pass(now);
+
+        let make_run = |id: &str, task_type: &str, ended: &str| -> Json {
+            let mut r: Json = serde_json::from_str(BENCH).expect("base");
+            r["id"] = json!(id);
+            r["writer"] = json!("vm.agg");
+            r["source"] = json!("observed");
+            r["benchmark"] = Json::Null;
+            r["task"] = json!({"id": id, "type": task_type, "title": id, "size": {"tasks": 1}});
+            r["model"] = json!({"id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high"});
+            r["endedAt"] = json!(ended);
+            r["writtenAt"] = json!(ended);
+            r["outcome"] = json!("done");
+            r
+        };
+
+        // 1. Ingest scored build A at shared path.
+        std::fs::write(
+            &shared_file,
+            make_run("vm.agg--build-a", "build", "2026-11-05T10:00:00Z").to_string(),
+        )
+        .expect("write build a");
+        own.ingest_pass_at(true, now + 1000).await;
+
+        // 2. Overwrite same path with valid test run B (different ID) and ingest.
+        std::fs::write(
+            &shared_file,
+            make_run("vm.agg--test-b", "test", "2026-11-05T11:00:00Z").to_string(),
+        )
+        .expect("write test b");
+        own.ingest_pass_at(true, now + 2000).await;
+
+        // 3. Overwrite same path with malformed JSON and ingest refusal.
+        std::fs::write(&shared_file, "{corrupt-json").expect("write corrupt");
+        own.ingest_pass_at(true, now + 3000).await;
+
+        let now_i64 = i64::try_from(now + 10_000).expect("now i64");
+        let offsets = crate::zone_facts::server_zone_facts("UTC", now_i64).expect("zone facts");
+        let (clock, day) = offsets.zone.words(now_i64).expect("zone words");
+        let build_feed = json!({
+            "now": now + 10_000,
+            "clock": clock,
+            "day": day,
+            "timeZone": "UTC",
+            "from": null,
+            "to": null,
+            "source": "all",
+            "taskType": "build",
+            "fromMs": null,
+            "toMs": null,
+        })
+        .to_string();
+
+        // Warm check (with `safe_paths` populated).
+        let (agg_bytes, agg_etag) = own.answer(&build_feed).await.expect("warm build answer");
+        let (legacy_bytes, legacy_etag) = answer_legacy_for_parity(&own, &build_feed).await;
+        assert_eq!(
+            String::from_utf8_lossy(&agg_bytes),
+            String::from_utf8_lossy(&legacy_bytes),
+            "warm filtered view must match legacy byte-for-byte"
+        );
+        assert_eq!(agg_etag, legacy_etag);
+        let view: Json = serde_json::from_slice(&agg_bytes).expect("warm view json");
+        assert_eq!(
+            view["unscored"]["unreadable"],
+            json!(0),
+            "refused path with retained build A must NOT count as unscored.unreadable"
+        );
+
+        // Simulated restart check (fresh `ScoreboardOwned` with empty `safe_paths` map).
+        let restarted = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        restarted.catalog_pass(now + 10_000);
+        // Set generation to match store without re-populating `safe_paths`.
+        {
+            let cur = own.generation();
+            let mut p = restarted.pass.lock().expect("restarted pass lock");
+            p.state = "ok".to_string();
+            p.generation = cur.0;
+            p.catalog_hash = cur.1;
+        }
+        let (restart_bytes, restart_etag) = restarted
+            .answer(&build_feed)
+            .await
+            .expect("restart build answer");
+        let (restart_legacy, restart_legacy_etag) =
+            answer_legacy_for_parity(&restarted, &build_feed).await;
+        assert_eq!(
+            String::from_utf8_lossy(&restart_bytes),
+            String::from_utf8_lossy(&restart_legacy),
+            "post-restart filtered view must match legacy byte-for-byte"
+        );
+        assert_eq!(restart_etag, restart_legacy_etag);
+        let rview: Json = serde_json::from_slice(&restart_bytes).expect("restart view json");
+        assert_eq!(rview["unscored"]["unreadable"], json!(0));
+    }
+
+    /// Regression for M5: when a write commits after feed admission and before `store.scoreboard_read`
+    /// runs, a named request must decline `Stale` (caching nothing under G), while an unnamed request
+    /// must serve the moved snapshot and cache it under the returned generation G+1 (never under G).
+    #[tokio::test]
+    async fn m5_moved_snapshot_before_store_read_declines_named_and_caches_unnamed_under_returned_gen()
+     {
+        use super::{Decline, Json, SafePaths, ingest_request};
+        let now = large_now();
+        let root = tempfile::tempdir().expect("reports");
+        write_bench(root.path());
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("catalog");
+        let ccs = tempfile::tempdir().expect("ccs");
+        let store_dir = ccs.path().join("store");
+        std::fs::create_dir_all(&store_dir).expect("store dir");
+        let store = StoreHost::new(boot(store_dir));
+        store.open_at_boot();
+        let own = owner(root.path().to_path_buf(), Some(Arc::clone(&store)));
+        own.seed().await;
+        own.catalog_pass(now);
+        own.ingest_pass_at(true, now).await;
+
+        let (gen_g, cat_g) = own.generation();
+        let dir = root.path().join("v1/writers/vm.lead/runs/2026-11-04");
+
+        // Helper to commit a brand-new run directly to the store (advancing store generation
+        // without advancing `own.pass` yet, simulating the exact admission -> read race).
+        let commit_direct = |store: &Arc<StoreHost>, name: &str, id: &str| {
+            let store = Arc::clone(store);
+            let dir = dir.clone();
+            let root_path = root.path().to_path_buf();
+            let id = id.to_string();
+            let name = name.to_string();
+            async move {
+                let doc = BENCH
+                    .replace("vm.lead--bench", &id)
+                    .replace("\"Task bench\"", &format!("\"Task {id}\""));
+                std::fs::write(dir.join(&name), &doc).expect("write direct run");
+                let scan: Json = serde_json::from_str(
+                    &store
+                        .call(
+                            "runsScan".to_string(),
+                            json!({"root": root_path.to_string_lossy(), "full": true}).to_string(),
+                        )
+                        .await
+                        .expect("runsScan"),
+                )
+                .expect("scan json");
+                let mut sp = SafePaths::new();
+                let req = ingest_request(&scan, now + 5000, &mut sp);
+                let rec: Json = serde_json::from_str(
+                    &store
+                        .call("runsRecord".to_string(), req.record.to_string())
+                        .await
+                        .expect("runsRecord"),
+                )
+                .expect("record json");
+                rec["generation"].as_u64().expect("generation u64")
+            }
+        };
+
+        // 1. Named request (naming generation G): store moves to G+1 during barrier -> must decline Stale
+        // and leave the view cache empty.
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *own.before_store_read.lock().expect("barrier lock") = Some((entered_tx, release_rx));
+        let now_i64 = i64::try_from(now + 1000).expect("now i64");
+        let offsets = crate::zone_facts::server_zone_facts("UTC", now_i64).expect("zone facts");
+        let (clock, day) = offsets.zone.words(now_i64).expect("zone words");
+        let named_feed = json!({
+            "now": now + 1000,
+            "clock": clock,
+            "day": day,
+            "timeZone": "UTC",
+            "from": null,
+            "to": null,
+            "source": "all",
+            "taskType": null,
+            "fromMs": null,
+            "toMs": null,
+            "generation": gen_g,
+            "catalogHash": cat_g,
+        })
+        .to_string();
+        let own_task = Arc::clone(&own);
+        let handle = tokio::spawn(async move { own_task.answer(&named_feed).await });
+        entered_rx
+            .await
+            .expect("named request reached pre-read barrier");
+        let gen_g1 = commit_direct(&store, "vm.lead--m5-1.json", "vm.lead--m5-1").await;
+        assert!(gen_g1 > gen_g, "store generation must advance");
+        release_tx.send(()).expect("release named barrier");
+        let named_res = handle.await.expect("named join");
+        assert_eq!(
+            named_res,
+            Err(Decline::Stale),
+            "named request whose store moved before read must decline Stale"
+        );
+        assert!(
+            own.views.lock().expect("views lock").is_empty(),
+            "declined named request must not cache anything under G"
+        );
+
+        // 2. Unnamed request admitted at G while store moves to G+2: must succeed with G+2 runs
+        // AND cache under G+2 (NOT under G), so once `ingest_pass` publishes G+2 the next unnamed
+        // request is a warm cache hit with zero extra compose!
+        let (entered_tx2, entered_rx2) = tokio::sync::oneshot::channel();
+        let (release_tx2, release_rx2) = tokio::sync::oneshot::channel();
+        *own.before_store_read.lock().expect("barrier lock 2") = Some((entered_tx2, release_rx2));
+        let unnamed_feed = feed_text_bare(now + 2000, "UTC");
+        let own_task2 = Arc::clone(&own);
+        let unnamed_clone = unnamed_feed.clone();
+        let handle2 = tokio::spawn(async move { own_task2.answer(&unnamed_clone).await });
+        entered_rx2
+            .await
+            .expect("unnamed request reached pre-read barrier");
+        let gen_g2 = commit_direct(&store, "vm.lead--m5-2.json", "vm.lead--m5-2").await;
+        assert!(gen_g2 > gen_g1);
+        release_tx2.send(()).expect("release unnamed barrier");
+        let (bytes_g2, _) = handle2
+            .await
+            .expect("unnamed join")
+            .expect("unnamed request must succeed with moved snapshot");
+        let view_g2: Json = serde_json::from_slice(&bytes_g2).expect("view g2 json");
+        assert_eq!(view_g2["history"]["runs"], json!(3));
+
+        // Verify the cached key carries `gen_g2`, NOT `gen_g`.
+        let keys: Vec<String> = own
+            .views
+            .lock()
+            .expect("views lock 2")
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(keys.len(), 1);
+        let parsed_key: Json = serde_json::from_str(&keys[0]).expect("parsed key json");
+        assert_eq!(
+            parsed_key[6].as_u64(),
+            Some(gen_g2),
+            "cache key must record returned generation {gen_g2}, not admitted {gen_g}"
+        );
+        let composes_before = own.compose_count.load(Ordering::Relaxed);
+        // Once `ingest_pass` catches `own.pass` up to `gen_g2`, a subsequent unnamed request hits
+        // the exact cached entry with zero second compose!
+        own.ingest_pass_at(true, now + 3000).await;
+        assert_eq!(own.generation().0, gen_g2);
+        let (bytes_warm, _) = own
+            .answer(&feed_text_bare(now + 4000, "UTC"))
+            .await
+            .expect("warm hit at G+2");
+        let view_warm: Json = serde_json::from_slice(&bytes_warm).expect("view warm json");
+        assert_eq!(view_warm["history"]["runs"], json!(3));
+        assert_eq!(
+            own.compose_count.load(Ordering::Relaxed),
+            composes_before,
+            "warm request after pass catches up to G+2 must hit the entry cached under G+2"
         );
     }
 }

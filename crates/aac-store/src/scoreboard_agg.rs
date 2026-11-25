@@ -1,16 +1,27 @@
 //! Scoreboard aggregate tables kept up to date in the same redb write transaction that ingests
 //! a run (and its corrections, revisions, path updates, rekeying, and joined reviews), plus a
-//! one-time migration from existing `run_head`/`run_payload` rows on store open.
+//! verified trust checkpoint and one-time migration from existing `run_head`/`run_payload` rows.
+//!
+//! Design:
+//! - Common event (brand-new run with no `corrects`, no `void`, no `review`, no prior head at its
+//!   path, and no waiting correction/review targeting its id): O(1) append into `run_sb_bucket`
+//!   plus O(1) trust-digest update inside the same write transaction.
+//! - Rare event (any correction, void, review, revision of an existing run, second run at an
+//!   existing path, path update, catalog rekey, or refusal of a known path): marks the commit
+//!   batch dirty and performs a clean full rebuild from `run_head` + `run_payload` inside the
+//!   same write transaction before committing.
+//! - Trust checkpoint: `(sb_agg_version, sb_agg_seq, sb_agg_catalog, sb_agg_head_count,
+//!   sb_agg_head_digest)` verified on open (`finish_replay`) and before serving; any mismatch
+//!   triggers a full rebuild. Replay never incrementally updates or stamps aggregates.
 //!
 //! Tables:
 //! - `run_sb_fact`: `r u32 -> StoredRunFact` (typed per-run scoring + summary facts; ~250 B/run).
 //! - `run_sb_bucket`: `BucketKey -> BucketAgg` (per-task-type, per-model, per-source, per-benchmark
-//!   counters, additive totals, exact median samples, sparse flags/metrics/reviews, top-20 newest).
-//! - `run_sb_bucket_members`: `(BucketKey, ended_ms u64, r u32) -> ()` (scoped single-bucket rebuild).
-//! - `run_sb_reviews_by_target`: `(target_r u32, review_r u32) -> ()` (joined reviews, even out-of-order).
-//! - `run_sb_corrections`: `(target_r u32, corrector_r u32) -> ()` (correction chain graph).
+//!   counters, exact median samples, time-ordered cost samples, flags/metrics/reviews, top-20 newest).
+//! - `run_sb_reviews_by_target`: `(target_r u32, review_r u32) -> ()` (joined reviews).
+//! - `run_sb_corrections`: `(target_r u32, corrector_r u32) -> ()` (correction targets).
 //! - `run_sb_correction_refused`: `r u32 -> String` (refused correction reasons).
-//! - `run_sb_path_hash`: `path_hash [u8; 16] -> r u32` (O(1) retained-path lookup for refusals/problems).
+//! - `run_sb_path_runs`: `(path_hash [u8; 16], r u32) -> ()` (multi-run retained-path index).
 //! - `run_sb_by_writer_day`: `(writer_id u32, day [u8; 10], r u32) -> ()` (scoped folder-problem trace).
 
 use crate::db::{Key, be_u32, be_u64, prefix_end};
@@ -27,73 +38,125 @@ use redb::{
     WriteTransaction,
 };
 use serde_json::{Value as Json, json};
+use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-thread_local! {
-    /// Per-thread dirty bucket set active during an `Engine::commit` batch so multiple
-    /// revisions/rekeys/corrections touching the same bucket rebuild it at most once per commit.
-    static DIRTY_BUCKETS: RefCell<Option<BTreeSet<BucketKey>>> = const { RefCell::new(None) };
+#[derive(Default)]
+struct BatchAggState {
+    needs_full_rebuild: bool,
+    appended_heads: u64,
+    appended_digest: [u64; 4],
+    catalog_updated: bool,
 }
 
-/// Scoped guard that batches dirty-bucket rebuilds for one `Engine::commit` write transaction.
+thread_local! {
+    /// Per-thread aggregate commit state active during an `Engine::commit` write transaction.
+    static BATCH_STATE: RefCell<Option<BatchAggState>> = const { RefCell::new(None) };
+}
+
+/// Scoped guard tracking O(1) appends vs full-rebuild triggers across one `Engine::commit` batch.
 /// Always clears thread-local state on drop (even on error or panic).
 pub(crate) struct DirtyBatchGuard {
     active: bool,
 }
 
 impl DirtyBatchGuard {
-    pub(crate) fn enter() -> Self {
-        let active = DIRTY_BUCKETS.with(|cell| {
+    pub(crate) fn enter(txn: &WriteTransaction, prev_runs_seq: Option<u64>) -> Result<Self> {
+        let valid_before = match prev_runs_seq {
+            Some(prev_seq) => is_stamp_header_consistent_tx(txn, prev_seq)?,
+            None => true,
+        };
+        let active = BATCH_STATE.with(|cell| {
             let mut slot = cell.borrow_mut();
             if slot.is_none() {
-                *slot = Some(BTreeSet::new());
+                *slot = Some(BatchAggState {
+                    needs_full_rebuild: !valid_before,
+                    appended_heads: 0,
+                    appended_digest: [0; 4],
+                    catalog_updated: false,
+                });
                 true
             } else {
+                if !valid_before && let Some(st) = slot.as_mut() {
+                    st.needs_full_rebuild = true;
+                }
                 false
             }
         });
-        Self { active }
+        Ok(Self { active })
     }
 }
 
 impl Drop for DirtyBatchGuard {
     fn drop(&mut self) {
         if self.active {
-            DIRTY_BUCKETS.with(|cell| {
+            BATCH_STATE.with(|cell| {
                 *cell.borrow_mut() = None;
             });
         }
     }
 }
 
-/// Rebuild all dirty buckets accumulated during the current `Engine::commit` write transaction.
-pub(crate) fn flush_dirty_buckets(txn: &WriteTransaction) -> Result<()> {
-    let dirty: BTreeSet<BucketKey> =
-        DIRTY_BUCKETS.with(|cell| cell.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default());
-    for key in dirty {
-        rebuild_single_bucket(txn, &key)?;
+/// Mark the active `Engine::commit` batch as needing a clean full aggregate rebuild from `RUN_HEAD`.
+pub(crate) fn mark_full_rebuild() {
+    BATCH_STATE.with(|cell| {
+        if let Some(st) = cell.borrow_mut().as_mut() {
+            st.needs_full_rebuild = true;
+        }
+    });
+}
+
+fn batch_needs_full_rebuild() -> bool {
+    BATCH_STATE.with(|cell| cell.borrow().as_ref().is_none_or(|st| st.needs_full_rebuild))
+}
+
+/// Note that `run.catalog` updated `RUN_META["catalog"]` in the current commit batch.
+pub(crate) fn on_catalog_changed() {
+    BATCH_STATE.with(|cell| {
+        if let Some(st) = cell.borrow_mut().as_mut() {
+            st.catalog_updated = true;
+        }
+    });
+}
+
+/// Record a refusal event: if the refused path hash matches any known effective run, schedule a
+/// clean full rebuild so path/refusal invariants stay exact.
+pub(crate) fn on_refused_recorded(txn: &WriteTransaction, path_hash: &[u8; 16]) -> Result<()> {
+    if !batch_needs_full_rebuild() && has_any_path_hash_tx(txn, path_hash)? {
+        mark_full_rebuild();
     }
     Ok(())
 }
 
-fn schedule_or_rebuild_dirty(txn: &WriteTransaction, dirty: BTreeSet<BucketKey>) -> Result<()> {
-    if dirty.is_empty() {
+/// Finalize Scoreboard aggregates inside the same `Engine::commit` write transaction before the
+/// ledger write and transaction commit.
+pub(crate) fn finish_commit(txn: &WriteTransaction, new_runs_seq: Option<u64>) -> Result<()> {
+    let state = BATCH_STATE.with(|cell| cell.borrow_mut().take()).unwrap_or_default();
+    let Some(seq) = new_runs_seq else {
         return Ok(());
+    };
+    if state.needs_full_rebuild {
+        return rebuild_all_aggregates_in_write(txn, seq);
     }
-    let batched = DIRTY_BUCKETS.with(|cell| {
-        if let Some(set) = cell.borrow_mut().as_mut() {
-            set.extend(dirty.iter().cloned());
-            true
-        } else {
-            false
-        }
-    });
-    if !batched {
-        for key in dirty {
-            rebuild_single_bucket(txn, &key)?;
-        }
+    if state.appended_heads > 0 {
+        let cur_count = meta_get(txn, META_HEAD_COUNT)?
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let cur_digest = meta_get(txn, META_HEAD_DIGEST)?
+            .as_deref()
+            .and_then(parse_digest)
+            .unwrap_or([0; 4]);
+        let next_count = cur_count + state.appended_heads;
+        let next_digest = add_digest(cur_digest, state.appended_digest);
+        meta_set(txn, META_HEAD_COUNT, &next_count.to_string())?;
+        meta_set(txn, META_HEAD_DIGEST, &format_digest(next_digest))?;
     }
+    if state.catalog_updated {
+        let cat = meta_get(txn, "catalog")?.unwrap_or_default();
+        meta_set(txn, META_CATALOG, &cat)?;
+    }
+    meta_set(txn, META_SEQ, &seq.to_string())?;
     Ok(())
 }
 
@@ -102,19 +165,26 @@ type Index = TableDefinition<'static, &'static [u8], ()>;
 
 pub const RUN_SB_FACT: Bytes = TableDefinition::new("run_sb_fact");
 pub const RUN_SB_BUCKET: Bytes = TableDefinition::new("run_sb_bucket");
-pub const RUN_SB_BUCKET_MEMBERS: Index = TableDefinition::new("run_sb_bucket_members");
 pub const RUN_SB_REVIEWS_BY_TARGET: Index = TableDefinition::new("run_sb_reviews_by_target");
 pub const RUN_SB_CORRECTIONS: Index = TableDefinition::new("run_sb_corrections");
 pub const RUN_SB_CORRECTION_REFUSED: Bytes = TableDefinition::new("run_sb_correction_refused");
-pub const RUN_SB_PATH_HASH: Bytes = TableDefinition::new("run_sb_path_hash");
+pub const RUN_SB_PATH_RUNS: Index = TableDefinition::new("run_sb_path_runs");
 pub const RUN_SB_BY_WRITER_DAY: Index = TableDefinition::new("run_sb_by_writer_day");
+
+/// Legacy v1 tables cleaned up on upgrade/rebuild (v1 stored single-run `run_sb_path_hash` with
+/// `&[u8]` values and `run_sb_bucket_members`).
+const LEGACY_RUN_SB_PATH_HASH: Bytes = TableDefinition::new("run_sb_path_hash");
+const LEGACY_RUN_SB_BUCKET_MEMBERS: Index = TableDefinition::new("run_sb_bucket_members");
 
 /// Bump when the binary format or derivation rules of `run_sb_*` change: `ensure_migrated`
 /// rebuilds the aggregate tables once from existing `run_head` + `run_payload` rows.
-pub const SB_AGG_VERSION: u32 = 1;
-const BIN_VERSION: u8 = 1;
+pub const SB_AGG_VERSION: u32 = 2;
+const BIN_VERSION: u8 = 2;
 const META_VERSION: &str = "sb_agg_version";
 const META_SEQ: &str = "sb_agg_seq";
+const META_CATALOG: &str = "sb_agg_catalog";
+const META_HEAD_COUNT: &str = "sb_agg_head_count";
+const META_HEAD_DIGEST: &str = "sb_agg_head_digest";
 const META_EFFECTIVE_COUNT: &str = "sb_agg_effective_count";
 /// Maximum newest summaries retained per bucket (Scoreboard shows at most 20 per column,
 /// 20 globally in `recent`, and 10 globally in `unscored.examples`).
@@ -203,13 +273,13 @@ pub fn normalized_unknown_outcome(raw: &str) -> String {
 }
 
 pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
-    for def in [RUN_SB_FACT, RUN_SB_BUCKET, RUN_SB_CORRECTION_REFUSED, RUN_SB_PATH_HASH] {
+    for def in [RUN_SB_FACT, RUN_SB_BUCKET, RUN_SB_CORRECTION_REFUSED] {
         txn.open_table(def)?;
     }
     for def in [
-        RUN_SB_BUCKET_MEMBERS,
         RUN_SB_REVIEWS_BY_TARGET,
         RUN_SB_CORRECTIONS,
+        RUN_SB_PATH_RUNS,
         RUN_SB_BY_WRITER_DAY,
     ] {
         txn.open_table(def)?;
@@ -218,42 +288,170 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
 }
 
 pub fn delete_tables(txn: &WriteTransaction) -> Result<()> {
-    for def in [RUN_SB_FACT, RUN_SB_BUCKET, RUN_SB_CORRECTION_REFUSED, RUN_SB_PATH_HASH] {
+    for def in [RUN_SB_FACT, RUN_SB_BUCKET, RUN_SB_CORRECTION_REFUSED] {
         txn.delete_table(def)?;
     }
     for def in [
-        RUN_SB_BUCKET_MEMBERS,
         RUN_SB_REVIEWS_BY_TARGET,
         RUN_SB_CORRECTIONS,
+        RUN_SB_PATH_RUNS,
         RUN_SB_BY_WRITER_DAY,
     ] {
         txn.delete_table(def)?;
     }
+    let _ = txn.delete_table(LEGACY_RUN_SB_PATH_HASH);
+    let _ = txn.delete_table(LEGACY_RUN_SB_BUCKET_MEMBERS);
     Ok(())
 }
 
-/// Whether the aggregate tables are initialized for incremental updates in this write txn.
-pub(crate) fn is_active(txn: &WriteTransaction) -> Result<bool> {
-    Ok(meta_get(txn, META_VERSION)?.and_then(|v| v.parse::<u32>().ok()) == Some(SB_AGG_VERSION))
-}
+// ---------------------------------------------------------------------------------------------
+// Verified trust checkpoint: (version, runs/ledger seq, catalog, head count, head digest)
 
-/// Stamp the last ledger sequence applied to the aggregate tables (in the same write txn).
-pub(crate) fn record_seq(txn: &WriteTransaction, seq: u64) -> Result<()> {
-    if is_active(txn)? {
-        meta_set(txn, META_SEQ, &seq.to_string())?;
+/// Deterministic 256-bit hash of one `RUN_HEAD` row's aggregate-relevant fields (every field in
+/// `runs::head_affects_agg`, excluding `revisions` which changes on losing revisions).
+fn head_entry_hash(r: u32, head: &Head) -> [u64; 4] {
+    let mut h = Sha256::new();
+    h.update(r.to_be_bytes());
+    h.update(head.seq.to_be_bytes());
+    h.update(head.written_ms.to_be_bytes());
+    h.update(head.ingested_ms.to_be_bytes());
+    h.update(head.ended_ms.to_be_bytes());
+    h.update([head.flags, head.verdict]);
+    h.update(head.sha);
+    h.update(head.loc.day.to_be_bytes());
+    h.update(head.loc.block.to_be_bytes());
+    h.update(head.loc.slot.to_be_bytes());
+    for id in head.ids {
+        h.update(id.to_be_bytes());
     }
-    Ok(())
+    let bytes = h.finalize();
+    [
+        u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
+        u64::from_be_bytes(bytes[8..16].try_into().unwrap()),
+        u64::from_be_bytes(bytes[16..24].try_into().unwrap()),
+        u64::from_be_bytes(bytes[24..32].try_into().unwrap()),
+    ]
 }
 
-/// Effective (post-correction) run count directly from aggregate metadata when available.
-pub(crate) fn effective_run_count_in_read(read: &ReadTransaction) -> Result<Option<u64>> {
-    let meta = read.open_table(RUN_META)?;
-    let ver = meta
-        .get(META_VERSION)?
-        .and_then(|v| std::str::from_utf8(v.value()).ok()?.parse::<u32>().ok());
+fn add_digest(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
+    [
+        a[0].wrapping_add(b[0]),
+        a[1].wrapping_add(b[1]),
+        a[2].wrapping_add(b[2]),
+        a[3].wrapping_add(b[3]),
+    ]
+}
+
+fn format_digest(d: [u64; 4]) -> String {
+    let mut out = [0u8; 32];
+    for (i, lane) in d.iter().enumerate() {
+        out[i * 8..(i + 1) * 8].copy_from_slice(&lane.to_be_bytes());
+    }
+    hex(&out)
+}
+
+fn parse_digest(text: &str) -> Option<[u64; 4]> {
+    if text.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0u8; 32];
+    for i in 0..32 {
+        bytes[i] = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some([
+        u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
+        u64::from_be_bytes(bytes[8..16].try_into().unwrap()),
+        u64::from_be_bytes(bytes[16..24].try_into().unwrap()),
+        u64::from_be_bytes(bytes[24..32].try_into().unwrap()),
+    ])
+}
+
+fn compute_heads_stamp_from_table<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    heads: &T,
+) -> Result<(u64, [u64; 4])> {
+    let mut count = 0u64;
+    let mut digest = [0u64; 4];
+    for item in heads.iter()? {
+        let (k, v) = item?;
+        let r = be_u32(k.value(), 0);
+        let head = Head::decode(v.value())?;
+        count += 1;
+        digest = add_digest(digest, head_entry_hash(r, &head));
+    }
+    Ok((count, digest))
+}
+
+/// Fast O(1) header check at the start of an `Engine::commit` batch: verifies that the stored
+/// aggregate metadata matches `SB_AGG_VERSION`, `prev_runs_seq`, and `RUN_META["catalog"]`.
+fn is_stamp_header_consistent_tx(txn: &WriteTransaction, prev_runs_seq: u64) -> Result<bool> {
+    let ver = meta_get(txn, META_VERSION)?.and_then(|v| v.parse::<u32>().ok());
     if ver != Some(SB_AGG_VERSION) {
+        return Ok(false);
+    }
+    let seq = meta_get(txn, META_SEQ)?.and_then(|v| v.parse::<u64>().ok());
+    if seq != Some(prev_runs_seq) {
+        return Ok(false);
+    }
+    let want_cat = meta_get(txn, "catalog")?.unwrap_or_default();
+    let got_cat = meta_get(txn, META_CATALOG)?;
+    if got_cat.as_deref() != Some(want_cat.as_str()) {
+        return Ok(false);
+    }
+    let has_count = meta_get(txn, META_HEAD_COUNT)?
+        .and_then(|v| v.parse::<u64>().ok())
+        .is_some();
+    let has_digest = meta_get(txn, META_HEAD_DIGEST)?
+        .as_deref()
+        .and_then(parse_digest)
+        .is_some();
+    Ok(has_count && has_digest)
+}
+
+/// Full trust verification on open (`finish_replay`) and before serving: checks schema version,
+/// `runs/ledger` checkpoint sequence, catalog hash, `RUN_HEAD` count, and the 256-bit digest of
+/// all `RUN_HEAD` rows. Any mismatch triggers a full rebuild.
+pub(crate) fn verify_trust_stamp_rd(read: &ReadTransaction) -> Result<bool> {
+    let cp_table = read.open_table(crate::db::CHECKPOINT)?;
+    let cp_seq = crate::db::read_checkpoint(&cp_table, "runs/ledger")?
+        .map(|c| c.last_sequence_id)
+        .unwrap_or(0);
+    let meta = read.open_table(RUN_META)?;
+    let read_str = |key: &str| -> Result<Option<String>> {
+        Ok(meta
+            .get(key)?
+            .and_then(|v| std::str::from_utf8(v.value()).ok().map(str::to_owned)))
+    };
+    if read_str(META_VERSION)?.and_then(|v| v.parse::<u32>().ok()) != Some(SB_AGG_VERSION) {
+        return Ok(false);
+    }
+    if read_str(META_SEQ)?.and_then(|v| v.parse::<u64>().ok()) != Some(cp_seq) {
+        return Ok(false);
+    }
+    let want_cat = read_str("catalog")?.unwrap_or_default();
+    if read_str(META_CATALOG)?.as_deref() != Some(want_cat.as_str()) {
+        return Ok(false);
+    }
+    let Some(want_count) = read_str(META_HEAD_COUNT)?.and_then(|v| v.parse::<u64>().ok()) else {
+        return Ok(false);
+    };
+    let Some(want_digest) = read_str(META_HEAD_DIGEST)?.as_deref().and_then(parse_digest) else {
+        return Ok(false);
+    };
+    let heads = read.open_table(RUN_HEAD)?;
+    if heads.len()? != want_count {
+        return Ok(false);
+    }
+    let (actual_count, actual_digest) = compute_heads_stamp_from_table(&heads)?;
+    Ok(actual_count == want_count && actual_digest == want_digest)
+}
+
+/// Effective (post-correction) run count directly from aggregate metadata when the trust stamp
+/// verifies against the live store.
+pub(crate) fn effective_run_count_in_read(read: &ReadTransaction) -> Result<Option<u64>> {
+    if !verify_trust_stamp_rd(read)? {
         return Ok(None);
     }
+    let meta = read.open_table(RUN_META)?;
     let count = meta
         .get(META_EFFECTIVE_COUNT)?
         .and_then(|v| std::str::from_utf8(v.value()).ok()?.parse::<u64>().ok());
@@ -332,13 +530,6 @@ impl BucketKey {
         let mut w = BinWriter::with_capacity(task_type.len() + 1);
         w.str_nul(task_type);
         w.0
-    }
-
-    fn member_key(&self, cursor_ms: u64, r: u32) -> Vec<u8> {
-        let mut out = self.encode();
-        out.extend_from_slice(&cursor_ms.to_be_bytes());
-        out.extend_from_slice(&r.to_be_bytes());
-        out
     }
 }
 
@@ -460,64 +651,6 @@ impl StoredRunFact {
         })
     }
 
-    pub fn overturned_cost_run(&self) -> Option<OverturnedCostRun> {
-        if self.outcome_code != 1 {
-            return None;
-        }
-        let cost = self.cost.as_ref()?;
-        let mut quota_windows = Vec::new();
-        let mut estimate_quota_windows = Vec::new();
-        let mut has_credits = false;
-        let mut has_usd = false;
-        let mut has_estimate_credits = false;
-        for u in 0..5 {
-            if self.units_for(u).is_none() {
-                continue;
-            }
-            if cost.credits.is_some() {
-                has_credits = true;
-            }
-            if cost.usd.is_some() {
-                has_usd = true;
-            }
-            if let Some((win, delta)) = &cost.quota
-                && *delta >= 0.0
-                && !quota_windows.contains(win)
-            {
-                quota_windows.push(win.clone());
-            }
-            if let Some(est) = &cost.estimate {
-                if est.credits.is_some() {
-                    has_estimate_credits = true;
-                }
-                if let Some((win, delta)) = &est.quota
-                    && *delta >= 0.0
-                    && !estimate_quota_windows.contains(win)
-                {
-                    estimate_quota_windows.push(win.clone());
-                }
-            }
-        }
-        if has_credits
-            || has_usd
-            || has_estimate_credits
-            || !quota_windows.is_empty()
-            || !estimate_quota_windows.is_empty()
-        {
-            Some(OverturnedCostRun {
-                target_r: self.r,
-                task_size: self.task_size,
-                has_credits,
-                has_usd,
-                has_estimate_credits,
-                quota_windows,
-                estimate_quota_windows,
-            })
-        } else {
-            None
-        }
-    }
-
     pub fn to_summary(&self) -> BucketRunSummary {
         BucketRunSummary {
             r: self.r,
@@ -553,53 +686,15 @@ impl StoredRunFact {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct RateAgg {
-    pub total: f64,
-    pub accepted: u64,
-    pub n: u64,
-}
-
-impl RateAgg {
-    pub fn add(&mut self, cost: f64, accepted_units: Option<u64>) {
-        self.n += 1;
-        self.total += cost;
-        if let Some(u) = accepted_units {
-            self.accepted = self.accepted.saturating_add(u);
-        }
-    }
-
-    pub fn merge(&mut self, other: &RateAgg) {
-        self.n += other.n;
-        self.total += other.total;
-        self.accepted = self.accepted.saturating_add(other.accepted);
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct CostAgg {
-    pub credits: [RateAgg; 5],
-    pub usd: [RateAgg; 5],
-    pub estimate_credits: [RateAgg; 5],
-    pub quotas: BTreeMap<String, [RateAgg; 5]>,
-    pub estimate_quotas: BTreeMap<String, [RateAgg; 5]>,
-    pub has_estimate: bool,
-    pub estimate_methods: BTreeSet<String>,
-    pub estimate_sources: BTreeSet<String>,
-}
-
-/// For a run that BOTH has `cost` AND has at least one `overturned && !disputed` joined review,
-/// record its cost inputs so if the live catalog disagrees with the store catalog on whether the
-/// overturning reviewer is scored, `accepted` units adjust cleanly.
+/// Compact per-run cost sample stored inside a bucket so cost rates are summed in exact
+/// `RUN_BY_TIME` `(cursor_ms, r)` order regardless of arrival order or cross-bucket column merges.
 #[derive(Clone, Debug, PartialEq)]
-pub struct OverturnedCostRun {
-    pub target_r: u32,
+pub struct BucketCostSample {
+    pub cursor_ms: u64,
+    pub r: u32,
+    pub outcome_done: bool,
     pub task_size: [Option<u64>; 5],
-    pub has_credits: bool,
-    pub has_usd: bool,
-    pub has_estimate_credits: bool,
-    pub quota_windows: Vec<String>,
-    pub estimate_quota_windows: Vec<String>,
+    pub cost: StoredCost,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -717,8 +812,7 @@ pub struct BucketAgg {
     pub thoroughness_files: Vec<f64>,
     pub thoroughness_records: Vec<f64>,
     pub thoroughness_min: Vec<f64>,
-    pub cost_agg: CostAgg,
-    pub overturned_cost_runs: Vec<OverturnedCostRun>,
+    pub cost_samples: Vec<BucketCostSample>,
     pub metric_rows: Vec<Vec<(String, f64)>>,
     pub flags: Vec<BucketFlag>,
     pub joined_reviews: Vec<BucketJoinedReview>,
@@ -807,102 +901,16 @@ impl BucketAgg {
                 reported_by: flag.reported_by.clone(),
             });
         }
-        // Cost aggregation: by default assumes all `outcome == 1` runs are accepted unless a
-        // valid-looking review overturned them. Because reviewer validity depends on the live
-        // catalog's `known_models`, `cost_agg` accumulates assuming NO overturns here and stores
-        // `overturned_cost_runs` for any done run that has an `overturned && !disputed` review
-        // (tiny set — composer subtracts accepted units for runs whose overturning reviewer is
-        // valid under the live catalog!).
-        // WAIT: keeping `cost_agg` without overturn subtraction + subtracting in composer for
-        // confirmed overturns is 100% EXACT AND never needs rebuilding `cost_agg` when a catalog
-        // changes whether a reviewer model is known!
+        // Store per-run cost samples keyed by `(cursor_ms, r)` so the composer always sums cost
+        // rates in exact `RUN_BY_TIME` order across arrival orders and cross-bucket column merges.
         if let Some(cost) = &fact.cost {
-            let done = fact.outcome_code == 1;
-            let has_overturn_candidate = done
-                && joined.iter().any(|rev| {
-                    rev.overturned
-                        && !rev.disputed
-                        && rev.review_task_type.as_deref() == Some("review")
-                        && rev.review_id != fact.id
-                        && rev.review_ended_epoch >= fact.ended_epoch
-                });
-            let mut ov_quota_windows = Vec::new();
-            let mut ov_est_quota_windows = Vec::new();
-            let mut ov_credits = false;
-            let mut ov_usd = false;
-            let mut ov_est_credits = false;
-            for u in 0..5 {
-                let Some(units) = fact.units_for(u) else {
-                    continue;
-                };
-                let acc = done.then_some(units);
-                if let Some(v) = cost.credits {
-                    self.cost_agg.credits[u].add(v, acc);
-                    if has_overturn_candidate {
-                        ov_credits = true;
-                    }
-                }
-                if let Some(v) = cost.usd {
-                    self.cost_agg.usd[u].add(v, acc);
-                    if has_overturn_candidate {
-                        ov_usd = true;
-                    }
-                }
-                if let Some((win, delta)) = &cost.quota
-                    && *delta >= 0.0
-                {
-                    self.cost_agg.quotas.entry(win.clone()).or_default()[u].add(*delta, acc);
-                    if has_overturn_candidate && !ov_quota_windows.contains(win) {
-                        ov_quota_windows.push(win.clone());
-                    }
-                }
-                if let Some(est) = &cost.estimate {
-                    if let Some(v) = est.credits {
-                        self.cost_agg.estimate_credits[u].add(v, acc);
-                        if has_overturn_candidate {
-                            ov_est_credits = true;
-                        }
-                    }
-                    if let Some((win, delta)) = &est.quota
-                        && *delta >= 0.0
-                    {
-                        self.cost_agg.estimate_quotas.entry(win.clone()).or_default()[u].add(*delta, acc);
-                        if has_overturn_candidate && !ov_est_quota_windows.contains(win) {
-                            ov_est_quota_windows.push(win.clone());
-                        }
-                    }
-                }
-            }
-            // Even a negative deltaPct still registers its window name in `quotas` (parity with
-            // `read_measures::quotas` which lists all distinct windows before filtering >= 0).
-            if let Some((win, _)) = &cost.quota {
-                self.cost_agg.quotas.entry(win.clone()).or_default();
-            }
-            if let Some(est) = &cost.estimate {
-                self.cost_agg.has_estimate = true;
-                self.cost_agg.estimate_methods.insert(est.method.clone());
-                self.cost_agg.estimate_sources.insert(est.source.clone());
-                if let Some((win, _)) = &est.quota {
-                    self.cost_agg.estimate_quotas.entry(win.clone()).or_default();
-                }
-            }
-            if has_overturn_candidate
-                && (ov_credits
-                    || ov_usd
-                    || ov_est_credits
-                    || !ov_quota_windows.is_empty()
-                    || !ov_est_quota_windows.is_empty())
-            {
-                self.overturned_cost_runs.push(OverturnedCostRun {
-                    target_r: fact.r,
-                    task_size: fact.task_size,
-                    has_credits: ov_credits,
-                    has_usd: ov_usd,
-                    has_estimate_credits: ov_est_credits,
-                    quota_windows: ov_quota_windows,
-                    estimate_quota_windows: ov_est_quota_windows,
-                });
-            }
+            self.cost_samples.push(BucketCostSample {
+                cursor_ms: fact.cursor_ms,
+                r: fact.r,
+                outcome_done: fact.outcome_code == 1,
+                task_size: fact.task_size,
+                cost: cost.clone(),
+            });
         }
         if !joined.is_empty() {
             self.joined_reviews.extend(joined.iter().cloned());
@@ -1022,11 +1030,33 @@ impl BinWriter {
             self.opt_u64(*v);
         }
     }
-    fn rate_arr(&mut self, arr: &[RateAgg; 5]) {
-        for r in arr {
-            self.f64(r.total);
-            self.u64(r.accepted);
-            self.u64(r.n);
+    fn stored_cost(&mut self, c: &StoredCost) {
+        self.opt_f64(c.credits);
+        self.opt_f64(c.usd);
+        match &c.quota {
+            Some((win, d)) => {
+                self.u8(1);
+                self.str(win);
+                self.f64(*d);
+            }
+            None => self.u8(0),
+        }
+        match &c.estimate {
+            Some(e) => {
+                self.u8(1);
+                self.str(&e.source);
+                self.str(&e.method);
+                self.opt_f64(e.credits);
+                match &e.quota {
+                    Some((win, d)) => {
+                        self.u8(1);
+                        self.str(win);
+                        self.f64(*d);
+                    }
+                    None => self.u8(0),
+                }
+            }
+            None => self.u8(0),
         }
     }
 }
@@ -1131,14 +1161,38 @@ impl<'a> BinReader<'a> {
             self.opt_u64()?,
         ])
     }
-    fn rate_arr(&mut self) -> Result<[RateAgg; 5]> {
-        let mut out = <[RateAgg; 5]>::default();
-        for item in &mut out {
-            item.total = self.f64()?;
-            item.accepted = self.u64()?;
-            item.n = self.u64()?;
-        }
-        Ok(out)
+    fn stored_cost(&mut self) -> Result<StoredCost> {
+        let credits = self.opt_f64()?;
+        let usd = self.opt_f64()?;
+        let quota = if self.u8()? == 0 {
+            None
+        } else {
+            Some((self.str()?, self.f64()?))
+        };
+        let estimate = if self.u8()? == 0 {
+            None
+        } else {
+            let source = self.str()?;
+            let method = self.str()?;
+            let e_credits = self.opt_f64()?;
+            let e_quota = if self.u8()? == 0 {
+                None
+            } else {
+                Some((self.str()?, self.f64()?))
+            };
+            Some(StoredEstimate {
+                source,
+                method,
+                credits: e_credits,
+                quota: e_quota,
+            })
+        };
+        Ok(StoredCost {
+            credits,
+            usd,
+            quota,
+            estimate,
+        })
     }
 }
 
@@ -1458,43 +1512,13 @@ impl BucketAgg {
         for v in &self.thoroughness_min {
             w.f64(*v);
         }
-        w.rate_arr(&self.cost_agg.credits);
-        w.rate_arr(&self.cost_agg.usd);
-        w.rate_arr(&self.cost_agg.estimate_credits);
-        w.u32(self.cost_agg.quotas.len() as u32);
-        for (win, arr) in &self.cost_agg.quotas {
-            w.str(win);
-            w.rate_arr(arr);
-        }
-        w.u32(self.cost_agg.estimate_quotas.len() as u32);
-        for (win, arr) in &self.cost_agg.estimate_quotas {
-            w.str(win);
-            w.rate_arr(arr);
-        }
-        w.bool(self.cost_agg.has_estimate);
-        w.u32(self.cost_agg.estimate_methods.len() as u32);
-        for m in &self.cost_agg.estimate_methods {
-            w.str(m);
-        }
-        w.u32(self.cost_agg.estimate_sources.len() as u32);
-        for s in &self.cost_agg.estimate_sources {
-            w.str(s);
-        }
-        w.u32(self.overturned_cost_runs.len() as u32);
-        for ov in &self.overturned_cost_runs {
-            w.u32(ov.target_r);
-            w.task_size(&ov.task_size);
-            w.bool(ov.has_credits);
-            w.bool(ov.has_usd);
-            w.bool(ov.has_estimate_credits);
-            w.u32(ov.quota_windows.len() as u32);
-            for win in &ov.quota_windows {
-                w.str(win);
-            }
-            w.u32(ov.estimate_quota_windows.len() as u32);
-            for win in &ov.estimate_quota_windows {
-                w.str(win);
-            }
+        w.u32(self.cost_samples.len() as u32);
+        for cs in &self.cost_samples {
+            w.u64(cs.cursor_ms);
+            w.u32(cs.r);
+            w.bool(cs.outcome_done);
+            w.task_size(&cs.task_size);
+            w.stored_cost(&cs.cost);
         }
         w.u32(self.metric_rows.len() as u32);
         for row in &self.metric_rows {
@@ -1659,56 +1683,15 @@ impl BucketAgg {
         for _ in 0..tm_len {
             thoroughness_min.push(r.f64()?);
         }
-        let credits = r.rate_arr()?;
-        let usd = r.rate_arr()?;
-        let estimate_credits = r.rate_arr()?;
-        let q_len = r.u32()? as usize;
-        let mut quotas = BTreeMap::new();
-        for _ in 0..q_len {
-            quotas.insert(r.str()?, r.rate_arr()?);
-        }
-        let eq_len = r.u32()? as usize;
-        let mut estimate_quotas = BTreeMap::new();
-        for _ in 0..eq_len {
-            estimate_quotas.insert(r.str()?, r.rate_arr()?);
-        }
-        let has_estimate = r.bool()?;
-        let em_len = r.u32()? as usize;
-        let mut estimate_methods = BTreeSet::new();
-        for _ in 0..em_len {
-            estimate_methods.insert(r.str()?);
-        }
-        let es_len = r.u32()? as usize;
-        let mut estimate_sources = BTreeSet::new();
-        for _ in 0..es_len {
-            estimate_sources.insert(r.str()?);
-        }
-        let ov_len = r.u32()? as usize;
-        let mut overturned_cost_runs = Vec::with_capacity(ov_len);
-        for _ in 0..ov_len {
-            let target_r = r.u32()?;
-            let task_size = r.task_size()?;
-            let has_credits = r.bool()?;
-            let has_usd = r.bool()?;
-            let has_estimate_credits = r.bool()?;
-            let qw_len = r.u32()? as usize;
-            let mut quota_windows = Vec::with_capacity(qw_len);
-            for _ in 0..qw_len {
-                quota_windows.push(r.str()?);
-            }
-            let eqw_len = r.u32()? as usize;
-            let mut estimate_quota_windows = Vec::with_capacity(eqw_len);
-            for _ in 0..eqw_len {
-                estimate_quota_windows.push(r.str()?);
-            }
-            overturned_cost_runs.push(OverturnedCostRun {
-                target_r,
-                task_size,
-                has_credits,
-                has_usd,
-                has_estimate_credits,
-                quota_windows,
-                estimate_quota_windows,
+        let cs_len = r.u32()? as usize;
+        let mut cost_samples = Vec::with_capacity(cs_len);
+        for _ in 0..cs_len {
+            cost_samples.push(BucketCostSample {
+                cursor_ms: r.u64()?,
+                r: r.u32()?,
+                outcome_done: r.bool()?,
+                task_size: r.task_size()?,
+                cost: r.stored_cost()?,
             });
         }
         let mr_len = r.u32()? as usize;
@@ -1868,17 +1851,7 @@ impl BucketAgg {
             thoroughness_files,
             thoroughness_records,
             thoroughness_min,
-            cost_agg: CostAgg {
-                credits,
-                usd,
-                estimate_credits,
-                quotas,
-                estimate_quotas,
-                has_estimate,
-                estimate_methods,
-                estimate_sources,
-            },
-            overturned_cost_runs,
+            cost_samples,
             metric_rows,
             flags,
             joined_reviews,
@@ -2127,14 +2100,6 @@ fn build_own_review_ref(fact: &StoredRunFact, target: Option<&StoredRunFact>) ->
     })
 }
 
-fn load_fact_tx(txn: &WriteTransaction, r: u32) -> Result<Option<StoredRunFact>> {
-    let table = txn.open_table(RUN_SB_FACT)?;
-    table
-        .get(Key::new().u32(r).as_slice())?
-        .map(|v| StoredRunFact::decode(v.value()))
-        .transpose()
-}
-
 fn load_fact_rd<T: ReadableTable<&'static [u8], &'static [u8]>>(table: &T, r: u32) -> Result<Option<StoredRunFact>> {
     table
         .get(Key::new().u32(r).as_slice())?
@@ -2148,21 +2113,45 @@ fn put_fact_tx(txn: &WriteTransaction, fact: &StoredRunFact) -> Result<()> {
     Ok(())
 }
 
-fn lookup_run_id_tx(txn: &WriteTransaction, run_id: &str) -> Result<Option<u32>> {
-    let rev = txn.open_table(RUN_DICT_REV)?;
-    lookup_id(&rev, kind::RUN_ID, run_id)
+fn path_run_key(path_hash: &[u8; 16], r: u32) -> Vec<u8> {
+    Key::new().bytes(path_hash).u32(r).0
 }
 
-fn reviews_of_target_tx(txn: &WriteTransaction, target_r: u32) -> Result<Vec<u32>> {
-    let table = txn.open_table(RUN_SB_REVIEWS_BY_TARGET)?;
-    let lo = Key::new().u32(target_r).u32(0);
-    let hi = Key::new().u32(target_r).u32(u32::MAX);
+fn has_any_path_hash_tx(txn: &WriteTransaction, path_hash: &[u8; 16]) -> Result<bool> {
+    let tbl = txn.open_table(RUN_SB_PATH_RUNS)?;
+    let lo = Key::new().bytes(path_hash).u32(0);
+    let hi = Key::new().bytes(path_hash).u32(u32::MAX);
+    Ok(tbl.range(lo.as_slice()..=hi.as_slice())?.next().is_some())
+}
+
+fn runs_at_path_hash_rd<T: ReadableTable<&'static [u8], ()>>(table: &T, path_hash: &[u8]) -> Result<Vec<u32>> {
+    if path_hash.len() != 16 {
+        return Ok(Vec::new());
+    }
+    let lo = Key::new().bytes(path_hash).u32(0);
+    let hi = Key::new().bytes(path_hash).u32(u32::MAX);
     let mut out = Vec::new();
     for item in table.range(lo.as_slice()..=hi.as_slice())? {
         let (k, _) = item?;
-        out.push(be_u32(k.value(), 4));
+        if k.value().len() == 20 {
+            out.push(be_u32(k.value(), 16));
+        }
     }
     Ok(out)
+}
+
+fn has_waiting_correction_for_tx(txn: &WriteTransaction, target_r: u32) -> Result<bool> {
+    let tbl = txn.open_table(RUN_SB_CORRECTIONS)?;
+    let lo = Key::new().u32(target_r).u32(0);
+    let hi = Key::new().u32(target_r).u32(u32::MAX);
+    Ok(tbl.range(lo.as_slice()..=hi.as_slice())?.next().is_some())
+}
+
+fn has_waiting_review_for_tx(txn: &WriteTransaction, target_r: u32) -> Result<bool> {
+    let tbl = txn.open_table(RUN_SB_REVIEWS_BY_TARGET)?;
+    let lo = Key::new().u32(target_r).u32(0);
+    let hi = Key::new().u32(target_r).u32(u32::MAX);
+    Ok(tbl.range(lo.as_slice()..=hi.as_slice())?.next().is_some())
 }
 
 fn reviews_of_target_rd<T: ReadableTable<&'static [u8], ()>>(table: &T, target_r: u32) -> Result<Vec<u32>> {
@@ -2185,120 +2174,6 @@ fn load_payload_doc_tx(txn: &WriteTransaction, head: &Head) -> Result<Option<Vec
     Ok(docs.get(head.loc.slot as usize).cloned())
 }
 
-/// Rebuild a single aggregate bucket from its `run_sb_bucket_members` index in exact
-/// `(cursor_ms, r)` ascending order (zero floating-point drift, exact medians/top-20).
-fn rebuild_single_bucket(txn: &WriteTransaction, key: &BucketKey) -> Result<()> {
-    let prefix = key.encode();
-    let end = prefix_end(&prefix);
-    let member_rs: Vec<u32> = {
-        let members = txn.open_table(RUN_SB_BUCKET_MEMBERS)?;
-        let mut out = Vec::new();
-        for item in members.range(prefix.as_slice()..end.as_slice())? {
-            let (k, _) = item?;
-            let kb = k.value();
-            if kb.len() == prefix.len() + 12 {
-                out.push(be_u32(kb, prefix.len() + 8));
-            }
-        }
-        out
-    };
-    if member_rs.is_empty() {
-        txn.open_table(RUN_SB_BUCKET)?.remove(prefix.as_slice())?;
-        return Ok(());
-    }
-    let mut agg = BucketAgg::default();
-    for r in member_rs {
-        let Some(fact) = load_fact_tx(txn, r)? else {
-            continue;
-        };
-        if !fact.effective {
-            continue;
-        }
-        let rev_rs = reviews_of_target_tx(txn, r)?;
-        let mut joined = Vec::new();
-        for rev_r in rev_rs {
-            if let Some(rev_fact) = load_fact_tx(txn, rev_r)?
-                && rev_fact.effective
-                && let Some(jr) = build_joined_review(&fact, &rev_fact)
-            {
-                joined.push(jr);
-            }
-        }
-        joined.sort_by(|a, b| {
-            a.review_cursor_ms
-                .cmp(&b.review_cursor_ms)
-                .then_with(|| a.review_r.cmp(&b.review_r))
-        });
-        let own_ref = if let Some(rev) = &fact.review {
-            let target = match lookup_run_id_tx(txn, &rev.effective_of)? {
-                Some(tr) => load_fact_tx(txn, tr)?,
-                None => None,
-            };
-            build_own_review_ref(&fact, target.as_ref())
-        } else {
-            None
-        };
-        agg.fold_run(&fact, &joined, own_ref);
-    }
-    txn.open_table(RUN_SB_BUCKET)?
-        .insert(prefix.as_slice(), agg.encode().as_slice())?;
-    Ok(())
-}
-
-/// Remove a run's membership and path indices for its old effective state.
-/// Note: `RUN_SB_REVIEWS_BY_TARGET` is maintained across both effective and voided reviews
-/// (callers filter by `rev_fact.effective`) so an un-voided correction chain still discovers
-/// reviews that were previously voided.
-fn unindex_fact_effective(txn: &WriteTransaction, old: &StoredRunFact) -> Result<()> {
-    let old_key = BucketKey::from_fact(old);
-    txn.open_table(RUN_SB_BUCKET_MEMBERS)?
-        .remove(old_key.member_key(old.cursor_ms, old.r).as_slice())?;
-    txn.open_table(RUN_SB_PATH_HASH)?
-        .remove(path_key(&old.file).as_slice())?;
-    Ok(())
-}
-
-/// Insert a run's membership and path indices for its effective fact state.
-fn index_fact_effective(txn: &WriteTransaction, fact: &StoredRunFact) -> Result<()> {
-    let key = BucketKey::from_fact(fact);
-    txn.open_table(RUN_SB_BUCKET_MEMBERS)?
-        .insert(key.member_key(fact.cursor_ms, fact.r).as_slice(), ())?;
-    txn.open_table(RUN_SB_PATH_HASH)?
-        .insert(path_key(&fact.file).as_slice(), Key::new().u32(fact.r).as_slice())?;
-    Ok(())
-}
-
-/// Update `RUN_SB_REVIEWS_BY_TARGET` when a review run's effective target changes or is added.
-fn set_review_target_index(
-    txn: &WriteTransaction,
-    review_r: u32,
-    old_target: Option<&str>,
-    new_target: Option<&str>,
-) -> Result<()> {
-    if old_target == new_target {
-        return Ok(());
-    }
-    if let Some(old) = old_target
-        && let Some(old_tr) = lookup_run_id_tx(txn, old)?
-    {
-        txn.open_table(RUN_SB_REVIEWS_BY_TARGET)?
-            .remove(Key::new().u32(old_tr).u32(review_r).as_slice())?;
-    }
-    if let Some(new) = new_target {
-        let new_tr = intern_run_id_readonly_or_create(txn, new)?;
-        txn.open_table(RUN_SB_REVIEWS_BY_TARGET)?
-            .insert(Key::new().u32(new_tr).u32(review_r).as_slice(), ())?;
-    }
-    Ok(())
-}
-
-fn intern_run_id_readonly_or_create(txn: &WriteTransaction, run_id: &str) -> Result<u32> {
-    if let Some(id) = lookup_run_id_tx(txn, run_id)? {
-        return Ok(id);
-    }
-    runs::intern_run_id(txn, run_id)
-}
-
 fn read_effective_count_tx(txn: &WriteTransaction) -> Result<u64> {
     Ok(meta_get(txn, META_EFFECTIVE_COUNT)?
         .and_then(|v| v.parse::<u64>().ok())
@@ -2309,219 +2184,23 @@ fn write_effective_count_tx(txn: &WriteTransaction, count: u64) -> Result<()> {
     meta_set(txn, META_EFFECTIVE_COUNT, &count.to_string())
 }
 
-/// True if `r` participates in any recorded correction chain (has `corrects`, is a target of a
-/// `corrects`, or is a review targeting a run in the correction graph).
-fn touches_corrections(
+/// Update `run_sb_*` tables in the SAME write transaction that recorded `run_head[r]`.
+///
+/// Common case (O(1) append): brand-new `run_id` (`!had_prior_head`), no `corrects`, no `void`,
+/// no `review`, no existing effective head at its path, and no waiting correction or review
+/// targeting `r`. Every other case marks the commit batch dirty for a clean full rebuild from
+/// `RUN_HEAD` + `RUN_PAYLOAD` inside `finish_commit` before committing.
+pub(crate) fn on_head_recorded(
     txn: &WriteTransaction,
-    old_fact: Option<&StoredRunFact>,
-    new_fact: &StoredRunFact,
-) -> Result<bool> {
-    if new_fact.corrects.is_some() || new_fact.has_void || old_fact.is_some_and(|f| f.corrects.is_some() || f.has_void)
-    {
-        return Ok(true);
-    }
-    let has_any_corrections = {
-        let tbl = txn.open_table(RUN_SB_CORRECTIONS)?;
-        tbl.iter()?.next().is_some()
-    };
-    if !has_any_corrections {
-        return Ok(false);
-    }
-    let corr_tbl = txn.open_table(RUN_SB_CORRECTIONS)?;
-    // Is `r` itself targeted by any correction?
-    let lo = Key::new().u32(new_fact.r).u32(0);
-    let hi = Key::new().u32(new_fact.r).u32(u32::MAX);
-    if corr_tbl.range(lo.as_slice()..=hi.as_slice())?.next().is_some() {
-        return Ok(true);
-    }
-    // If `new_fact` or `old_fact` is a review, does its target sit in the correction graph?
-    for rev_target in [
-        new_fact.review.as_ref().map(|r| r.orig_of.as_str()),
-        old_fact.and_then(|f| f.review.as_ref().map(|r| r.orig_of.as_str())),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Some(tr) = lookup_run_id_tx(txn, rev_target)? {
-            let t_lo = Key::new().u32(tr).u32(0);
-            let t_hi = Key::new().u32(tr).u32(u32::MAX);
-            if corr_tbl.range(t_lo.as_slice()..=t_hi.as_slice())?.next().is_some() {
-                return Ok(true);
-            }
-            if let Some(tf) = load_fact_tx(txn, tr)?
-                && (tf.corrects.is_some() || tf.has_void || !tf.effective)
-            {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-/// Resolve the small connected correction closure using the shared `crate::run_corrections::resolve`
-/// and apply exact deltas to `RUN_SB_FACT`, `RUN_SB_BUCKET`, and `RUN_SB_CORRECTION_REFUSED` in
-/// the same write transaction.
-fn resolve_correction_closure(txn: &WriteTransaction, extra_dirty: &mut BTreeSet<BucketKey>) -> Result<()> {
-    // Gather all correction edges: (target_r, corrector_r) and all corrector_r.
-    let mut closure: BTreeSet<u32> = BTreeSet::new();
-    {
-        let corr = txn.open_table(RUN_SB_CORRECTIONS)?;
-        for item in corr.iter()? {
-            let (k, _) = item?;
-            let target_r = be_u32(k.value(), 0);
-            let corr_r = be_u32(k.value(), 4);
-            if target_r != 0 {
-                closure.insert(target_r);
-            }
-            closure.insert(corr_r);
-        }
-    }
-    // Also include any previously refused run (in case a missing target just arrived!).
-    {
-        let refused = txn.open_table(RUN_SB_CORRECTION_REFUSED)?;
-        for item in refused.iter()? {
-            let (k, _) = item?;
-            closure.insert(be_u32(k.value(), 0));
-        }
-    }
-    // Expand transitively along `corrects` targets and incoming reviews (`review.of`).
-    let mut queue: Vec<u32> = closure.iter().copied().collect();
-    let mut pos = 0;
-    while pos < queue.len() {
-        let cur = queue[pos];
-        pos += 1;
-        if let Some(fact) = load_fact_tx(txn, cur)?
-            && let Some(target_id) = &fact.corrects
-            && let Some(tr) = lookup_run_id_tx(txn, target_id)?
-            && closure.insert(tr)
-        {
-            queue.push(tr);
-        }
-        for rev_r in reviews_of_target_tx(txn, cur)? {
-            if closure.insert(rev_r) {
-                queue.push(rev_r);
-            }
-        }
-    }
-    // Also scan any review whose `orig_of` points to a member of `closure` (even if its
-    // `effective_of` currently points to another member of `closure`, it's already picked up
-    // above because both `orig_of` and `effective_of` are in `closure`!).
-    let mut facts: Vec<StoredRunFact> = Vec::with_capacity(closure.len());
-    for &r in &closure {
-        if let Some(fact) = load_fact_tx(txn, r)? {
-            facts.push(fact);
-        }
-    }
-    // Build minimal JSON records for `crate::run_corrections::resolve`.
-    let records: Vec<Json> = facts
-        .iter()
-        .map(|f| {
-            let mut doc = json!({
-                "id": f.id,
-                "writer": f.writer,
-                "seq": f.seq,
-                "writtenAt": f.written_at,
-            });
-            if let Some(target) = &f.corrects {
-                doc["corrects"] = json!(target);
-            }
-            if f.has_void {
-                doc["void"] = json!({"reason": "void"});
-            }
-            if let Some(rev) = &f.review {
-                doc["review"] = json!({"of": rev.orig_of});
-            }
-            json!({ "r": f.r, "doc": doc })
-        })
-        .collect();
-    let res = crate::run_corrections::resolve(&records, |v| v.as_str().and_then(run_schema::iso_ms));
-    let mut new_effective_of: HashMap<u32, Option<String>> = HashMap::new();
-    for row in &res.rows {
-        let r = row["r"].as_u64().unwrap_or(0) as u32;
-        let eff_of = row["doc"]["review"]["of"].as_str().map(str::to_string);
-        new_effective_of.insert(r, eff_of);
-    }
-    // Update RUN_SB_CORRECTION_REFUSED.
-    {
-        let mut refused_tbl = txn.open_table(RUN_SB_CORRECTION_REFUSED)?;
-        let old_keys: Vec<Vec<u8>> = refused_tbl
-            .iter()?
-            .map(|item| Ok(item?.0.value().to_vec()))
-            .collect::<Result<_>>()?;
-        for k in old_keys {
-            refused_tbl.remove(k.as_slice())?;
-        }
-        for fact in &facts {
-            if let Some(reason) = res.refused.get(&fact.id) {
-                refused_tbl.insert(Key::new().u32(fact.r).as_slice(), reason.as_bytes())?;
-            }
-        }
-    }
-    let mut eff_count = read_effective_count_tx(txn)?;
-    for mut fact in facts {
-        let was_eff = fact.effective;
-        let old_eff_of = fact.review.as_ref().map(|r| r.effective_of.clone());
-        let now_eff = new_effective_of.contains_key(&fact.r);
-        let now_eff_of = new_effective_of.get(&fact.r).cloned().flatten();
-        let target_changed = old_eff_of != now_eff_of;
-        if was_eff == now_eff && !target_changed {
-            // Still mark its bucket dirty if it is effective and reviewed by anything in closure.
-            if now_eff {
-                extra_dirty.insert(BucketKey::from_fact(&fact));
-            }
-            continue;
-        }
-        if was_eff {
-            unindex_fact_effective(txn, &fact)?;
-            eff_count = eff_count.saturating_sub(1);
-            extra_dirty.insert(BucketKey::from_fact(&fact));
-            if let Some(old_target) = &old_eff_of
-                && let Some(tr) = lookup_run_id_tx(txn, old_target)?
-                && let Some(tf) = load_fact_tx(txn, tr)?
-            {
-                extra_dirty.insert(BucketKey::from_fact(&tf));
-            }
-        }
-        fact.effective = now_eff;
-        if let (Some(rev), Some(new_of)) = (&mut fact.review, now_eff_of) {
-            rev.effective_of = new_of;
-        } else if let Some(rev) = &mut fact.review {
-            rev.effective_of = rev.orig_of.clone();
-        }
-        let new_eff_target = fact.review.as_ref().map(|r| r.effective_of.as_str());
-        set_review_target_index(txn, fact.r, old_eff_of.as_deref(), new_eff_target)?;
-        put_fact_tx(txn, &fact)?;
-        if now_eff {
-            index_fact_effective(txn, &fact)?;
-            eff_count += 1;
-            extra_dirty.insert(BucketKey::from_fact(&fact));
-            if let Some(rev) = &fact.review
-                && let Some(tr) = lookup_run_id_tx(txn, &rev.effective_of)?
-                && let Some(tf) = load_fact_tx(txn, tr)?
-            {
-                extra_dirty.insert(BucketKey::from_fact(&tf));
-            }
-        }
-        // Any review pointing at this run needs its own bucket refreshed (`own_review_refs`).
-        for rev_r in reviews_of_target_tx(txn, fact.r)? {
-            if let Some(rf) = load_fact_tx(txn, rev_r)?
-                && rf.effective
-            {
-                extra_dirty.insert(BucketKey::from_fact(&rf));
-            }
-        }
-    }
-    write_effective_count_tx(txn, eff_count)?;
-    Ok(())
-}
-
-/// Update `run_sb_*` tables in the SAME write transaction that changed `run_head[r]`.
-/// `doc_bytes` is passed directly on `run.recorded` (avoiding any `run_payload` read).
-pub(crate) fn on_head_changed(txn: &WriteTransaction, r: u32, new_head: &Head, doc_bytes: Option<&[u8]>) -> Result<()> {
-    if !is_active(txn)? {
+    r: u32,
+    new_head: &Head,
+    had_prior_head: bool,
+    doc_bytes: Option<&[u8]>,
+) -> Result<()> {
+    if had_prior_head || batch_needs_full_rebuild() {
+        mark_full_rebuild();
         return Ok(());
     }
-    let old_fact = load_fact_tx(txn, r)?;
     let owned_doc: Vec<u8>;
     let bytes: &[u8] = match doc_bytes {
         Some(b) => b,
@@ -2530,7 +2209,10 @@ pub(crate) fn on_head_changed(txn: &WriteTransaction, r: u32, new_head: &Head, d
                 owned_doc = b;
                 &owned_doc
             }
-            None => return Ok(()),
+            None => {
+                mark_full_rebuild();
+                return Ok(());
+            }
         },
     };
     let Some(mut new_fact) = ({
@@ -2538,273 +2220,95 @@ pub(crate) fn on_head_changed(txn: &WriteTransaction, r: u32, new_head: &Head, d
         let mut dict = Dict::new(&dict_table);
         extract_fact(&mut dict, r, new_head, bytes)?
     }) else {
+        mark_full_rebuild();
         return Ok(());
     };
-    // Update writer-day index.
-    if let Some(old) = &old_fact
-        && (old.writer_id != new_fact.writer_id || old.file != new_fact.file)
-    {
-        txn.open_table(RUN_SB_BY_WRITER_DAY)?
-            .remove(writer_day_key(old.writer_id, &old.file, r).as_slice())?;
+    let ph = path_key(&new_fact.file);
+    let is_rare = new_fact.corrects.is_some()
+        || new_fact.has_void
+        || new_fact.review.is_some()
+        || has_any_path_hash_tx(txn, &ph)?
+        || has_waiting_correction_for_tx(txn, r)?
+        || has_waiting_review_for_tx(txn, r)?;
+    if is_rare {
+        mark_full_rebuild();
+        return Ok(());
     }
+
+    // Fast O(1) append for a brand-new plain run at a fresh path.
+    new_fact.effective = true;
+    put_fact_tx(txn, &new_fact)?;
     txn.open_table(RUN_SB_BY_WRITER_DAY)?
         .insert(writer_day_key(new_fact.writer_id, &new_fact.file, r).as_slice(), ())?;
+    txn.open_table(RUN_SB_PATH_RUNS)?
+        .insert(path_run_key(&ph, r).as_slice(), ())?;
+    let key_bytes = BucketKey::from_fact(&new_fact).encode();
+    let mut bucket = {
+        let tbl = txn.open_table(RUN_SB_BUCKET)?;
+        tbl.get(key_bytes.as_slice())?
+            .map(|v| BucketAgg::decode(v.value()))
+            .transpose()?
+            .unwrap_or_default()
+    };
+    bucket.fold_run(&new_fact, &[], None);
+    txn.open_table(RUN_SB_BUCKET)?
+        .insert(key_bytes.as_slice(), bucket.encode().as_slice())?;
+    let eff = read_effective_count_tx(txn)?;
+    write_effective_count_tx(txn, eff + 1)?;
 
-    // Update corrections graph index if `corrects` present or changed.
-    if let Some(old) = &old_fact
-        && let Some(old_corr) = &old.corrects
-    {
-        let old_tr = lookup_run_id_tx(txn, old_corr)?.unwrap_or(0);
-        txn.open_table(RUN_SB_CORRECTIONS)?
-            .remove(Key::new().u32(old_tr).u32(r).as_slice())?;
-    }
-    if let Some(new_corr) = &new_fact.corrects {
-        let new_tr = intern_run_id_readonly_or_create(txn, new_corr)?;
-        txn.open_table(RUN_SB_CORRECTIONS)?
-            .insert(Key::new().u32(new_tr).u32(r).as_slice(), ())?;
-    }
-
-    if touches_corrections(txn, old_fact.as_ref(), &new_fact)? {
-        let mut dirty: BTreeSet<BucketKey> = BTreeSet::new();
-        let mut eff_count = read_effective_count_tx(txn)?;
-        if let Some(old) = &old_fact
-            && old.effective
-        {
-            unindex_fact_effective(txn, old)?;
-            eff_count = eff_count.saturating_sub(1);
-            dirty.insert(BucketKey::from_fact(old));
-            if let Some(rev) = &old.review
-                && let Some(tr) = lookup_run_id_tx(txn, &rev.effective_of)?
-                && let Some(tf) = load_fact_tx(txn, tr)?
-            {
-                dirty.insert(BucketKey::from_fact(&tf));
-            }
+    let entry_hash = head_entry_hash(r, new_head);
+    BATCH_STATE.with(|cell| {
+        if let Some(st) = cell.borrow_mut().as_mut() {
+            st.appended_heads += 1;
+            st.appended_digest = add_digest(st.appended_digest, entry_hash);
         }
-        // Start `new_fact` as non-effective before closure resolution so closure flips it cleanly.
-        let old_rev_target = old_fact
-            .as_ref()
-            .and_then(|f| f.review.as_ref().map(|r| r.effective_of.as_str()));
-        let new_rev_target = new_fact.review.as_ref().map(|r| r.effective_of.as_str());
-        set_review_target_index(txn, r, old_rev_target, new_rev_target)?;
-        new_fact.effective = false;
-        put_fact_tx(txn, &new_fact)?;
-        write_effective_count_tx(txn, eff_count)?;
-        resolve_correction_closure(txn, &mut dirty)?;
-        schedule_or_rebuild_dirty(txn, dirty)?;
-        return Ok(());
-    }
-
-    // No corrections involved: `new_fact` is effective.
-    new_fact.effective = true;
-    let old_rev_target = old_fact
-        .as_ref()
-        .and_then(|f| f.review.as_ref().map(|r| r.effective_of.as_str()));
-    let new_rev_target = new_fact.review.as_ref().map(|r| r.effective_of.as_str());
-    set_review_target_index(txn, r, old_rev_target, new_rev_target)?;
-    let new_key = BucketKey::from_fact(&new_fact);
-    let incoming_reviews = reviews_of_target_tx(txn, r)?;
-
-    // Fast O(1) incremental append path for EVERY brand-new non-correction run (in-order or
-    // out-of-order backfill, plain run or review run): folds directly into the target bucket(s)
-    // without rebuilding any bucket from `run_sb_bucket_members`.
-    if old_fact.is_none() {
-        let mut joined = Vec::new();
-        for &rev_r in &incoming_reviews {
-            if rev_r == r {
-                if let Some(jr) = build_joined_review(&new_fact, &new_fact) {
-                    joined.push(jr);
-                }
-            } else if let Some(rev_fact) = load_fact_tx(txn, rev_r)?
-                && rev_fact.effective
-                && let Some(jr) = build_joined_review(&new_fact, &rev_fact)
-            {
-                joined.push(jr);
-            }
-        }
-        let target_fact = if let Some(rev) = &new_fact.review {
-            match lookup_run_id_tx(txn, &rev.effective_of)? {
-                Some(tr) if tr == r => Some(new_fact.clone()),
-                Some(tr) => load_fact_tx(txn, tr)?,
-                None => None,
-            }
-        } else {
-            None
-        };
-        let own_ref = build_own_review_ref(&new_fact, target_fact.as_ref());
-
-        put_fact_tx(txn, &new_fact)?;
-        index_fact_effective(txn, &new_fact)?;
-        let eff = read_effective_count_tx(txn)?;
-        write_effective_count_tx(txn, eff + 1)?;
-
-        // 1. Fold `new_fact` into its own bucket in O(1).
-        let key_bytes = new_key.encode();
-        let mut bucket = {
-            let tbl = txn.open_table(RUN_SB_BUCKET)?;
-            tbl.get(key_bytes.as_slice())?
-                .map(|v| BucketAgg::decode(v.value()))
-                .transpose()?
-                .unwrap_or_default()
-        };
-        bucket.fold_run(&new_fact, &joined, own_ref);
-        txn.open_table(RUN_SB_BUCKET)?
-            .insert(key_bytes.as_slice(), bucket.encode().as_slice())?;
-
-        // 2. If `new_fact` reviews an existing effective run `tf` (`tf.r != r`), append the
-        // joined review (and any overturn cost-run record) directly onto `tf`'s bucket in O(1).
-        let mut dirty: BTreeSet<BucketKey> = BTreeSet::new();
-        if let Some(rev) = &new_fact.review
-            && let Some(tf) = &target_fact
-            && tf.r != r
-            && tf.effective
-            && let Some(jr) = build_joined_review(tf, &new_fact)
-        {
-            let tf_key = BucketKey::from_fact(tf);
-            let tf_key_bytes = tf_key.encode();
-            let existing_tf = {
-                let tbl = txn.open_table(RUN_SB_BUCKET)?;
-                tbl.get(tf_key_bytes.as_slice())?
-                    .map(|v| BucketAgg::decode(v.value()))
-                    .transpose()?
-            };
-            if let Some(mut tb) = existing_tf {
-                let overturn_cand = rev.overturned
-                    && !rev.disputed
-                    && new_fact.task_type.as_deref() == Some("review")
-                    && new_fact.id != tf.id
-                    && new_fact.ended_epoch >= tf.ended_epoch;
-                if overturn_cand
-                    && !tb.overturned_cost_runs.iter().any(|ov| ov.target_r == tf.r)
-                    && let Some(ov) = tf.overturned_cost_run()
-                {
-                    tb.overturned_cost_runs.push(ov);
-                }
-                tb.joined_reviews.push(jr);
-                txn.open_table(RUN_SB_BUCKET)?
-                    .insert(tf_key_bytes.as_slice(), tb.encode().as_slice())?;
-            } else {
-                dirty.insert(tf_key);
-            }
-        }
-
-        // 3. If existing reviews arrived BEFORE this target (backfill newest-days-first),
-        // patch each such review's `own_review_refs` entry in its bucket in O(1).
-        for rev_r in incoming_reviews {
-            if rev_r == r {
-                continue;
-            }
-            if let Some(rf) = load_fact_tx(txn, rev_r)?
-                && rf.effective
-                && let Some(updated_own) = build_own_review_ref(&rf, Some(&new_fact))
-            {
-                let rf_key = BucketKey::from_fact(&rf);
-                let rf_key_bytes = rf_key.encode();
-                let existing_rf = {
-                    let tbl = txn.open_table(RUN_SB_BUCKET)?;
-                    tbl.get(rf_key_bytes.as_slice())?
-                        .map(|v| BucketAgg::decode(v.value()))
-                        .transpose()?
-                };
-                if let Some(mut rb) = existing_rf {
-                    if let Some(slot) = rb.own_review_refs.iter_mut().find(|o| o.self_r == rev_r) {
-                        *slot = updated_own;
-                    } else {
-                        rb.own_review_refs.push(updated_own);
-                    }
-                    txn.open_table(RUN_SB_BUCKET)?
-                        .insert(rf_key_bytes.as_slice(), rb.encode().as_slice())?;
-                } else {
-                    dirty.insert(rf_key);
-                }
-            }
-        }
-        schedule_or_rebuild_dirty(txn, dirty)?;
-        return Ok(());
-    }
-
-    // Targeted bucket-rebuild path (revisions, path updates, catalog rekeying).
-    let mut dirty: BTreeSet<BucketKey> = BTreeSet::new();
-    let mut eff_count = read_effective_count_tx(txn)?;
-    if let Some(old) = &old_fact
-        && old.effective
-    {
-        unindex_fact_effective(txn, old)?;
-        eff_count = eff_count.saturating_sub(1);
-        dirty.insert(BucketKey::from_fact(old));
-        if let Some(rev) = &old.review
-            && let Some(tr) = lookup_run_id_tx(txn, &rev.effective_of)?
-            && let Some(tf) = load_fact_tx(txn, tr)?
-            && tf.effective
-        {
-            dirty.insert(BucketKey::from_fact(&tf));
-        }
-    }
-    put_fact_tx(txn, &new_fact)?;
-    index_fact_effective(txn, &new_fact)?;
-    eff_count += 1;
-    write_effective_count_tx(txn, eff_count)?;
-    dirty.insert(new_key);
-
-    // If this run is a review, its target's bucket gains/updates the joined review.
-    if let Some(rev) = &new_fact.review
-        && let Some(tr) = lookup_run_id_tx(txn, &rev.effective_of)?
-        && let Some(tf) = load_fact_tx(txn, tr)?
-        && tf.effective
-    {
-        dirty.insert(BucketKey::from_fact(&tf));
-    }
-    // If existing reviews already targeted this run (e.g., revision), refresh those reviews'
-    // own buckets so `own_review_refs` carries the target's updated metadata.
-    for rev_r in incoming_reviews {
-        if let Some(rf) = load_fact_tx(txn, rev_r)?
-            && rf.effective
-        {
-            dirty.insert(BucketKey::from_fact(&rf));
-        }
-    }
-    schedule_or_rebuild_dirty(txn, dirty)?;
+    });
     Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
-// One-time migration on store open (`RunsProjector::finish_replay`)
+// Verified migration & canonical full rebuild from RUN_HEAD + RUN_PAYLOAD
 
-/// Build `run_sb_*` tables once from existing `run_head`/`run_payload` rows if absent, outdated,
-/// or out of sync with the `runs/ledger` checkpoint (e.g., after an older binary wrote runs).
+/// Verify the aggregate trust stamp against post-replay `RUN_HEAD` + `CHECKPOINT["runs/ledger"]`
+/// and rebuild once from scratch on any mismatch (absent, version bump, rollback/upgrade, or
+/// crash-recovery tail).
 pub(crate) fn ensure_migrated(db: &Database) -> Result<()> {
-    let (up_to_date, checkpoint_seq) = {
+    let up_to_date = {
         let read = db.begin_read()?;
-        let cp_table = read.open_table(crate::db::CHECKPOINT)?;
-        let cp_seq = crate::db::read_checkpoint(&cp_table, "runs/ledger")?
-            .map(|c| c.last_sequence_id)
-            .unwrap_or(0);
-        let meta = read.open_table(RUN_META)?;
-        let ver = meta
-            .get(META_VERSION)?
-            .and_then(|v| std::str::from_utf8(v.value()).ok()?.parse::<u32>().ok());
-        let seq = meta
-            .get(META_SEQ)?
-            .and_then(|v| std::str::from_utf8(v.value()).ok()?.parse::<u64>().ok());
-        (ver == Some(SB_AGG_VERSION) && seq == Some(cp_seq), cp_seq)
+        verify_trust_stamp_rd(&read)?
     };
     if up_to_date {
         return Ok(());
     }
-    rebuild_all_aggregates(db, checkpoint_seq)
+    rebuild_all_aggregates(db)
 }
 
-/// Full one-time build of all `run_sb_*` tables in one atomic write transaction, streaming
-/// payload blocks with a bounded 16-block cache so migration RSS stays tiny.
-pub(crate) fn rebuild_all_aggregates(db: &Database, checkpoint_seq: u64) -> Result<()> {
-    // Pass 1 (read transaction): stream RUN_BY_TIME -> RUN_HEAD -> RUN_PAYLOAD into compact
-    // `StoredRunFact`s (no full Json trees held across runs).
+/// Full atomic rebuild of all `run_sb_*` tables in a standalone write transaction, stamping the
+/// verified trust checkpoint from inside that transaction.
+pub(crate) fn rebuild_all_aggregates(db: &Database) -> Result<()> {
+    let txn = crate::engine::begin(db)?;
+    let cp_seq = {
+        let cp_table = txn.open_table(crate::db::CHECKPOINT)?;
+        crate::db::read_checkpoint(&cp_table, "runs/ledger")?
+            .map(|c| c.last_sequence_id)
+            .unwrap_or(0)
+    };
+    rebuild_all_aggregates_in_write(&txn, cp_seq)?;
+    txn.commit()?;
+    Ok(())
+}
+
+/// Canonical full rebuild of all `run_sb_*` tables inside an existing `WriteTransaction`, streaming
+/// payload blocks with a bounded 16-block cache so RSS stays small.
+pub(crate) fn rebuild_all_aggregates_in_write(txn: &WriteTransaction, checkpoint_seq: u64) -> Result<()> {
+    // Pass 1: stream RUN_BY_TIME -> RUN_HEAD -> RUN_PAYLOAD into compact `StoredRunFact`s, and
+    // compute the canonical `(head_count, head_digest)` directly from `RUN_HEAD`.
     let mut facts: Vec<StoredRunFact> = Vec::new();
-    {
-        let read = db.begin_read()?;
-        let by_time = read.open_table(RUN_BY_TIME)?;
-        let heads = read.open_table(RUN_HEAD)?;
-        let payloads = read.open_table(RUN_PAYLOAD)?;
-        let dict_table = read.open_table(RUN_DICT)?;
+    let (head_count, head_digest) = {
+        let by_time = txn.open_table(RUN_BY_TIME)?;
+        let heads = txn.open_table(RUN_HEAD)?;
+        let payloads = txn.open_table(RUN_PAYLOAD)?;
+        let dict_table = txn.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
         let mut blocks: HashMap<(u32, u32), Vec<Vec<u8>>> = HashMap::new();
         for item in by_time.iter()? {
@@ -2831,7 +2335,8 @@ pub(crate) fn rebuild_all_aggregates(db: &Database, checkpoint_seq: u64) -> Resu
                 facts.push(fact);
             }
         }
-    }
+        compute_heads_stamp_from_table(&heads)?
+    };
 
     // Pass 2: resolve corrections over the correction-chain closure only (if any `corrects` exist).
     let mut refused_reasons: Vec<(u32, String)> = Vec::new();
@@ -2951,11 +2456,9 @@ pub(crate) fn rebuild_all_aggregates(db: &Database, checkpoint_seq: u64) -> Resu
         buckets.entry(key).or_default().fold_run(fact, &joined, own_ref);
     }
 
-    // Pass 4: single atomic write transaction committing all `run_sb_*` tables + metadata.
-    let txn = crate::engine::begin(db)?;
-    delete_tables(&txn)?;
-    create_tables(&txn)?;
-    // Collect any missing run_id strings that need interning before opening write tables.
+    // Pass 4: replace all `run_sb_*` tables + trust stamp atomically inside `txn`.
+    delete_tables(txn)?;
+    create_tables(txn)?;
     let mut missing_run_ids: BTreeSet<String> = BTreeSet::new();
     {
         let rev_tbl = txn.open_table(RUN_DICT_REV)?;
@@ -2973,7 +2476,7 @@ pub(crate) fn rebuild_all_aggregates(db: &Database, checkpoint_seq: u64) -> Resu
         }
     }
     for missing in missing_run_ids {
-        runs::intern_run_id(&txn, &missing)?;
+        runs::intern_run_id(txn, &missing)?;
     }
     let mut run_id_cache: HashMap<String, u32> = facts.iter().map(|f| (f.id.clone(), f.r)).collect();
     {
@@ -2995,10 +2498,9 @@ pub(crate) fn rebuild_all_aggregates(db: &Database, checkpoint_seq: u64) -> Resu
     }
     {
         let mut fact_tbl = txn.open_table(RUN_SB_FACT)?;
-        let mut mem_tbl = txn.open_table(RUN_SB_BUCKET_MEMBERS)?;
         let mut rev_tbl = txn.open_table(RUN_SB_REVIEWS_BY_TARGET)?;
         let mut corr_tbl = txn.open_table(RUN_SB_CORRECTIONS)?;
-        let mut path_tbl = txn.open_table(RUN_SB_PATH_HASH)?;
+        let mut path_tbl = txn.open_table(RUN_SB_PATH_RUNS)?;
         let mut wd_tbl = txn.open_table(RUN_SB_BY_WRITER_DAY)?;
         for fact in &facts {
             fact_tbl.insert(Key::new().u32(fact.r).as_slice(), fact.encode().as_slice())?;
@@ -3014,9 +2516,8 @@ pub(crate) fn rebuild_all_aggregates(db: &Database, checkpoint_seq: u64) -> Resu
                 rev_tbl.insert(Key::new().u32(tr).u32(fact.r).as_slice(), ())?;
             }
             if fact.effective {
-                let key = BucketKey::from_fact(fact);
-                mem_tbl.insert(key.member_key(fact.cursor_ms, fact.r).as_slice(), ())?;
-                path_tbl.insert(path_key(&fact.file).as_slice(), Key::new().u32(fact.r).as_slice())?;
+                let ph = path_key(&fact.file);
+                path_tbl.insert(path_run_key(&ph, fact.r).as_slice(), ())?;
             }
         }
     }
@@ -3032,10 +2533,13 @@ pub(crate) fn rebuild_all_aggregates(db: &Database, checkpoint_seq: u64) -> Resu
             bucket_tbl.insert(key.encode().as_slice(), agg.encode().as_slice())?;
         }
     }
-    meta_set(&txn, META_VERSION, &SB_AGG_VERSION.to_string())?;
-    meta_set(&txn, META_SEQ, &checkpoint_seq.to_string())?;
-    write_effective_count_tx(&txn, effective_count)?;
-    txn.commit()?;
+    let catalog = meta_get(txn, "catalog")?.unwrap_or_default();
+    meta_set(txn, META_VERSION, &SB_AGG_VERSION.to_string())?;
+    meta_set(txn, META_SEQ, &checkpoint_seq.to_string())?;
+    meta_set(txn, META_CATALOG, &catalog)?;
+    meta_set(txn, META_HEAD_COUNT, &head_count.to_string())?;
+    meta_set(txn, META_HEAD_DIGEST, &format_digest(head_digest))?;
+    write_effective_count_tx(txn, effective_count)?;
     Ok(())
 }
 
@@ -3112,6 +2616,7 @@ pub struct ProblemTrace {
 pub struct ScoreboardRead {
     pub generation: u64,
     pub catalog_hash: Option<String>,
+    pub write_seq: u64,
     pub effective_runs_total: u64,
     pub identity: Json,
     pub refused: Vec<StoreRefusedFile>,
@@ -3123,6 +2628,7 @@ pub struct ScoreboardRead {
 }
 
 /// Read the Scoreboard aggregates + metadata in one redb read transaction.
+/// Verifies the trust stamp before serving (rebuilding from `RUN_HEAD` on any mismatch).
 /// `extra_problems` are the pass problems (`(file, since)` pairs) so problem tracing completes in
 /// the exact same snapshot.
 pub fn read_for_scoreboard(
@@ -3132,7 +2638,14 @@ pub fn read_for_scoreboard(
     safe_paths: &HashMap<String, String>,
 ) -> Result<ScoreboardRead> {
     engine.with_db(|db| {
-        let read = db.begin_read()?;
+        let mut read = db.begin_read()?;
+        if !verify_trust_stamp_rd(&read)? {
+            drop(read);
+            rebuild_all_aggregates(db)?;
+            engine.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            read = db.begin_read()?;
+        }
+        let write_seq = engine.runs_write_seq();
         let identity = runs::identity_table_in_read(&read)?;
         let cp_table = read.open_table(crate::db::CHECKPOINT)?;
         let generation = crate::db::read_checkpoint(&cp_table, "runs/ledger")?
@@ -3150,9 +2663,9 @@ pub fn read_for_scoreboard(
         let dict_table = read.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
         let fact_table = read.open_table(RUN_SB_FACT)?;
-        let path_hash_table = read.open_table(RUN_SB_PATH_HASH)?;
+        let path_runs_table = read.open_table(RUN_SB_PATH_RUNS)?;
 
-        // 1. Read refused files and resolve any retained-run paths in O(1) via RUN_SB_PATH_HASH.
+        // 1. Read refused files and resolve any retained-run path via multi-run RUN_SB_PATH_RUNS.
         let mut refused = Vec::new();
         {
             let files_tbl = read.open_table(RUN_FILE)?;
@@ -3164,12 +2677,15 @@ pub fn read_for_scoreboard(
                 }
                 let row = runs::decode_file_row(bytes)?;
                 let hash_hex = hex(k.value());
-                let retained_file = if let Some(r_bytes) = path_hash_table.get(k.value())? {
-                    let r = be_u32(r_bytes.value(), 0);
-                    load_fact_rd(&fact_table, r)?.map(|f| f.file)
-                } else {
-                    None
-                };
+                let mut retained_file = None;
+                for r in runs_at_path_hash_rd(&path_runs_table, k.value())? {
+                    if let Some(fact) = load_fact_rd(&fact_table, r)?
+                        && fact.effective
+                    {
+                        retained_file = Some(fact.file);
+                        break;
+                    }
+                }
                 refused.push(StoreRefusedFile {
                     path_hash: hash_hex,
                     retained_file,
@@ -3288,7 +2804,7 @@ pub fn read_for_scoreboard(
             map.into_iter().collect()
         };
 
-        // 4. Trace any `writers/...` problems against matched runs and joined reviews.
+        // 4. Trace any `writers/...` problems against ALL matching effective runs and joined reviews.
         let mut all_writer_problems: Vec<(String, Option<i64>)> = Vec::new();
         for rf in &refused {
             let file = safe_paths
@@ -3371,8 +2887,7 @@ pub fn read_for_scoreboard(
             for (p_file, since) in &all_writer_problems {
                 if p_file.ends_with(".json") {
                     let hash = path_key(p_file);
-                    if let Some(r_bytes) = path_hash_table.get(hash.as_slice())? {
-                        let r = be_u32(r_bytes.value(), 0);
+                    for r in runs_at_path_hash_rd(&path_runs_table, hash.as_slice())? {
                         if let Some(fact) = load_fact_rd(&fact_table, r)?
                             && fact.file == *p_file
                         {
@@ -3417,6 +2932,7 @@ pub fn read_for_scoreboard(
         Ok(ScoreboardRead {
             generation,
             catalog_hash,
+            write_seq,
             effective_runs_total,
             identity,
             refused,
@@ -3432,7 +2948,13 @@ pub fn read_for_scoreboard(
 /// `run_sb_correction_refused` without touching `run_payload` or building `ResolvedHistory`.
 pub fn accepted_receipts(engine: &Engine) -> Result<(u64, Vec<AcceptedReceipt>)> {
     engine.with_db(|db| {
-        let read = db.begin_read()?;
+        let mut read = db.begin_read()?;
+        if !verify_trust_stamp_rd(&read)? {
+            drop(read);
+            rebuild_all_aggregates(db)?;
+            engine.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            read = db.begin_read()?;
+        }
         let cp_table = read.open_table(crate::db::CHECKPOINT)?;
         let generation = crate::db::read_checkpoint(&cp_table, "runs/ledger")?
             .map(|c| c.last_sequence_id)
