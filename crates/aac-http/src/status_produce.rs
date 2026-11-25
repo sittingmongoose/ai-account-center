@@ -766,7 +766,7 @@ impl Produce {
             let cards: Vec<(Json, String)> = reports_for_feed
                 .cards
                 .iter()
-                .map(|row| (row.doc.clone(), row.sha256.clone()))
+                .map(|row| ((*row.doc).clone(), row.sha256.clone()))
                 .collect();
             answers.feed(&cards)
         })
@@ -863,7 +863,7 @@ impl Produce {
                 .reports_rows
                 .cards
                 .iter()
-                .map(|row| (row.doc.clone(), row.sha256.clone()))
+                .map(|row| ((*row.doc).clone(), row.sha256.clone()))
                 .collect();
             let fresh = Arc::new(self.answers.feed(&cards));
             {
@@ -1237,7 +1237,7 @@ impl Produce {
             let cards: Vec<(Json, String)> = reports_rows
                 .cards
                 .iter()
-                .map(|row| (row.doc.clone(), row.sha256.clone()))
+                .map(|row| ((*row.doc).clone(), row.sha256.clone()))
                 .collect();
             let fresh = Arc::new(self.answers.feed(&cards));
             let mut state = self.state();
@@ -2062,7 +2062,7 @@ mod flicker_tests {
         reports.threads.push(SeenReport {
             file: format!("writers/{writer}/thread.json"),
             writer: writer.to_owned(),
-            doc: json!({
+            doc: std::sync::Arc::new(json!({
                 "schema": "agent-reports/thread@1",
                 "writer": writer,
                 "seq": 1,
@@ -2074,7 +2074,7 @@ mod flicker_tests {
                 "blockedOn": null,
                 "ttlSeconds": 3600,
                 "links": [],
-            }),
+            })),
             sha256: "a".repeat(64),
             first_seen_at: now,
             written_at_ms: clamp_i64(now),
@@ -2392,7 +2392,8 @@ mod flicker_tests {
         // An unprovable report containing an exact `Object.prototype` member name declines `shape`
         // once published (never silently masked by the earlier good generation).
         let mut bad_scan = scan_with_thread("vm.bad", now + 1000);
-        bad_scan.reports.threads[0].doc["summary"] = json!("constructor");
+        std::sync::Arc::make_mut(&mut bad_scan.reports.threads[0].doc)["summary"] =
+            json!("constructor");
         produce.after_scan(bad_scan).await;
         assert_eq!(
             produce

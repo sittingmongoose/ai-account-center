@@ -163,7 +163,7 @@ fn seen(value: &Json) -> SeenReport {
     SeenReport {
         file: value["file"].as_str().unwrap_or("").to_owned(),
         writer: value["writer"].as_str().unwrap_or("").to_owned(),
-        doc: value["doc"].clone(),
+        doc: std::sync::Arc::new(value["doc"].clone()),
         sha256: value["sha256"].as_str().unwrap_or("").to_owned(),
         first_seen_at: value["firstSeenAt"].as_u64().unwrap_or(0),
         written_at_ms: value["writtenAtMs"].as_i64().unwrap_or(0),

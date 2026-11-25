@@ -33,11 +33,13 @@ impl Default for Limits {
 }
 
 /// One accepted revision: the projected document, its digest, and when AAC first saw it.
+/// The document is shared (`Arc`): a scan's snapshot hands the same documents to every
+/// reader of the pass, so taking one clones no document tree.
 #[derive(Clone, Debug)]
 pub struct SeenReport {
     pub file: String,
     pub writer: String,
-    pub doc: Json,
+    pub doc: std::sync::Arc<Json>,
     pub sha256: String,
     pub first_seen_at: u64,
     pub written_at_ms: i64,
@@ -214,7 +216,7 @@ impl AgentReportsReader {
             file: rel.to_string(),
             writer: writer.to_string(),
             written_at_ms: aac_num::ecma::parse_instant(written_at).unwrap_or(0),
-            doc,
+            doc: std::sync::Arc::new(doc),
             sha256,
             first_seen_at: now,
             problem: None,
@@ -611,19 +613,29 @@ impl AgentReportsReader {
     }
 
     fn stat_boards(&mut self, fs: &dyn ShareFs) -> bool {
-        let (threads, tasks, _) = self.collect();
+        // Read the retained documents in place: collecting them first cloned every
+        // thread/tasks document on every scan just to read two fields.
         let mut paths: Vec<String> = Vec::new();
         let mut push = |path: &str| {
             if !paths.iter().any(|held| held == path) {
                 paths.push(path.to_string());
             }
         };
-        for row in &tasks {
-            if let Some(board) = row.doc["board"].as_str() {
+        // Two passes, tasks then threads, in entry order: the boards map's member order
+        // is part of the state text the parity fixtures pin byte for byte.
+        for entry in self.entries.values() {
+            if entry.kind == "tasks"
+                && let Some(row) = &entry.good
+                && let Some(board) = row.doc["board"].as_str()
+            {
                 push(board);
             }
         }
-        for row in &threads {
+        for entry in self.entries.values() {
+            if entry.kind != "thread" {
+                continue;
+            }
+            let Some(row) = &entry.good else { continue };
             if let Some(links) = row.doc["links"].as_array() {
                 for link in links {
                     if link["label"]
@@ -761,7 +773,7 @@ pub fn state_json(state: &AgentReportsState) -> Json {
                     let mut out = Map::new();
                     out.insert("file".to_string(), Json::from(row.file.clone()));
                     out.insert("writer".to_string(), Json::from(row.writer.clone()));
-                    out.insert("doc".to_string(), row.doc.clone());
+                    out.insert("doc".to_string(), (*row.doc).clone());
                     out.insert("sha256".to_string(), Json::from(row.sha256.clone()));
                     out.insert("firstSeenAt".to_string(), Json::from(row.first_seen_at));
                     out.insert("writtenAtMs".to_string(), Json::from(row.written_at_ms));
