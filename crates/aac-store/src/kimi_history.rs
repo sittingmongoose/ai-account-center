@@ -123,6 +123,7 @@ pub fn ingest_kimi_from_omp_scan(
         kind: KIND_BACKFILL,
         read_at: now_ms,
         complete: true,
+        unreadable_records: None,
         cause: None,
         now: now_ms,
     });

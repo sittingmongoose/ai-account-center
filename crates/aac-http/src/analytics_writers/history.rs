@@ -34,6 +34,13 @@ struct Source<'a> {
     epoch: u64,
 }
 
+/// The scanner's own unreadable-record count for a backfill answer, inside the contract bound.
+pub(super) fn unreadable_records_of(answer: &Value, tool: &str) -> Option<u64> {
+    answer["kinds"][tool]["unreadableRecords"]
+        .as_u64()
+        .filter(|count| (1..=contract::MAX_FILE_COUNT).contains(count))
+}
+
 pub(super) fn rescan_legacy_source(
     store: &Engine,
     host: &str,
@@ -92,6 +99,9 @@ impl<'a> Source<'a> {
         pricing: &dyn collect::Pricing,
     ) -> Result<bool> {
         let complete = cache.apply(self.tool, response, complete, LOOKBACK);
+        // The scanner's own unreadable-record count, bounded like the live writer's (r1 Medium):
+        // an incomplete backfill records it in scan history, beyond the live window.
+        let unreadable_records = unreadable_records_of(response, self.tool);
         if self.tool == "claude" {
             // A later computer can reveal the original of a mirror seen in this scan.
             analytics_cache::put(store, &self.checkpoint(), &cache.encode()?)?;
@@ -104,7 +114,7 @@ impl<'a> Source<'a> {
             )?;
             claude_mirrors::keep_historical_originals(store, &mut part)?;
             if !part.rows.is_empty() || !part.sessions.is_empty() {
-                self.publish(store, &part.rows, &part.sessions, false, now, pricing)?;
+                self.publish(store, &part.rows, &part.sessions, false, None, now, pricing)?;
             }
             if complete {
                 store.set_meta(&self.ready_marker(), &self.epoch.to_string())?;
@@ -112,7 +122,15 @@ impl<'a> Source<'a> {
             return Ok(complete);
         }
         let checkpoint = (!complete).then(|| cache.encode()).transpose()?;
-        self.publish(store, &cache.rows, &cache.srows, complete, now, pricing)?;
+        self.publish(
+            store,
+            &cache.rows,
+            &cache.srows,
+            complete,
+            unreadable_records,
+            now,
+            pricing,
+        )?;
         if let Some(checkpoint) = checkpoint {
             analytics_cache::put(store, &self.checkpoint(), &checkpoint)?;
         }
@@ -133,12 +151,14 @@ impl<'a> Source<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn publish(
         &self,
         store: &Engine,
         rows: &[Value],
         sessions: &[Value],
         complete: bool,
+        unreadable_records: Option<u64>,
         now: i64,
         pricing: &dyn collect::Pricing,
     ) -> Result<()> {
@@ -151,6 +171,7 @@ impl<'a> Source<'a> {
             kind: "backfill",
             read_at: now,
             complete,
+            unreadable_records,
             cause: None,
             now,
         });
@@ -230,7 +251,7 @@ impl Job {
         }
         for ((source, ready), part) in pending.into_iter().zip(parts) {
             super::claude_contributions::remember(store, &part, "backfill", now, pricing)?;
-            source.publish(store, &part.rows, &part.sessions, ready, now, pricing)?;
+            source.publish(store, &part.rows, &part.sessions, ready, None, now, pricing)?;
             if !ready {
                 self.attempts
                     .entry(source.key())
@@ -468,6 +489,7 @@ mod tests {
                             &cache.rows,
                             &cache.srows,
                             false,
+                            None,
                             now,
                             &ResolverPricing::new(home),
                         )
@@ -940,5 +962,158 @@ mod tests {
         let qwen = find("qwen3-max");
         assert_ne!(qwen.r, "kimi-code");
         assert_eq!((qwen.i, qwen.o), (80, 20));
+    }
+
+    /// r1 Medium: a mixed backfill beyond the 31-day live window keeps its unreadable-record
+    /// count: the backfill report carries it, an incomplete read is recorded in scan history
+    /// (aac-store gate test), and the backfill never becomes live state. One readable reply
+    /// and two unreadable ones, 40 days ago.
+    #[test]
+    fn mixed_backfill_beyond_the_live_window_keeps_the_unreadable_count() {
+        let dir = tempfile::tempdir().expect("fixture home");
+        let home = dir.path();
+        let now = aac_store::engine::now_ms() as i64;
+        let old = now - 40 * super::super::DAY;
+        let stamp = aac_num::ecma::to_iso_string(old).expect("reply date");
+        let db = home.join(".local/share/devin/cli/sessions.db");
+        std::fs::create_dir_all(db.parent().expect("fixture parent")).expect("fixture folder");
+        let conn = rusqlite::Connection::open(&db).expect("open fixture db");
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (id TEXT, working_directory TEXT, model TEXT);
+             CREATE TABLE IF NOT EXISTS message_nodes (session_id TEXT, chat_message TEXT, created_at INTEGER);",
+        )
+        .expect("fixture schema");
+        conn.execute(
+            "INSERT INTO sessions VALUES ('s1', '/tmp', 'devin-model')",
+            [],
+        )
+        .expect("fixture session");
+        for (id, metrics) in [
+            (
+                "m1",
+                json!({"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 0, "cache_creation_tokens": 0}),
+            ),
+            ("m2", json!({"output_tokens": 5})),
+            ("m3", json!({"output_tokens": 7})),
+        ] {
+            let message = json!({
+                "message_id": id,
+                "metadata": {
+                    "request_id": id,
+                    "created_at": stamp,
+                    "generation_model": "devin-model",
+                    "metrics": metrics,
+                },
+            })
+            .to_string();
+            conn.execute(
+                "INSERT INTO message_nodes VALUES ('s1', ?, ?)",
+                rusqlite::params![message, old / 1000],
+            )
+            .expect("fixture reply");
+        }
+        conn.close().expect("close fixture db");
+        let env = aac_usage::discover::Env::from([
+            ("HOME".to_string(), home.to_string_lossy().into_owned()),
+            ("PATH".to_string(), String::new()),
+        ]);
+        let answer = aac_usage::protocol::scan(
+            &aac_usage::protocol::parse_request(
+                json!({"kinds":["devin"],"minDateMs":0,"fingerprints":{}})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .expect("scanner request"),
+            home,
+            &env,
+        );
+        assert!(
+            super::super::valid_scan_answer(&answer, &["devin".to_owned()]),
+            "the backend answer is valid: {answer}"
+        );
+        assert_eq!(
+            super::super::scan_state(
+                &answer,
+                "devin",
+                super::super::has_readable_records(&answer, &scan_state::Cache::default(), "devin")
+            ),
+            ("scanning", None),
+            "a mixed scan is partial"
+        );
+        // The validated count rides the backfill report.
+        assert_eq!(unreadable_records_of(&answer, "devin"), Some(2));
+        let report = report::rows_report(&report::RowsReportArgs {
+            computer: "ubuntu",
+            tool: "devin",
+            data: &[json!({"hourly": []})],
+            kind: "backfill",
+            read_at: now,
+            complete: false,
+            unreadable_records: unreadable_records_of(&answer, "devin"),
+            cause: None,
+            now,
+        });
+        assert_eq!(report["counts"]["unreadableRecords"], json!(2));
+        assert!(
+            report::contract_reports(&[report])
+                .expect("contract report")
+                .len()
+                == 1
+        );
+        // Through the writer: incomplete, readable hour stored, live state untouched.
+        let engine = aac_store::ops::open_engine(
+            home.join("store").to_str().expect("fixture path"),
+            None,
+            None,
+        )
+        .expect("open activity store");
+        let source = Source {
+            computer: "ubuntu",
+            tool: "devin",
+            epoch: 0,
+        };
+        let pricing = ResolverPricing::new(home);
+        assert!(
+            !source
+                .accept(
+                    &engine,
+                    source.load(&engine).expect("checkpoint"),
+                    &answer,
+                    false,
+                    now,
+                    &pricing
+                )
+                .expect("commit historical Devin"),
+            "a mixed backfill is incomplete"
+        );
+        // Hour starts are stored: read a full day around the old reply.
+        let range = aac_store::ops::call(
+            &engine,
+            "activityRange",
+            &json!({"fromMs": old - 86_400_000, "toMs": old + 86_400_000}).to_string(),
+        )
+        .expect("stored activity range");
+        let tokens: u64 = range["rows"]
+            .as_array()
+            .expect("range rows")
+            .iter()
+            .map(|row| row[5].as_u64().expect("input tokens"))
+            .sum();
+        assert_eq!(tokens, 100, "the readable old hour is stored: {range}");
+        let sources = aac_store::ops::call(
+            &engine,
+            "activitySources",
+            &json!({"fromMs": now - 31 * super::super::DAY, "toMs": now}).to_string(),
+        )
+        .expect("activity sources");
+        let live = sources["sources"]
+            .as_array()
+            .expect("source rows")
+            .iter()
+            .find(|source| source["tool"] == "devin");
+        assert!(
+            live.is_none_or(|source| source["state"].is_null()),
+            "the backfill never becomes live state: {sources}"
+        );
     }
 }

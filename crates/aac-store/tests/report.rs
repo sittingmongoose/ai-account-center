@@ -86,6 +86,7 @@ fn rows_reports_match_the_ts_builder() {
             kind: input["kind"].as_str().expect("kind"),
             read_at: input["readAt"].as_i64().expect("readAt"),
             complete: input["complete"].as_bool().expect("complete"),
+            unreadable_records: None,
             cause: input["cause"].as_str(),
             now: input["now"].as_i64().expect("now"),
         };

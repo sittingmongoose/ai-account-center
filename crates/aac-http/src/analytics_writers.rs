@@ -397,6 +397,21 @@ fn has_readable_records(answer: &Value, cache: &scan_state::Cache, kind: &str) -
         .any(|row| row["k"].as_str() == Some(kind))
 }
 
+/// Whether the answer itself is incomplete: record-level read errors or a non-final read
+/// state. Such an answer is applied as incomplete, whatever the cache held before (r1 High).
+fn answer_incomplete(answer: &Value, kind: &str) -> bool {
+    let read = &answer["kinds"][kind];
+    read["unreadable"] == true
+        || ["readFailures", "unreadableFolders", "unreadableRecords"]
+            .iter()
+            .any(|key| read[key].as_u64().is_some_and(|count| count > 0))
+        || read["partial"] == true
+        || matches!(
+            read["state"].as_str(),
+            Some("pending" | "error" | "unreadable")
+        )
+}
+
 /// One tool of a valid scanner answer: its source state and the cached rows the writer reports.
 /// `flags` are (settled prints packed, source limited, experiment discovery still running).
 fn scanned_kind(
@@ -407,16 +422,30 @@ fn scanned_kind(
     (packed, limited, discovering): (bool, bool, bool),
     cache: &mut scan_state::Cache,
 ) -> (Value, Vec<Value>, Vec<Value>) {
-    let readable = has_readable_records(answer, cache, kind);
-    let (mut state, mut cause) = source_state(answer, kind, readable);
-    if limited {
-        (state, cause) = ("unreadable", Some("source_limit"));
-    } else if matches!(state, "ok" | "not_installed" | "no_usage") && discovering {
-        (state, cause) = ("scanning", None);
-    }
+    let settle = |readable: bool| -> (&'static str, Option<&'static str>) {
+        let (state, cause) = source_state(answer, kind, readable);
+        if limited {
+            ("unreadable", Some("source_limit"))
+        } else if matches!(state, "ok" | "not_installed" | "no_usage") && discovering {
+            ("scanning", None)
+        } else {
+            (state, cause)
+        }
+    };
+    let state = settle(has_readable_records(answer, cache, kind)).0;
     let complete = matches!(state, "ok" | "no_usage");
     let compatible = !packed || answer["kinds"][kind]["settledPacked"] == true;
-    if !cache.apply(kind, answer, complete && compatible, cutoff) && complete {
+    let applied = cache.apply(
+        kind,
+        answer,
+        complete && compatible && !answer_incomplete(answer, kind),
+        cutoff,
+    );
+    // Whether readable usage survives is decided from the cache as the apply left it: a
+    // changed file whose cached rows were replaced by none leaves nothing readable, so the
+    // scan is a read failure, never "Scanning" with "readable usage included" (r1 High).
+    let (mut state, mut cause) = settle(has_readable_records(answer, cache, kind));
+    if !applied && complete {
         (state, cause) = ("scanning", None);
     }
     let of_kind = |rows: &[Value]| -> Vec<Value> {
@@ -1783,6 +1812,93 @@ mod tests {
         assert_eq!(source["counts"]["unreadableRecords"], json!(2));
     }
 
+    /// r1 Medium: a file read failure with a readable cell keeps the failure; the
+    /// mixed-record note never appears on cause `read_failed`, even through the Store
+    /// (report `partial` -> grid `cached`) with the count attached.
+    #[test]
+    fn a_read_failure_never_gains_the_mixed_record_note() {
+        let dir = tempfile::tempdir().expect("fixture home");
+        let engine = Arc::new(
+            aac_store::ops::open_engine(dir.path().to_str().expect("fixture path"), None, None)
+                .expect("open activity store"),
+        );
+        let now = aac_store::engine::now_ms() as i64 - 60_000;
+        let data_at = now - 3_600_000;
+        let hour = aac_num::ecma::to_iso_string(data_at).expect("hour");
+        let answer = json!({
+            "version": 2, "reader": {"name": "aac-usage-scan"},
+            "rows": [{"f": "store.db", "k": "cursor", "p": "anthropic", "m": "claude-opus-4-5",
+                "h": hour[..13].replace('T', " ") + ":00", "i": 100, "o": 0, "n": 1}],
+            "srows": [],
+            "kinds": {"cursor": {"state":"ok", "partial":true, "unreadableRecords":2, "readFailures":1}},
+            "discovery": {"kinds": {"cursor": {
+                "freshness": {"state":"current", "newestDataMs":data_at,
+                    "newestActivityMs":data_at, "activityComplete":true}
+            }}}
+        });
+        assert!(valid_scan_answer(&answer, &["cursor".into()]));
+        assert_eq!(
+            scan_state(&answer, "cursor", true),
+            ("unreadable", Some("read_failed"))
+        );
+        let source = scan_source_state(
+            &answer,
+            "cursor",
+            "ubuntu",
+            now,
+            "unreadable",
+            Some("read_failed"),
+        );
+        let worker = collect::worker_from_scan(
+            answer["rows"].as_array().expect("scanner hourly rows"),
+            &[],
+            "cursor",
+            "ubuntu",
+            now,
+            &ResolverPricing::new(dir.path()),
+        );
+        let reports = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &[json!({"tool":"cursor", "host":"ubuntu", "data":worker})],
+            states: &[source],
+            window_from_ms: now - DAY,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &["cursor".into()].into_iter().collect(),
+        });
+        assert_eq!(
+            reports[0]["state"], "partial",
+            "verified cells stay partial"
+        );
+        assert_eq!(reports[0]["cause"], json!("read_failed"));
+        assert_eq!(reports[0]["counts"]["unreadableRecords"], json!(2));
+        let receipt = ingest_reports(&engine, &reports).expect("ingest scanner report");
+        assert_eq!(receipt["refused"], json!([]));
+        let activity = crate::analytics_route::compose(
+            engine.clone(),
+            dir.path(),
+            None,
+            &crate::analytics_live::Live::default(),
+            Some("range=7d&tz=UTC"),
+            now,
+        )
+        .expect("native Analytics answer")["activity"]
+            .clone();
+        assert_eq!(activity["sources"][0]["state"], "cached");
+        assert_eq!(activity["sources"][0]["cause"], json!("read_failed"));
+        let detail = activity["sources"][0]["detail"]
+            .as_str()
+            .expect("failure disclosure");
+        assert!(
+            detail.contains("could not be read"),
+            "the failure stands: {detail}"
+        );
+        assert!(
+            !detail.contains("records unreadable"),
+            "no mixed-record note on a read failure: {detail}"
+        );
+    }
+
     /// Every record unreadable and nothing readable: the scan is unreadable.
     #[test]
     fn unreadable_records_without_readable_rows_is_unreadable() {
@@ -1808,6 +1924,164 @@ mod tests {
         assert_eq!(
             scan_state(&answer, "cursor", true),
             ("unreadable", Some("read_failed"))
+        );
+    }
+
+    /// r1 High: the last readable row must not be evicted into a "Scanning" state. Two real
+    /// Devin scanner answers through the writer and the Store: the second replaces the only
+    /// cached reply with an unreadable one, so the source is unreadable/read_failed with the
+    /// failure detail, never "Scanning" with "readable usage included".
+    #[test]
+    fn a_replaced_last_readable_row_is_a_read_failure_not_scanning() {
+        let dir = tempfile::tempdir().expect("fixture home");
+        let engine = Arc::new(
+            aac_store::ops::open_engine(
+                dir.path().join("store").to_str().expect("fixture path"),
+                None,
+                None,
+            )
+            .expect("open activity store"),
+        );
+        let now = aac_store::engine::now_ms() as i64 - 60_000;
+        let data_at = now - 3_600_000;
+        let stamp = aac_num::ecma::to_iso_string(data_at).expect("reply date");
+        let db = dir.path().join(".local/share/devin/cli/sessions.db");
+        std::fs::create_dir_all(db.parent().expect("fixture parent")).expect("fixture folder");
+        let write = |metrics: &serde_json::Map<String, Value>| {
+            let conn = rusqlite::Connection::open(&db).expect("open fixture db");
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS sessions (id TEXT, working_directory TEXT, model TEXT);
+                 CREATE TABLE IF NOT EXISTS message_nodes (session_id TEXT, chat_message TEXT, created_at INTEGER);
+                 DELETE FROM message_nodes;",
+            )
+            .expect("fixture schema");
+            conn.execute(
+                "INSERT INTO sessions VALUES ('s1', '/tmp', 'devin-model')",
+                [],
+            )
+            .expect("fixture session");
+            let message = json!({
+                "message_id": "m1",
+                "metadata": {
+                    "request_id": "r1",
+                    "created_at": stamp,
+                    "generation_model": "devin-model",
+                    "metrics": metrics,
+                },
+            })
+            .to_string();
+            conn.execute(
+                "INSERT INTO message_nodes VALUES ('s1', ?, ?)",
+                rusqlite::params![message, data_at / 1000],
+            )
+            .expect("fixture reply");
+            conn.close().expect("close fixture db");
+        };
+        let readable = serde_json::from_value::<serde_json::Map<String, Value>>(json!({
+            "input_tokens": 100, "output_tokens": 10,
+            "cache_read_tokens": 0, "cache_creation_tokens": 0,
+        }))
+        .expect("readable metrics");
+        write(&readable);
+        let env = aac_usage::discover::Env::from([
+            (
+                "HOME".to_string(),
+                dir.path().to_string_lossy().into_owned(),
+            ),
+            ("PATH".to_string(), String::new()),
+        ]);
+        let scan = |cache: &scan_state::Cache| {
+            let mut prints = cache.fingerprints.clone();
+            prints.insert(
+                "_store".into(),
+                json!({"settledBefore":{}, "settledSlot": 1}),
+            );
+            aac_usage::protocol::scan(
+                &aac_usage::protocol::parse_request(
+                    json!({"kinds":["devin"],"minDateMs":now - DAY,"fingerprints":prints})
+                        .to_string()
+                        .as_bytes(),
+                )
+                .expect("scanner request"),
+                dir.path(),
+                &env,
+            )
+        };
+        let mut cache = scan_state::Cache::default();
+        let (first, first_rows, _) = scanned_kind(
+            &scan(&cache),
+            "devin",
+            "ubuntu",
+            (now, now - 31 * DAY),
+            (false, false, false),
+            &mut cache,
+        );
+        assert_eq!(first["state"], "ok", "the first scan reads the reply");
+        assert_eq!(first_rows.len(), 1, "the first scan caches one hourly row");
+        let unreadable = serde_json::from_value::<serde_json::Map<String, Value>>(json!({
+            "output_tokens": 10,
+        }))
+        .expect("unreadable metrics");
+        write(&unreadable);
+        let (second, second_rows, _) = scanned_kind(
+            &scan(&cache),
+            "devin",
+            "ubuntu",
+            (now, now - 31 * DAY),
+            (false, false, false),
+            &mut cache,
+        );
+        assert_eq!(
+            second["state"], "unreadable",
+            "no readable usage survives the rescan"
+        );
+        assert_eq!(second["cause"], json!("read_failed"));
+        assert!(
+            second_rows.is_empty(),
+            "the replaced reply leaves no hourly rows"
+        );
+        let worker = collect::worker_from_scan(
+            &second_rows,
+            &[],
+            "devin",
+            "ubuntu",
+            now,
+            &ResolverPricing::new(dir.path()),
+        );
+        let reports = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &[json!({"tool":"devin", "host":"ubuntu", "data":worker})],
+            states: &[second],
+            window_from_ms: now - DAY,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &["devin".into()].into_iter().collect(),
+        });
+        assert_eq!(reports[0]["state"], "unreadable");
+        let receipt = ingest_reports(&engine, &reports).expect("ingest scanner report");
+        assert_eq!(receipt["refused"], json!([]));
+        let activity = crate::analytics_route::compose(
+            engine.clone(),
+            dir.path(),
+            None,
+            &crate::analytics_live::Live::default(),
+            Some("range=7d&tz=UTC"),
+            now,
+        )
+        .expect("native Analytics answer")["activity"]
+            .clone();
+        assert_eq!(activity["sources"][0]["state"], "unreadable");
+        assert_eq!(activity["sources"][0]["cause"], json!("read_failed"));
+        let detail = activity["sources"][0]["detail"]
+            .as_str()
+            .expect("failure disclosure");
+        assert!(
+            detail.contains("could not be read"),
+            "the failure detail stands: {detail}"
+        );
+        assert!(
+            !detail.contains("readable usage included"),
+            "no readable-usage claim without usage: {detail}"
         );
     }
 

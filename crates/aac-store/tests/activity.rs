@@ -250,6 +250,29 @@ fn backfill_adds_old_history_and_never_lowers() {
     assert_eq!(call(&engine, "activityOldest", json!({})).as_u64(), Some(ancient));
 }
 
+/// r1 Medium: an incomplete backfill that carries unreadable-record evidence is recorded in
+/// scan history; one without evidence is not.
+#[test]
+fn incomplete_backfill_with_unreadable_evidence_is_scan_history() {
+    let dir = temp_dir("act-backfill-evidence");
+    let engine = open(&dir);
+    let read = T0 + 300 * D;
+    let ancient = read - 200 * D;
+    let cells = || vec![cell(ancient, Some(SESSION_B), "gpt-5", 70)];
+    let mut evidenced = report("ubuntu", read + 60_000, "partial", false, None, cells());
+    evidenced["kind"] = json!("backfill");
+    evidenced["counts"] = json!({"unreadableRecords": 2});
+    let first = ingest(&engine, vec![evidenced]);
+    assert_eq!(first["readsLogged"], 1, "the evidence is scan history");
+    let mut plain = report("ubuntu", read + 120_000, "partial", false, None, cells());
+    plain["kind"] = json!("backfill");
+    let second = ingest(&engine, vec![plain]);
+    assert_eq!(
+        second["readsLogged"], 0,
+        "an incomplete backfill without evidence stays out"
+    );
+}
+
 #[test]
 fn a_rebuild_from_the_logs_gives_the_same_tables() {
     let dir = temp_dir("act-replay");

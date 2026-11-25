@@ -278,6 +278,7 @@ impl Migration<'_> {
             kind: "import",
             read_at: self.now,
             complete: false,
+            unreadable_records: None,
             cause: Some("retired_cache"),
             now: self.now,
         })

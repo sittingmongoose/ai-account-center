@@ -1149,8 +1149,11 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
             .get("unreadableRecords")
             .and_then(Value::as_u64)
             .filter(|n| *n > 0);
+        // A read failure keeps its failure text alone (r1 Medium): the mixed-record note never
+        // appears on a cause of `read_failed`, even when verified cells already existed.
         if let Some(count) = unreadable_records
             && !matches!(state, "unreadable" | "scan_failed" | "unavailable")
+            && cause.and_then(Value::as_str) != Some("read_failed")
         {
             let records = if count == 1 {
                 "record unreadable"

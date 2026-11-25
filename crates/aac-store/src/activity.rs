@@ -1523,8 +1523,14 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
             let src = read_source(batch.txn, c, t)?;
             let log_it = match &src.read {
                 // a backfill read is history when it covers something; an import always is, so the
-                // scan history says where imported usage came from
-                _ if entry.read.kind.is_some() => entry.read.complete || entry.read.kind.as_deref() == Some("import"),
+                // scan history says where imported usage came from; an incomplete backfill with
+                // unreadable-record evidence is history too (r1 Medium: the count lives beyond
+                // the live window, where the live read cannot name it)
+                _ if entry.read.kind.is_some() => {
+                    entry.read.complete
+                        || entry.read.kind.as_deref() == Some("import")
+                        || entry.read.counts.as_ref().and_then(|c| c.unreadable_records).is_some()
+                }
                 None => true,
                 Some(old) => {
                     entry.read.at > old.at

@@ -411,6 +411,9 @@ pub struct RowsReportArgs<'a> {
     pub read_at: i64,
     /// Whether the read finished.
     pub complete: bool,
+    /// Records the reader could not read beside readable ones; kept with the report so the
+    /// page can name the evidence (r1 backfill).
+    pub unreadable_records: Option<u64>,
     /// A fixed cause word, when the read names one.
     pub cause: Option<&'a str>,
     /// The clock; read times never pass it.
@@ -469,8 +472,15 @@ pub fn rows_report(args: &RowsReportArgs<'_>) -> Value {
         },
     );
     report.insert("cause".into(), json!(args.cause));
-    if future_dated > 0 {
-        report.insert("counts".into(), json!({ "futureDated": future_dated }));
+    if future_dated > 0 || args.unreadable_records.is_some() {
+        let mut counts = Map::new();
+        if future_dated > 0 {
+            counts.insert("futureDated".into(), json!(future_dated));
+        }
+        if let Some(unreadable_records) = args.unreadable_records {
+            counts.insert("unreadableRecords".into(), json!(unreadable_records));
+        }
+        report.insert("counts".into(), Value::Object(counts));
     }
     report.insert("cells".into(), Value::Array(cells));
     report.insert("sessions".into(), Value::Array(sessions_of(&sessions, limit)));
