@@ -141,9 +141,8 @@
     },
     {
       "file": "crates/aac-agent/src/inventory.rs",
-      "kind": "HTTP",
+      "kind": "helper",
       "evidence": [
-        "HTTP",
         "helper"
       ]
     },
@@ -1003,10 +1002,9 @@
     },
     {
       "file": "crates/aac-http/src/status_produce.rs",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/status_run.rs",
@@ -1416,10 +1414,9 @@
     },
     {
       "file": "crates/aac-status/src/produce/browsers.rs",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-status/src/produce/facts.rs",
@@ -1697,9 +1694,8 @@
     },
     {
       "file": "crates/aac-status/tests/status_produce.rs",
-      "kind": "HTTP",
+      "kind": "table",
       "evidence": [
-        "HTTP",
         "table"
       ]
     },
@@ -3245,6 +3241,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/scripts/build-dashboard-native.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/scripts/build-status-native.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -3262,6 +3265,14 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/scripts/cargo-target-guard.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
     },
     {
       "file": "tests/unit/scripts/check-line-endings.test.ts",
@@ -4717,9 +4728,8 @@
     },
     {
       "file": "tests/unit/web-server/status/status-collectors.test.ts",
-      "kind": "HTTP",
+      "kind": "helper",
       "evidence": [
-        "HTTP",
         "helper"
       ]
     },
@@ -4977,10 +4987,9 @@
     },
     {
       "file": "web-dashboard/leptos/src/api.rs",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "web-dashboard/leptos/src/cards.rs",

@@ -30,7 +30,7 @@ for (const file of [...new Set(tracked)].sort()) {
   )
     evidence.push('safety');
   if (
-    /\.listen\(|startServer\(|createServer\(|supertest|fetch\(|browser-check|\.goto\(/.test(source)
+    /\.listen\(|startServer\(|createServer\(|supertest|fetch\(|browser-check (run|audit|diff|report)|\.goto\(/.test(source)
   )
     evidence.push('HTTP');
   if (
