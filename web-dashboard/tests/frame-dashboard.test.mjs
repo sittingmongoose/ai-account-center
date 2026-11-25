@@ -708,3 +708,129 @@ test('an older status read cannot erase a job adopted from a 409', async () => {
     assert.equal(ctl.toasts().filter((t) => t.title === 'App checks finished').length, 1);
   } finally { ctl.c.stop(); }
 });
+
+// The server broadcasts accounts-changed on /ws after an account write (a key saved in another browser, a visibility
+// save, a collection landed). Home must re-read and redraw on that hint, without a reload (home-stale-after-account-add).
+test('accounts-changed hint: one coalesced re-read redraws Home; a read in flight is superseded', async () => {
+  const { server: base } = fixtureServer();
+  let added = false;
+  let hold = null;
+  const server = async (method, path, body) => {
+    if (method === 'GET' && path.startsWith('/api/accounts/dashboard?')) {
+      if (hold) { const gate = hold; hold = null; await gate; }
+      const answer = await base(method, path, body);
+      if (added) answer.payload.accounts.push({ id: 'opencode-go:fourth', provider: 'opencode-go', email: 'fourth.opencode.go@example.invalid', status: 'ok', windows: [], capabilities: {} });
+      return answer;
+    }
+    return base(method, path, body);
+  };
+  const calls = [], emitted = [], timers = new Map();
+  let nextId = 1;
+  const c = createFrameDashboard({
+    fetch: async (path, options = {}) => { calls.push({ method: options.method || 'GET', path }); return respond(await server(options.method || 'GET', path, options.body ? JSON.parse(options.body) : null)); },
+    storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    location: { protocol: 'http:', hostname: '192.0.2.10', host: '192.0.2.10:3000', origin: ORIGIN },
+    setTimeout: (fn, ms) => { const id = nextId++; timers.set(id, { fn: () => { timers.delete(id); fn(); }, ms }); return id; },
+    clearTimeout: (id) => timers.delete(id),
+    setInterval: () => 0,
+    clearInterval: () => {},
+    emit: (key, json) => emitted.push({ key, json }),
+  });
+  const reads = () => calls.filter((x) => x.path.startsWith('/api/accounts/dashboard?')).length;
+  const last = (key) => emitted.findLast((e) => e.key === key)?.json;
+  try {
+    await c.start({ check: (await server('GET', '/api/auth/check')).payload });
+    await flush(16);
+    assert.ok(last('dashboard'), 'Home is drawn from the first read');
+    const before = reads();
+    added = true;
+    c.accountsChanged();
+    c.accountsChanged();
+    await flush();
+    assert.equal(reads(), before, 'the burst waits a moment before reading');
+    assert.equal(timers.size, 1, 'one coalescing timer for the whole burst');
+    for (const { fn } of timers.values()) fn();
+    await flush(16);
+    assert.equal(reads(), before + 1, 'one re-read for the burst');
+    assert.ok(last('dashboard').includes('opencode-go:fourth'), 'Home is pushed the view with the added account');
+    // a hint while a read is in flight: that read's answer predates the write, so it is dropped and the newer one draws
+    let release;
+    hold = new Promise((resolve) => { release = resolve; });
+    c.command('refresh');
+    await flush();
+    assert.equal(hold, null, 'the manual read is in flight (held)');
+    c.accountsChanged();
+    for (const { fn } of timers.values()) fn();
+    await flush(16);
+    assert.ok(last('dashboard').includes('opencode-go:fourth'), 'the superseding read draws the added account');
+    const pushed = emitted.filter((e) => e.key === 'dashboard').length;
+    release();
+    await flush(16);
+    assert.equal(emitted.filter((e) => e.key === 'dashboard').length, pushed, 'the superseded answer draws nothing');
+    assert.ok(last('dashboard').includes('opencode-go:fourth'), 'the newer view stays on screen');
+    c.accountsChanged();
+    assert.equal(timers.size, 1, 'a pending hint is armed');
+  } finally { c.stop(); }
+  assert.equal(timers.size, 0, 'stop cancels the pending hint');
+});
+
+test('the frame re-reads on the server\'s accounts-changed hint and closes its socket on stop', async () => {
+  const { server: base } = fixtureServer();
+  let added = false;
+  const server = async (method, path, body) => {
+    const answer = await base(method, path, body);
+    if (added && method === 'GET' && path.startsWith('/api/accounts/dashboard?')) answer.payload.accounts.push({ id: 'opencode-go:fourth', provider: 'opencode-go', email: 'fourth.opencode.go@example.invalid', status: 'ok', windows: [], capabilities: {} });
+    return answer;
+  };
+  const listeners = new Map(), sockets = [], calls = [];
+  class Socket {
+    constructor(url) { this.url = url; this.closed = false; sockets.push(this); }
+    close() { this.closed = true; }
+  }
+  const win = {
+    location: { protocol: 'http:', hostname: '192.0.2.10', host: '192.0.2.10:3000', origin: ORIGIN, search: '', href: '' },
+    navigator: { userAgent: 'Mac fixture' }, innerWidth: 1440,
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    fetch: async (path, options = {}) => { calls.push({ method: options.method || 'GET', path }); return respond(await server(options.method || 'GET', path, options.body ? JSON.parse(options.body) : null)); },
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
+    dispatchEvent: (event) => { for (const fn of listeners.get(event.type) || []) fn(event); },
+    addEventListener: (name, fn) => listeners.set(name, [...(listeners.get(name) || []), fn]),
+    removeEventListener: () => {},
+    history: { state: null, pushState() {}, back() {} },
+    matchMedia: () => ({ matches: false }),
+    WebSocket: Socket,
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
+  };
+  const views = [];
+  win.addEventListener('aac-dash', (e) => views.push(e.detail));
+  const ctl = installFrameDashboard(win);
+  const reads = () => calls.filter((x) => x.path.startsWith('/api/accounts/dashboard?')).length;
+  const last = (key) => views.findLast((v) => v.key === key)?.json;
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    await ctl.start({ check: (await server('GET', '/api/auth/check')).payload });
+    await flush(16);
+    assert.equal(sockets.length, 1, 'the frame opens one hint socket');
+    assert.equal(sockets[0].url, 'ws://192.0.2.10:3000/ws');
+    sockets[0].onopen();
+    const before = reads();
+    sockets[0].onmessage({ data: JSON.stringify({ type: 'status-changed' }) });
+    sockets[0].onmessage({ data: '{invalid' });
+    await wait(350);
+    assert.equal(reads(), before, 'other hints and unreadable messages read nothing');
+    added = true;
+    sockets[0].onmessage({ data: JSON.stringify({ type: 'accounts-changed' }) });
+    await wait(400); await flush(16);
+    assert.equal(reads(), before + 1, 'the hint re-reads the dashboard');
+    assert.ok(last('dashboard').includes('opencode-go:fourth'), 'Home draws the added account without a reload');
+    // a dropped socket reconnects and reads through the hints it missed
+    sockets[0].closed = true; sockets[0].onclose(); // the browser dropped it
+    await wait(1200);
+    assert.equal(sockets.length, 2, 'the socket reconnects');
+    sockets[1].onopen();
+    await wait(400); await flush(16);
+    assert.ok(reads() > before + 1, 'a reconnect reads through missed hints');
+  } finally { ctl.stop(); }
+  assert.ok(sockets.every((s) => s.closed), 'stop closes the hint socket');
+});

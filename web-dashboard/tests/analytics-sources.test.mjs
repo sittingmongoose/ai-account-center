@@ -232,18 +232,10 @@ test('a tool a scan has not reached says Scanning, and the page holds until the 
   assert.match(cell.tip, /The scan ran out of time before it reached this tool; the next scan continues\./);
   // scanning cells are flagged in the label, and never counted as failures
   assert.equal(inc.label, 'Included usage · 18 scanning');
-  // a cold answer with no numbers yet stays behind the loading screen, with per-host progress
+  // a cold answer with no numbers yet stays behind the loading screen — a plain splash, no computer list
   const cold = usageView(payload({ status: 'loading', totals: null, byHour: [], models: [], providers: [], refreshing: true, refreshingRemote: ['mac', 'windows', 'nas1'], sources: scanning }), state(), { now });
   assert.equal(cold.ready, false);
-  assert.deepEqual(cold.loading.hosts, [
-    { name: 'Ubuntu', detail: 'read' },
-    { name: 'Mac', detail: '0 of 6 tools · scanning now' },
-    { name: 'Windows', detail: '0 of 6 tools · scanning now' },
-    { name: 'Nas1', detail: '0 of 6 tools · scanning now' },
-    { name: 'Alexis PC', detail: '0 of 6 tools · scanning now' },
-    { name: 'Odroid', detail: '0 of 6 tools · scanning now' },
-    { name: '1070ti', detail: '0 of 6 tools · scanning now' },
-  ]);
+  assert.equal(cold.loading, undefined, 'the view carries no per-computer loading rows');
   assert.equal(cold.head.updating, true);
   // the same cells with numbers in hand draw the page and update calmly
   const warm = usageView(payload({ status: 'cached', refreshing: true, refreshingRemote: ['nas1', 'mac', 'windows'], sources: scanning }), state(), { now });

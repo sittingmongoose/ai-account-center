@@ -91,6 +91,7 @@ export function createFrameDashboard({
   let updateDoneTimer = 0;
   let refreshing = null;
   let refreshGeneration = 0;
+  let accountsHintTimer = 0;
   let username = '';
   let refreshIntervalSeconds = 60;
   let refreshSettingsKnown = false;
@@ -644,6 +645,16 @@ export function createFrameDashboard({
     back,
     /** The window came back on screen or online: Update apps reads its state (bridge.js focus listener). */
     focused() { if (authenticated) void updateStatus(); },
+    /** The server's accounts-changed hint (/ws): accounts were written (a key saved in another browser, a visibility
+     * save, a collection landed); re-read so Home draws them without a reload. A burst coalesces into one read; a read
+     * in flight is superseded — its answer predates the write. */
+    accountsChanged() {
+      if (gone() || !authenticated || accountsHintTimer) return;
+      accountsHintTimer = schedule(() => {
+        accountsHintTimer = 0;
+        void refresh(false, true);
+      }, 250);
+    },
     online(value) { setOnline(value); },
     /** The install prompt was captured or used up, or the display mode changed: the "Home screen app" row follows. */
     installChanged() { if (!stopped) renderAccounts(); },
@@ -660,6 +671,8 @@ export function createFrameDashboard({
       if (usageTimer) cancelEvery(usageTimer);
       usageTimer = 0;
       cancelLater(updateDoneTimer);
+      cancelLater(accountsHintTimer);
+      accountsHintTimer = 0;
     },
     /** For tests and the kit. */
     state() {
@@ -763,6 +776,32 @@ export function installFrameDashboard(win = globalThis) {
   // the page captured or lost the install prompt (leptos/index.html), or the app was installed while open
   win.addEventListener?.('aac-install', onInstall);
   try { standaloneQuery?.addEventListener?.('change', onInstall); } catch {}
+  // ---- accounts-changed hints (/ws): the server says the accounts changed; the dashboard re-reads so Home draws
+  // them without a reload. The socket reconnects with a growing delay, up to a minute; a reconnect reads through
+  // any hint it missed.
+  let hintSocket = null, hintRetry = 0, hintDelay = 1_000, hintOpened = false, hintsStopped = false;
+  const connectHints = () => {
+    if (hintsStopped) return;
+    let socket;
+    try { socket = new win.WebSocket(`${win.location.protocol === 'https:' ? 'wss' : 'ws'}://${win.location.host}/ws`); }
+    catch { hintRetry = win.setTimeout(connectHints, hintDelay); hintDelay = Math.min(hintDelay * 2, 60_000); return; }
+    hintSocket = socket;
+    socket.onopen = () => {
+      hintDelay = 1_000;
+      if (hintOpened) controller.accountsChanged();
+      hintOpened = true;
+    };
+    socket.onmessage = (event) => {
+      try { if (JSON.parse(event.data)?.type === 'accounts-changed') controller.accountsChanged(); } catch { /* Not an account hint. */ }
+    };
+    socket.onclose = () => {
+      hintSocket = null;
+      if (hintsStopped) return;
+      hintRetry = win.setTimeout(connectHints, hintDelay);
+      hintDelay = Math.min(hintDelay * 2, 60_000);
+    };
+  };
+  if (typeof win.WebSocket === 'function') connectHints();
   // It starts from the frame session's check and user (frame-session.mjs): they were read to sign in.
   const start = controller.start;
   controller.start = (options = {}) => {
@@ -782,6 +821,9 @@ export function installFrameDashboard(win = globalThis) {
     win.removeEventListener?.('offline', onOffline);
     win.removeEventListener?.('aac-install', onInstall);
     try { standaloneQuery?.removeEventListener?.('change', onInstall); } catch {}
+    hintsStopped = true;
+    win.clearTimeout?.(hintRetry);
+    if (hintSocket) { hintSocket.onopen = hintSocket.onmessage = hintSocket.onclose = null; hintSocket.close(); }
     stop();
   };
   controller.id = ++installs;

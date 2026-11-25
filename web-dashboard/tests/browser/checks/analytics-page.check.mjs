@@ -529,4 +529,34 @@ export const tests = {
 			});
 		}
 	},
+
+	// analytics-loading-host-list: while the first read is under way the page shows its plain splash only —
+	// no per-computer "queued" lines under the spinner.
+	async 'analytics: the loading splash is plain, with no computer list'(t) {
+		for (const f of [
+			{ name: 'desktop', width: 1440, height: 900 },
+			{ name: 'iphone', width: 402, height: 874, mobile: true, safe: '0,0,34,0' },
+		]) {
+			await t.step(f.name, async () => {
+				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: !!f.mobile, hasTouch: !!f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+				await t.app.signIn();
+				// a first visit (nothing kept) whose data reads are all held: the page can only show its loading state
+				const { release } = await holdData(t, scanningEverywhere);
+				await t.goto(`/app/analytics?e2e${f.safe ? `&safe=${f.safe}` : ''}`, { settleMs: 300 });
+				await t.until('the loading splash is on screen, the boot splash gone', () => !!document.querySelector('.route:not([hidden]) .ax-loading .page-splash') && !document.querySelector('.boot-splash') && !document.querySelector('.signin-page'), null, { timeout: 30000, hard: true });
+				await t.page.waitForTimeout(400);
+				if (t.args.shots) await t.shot(`analytics-loading-${f.name}`, `${f.name}: the Analytics loading state`);
+				const loading = await t.page.evaluate(() => ({
+					hostRows: document.querySelectorAll('.ax-loading .ld-host').length,
+					text: document.querySelector('.ax-loading')?.textContent ?? '',
+					bar: !!document.querySelector('.ax-loading .splash-bar'),
+				}));
+				await t.equal('no computer rows under the spinner', loading.hostRows, 0);
+				await t.check('the splash names no computer', !/Ubuntu|Mac|Windows|Nas1|Alexis|Odroid|1070ti|queued/.test(loading.text), loading.text);
+				await t.check('the plain splash keeps its bar', loading.bar);
+				release();
+				await t.until('the numbers land and the splash goes', () => document.querySelectorAll('.ax-page .kpi').length === 5 && !document.querySelector('.ax-loading'), null, { timeout: 30000, hard: true });
+			});
+		}
+	},
 };

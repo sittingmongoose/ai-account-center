@@ -1756,7 +1756,6 @@ export function usageView(payload, state, opts = {}) {
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
     ready,
-    loading: { hosts: progress.map(p => ({ name: p.name, detail: p.detail })) },
     head: headOf(A, R, state, now, zone, progress),
     scope: [
       { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, grouped by the provider that served it: Claude Code, Codex, Muse Code and Antigravity are their own provider, OMP and zcode record the route of every call, and generic JSONL logs count under the provider their model names, else Other. A route no provider claims is under Other. Tokens by provider, under the totals, says how much each served; pick one to see its usage by model.' },

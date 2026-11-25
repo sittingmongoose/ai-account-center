@@ -41,12 +41,11 @@ pub fn dismiss_boot(fade: bool) {
         .set_timeout_with_callback_and_timeout_and_arguments_0(remove.unchecked_ref(), FADE_MS);
 }
 
-fn splash_body(name: String, more: Option<Children>) -> impl IntoView {
+fn splash_body(name: String) -> impl IntoView {
     view! {
         <div class="splash-in">
             <div class="splash-brand"><Logo/><span class="brand-name">{name}</span></div>
             <div class="splash-bar" aria-hidden="true"><i></i></div>
-            {more.map(|more| view! { <div class="splash-more">{more()}</div> })}
         </div>
     }
 }
@@ -57,21 +56,17 @@ fn splash_body(name: String, more: Option<Children>) -> impl IntoView {
 pub fn Splash() -> impl IntoView {
     view! {
         <div class="boot-splash" role="status" aria-label="AI Account Center is loading">
-            {splash_body("AI Account Center".into(), None)}
+            {splash_body("AI Account Center".into())}
         </div>
     }
 }
 
-/// A page's first read: the same splash in the page's content area, named after the page. `children`, when given, is
-/// a quiet line under the bar (Analytics: how far each computer's scan is).
+/// A page's first read: the same splash in the page's content area, named after the page.
 #[component]
-pub fn PageSplash(
-    name: &'static str,
-    #[prop(optional)] children: Option<Children>,
-) -> impl IntoView {
+pub fn PageSplash(name: &'static str) -> impl IntoView {
     view! {
         <div class="page-splash" role="status" aria-label=format!("Loading {name}")>
-            {splash_body(name.into(), children)}
+            {splash_body(name.into())}
         </div>
     }
 }

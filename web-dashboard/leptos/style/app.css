@@ -1730,14 +1730,6 @@ body { min-height: 100dvh; }
 @media (prefers-reduced-motion: reduce) { .ax-fresh-spin, .ax-fresh-bar, .ax-stale .kpi-val, .ax-stale .prov-item b { animation: none; } }
 @media (max-width: 599.98px) { .ax-fresh { min-height: 28px; margin: -6px 0 10px; padding: 4px 10px 5px; font-size: 12px; gap: 6px; } }
 
-/* loading: one row per computer over calm placeholders */
-.ax-loading .ax-body { display: grid; gap: 8px; }
-.ld-host { display: flex; gap: 8px; font-size: 12.5px; }
-.skel { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--paper-3) 0%, var(--paper-2) 50%, var(--paper-3) 100%); background-size: 200% 100%;
-  animation: skel 1.6s ease-in-out infinite; }
-.skel.tall { height: 64px; }
-@keyframes skel { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-
 /* KPIs and tokens by provider */
 .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; margin-bottom: 10px; }
 .kpi { padding: 15px 18px 16px; min-width: 0; }
@@ -2127,7 +2119,7 @@ button.qh-row:hover .qh-line { stroke-width: 2.2px; }
   button.qh-row, .focus { padding-left: 12px; padding-right: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ax-card, .trend-data.draw-on, .cbm-fill, .tk-bar i, .donut-svg .arcs, .gauge .gauge-val, .db-stack, .ax-layer, .focus-box .draw-on-svg, .pop, .skel { animation: none !important; }
+  .ax-card, .trend-data.draw-on, .cbm-fill, .tk-bar i, .donut-svg .arcs, .gauge .gauge-val, .db-stack, .ax-layer, .focus-box .draw-on-svg, .pop { animation: none !important; }
   .xh, .xdot, .tr-total, .tr-split, .db-stack, .cbm-fill { transition: none !important; }
 }
 
@@ -2396,9 +2388,6 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .page-splash { display: grid; place-items: center; min-height: min(56vh, 520px); padding: 24px 16px; }
 .page-splash .splash-brand .logo { width: 28px; height: 28px; }
 .page-splash .splash-brand .brand-name { font-size: 17px; }
-.splash-more { max-width: 34em; text-align: center; color: var(--ink-3); font-size: var(--fs-small); }
-.ld-hosts { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
-.ld-hosts .ld-host b { color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
 .signin-page { min-height: 100dvh; display: grid; place-items: center; padding: calc(var(--safe-top) + 24px) calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 16px); }
 .signin-card { width: min(400px, 100%); padding: 24px; display: grid; gap: 14px; }
 /* In the rail's chrome the strip holds the clock and the signal ring (the folded Duo), so the card keeps clear of it. */

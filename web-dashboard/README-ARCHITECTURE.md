@@ -68,6 +68,10 @@ reading in a page, never add or average across accounts, never turn a missing va
   `accounts`, `accounts-strength`, `details`, `update`, `busy`, `refresh-interval`, `chrome`;
   `dash.rs` keeps the latest of each as a signal) and `aac-analytics` (`analytics/feed.rs`). A page draws its
   loading state until the first view, never zeros.
+- **Live re-reads**: the dashboard controller listens for the server's `accounts-changed` hint on `/ws`
+  (`installFrameDashboard`): an account write in any browser triggers one coalesced re-read, so Home redraws
+  without a reload; the interval read remains the safety net. Status keeps its own `status-changed` socket
+  (`live.rs`), and reset claims theirs (`reset-live.mjs`).
 - **Intent comes back through the controller**: a page calls `aacFrameDashboard.act(kind, value)` or
   `aacFrameAnalytics.act(kind, value)` (through `dash.rs` and `feed.rs`, with the controller's id, so a page only
   drives the controller it installed). Only the kinds in `PAGE_ACTIONS` (`public/frame-seam.mjs`) run: Details and
@@ -206,9 +210,10 @@ Motion: sections play their first view when they first scroll on screen. On a ra
 controller sends the shape to end on with `analytics-motion: morph`, and the page glides the trend from what is on
 screen (`leptos/src/analytics/trend.rs`, 520 ms, the same easing as before); count-ups land on the exact text the
 view gives, and nothing loops while idle. Analytics arms only on a useful answer (`usage.ready`, FW4-N10): a cold,
-still-converging response stays behind the loading screen, which names each computer's scan progress ("Mac: 0 of 5
-tools · scanning now", `hostProgress`); once armed, background updates show one calm Updating line in the header,
-poll answers render as morphs, and the sources-grid cells are keyed by host, so a state flip updates in place.
+still-converging response stays behind the loading screen — the page's plain splash, with no computer list; once
+armed, background updates show one calm Updating line in the header (the scan progress, `hostProgress`, lives in
+that line's tip), poll answers render as morphs, and the sources-grid cells are keyed by host, so a state flip
+updates in place.
 
 ### Accounts & Settings v3
 

@@ -261,61 +261,12 @@ fn FreshStrip() -> impl IntoView {
     }
 }
 
-/// The registered computers as the page names them, in registry order (the same table the server reads).
-fn computer_labels() -> &'static [String] {
-    static LABELS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-        let registry: serde_json::Value =
-            serde_json::from_str(include_str!("../../../public/computers.json"))
-                .expect("packaged computer registry");
-        registry
-            .as_object()
-            .map(|rows| {
-                rows.values()
-                    .filter_map(|row| row["label"].as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
-    });
-    &LABELS
-}
-
-/// "Ubuntu", "Ubuntu and Mac", "Ubuntu, Mac and Windows": the page's list wording.
-fn listed(names: &[String]) -> String {
-    match names {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
-}
-
-/// Before the first useful answer: the page's splash, with one quiet line per computer saying how far its scan is.
+/// Before the first useful answer: the page's plain splash. No computer list: the numbers appear as soon as they land.
 #[component]
 fn LoadingCards() -> impl IntoView {
-    let ax = expect_context::<Ax>();
-    let hosts = ax.part(|v| v.usage.loading.hosts.clone());
-    let rows = move || {
-        let list = hosts.get();
-        if list.is_empty() {
-            computer_labels()
-                .iter()
-                .map(|n| LoadHost {
-                    name: n.clone().into(),
-                    detail: "queued".into(),
-                })
-                .collect()
-        } else {
-            list
-        }
-    };
     view! {
-        <div class="ax-loading" title=format!("Reading usage logs on {}. The page appears as soon as the first numbers land.", listed(computer_labels()))>
-            <PageSplash name="Analytics">
-                <div class="ld-hosts">
-                    {move || rows().into_iter().map(|h| view! {
-                        <span class="ld-host"><b>{h.name}</b>" "<span class="tnum">{h.detail}</span></span>
-                    }).collect_view()}
-                </div>
-            </PageSplash>
+        <div class="ax-loading">
+            <PageSplash name="Analytics"/>
         </div>
     }
 }
@@ -406,30 +357,6 @@ mod tests {
         let v = parse("{\"version\":7,\"usage\":{\"kpis\":null,\"head\":{\"read\":null}},\"agenda\":{\"a\":null}}")
             .expect("nulls tolerated");
         assert!(v.usage.kpis.is_empty() && v.usage.head.read.is_empty() && v.agenda.a.is_empty());
-    }
-
-    #[test]
-    fn the_loading_fallback_names_every_registered_computer() {
-        let labels = computer_labels();
-        assert!(labels.len() >= 7, "{labels:?}");
-        for label in [
-            "Ubuntu",
-            "Mac",
-            "Windows",
-            "Nas1",
-            "Alexis PC",
-            "Odroid",
-            "1070ti",
-        ] {
-            assert!(
-                labels.iter().any(|name| name == label),
-                "{label}: {labels:?}"
-            );
-        }
-        assert_eq!(
-            listed(&labels[..2]),
-            format!("{} and {}", labels[0], labels[1])
-        );
     }
 
     #[test]

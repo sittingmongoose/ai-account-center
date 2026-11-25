@@ -55,7 +55,6 @@ pub struct Usage {
     pub status_note: String,
     pub cached: bool,
     pub ready: bool,
-    pub loading: Loading,
     pub head: Head,
     #[serde(deserialize_with = "nullable")]
     pub scope: Vec<ScopeLine>,
@@ -75,22 +74,6 @@ pub struct Usage {
     pub heat: Heat,
     pub daily: Daily,
     pub calendar: Calendar,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct Loading {
-    #[serde(deserialize_with = "nullable")]
-    pub hosts: Vec<LoadHost>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct LoadHost {
-    #[serde(deserialize_with = "nullable")]
-    pub name: String,
-    #[serde(deserialize_with = "nullable")]
-    pub detail: String,
 }
 
 /// The header line (also sent alone between refreshes as `analytics-head`, so "read 2m ago" ticks).

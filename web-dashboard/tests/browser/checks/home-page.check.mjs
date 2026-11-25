@@ -325,4 +325,53 @@ export const tests = {
 			await t.audit(`home ${f.name}`);
 		}
 	},
+
+	// home-stale-after-account-add: a key saved in another browser reaches the server, which broadcasts
+	// accounts-changed on /ws; Home must redraw on the hint alone, with no reload and no wait for the interval read.
+	async 'home: an accounts-changed hint redraws Home without a reload'(t) {
+		for (const f of [
+			{ name: 'desktop', width: 1440, height: 900 },
+			{ name: 'iphone', width: 402, height: 874, mobile: true, safe: '0,0,34,0' },
+		]) {
+			await t.step(f.name, async () => {
+				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: !!f.mobile, hasTouch: !!f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+				await t.app.signIn();
+				const sockets = [];
+				await t.page.routeWebSocket('**/ws', (ws) => { sockets.push(ws); });
+				await t.app.stub('/api/accounts/dashboard', homeAccounts());
+				await t.app.stub('/api/claude/desktop-profiles', homeProfiles());
+				await t.goto(`/app/home?e2e${f.safe ? `&safe=${f.safe}` : ''}`, { settleMs: 300 });
+				await t.until('Home drawn from the dashboard\'s view', () => document.querySelectorAll('.home .hrow').length >= 8 && document.querySelectorAll('.hcard').length >= 6, null, { timeout: 60000, hard: true });
+				await t.page.evaluate(() => { window.__aacNoReload = 1; });
+				const cardsBefore = await t.page.evaluate(() => document.querySelectorAll('.hcard').length);
+				// the added OpenCode Go key: the next dashboard answer carries it, and the server sends the hint
+				const next = homeAccounts();
+				next.accounts.push({
+					id: 'opencode-go:two', provider: 'opencode-go', providerLabel: 'opencode-go', label: 'second.opencode.go@example.invalid',
+					email: 'second.opencode.go@example.invalid', plan: 'go', platform: 'ubuntu', host: 'ubuntu', source: 'fixture', status: 'ok',
+					message: null, fetchedAt: new Date().toISOString(), sampledAt: new Date().toISOString(), isActive: false, hidden: false, trayHidden: false,
+					windows: [{ key: 'monthly_spend', label: 'Monthly spend', kind: 'spend', unit: 'USD', used: 1.2, limit: 10, resetAt: new Date(Date.now() + 15000 * 60_000).toISOString(), usedPercent: null, remainingPercent: null, windowMinutes: null }],
+					capabilities: {}, signInNeeded: [],
+				});
+				await t.app.stub('/api/accounts/dashboard', next);
+				await t.page.waitForTimeout(300);
+				await t.check('the hint socket is connected', sockets.length >= 1, `${sockets.length} sockets`);
+				for (const ws of sockets) ws.send(JSON.stringify({ type: 'accounts-changed' }));
+				// the coalesced re-read lands well inside this wait; the interval read (60 s) cannot have run
+				await t.page.waitForTimeout(1500);
+				// show the Other providers cards, where the added OpenCode Go key lands
+				await t.page.evaluate(() => { const cards = document.querySelectorAll('.hcard'); cards[cards.length - 1]?.scrollIntoView({ block: 'center' }); });
+				await t.page.waitForTimeout(200);
+				if (t.args.shots) await t.shot(`home-hint-${f.name}`, `${f.name}: Home after the accounts-changed hint`);
+				let redrawn = true;
+				try { await t.page.waitForFunction(() => [...document.querySelectorAll('.hcard')].some((c) => c.textContent.includes('second.opencode.go@example.invalid')), null, { timeout: 8000 }); } catch { redrawn = false; }
+				await t.check('Home redraws with the added account', redrawn);
+				if (redrawn) {
+					await t.equal('one more card, no others lost', await t.page.evaluate(() => document.querySelectorAll('.hcard').length), cardsBefore + 1);
+					await t.check('the page never reloaded', await t.page.evaluate(() => window.__aacNoReload === 1));
+					await t.audit(`home hint ${f.name}`);
+				}
+			});
+		}
+	},
 };
