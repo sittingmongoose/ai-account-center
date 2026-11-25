@@ -746,8 +746,8 @@ impl Produce {
         self.after_scan_shared(
             Arc::new(scan.reports),
             Arc::new(scan.docs),
-            scan.quota,
-            scan.registry,
+            Arc::new(scan.quota),
+            Arc::new(scan.registry),
             true,
         )
         .await;
@@ -757,8 +757,8 @@ impl Produce {
         self: &Arc<Self>,
         reports: Arc<AgentReportsState>,
         docs: Arc<StatusDocsState>,
-        quota: Json,
-        registry: Json,
+        quota: Arc<Json>,
+        registry: Arc<Json>,
         emit_hint: bool,
     ) {
         let answers = Arc::clone(&self.answers);
@@ -777,8 +777,8 @@ impl Produce {
             let mut state = self.state();
             state.reports_rows = reports;
             state.docs_rows = docs;
-            state.quota = Arc::new(quota);
-            state.registry = Arc::new(registry);
+            state.quota = quota;
+            state.registry = registry;
             state.answers = Arc::new(feed);
             state.answers_dirty = false;
             state.pinned_dirty = true;
@@ -2650,5 +2650,36 @@ mod low_tests {
             text.contains(&format!("\"generatedAt\":\"{follower_iso}\"")),
             "L3: a past follower must get its own generatedAt, not the leader's future instant ({leader_iso}): {text}"
         );
+    }
+
+    /// The producer holds the one shared copy of each scan input: the very Arcs the scan handed
+    /// it, not a second wrapped or parsed copy of the same quota/registry JSON.
+    #[tokio::test]
+    async fn after_scan_shared_holds_the_one_shared_copy() {
+        let (_scratch, ccs, reports) = scratch();
+        let produce = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let reports_rows = Arc::new(empty_reports());
+        let docs_rows = Arc::new(StatusDocsState {
+            state: "missing",
+            scanned_at: None,
+            docs: Vec::new(),
+            problems: Vec::new(),
+        });
+        let quota = Arc::new(json!({"state": "ok"}));
+        let registry = Arc::new(json!({"data": null, "asOf": null, "error": null}));
+        produce
+            .after_scan_shared(
+                Arc::clone(&reports_rows),
+                Arc::clone(&docs_rows),
+                Arc::clone(&quota),
+                Arc::clone(&registry),
+                false,
+            )
+            .await;
+        let state = produce.state();
+        assert!(Arc::ptr_eq(&state.reports_rows, &reports_rows));
+        assert!(Arc::ptr_eq(&state.docs_rows, &docs_rows));
+        assert!(Arc::ptr_eq(&state.quota, &quota));
+        assert!(Arc::ptr_eq(&state.registry, &registry));
     }
 }

@@ -38,6 +38,10 @@ use std::sync::{Arc, Mutex};
 const CACHE_MS: u64 = 60_000;
 /// Filtered views kept at once.
 const CACHE_ENTRIES: usize = 4;
+/// Bytes one view-cache map keeps at once: the entry cap bounds the filter count, this bounds
+/// the memory when the views themselves grow (a bigger run set writes a bigger body). The two
+/// maps share each view's `Arc`, so the resident bytes are at most this cap, not twice it.
+const CACHE_BYTES: usize = 16 << 20;
 /// A pass every two minutes; again within a second while a backfill has more.
 pub(crate) const PASS_MS: u64 = 120_000;
 pub(crate) const MORE_MS: u64 = 1_000;
@@ -601,6 +605,38 @@ fn cached_bytes(cached: &CachedView, now: u64, stale: bool) -> (Vec<u8>, String)
         (bytes, format!("W/\"{hex}\""))
     } else {
         (bytes, cached.etag.clone())
+    }
+}
+
+/// Trim one view-cache map to its bounds: at most [`CACHE_ENTRIES`] views, and at most
+/// [`CACHE_BYTES`] of their bytes. The oldest go first; the newest view always survives, even
+/// when it alone is over the byte cap (an empty cache would only recompose it at once).
+fn trim_view_cache(map: &mut IndexMap<String, Arc<CachedView>>) {
+    while map.len() > CACHE_ENTRIES {
+        map.shift_remove_index(0);
+    }
+    let mut bytes: usize = map.values().map(|view| view.bytes.len()).sum();
+    while bytes > CACHE_BYTES && map.len() > 1 {
+        if let Some((_, evicted)) = map.shift_remove_index(0) {
+            bytes -= evicted.bytes.len();
+        }
+    }
+}
+
+impl ScoreboardOwned {
+    /// Keep one composed view under its cache key and its filter's last-good key, trimmed to
+    /// the entry and byte bounds.
+    fn keep_view(&self, cache_key: String, filter_key: String, cached: Arc<CachedView>) {
+        {
+            let mut views = self.views.lock().unwrap_or_else(|p| p.into_inner());
+            views.shift_remove(&cache_key);
+            views.insert(cache_key, Arc::clone(&cached));
+            trim_view_cache(&mut views);
+        }
+        let mut good = self.last_good.lock().unwrap_or_else(|p| p.into_inner());
+        good.shift_remove(&filter_key);
+        good.insert(filter_key, cached);
+        trim_view_cache(&mut good);
     }
 }
 
@@ -2090,22 +2126,7 @@ impl ScoreboardOwned {
             age_value_offset,
             etag: etag.clone(),
         });
-        {
-            let mut views = self.views.lock().unwrap_or_else(|p| p.into_inner());
-            views.shift_remove(&cache_key);
-            views.insert(cache_key, Arc::clone(&cached));
-            while views.len() > CACHE_ENTRIES {
-                views.shift_remove_index(0);
-            }
-        }
-        {
-            let mut good = self.last_good.lock().unwrap_or_else(|p| p.into_inner());
-            good.shift_remove(&filter_key);
-            good.insert(filter_key, cached);
-            while good.len() > CACHE_ENTRIES {
-                good.shift_remove_index(0);
-            }
-        }
+        self.keep_view(cache_key, filter_key, cached);
         Ok((bytes, etag))
     }
 
@@ -2922,7 +2943,10 @@ fn compose_decline_reason(
 
 #[cfg(test)]
 mod tests {
-    use super::{HeldRuns, ScoreboardOwned, scan_share_runs, scan_share_runs_cached};
+    use super::{
+        CACHE_BYTES, CACHE_ENTRIES, CachedView, HeldRuns, ScoreboardOwned, scan_share_runs,
+        scan_share_runs_cached,
+    };
     use crate::store_host::{StoreBoot, StoreHost};
     use aac_files::registry::Owners;
     use aac_status::share::check::ReadersCheckWriter;
@@ -4529,5 +4553,58 @@ mod tests {
             ),
             "missing-outcome-rank"
         );
+    }
+
+    /// The view cache is bounded in bytes, not only entries: oversized views evict the oldest
+    /// until the kept bytes fit the cap, the newest view always survives, and a single view
+    /// bigger than the cap is still kept (an empty cache would only recompose it at once).
+    #[test]
+    fn the_view_cache_is_bounded_in_bytes() {
+        let root = tempfile::tempdir().expect("reports");
+        let owner = owner(root.path().to_path_buf(), None);
+        let big = 5 * 1024 * 1024;
+        for i in 0..4u64 {
+            let cached = Arc::new(CachedView {
+                at: 1_790_000_000_000 + i * 1_000,
+                seq: 1,
+                bytes: vec![b'x'; big],
+                age_value_offset: None,
+                etag: format!("W/\"{i}\""),
+            });
+            owner.keep_view(format!("cache-{i}"), format!("filter-{i}"), cached);
+        }
+        {
+            let views = owner.views.lock().unwrap_or_else(|p| p.into_inner());
+            let total: usize = views.values().map(|view| view.bytes.len()).sum();
+            assert!(
+                total <= CACHE_BYTES,
+                "views held {total} bytes over the {CACHE_BYTES} cap"
+            );
+            assert!(views.contains_key("cache-3"), "the newest view survives");
+            assert!(
+                views.len() < CACHE_ENTRIES,
+                "oversized views evict by bytes, not only by count"
+            );
+        }
+        {
+            let good = owner.last_good.lock().unwrap_or_else(|p| p.into_inner());
+            let total: usize = good.values().map(|view| view.bytes.len()).sum();
+            assert!(total <= CACHE_BYTES, "last good held {total} bytes");
+            assert!(good.contains_key("filter-3"));
+        }
+        owner.keep_view(
+            "solo".into(),
+            "solo-filter".into(),
+            Arc::new(CachedView {
+                at: 1_790_000_100_000,
+                seq: 2,
+                bytes: vec![b'y'; CACHE_BYTES + 1],
+                age_value_offset: None,
+                etag: "W/\"solo\"".into(),
+            }),
+        );
+        let views = owner.views.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(views.len(), 1, "one oversized view keeps only itself");
+        assert!(views.contains_key("solo"));
     }
 }

@@ -6,7 +6,8 @@ use aac_store::{
     error::{Error, Result},
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 pub(super) type Owners = BTreeMap<String, String>;
 
@@ -23,11 +24,43 @@ pub(super) struct Part<'a> {
     pub(super) fingerprints: Value,
 }
 
-pub(super) fn load(store: &Engine, key: &str) -> Result<Owners> {
-    match analytics_cache::get(store, key)? {
-        Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
-        None => Ok(Owners::new()),
+/// One parsed owner map per (store instance, key) for the whole process: the activity pass
+/// re-reads these maps every minute, and the redb read plus JSON parse of the published-mirror
+/// map was about 100 MB of transient work per pass. `save` refreshes the entry; a new store
+/// instance (a fresh database, a rebuilt one) starts cold. Bounded: a service holds one store's
+/// three maps; the cap only evicts test fixtures' entries.
+type MemoMap = HashMap<(String, String), Arc<Owners>>;
+static MEMO: Mutex<Option<MemoMap>> = Mutex::new(None);
+const MEMO_ENTRIES: usize = 32;
+
+fn memo_lock() -> std::sync::MutexGuard<'static, Option<MemoMap>> {
+    MEMO.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn memo_remember(instance: &str, key: &str, owners: Arc<Owners>) {
+    let mut held = memo_lock();
+    let map = held.get_or_insert_with(HashMap::new);
+    if map.len() >= MEMO_ENTRIES {
+        map.clear();
     }
+    map.insert((instance.to_owned(), key.to_owned()), owners);
+}
+
+pub(super) fn load(store: &Engine, key: &str) -> Result<Arc<Owners>> {
+    if let Some(owners) = memo_lock()
+        .as_ref()
+        .and_then(|map| map.get(&(store.instance_id.clone(), key.to_owned())))
+    {
+        return Ok(Arc::clone(owners));
+    }
+    let owners: Owners = match analytics_cache::get(store, key)? {
+        Some(bytes) => serde_json::from_slice(&bytes)?,
+        None => Owners::new(),
+    };
+    let owners = Arc::new(owners);
+    memo_remember(&store.instance_id, key, Arc::clone(&owners));
+    Ok(owners)
 }
 
 pub(super) fn save(store: &Engine, key: &str, owners: &Owners) -> Result<()> {
@@ -38,7 +71,9 @@ pub(super) fn save(store: &Engine, key: &str, owners: &Owners) -> Result<()> {
             "Claude mirror owner map size limit",
         ));
     }
-    analytics_cache::put(store, key, &bytes)
+    analytics_cache::put(store, key, &bytes)?;
+    memo_remember(&store.instance_id, key, Arc::new(owners.clone()));
+    Ok(())
 }
 
 pub(super) fn identity(print: &Value) -> Option<(&str, bool)> {
@@ -62,7 +97,7 @@ pub(super) fn select_live(
     let previous = load(store, LIVE)?;
     let historical = load(store, HISTORY)?;
     let owners = choose(parts, states, &previous, &historical);
-    if owners != previous {
+    if owners != *previous {
         save(store, LIVE, &owners)?;
     }
     Ok(())
@@ -86,10 +121,12 @@ pub(super) fn keep_historical_originals(store: &Engine, part: &mut Part<'_>) -> 
         let Some((name, false)) = row_identity(row, &part.fingerprints) else {
             return false;
         };
-        owners.entry(name.to_owned()).or_insert_with(|| {
-            changed = true;
-            part.host.to_owned()
-        });
+        Arc::make_mut(&mut owners)
+            .entry(name.to_owned())
+            .or_insert_with(|| {
+                changed = true;
+                part.host.to_owned()
+            });
         true
     };
     part.rows.retain(&mut keep);
@@ -388,5 +425,47 @@ mod tests {
         );
         assert_eq!(parts[1].rows.len(), 1);
         assert_eq!(parts[1].sessions.len(), 1);
+    }
+
+    #[test]
+    fn the_owner_map_is_parsed_once_and_shared_across_loads() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let engine = ops::open_engine(fixture.path().to_str().expect("path"), None, None)
+            .expect("open activity store");
+        let mut owners = Owners::new();
+        owners.insert("same-basename-digest".to_owned(), "nas1".to_owned());
+        save(&engine, LIVE, &owners).expect("save");
+        let first = load(&engine, LIVE).expect("first load");
+        let second = load(&engine, LIVE).expect("second load");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "loads of an unchanged map share the one parse"
+        );
+        // A save refreshes the shared map for the next load.
+        let mut updated = Owners::new();
+        updated.insert("same-basename-digest".to_owned(), "mac".to_owned());
+        save(&engine, LIVE, &updated).expect("re-save");
+        let third = load(&engine, LIVE).expect("third load");
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert_eq!(
+            third.get("same-basename-digest").map(String::as_str),
+            Some("mac")
+        );
+        engine.close().expect("close");
+    }
+
+    #[test]
+    fn two_stores_do_not_share_one_memo_entry() {
+        let a = tempfile::tempdir().expect("store a");
+        let b = tempfile::tempdir().expect("store b");
+        let ea = ops::open_engine(a.path().to_str().expect("path"), None, None).expect("open a");
+        let eb = ops::open_engine(b.path().to_str().expect("path"), None, None).expect("open b");
+        let mut owners = Owners::new();
+        owners.insert("name".to_owned(), "nas1".to_owned());
+        save(&ea, HISTORY, &owners).expect("save a");
+        let from_b = load(&eb, HISTORY).expect("load b");
+        assert!(from_b.is_empty(), "another store's map is not this store's");
+        ea.close().expect("close a");
+        eb.close().expect("close b");
     }
 }

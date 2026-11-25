@@ -1,12 +1,13 @@
 //! Evidence for raise-only mirror cells. Store the exact priced projection before
 //! publishing so a later original can remove only the copy from a settled hour.
-use super::claude_mirrors::{self, Owners, Part};
+use super::claude_mirrors::{self, Part};
 use aac_store::{
     activity, analytics_cache, collect, contract, engine::Engine, error::Result, report,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 const PHASES: [&str; 3] = ["migration", "backfill", "live"];
 type ScanRows = (Vec<Value>, Vec<Value>);
@@ -96,10 +97,10 @@ pub(super) fn remember(
             };
             let snapshot = snapshots.entry(hour).or_default();
             if let Some(name) = name {
-                owners
+                Arc::make_mut(&mut owners)
                     .entry(name.to_owned())
                     .or_insert_with(|| part.host.to_owned());
-                history
+                Arc::make_mut(&mut history)
                     .entry(name.to_owned())
                     .or_insert_with(|| part.host.to_owned());
                 snapshot
@@ -151,7 +152,7 @@ pub(super) fn reconcile(
     now: i64,
     pricing: &dyn collect::Pricing,
 ) -> Result<()> {
-    let mirrors: Owners = claude_mirrors::load(store, claude_mirrors::HISTORY_MIRRORS)?;
+    let mirrors = claude_mirrors::load(store, claude_mirrors::HISTORY_MIRRORS)?;
     let mut history = claude_mirrors::load(store, claude_mirrors::HISTORY)?;
     let before_history = history.clone();
     for part in parts {
@@ -161,7 +162,7 @@ pub(super) fn reconcile(
                 continue;
             }
             let Some(mirror_host) = mirrors.get(name) else {
-                history
+                Arc::make_mut(&mut history)
                     .entry(name.to_owned())
                     .or_insert_with(|| part.host.to_owned());
                 continue;
@@ -207,7 +208,7 @@ pub(super) fn reconcile(
                     }
                     let after = snapshot.projection(mirror_host, now)?;
                     if activity::reconcile_claude_projection(store, &before, &after, &originals)? {
-                        history.insert(name.to_owned(), part.host.to_owned());
+                        Arc::make_mut(&mut history).insert(name.to_owned(), part.host.to_owned());
                         claude_mirrors::save(store, claude_mirrors::HISTORY, &history)?;
                         snapshot.mirrors.retain(|_, cells| !cells.is_empty());
                         let lookup = key(mirror_host, hour, phase);

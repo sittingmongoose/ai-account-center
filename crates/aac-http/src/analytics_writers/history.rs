@@ -223,7 +223,7 @@ impl Job {
             &claude_mirrors::Owners::new(),
             &previous,
         );
-        if owners != previous {
+        if owners != *previous {
             // Persist the choices before publishing. A crash between computers must
             // retry with the same choices, even after a completed checkpoint is removed.
             claude_mirrors::save(store, claude_mirrors::HISTORY, &owners)?;

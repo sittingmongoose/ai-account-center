@@ -37,8 +37,8 @@ struct Readers {
 struct OwnedState {
     generation: u64,
     reports_rows: Option<Arc<AgentReportsState>>,
-    quota: Json,
-    registry: Json,
+    quota: Arc<Json>,
+    registry: Arc<Json>,
     docs_rows: Option<Arc<StatusDocsState>>,
 }
 
@@ -57,8 +57,8 @@ struct Outcome {
     changed: bool,
     reports: Arc<AgentReportsState>,
     docs: Arc<StatusDocsState>,
-    quota: Json,
-    registry: Json,
+    quota: Arc<Json>,
+    registry: Arc<Json>,
 }
 
 /// Refresh `scannedAt` at most once every 45 s when nothing on disk changed (well inside the
@@ -107,9 +107,9 @@ impl StatusOwned {
                 docs: StatusDocsReader::new(reports_root, status_docs::STATUS_DOCS_LIMITS),
             }),
             state: Mutex::new(OwnedState {
-                registry: json!({"data": null, "asOf": null, "error": null}),
+                registry: Arc::new(json!({"data": null, "asOf": null, "error": null})),
                 reports_rows: None,
-                quota: Json::Null,
+                quota: Arc::new(Json::Null),
                 docs_rows: None,
                 generation: 0,
             }),
@@ -157,16 +157,16 @@ impl StatusOwned {
                     if scan.changed {
                         changed = true;
                     }
-                    json!({
+                    Arc::new(json!({
                         "data": scan.threads,
                         "asOf": now,
                         "error": null,
                         "problems": scan.problems.iter().map(|p| json!({"item": p.item, "reason": p.reason, "since": p.since})).collect::<Vec<_>>(),
-                    })
+                    }))
                 }
                 Err(reason) => {
                     changed = true;
-                    failed_registry(&state.registry, reason, now)
+                    Arc::new(failed_registry(&state.registry, reason, now))
                 }
             }
         } else {
@@ -181,7 +181,7 @@ impl StatusOwned {
         }
         let reports = Arc::new(readers.reports.snapshot());
         let docs = Arc::new(readers.docs.snapshot());
-        let quota = quota::state_json(&readers.quota.snapshot());
+        let quota = Arc::new(quota::state_json(&readers.quota.snapshot()));
         Some(Outcome {
             changed,
             reports,
@@ -251,8 +251,8 @@ impl StatusOwned {
         json!({
             "generation": generation,
             "reports": reports,
-            "quota": quota,
-            "registry": registry,
+            "quota": Json::clone(&quota),
+            "registry": Json::clone(&registry),
             "docs": docs,
         })
     }
@@ -627,4 +627,42 @@ pub(crate) async fn initialize_reports(root: std::path::PathBuf) {
             let _ = aac_files::share::write_atomically(&target, name, &bytes, 0o644);
         }
     }).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The registry JSON is one shared copy: a pass that does not rescan the registry hands the
+    /// producers the same Arc the held state keeps, instead of a deep clone per pass.
+    #[test]
+    fn a_quiet_pass_shares_the_registry_arc() {
+        let root = tempfile::tempdir().expect("share");
+        let reports_root = root.path().join("reports");
+        let registry_dir = root.path().join("registry");
+        std::fs::create_dir_all(&reports_root).expect("reports root");
+        std::fs::create_dir_all(&registry_dir).expect("registry dir");
+        let rows = aac_files::registry::rows().expect("registry rows");
+        let owner = StatusOwned::new(
+            reports_root.clone(),
+            registry_dir,
+            None,
+            Feeds::new(),
+            Owners::defaults(rows),
+            Arc::new(Mutex::new(ReadersCheckWriter::new(reports_root))),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let first = owner
+            .scan_blocking(1_790_000_000_000, true)
+            .expect("first pass");
+        let second = owner
+            .scan_blocking(1_790_000_010_000, false)
+            .expect("quiet pass");
+        assert!(
+            Arc::ptr_eq(&first.registry, &second.registry),
+            "the registry is one shared copy across passes"
+        );
+        let state = owner.state.lock().unwrap_or_else(|p| p.into_inner());
+        assert!(Arc::ptr_eq(&state.registry, &second.registry));
+    }
 }

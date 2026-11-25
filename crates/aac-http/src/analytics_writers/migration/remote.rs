@@ -5,6 +5,7 @@ use aac_store::error::{Error, Result};
 use aac_store::{activity, analytics_cache, collect, contract};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 
 pub(super) const PREFIX: &str = scan_state::REMOTE_ARCHIVE;
 const OWNERS: &str = "legacy/cache/analytics-remote-v1/claude-mirror-owners.json";
@@ -71,18 +72,18 @@ fn legacy_owners(migration: &Migration<'_>) -> Result<claude_mirrors::Owners> {
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .filter(|value| value["version"] == 1)
     else {
-        return Ok(previous);
+        return Ok(Arc::unwrap_or_clone(previous));
     };
     for (name, host) in value["owners"].as_object().into_iter().flatten() {
         if !name.is_empty()
             && let Some(host) = host.as_str().filter(|id| contract::ident_ok(id))
         {
-            previous
+            Arc::make_mut(&mut previous)
                 .entry(name.clone())
                 .or_insert_with(|| host.to_owned());
         }
     }
-    Ok(previous)
+    Ok(Arc::unwrap_or_clone(previous))
 }
 
 fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<Selection> {
@@ -166,14 +167,14 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
     }
     let stored_owners = claude_mirrors::load(migration.store, claude_mirrors::HISTORY)?;
     let mut committed = stored_owners.clone();
-    committed.retain(|name, host| {
+    Arc::make_mut(&mut committed).retain(|name, host| {
         !originals.contains(name) || !mirrors.contains(&(name.clone(), host.as_str()))
     });
     if let Some(local) = migration.local {
         for (name, _) in &mirrors {
             if migration.local_originals.contains(name) {
                 originals.insert(name.clone());
-                committed.insert(name.clone(), local.to_owned());
+                Arc::make_mut(&mut committed).insert(name.clone(), local.to_owned());
             }
         }
     }
@@ -192,11 +193,11 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
             // The same transcript is already in dated Store history on this source.
             // Never treat a host known to hold this mirror as an original.
             originals.insert(name.clone());
-            committed.insert(name.clone(), computer);
+            Arc::make_mut(&mut committed).insert(name.clone(), computer);
         }
     }
     let selected = claude_mirrors::choose(&mut parts, &mut states, &previous, &committed);
-    if selected != stored_owners {
+    if selected != *stored_owners {
         // Keep the same election if the boot stops between reports or before retirement.
         claude_mirrors::save(migration.store, claude_mirrors::HISTORY, &selected)?;
     }

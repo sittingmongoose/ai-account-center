@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
@@ -107,7 +107,8 @@ pub fn normalize_cache_payload(payload: &Value) -> Option<(f64, Map<String, Valu
 pub struct CachedRegistry {
     /// `fetchedAt` as parsed.
     pub fetched_at: f64,
-    /// The normalized providers, in payload order.
+    /// The normalized providers pruned to the fields resolution reads (see [`prune`]),
+    /// in payload order.
     pub providers: Map<String, Value>,
     /// Provider key → (normalized candidate id → model key).
     index: HashMap<String, HashMap<String, String>>,
@@ -134,9 +135,48 @@ fn build_index(providers: &Map<String, Value>) -> HashMap<String, HashMap<String
     index
 }
 
+/// The resident registry keeps only what resolution reads: each provider's `id` and each
+/// model's `id` and `cost`. The catalog's other fields (names, limits, modalities, dates) are
+/// the bulk of the parsed tree; the cache file and the refresh return payload keep them, since
+/// the write path serializes the full normalized map, not this pruned one.
+fn prune(providers: Map<String, Value>) -> Map<String, Value> {
+    providers
+        .into_iter()
+        .map(|(key, provider)| {
+            let mut slim = Map::new();
+            if let Value::Object(mut provider) = provider {
+                if let Some(id) = provider.remove("id") {
+                    slim.insert("id".into(), id);
+                }
+                if let Some(Value::Object(models)) = provider.remove("models") {
+                    let models: Map<String, Value> = models
+                        .into_iter()
+                        .map(|(model_key, model)| {
+                            let mut small = Map::new();
+                            if let Value::Object(mut model) = model {
+                                if let Some(id) = model.remove("id") {
+                                    small.insert("id".into(), id);
+                                }
+                                if let Some(cost) = model.remove("cost") {
+                                    small.insert("cost".into(), cost);
+                                }
+                            }
+                            (model_key, Value::Object(small))
+                        })
+                        .collect();
+                    slim.insert("models".into(), Value::Object(models));
+                }
+            }
+            (key, Value::Object(slim))
+        })
+        .collect()
+}
+
 impl CachedRegistry {
-    /// Wrap already-normalized providers (with their `fetchedAt`).
+    /// Wrap already-normalized providers (with their `fetchedAt`), keeping only the fields
+    /// resolution reads.
     pub fn new(fetched_at: f64, providers: Map<String, Value>) -> Self {
+        let providers = prune(providers);
         let index = build_index(&providers);
         CachedRegistry {
             fetched_at,
@@ -159,7 +199,20 @@ fn stat_key(path: &Path) -> Option<StatKey> {
 /// reads share one parsed registry until the file changes or a write clears the memo.
 pub struct RegistryCache {
     path: PathBuf,
-    memo: Option<(StatKey, CachedRegistry)>,
+    memo: Option<(StatKey, Arc<CachedRegistry>)>,
+}
+
+/// One parsed registry per cache file for the whole process: every `RegistryCache` (the route's
+/// shared resolver, the writers' pricing seam, the refresh point) shares the one parse until the
+/// file changes. Bounded: a service reads one cache file; the cap only evicts test fixtures' paths.
+type SharedMap = HashMap<PathBuf, (StatKey, Arc<CachedRegistry>)>;
+static SHARED: Mutex<Option<SharedMap>> = Mutex::new(None);
+const SHARED_PATHS: usize = 16;
+
+fn shared_lock() -> std::sync::MutexGuard<'static, Option<SharedMap>> {
+    SHARED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl RegistryCache {
@@ -178,16 +231,34 @@ impl RegistryCache {
     pub fn read(&mut self, allow_stale: bool, now: f64) -> Option<&CachedRegistry> {
         let key = stat_key(&self.path)?;
         if !self.memo.as_ref().is_some_and(|(k, _)| *k == key) {
-            let text = fs::read_to_string(&self.path).ok()?;
-            let payload: Value = serde_json::from_str(&text).ok()?;
-            let (fetched_at, providers) = normalize_cache_payload(&payload)?;
-            self.memo = Some((key, CachedRegistry::new(fetched_at, providers)));
+            let shared = shared_lock()
+                .as_ref()
+                .and_then(|held| held.get(&self.path))
+                .filter(|(held_key, _)| *held_key == key)
+                .map(|(_, cached)| Arc::clone(cached));
+            let cached = match shared {
+                Some(cached) => cached,
+                None => {
+                    let text = fs::read_to_string(&self.path).ok()?;
+                    let payload: Value = serde_json::from_str(&text).ok()?;
+                    let (fetched_at, providers) = normalize_cache_payload(&payload)?;
+                    let cached = Arc::new(CachedRegistry::new(fetched_at, providers));
+                    let mut held = shared_lock();
+                    let map = held.get_or_insert_with(HashMap::new);
+                    if map.len() >= SHARED_PATHS {
+                        map.clear();
+                    }
+                    map.insert(self.path.clone(), (key, Arc::clone(&cached)));
+                    cached
+                }
+            };
+            self.memo = Some((key, cached));
         }
         let (_, cached) = self.memo.as_ref().expect("memo just set");
         if !allow_stale && now - cached.fetched_at > CACHE_TTL_MS {
             return None;
         }
-        Some(cached)
+        Some(cached.as_ref())
     }
 
     /// `setCachedModelsDevRegistry`: best-effort write of the cache bytes `JSON.stringify` would
@@ -208,11 +279,17 @@ impl RegistryCache {
         }
         let _ = fs::write(&self.path, bytes);
         self.memo = None;
+        if let Some(map) = shared_lock().as_mut() {
+            map.remove(&self.path);
+        }
     }
 
     /// `clearModelsDevRegistryCache`: true when the file existed and was removed.
     pub fn clear(&mut self) -> bool {
         self.memo = None;
+        if let Some(map) = shared_lock().as_mut() {
+            map.remove(&self.path);
+        }
         match fs::remove_file(&self.path) {
             Ok(()) => true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -262,9 +339,21 @@ fn inode(_metadata: &fs::Metadata) -> u64 {
     0
 }
 
+/// The full normalized payload re-read from the cache file: the refresh flow returns it (the
+/// returned registry keeps every extra field), while the resident memo holds only the fields
+/// resolution reads. Transient — the caller drops it.
+fn full_providers(path: &Path) -> Option<Map<String, Value>> {
+    let text = fs::read_to_string(path).ok()?;
+    let payload: Value = serde_json::from_str(&text).ok()?;
+    normalize_cache_payload(&payload).map(|(_, providers)| providers)
+}
+
 fn stale(cache: &Mutex<RegistryCache>, now: f64) -> Option<Map<String, Value>> {
     let mut guard = lock(cache);
-    guard.read(true, now).map(|cached| cached.providers.clone())
+    guard.read(true, now)?;
+    let path = guard.path().to_path_buf();
+    drop(guard);
+    full_providers(&path)
 }
 
 fn lock(cache: &Mutex<RegistryCache>) -> std::sync::MutexGuard<'_, RegistryCache> {
@@ -283,8 +372,10 @@ pub fn refresh_models_dev_registry(
 ) -> Option<Map<String, Value>> {
     if !force {
         let mut guard = lock(cache);
-        if let Some(fresh) = guard.read(false, now) {
-            return Some(fresh.providers.clone());
+        if guard.read(false, now).is_some() {
+            let path = guard.path().to_path_buf();
+            drop(guard);
+            return full_providers(&path);
         }
     }
     match fetch() {
@@ -359,8 +450,10 @@ impl RegistryRefresh {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             let mut guard = lock(&self.cache);
-            if let Some(fresh) = guard.read(false, now) {
-                return Some(fresh.providers.clone());
+            if guard.read(false, now).is_some() {
+                let path = guard.path().to_path_buf();
+                drop(guard);
+                return full_providers(&path);
             }
             drop(guard);
             return stale(&self.cache, now);
@@ -656,5 +749,105 @@ mod tests {
             refresh_models_dev_registry(refresh.cache(), false, 8.0, || unreachable!("no fetch"))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn two_caches_over_one_file_share_one_parse() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join(CACHE_FILE_NAME);
+        let mut first = RegistryCache::new(path.clone());
+        let mut second = RegistryCache::new(path);
+        first.write(&providers(), 1.0);
+        let a = first.read(true, 0.0).expect("first read") as *const CachedRegistry;
+        let b = second.read(true, 0.0).expect("second read") as *const CachedRegistry;
+        assert!(
+            std::ptr::eq(a, b),
+            "a second cache over the same unchanged file must reuse the one parse"
+        );
+    }
+
+    #[test]
+    fn the_resident_registry_keeps_only_the_fields_resolution_reads() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut cache = RegistryCache::new(root.path().join(CACHE_FILE_NAME));
+        let full = normalize_registry_payload(&json!({
+            "openai": {
+                "id": "openai", "name": "OpenAI", "doc": "https://openai.com",
+                "models": { "gpt-5.5": {
+                    "id": "gpt-5.5", "name": "GPT-5.5", "knowledge": "2026-01",
+                    "modalities": { "input": ["text"] },
+                    "cost": { "input": 5, "output": 30 }
+                } }
+            }
+        }))
+        .expect("normalizes");
+        cache.write(&full, 1.0);
+        let cached = cache.read(true, 0.0).expect("read");
+        let provider = cached.providers.get("openai").expect("provider");
+        assert_eq!(
+            provider
+                .as_object()
+                .expect("object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["id", "models"]
+        );
+        let model = &provider["models"]["gpt-5.5"];
+        assert_eq!(
+            model
+                .as_object()
+                .expect("object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["id", "cost"]
+        );
+        // Resolution still answers from the pruned tree.
+        let (_, _, rates) = resolve_provider_model(cached, "openai", "gpt-5.5").expect("rates");
+        assert_eq!(rates.input_per_million, 5.0);
+        assert_eq!(rates.output_per_million, 30.0);
+    }
+
+    #[test]
+    fn a_refresh_returns_the_full_payload_even_though_the_memo_is_pruned() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cache = Mutex::new(RegistryCache::new(root.path().join(CACHE_FILE_NAME)));
+        let full = normalize_registry_payload(&json!({
+            "openai": {
+                "id": "openai", "name": "OpenAI",
+                "models": { "gpt-5.5": { "id": "gpt-5.5", "cost": { "input": 5, "output": 30 } } }
+            }
+        }))
+        .expect("normalizes");
+        lock(&cache).write(&full, 1.0);
+        let returned =
+            refresh_models_dev_registry(&cache, false, 2.0, || unreachable!("fresh cache"))
+                .expect("fresh answer");
+        assert_eq!(returned["openai"]["name"], json!("OpenAI"));
+    }
+
+    #[test]
+    fn a_write_invalidates_the_shared_parse_for_other_caches() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join(CACHE_FILE_NAME);
+        let mut first = RegistryCache::new(path.clone());
+        let mut second = RegistryCache::new(path);
+        first.write(&providers(), 1.0);
+        assert!(first.read(true, 0.0).is_some());
+        let mut replacement = Map::new();
+        replacement.insert(
+            "anthropic".into(),
+            json!({
+                "id": "anthropic",
+                "models": { "claude-x": { "id": "claude-x", "cost": { "input": 1, "output": 2 } } }
+            }),
+        );
+        second.write(&replacement, 2.0);
+        let cached = first
+            .read(true, 0.0)
+            .expect("re-read after the other cache wrote");
+        assert!(cached.providers.contains_key("anthropic"));
+        assert!(!cached.providers.contains_key("openai"));
     }
 }
