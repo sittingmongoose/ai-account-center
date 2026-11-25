@@ -3425,6 +3425,12 @@
       ]
     },
     {
+      "file": "tests/unit/scripts/memory-budget.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/scripts/personal-detail-guard.test.ts",
       "kind": "safety",
       "evidence": [

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "description": "Phase 4 dashboard server memory budget limits on the real-sized synthetic fixture (max of 3 calibration runs + 10%). Lower as each phase-4 optimization lands.",
+  "calibratedAt": "2026-11-25T18:12:15Z",
+  "calibratedHost": "ubuntu-agent-nas1",
+  "calibratedCommit": "c3893f00f",
+  "seed": 20261125,
+  "durationSec": 300,
+  "steadyAfterSec": 120,
+  "baselineMeasured": {
+    "runs": 3,
+    "steadyMedianRssMiB": 290.62,
+    "steadyMedianRssRangeMiB": [249.96, 290.62],
+    "steadyMedianPssMiB": 288.34,
+    "peakRssMiB": 591.53,
+    "peakRssRangeMiB": [513.89, 591.53],
+    "peakPssMiB": 589.26,
+    "childrenPeakRssMiB": 0,
+    "childrenPeakPssMiB": 0
+  },
+  "limits": {
+    "steadyRssMiB": 320,
+    "peakRssMiB": 651,
+    "childrenPeakRssMiB": 16
+  }
+}

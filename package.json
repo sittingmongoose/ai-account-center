@@ -65,6 +65,7 @@
     "config/secret-policy.json",
     "config/tables/",
     "config/private-files.json",
+    "config/memory-budget.json",
     "tests/spec/wire-words.json",
     "tests/fixtures/secret-policy-cases.json",
     "tests/fixtures/secret-policy-cases.ts",
@@ -152,7 +153,8 @@
     "ui:validate": "node scripts/validate-ui.js",
     "prepack": "node scripts/check-line-endings.js && bun run build:all",
     "prepare": "husky",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "perf:memory": "node scripts/perf/memory-budget.mjs"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

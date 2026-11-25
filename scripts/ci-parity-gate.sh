@@ -119,18 +119,23 @@ fi
 # The Leptos dashboard crate (web-dashboard/leptos): clippy -D warnings on the
 # pinned toolchain in that folder. AAC_LEPTOS_RUST=off skips it on a machine
 # that may not run Rust builds.
-if [[ "${AAC_LEPTOS_RUST:-on}" == "off" ]]; then
+if [[ "$RUST_STEPS" == "off" ]]; then
+  echo "[!] VM host: skipping the Leptos clippy check (the landing gate runs it)."
+elif [[ "${AAC_LEPTOS_RUST:-on}" == "off" ]]; then
   echo "[!] AAC_LEPTOS_RUST=off: skipping the Leptos clippy check."
 elif command -v cargo >/dev/null 2>&1; then
   (cd web-dashboard/leptos && cargo clippy --all-targets --locked -- -D warnings)
 else
   echo "[!] cargo is not installed: skipping the Leptos clippy check."
+fi
 
 # The dashboard's own Rust unit tests (roster grouping, scoreboard readings) run on the host with the
 # crate's pinned toolchain. ui:validate checks the crate's formatting and the node tests only, so
 # without this step a stale Leptos expectation lands green. AAC_LEPTOS_RUST=off skips it on a machine
 # that may not run Rust builds; the dashboard still builds from dist/ui.
-if [[ "${AAC_LEPTOS_RUST:-on}" == "off" ]]; then
+if [[ "$RUST_STEPS" == "off" ]]; then
+  echo "[!] VM host: skipping the dashboard's Leptos Rust tests (the landing gate runs them)."
+elif [[ "${AAC_LEPTOS_RUST:-on}" == "off" ]]; then
   echo "[!] AAC_LEPTOS_RUST=off: skipping the dashboard's Leptos Rust tests."
 elif command -v cargo >/dev/null 2>&1; then
   ( cd web-dashboard/leptos && cargo test --lib --locked )
@@ -164,5 +169,15 @@ case "$(uname -s)" in
     run_fixture_check python3 macos-bar/Scripts/migration_check.py
     ;;
 esac
+
+# Optional memory budget check (Phase 4, step 1): opt-in with AAC_PERF_MEMORY=on
+# on the Nas1 landing gate (5-minute poll exceeds the Push CI 5-minute add-on limit).
+if [[ "${AAC_PERF_MEMORY:-off}" == "on" ]]; then
+  if [[ "$RUST_STEPS" == "off" ]]; then
+    echo "[!] VM host: skipping perf:memory (run on Nas1 with a full dist/ build)."
+  else
+    bun run perf:memory
+  fi
+fi
 
 echo "[OK] CI parity gate passed."
