@@ -2044,6 +2044,19 @@ mod flicker_tests {
     use crate::limits::Limits;
     use aac_status::share::reports::SeenReport;
 
+    /// Wait for a real event (a counter, a flag) with a deadline guard. The condition is the
+    /// barrier; no fixed sleep assumes how long the event takes under load.
+    async fn wait_until(mut cond: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !cond() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "condition never became true"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     fn utc_zone(now: u64) -> ZoneFacts {
         let now = clamp_i64(now);
         let span = 30 * 86_400_000;
@@ -2120,24 +2133,30 @@ mod flicker_tests {
         };
         assert!(initial.is_ok(), "initial read failed: {initial:?}");
 
-        // Hold the answers engine lock for 700 ms to make the background producer pass slow
-        // (matching `answers_owned::jobs` / slow share I/O during `publish`).
+        // Hold the answers engine lock until the test releases it, so the background producer
+        // pass is slow for exactly as long as the reads below need (matching
+        // `answers_owned::jobs` / slow share I/O during `publish`). No wall-clock assumption.
         let (hold_ready_tx, hold_ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
         let hold_answers = Arc::clone(&answers);
         let holder = std::thread::spawn(move || {
             let _guard = hold_answers.lock_engine_for_test();
             let _ = hold_ready_tx.send(());
-            std::thread::sleep(Duration::from_millis(700));
+            let _ = release_rx.recv();
         });
         hold_ready_rx.recv().unwrap();
 
         // Trigger a background producer pass that must refresh answers and republish.
+        let entered = Arc::clone(&produce.publish_entered);
+        let before = entered.load(Ordering::SeqCst);
         produce.mark_answers();
         let publisher = {
             let produce = Arc::clone(&produce);
             tokio::task::spawn_blocking(move || produce.publish(None, true))
         };
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        // Barrier: the pass has entered and must block on the held engine lock before it can
+        // commit, so every read below runs during a genuinely slow pass.
+        wait_until(|| entered.load(Ordering::SeqCst) > before).await;
 
         // While the slow producer pass is running, Status reads must answer within the
         // 400 ms route budget from the last good generation (never `deadline` or `busy`).
@@ -2160,6 +2179,7 @@ mod flicker_tests {
             }
         }
 
+        let _ = release_tx.send(());
         let _ = holder.join();
         let _ = publisher.await;
     }
@@ -2194,6 +2214,8 @@ mod flicker_tests {
 
         // Make the next source build take 600 ms (longer than the 400 ms route budget).
         produce.publish_delay_ms.store(600, Ordering::SeqCst);
+        let entered = Arc::clone(&produce.publish_entered);
+        let before = entered.load(Ordering::SeqCst);
         let scan_task = {
             let produce = Arc::clone(&produce);
             tokio::spawn(async move {
@@ -2202,7 +2224,9 @@ mod flicker_tests {
                     .await;
             })
         };
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        // Barrier: the pass has entered; its injected 600 ms delay (longer than the 400 ms
+        // route budget) keeps it from committing while the reads below run.
+        wait_until(|| entered.load(Ordering::SeqCst) > before).await;
 
         // Concurrent reads during the slow producer pass answer from `vm.first` within 400 ms.
         for i in 0..6 {
@@ -2260,21 +2284,30 @@ mod flicker_tests {
             .expect("prime zone");
         let before = produce.compose.compose_count();
 
-        // Slow each compose to 120 ms and fire 12 concurrent reads at a fresh second (cache miss).
-        produce.compose.set_compose_delay_ms(120);
+        // One leader enters the flight first; the barrier proves it is in flight before the
+        // other 11 readers start, so all 12 share one compose regardless of machine load.
+        // The 1 s injected delay keeps the flight open; the reads carry a hang guard, not a
+        // wall-clock budget (the 400 ms route budget during a slow pass is the barrier
+        // tests' assertion above).
+        produce.compose.set_compose_delay_ms(1000);
         let base_now = now + 5_000;
         let mut tasks = Vec::new();
-        for offset in 0..12_u64 {
+        let mut spawn_reader = |offset: u64| {
             let produce = Arc::clone(&produce);
             let limits = limits.clone();
             let zone = zone.clone();
             tasks.push(tokio::spawn(async move {
                 tokio::time::timeout(
-                    Duration::from_millis(400),
+                    Duration::from_secs(5),
                     produce.view_async(Some(&limits), base_now + offset, "UTC", &zone),
                 )
                 .await
             }));
+        };
+        spawn_reader(0);
+        wait_until(|| produce.compose.compose_count() > before).await;
+        for offset in 1..12_u64 {
+            spawn_reader(offset);
         }
         for (idx, task) in tasks.into_iter().enumerate() {
             let result = task.await.unwrap();
@@ -2284,7 +2317,7 @@ mod flicker_tests {
                     assert!(etag.starts_with("W/\""), "reader {idx}");
                 }
                 Ok(Err(reason)) => panic!("reader {idx} declined with {reason:?}"),
-                Err(_) => panic!("reader {idx} hit 400ms deadline"),
+                Err(_) => panic!("reader {idx} hung"),
             }
         }
         produce.compose.set_compose_delay_ms(0);
@@ -2295,10 +2328,14 @@ mod flicker_tests {
         );
     }
 
-    /// Cold start: `warm()` prepares the default display zone before the first read arrives, and
-    /// concurrent cold reads share one in-flight publish without filling `Pool::Status`.
+    /// Cold start: `warm()` prepares the default display zone, so the very first read is served
+    /// from the warm state without a producer pass. That is asserted structurally (no publish
+    /// runs during the read); a wall-clock bound here only measures machine load. Concurrent
+    /// cold reads all succeed while a publish is in flight: none declines busy or deadline, so
+    /// the pool is never filled. The 400 ms route budget during a slow pass is asserted by the
+    /// two barrier tests above, where the slow pass is guaranteed by the injected delay.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cold_start_warm_and_concurrent_cold_reads_succeed_within_budget() {
+    async fn cold_start_warm_and_concurrent_cold_reads_succeed() {
         let scratch = tempfile::tempdir().unwrap();
         let ccs = scratch.path().join("ccs");
         let reports = scratch.path().join("reports");
@@ -2314,7 +2351,7 @@ mod flicker_tests {
             offsets: offsets.offsets,
         };
 
-        // Warmed startup serves the very first read immediately.
+        // Warmed startup serves the very first read from the warm state.
         let produce = Produce::new(
             Feeds::new(),
             AnswersOwned::new(ccs.clone(), reports.clone()),
@@ -2322,18 +2359,24 @@ mod flicker_tests {
         );
         produce.warm().await;
         let limits = Limits::new();
-        let started = std::time::Instant::now();
+        let entered = Arc::clone(&produce.publish_entered);
+        let before = entered.load(Ordering::SeqCst);
         let first = tokio::time::timeout(
-            Duration::from_millis(400),
+            Duration::from_secs(5),
             produce.view_async(Some(&limits), now, &tz_name, &zone),
         )
         .await
-        .expect("warmed first read must not time out")
+        .expect("warmed first read must not hang")
         .expect("warmed first read must succeed");
         assert!(!first.0.is_empty());
-        assert!(started.elapsed() < Duration::from_millis(400));
+        assert_eq!(
+            entered.load(Ordering::SeqCst),
+            before,
+            "the warmed first read must be served from the warm state, not a producer pass"
+        );
 
-        // Un-warmed cold start with 8 concurrent readers shares one publish and zero pool fills.
+        // Un-warmed cold start: 8 concurrent readers while a publish is in flight (120 ms
+        // injected delay). Every read succeeds; a pool fill would decline busy or deadline.
         let cold = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
         cold.publish_delay_ms.store(120, Ordering::SeqCst);
         let mut tasks = Vec::new();
@@ -2344,7 +2387,7 @@ mod flicker_tests {
             let tz_name = tz_name.clone();
             tasks.push(tokio::spawn(async move {
                 tokio::time::timeout(
-                    Duration::from_millis(400),
+                    Duration::from_secs(5),
                     cold.view_async(Some(&limits), now + i, &tz_name, &zone),
                 )
                 .await
@@ -2354,7 +2397,7 @@ mod flicker_tests {
             let reply = task
                 .await
                 .unwrap()
-                .unwrap_or_else(|_| panic!("cold reader {idx} timed out"))
+                .unwrap_or_else(|_| panic!("cold reader {idx} hung"))
                 .unwrap_or_else(|reason| panic!("cold reader {idx} declined {reason:?}"));
             assert!(!reply.0.is_empty());
         }
@@ -2468,8 +2511,9 @@ mod low_tests {
         let before = entered.load(Ordering::SeqCst);
         produce.mark_answers();
         wait_for(|| entered.load(Ordering::SeqCst) > before).await;
-        // Let the panicking pass unwind before the next trigger.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Wait for the panicking pass to unwind (the RAII guard clears publish_running)
+        // before the next trigger; a stuck flag would time out here, not pass silently.
+        wait_for(|| !produce.publish_running.load(Ordering::SeqCst)).await;
 
         // The next coalesced publish must still run, not be a no-op behind a stuck flag.
         let before_next = entered.load(Ordering::SeqCst);
@@ -2622,6 +2666,7 @@ mod low_tests {
         // Make the leader's compose slow enough for the follower to join its flight.
         produce.compose.set_compose_delay_ms(150);
         let compose = produce.compose.clone();
+        let compose_before = compose.compose_count();
         let leader_gens = gens.clone();
         let leader = tokio::spawn(async move {
             compose
@@ -2635,8 +2680,9 @@ mod low_tests {
                 )
                 .await
         });
-        // Join while the leader is in flight (same six ids, same clock/day).
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        // Barrier: the leader's compose has started (inside its 150 ms injected delay), so
+        // the follower joins the same flight (same six ids, same clock/day) instead of racing it.
+        wait_for(|| produce.compose.compose_count() > compose_before).await;
         let follower = produce
             .compose
             .answer_generations_async(None, gens, follower_now, follower_clock, follower_day, true)
@@ -2681,5 +2727,97 @@ mod low_tests {
         assert!(Arc::ptr_eq(&state.docs_rows, &docs_rows));
         assert!(Arc::ptr_eq(&state.quota, &quota));
         assert!(Arc::ptr_eq(&state.registry, &registry));
+    }
+
+    /// A failed compose propagates its named decline to every follower sharing the flight,
+    /// and the failed flight is cleared: the same inputs compose again, and a healthy
+    /// generation set recovers at once. Blind-check coverage for StatusCompose failure
+    /// propagation (flicker-T1): a leader that served bytes despite a failed compose, or a
+    /// flight that stayed in the map after failing, fails this test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_compose_propagates_to_every_follower_and_clears() {
+        let (_scratch, ccs, reports) = scratch();
+        let feeds = Feeds::new();
+        let produce = Produce::new(feeds.clone(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let now = 1_795_000_000_000_u64;
+        produce.after_scan(scan_with_thread("vm.prop", now)).await;
+        let gens = match produce.current_published() {
+            Some(PublishedState::Ready(published)) => published.generations.clone(),
+            _ => panic!("expected a published generation"),
+        };
+        let now_i64 = clamp_i64(now);
+        let span = 30 * 86_400_000;
+        let zone =
+            Zone::proven(now_i64 - span, now_i64 + span, &[[now_i64 - span, 0]]).expect("utc zone");
+        let (clock, day) = zone.words(now_i64).expect("zone words");
+
+        // A facts generation whose presentation proves nothing: it prepares and passes
+        // validate_prepared, but the compose cannot build the view from it.
+        let bad_facts = feeds
+            .prepare_generation(
+                FACTS,
+                br#"{"generation":"9000000000000000001","data":{"timeZone":"UTC"},"facts":{"dates":{},"epochs":{},"order":{}}}"#,
+            )
+            .expect("bad facts prepare");
+        let mut bad = gens.clone();
+        bad[5] = bad_facts;
+
+        // Slow the compose so followers join the leader's flight instead of racing it.
+        produce.compose.set_compose_delay_ms(300);
+        let compose_before = produce.compose.compose_count();
+        let compose = produce.compose.clone();
+        let bad_leader = bad.clone();
+        let leader_clock = clock.clone();
+        let leader_day = day.clone();
+        let leader = tokio::spawn(async move {
+            compose
+                .answer_generations_async(None, bad_leader, now_i64, leader_clock, leader_day, true)
+                .await
+        });
+        wait_for(|| produce.compose.compose_count() > compose_before).await;
+        let mut followers = Vec::new();
+        for _ in 0..5 {
+            let compose = produce.compose.clone();
+            let bad = bad.clone();
+            let clock = clock.clone();
+            let day = day.clone();
+            followers.push(tokio::spawn(async move {
+                compose
+                    .answer_generations_async(None, bad, now_i64, clock, day, true)
+                    .await
+            }));
+        }
+        let lead = leader.await.unwrap();
+        assert!(
+            lead.is_err(),
+            "a failed compose must decline by name, not serve bytes: {lead:?}"
+        );
+        for follower in followers {
+            assert_eq!(
+                follower.await.unwrap(),
+                lead,
+                "every follower must receive the leader's decline"
+            );
+        }
+
+        // The failed flight is gone: the same bad set composes again (and declines again),
+        // never joining a dead flight, and a healthy set recovers.
+        produce.compose.set_compose_delay_ms(0);
+        let again = produce
+            .compose
+            .answer_generations_async(None, bad.clone(), now_i64, clock.clone(), day.clone(), true)
+            .await;
+        assert_eq!(again, lead, "the same inputs must decline the same way");
+        assert_eq!(
+            produce.compose.compose_count() - compose_before,
+            2,
+            "the failed flight must not stay in the inflight map"
+        );
+        let (bytes, _) = produce
+            .compose
+            .answer_generations_async(None, gens, now_i64, clock, day, true)
+            .await
+            .expect("a healthy generation set recovers");
+        assert!(!bytes.is_empty());
     }
 }

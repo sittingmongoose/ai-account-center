@@ -595,4 +595,94 @@ mod tests {
             Some(Decline::Stale)
         );
     }
+
+    /// A failed multi-source commit changes nothing: an entry that would have committed
+    /// first stays at its old generation when a later entry is refused (flicker-T1's
+    /// commit_generations rollback coverage). A commit that inserted entries before
+    /// checking every one of them fails this test.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_failed_commit_leaves_every_source_unchanged() {
+        let feeds = Feeds::new();
+        assert!(
+            feeds
+                .put(
+                    "status-reports",
+                    br#"{"generation":"1","data":{"reports":{}},"facts":{}}"#
+                )
+                .is_ok()
+        );
+        assert!(
+            feeds
+                .put(
+                    "status-quota",
+                    br#"{"generation":"1","data":{"quota":{}},"facts":{}}"#
+                )
+                .is_ok()
+        );
+        let newer_reports = feeds
+            .prepare_generation(
+                "status-reports",
+                br#"{"generation":"2","data":{"reports":{"a":1}},"facts":{}}"#,
+            )
+            .unwrap();
+        // The same generation id with other bytes: a generation is immutable, so this is refused.
+        let colliding_quota = feeds
+            .prepare_generation(
+                "status-quota",
+                br#"{"generation":"1","data":{"quota":{"b":2}},"facts":{}}"#,
+            )
+            .unwrap();
+        assert_eq!(
+            feeds
+                .commit_generations(&[
+                    ("status-reports", newer_reports),
+                    ("status-quota", colliding_quota)
+                ])
+                .err(),
+            Some(Decline::Shape)
+        );
+        assert_eq!(
+            held(&feeds, "status-reports").as_deref(),
+            Some("1"),
+            "the first entry must not commit when a later entry is refused"
+        );
+        assert_eq!(held(&feeds, "status-quota").as_deref(), Some("1"));
+        assert_eq!(
+            feeds.latest("status-quota").unwrap().data.get(),
+            r#"{"quota":{}}"#
+        );
+    }
+
+    /// A commit that would pass the source cap refuses as a whole: neither a brand-new
+    /// source nor a newer generation of an existing one slips in (flicker-T1).
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_commit_over_the_source_cap_refuses_without_partial_inserts() {
+        let feeds = Feeds::new();
+        for i in 0..SOURCES {
+            assert!(
+                feeds
+                    .put(
+                        &format!("s{i}"),
+                        br#"{"generation":"1","data":{},"facts":{}}"#
+                    )
+                    .is_ok()
+            );
+        }
+        let newer_s0 = feeds
+            .prepare_generation("s0", br#"{"generation":"2","data":{},"facts":{}}"#)
+            .unwrap();
+        let extra = feeds
+            .prepare_generation("extra-a", br#"{"generation":"1","data":{},"facts":{}}"#)
+            .unwrap();
+        assert_eq!(
+            feeds
+                .commit_generations(&[("s0", newer_s0), ("extra-a", extra)])
+                .err(),
+            Some(Decline::Busy)
+        );
+        assert_eq!(held(&feeds, "s0").as_deref(), Some("1"));
+        assert_eq!(feeds.status("extra-a").err(), Some(Decline::Stale));
+    }
 }
