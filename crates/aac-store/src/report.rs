@@ -231,6 +231,16 @@ pub fn report_state(source: &Value, has_cells: bool) -> (String, Option<String>)
         .filter(|c| is_fixed_cause(c))
         .map(str::to_string);
     let state = source["state"].as_str().unwrap_or("");
+    // A state that implies readable usage must carry published cells (r2 High): however the
+    // rows were dropped (cache eviction, worker filtering, anything else), zero published
+    // cells with unreadable records is a read failure, never "Scanning" with a
+    // readable-usage claim. Decided from what is published here.
+    let unreadable_records = source["counts"]["unreadableRecords"]
+        .as_u64()
+        .is_some_and(|count| count > 0);
+    if !has_cells && unreadable_records && matches!(state, "scanning" | "cached") {
+        return ("unreadable".into(), Some("read_failed".into()));
+    }
     let owned = |s: &str| (s.to_string(), fixed.clone());
     match state {
         "scan_failed" | "unreadable" | "installed_no_logs" | "no_reader" => {

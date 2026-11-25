@@ -1899,6 +1899,154 @@ mod tests {
         );
     }
 
+    /// r2 High: rows dropped after the cache apply (here the worker's future-dated cut-off)
+    /// must still end `unreadable/read_failed` when the published report has zero cells with
+    /// unreadable records. Two real Devin replies on a fixed writer clock.
+    #[test]
+    fn a_worker_dropped_row_leaves_no_readable_usage_claim() {
+        let dir = tempfile::tempdir().expect("fixture home");
+        let engine = Arc::new(
+            aac_store::ops::open_engine(
+                dir.path().join("store").to_str().expect("fixture path"),
+                None,
+                None,
+            )
+            .expect("open activity store"),
+        );
+        // The recheck's clock: 12:40 unreadable, 12:50 writer, 13:00 valid (past the 5-minute
+        // future slack, so the worker drops it after the cache kept it).
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-25T12:50:00Z")
+            .expect("clock")
+            .timestamp_millis();
+        let db = dir.path().join(".local/share/devin/cli/sessions.db");
+        std::fs::create_dir_all(db.parent().expect("fixture parent")).expect("fixture folder");
+        let conn = rusqlite::Connection::open(&db).expect("open fixture db");
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (id TEXT, working_directory TEXT, model TEXT);
+             CREATE TABLE IF NOT EXISTS message_nodes (session_id TEXT, chat_message TEXT, created_at INTEGER);",
+        )
+        .expect("fixture schema");
+        conn.execute(
+            "INSERT INTO sessions VALUES ('s1', '/tmp', 'devin-model')",
+            [],
+        )
+        .expect("fixture session");
+        for (id, at, metrics) in [
+            ("m1", now - 600_000, json!({"output_tokens": 5})),
+            (
+                "m2",
+                now + 600_000,
+                json!({"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 0, "cache_creation_tokens": 0}),
+            ),
+        ] {
+            let message = json!({
+                "message_id": id,
+                "metadata": {
+                    "request_id": id,
+                    "created_at": aac_num::ecma::to_iso_string(at).expect("reply date"),
+                    "generation_model": "devin-model",
+                    "metrics": metrics,
+                },
+            })
+            .to_string();
+            conn.execute(
+                "INSERT INTO message_nodes VALUES ('s1', ?, ?)",
+                rusqlite::params![message, at / 1000],
+            )
+            .expect("fixture reply");
+        }
+        conn.close().expect("close fixture db");
+        let env = aac_usage::discover::Env::from([
+            (
+                "HOME".to_string(),
+                dir.path().to_string_lossy().into_owned(),
+            ),
+            ("PATH".to_string(), String::new()),
+        ]);
+        let answer = aac_usage::protocol::scan(
+            &aac_usage::protocol::parse_request(
+                json!({"kinds":["devin"],"minDateMs":now - DAY,"fingerprints":{}})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .expect("scanner request"),
+            dir.path(),
+            &env,
+        );
+        assert!(
+            valid_scan_answer(&answer, &["devin".into()]),
+            "the backend answer is valid: {answer}"
+        );
+        assert_eq!(answer["kinds"]["devin"]["unreadableRecords"], json!(1));
+        assert_eq!(
+            answer["rows"].as_array().expect("scanner rows").len(),
+            1,
+            "the 13:00 row reaches the writer"
+        );
+        let mut cache = scan_state::Cache::default();
+        let (source, kind_rows, _) = scanned_kind(
+            &answer,
+            "devin",
+            "ubuntu",
+            (now, now - 31 * DAY),
+            (false, false, false),
+            &mut cache,
+        );
+        assert_eq!(
+            source["state"], "scanning",
+            "the cache still holds the 13:00 row"
+        );
+        assert_eq!(kind_rows.len(), 1);
+        let worker = collect::worker_from_scan(
+            &kind_rows,
+            &[],
+            "devin",
+            "ubuntu",
+            now,
+            &ResolverPricing::new(dir.path()),
+        );
+        assert!(
+            worker["cells"].as_array().expect("worker cells").is_empty(),
+            "the worker drops the future-dated hour"
+        );
+        let reports = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &[json!({"tool":"devin", "host":"ubuntu", "data":worker})],
+            states: &[source],
+            window_from_ms: now - DAY,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &["devin".into()].into_iter().collect(),
+        });
+        assert_eq!(reports[0]["state"], "unreadable");
+        assert_eq!(reports[0]["cause"], json!("read_failed"));
+        let receipt = ingest_reports(&engine, &reports).expect("ingest scanner report");
+        assert_eq!(receipt["refused"], json!([]));
+        let activity = crate::analytics_route::compose(
+            engine.clone(),
+            dir.path(),
+            None,
+            &crate::analytics_live::Live::default(),
+            Some("range=7d&tz=UTC"),
+            now,
+        )
+        .expect("native Analytics answer")["activity"]
+            .clone();
+        assert_eq!(activity["sources"][0]["state"], "unreadable");
+        assert_eq!(activity["sources"][0]["cause"], json!("read_failed"));
+        let detail = activity["sources"][0]["detail"]
+            .as_str()
+            .expect("failure disclosure");
+        assert!(
+            detail.contains("could not be read"),
+            "the failure detail stands: {detail}"
+        );
+        assert!(
+            !detail.contains("readable usage included"),
+            "no readable-usage claim without published cells: {detail}"
+        );
+    }
+
     /// Every record unreadable and nothing readable: the scan is unreadable.
     #[test]
     fn unreadable_records_without_readable_rows_is_unreadable() {
