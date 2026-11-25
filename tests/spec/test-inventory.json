@@ -3426,9 +3426,11 @@
     },
     {
       "file": "tests/unit/scripts/memory-budget.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
     },
     {
       "file": "tests/unit/scripts/personal-detail-guard.test.ts",

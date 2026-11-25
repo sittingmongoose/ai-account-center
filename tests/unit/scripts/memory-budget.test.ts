@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,21 +12,104 @@ import {
   POLL_PLAN,
   buildIsolatedEnv,
   collectDescendants,
+  evaluateRouteFailures,
+  evaluateSampleFailures,
   evaluateThresholds,
+  getChildExitStatus,
+  loadThresholdConfig,
   parseProcStat,
   parseSmapsRollup,
+  runMemoryBudget,
+  summarizeRoutes,
   summarizeSamples,
+  validateRunOptions,
+  validateThresholdConfig,
 } from '../../../scripts/perf/memory-budget.mjs';
 
 const { scanText } = require('../../../scripts/personal-detail-guard.js');
 
-function walkFiles(dir, base = dir, out = []) {
+const REPO_ROOT = path.resolve(import.meta.dir, '../../..');
+const RUNNER_PATH = path.join(REPO_ROOT, 'scripts', 'perf', 'memory-budget.mjs');
+const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, 'config', 'memory-budget.json');
+
+function walkFiles(dir: string, base = dir, out: string[] = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) walkFiles(full, base, out);
     else out.push(path.relative(base, full).split(path.sep).join('/'));
   }
   return out.sort();
+}
+
+function makeSample(
+  tSec: number,
+  serverRssKiB: number,
+  childrenRssKiB = 0,
+  serverPssKiB = serverRssKiB
+) {
+  return {
+    tSec,
+    serverRssKiB,
+    serverPssKiB,
+    childrenRssKiB,
+    childrenPssKiB: childrenRssKiB,
+    totalRssKiB: serverRssKiB + childrenRssKiB,
+    totalPssKiB: serverPssKiB + childrenRssKiB,
+    threads: 8,
+    childrenCount: childrenRssKiB > 0 ? 1 : 0,
+  };
+}
+
+/** Write a tiny Node HTTP server acting as a fake dashboard launcher for runner integration tests. */
+function writeFakeDashboardScript(
+  dir: string,
+  filename: string,
+  { failAfterFirst = false } = {}
+) {
+  const scriptPath = path.join(dir, filename);
+  fs.writeFileSync(
+    scriptPath,
+    `import http from 'node:http';
+const args = process.argv.slice(2);
+const portIdx = args.indexOf('--port');
+const port = portIdx >= 0 ? Number(args[portIdx + 1]) : 0;
+const failAfterFirst = ${JSON.stringify(failAfterFirst)};
+const hits = new Map();
+const server = http.createServer((req, res) => {
+  const url = req.url || '/';
+  if (url === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"ok":true}');
+    return;
+  }
+  if (url === '/api/auth/setup' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"configured":false}');
+    return;
+  }
+  if (url === '/api/auth/setup' && req.method === 'POST') {
+    res.writeHead(201, {
+      'Content-Type': 'application/json',
+      'Set-Cookie': 'aac_session=fake-token; HttpOnly; Path=/',
+    });
+    res.end('{"ok":true}');
+    return;
+  }
+  const count = (hits.get(url) ?? 0) + 1;
+  hits.set(url, count);
+  if (failAfterFirst && count > 1) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end('{"error":"simulated_late_failure"}');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end('{"ok":true,"hit":' + count + '}');
+});
+server.listen(port, '127.0.0.1');
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+`
+  );
+  return scriptPath;
 }
 
 describe('memory budget fixture generator', () => {
@@ -67,7 +151,13 @@ describe('memory budget fixture generator', () => {
       for (const rel of filesA) {
         const bytesA = fs.readFileSync(path.join(rootA, rel));
         const bytesB = fs.readFileSync(path.join(rootB, rel));
-        if (rel.endsWith('.json') || rel.endsWith('.jsonl') || rel.endsWith('.md') || rel.endsWith('.pub') || rel.endsWith('.pem')) {
+        if (
+          rel.endsWith('.json') ||
+          rel.endsWith('.jsonl') ||
+          rel.endsWith('.md') ||
+          rel.endsWith('.pub') ||
+          rel.endsWith('.pem')
+        ) {
           const textA = bytesA.toString('utf8');
           const textB = bytesB.toString('utf8');
           expect(textA.replaceAll(rootA, '<ROOT>')).toBe(textB.replaceAll(rootB, '<ROOT>'));
@@ -141,11 +231,11 @@ describe('memory budget sampler and threshold evaluator', () => {
 
   it('computes steady median after minute 2 and peak metrics and fails over threshold', () => {
     const samples = [
-      { tSec: 0, serverRssKiB: 100 * 1024, serverPssKiB: 90 * 1024, childrenRssKiB: 0, childrenPssKiB: 0, totalRssKiB: 100 * 1024, totalPssKiB: 90 * 1024, threads: 8, childrenCount: 0 },
-      { tSec: 60, serverRssKiB: 400 * 1024, serverPssKiB: 380 * 1024, childrenRssKiB: 50 * 1024, childrenPssKiB: 45 * 1024, totalRssKiB: 450 * 1024, totalPssKiB: 425 * 1024, threads: 12, childrenCount: 1 },
-      { tSec: 120, serverRssKiB: 200 * 1024, serverPssKiB: 190 * 1024, childrenRssKiB: 10 * 1024, childrenPssKiB: 8 * 1024, totalRssKiB: 210 * 1024, totalPssKiB: 198 * 1024, threads: 10, childrenCount: 1 },
-      { tSec: 180, serverRssKiB: 210 * 1024, serverPssKiB: 200 * 1024, childrenRssKiB: 0, childrenPssKiB: 0, totalRssKiB: 210 * 1024, totalPssKiB: 200 * 1024, threads: 10, childrenCount: 0 },
-      { tSec: 240, serverRssKiB: 220 * 1024, serverPssKiB: 210 * 1024, childrenRssKiB: 0, childrenPssKiB: 0, totalRssKiB: 220 * 1024, totalPssKiB: 210 * 1024, threads: 10, childrenCount: 0 },
+      makeSample(0, 100 * 1024, 0, 90 * 1024),
+      makeSample(60, 400 * 1024, 50 * 1024, 380 * 1024),
+      makeSample(120, 200 * 1024, 10 * 1024, 190 * 1024),
+      makeSample(180, 210 * 1024, 0, 200 * 1024),
+      makeSample(240, 220 * 1024, 0, 210 * 1024),
     ];
     const summary = summarizeSamples(samples, 120);
     expect(summary.steadyMedianRssMiB).toBe(210);
@@ -170,6 +260,319 @@ describe('memory budget sampler and threshold evaluator', () => {
     expect(fail.violations[1].deltaMiB).toBe(50);
   });
 
+  it('rejects misspelled, missing, non-finite, and unknown limit keys before fixture generation', () => {
+    const summary = summarizeSamples(
+      [makeSample(0, 700 * 1024), makeSample(120, 700 * 1024), makeSample(240, 900 * 1024, 80 * 1024)],
+      120
+    );
+
+    const misspelled = {
+      schemaVersion: 1,
+      limits: { steadyRssMib: 320, peakRssMib: 651, childrenPeakRssMib: 16 },
+    };
+    expect(() => validateThresholdConfig(misspelled)).toThrow(/unknown limit key/i);
+    expect(() => evaluateThresholds(summary, misspelled)).toThrow(/unknown limit key/i);
+
+    expect(() =>
+      validateThresholdConfig({
+        schemaVersion: 1,
+        limits: { steadyRssMiB: 320, peakRssMiB: 651, childrenPeakRssMiB: 16, extraLimit: 5 },
+      })
+    ).toThrow(/unknown limit key/i);
+
+    expect(() =>
+      validateThresholdConfig({
+        schemaVersion: 1,
+        limits: { steadyRssMiB: 320, peakRssMiB: 651 },
+      })
+    ).toThrow(/missing required limit "childrenPeakRssMiB"/i);
+
+    for (const bad of [null, Number.NaN, Number.POSITIVE_INFINITY, -1, '320']) {
+      expect(() =>
+        validateThresholdConfig({
+          schemaVersion: 1,
+          limits: { steadyRssMiB: bad, peakRssMiB: 651, childrenPeakRssMiB: 16 },
+        })
+      ).toThrow(/finite non-negative number/i);
+    }
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-badcfg-'));
+    try {
+      const badCfgPath = path.join(tmpDir, 'bad-budget.json');
+      fs.writeFileSync(badCfgPath, `${JSON.stringify(misspelled, null, 2)}\n`);
+      expect(() => loadThresholdConfig(badCfgPath)).toThrow(/unknown limit key/i);
+
+      // CLI must fail immediately during config validation before fixture generation.
+      const res = spawnSync(
+        process.execPath,
+        [RUNNER_PATH, '--config', badCfgPath, '--fixture-dir', path.join(tmpDir, 'does-not-exist')],
+        { encoding: 'utf8', timeout: 10_000 }
+      );
+      expect(res.status).not.toBe(0);
+      expect(res.stderr).toMatch(/unknown limit key/i);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('compares unrounded values so 4 KiB over a limit fails while exact limit passes', () => {
+    const committedConfig = loadThresholdConfig(DEFAULT_CONFIG_PATH);
+
+    const exactSamples = [
+      makeSample(0, 200 * 1024, 0),
+      makeSample(60, 651 * 1024, 16 * 1024),
+      makeSample(120, 320 * 1024, 0),
+      makeSample(180, 320 * 1024, 0),
+      makeSample(240, 320 * 1024, 0),
+    ];
+    const exactSummary = summarizeSamples(exactSamples, 120);
+    const exactCheck = evaluateThresholds(exactSummary, committedConfig);
+    expect(exactCheck.ok).toBe(true);
+    expect(exactCheck.violations).toEqual([]);
+
+    // 4 KiB over peak (651 MiB + 4 KiB) and 4 KiB over children peak (16 MiB + 4 KiB)
+    // and 4 KiB over steady (320 MiB + 4 KiB) would all round down to the limit at 2 decimals.
+    const over4KiBSamples = [
+      makeSample(0, 200 * 1024, 0),
+      makeSample(60, 651 * 1024 + 4, 16 * 1024 + 4),
+      makeSample(120, 320 * 1024 + 4, 0),
+      makeSample(180, 320 * 1024 + 4, 0),
+      makeSample(240, 320 * 1024 + 4, 0),
+    ];
+    const overSummary = summarizeSamples(over4KiBSamples, 120);
+    expect(overSummary.peakRssMiB).toBe(651);
+    expect(overSummary.childrenPeakRssMiB).toBe(16);
+    expect(overSummary.steadyMedianRssMiB).toBe(320);
+
+    const overCheck = evaluateThresholds(overSummary, committedConfig);
+    expect(overCheck.ok).toBe(false);
+    expect(overCheck.violations.map((v) => v.metric)).toEqual([
+      'steadyRssMiB',
+      'peakRssMiB',
+      'childrenPeakRssMiB',
+    ]);
+    for (const v of overCheck.violations) {
+      expect(v.deltaKiB).toBe(4);
+      expect(v.deltaMiB).toBeGreaterThan(0);
+      expect(v.measuredMiB).toBeGreaterThan(v.limitMiB);
+    }
+  });
+
+  it('refuses steady fallback and insufficient steady samples in check mode while allowing measure-only fallback', () => {
+    const earlyOnly = [makeSample(0, 120 * 1024), makeSample(2, 130 * 1024)];
+    expect(() => summarizeSamples(earlyOnly, 120)).toThrow(/steady window/i);
+
+    const fallbackSummary = summarizeSamples(earlyOnly, 120, { allowSteadyFallback: true });
+    expect(fallbackSummary.steadySampleCount).toBe(0);
+    expect(fallbackSummary.steadyUsedFallback).toBe(true);
+    expect(() =>
+      evaluateThresholds(fallbackSummary, loadThresholdConfig(DEFAULT_CONFIG_PATH))
+    ).toThrow(/steady-window samples/i);
+
+    const sampleFailures = evaluateSampleFailures(fallbackSummary, {
+      durationSec: 300,
+      steadyAfterSec: 120,
+      sampleIntervalSec: 2,
+    });
+    expect(sampleFailures.length).toBeGreaterThanOrEqual(2);
+
+    // Too few steady samples (killed shortly after minute 2) also fails check mode.
+    const shortSteady = [
+      makeSample(0, 100 * 1024),
+      makeSample(120, 200 * 1024),
+      makeSample(122, 205 * 1024),
+      makeSample(124, 210 * 1024),
+    ];
+    const shortSummary = summarizeSamples(shortSteady, 120);
+    const shortFailures = evaluateSampleFailures(shortSummary, {
+      durationSec: 300,
+      steadyAfterSec: 120,
+      sampleIntervalSec: 2,
+    });
+    expect(shortFailures.some((msg) => msg.includes('Insufficient steady-window samples'))).toBe(true);
+    expect(shortFailures.some((msg) => msg.includes('ended too early'))).toBe(true);
+  });
+
+  it('fails zero-length runs and rejects later poll failures across the measurement window', () => {
+    expect(() =>
+      validateRunOptions({ durationSec: 0, steadyAfterSec: 120, sampleIntervalSec: 2, check: true })
+    ).toThrow(/durationSec/i);
+    expect(() =>
+      validateRunOptions({ durationSec: 0, steadyAfterSec: 120, sampleIntervalSec: 2, check: false })
+    ).toThrow(/durationSec/i);
+    expect(() =>
+      validateRunOptions({
+        durationSec: 10,
+        steadyAfterSec: 120,
+        sampleIntervalSec: 2,
+        check: true,
+      })
+    ).toThrow(/steadyAfterSec/i);
+    // Explicit measure-only mode allows short runs whose steadyAfterSec exceeds durationSec.
+    expect(() =>
+      validateRunOptions({
+        durationSec: 10,
+        steadyAfterSec: 120,
+        sampleIntervalSec: 2,
+        check: false,
+      })
+    ).not.toThrow();
+
+    // CLI zero-length check run fails immediately before fixture generation.
+    const zeroCli = spawnSync(process.execPath, [RUNNER_PATH, '--duration', '0'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+    expect(zeroCli.status).not.toBe(0);
+    expect(zeroCli.stderr).toMatch(/durationSec/i);
+
+    // Zero calls across all routes must fail.
+    const zeroRoutes = summarizeRoutes([]);
+    const zeroFailures = evaluateRouteFailures(zeroRoutes, 300);
+    expect(zeroFailures).toHaveLength(POLL_PLAN.length);
+
+    // 7 initial HTTP 200s followed by 54 later failures across a 5-minute schedule must fail.
+    const lateFailureRecords = [];
+    for (const route of POLL_PLAN) {
+      let idx = 0;
+      for (let t = route.offsetSec; t < 300; t += route.periodSec) {
+        lateFailureRecords.push({
+          tSec: t,
+          route: route.name,
+          status: idx === 0 ? 200 : 500,
+          bytes: idx === 0 ? 1024 : 0,
+          encoding: '',
+          ms: 5,
+        });
+        idx += 1;
+      }
+    }
+    const lateSummary = summarizeRoutes(lateFailureRecords);
+    const lateFailures = evaluateRouteFailures(lateSummary, 300);
+    expect(lateFailures).toHaveLength(6);
+    expect(lateFailures.every((msg) => msg.includes('polls failed'))).toBe(true);
+
+    // Full 5-minute healthy schedule passes cleanly.
+    const healthyRecords = [];
+    for (const route of POLL_PLAN) {
+      for (let t = route.offsetSec; t < 300; t += route.periodSec) {
+        healthyRecords.push({
+          tSec: t,
+          route: route.name,
+          status: 200,
+          bytes: 1024,
+          encoding: '',
+          ms: 5,
+        });
+      }
+    }
+    expect(evaluateRouteFailures(summarizeRoutes(healthyRecords), 300)).toEqual([]);
+  });
+
+  it('detects a SIGKILLed real child process via signalCode even when exitCode is null', async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+      stdio: 'ignore',
+    });
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    child.kill('SIGKILL');
+    await exited;
+
+    expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBe('SIGKILL');
+    expect(getChildExitStatus(child)).toEqual({
+      exitCode: null,
+      signalCode: 'SIGKILL',
+      reason: 'signal=SIGKILL',
+    });
+  });
+
+  it.skipIf(process.platform !== 'linux')(
+    'fails runMemoryBudget on a SIGKILLed child, fails on later poll errors, and passes a healthy run',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-e2e-'));
+      const fastPollPlan = [
+        { name: 'status', path: '/api/status', periodSec: 0.4, offsetSec: 0 },
+        { name: 'accounts', path: '/api/accounts/dashboard', periodSec: 0.5, offsetSec: 0.1 },
+      ];
+      const generousConfigPath = path.join(tmpDir, 'budget.json');
+      fs.writeFileSync(
+        generousConfigPath,
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            limits: { steadyRssMiB: 2048, peakRssMiB: 2048, childrenPeakRssMiB: 512 },
+          },
+          null,
+          2
+        )}\n`
+      );
+      try {
+        // 1. SIGKILLed dashboard child during measurement must reject with signal=SIGKILL.
+        const okScript = writeFakeDashboardScript(tmpDir, 'ok-dashboard.mjs', {
+          failAfterFirst: false,
+        });
+        let killTimer: ReturnType<typeof setTimeout> | null = null;
+        await expect(
+          runMemoryBudget({
+            durationSec: 4,
+            steadyAfterSec: 1.5,
+            sampleIntervalSec: 0.25,
+            seed: 1,
+            configPath: generousConfigPath,
+            check: true,
+            pollPlan: fastPollPlan,
+            launcherPath: process.execPath,
+            launcherArgs: ({ port }) => [okScript, '--port', String(port)],
+            onServerReady: ({ child }) => {
+              killTimer = setTimeout(() => child.kill('SIGKILL'), 350);
+            },
+          })
+        ).rejects.toThrow(/signal=SIGKILL/);
+        if (killTimer) clearTimeout(killTimer);
+
+        // 2. Later poll failures after initial 200s must mark the run failed.
+        const flakyScript = writeFakeDashboardScript(tmpDir, 'flaky-dashboard.mjs', {
+          failAfterFirst: true,
+        });
+        const flakySummary = await runMemoryBudget({
+          durationSec: 1.8,
+          steadyAfterSec: 0.5,
+          sampleIntervalSec: 0.2,
+          seed: 1,
+          configPath: generousConfigPath,
+          check: true,
+          pollPlan: fastPollPlan,
+          launcherPath: process.execPath,
+          launcherArgs: ({ port }) => [flakyScript, '--port', String(port)],
+        });
+        expect(flakySummary.ok).toBe(false);
+        expect(flakySummary.routeFailures.length).toBeGreaterThanOrEqual(2);
+        expect(flakySummary.routeFailures.every((msg) => msg.includes('polls failed'))).toBe(true);
+
+        // 3. Healthy child with 100% 200s and full steady window passes.
+        const healthySummary = await runMemoryBudget({
+          durationSec: 1.8,
+          steadyAfterSec: 0.5,
+          sampleIntervalSec: 0.2,
+          seed: 1,
+          configPath: generousConfigPath,
+          check: true,
+          pollPlan: fastPollPlan,
+          launcherPath: process.execPath,
+          launcherArgs: ({ port }) => [okScript, '--port', String(port)],
+        });
+        expect(healthySummary.ok).toBe(true);
+        expect(healthySummary.routeFailures).toEqual([]);
+        expect(healthySummary.sampleFailures).toEqual([]);
+        expect(healthySummary.memory.steadyUsedFallback).toBe(false);
+        expect(healthySummary.memory.steadySampleCount).toBeGreaterThanOrEqual(3);
+        expect(healthySummary.threshold?.ok).toBe(true);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }
+  );
+
   it('isolates every home variable and polls the required routes on schedule', () => {
     const env = buildIsolatedEnv({
       home: '/tmp/aac-test-home',
@@ -179,7 +582,14 @@ describe('memory budget sampler and threshold evaluator', () => {
       stubsDir: '/tmp/aac-test-stubs',
       xdgRuntimeDir: '/tmp/aac-test-xdg',
     });
-    for (const key of ['HOME', 'CCS_HOME', 'USERPROFILE', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME']) {
+    for (const key of [
+      'HOME',
+      'CCS_HOME',
+      'USERPROFILE',
+      'CODEX_HOME',
+      'CLAUDE_CONFIG_DIR',
+      'XDG_CONFIG_HOME',
+    ]) {
       expect(env[key]).toStartWith('/tmp/aac-test-home');
     }
     expect(env.AAC_STATUS_DOORBELL).toBe('off');
@@ -199,12 +609,13 @@ describe('memory budget sampler and threshold evaluator', () => {
   });
 
   it('tracks a valid config/memory-budget.json threshold file', () => {
-    const configPath = path.resolve(import.meta.dir, '../../../config/memory-budget.json');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const config = loadThresholdConfig(DEFAULT_CONFIG_PATH);
     expect(config.schemaVersion).toBe(1);
     expect(typeof config.limits.steadyRssMiB).toBe('number');
     expect(config.limits.steadyRssMiB).toBeGreaterThan(0);
     expect(typeof config.limits.peakRssMiB).toBe('number');
     expect(config.limits.peakRssMiB).toBeGreaterThanOrEqual(config.limits.steadyRssMiB);
+    expect(typeof config.limits.childrenPeakRssMiB).toBe('number');
+    expect(config.limits.childrenPeakRssMiB).toBeGreaterThanOrEqual(0);
   });
 });

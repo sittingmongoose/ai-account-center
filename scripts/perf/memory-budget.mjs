@@ -28,6 +28,30 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, 'config', 'memory-budget.json');
 const KIB_PER_MIB = 1024;
+const MIN_STEADY_SAMPLES_FLOOR = 3;
+
+/** Required budget ceilings in config/memory-budget.json for check mode. */
+export const REQUIRED_LIMIT_KEYS = Object.freeze([
+  'steadyRssMiB',
+  'peakRssMiB',
+  'childrenPeakRssMiB',
+]);
+
+const THRESHOLD_CHECKS = Object.freeze([
+  ['steadyRssMiB', 'steadyMedianRssKiB', 'steadyMedianRssMiB'],
+  ['peakRssMiB', 'peakRssKiB', 'peakRssMiB'],
+  ['steadyPssMiB', 'steadyMedianPssKiB', 'steadyMedianPssMiB'],
+  ['peakPssMiB', 'peakPssKiB', 'peakPssMiB'],
+  ['childrenPeakRssMiB', 'childrenPeakRssKiB', 'childrenPeakRssMiB'],
+  ['childrenPeakPssMiB', 'childrenPeakPssKiB', 'childrenPeakPssMiB'],
+  ['totalSteadyRssMiB', 'totalSteadyMedianRssKiB', 'totalSteadyMedianRssMiB'],
+  ['totalPeakRssMiB', 'totalPeakRssKiB', 'totalPeakRssMiB'],
+]);
+
+/** Every limit key accepted in config/memory-budget.json. */
+export const ALLOWED_LIMIT_KEYS = Object.freeze(
+  new Set(THRESHOLD_CHECKS.map(([limitKey]) => limitKey))
+);
 
 /** Default polling plan matching open dashboard pages + both desktop Home trays. */
 export const POLL_PLAN = Object.freeze([
@@ -68,6 +92,26 @@ export const POLL_PLAN = Object.freeze([
 const FIXTURE_USER = 'perfadmin';
 const FIXTURE_PASS = 'Perf-Correct-Horse-Battery-9';
 
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Return exit details when a child has exited or been terminated by a signal, else null. */
+export function getChildExitStatus(child) {
+  if (!child) return null;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return {
+      exitCode: child.exitCode ?? null,
+      signalCode: child.signalCode ?? null,
+      reason:
+        child.signalCode !== null && child.signalCode !== undefined
+          ? `signal=${child.signalCode}`
+          : `code=${child.exitCode}`,
+    };
+  }
+  return null;
+}
+
 /** Parse /proc/<pid>/smaps_rollup text into KiB counters. */
 export function parseSmapsRollup(text) {
   const out = { rssKiB: 0, pssKiB: 0, pssAnonKiB: 0, pssFileKiB: 0, swapKiB: 0 };
@@ -95,6 +139,13 @@ export function parseProcStatusRss(text) {
     else if (line.startsWith('VmSwap:')) swapKiB = Number.parseInt(line.slice(7).trim(), 10) || 0;
   }
   return { rssKiB, pssKiB: rssKiB, pssAnonKiB: 0, pssFileKiB: 0, swapKiB };
+}
+
+function readProcStatState(text) {
+  const close = text.lastIndexOf(')');
+  if (close < 0) return null;
+  const fields = text.slice(close + 2).trim().split(/\s+/);
+  return fields[0] ?? null;
 }
 
 /** Parse /proc/<pid>/stat text for parent PID and thread count. */
@@ -129,6 +180,22 @@ export function collectDescendants(rootPid, parentByPid) {
     }
   }
   return found;
+}
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    const state = readProcStatState(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    if (state === 'Z' || state === 'X') return false;
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 function readProcMemory(pid) {
@@ -166,9 +233,13 @@ function listProcParents() {
 
 /** Sample server process and all descendant processes from /proc. */
 export function sampleProcessTree(rootPid, elapsedSec) {
+  let rootStatText;
   let rootStat;
   try {
-    rootStat = parseProcStat(fs.readFileSync(`/proc/${rootPid}/stat`, 'utf8'));
+    rootStatText = fs.readFileSync(`/proc/${rootPid}/stat`, 'utf8');
+    const state = readProcStatState(rootStatText);
+    if (state === 'Z' || state === 'X') return null;
+    rootStat = parseProcStat(rootStatText);
   } catch {
     return null;
   }
@@ -218,12 +289,152 @@ function toMiB(kib) {
   return +(kib / KIB_PER_MIB).toFixed(2);
 }
 
-/** Compute steady median (after steadyAfterSec), peak, and children peak summary. */
-export function summarizeSamples(samples, steadyAfterSec = 120) {
+/** Minimum valid steady-window samples required for check mode. */
+export function minRequiredSteadySamples(durationSec, steadyAfterSec, sampleIntervalSec) {
+  const steadyWindowSec = durationSec - steadyAfterSec;
+  if (
+    !Number.isFinite(steadyWindowSec) ||
+    steadyWindowSec <= 0 ||
+    !Number.isFinite(sampleIntervalSec) ||
+    sampleIntervalSec <= 0
+  ) {
+    return 0;
+  }
+  const expected = Math.floor(steadyWindowSec / sampleIntervalSec) + 1;
+  return Math.max(MIN_STEADY_SAMPLES_FLOOR, Math.ceil(expected * 0.5));
+}
+
+/** Validate timing options before generating the fixture or starting the server. */
+export function validateRunOptions(opts, pollPlan = POLL_PLAN) {
+  if (!isPlainObject(opts)) {
+    throw new Error('Runner options must be an object.');
+  }
+  const { durationSec, steadyAfterSec, sampleIntervalSec, check = true } = opts;
+  if (typeof durationSec !== 'number' || !Number.isFinite(durationSec) || durationSec <= 0) {
+    throw new Error(`Invalid durationSec (${durationSec}): must be a finite number > 0.`);
+  }
+  if (
+    typeof steadyAfterSec !== 'number' ||
+    !Number.isFinite(steadyAfterSec) ||
+    steadyAfterSec < 0
+  ) {
+    throw new Error(`Invalid steadyAfterSec (${steadyAfterSec}): must be a finite number >= 0.`);
+  }
+  if (
+    typeof sampleIntervalSec !== 'number' ||
+    !Number.isFinite(sampleIntervalSec) ||
+    sampleIntervalSec <= 0
+  ) {
+    throw new Error(
+      `Invalid sampleIntervalSec (${sampleIntervalSec}): must be a finite number > 0.`
+    );
+  }
+  if (opts.seed !== undefined && (typeof opts.seed !== 'number' || !Number.isFinite(opts.seed))) {
+    throw new Error(`Invalid seed (${opts.seed}): must be a finite number.`);
+  }
+  if (!Array.isArray(pollPlan) || pollPlan.length === 0) {
+    throw new Error('Poll plan must contain at least one route.');
+  }
+
+  if (check) {
+    if (durationSec <= steadyAfterSec) {
+      throw new Error(
+        `Check mode requires durationSec (${durationSec}s) > steadyAfterSec (${steadyAfterSec}s) to collect steady-window samples.`
+      );
+    }
+    const maxOffsetSec = Math.max(...pollPlan.map((route) => route.offsetSec));
+    if (durationSec <= maxOffsetSec) {
+      throw new Error(
+        `Check mode requires durationSec (${durationSec}s) > max route offset (${maxOffsetSec}s) so every route is polled.`
+      );
+    }
+    const steadyWindowSec = durationSec - steadyAfterSec;
+    const expectedSteady = Math.floor(steadyWindowSec / sampleIntervalSec) + 1;
+    if (expectedSteady < MIN_STEADY_SAMPLES_FLOOR) {
+      throw new Error(
+        `Check mode steady window (${steadyWindowSec}s at ${sampleIntervalSec}s interval) allows only ${expectedSteady} sample(s); need at least ${MIN_STEADY_SAMPLES_FLOOR}.`
+      );
+    }
+  }
+}
+
+/** Validate a threshold config object; refuses missing required limits, non-finite values, and unknown keys. */
+export function validateThresholdConfig(
+  config,
+  { requireSchemaVersion = false, source = 'threshold config' } = {}
+) {
+  if (!isPlainObject(config)) {
+    throw new Error(`Invalid ${source}: expected a JSON object.`);
+  }
+  if (requireSchemaVersion || config.schemaVersion !== undefined) {
+    if (config.schemaVersion !== 1) {
+      throw new Error(
+        `Invalid ${source}: unsupported schemaVersion ${JSON.stringify(config.schemaVersion)} (expected 1).`
+      );
+    }
+  }
+  if (!isPlainObject(config.limits)) {
+    throw new Error(`Invalid ${source}: missing "limits" object.`);
+  }
+
+  const limitKeys = Object.keys(config.limits);
+  const unknownKeys = limitKeys.filter((key) => !ALLOWED_LIMIT_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `Invalid ${source}: unknown limit key(s) ${unknownKeys.map((k) => `"${k}"`).join(', ')} (allowed: ${[...ALLOWED_LIMIT_KEYS].join(', ')}).`
+    );
+  }
+
+  for (const key of REQUIRED_LIMIT_KEYS) {
+    if (!Object.hasOwn(config.limits, key)) {
+      throw new Error(`Invalid ${source}: missing required limit "${key}".`);
+    }
+  }
+
+  for (const key of limitKeys) {
+    const val = config.limits[key];
+    if (typeof val !== 'number' || !Number.isFinite(val) || val < 0) {
+      throw new Error(
+        `Invalid ${source}: limit "${key}" must be a finite non-negative number (got ${JSON.stringify(val)}).`
+      );
+    }
+  }
+
+  return config;
+}
+
+/** Read and validate config/memory-budget.json before generating the fixture. */
+export function loadThresholdConfig(configPath) {
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`Threshold config not found: ${configPath}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    throw new Error(
+      `Invalid threshold config JSON (${configPath}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  return validateThresholdConfig(parsed, { requireSchemaVersion: true, source: configPath });
+}
+
+/**
+ * Compute steady median (after steadyAfterSec), peak, and children peak summary.
+ * Retains exact KiB values for unrounded threshold comparison.
+ * Refuses empty steady windows unless allowSteadyFallback is explicitly enabled (measure-only runs).
+ */
+export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
   if (!samples.length) {
     throw new Error('No memory samples were collected from /proc.');
   }
+  const allowSteadyFallback = options?.allowSteadyFallback === true;
   const steadyWindow = samples.filter((s) => s.tSec >= steadyAfterSec);
+  if (steadyWindow.length === 0 && !allowSteadyFallback) {
+    throw new Error(
+      `No memory samples were collected in the steady window (t >= ${steadyAfterSec}s; collected ${samples.length} earlier sample(s)).`
+    );
+  }
   const steadySource = steadyWindow.length > 0 ? steadyWindow : samples;
 
   const peakServerRssKiB = Math.max(...samples.map((s) => s.serverRssKiB));
@@ -238,11 +449,26 @@ export function summarizeSamples(samples, steadyAfterSec = 120) {
   const steadyMedianTotalRssKiB = median(steadySource.map((s) => s.totalRssKiB));
   const steadyMedianTotalPssKiB = median(steadySource.map((s) => s.totalPssKiB));
 
+  const lastSample = samples[samples.length - 1];
+
   return {
     sampleCount: samples.length,
     steadyAfterSec,
     steadySampleCount: steadyWindow.length,
     steadyUsedFallback: steadyWindow.length === 0,
+    lastSampleSec: lastSample.tSec,
+    steadyMedianRssKiB,
+    steadyMedianPssKiB,
+    peakRssKiB: peakServerRssKiB,
+    peakPssKiB: peakServerPssKiB,
+    childrenPeakRssKiB,
+    childrenPeakPssKiB,
+    totalSteadyMedianRssKiB: steadyMedianTotalRssKiB,
+    totalSteadyMedianPssKiB: steadyMedianTotalPssKiB,
+    totalPeakRssKiB,
+    totalPeakPssKiB,
+    endRssKiB: lastSample.serverRssKiB,
+    endPssKiB: lastSample.serverPssKiB,
     steadyMedianRssMiB: toMiB(steadyMedianRssKiB),
     steadyMedianPssMiB: toMiB(steadyMedianPssKiB),
     peakRssMiB: toMiB(peakServerRssKiB),
@@ -253,44 +479,130 @@ export function summarizeSamples(samples, steadyAfterSec = 120) {
     totalSteadyMedianPssMiB: toMiB(steadyMedianTotalPssKiB),
     totalPeakRssMiB: toMiB(totalPeakRssKiB),
     totalPeakPssMiB: toMiB(totalPeakPssKiB),
-    endRssMiB: toMiB(samples[samples.length - 1].serverRssKiB),
-    endPssMiB: toMiB(samples[samples.length - 1].serverPssKiB),
+    endRssMiB: toMiB(lastSample.serverRssKiB),
+    endPssMiB: toMiB(lastSample.serverPssKiB),
     maxThreads: Math.max(...samples.map((s) => s.threads)),
     maxChildren: Math.max(...samples.map((s) => s.childrenCount)),
   };
 }
 
-/** Check measured metrics against config/memory-budget.json limits. */
+/** Check whether steady-window sampling met check-mode sufficiency requirements. */
+export function evaluateSampleFailures(memory, { durationSec, steadyAfterSec, sampleIntervalSec }) {
+  const failures = [];
+  if (!memory || memory.sampleCount <= 0) {
+    failures.push('No memory samples were collected from /proc.');
+    return failures;
+  }
+  if (memory.steadyUsedFallback) {
+    failures.push(
+      `Steady window (t >= ${steadyAfterSec}s) collected 0 samples; startup fallback is not permitted in check mode.`
+    );
+  }
+  const minSteady = minRequiredSteadySamples(durationSec, steadyAfterSec, sampleIntervalSec);
+  if (memory.steadySampleCount < minSteady) {
+    failures.push(
+      `Insufficient steady-window samples (t >= ${steadyAfterSec}s): collected ${memory.steadySampleCount}, required >= ${minSteady}.`
+    );
+  }
+  const minLastSec = Math.max(steadyAfterSec, durationSec - Math.max(sampleIntervalSec * 3, 5));
+  if (
+    typeof memory.lastSampleSec !== 'number' ||
+    !Number.isFinite(memory.lastSampleSec) ||
+    memory.lastSampleSec < minLastSec
+  ) {
+    failures.push(
+      `Memory sampling ended too early: last sample at t=${memory.lastSampleSec ?? 'none'}s, required >= ${minLastSec.toFixed(1)}s.`
+    );
+  }
+  return failures;
+}
+
+/** Check measured metrics against config/memory-budget.json limits using unrounded values. */
 export function evaluateThresholds(memorySummary, config) {
-  const limits = config?.limits ?? {};
-  const checks = [
-    ['steadyRssMiB', 'steadyMedianRssMiB'],
-    ['peakRssMiB', 'peakRssMiB'],
-    ['steadyPssMiB', 'steadyMedianPssMiB'],
-    ['peakPssMiB', 'peakPssMiB'],
-    ['childrenPeakRssMiB', 'childrenPeakRssMiB'],
-    ['childrenPeakPssMiB', 'childrenPeakPssMiB'],
-    ['totalSteadyRssMiB', 'totalSteadyMedianRssMiB'],
-    ['totalPeakRssMiB', 'totalPeakRssMiB'],
-  ];
+  validateThresholdConfig(config);
+  if (!isPlainObject(memorySummary)) {
+    throw new Error('Memory summary must be an object.');
+  }
+  if (memorySummary.steadyUsedFallback === true || memorySummary.steadySampleCount === 0) {
+    throw new Error(
+      'Cannot evaluate thresholds without steady-window samples (steadyUsedFallback=true or steadySampleCount=0).'
+    );
+  }
+
+  const limits = config.limits;
   const violations = [];
   const results = [];
-  for (const [limitKey, metricKey] of checks) {
+  for (const [limitKey, kibKey, mibKey] of THRESHOLD_CHECKS) {
+    if (!Object.hasOwn(limits, limitKey)) continue;
     const limit = limits[limitKey];
-    if (limit === undefined || limit === null) continue;
-    const measured = memorySummary[metricKey];
-    const deltaMiB = +(measured - limit).toFixed(2);
-    const pctOver = limit > 0 ? +(((measured - limit) / limit) * 100).toFixed(1) : measured > 0 ? 100 : 0;
-    const ok = measured <= limit;
-    const row = { metric: limitKey, measuredMiB: measured, limitMiB: limit, deltaMiB, pctOver, ok };
+    const limitKiB = limit * KIB_PER_MIB;
+    let measuredKiB;
+    let exactMeasuredMiB;
+    if (typeof memorySummary[kibKey] === 'number' && Number.isFinite(memorySummary[kibKey])) {
+      measuredKiB = memorySummary[kibKey];
+      exactMeasuredMiB = measuredKiB / KIB_PER_MIB;
+    } else if (
+      typeof memorySummary[mibKey] === 'number' &&
+      Number.isFinite(memorySummary[mibKey])
+    ) {
+      exactMeasuredMiB = memorySummary[mibKey];
+      measuredKiB = exactMeasuredMiB * KIB_PER_MIB;
+    } else {
+      throw new Error(
+        `Memory summary is missing a finite value for "${limitKey}" (${kibKey}/${mibKey}).`
+      );
+    }
+
+    const deltaKiB = measuredKiB - limitKiB;
+    const exactDeltaMiB = deltaKiB / KIB_PER_MIB;
+    const ok = deltaKiB <= 0;
+
+    let measuredMiB = +exactMeasuredMiB.toFixed(2);
+    let deltaMiB = +exactDeltaMiB.toFixed(2);
+    if (!ok && (measuredMiB <= limit || deltaMiB <= 0)) {
+      measuredMiB = +exactMeasuredMiB.toFixed(4);
+      deltaMiB = +exactDeltaMiB.toFixed(4);
+      if (measuredMiB <= limit || deltaMiB <= 0) {
+        measuredMiB = exactMeasuredMiB;
+        deltaMiB = exactDeltaMiB;
+      }
+    }
+    const rawPct = limitKiB > 0 ? (deltaKiB / limitKiB) * 100 : deltaKiB > 0 ? 100 : 0;
+    const pctOver =
+      !ok && Math.abs(+rawPct.toFixed(1)) === 0 ? +rawPct.toFixed(4) || rawPct : +rawPct.toFixed(1);
+
+    const row = {
+      metric: limitKey,
+      measuredMiB,
+      limitMiB: limit,
+      deltaMiB,
+      measuredKiB,
+      limitKiB,
+      deltaKiB,
+      pctOver,
+      ok,
+    };
     results.push(row);
     if (!ok) violations.push(row);
+  }
+
+  if (results.length < REQUIRED_LIMIT_KEYS.length) {
+    throw new Error(
+      `Threshold evaluation executed only ${results.length} check(s); expected at least ${REQUIRED_LIMIT_KEYS.length}.`
+    );
   }
   return { ok: violations.length === 0, results, violations };
 }
 
 /** Build the isolated server environment with every home-like variable pointed at the temp dir. */
-export function buildIsolatedEnv({ home, ccsDir, reportsDir, registryDir, stubsDir, xdgRuntimeDir }) {
+export function buildIsolatedEnv({
+  home,
+  ccsDir,
+  reportsDir,
+  registryDir,
+  stubsDir,
+  xdgRuntimeDir,
+}) {
   return {
     PATH: `${stubsDir}:/usr/bin:/bin`,
     LANG: 'C.UTF-8',
@@ -344,8 +656,21 @@ function getFreePort() {
   });
 }
 
-function httpRequest({ port, method = 'GET', reqPath, headers = {}, body = null, agent, timeoutMs = 60_000 }) {
+function httpRequest({
+  port,
+  method = 'GET',
+  reqPath,
+  headers = {},
+  body = null,
+  agent,
+  timeoutMs = 60_000,
+  signal = null,
+}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(`HTTP request aborted (${method} ${reqPath})`));
+      return;
+    }
     const req = http.request(
       {
         hostname: '127.0.0.1',
@@ -360,6 +685,7 @@ function httpRequest({ port, method = 'GET', reqPath, headers = {}, body = null,
         const chunks = [];
         res.on('data', (chunk) => chunks.push(chunk));
         res.on('end', () => {
+          cleanupAbort();
           const buf = Buffer.concat(chunks);
           resolve({
             status: res.statusCode ?? 0,
@@ -369,24 +695,50 @@ function httpRequest({ port, method = 'GET', reqPath, headers = {}, body = null,
         });
       }
     );
+    const onAbort = () => {
+      req.destroy(new Error(`HTTP request aborted (${method} ${reqPath})`));
+    };
+    const cleanupAbort = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
     req.on('timeout', () => {
       req.destroy(new Error(`HTTP timeout after ${timeoutMs} ms (${method} ${reqPath})`));
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      cleanupAbort();
+      reject(err);
+    });
     if (body !== null) req.write(body);
     req.end();
   });
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms, signal = null) {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
-async function waitForHealth(port, child, timeoutMs = 60_000) {
+async function waitForHealth(port, child, timeoutMs = 60_000, getSpawnError = () => null) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Dashboard server exited before listening (code=${child.exitCode}).`);
+    const err = getSpawnError();
+    if (err) {
+      throw new Error(`Dashboard server failed to start: ${err.message}`);
+    }
+    const exited = getChildExitStatus(child);
+    if (exited) {
+      throw new Error(`Dashboard server exited before listening (${exited.reason}).`);
     }
     try {
       const res = await httpRequest({ port, reqPath: '/api/health', timeoutMs: 2000 });
@@ -440,15 +792,15 @@ async function signInLoopback(port) {
   return cookie;
 }
 
-async function runPollLoop(route, port, cookie, startedMs, durationMs, records) {
+async function runPollLoop(route, port, cookie, startedMs, durationMs, records, abortSignal) {
   const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
   let due = startedMs + route.offsetSec * 1000;
   try {
-    while (true) {
+    while (!abortSignal?.aborted) {
       const now = Date.now();
       if (now - startedMs >= durationMs) break;
       if (now < due) {
-        await sleep(Math.min(due - now, 250));
+        await sleep(Math.min(due - now, 250), abortSignal);
         continue;
       }
       due += route.periodSec * 1000;
@@ -463,6 +815,7 @@ async function runPollLoop(route, port, cookie, startedMs, durationMs, records) 
           reqPath: route.path,
           agent,
           timeoutMs: 60_000,
+          signal: abortSignal,
           headers: {
             Accept: 'application/json',
             'Accept-Encoding': 'gzip, deflate, br',
@@ -475,6 +828,7 @@ async function runPollLoop(route, port, cookie, startedMs, durationMs, records) 
         bytes = res.body.length;
         encoding = String(res.headers['content-encoding'] ?? '');
       } catch (err) {
+        if (abortSignal?.aborted) break;
         status = -1;
         error = err instanceof Error ? err.message : String(err);
       }
@@ -494,14 +848,14 @@ async function runPollLoop(route, port, cookie, startedMs, durationMs, records) 
   }
 }
 
-function summarizeRoutes(records) {
+export function summarizeRoutes(records, pollPlan = POLL_PLAN) {
   const byRoute = new Map();
   for (const row of records) {
     if (!byRoute.has(row.route)) byRoute.set(row.route, []);
     byRoute.get(row.route).push(row);
   }
   const summary = {};
-  for (const route of POLL_PLAN) {
+  for (const route of pollPlan) {
     const list = byRoute.get(route.name) ?? [];
     const ok = list.filter((r) => r.status === 200);
     const msList = list.map((r) => r.ms);
@@ -520,18 +874,80 @@ function summarizeRoutes(records) {
   return summary;
 }
 
+/** Expected number of scheduled calls for a route during [0, durationSec). */
+export function expectedRouteCalls(route, durationSec) {
+  if (
+    !Number.isFinite(durationSec) ||
+    durationSec <= 0 ||
+    durationSec <= route.offsetSec ||
+    !Number.isFinite(route.periodSec) ||
+    route.periodSec <= 0
+  ) {
+    return 0;
+  }
+  return Math.floor((durationSec - route.offsetSec - 1e-9) / route.periodSec) + 1;
+}
+
+/**
+ * Verify every route polled successfully across the full window:
+ * - Zero poll failures allowed (later failures fail even after an initial 200)
+ * - In check mode, every route must complete its scheduled polls (zero calls fails)
+ */
+export function evaluateRouteFailures(
+  routes,
+  durationSec = 300,
+  pollPlan = POLL_PLAN,
+  { check = true } = {}
+) {
+  const failures = [];
+  for (const route of pollPlan) {
+    const row = routes?.[route.name];
+    const scheduled = expectedRouteCalls(route, durationSec);
+    const minRequired = check
+      ? Math.max(1, scheduled <= 1 ? scheduled : scheduled - 1)
+      : scheduled <= 1
+        ? scheduled
+        : scheduled - 1;
+
+    if (!row || row.calls === 0) {
+      if (minRequired > 0) {
+        failures.push(`${route.name}: 0 HTTP 200 calls (expected >= ${minRequired})`);
+      }
+      continue;
+    }
+
+    const failedCount =
+      typeof row.failed === 'number' && Number.isFinite(row.failed)
+        ? row.failed
+        : Math.max(0, row.calls - row.ok);
+    if (failedCount > 0 || row.ok < row.calls) {
+      failures.push(
+        `${route.name}: ${failedCount}/${row.calls} polls failed (${row.ok}/${row.calls} HTTP 200)`
+      );
+      continue;
+    }
+
+    if (minRequired > 0 && row.calls < minRequired) {
+      failures.push(
+        `${route.name}: only ${row.calls}/${scheduled} polls completed across ${durationSec}s window (expected >= ${minRequired})`
+      );
+    }
+  }
+  return failures;
+}
+
 async function stopChild(child) {
-  if (!child || child.exitCode !== null) return;
+  if (!child || getChildExitStatus(child) !== null) return;
   try {
     child.kill('SIGTERM');
   } catch {
     return;
   }
   const deadline = Date.now() + 10_000;
-  while (child.exitCode === null && Date.now() < deadline) {
+  while (getChildExitStatus(child) === null && Date.now() < deadline) {
     await sleep(100);
   }
-  if (child.exitCode === null) {
+  if (getChildExitStatus(child) === null) {
     try {
       child.kill('SIGKILL');
     } catch {
@@ -566,7 +982,7 @@ function checkBuiltArtifacts(repoRoot) {
   return { launcher, storeMod };
 }
 
-function parseCli(argv) {
+export function parseCli(argv) {
   const args = argv.slice(2);
   const opts = {
     durationSec: 300,
@@ -606,28 +1022,34 @@ function parseCli(argv) {
 
 export async function runMemoryBudget(opts) {
   if (process.platform !== 'linux') {
-    throw new Error(`memory-budget requires Linux /proc sampling (current platform: ${process.platform}).`);
+    throw new Error(
+      `memory-budget requires Linux /proc sampling (current platform: ${process.platform}).`
+    );
   }
-  const wallStart = Date.now();
-  const { launcher, storeMod } = checkBuiltArtifacts(REPO_ROOT);
+  const pollPlan = opts.pollPlan ?? POLL_PLAN;
+  validateRunOptions(opts, pollPlan);
 
   let thresholdConfig = null;
   if (opts.check) {
-    if (!fs.existsSync(opts.configPath)) {
-      throw new Error(`Threshold config not found: ${opts.configPath}`);
-    }
-    thresholdConfig = JSON.parse(fs.readFileSync(opts.configPath, 'utf8'));
+    thresholdConfig = loadThresholdConfig(opts.configPath);
   }
+
+  const wallStart = Date.now();
+  const artifacts = opts.launcherPath
+    ? { launcher: opts.launcherPath, storeMod: null }
+    : checkBuiltArtifacts(REPO_ROOT);
 
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-perf-memory-'));
   let child = null;
   let samplerTimer = null;
+  let stoppingChild = false;
 
   const cleanup = async () => {
     if (samplerTimer) {
       clearInterval(samplerTimer);
       samplerTimer = null;
     }
+    stoppingChild = true;
     await stopChild(child);
     if (!opts.keep) {
       fs.rmSync(runRoot, { recursive: true, force: true });
@@ -649,7 +1071,9 @@ export async function runMemoryBudget(opts) {
     if (opts.fixtureDir) {
       const copied = path.join(runRoot, 'fixture');
       fs.cpSync(opts.fixtureDir, copied, { recursive: true });
-      const manifest = JSON.parse(fs.readFileSync(path.join(copied, 'fixture-manifest.json'), 'utf8'));
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(copied, 'fixture-manifest.json'), 'utf8')
+      );
       fixture = {
         ...manifest,
         root: copied,
@@ -658,10 +1082,28 @@ export async function runMemoryBudget(opts) {
         reportsDir: path.join(copied, 'agent-reports'),
         registryDir: path.join(copied, 'agent-reports', 'pm-mail-registry'),
       };
+    } else if (opts.launcherPath) {
+      const fakeRoot = path.join(runRoot, 'fixture');
+      const home = path.join(fakeRoot, 'home');
+      const ccsDir = path.join(home, '.ccs');
+      const reportsDir = path.join(fakeRoot, 'agent-reports');
+      const registryDir = path.join(reportsDir, 'pm-mail-registry');
+      fs.mkdirSync(ccsDir, { recursive: true });
+      fs.mkdirSync(registryDir, { recursive: true });
+      fixture = {
+        seed: opts.seed,
+        counts: {},
+        store: null,
+        root: fakeRoot,
+        home,
+        ccsDir,
+        reportsDir,
+        registryDir,
+      };
     } else {
       fixture = await generateMemoryFixture(path.join(runRoot, 'fixture'), {
         seed: opts.seed,
-        storeModule: storeMod,
+        storeModule: artifacts.storeMod,
       });
     }
     const fixtureMs = Date.now() - fixtureStart;
@@ -686,27 +1128,68 @@ export async function runMemoryBudget(opts) {
     const stdoutFd = fs.openSync(path.join(logsDir, 'server-stdout.log'), 'w');
     const stderrFd = fs.openSync(path.join(logsDir, 'server-stderr.log'), 'w');
     const bootStart = Date.now();
-    child = spawn(
-      launcher,
-      ['dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(port), '--config-dir', fixture.ccsDir],
-      {
-        cwd: REPO_ROOT,
-        env,
-        stdio: ['ignore', stdoutFd, stderrFd],
-      }
-    );
+    const launchArgs = opts.launcherArgs
+      ? opts.launcherArgs({ port, ccsDir: fixture.ccsDir })
+      : [
+          'dashboard',
+          '--no-open',
+          '--host',
+          '127.0.0.1',
+          '--port',
+          String(port),
+          '--config-dir',
+          fixture.ccsDir,
+        ];
+    child = spawn(artifacts.launcher, launchArgs, {
+      cwd: REPO_ROOT,
+      env,
+      stdio: ['ignore', stdoutFd, stderrFd],
+    });
     fs.closeSync(stdoutFd);
     fs.closeSync(stderrFd);
 
-    await waitForHealth(port, child, 60_000);
+    let unexpectedExit = null;
+    let spawnError = null;
+    const pollAbort = new AbortController();
+    child.once('exit', (code, signal) => {
+      if (stoppingChild || unexpectedExit) return;
+      unexpectedExit = {
+        exitCode: code ?? null,
+        signalCode: signal ?? null,
+        reason: signal ? `signal=${signal}` : `code=${code}`,
+      };
+      pollAbort.abort();
+    });
+    child.once('error', (err) => {
+      if (stoppingChild) return;
+      spawnError = err;
+      pollAbort.abort();
+    });
+
+    const assertChildRunning = (phase) => {
+      if (spawnError) {
+        throw new Error(`Dashboard server failed ${phase}: ${spawnError.message}`);
+      }
+      const exitInfo = unexpectedExit ?? getChildExitStatus(child);
+      if (exitInfo) {
+        throw new Error(`Dashboard server exited unexpectedly ${phase} (${exitInfo.reason}).`);
+      }
+    };
+
+    await waitForHealth(port, child, 60_000, () => spawnError);
     const bootMs = Date.now() - bootStart;
     const cookie = await signInLoopback(port);
+    assertChildRunning('during loopback sign-in');
+
+    if (typeof opts.onServerReady === 'function') {
+      await opts.onServerReady({ child, port, cookie });
+    }
 
     const pollStart = Date.now();
     const durationMs = opts.durationSec * 1000;
     const samples = [];
     const takeSample = () => {
-      if (!child?.pid || child.exitCode !== null) return;
+      if (!child?.pid || unexpectedExit || getChildExitStatus(child)) return;
       const sample = sampleProcessTree(child.pid, (Date.now() - pollStart) / 1000);
       if (sample) samples.push(sample);
     };
@@ -715,26 +1198,42 @@ export async function runMemoryBudget(opts) {
 
     const routeRecords = [];
     await Promise.all(
-      POLL_PLAN.map((route) => runPollLoop(route, port, cookie, pollStart, durationMs, routeRecords))
+      pollPlan.map((route) =>
+        runPollLoop(route, port, cookie, pollStart, durationMs, routeRecords, pollAbort.signal)
+      )
     );
     takeSample();
     clearInterval(samplerTimer);
     samplerTimer = null;
 
-    if (child.exitCode !== null) {
-      throw new Error(`Dashboard server exited unexpectedly during run (code=${child.exitCode}).`);
+    if (!unexpectedExit && !getChildExitStatus(child) && child.pid && !isPidAlive(child.pid)) {
+      const waitDeadline = Date.now() + 500;
+      while (!unexpectedExit && !getChildExitStatus(child) && Date.now() < waitDeadline) {
+        await sleep(25);
+      }
+      if (!unexpectedExit && !getChildExitStatus(child)) {
+        throw new Error(`Dashboard server died unexpectedly during run (pid=${child.pid}).`);
+      }
     }
+    assertChildRunning('during run');
 
-    const memory = summarizeSamples(samples, opts.steadyAfterSec);
-    const routes = summarizeRoutes(routeRecords);
-    const routeFailures = Object.entries(routes)
-      .filter(([, row]) => row.calls > 0 && row.ok === 0)
-      .map(([name, row]) => `${name}: 0/${row.calls} HTTP 200`);
-
+    const memory = summarizeSamples(samples, opts.steadyAfterSec, {
+      allowSteadyFallback: !opts.check,
+    });
+    const routes = summarizeRoutes(routeRecords, pollPlan);
+    const routeFailures = evaluateRouteFailures(routes, opts.durationSec, pollPlan, {
+      check: opts.check,
+    });
+    const sampleFailures = opts.check ? evaluateSampleFailures(memory, opts) : [];
     const threshold = thresholdConfig ? evaluateThresholds(memory, thresholdConfig) : null;
+    const ok =
+      routeFailures.length === 0 &&
+      sampleFailures.length === 0 &&
+      (!threshold || threshold.ok);
 
     const summary = {
       schemaVersion: 1,
+      ok,
       measuredAt: new Date().toISOString(),
       host: os.hostname(),
       seed: fixture.seed,
@@ -751,6 +1250,7 @@ export async function runMemoryBudget(opts) {
       memory,
       routes,
       routeFailures,
+      sampleFailures,
       threshold,
       ...(opts.keep ? { runRoot } : {}),
     };
@@ -786,17 +1286,26 @@ function formatHumanSummary(summary) {
   if (summary.routeFailures.length) {
     lines.push(`[X] Route failures: ${summary.routeFailures.join('; ')}`);
   }
+  if (summary.sampleFailures?.length) {
+    lines.push(`[X] Sample failures: ${summary.sampleFailures.join('; ')}`);
+  }
   if (summary.threshold) {
     if (summary.threshold.ok) {
       lines.push('[OK] Memory within all configured limits:');
       for (const r of summary.threshold.results) {
-        lines.push(`     ${r.metric}: ${r.measuredMiB} MiB <= ${r.limitMiB} MiB (${r.deltaMiB >= 0 ? '+' : ''}${r.deltaMiB} MiB)`);
+        lines.push(
+          `     ${r.metric}: ${r.measuredMiB} MiB <= ${r.limitMiB} MiB (${r.deltaMiB >= 0 ? '+' : ''}${r.deltaMiB} MiB)`
+        );
       }
     } else {
       lines.push('[X] Memory budget EXCEEDED:');
       for (const v of summary.threshold.violations) {
+        const kibDetail =
+          typeof v.deltaKiB === 'number' && v.deltaKiB > 0 && v.deltaKiB < KIB_PER_MIB
+            ? ` / +${v.deltaKiB} KiB`
+            : '';
         lines.push(
-          `     EXCEEDED ${v.metric}: ${v.measuredMiB} MiB > limit ${v.limitMiB} MiB (+${v.deltaMiB} MiB, +${v.pctOver}%)`
+          `     EXCEEDED ${v.metric}: ${v.measuredMiB} MiB > limit ${v.limitMiB} MiB (+${v.deltaMiB} MiB${kibDetail}, +${v.pctOver}%)`
         );
       }
     }
@@ -818,9 +1327,7 @@ async function main(argv) {
   } else {
     process.stdout.write(formatHumanSummary(summary));
   }
-  if (summary.routeFailures.length > 0) return 1;
-  if (summary.threshold && !summary.threshold.ok) return 1;
-  return 0;
+  return summary.ok ? 0 : 1;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
@@ -829,7 +1336,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
       process.exitCode = code;
     })
     .catch((error) => {
-      process.stderr.write(`[X] ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+      process.stderr.write(
+        `[X] ${error instanceof Error ? error.stack || error.message : String(error)}\n`
+      );
       process.exitCode = 1;
     });
 }
