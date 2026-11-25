@@ -195,15 +195,16 @@ pub const PROTO_NAMES: [&str; 12] = [
     "toLocaleString",
 ];
 
-/// True when a key or string anywhere in `value` holds an `Object.prototype` member name as a word (split at every
-/// character an identifier cannot hold, so "constructor.fixture" counts). A Status or Scoreboard input with one
-/// declines: TS may look such a name up in a plain object (a quota meter label, a catalog metric) and answer with
-/// the inherited member (big review, Fable L1).
+/// True when a key or string anywhere in `value` is exactly an `Object.prototype` member
+/// name. A Status or Scoreboard input with one declines: TS may look such a name up in a
+/// plain object (a quota meter label, a catalog metric) and answer with the inherited
+/// member (big review, Fable L1). A plain object lookup `{...}[name]` reads an inherited
+/// member only for the exact name, so prose that merely holds such a name as a word
+/// ("constructor refusals" in a card, "constructor.fixture" as an id) answers: the fed
+/// Status gate already narrowed to exact names in aac-http (hotfix ee3efb720), and the
+/// envelope and Scoreboard paths now keep the same rule here.
 pub fn proto_named(value: &V) -> bool {
-    let named = |text: &str| {
-        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
-            .any(|word| PROTO_NAMES.contains(&word))
-    };
+    let named = |text: &str| PROTO_NAMES.contains(&text);
     match value {
         V::String(text) => named(text),
         V::Array(rows) => rows.iter().any(proto_named),
@@ -274,19 +275,23 @@ pub fn js_whitespace(c: char) -> bool {
 mod lows_tests {
     use serde_json::json;
 
-    /// Big review (Fable L1): a prototype member name anywhere in a Status or Scoreboard input declines it.
+    /// Big review (Fable L1): an exact prototype member name anywhere in a Status or
+    /// Scoreboard input declines it; prose holding one as a word does not (the aac-http
+    /// fed gate's rule since hotfix ee3efb720, now the one rule).
     #[test]
-    fn prototype_member_names_are_found_as_words() {
+    fn prototype_member_names_are_found_only_when_exact() {
         for value in [
             json!({"meter": "constructor"}),
             json!({"metric": {"of": "__proto__"}}),
-            json!([{"writer": "constructor.fixture"}]),
             json!({"toString": 1}),
-            json!({"a": ["x", "x valueOf y"]}),
+            json!(["valueOf"]),
         ] {
             assert!(super::proto_named(&value), "{value}");
         }
         for value in [
+            json!([{"writer": "constructor.fixture"}]),
+            json!({"a": ["x", "x valueOf y"]}),
+            json!({"note": "original_scope constructor refusals reach it first"}),
             json!({"meter": "five_hour", "label": "Constructor"}),
             json!({"note": "construction toStrings value"}),
             json!([1, null, true]),

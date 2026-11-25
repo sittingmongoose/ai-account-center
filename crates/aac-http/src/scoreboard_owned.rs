@@ -282,7 +282,7 @@ struct PreparedDocs {
     /// doc gives the composer's doc. `None` keeps the doc as written (no model id).
     patches: Vec<Option<aac_status::model_identity::Resolved>>,
     /// Whether the row or its normalized doc holds an exact prototype name
-    /// (`status_fed::proto_exact`): a filter that picks one declines.
+    /// (`read_context::proto_named`): a filter that picks one declines.
     proto: Vec<bool>,
     /// What compose reads of each row (`read_scoreboard::row_facts`).
     facts: Vec<aac_status::read_scoreboard::RowFacts>,
@@ -1472,8 +1472,8 @@ impl ScoreboardOwned {
                 "sha256": entry.sha256,
             });
             proto.push(
-                crate::status_fed::proto_exact(&state)
-                    || crate::status_fed::proto_exact(&normalized),
+                aac_status::read_context::proto_named(&state)
+                    || aac_status::read_context::proto_named(&normalized),
             );
             facts.push(aac_status::read_scoreboard::row_facts(&state, &normalized));
             patches.push(patch);
@@ -2851,7 +2851,8 @@ fn check_problems(runs: &Json) -> Vec<Problem> {
 
 /// The few fields `read_measures::Index`, `quality`, and `overclaim` read from a joined review
 /// run outside the filtered row set. Unused prose (`task.title`, `outcome`, `flags`) stays out of
-/// `data["joinReviews"]` so a prototype word inside prose never trips `proto_named(data)`.
+/// `data["joinReviews"]`, so prose never grows the input the composer gates with
+/// `proto_named(data)` (an exact prototype name as a whole prose field would still decline).
 fn join_review_doc(raw: &Json) -> Json {
     let evidence = raw["evidence"]
         .as_array()
@@ -3139,8 +3140,8 @@ mod tests {
                 "vm.lead--bench" => {
                     seen += 1;
                     assert!(
-                        aac_status::read_context::proto_named(&row),
-                        "word rule sees it"
+                        !aac_status::read_context::proto_named(&row),
+                        "the exact-name rule does not see prose"
                     );
                     assert!(!prepared.proto[index], "prose run must be answered");
                 }

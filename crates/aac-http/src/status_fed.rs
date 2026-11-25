@@ -113,26 +113,13 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
     Ok(Part { data: value, facts })
 }
 
-/// `read_status::fed_part` with the prototype-name rule narrowed to [`proto_exact`]: the data is an
-/// object and no key or string in it is exactly an `Object.prototype` member name. The composer's
-/// word rule (`read_context::proto_named`) also refused prose that merely holds such a name as a
-/// word ("constructor refusals" in a card), which only ever handed the read to TS; with no TS
-/// fallback it failed the whole page. A plain object lookup `{...}[name]` reads an inherited
-/// member only for the exact name, so an exact name still declines.
+/// `read_status::fed_part`: the data is an object and no key or string in it is exactly an
+/// `Object.prototype` member name (`read_context::proto_named`, the one exact-name rule).
+/// Prose that merely holds such a name as a word ("constructor refusals" in a card)
+/// answers; a plain object lookup `{...}[name]` reads an inherited member only for the
+/// exact name, so an exact name still declines.
 pub(crate) fn fed_part(data: &Value) -> Option<()> {
-    (data.is_object() && !proto_exact(data)).then_some(())
-}
-
-/// True when a key or string anywhere in `value` is exactly an `Object.prototype` member name
-/// (`read_context::PROTO_NAMES`).
-pub(crate) fn proto_exact(value: &Value) -> bool {
-    let named = |text: &str| aac_status::read_context::PROTO_NAMES.contains(&text);
-    match value {
-        Value::String(text) => named(text),
-        Value::Array(rows) => rows.iter().any(proto_exact),
-        Value::Object(map) => map.iter().any(|(key, v)| named(key) || proto_exact(v)),
-        _ => false,
-    }
+    (data.is_object() && !aac_status::read_context::proto_named(data)).then_some(())
 }
 
 /// The front door's per-request facts: the clock, now's two words (formatted by TS in the facts' time zone) and
@@ -634,8 +621,8 @@ mod tests {
         let card = r#"{"reports":{"threads":[],"tasks":[],"cards":[{"id":"vm.lead--E5-1","state":"withdrawn","title":"Entailment proof","blocks":"recipe_tuple / original_scope constructor refusals reach it first","notes":["C8-B1 constructor, cuts","a toString() call","valueOf.x and hasOwnProperty-check"]}],"problems":[]}}"#;
         assert!(prepare(REPORTS, &raw(card), &raw("{}")).is_ok());
         assert!(fed_part(&serde_json::from_str(card).expect("json")).is_some());
-        // The word rule the composer keeps elsewhere still sees it; this gate does not.
-        assert!(aac_status::read_context::proto_named(
+        // The one exact-name rule the composer keeps everywhere agrees: prose is not a name.
+        assert!(!aac_status::read_context::proto_named(
             &serde_json::from_str(card).expect("json")
         ));
         // Round trip and member checks still apply to such prose.
