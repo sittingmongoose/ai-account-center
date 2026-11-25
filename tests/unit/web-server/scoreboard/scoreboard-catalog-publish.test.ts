@@ -41,6 +41,7 @@ const NEW_MODELS = [
   'alibaba/qwen4-max',
   'alibaba/qwen4-max-preview',
   'google/gemini-4-hydrogen',
+  'opencode-go/hungerg-free',
 ];
 const pretty = (doc: unknown) => `${JSON.stringify(doc, null, 2)}\n`;
 

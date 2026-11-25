@@ -65,8 +65,8 @@ describe('the published alias table', () => {
       expect([written, packaged.aliases[written]]).toEqual([written, canonical]);
     for (const suffix of builtin.effortSuffixes) expect(packaged.effortSuffixes).toContain(suffix);
     // Our built-in copy's 104 plus explicit Qwen spellings (9), Gemini 4 Hydrogen (2),
-    // DeepSeek V4.1 Flash (2), Astra 6.2 (6), Sol 6.2 (6) and Z.ai account spellings (2).
-    expect(Object.keys(packaged.aliases)).toHaveLength(131);
+    // DeepSeek V4.1 Flash (2), Astra 6.2 (6), Sol 6.2 (6), Z.ai account spellings (2) and HungerG Free (2).
+    expect(Object.keys(packaged.aliases)).toHaveLength(133);
     const known = new Set(models.map((model) => model.model));
     for (const canonical of Object.values(packaged.aliases))
       expect(known.has(canonical)).toBe(true);
@@ -103,6 +103,7 @@ describe('the published alias table', () => {
       'alibaba/qwen4-max',
       'alibaba/qwen4-max-preview',
       'google/gemini-4-hydrogen',
+      'opencode-go/hungerg-free',
     ];
     const nov11 = published.models.filter((model) => !NEW_MODELS.includes(model.model));
     expect(nov11).toHaveLength(16);
