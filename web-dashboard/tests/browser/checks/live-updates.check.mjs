@@ -192,6 +192,13 @@ export const tests = {
 	},
 
 	async 'film desktop home: idle while readings change, for a recording'(t) {
+		// A clean context with service workers blocked: the run's shared context may already
+		// have an active worker from an earlier test, and sw.js passes /api requests through
+		// its own fetch, which page.route cannot intercept — the stubs would be bypassed and
+		// Home would draw the real empty dashboard (the 2026-11-24 sweep's load flake and
+		// TOOL-ISSUES 77's sequence leak). The worker is not this check's subject; the idle
+		// Home test above isolates the same way. Recording follows t.page.
+		await t.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
 		await t.page.addInitScript(instrument);
 		await t.app.signIn();
 		const reads = await stubChanging(t);

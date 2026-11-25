@@ -157,5 +157,10 @@ export const tests = {
 		await t.equal('still one logout request', calls, 1);
 		await t.check('the frame followed the server: signed out, with its sign-in', state.signedIn === false && state.form, JSON.stringify(state));
 		await t.check('and the session is ended', !(await serverSignedIn(t)));
+		// While the logout answer is held, the session is already ended on the server, so the
+		// reset-hints socket (public/reset-live.mjs) reconnects once a second and each attempt
+		// logs an authentication failure. That is the page's honest retry, not a fault: allow
+		// exactly those lines here (this call consumes them; other tests still fail on them).
+		await t.noConsoleErrors('console: only the reset socket retrying while signed out', { allow: [/WebSocket connection to 'ws:\/\/127\.0\.0\.1:\d+\/ws' failed: HTTP Authentication failed/] });
 	},
 };

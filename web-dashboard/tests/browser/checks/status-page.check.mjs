@@ -569,11 +569,14 @@ export const tests = {
       signedAnswers(t).length,
       before + 1
     );
+    // The condition is the real event (the server recomposed and the page polled); the cap is
+    // only a hang guard. Under five parallel browsers the send-to-recompose path can take
+    // longer than 15 s (the 2026-11-24 sweep's load flake), so use the kit's 60 s guard.
     await t.until(
       'the answered card leaves the deck',
       () => /\b7 open/.test(document.querySelector('.sec-questions .plate-meta')?.textContent || ''),
       null,
-      { timeout: 15000 }
+      { timeout: 60000 }
     );
     await t.audit('end to end 1440');
     const view = await t.page.evaluate(async () => {
