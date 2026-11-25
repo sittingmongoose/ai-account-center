@@ -834,3 +834,40 @@ test('the frame re-reads on the server\'s accounts-changed hint and closes its s
   } finally { ctl.stop(); }
   assert.ok(sockets.every((s) => s.closed), 'stop closes the hint socket');
 });
+
+test('the hint socket stops quietly when the server closes it signed out (4001)', async () => {
+  const { server } = fixtureServer();
+  const listeners = new Map(), sockets = [];
+  class Socket {
+    constructor(url) { this.url = url; this.closed = false; sockets.push(this); }
+    close() { this.closed = true; }
+  }
+  const win = {
+    location: { protocol: 'http:', hostname: '192.0.2.10', host: '192.0.2.10:3000', origin: ORIGIN, search: '', href: '' },
+    navigator: { userAgent: 'Mac fixture' }, innerWidth: 1440,
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    fetch: async (path, options = {}) => respond(await server(options.method || 'GET', path, options.body ? JSON.parse(options.body) : null)),
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
+    dispatchEvent: (event) => { for (const fn of listeners.get(event.type) || []) fn(event); },
+    addEventListener: (name, fn) => listeners.set(name, [...(listeners.get(name) || []), fn]),
+    removeEventListener: () => {},
+    history: { state: null, pushState() {}, back() {} },
+    matchMedia: () => ({ matches: false }),
+    WebSocket: Socket,
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
+  };
+  const ctl = installFrameDashboard(win);
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    await ctl.start({ check: (await server('GET', '/api/auth/check')).payload });
+    await flush(16);
+    assert.equal(sockets.length, 1, 'the frame opens one hint socket');
+    sockets[0].onopen();
+    // websocket.rs ends a live socket with 4001 "Signed out" when its session ends: reconnecting
+    // would only collect /ws authentication failures, so the socket stops instead.
+    sockets[0].onclose({ code: 4001, reason: 'Signed out' });
+    await wait(2500); // longer than the first reconnect delay
+    assert.equal(sockets.length, 1, 'a session the server signed out is never reconnected');
+  } finally { ctl.stop(); }
+});

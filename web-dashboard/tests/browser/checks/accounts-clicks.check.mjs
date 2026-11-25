@@ -56,7 +56,13 @@ const FIXTURE = {
 			windows: [quota('plan-reported', 'Grok and Composer', 90.34, 43200)],
 		}),
 	],
-	settings: {},
+	// The server's dashboard answer always carries the visibility lists and the refresh interval
+	// (aac-http account_usage/dashboard.rs). A stub without them made every later re-read forget the
+	// tray lists, which re-disabled the tray switches mid-test (the 2026-11-25 kit failure).
+	settings: {
+		refreshIntervalSeconds: 60, visibilityAvailable: true,
+		hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [], trayHiddenAccountIds: [],
+	},
 };
 
 // D tier (1280+), the F tiers in between (760-1279, where Details is a side panel or sheet), and the phone tier

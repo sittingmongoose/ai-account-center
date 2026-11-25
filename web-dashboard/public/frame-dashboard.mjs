@@ -794,9 +794,13 @@ export function installFrameDashboard(win = globalThis) {
     socket.onmessage = (event) => {
       try { if (JSON.parse(event.data)?.type === 'accounts-changed') controller.accountsChanged(); } catch { /* Not an account hint. */ }
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       hintSocket = null;
       if (hintsStopped) return;
+      // The server closes a live hint socket with 4001 "Signed out" the moment its session ends
+      // (aac-http websocket.rs): every reconnect after that only collects authentication failures,
+      // so stop quietly instead of retrying a session this page can no longer use.
+      if (event?.code === 4001) { hintsStopped = true; return; }
       hintRetry = win.setTimeout(connectHints, hintDelay);
       hintDelay = Math.min(hintDelay * 2, 60_000);
     };
