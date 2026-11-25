@@ -140,7 +140,9 @@ fn account_reads_need_a_dashboard_session() -> Result<()> {
     let s = Service::start()?;
     for path in ROUTES {
         for (kind, role) in [("session", "public"), ("device", "device"), ("hub", "hub")] {
-            let (status, _) = s.call(path, &principal(kind, role), Some("{}"))?;
+            // No body: these routes answer 401 before reading it, and a body written under
+            // load can surface as a broken pipe instead of the refusal (d7-home-T2).
+            let (status, _) = s.call(path, &principal(kind, role), None)?;
             assert_eq!(status, 401, "{path} {kind}/{role}");
         }
         let (status, _) = s.call(&format!("{path}?x=1"), &principal("session", "admin"), None)?;
