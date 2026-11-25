@@ -555,7 +555,11 @@ class UpdaterTests(unittest.TestCase):
         item = mock.Mock(args=['/Applications/T3 Code (Nightly).app/Contents/MacOS/T3 Code (Nightly)'], cwd='/', env={}, pid=1, ppid=0)
         ssh = {'SSH_CONNECTION': '192.0.2.1 50000 192.0.2.2 22', 'SSH_CLIENT': '192.0.2.1 50000 22', 'SSH_TTY': '/dev/ttys009',
                'SSH_AUTH_SOCK': '/private/tmp/ssh-x/agent.1', 'KEEP': 'yes', 'CCS_SESSION_SECRET': 'hidden'}
-        with mock.patch.dict(os.environ, ssh), \
+        # Control the whole SSH environment: an inherited SSH_ASKPASS (or any other SSH_* key)
+        # is not one of the named session markers the product strips, so the assertion below
+        # would fail on the host's environment, not on the product (cl-singles-3-ssh-askpass).
+        base = {k: v for k, v in os.environ.items() if not k.startswith('SSH_')}
+        with mock.patch.dict(os.environ, {**base, **ssh}, clear=True), \
                 mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
                 mock.patch.object(processes, 'desktop_roots', return_value=[item]), \
                 mock.patch.object(processes, 'command') as run, mock.patch.object(processes.subprocess, 'Popen') as popen:
