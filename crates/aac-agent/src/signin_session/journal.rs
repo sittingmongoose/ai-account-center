@@ -381,6 +381,34 @@ fn kill_stray(entry: &Entry) {
 mod tests {
     use super::*;
 
+    /// Run one lease-sensitive case in a child process that runs only that test. A sibling
+    /// test's fork inherits any lease descriptor held at fork time and keeps it until exec;
+    /// the journal's read, prune and ledger paths treat a busy claim as absent, so that
+    /// transient lock fails an assertion (agent-journal-race). The child has no sibling forks,
+    /// so its leases are never inherited. The child must actually run and pass the case: a
+    /// filter that matches nothing fails here instead of passing silently.
+    fn isolated(name: &str, cases: fn()) {
+        const CHILD: &str = "AAC_TOOL_BATCH_JOURNAL_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            cases();
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(name)
+            .arg("--test-threads=1")
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && text.contains("test result: ok. 1 passed"),
+            "the isolated journal case did not run and pass:\n{text}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     fn entry(id: &str, state: &str, owner_pid: u32, finished_at: Option<i64>) -> Entry {
         Entry {
             job: json!({
@@ -411,6 +439,13 @@ mod tests {
 
     #[test]
     fn journal_round_trip_and_get_semantics() {
+        isolated(
+            "signin_session::journal::tests::journal_round_trip_and_get_semantics",
+            journal_round_trip_and_get_semantics_cases,
+        );
+    }
+
+    fn journal_round_trip_and_get_semantics_cases() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::open(dir.path()).unwrap();
         let now = 1_763_424_000_000i64;
@@ -440,6 +475,14 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn dead_owner_recovers_server_restarted() {
+        isolated(
+            "signin_session::journal::tests::dead_owner_recovers_server_restarted",
+            dead_owner_recovers_server_restarted_cases,
+        );
+    }
+
+    #[cfg(unix)]
+    fn dead_owner_recovers_server_restarted_cases() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::open(dir.path()).unwrap();
         let now = 1_763_424_000_000i64;
@@ -456,6 +499,13 @@ mod tests {
 
     #[test]
     fn settle_finalizes_install_pending() {
+        isolated(
+            "signin_session::journal::tests::settle_finalizes_install_pending",
+            settle_finalizes_install_pending_cases,
+        );
+    }
+
+    fn settle_finalizes_install_pending_cases() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::open(dir.path()).unwrap();
         let now = 1_763_424_000_000i64;
@@ -484,6 +534,13 @@ mod tests {
 
     #[test]
     fn device_code_and_settled_email_stay_in_the_live_job_only() {
+        isolated(
+            "signin_session::journal::tests::device_code_and_settled_email_stay_in_the_live_job_only",
+            device_code_and_settled_email_stay_in_the_live_job_only_cases,
+        );
+    }
+
+    fn device_code_and_settled_email_stay_in_the_live_job_only_cases() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::open(dir.path()).unwrap();
         let id = "job_0123456789abcdef";
@@ -580,6 +637,13 @@ mod tests {
 
     #[test]
     fn a_pre_fix_entry_is_scrubbed_before_pruning_can_keep_its_bytes() {
+        isolated(
+            "signin_session::journal::tests::a_pre_fix_entry_is_scrubbed_before_pruning_can_keep_its_bytes",
+            a_pre_fix_entry_is_scrubbed_before_pruning_can_keep_its_bytes_cases,
+        );
+    }
+
+    fn a_pre_fix_entry_is_scrubbed_before_pruning_can_keep_its_bytes_cases() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::open(dir.path()).unwrap();
         let now = 1_763_424_000_000i64;
@@ -612,6 +676,13 @@ mod tests {
 
     #[test]
     fn cancel_flag_is_recorded() {
+        isolated(
+            "signin_session::journal::tests::cancel_flag_is_recorded",
+            cancel_flag_is_recorded_cases,
+        );
+    }
+
+    fn cancel_flag_is_recorded_cases() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Journal::open(dir.path()).unwrap();
         let id = "job_0123456789abcdef";
