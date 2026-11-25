@@ -13,6 +13,9 @@ const { spawnSync } = require('child_process');
 
 const CRATE = path.resolve(__dirname, '..', 'crates', 'aac-status');
 
+// One fresh CARGO_TARGET_DIR per checkout: refuse a folder another checkout created.
+require('./foundation/cargo-target-guard.js').guardCargoTarget(path.resolve(__dirname, '..'));
+
 function cargo(args) {
   const result = spawnSync('cargo', args, { cwd: CRATE, stdio: 'inherit' });
   if (result.error) {
