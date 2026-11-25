@@ -95,7 +95,8 @@ pub fn short_word(result: &str) -> String {
 }
 
 /// A narrow table's word for a cell: one short token that never wraps in a column a seventh of a phone wide. A failure
-/// or a step for the user stays a word (drawn as a colored chip), never just a mark; the full result stays in the
+/// or a step for the user stays a word (drawn as a colored chip), never just a mark, and every failure reads "failed"
+/// (a failed restart too: "restart" alone would read as an instruction); the full result stays in the
 /// cell's tip and the row's details. Unknown words keep their own text (clipped, never broken).
 pub fn tiny_word(result: &str) -> String {
     let r = result.trim();
@@ -109,7 +110,7 @@ pub fn tiny_word(result: &str) -> String {
         "Updated" => "updated",
         "Not installed" => "absent",
         "Failed" | "Installer failed" => "failed",
-        "Updated, restart failed" => "restart",
+        "Updated, restart failed" => "failed",
         "Quit to finish update" => "quit",
         "Needs action" => "action",
         "Codex busy, try later" => "busy",
@@ -410,6 +411,9 @@ mod tests {
         assert_eq!(tiny_word("Updated to 2.1.3"), "→2.1.3");
         assert_eq!(tiny_word("Quit to finish update"), "quit");
         assert_eq!(tiny_word("Installer failed"), "failed");
+        // a failed restart is a failure, not an instruction to restart (review r1); the cell keeps "restart failed"
+        assert_eq!(tiny_word("Updated, restart failed"), "failed");
+        assert_eq!(short_word("Updated, restart failed"), "restart failed");
         assert_eq!(tiny_word("Unknown: Nas1 not reachable"), "offline");
         assert_eq!(tiny_word("Checking · 45s"), "check");
         assert_eq!(

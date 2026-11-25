@@ -47,8 +47,9 @@ export function dashboard({ rich = false } = {}) {
 }
 
 const APPS = [['claude-code', 'Claude Code'], ['claude-desktop', 'Claude Desktop'], ['codex-cli', 'Codex CLI'], ['codex-desktop', 'Codex Desktop'], ['antigravity-cli', 'Antigravity CLI'], ['muse-code', 'Muse Code'], ['omp', 'OMP'], ['zcode', 'ZCode'], ['t3-code', 'T3 Code'], ['t3-acp-adapters', 'T3 ACP adapters']];
-/** A finished Update apps run on four computers: mostly current, a few updated, one failed, one needing action. */
-export function updateJob() {
+/** A finished Update apps run on four computers: mostly current, a few updated, one failed, one needing action.
+ * `restartFailed` adds a Windows Codex Desktop that updated but did not reopen (a second failure). */
+export function updateJob({ restartFailed = false } = {}) {
 	const results = [];
 	for (const host of ['mac', 'windows', 'ubuntu', 'nas1']) {
 		for (const [appId, appLabel] of APPS) {
@@ -57,6 +58,7 @@ export function updateJob() {
 			if (appId === 'claude-code' && host !== 'windows') { status = 'updated'; previousVersion = '2.1.0'; version = '2.1.3'; }
 			if (appId === 'codex-desktop' && host === 'mac') { status = 'action_required'; message = 'Quit Codex Desktop to finish the update.'; }
 			if (appId === 'zcode' && host === 'windows') { status = 'not_installed'; version = ''; }
+			if (restartFailed && appId === 'codex-desktop' && host === 'windows') { status = 'restart_failed'; previousVersion = '1.4.1'; message = 'Updated, but Codex Desktop did not open again.'; }
 			let diagnostics;
 			if (appId === 'antigravity-cli' && host === 'nas1') {
 				status = 'failed'; message = 'The download stopped: connection reset.';

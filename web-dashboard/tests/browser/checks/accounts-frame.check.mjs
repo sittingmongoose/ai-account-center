@@ -4,6 +4,7 @@
 // same ones the Slint page sent through bridge.js and accounts-controller.mjs (now run by public/frame-dashboard.mjs).
 
 import { fakeServer, serve, changes, dashboard, updateJob } from '../accounts-fixture.mjs';
+import { HOST_IDS, HOST_LABELS } from '../../../public/computers.mjs';
 
 async function open(t, server, { width = 1440, height = 900, phone = false, duo = false, safe = '' } = {}) {
 	await t.newContext(phone
@@ -51,9 +52,55 @@ function measureUpdateTable() {
 	const hosts = [...table.querySelectorAll('.ut-host')].map((h) => shown(h));
 	const rows = [...table.querySelectorAll('.ut-item')].map((item) => ({
 		app: shown(item.querySelector('.ut-app')),
-		cells: [...item.querySelectorAll('.ut-cell')].map((c) => ({ text: shown(c), crit: c.classList.contains('w-crit'), warn: c.classList.contains('w-warn'), tip: c.title })),
+		cells: [...item.querySelectorAll('.ut-cell')].map((c) => {
+			// the computer a cell is drawn under: the head whose column holds the cell's middle
+			const r = c.getBoundingClientRect();
+			const mid = (r.left + r.right) / 2;
+			const head = [...table.querySelectorAll('.ut-host')].find((h) => { const b = h.getBoundingClientRect(); return mid >= b.left && mid <= b.right; });
+			return { text: shown(c), full: c.querySelector('.ut-w')?.textContent.trim() || '', host: head?.title || '', crit: c.classList.contains('w-crit'), warn: c.classList.contains('w-warn'), tip: c.title };
+		}),
 	}));
 	return { broken, spill, overlap, hosts, rows, sideways: document.documentElement.scrollWidth > innerWidth + 1, appHead: shown(table.querySelector('.ut-head .ut-app')) };
+}
+
+// What each app x computer cell must say, from the fixture job: the phone's short word or the desktop's words, and its
+// tone. A computer without a row for an app shows "–".
+function expectedUpdateCells(job, phone) {
+	const want = new Map();
+	for (const r of job.results) {
+		const host = HOST_LABELS[r.platform];
+		const failed = r.status === 'failed' || r.status === 'restart_failed';
+		const words = {
+			current: ['✓', 'current'],
+			updated: [`→${r.version}`, `→ ${r.version}`],
+			action_required: ['quit', 'quit to finish'],
+			failed: ['failed', r.diagnostics?.cause === 'installer_failed' ? 'installer failed' : 'failed'],
+			restart_failed: ['failed', 'restart failed'],
+			not_installed: ['absent', 'not installed'],
+		}[r.status];
+		want.set(`${r.appLabel} | ${host}`, { text: words[phone ? 0 : 1], tone: failed ? 'crit' : r.status === 'action_required' ? 'warn' : '' });
+	}
+	return want;
+}
+
+// Every drawn cell against what the job says for its app under the computer whose head it sits beneath; every
+// app x computer pair must be drawn exactly once.
+function updateCellMismatches(m, want) {
+	const bad = [];
+	const seen = new Set();
+	for (const r of m?.rows || []) {
+		for (const c of r.cells) {
+			const key = `${r.app} | ${c.host}`;
+			const w = want.get(key) || { text: '–', tone: '' };
+			const tone = c.crit ? 'crit' : c.warn ? 'warn' : '';
+			if (seen.has(key)) bad.push(`${key} drawn twice`);
+			seen.add(key);
+			if (c.text !== w.text || tone !== w.tone) bad.push(`${key}: "${c.text}" ${tone || 'plain'}, expected "${w.text}" ${w.tone || 'plain'}`);
+		}
+	}
+	const apps = [...new Set([...want.keys()].map((k) => k.split(' | ')[0]))];
+	for (const app of apps) for (const id of HOST_IDS) if (!seen.has(`${app} | ${HOST_LABELS[id]}`)) bad.push(`${app} | ${HOST_LABELS[id]} not drawn`);
+	return bad;
 }
 
 export const tests = {
@@ -359,7 +406,8 @@ export const tests = {
 	async 'accounts: Update apps on a phone: no head overlap, no word broken, every state shown'(t) {
 		for (const [width, height, duo] of [[390, 844, false], [402, 874, false], [466, 678, true]]) {
 			const at = `${width} px`;
-			await open(t, fakeServer({ update: updateJob() }), { width, height, phone: true, duo });
+			const job = updateJob({ restartFailed: true });
+			await open(t, fakeServer({ update: job }), { width, height, phone: true, duo });
 			await t.page.click('[data-probe="update-card"] .upd-head');
 			await t.until(`${at}: the Update apps table opens`, () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 10000, hard: true });
 			await t.until(`${at}: the card has stopped moving`, () => document.querySelector('[data-probe="update-card"]').getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), null, { timeout: 5000 });
@@ -374,14 +422,50 @@ export const tests = {
 			await t.check(`${at}: the step for the user is shown as a word`, !!m && m.rows.some((r) => r.app === 'Codex Desktop' && r.cells.some((c) => c.warn && c.text === 'quit')));
 			await t.check(`${at}: a computer without results says so once, under its head`, !!m && m.hosts.filter((h) => /no results$/.test(h)).length === 3);
 			await t.check(`${at}: no sideways page scroll`, !!m && !m.sideways);
+			// Review r1 (Medium): each cell is judged under the computer whose head it is drawn beneath, so a failure
+			// under the wrong computer fails; the check proves it catches two swapped cells.
+			const want = expectedUpdateCells(job, true);
+			const bad = updateCellMismatches(m, want);
+			await t.check(`${at}: every cell says what the run reported for its app on the computer above it`, bad.length === 0, bad.slice(0, 6).join('; '));
+			const swap = () => t.page.evaluate(() => {
+				const item = [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Antigravity CLI');
+				const cells = [...item.querySelectorAll('.ut-cell')];
+				const [a, b] = [cells[2], cells[3]];   // Ubuntu, Nas1
+				const mark = document.createComment('swap');
+				a.replaceWith(mark); b.replaceWith(a); mark.replaceWith(b);
+			});
+			await swap();
+			const swapped = updateCellMismatches(await t.page.evaluate(measureUpdateTable), want);
+			await swap();
+			await t.check(`${at}: the cell check catches a failure moved under the wrong computer`,
+				swapped.some((b) => b.startsWith('Antigravity CLI | Ubuntu: "failed"')) && swapped.some((b) => b.startsWith('Antigravity CLI | Nas1: "✓"')), swapped.join('; '));
+			await t.check(`${at}: the swap was put back`, updateCellMismatches(await t.page.evaluate(measureUpdateTable), want).join('; ') === bad.join('; '));
+			// Review r1 (High): a failed restart reads as a failure, never as "restart" (an instruction)
+			const restart = m?.rows.find((r) => r.app === 'Codex Desktop')?.cells.find((c) => c.host === 'Windows');
+			await t.check(`${at}: a failed restart shows "failed" in red`, restart?.text === 'failed' && restart.crit, JSON.stringify(restart));
+			await t.check(`${at}: its cell still says "restart failed" to screen readers and in its tip`,
+				restart?.full === 'restart failed' && restart.tip.startsWith('Updated, restart failed'), JSON.stringify(restart));
+			await t.page.evaluate(() => [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Codex Desktop')?.querySelector('button.ut-row')?.click());
+			await t.until(`${at}: Codex Desktop's details say Windows' restart failed`, () => [...document.querySelectorAll('.ut-details li')].some((li) => li.textContent.startsWith('Windows') && li.textContent.includes('restart failed')), null, { timeout: 5000 });
+			await t.until(`${at}: the details have stopped moving`, () => document.querySelector('[data-probe="update-card"]').getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), null, { timeout: 5000 });
+			await t.check(`${at}: the open details keep every word whole`, await t.page.evaluate(() => {
+				const ul = document.querySelector('.ut-details');
+				return !!ul && ul.scrollWidth <= ul.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth + 1;
+			}));
+			await t.shot(`update-apps-phone-${width}-restart-details`, `Codex Desktop's details open on a ${width} px ${duo ? 'folded Duo' : 'phone'}: Windows says its restart failed`);
+			await t.page.evaluate(() => [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Codex Desktop')?.querySelector('button.ut-row')?.click());
+			await t.until(`${at}: the details close`, () => !document.querySelector('.ut-details'), null, { timeout: 5000 });
 			await t.shot(`update-apps-phone-${width}`, `Update apps open on a ${width} px ${duo ? 'folded Duo' : 'phone'}`);
 		}
 	},
 
 	async 'accounts: Update apps on a 1920 desktop keeps its full words in one line per app'(t) {
-		await open(t, fakeServer({ update: updateJob() }), { width: 1920, height: 1080 });
+		const job = updateJob({ restartFailed: true });
+		await open(t, fakeServer({ update: job }), { width: 1920, height: 1080 });
 		await t.until('the Update apps table is open', () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 15000, hard: true });
 		const m = await t.page.evaluate(measureUpdateTable);
+		const bad = updateCellMismatches(m, expectedUpdateCells(job, false));
+		await t.check('every cell says its full words under the computer above it ("restart failed" on Windows)', bad.length === 0, bad.slice(0, 6).join('; '));
 		await t.check('the App column head is shown', m?.appHead === 'App');
 		await t.check('the computers keep their full names', !!m && m.hosts.slice(0, 2).join('|') === 'Mac|Windows' && m.hosts.some((h) => h.startsWith('Alexis PC')));
 		await t.check('cells keep their full words', !!m && m.rows.some((r) => r.cells.some((c) => c.text === 'current')) && m.rows.some((r) => r.cells.some((c) => c.text === 'quit to finish')));
