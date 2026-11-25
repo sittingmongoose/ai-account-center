@@ -393,19 +393,45 @@ impl Zone {
 /// uppercase and shares its primary weight; every other character has a primary weight of its own.
 pub const ASCII_ORDER: &str = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$0123456789aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ";
 
+/// Precomputed `(primary, tertiary)` weights of every printable ASCII byte, from
+/// [`ASCII_ORDER`]: one primary per letter pair (lowercase first), else its rank in the order.
+/// Resolved once here so no comparison scans the order per character.
+const ASCII_WEIGHTS: [Option<(u32, u32)>; 128] = {
+    let order = ASCII_ORDER.as_bytes();
+    let mut digits_end = 0u32;
+    let mut i = 0;
+    while i < order.len() {
+        if order[i] == b'a' {
+            digits_end = i as u32;
+            break;
+        }
+        i += 1;
+    }
+    let mut table: [Option<(u32, u32)>; 128] = [None; 128];
+    let mut at = 0;
+    while at < order.len() {
+        let c = order[at];
+        if (c as usize) < 128 {
+            let entry = if c.is_ascii_alphabetic() {
+                // a A b B ...: one primary per letter pair, lowercase first.
+                (
+                    digits_end + (at as u32 - digits_end) / 2,
+                    if c.is_ascii_uppercase() { 1 } else { 0 },
+                )
+            } else {
+                (at as u32, 0)
+            };
+            table[c as usize] = Some(entry);
+        }
+        at += 1;
+    }
+    table
+};
+
 /// `(primary, tertiary)` weights of a printable ASCII byte, from [`ASCII_ORDER`].
 fn weights(c: u8) -> Option<(u8, u8)> {
-    let at = ASCII_ORDER.bytes().position(|o| o == c)? as u8;
-    let digits_end = ASCII_ORDER.bytes().position(|o| o == b'a')? as u8;
-    Some(if c.is_ascii_alphabetic() {
-        // a A b B ...: one primary per letter pair, lowercase first.
-        (
-            digits_end + (at - digits_end) / 2,
-            u8::from(c.is_ascii_uppercase()),
-        )
-    } else {
-        (at, 0)
-    })
+    let (primary, tertiary) = ASCII_WEIGHTS.get(usize::from(c)).copied().flatten()?;
+    Some((primary as u8, tertiary as u8))
 }
 
 /// `a.localeCompare(b)` for two printable ASCII strings (U+0020 to U+007E): primary weights left to right (a prefix
@@ -415,6 +441,47 @@ pub fn ascii_compare(a: &str, b: &str) -> Option<Ordering> {
     let (ka, kb) = (keys(a)?, keys(b)?);
     let primary = ka.iter().map(|k| k.0).cmp(kb.iter().map(|k| k.0));
     Some(primary.then_with(|| ka.iter().map(|k| k.1).cmp(kb.iter().map(|k| k.1))))
+}
+
+/// Primary weight base for characters outside printable ASCII: above every printable-ASCII
+/// primary (each below [`ASCII_ORDER`]'s length), so any such character sorts after every
+/// printable ASCII character at the primary level, ordered by its Unicode code point.
+const NON_ASCII_PRIMARY: u32 = 256;
+
+/// One word's collation key: its primary weights, then its tertiary (case) weights.
+/// Comparing two keys is [`collate`].
+pub type CollationKey = (Vec<u32>, Vec<u32>);
+
+/// The [`CollationKey`] of any string, computed once per word before a sort: printable
+/// ASCII keeps its [`ascii_compare`] weights; every other character (non-ASCII, or an
+/// ASCII control) takes [`NON_ASCII_PRIMARY`] plus its code point as primary and zero
+/// tertiary.
+#[must_use]
+pub fn collation_key(s: &str) -> CollationKey {
+    let mut primary = Vec::with_capacity(s.len());
+    let mut tertiary = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        let (p, t) = if ('\u{20}'..='\u{7e}').contains(&c) {
+            ASCII_WEIGHTS[c as usize].unwrap_or((NON_ASCII_PRIMARY + c as u32, 0))
+        } else {
+            (NON_ASCII_PRIMARY + c as u32, 0)
+        };
+        primary.push(p);
+        tertiary.push(t);
+    }
+    (primary, tertiary)
+}
+
+/// A total, deterministic order for any two UTF-8 strings that is exactly [`ascii_compare`]
+/// whenever both are printable ASCII: primary weights left to right (a prefix first), then
+/// tertiary weights. Lexicographic on weight keys, so total and transitive for any input.
+/// This is the one total collation: the Status facts' completed ranks, the Scoreboard facts
+/// and the Analytics projection sorts all order by it.
+#[must_use]
+pub fn collate(a: &str, b: &str) -> Ordering {
+    let (pa, ta) = collation_key(a);
+    let (pb, tb) = collation_key(b);
+    pa.cmp(&pb).then_with(|| ta.cmp(&tb))
 }
 
 #[cfg(test)]
@@ -498,6 +565,71 @@ mod tests {
         assert_eq!(ascii_compare("é", "e"), None);
         assert_eq!(ascii_compare("a\tb", "ab"), None);
         assert_eq!(ASCII_ORDER.len(), 95);
+    }
+
+    /// The total collation is `ascii_compare` on printable ASCII (every pair of a mixed word
+    /// list, singles included) and one deterministic order past it: this pins the deduped
+    /// copy in aac-num to the two orders aac-http and aac-views held before.
+    #[test]
+    fn collate_extends_ascii_compare_to_a_total_order() {
+        let words = [
+            "",
+            "a",
+            "A",
+            "b",
+            "Z",
+            "a b",
+            "a_1",
+            "a-1",
+            "a-b",
+            "ab",
+            "aB",
+            "Ab",
+            "codex",
+            "Claude",
+            "claude-3",
+            "claude-3-5",
+            "gpt-4o",
+            "gpt-4",
+            "0",
+            " ",
+            "_",
+            "~",
+        ];
+        for a in words {
+            for b in words {
+                assert_eq!(
+                    collate(a, b),
+                    ascii_compare(a, b).expect("a printable ASCII pair"),
+                    "{a:?} vs {b:?}"
+                );
+                assert_eq!(
+                    collation_key(a).cmp(&collation_key(b)),
+                    collate(a, b),
+                    "key {a:?} vs {b:?}"
+                );
+            }
+        }
+        // Past printable ASCII the order is by code point above every ASCII primary.
+        assert_eq!(collate("é", "e"), Ordering::Greater);
+        assert_eq!(collate("e", "é"), Ordering::Less);
+        assert_eq!(collate("模型", "model"), Ordering::Greater);
+        assert_eq!(collate("café", "cafe"), Ordering::Greater);
+        assert_eq!(collate("a\tb", "ab"), Ordering::Greater);
+        assert_eq!(collate("x", "x"), Ordering::Equal);
+        assert_eq!(
+            collate(
+                "Claude and GPT models \u{b7} 5-hour \u{b7} In T3",
+                "Claude and GPT models \u{b7} Weekly \u{b7} In T3"
+            ),
+            Ordering::Less
+        );
+        // Total: sorting is consistent (no cycle through the non-ASCII extension).
+        let mut mixed = ["a", "A", "Bé", "é", "ab", "abé", "az", "Z", "模型", "a\tb"];
+        mixed.sort_by(|a, b| collate(a, b));
+        for pair in mixed.windows(2) {
+            assert_ne!(collate(pair[0], pair[1]), Ordering::Greater, "{pair:?}");
+        }
     }
 
     #[test]

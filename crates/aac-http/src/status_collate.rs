@@ -6,81 +6,16 @@
 //! window labels hold a middle dot ("Claude and GPT models · Weekly"), which the usage panel's
 //! provider/label/window sort compares: every Status read declined. TS ranked every word with
 //! `Intl`. This module completes the ranks in the service (aac-status, in the agent's source
-//! closure, stays unchanged) with the same total collation the Analytics projection uses
-//! (`aac_views::analytics_activity::collate`): exactly `ascii_compare` for printable ASCII, and
-//! any other character above every printable-ASCII primary by code point.
+//! closure, stays unchanged) with the one total collation in `aac_num::intl`
+//! (`collation_key` / `collate`, shared with the Analytics projection): exactly
+//! `ascii_compare` for printable ASCII, and any other character above every
+//! printable-ASCII primary by code point.
 use aac_num::intl;
 use indexmap::IndexSet;
 use serde_json::{Map, Value};
-#[cfg(test)]
-use std::cmp::Ordering;
-
-type CollationKey = (Vec<u32>, Vec<u32>);
-
-/// Primary weight base for characters outside printable ASCII (above every ASCII primary).
-const NON_ASCII_PRIMARY: u32 = 256;
-
-/// Precomputed `(primary, tertiary)` table for printable ASCII bytes from `intl::ASCII_ORDER`:
-/// one primary per letter pair (lowercase first), else its rank. The weights `intl::ascii_compare`
-/// uses, resolved in O(1) instead of scanning `ASCII_ORDER` per character comparison.
-const ASCII_WEIGHTS: [Option<(u32, u32)>; 128] = {
-    let order = intl::ASCII_ORDER.as_bytes();
-    let mut digits_end = 0u32;
-    let mut i = 0;
-    while i < order.len() {
-        if order[i] == b'a' {
-            digits_end = i as u32;
-            break;
-        }
-        i += 1;
-    }
-    let mut table: [Option<(u32, u32)>; 128] = [None; 128];
-    let mut at = 0;
-    while at < order.len() {
-        let c = order[at];
-        if (c as usize) < 128 {
-            let entry = if c.is_ascii_alphabetic() {
-                (
-                    digits_end + (at as u32 - digits_end) / 2,
-                    if c.is_ascii_uppercase() { 1 } else { 0 },
-                )
-            } else {
-                (at as u32, 0)
-            };
-            table[c as usize] = Some(entry);
-        }
-        at += 1;
-    }
-    table
-};
-
-/// `(primary, tertiary)` collation key for one string, computed once per word before sorting.
-fn collation_key(s: &str) -> CollationKey {
-    let mut primary = Vec::with_capacity(s.len());
-    let mut tertiary = Vec::with_capacity(s.len());
-    for c in s.chars() {
-        let (p, t) = if ('\u{20}'..='\u{7e}').contains(&c) {
-            ASCII_WEIGHTS[c as usize].unwrap_or((NON_ASCII_PRIMARY + c as u32, 0))
-        } else {
-            (NON_ASCII_PRIMARY + c as u32, 0)
-        };
-        primary.push(p);
-        tertiary.push(t);
-    }
-    (primary, tertiary)
-}
-
-/// A total order for any two strings that is exactly `intl::ascii_compare` when both are
-/// printable ASCII: primary weights left to right (a prefix first), then tertiary weights.
-#[cfg(test)]
-pub(crate) fn collate(a: &str, b: &str) -> Ordering {
-    let (pa, ta) = collation_key(a);
-    let (pb, tb) = collation_key(b);
-    pa.cmp(&pb).then_with(|| ta.cmp(&tb))
-}
 
 /// The facts text with `order` holding a rank for every word the sources' data carries
-/// (`facts::words_of`, the producer's own word set), ranked by `collation_key`. `None` when a text
+/// (`facts::words_of`, the producer's own word set), ranked by `intl::collation_key`. `None` when a text
 /// does not parse (the caller keeps the facts it has).
 pub(crate) fn complete_order(sources: &[&str], facts: &str) -> Option<String> {
     let mut values = Vec::with_capacity(sources.len());
@@ -90,11 +25,11 @@ pub(crate) fn complete_order(sources: &[&str], facts: &str) -> Option<String> {
     complete_order_of(&values.iter().collect::<Vec<_>>(), facts)
 }
 
-/// Rank a deduplicated word set into a JSON `{word: rank}` object using `collation_key`.
+/// Rank a deduplicated word set into a JSON `{word: rank}` object using `intl::collation_key`.
 pub(crate) fn rank_words<'a>(words: impl IntoIterator<Item = &'a String>) -> Map<String, Value> {
-    let mut keyed: Vec<(CollationKey, &String)> = words
+    let mut keyed: Vec<((Vec<u32>, Vec<u32>), &String)> = words
         .into_iter()
-        .map(|word| (collation_key(word), word))
+        .map(|word| (intl::collation_key(word), word))
         .collect();
     keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
     keyed
@@ -122,6 +57,7 @@ mod tests {
     use aac_status::produce::facts::Facts;
     use aac_status::read_context::{Context, Presentation};
     use serde_json::json;
+    use std::cmp::Ordering;
     use std::sync::Arc;
 
     fn context(facts: &str) -> Context {
@@ -167,7 +103,7 @@ mod tests {
             for b in ascii {
                 assert_eq!(after.compare(a, b), before.compare(a, b), "{a} {b}");
                 assert_eq!(
-                    Some(collate(a, b)),
+                    Some(intl::collate(a, b)),
                     aac_num::intl::ascii_compare(a, b),
                     "{a} {b}"
                 );
