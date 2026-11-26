@@ -85,6 +85,26 @@ export function updateJob({ restartFailed = false, contract = false } = {}) {
 	return { id: '0123abcd-0000-4000-8000-00000000abcd', state: 'succeeded', startedAt: at(-190), finishedAt: at(-182), expectedResults: results.length, results };
 }
 
+/** A running Update apps job (the POST /api/app-updates/start answer): no results yet, one computer working. */
+export function runJob() {
+	return {
+		id: '0123abcd-2222-4000-8000-00000000abcd',
+		state: 'running',
+		startedAt: at(0),
+		finishedAt: null,
+		activePlatform: 'mac',
+		cancelRequested: false,
+		expectedResults: 38,
+		hosts: {
+			mac: { state: 'running', currentApp: 'claude-code', phase: 'updating' },
+			windows: { state: 'waiting', currentApp: null, phase: null },
+			ubuntu: { state: 'waiting', currentApp: null, phase: null },
+			nas1: { state: 'waiting', currentApp: null, phase: null },
+		},
+		results: [],
+	};
+}
+
 /** The retry of updateJob(): only the failed row, on its computer. */
 export function retryJob() {
 	return {
@@ -138,7 +158,17 @@ export function fakeServer(over = {}) {
 		// Details reads the account's reset inventory; these fixture accounts hold none.
 		['GET', /^\/api\/accounts\/[^/]+\/reset-claims$/, () => json(200, { status: 'ok', observedAtMs: Date.now(), grants: [], history: [], pendingAttempt: null })],
 		['GET', /^\/api\/app-updates\/status$/, () => json(200, { job: s.update })],
+		['POST', /^\/api\/app-updates\/start$/, () => {
+			// A second start while one runs is refused with the running job (the frame's 409 path).
+			if (s.update && s.update.state === 'running') return json(409, { error: 'Already running', job: s.update });
+			s.update = runJob();
+			return json(202, { job: s.update });
+		}],
 		['POST', /^\/api\/app-updates\/retry$/, () => { s.update = retryJob(); return json(202, { job: s.update }); }],
+		['POST', /^\/api\/app-updates\/cancel$/, () => {
+			if (s.update && s.update.state === 'running') { s.update = { ...s.update, cancelRequested: true }; return json(202, { job: s.update, cancelling: true }); }
+			return json(200, { job: s.update, cancelling: false });
+		}],
 		['GET', /^\/api\/auth\/devices$/, () => json(200, { devices: s.rich ? [
 			{ id: 'dev-mac-1', name: 'MacBook tray', platform: 'mac', appVersion: '3.2.0', pairedAt: at(-60 * 24 * 9), lastSeenAt: at(-3), lastSeenAddress: '192.168.10.31', idleExpiresAt: at(60 * 24 * 80) },
 			{ id: 'dev-win-1', name: 'Windows PC tray', platform: 'windows', appVersion: '3.2.0', pairedAt: at(-60 * 24 * 20), lastSeenAt: at(-60 * 5), lastSeenAddress: '192.168.10.40' },

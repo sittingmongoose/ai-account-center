@@ -158,13 +158,28 @@
         "label": "GLM 5.3",
         "family": "GLM",
         "runtimes": [
-          "zcode"
+          "zcode",
+          "omp"
         ],
         "efforts": [
           "max"
         ],
         "prices": null,
         "notes": "Mechanical work, reviewed."
+      },
+      {
+        "model": "zai/glm-5.4",
+        "label": "GLM 5.4",
+        "family": "GLM",
+        "runtimes": [
+          "omp",
+          "zcode"
+        ],
+        "efforts": [
+          "max"
+        ],
+        "prices": null,
+        "notes": "Under evaluation against GLM 5.3 (2026-11-26 bake-off)."
       },
       {
         "model": "muse/muse-spark-1.3-contributor",

@@ -39,6 +39,7 @@ const packagedAliases = JSON.parse(packaged('model-aliases.json')) as {
 const NEW_MODELS = [
   'openai/gpt-6.2-sol',
   'openai/gpt-6.2-astra',
+  'zai/glm-5.4',
   'google/gemini-4-neon',
   'deepseek/deepseek-v4.1-flash',
   'alibaba/qwen3.8-max',

@@ -143,7 +143,12 @@
     "devin/swe-2-1-medium": "devin/swe-2-1-max",
     "acpRegistry_devin/swe-2-1-max": "devin/swe-2-1-max",
     "acpRegistry_devin/swe-2-1-medium": "devin/swe-2-1-max",
-    "SWE-2.1 Max": "devin/swe-2-1-max"
+    "SWE-2.1 Max": "devin/swe-2-1-max",
+    "omp/zai/glm-5.3": "zai/glm-5.3",
+    "glm-5.4": "zai/glm-5.4",
+    "omp/glm-5.4": "zai/glm-5.4",
+    "omp/zai/glm-5.4": "zai/glm-5.4",
+    "zcode/glm-5.4": "zai/glm-5.4"
   },
   "effortSuffixes": [
     "-minimal",

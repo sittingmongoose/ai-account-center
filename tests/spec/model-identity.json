@@ -64,6 +64,12 @@
       ]
     },
     {
+      "model": "zai/glm-5.4",
+      "efforts": [
+        "max"
+      ]
+    },
+    {
       "model": "muse/muse-spark-1.3-contributor",
       "efforts": [
         "max"
@@ -290,7 +296,12 @@
     "devin/swe-2-1-medium": "devin/swe-2-1-max",
     "acpRegistry_devin/swe-2-1-max": "devin/swe-2-1-max",
     "acpRegistry_devin/swe-2-1-medium": "devin/swe-2-1-max",
-    "SWE-2.1 Max": "devin/swe-2-1-max"
+    "SWE-2.1 Max": "devin/swe-2-1-max",
+    "omp/zai/glm-5.3": "zai/glm-5.3",
+    "glm-5.4": "zai/glm-5.4",
+    "omp/glm-5.4": "zai/glm-5.4",
+    "omp/zai/glm-5.4": "zai/glm-5.4",
+    "zcode/glm-5.4": "zai/glm-5.4"
   },
   "effortSuffixes": [
     "-minimal",
@@ -6832,6 +6843,600 @@
       "useTable": true,
       "want": {
         "id": "glm-5.3-unknownsuffix",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "glm-5.4-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-minimal",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "minimal"
+      }
+    },
+    {
+      "id": "glm-5.4-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-low",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "glm-5.4-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-medium",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "glm-5.4-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-xhigh",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "xhigh"
+      }
+    },
+    {
+      "id": "glm-5.4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-max",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": "max",
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-minimal",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-low",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-medium",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-high",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-xhigh",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-max",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": "high",
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-minimal",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-low",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-medium",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-high",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-xhigh",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4-max",
+      "effort": "high",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": "",
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4-minimal",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4-low",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4-medium",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4-high",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4-xhigh",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "glm-5.4-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4-max",
+      "effort": "",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": ""
+      }
+    },
+    {
+      "id": "zai/glm-5.4-unknownsuffix",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4-unknownsuffix",
+        "effort": null
+      }
+    },
+    {
+      "id": "glm-5.4-unknownsuffix",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "glm-5.4-unknownsuffix",
         "effort": "max"
       }
     },
@@ -23201,6 +23806,246 @@
       },
       "overrideAliases": {
         "SWE-2.1 Max": "unlisted/model"
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.3",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.3",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.3",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "omp/zai/glm-5.3",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.3-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.3",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.3",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "omp/zai/glm-5.3",
+        "effort": null
+      },
+      "overrideAliases": {
+        "omp/zai/glm-5.3": "unlisted/model"
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "glm-5.4-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      },
+      "overrideAliases": {
+        "glm-5.4": "unlisted/model"
+      }
+    },
+    {
+      "id": "omp/glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/glm-5.4",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "omp/glm-5.4",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "omp/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/glm-5.4-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "omp/glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "omp/glm-5.4",
+        "effort": null
+      },
+      "overrideAliases": {
+        "omp/glm-5.4": "unlisted/model"
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.4",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.4",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "omp/zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.4-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "omp/zai/glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "omp/zai/glm-5.4",
+        "effort": null
+      },
+      "overrideAliases": {
+        "omp/zai/glm-5.4": "unlisted/model"
+      }
+    },
+    {
+      "id": "zcode/glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "zcode/glm-5.4",
+      "effort": "max",
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "max"
+      }
+    },
+    {
+      "id": "zcode/glm-5.4",
+      "effort": null,
+      "useTable": false,
+      "want": {
+        "id": "zcode/glm-5.4",
+        "effort": null
+      }
+    },
+    {
+      "id": "zcode/glm-5.4-high",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zai/glm-5.4",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "zcode/glm-5.4",
+      "effort": null,
+      "useTable": true,
+      "want": {
+        "id": "zcode/glm-5.4",
+        "effort": null
+      },
+      "overrideAliases": {
+        "zcode/glm-5.4": "unlisted/model"
       }
     },
     {

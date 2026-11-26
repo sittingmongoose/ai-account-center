@@ -69,8 +69,8 @@ describe('the published alias table', () => {
     for (const suffix of builtin.effortSuffixes) expect(packaged.effortSuffixes).toContain(suffix);
     // Our built-in copy's 104 plus explicit Qwen spellings (9), Gemini 4 Hydrogen (2),
     // DeepSeek V4.1 Flash (2), Astra 6.2 (6), Sol 6.2 (6), Z.ai account spellings (2),
-    // Gemini 4 Neon (2), Grok 4.6 (2), HungerG Free (2) and Devin SWE-2.1 Max (6).
-    expect(Object.keys(packaged.aliases)).toHaveLength(143);
+    // Gemini 4 Neon (2), Grok 4.6 (2), HungerG Free (2), Devin SWE-2.1 Max (6) and GLM 5.4 (5).
+    expect(Object.keys(packaged.aliases)).toHaveLength(148);
     const known = new Set(models.map((model) => model.model));
     for (const canonical of Object.values(packaged.aliases))
       expect(known.has(canonical)).toBe(true);
@@ -102,6 +102,7 @@ describe('the published alias table', () => {
     const NEW_MODELS = [
       'openai/gpt-6.2-sol',
       'openai/gpt-6.2-astra',
+      'zai/glm-5.4',
       'google/gemini-4-neon',
       'deepseek/deepseek-v4.1-flash',
       'alibaba/qwen3.8-max',
@@ -174,6 +175,26 @@ describe('the published alias table', () => {
     expect(
       normalizeModel('swe-2-1-max-high', null, published.models, published.table)
     ).toEqual({ id: 'devin/swe-2-1-max', effort: 'high' });
+  });
+
+  it('resolves every GLM 5.4 spelling and the OMP GLM 5.3 spelling', async () => {
+    const entry = models.find((model) => model.model === 'zai/glm-5.4');
+    expect(entry?.runtimes).toEqual(['omp', 'zcode']);
+    expect(entry?.efforts).toEqual(['max']);
+    const glm53 = models.find((model) => model.model === 'zai/glm-5.3');
+    expect(glm53?.runtimes).toEqual(['zcode', 'omp']);
+    const published = await publishedTable();
+    for (const [written, id] of [
+      ['glm-5.4', 'zai/glm-5.4'],
+      ['omp/glm-5.4', 'zai/glm-5.4'],
+      ['omp/zai/glm-5.4', 'zai/glm-5.4'],
+      ['zcode/glm-5.4', 'zai/glm-5.4'],
+      ['omp/zai/glm-5.3', 'zai/glm-5.3'],
+    ] as const)
+      expect([written, normalizeModel(written, null, published.models, published.table)]).toEqual([
+        written,
+        { id, effort: null },
+      ]);
   });
 
   it('resolves Astra 6.2 review spellings with max effort', async () => {
