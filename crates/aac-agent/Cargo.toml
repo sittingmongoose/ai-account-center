@@ -28,6 +28,7 @@ sha2.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 unicode-normalization = "0.1"
 url = "2.5"
 
