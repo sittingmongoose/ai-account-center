@@ -10,6 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+pub mod antigravity_store;
 pub mod auth_owner;
 pub mod codex_identity;
 pub mod codex_registry;

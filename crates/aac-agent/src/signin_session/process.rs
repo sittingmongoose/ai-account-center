@@ -91,6 +91,8 @@ pub struct Command {
     pub env: BTreeMap<String, String>,
     /// Run the CLI on a pseudo-terminal through the fixed relay.
     pub pty: bool,
+    /// When set, drive the Antigravity sandboxed CLI on a native Rust PTY without Python.
+    pub antigravity_driver: Option<crate::signin_session::antigravity_driver::DriverSpec>,
 }
 
 /// Why a spawn failed (`SignInSpawnFailure`).
@@ -222,6 +224,9 @@ impl Utf8Decoder {
 /// path; the TypeScript runner never starts sign-in jobs on Windows either.
 #[cfg(unix)]
 pub fn spawn(command: &Command) -> Handle {
+    if let Some(driver) = &command.antigravity_driver {
+        return crate::signin_session::antigravity_driver::spawn(command, driver);
+    }
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let (event_tx, events) = mpsc::unbounded_channel();
@@ -374,6 +379,37 @@ pub fn spawn(_command: &Command) -> Handle {
     }
 }
 
+/// A handle for a spawn that failed before creating a child (used by the Antigravity driver).
+pub(crate) fn unspawned_handle(
+    events: mpsc::UnboundedReceiver<ProcessEvent>,
+    input: mpsc::UnboundedSender<String>,
+) -> Handle {
+    Handle {
+        events,
+        input,
+        killer: Arc::new(NoChild),
+        killed: AtomicBool::new(false),
+        pid: None,
+    }
+}
+
+/// Construct a spawned handle from a driver-managed child process.
+#[cfg(unix)]
+pub(crate) fn spawned_handle(
+    events: mpsc::UnboundedReceiver<ProcessEvent>,
+    input: mpsc::UnboundedSender<String>,
+    killer: Arc<dyn Killer>,
+    pid: Option<u32>,
+) -> Handle {
+    Handle {
+        events,
+        input,
+        killer,
+        killed: AtomicBool::new(false),
+        pid,
+    }
+}
+
 /// A handle with no child (spawn already failed).
 struct NoChild;
 impl Killer for NoChild {
@@ -481,6 +517,7 @@ mod tests {
             args: vec!["-c".into(), "printf 'hello\\n'; exit 3".into()],
             env,
             pty: true,
+            antigravity_driver: None,
         });
         let mut data = String::new();
         let mut exit = None;
@@ -505,6 +542,7 @@ mod tests {
             args: vec![],
             env: BTreeMap::new(),
             pty: false,
+            antigravity_driver: None,
         });
         let event = handle.events.recv().await;
         assert!(matches!(
@@ -523,6 +561,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 30".into()],
             env,
             pty: true,
+            antigravity_driver: None,
         });
         // Give the relay a moment to fork the CLI.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;

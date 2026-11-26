@@ -15,10 +15,10 @@ use aac_files::{profile_staging, profile_writes::AntigravityMaintenanceLease, re
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-const CREDENTIAL: &str = ".gemini/antigravity-cli/antigravity-oauth-token";
-const FORMAT: &str = "antigravity-consumer-json";
-pub(super) const ORIGIN: &str = "https://accounts.google.com";
-const BUS: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+pub(crate) const CREDENTIAL: &str = ".gemini/antigravity-cli/antigravity-oauth-token";
+pub(crate) const FORMAT: &str = "antigravity-consumer-json";
+pub(crate) const ORIGIN: &str = "https://accounts.google.com";
+pub(crate) const BUS: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
   <type>session</type>
@@ -31,7 +31,6 @@ const BUS: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus C
   </policy>
 </busconfig>
 "#;
-const DRIVER: &str = include_str!("../../../../../scripts/antigravity/signin_driver.py");
 
 pub(super) struct Stage {
     root: PathBuf,
@@ -138,16 +137,17 @@ impl Stage {
                 .then_some(runtime_dir.as_str()),
             &env,
         )?;
-        let mut args = vec![
-            json!("-c"),
-            json!(DRIVER.trim_end()),
-            json!(stage.join(CREDENTIAL).to_str()?),
-            json!(ORIGIN),
-            json!("--"),
-            json!("/usr/bin/bwrap"),
-        ];
-        args.extend_from_slice(sandbox["sandboxArgs"].as_array()?);
-        Some(json!({"file":"/usr/bin/python3","args":args,"env":sandbox["env"],"pty":false}))
+        let args = sandbox["sandboxArgs"].as_array()?;
+        Some(json!({
+            "file": "/usr/bin/bwrap",
+            "args": args,
+            "env": sandbox["env"],
+            "pty": false,
+            "antigravityDriver": {
+                "tokenPath": stage.join(CREDENTIAL).to_str()?,
+                "origin": ORIGIN,
+            }
+        }))
     }
 
     fn credential(&self) -> Option<Vec<u8>> {
@@ -543,5 +543,38 @@ mod tests {
         );
         assert!(parsed.profile("beta").is_none());
         assert!(parsed.profile("alpha").is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_command_uses_native_bwrap_and_antigravity_driver_with_zero_python() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let root = dir.path().join(".ccs");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&root).unwrap();
+        let stage = Stage {
+            root: root.clone(),
+            directory: ".staging-0123456789abcdef".into(),
+            marker: "work.running".into(),
+            device: 0,
+            inode: 0,
+        };
+        let cmd = stage.command(&home).expect("command built");
+        assert_eq!(cmd["file"], "/usr/bin/bwrap");
+        assert_eq!(cmd["pty"], false);
+        assert!(
+            !cmd.to_string().contains("python3") && !cmd.to_string().contains("signin_driver"),
+            "unexpected python reference in command: {cmd}"
+        );
+        assert_eq!(cmd["antigravityDriver"]["origin"], ORIGIN);
+        assert!(
+            cmd["antigravityDriver"]["tokenPath"]
+                .as_str()
+                .unwrap()
+                .ends_with(".gemini/antigravity-cli/antigravity-oauth-token")
+        );
+        // Prevent Drop from trying to clean nonexistent directories (it ignores errors cleanly).
+        std::mem::forget(stage);
     }
 }

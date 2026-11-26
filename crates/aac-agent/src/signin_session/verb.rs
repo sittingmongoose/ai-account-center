@@ -27,7 +27,7 @@ pub enum Action {
     /// Run one interactive session.
     Start {
         /// The flow metadata and prepared command.
-        spec: Spec,
+        spec: Box<Spec>,
         /// The CCS root whose journal holds the job.
         ccs: PathBuf,
         /// The front door's reserved id, when it mirrors the job synchronously.
@@ -122,13 +122,44 @@ fn ccs_root(args: &Value) -> Result<PathBuf, Failure> {
     Ok(path)
 }
 
+fn parse_antigravity_driver(
+    value: Option<&Value>,
+) -> Result<Option<crate::signin_session::antigravity_driver::DriverSpec>, Failure> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| refused("invalid sign-in driver"))?;
+    if object.len() != 2
+        || object
+            .keys()
+            .any(|key| !["tokenPath", "origin"].contains(&key.as_str()))
+    {
+        return Err(refused("invalid sign-in driver"));
+    }
+    let token_path = ascii_text(&value["tokenPath"], 1024)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| refused("invalid sign-in driver"))?;
+    let origin = ascii_text(&value["origin"], 256)
+        .filter(|o| {
+            o.strip_prefix("https://")
+                .is_some_and(|h| !h.is_empty() && !h.contains('/'))
+        })
+        .ok_or_else(|| refused("invalid sign-in driver"))?;
+    Ok(Some(
+        crate::signin_session::antigravity_driver::DriverSpec { token_path, origin },
+    ))
+}
+
 fn parse_command(value: &Value) -> Result<Command, Failure> {
     let object = value
         .as_object()
         .ok_or_else(|| refused("invalid sign-in command"))?;
     if object
         .keys()
-        .any(|key| !["file", "args", "env", "pty"].contains(&key.as_str()))
+        .any(|key| !["file", "args", "env", "pty", "antigravityDriver"].contains(&key.as_str()))
     {
         return Err(refused("invalid sign-in command"));
     }
@@ -163,11 +194,13 @@ fn parse_command(value: &Value) -> Result<Command, Failure> {
     let pty = value["pty"]
         .as_bool()
         .ok_or_else(|| refused("invalid sign-in pty"))?;
+    let antigravity_driver = parse_antigravity_driver(object.get("antigravityDriver"))?;
     Ok(Command {
         file,
         args: argv,
         env: environment,
         pty,
+        antigravity_driver,
     })
 }
 
@@ -232,7 +265,7 @@ fn parse_start(args: &Value) -> Result<Action, Failure> {
         ),
     };
     Ok(Action::Start {
-        spec: Spec {
+        spec: Box::new(Spec {
             provider,
             kind,
             mode,
@@ -243,7 +276,7 @@ fn parse_start(args: &Value) -> Result<Action, Failure> {
             timeout_ms,
             first_output_timeout_ms,
             command,
-        },
+        }),
         ccs: ccs_root(args)?,
         job_id,
         front_door_pid,
@@ -754,7 +787,7 @@ pub async fn interactive(
     let mut control_tx = Some(control_tx);
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
     let session = run_session(
-        spec,
+        *spec,
         ccs,
         job_id,
         front_door_pid,

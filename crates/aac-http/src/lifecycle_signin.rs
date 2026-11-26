@@ -21,12 +21,21 @@ struct Start {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AntigravityDriver {
+    token_path: String,
+    origin: String,
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Command {
     file: String,
     args: Vec<String>,
     env: std::collections::BTreeMap<String, String>,
     pty: bool,
+    #[serde(default, rename = "antigravityDriver")]
+    antigravity_driver: Option<AntigravityDriver>,
 }
 
 fn identifier(value: &str) -> bool {
@@ -69,7 +78,21 @@ impl Command {
             args.extend(self.args.drain(2..));
             self.args = args;
         }
-        (Path::new(&self.file).is_absolute()
+        let driver_ok = match &self.antigravity_driver {
+            None => true,
+            Some(driver) => {
+                provider == "antigravity"
+                    && Path::new(&driver.token_path).is_absolute()
+                    && ascii(&driver.token_path, 1024)
+                    && ascii(&driver.origin, 256)
+                    && driver
+                        .origin
+                        .strip_prefix("https://")
+                        .is_some_and(|host| !host.is_empty() && !host.contains('/'))
+            }
+        };
+        (driver_ok
+            && Path::new(&self.file).is_absolute()
             && ascii(&self.file, 1024)
             && self.args.len() <= 64
             && self.args.iter().all(|arg| ascii(arg, 4096))
@@ -134,6 +157,18 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
         return None;
     }
     let command = start.command.bind(&start.provider)?;
+    let mut wire_command = json!({
+        "file": command.file,
+        "args": command.args,
+        "env": command.env,
+        "pty": command.pty,
+    });
+    if let Some(driver) = command.antigravity_driver {
+        wire_command["antigravityDriver"] = json!({
+            "tokenPath": driver.token_path,
+            "origin": driver.origin,
+        });
+    }
     Some((
         start.timeout_ms + 60_000,
         json!({
@@ -149,12 +184,7 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
             "platform": start.platform,
             "allowedOrigins": start.allowed_origins,
             "timeoutMs": start.timeout_ms,
-            "command": {
-                "file": command.file,
-                "args": command.args,
-                "env": command.env,
-                "pty": command.pty,
-            }
+            "command": wire_command,
         }),
     ))
 }
@@ -172,6 +202,7 @@ mod tests {
             args: vec!["-c".into(), program.into(), "fixture".into()],
             env: Default::default(),
             pty: false,
+            antigravity_driver: None,
         }
         .bind("antigravity")
         .expect("driver fits the agent argv");
@@ -192,6 +223,7 @@ mod tests {
             args: vec!["-c".into(), "import sys\n".into()],
             env: Default::default(),
             pty: false,
+            antigravity_driver: None,
         };
         assert!(command.bind("antigravity").is_none());
     }
@@ -218,5 +250,40 @@ mod tests {
         assert_eq!(wire["platform"], "mac");
         request["ccs"] = json!("/another/journal");
         assert!(agent_start(Path::new(root), &request.to_string()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antigravity_native_driver_passes_through_without_python() {
+        let request = json!({
+            "jobId": "job_0123456789abcdef",
+            "frontDoorPid": 42,
+            "provider": "antigravity",
+            "kind": "supervised-cli",
+            "mode": "add",
+            "accountId": null,
+            "profileName": "work",
+            "platform": "ubuntu",
+            "allowedOrigins": ["https://accounts.google.com"],
+            "timeoutMs": 900000,
+            "command": {
+                "file": "/usr/bin/bwrap",
+                "args": ["--die-with-parent", "/usr/bin/dbus-run-session"],
+                "env": {"HOME": "/home/u"},
+                "pty": false,
+                "antigravityDriver": {
+                    "tokenPath": "/fixture/ccs/antigravity-signin/.staging-0123456789abcdef/home/.gemini/antigravity-cli/antigravity-oauth-token",
+                    "origin": "https://accounts.google.com"
+                }
+            }
+        });
+        let (deadline, wire) =
+            agent_start(Path::new("/fixture/ccs"), &request.to_string()).expect("native driver");
+        assert_eq!(deadline, 960_000);
+        assert_eq!(wire["command"]["file"], "/usr/bin/bwrap");
+        assert_eq!(
+            wire["command"]["antigravityDriver"]["origin"],
+            "https://accounts.google.com"
+        );
     }
 }

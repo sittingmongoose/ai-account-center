@@ -146,7 +146,7 @@ fn sweep_antigravity_orphans(root: &Path) -> Option<(usize, usize)> {
     lease.writer().antigravity_sweep(root, &saved).ok()
 }
 
-pub(super) fn holder_record() -> Option<String> {
+pub(crate) fn holder_record() -> Option<String> {
     let pid = std::process::id();
     let marker = json!({
         "pid":pid,"startedAt":storage::iso(now())?,"processStart":process_start(pid),"bootId":boot_id()
@@ -161,7 +161,7 @@ fn process_start(pid: u32) -> Option<String> {
     digits(start).then(|| start.to_owned())
 }
 
-fn boot_id() -> Option<String> {
+pub(crate) fn boot_id() -> Option<String> {
     let bytes = aac_files::read_bounded(Path::new("/proc/sys/kernel/random/boot_id"), 64).ok()?;
     let id = std::str::from_utf8(&bytes).ok()?.trim();
     boot_id_shape(id).then(|| id.to_owned())
@@ -185,7 +185,17 @@ fn optional(value: &Value, predicate: impl Fn(&str) -> bool) -> Option<Option<&s
     value.as_str().filter(|text| predicate(text)).map(Some)
 }
 
-fn holder_stale(bytes: &[u8], mtime: u64, now: u64, boot: Option<&str>) -> Option<bool> {
+pub(crate) fn holder_stale(bytes: &[u8], mtime: u64, now: u64, boot: Option<&str>) -> Option<bool> {
+    holder_stale_after(bytes, mtime, now, boot, 30 * 60_000)
+}
+
+pub(crate) fn holder_stale_after(
+    bytes: &[u8],
+    mtime: u64,
+    now: u64,
+    boot: Option<&str>,
+    silent_after_ms: u64,
+) -> Option<bool> {
     let record: Value = serde_json::from_slice(bytes).ok()?;
     let pid = u32::try_from(record["pid"].as_u64()?).ok()?;
     if pid == 0 {
@@ -204,5 +214,5 @@ fn holder_stale(bytes: &[u8], mtime: u64, now: u64, boot: Option<&str>) -> Optio
     {
         return Some(true);
     }
-    Some(now.saturating_sub(mtime.max(started)) > 30 * 60_000)
+    Some(now.saturating_sub(mtime.max(started)) > silent_after_ms)
 }
