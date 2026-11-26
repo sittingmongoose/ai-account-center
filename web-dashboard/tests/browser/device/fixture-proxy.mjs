@@ -5,6 +5,10 @@
 //   node web-dashboard/tests/browser/device/fixture-proxy.mjs <listen port> <dashboard port>
 // With AAC_FIXTURE_ACCOUNTS=rich, the account routes come from ../accounts-fixture.mjs instead (every provider, a trash
 // entry, paired trays, an Update apps run, and the sign-in and remove flows), for Accounts & Settings device checks.
+// With AAC_FIXTURE_ACCOUNTS=deep (rich plus the deep-review states, see /mnt/Cursor/share/ai-account-center/device-fixture/),
+// the Update apps run is the committed contract run (updateJob({ restartFailed: true, contract: true })) plus one plain
+// unknown row, the Antigravity login is selected but its runtime unverified, and two Claude accounts share the name
+// before the @ (sam@alpha.example, sam@beta.example) so Compare keeps their full addresses.
 // D7: with AAC_FIXTURE_RUST_HOME=<aac-http binary> (the dashboard's Rust Home switch on), the dashboard answer offers
 // the server's Home view and GET /api/views/home is answered from the same fixtures, the view built by the proxy's own
 // Rust service (../rust-home-builder.mjs), as the switch-on server would build it from these answers.
@@ -83,7 +87,18 @@ const upstreamJson = (p, cookie) => new Promise((resolve) => {
 });
 
 const { fakeServer, updateJob } = await import('../accounts-fixture.mjs');
-const rich = process.env.AAC_FIXTURE_ACCOUNTS === 'rich' ? fakeServer({ rich: true, update: updateJob() }) : null;
+// `deep` is `rich` plus the deep-review states (device passes check the Update apps failures, the Antigravity runtime
+// line and Compare's full addresses, none of which the plain rich answers produce).
+const DEEP = process.env.AAC_FIXTURE_ACCOUNTS === 'deep';
+const richAccounts = DEEP || process.env.AAC_FIXTURE_ACCOUNTS === 'rich';
+function deepJob() {
+	const job = updateJob({ restartFailed: true, contract: true });
+	// One plain unknown, neither timed out nor unreachable, so the table's generic "unknown" word is producible on device.
+	const zcode = job.results.find((r) => r.platform === 'ubuntu' && r.appId === 'zcode');
+	if (zcode) { zcode.status = 'unknown'; zcode.previousVersion = ''; zcode.version = ''; zcode.message = 'Unknown: this computer did not report a status.'; }
+	return job;
+}
+const rich = richAccounts ? fakeServer({ rich: true, update: DEEP ? deepJob() : updateJob() }) : null;
 /** Whether a rich account route answers this request. */
 const richMatch = (method, pathname) => !!rich && rich.routes.some(([m, re]) => m === method && re.test(pathname));
 /** The rich account routes' answer for this request, or null. */
@@ -95,10 +110,66 @@ function richAnswer(method, pathname, body) {
 	}
 	return null;
 }
+const richJson = (method, pathname, body = {}) => { const a = richAnswer(method, pathname, body); return a ? JSON.parse(a.body) : null; };
+// The deep fixture's four answers. Everything mirrors the kit's rich answers with the three deep-review states added:
+// the Antigravity profile id is the bound form (antigravity:profile:a1, the kit check's board()), and two Claude
+// twins share the name before the @ (analytics-quota.test.mjs's sam@ twins).
+function deepDashboard() {
+	const d = richJson('GET', '/api/accounts/dashboard');
+	const agy = d.accounts.find((a) => a.id === 'antigravity:a1');
+	if (agy) agy.id = 'antigravity:profile:a1';
+	const one = d.accounts.find((a) => a.id === 'claude:one');
+	if (one) {
+		const twins = ['alpha', 'beta'].map((name) => {
+			const twin = JSON.parse(JSON.stringify(one));
+			twin.id = `claude:twin-${name}`; twin.label = `sam@${name}.example`; twin.email = `sam@${name}.example`;
+			twin.capabilities = { ...twin.capabilities, claudeProfileId: `twin-${name}` };
+			return twin;
+		});
+		d.accounts.splice(d.accounts.indexOf(one) + 1, 0, ...twins);
+	}
+	return d;
+}
+const deepAntigravity = () => ({ schemaVersion: 1, hostId: 'ubuntu', activationSupported: false,
+	profiles: [{ id: 'a1', email: 'agy.workspace@example.invalid', plan: 'pro', hostId: 'ubuntu', available: true, selected: true, runtimeVerified: false, verifiedAt: new Date().toISOString() }] });
+function deepRegistry() {
+	const r = richJson('GET', '/api/accounts/registry');
+	for (const a of r.accounts) if (a.id === 'antigravity:a1') a.id = 'antigravity:profile:a1';
+	for (const name of ['alpha', 'beta']) r.accounts.push({ id: `claude:twin-${name}`, provider: 'claude', actions: { remove: true, signInAgain: true, replaceKey: true, recheck: true }, removeRefusal: null });
+	return r;
+}
+const deepAnswer = (pathname, url) => {
+	if (pathname === '/api/accounts/dashboard') return deepDashboard();
+	if (pathname === '/api/accounts/registry') return deepRegistry();
+	if (pathname === '/api/antigravity/profiles') return deepAntigravity();
+	if (pathname === '/api/accounts/analytics') {
+		const range = ['24h', '7d', '30d', '90d', 'all', 'custom'].includes(url.searchParams.get('range')) ? url.searchParams.get('range') : '7d';
+		const days = url.searchParams.get('from') ? { from: url.searchParams.get('from'), to: url.searchParams.get('to') } : null;
+		return analyticsFixture({ range, days, accounts: deepDashboard().accounts });
+	}
+	return null;
+};
+const DEEP_PATHS = new Set(['/api/accounts/dashboard', '/api/accounts/registry', '/api/antigravity/profiles', '/api/accounts/analytics']);
+/** The deep answers, only for a signed-in browser (the same check the other fixture routes make). */
+function serveDeep(req, res, pathname, url) {
+	const check = http.request({ host: '127.0.0.1', port: target, path: '/api/auth/check', headers: { cookie: req.headers.cookie || '', host: req.headers.host } }, (r) => {
+		let text = '';
+		r.on('data', (d) => (text += d)).on('end', () => {
+			let signedIn = false;
+			try { const s = JSON.parse(text); signedIn = s.authenticated === true || s.authRequired === false; } catch {}
+			if (!signedIn) { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"Sign in first.","code":"auth_required"}'); return; }
+			res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+			res.end(JSON.stringify(deepAnswer(pathname, url)));
+		});
+	});
+	check.on('error', () => { res.writeHead(502); res.end(); });
+	check.end();
+}
 
 const server = http.createServer((req, res) => {
 	const url = new URL(req.url, 'http://x');
 	const pathname = url.pathname;
+	if (DEEP && req.method === 'GET' && DEEP_PATHS.has(pathname)) { serveDeep(req, res, pathname, url); return; }
 	if (richMatch(req.method, pathname)) {
 		let raw = '';
 		req.on('data', (d) => (raw += d)).on('end', () => {
