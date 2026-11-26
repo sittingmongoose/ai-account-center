@@ -279,8 +279,7 @@ and schema version 1. Menu opening forces a server-backed refresh; background
 reads use the dashboard’s saved usage refresh interval (60 seconds by default).
 Adjust it in dashboard Settings; manual Refresh bypasses the normal sample cache.
 
-The dashboard still sends a fixed `codexAutoSwitch` (always off) for trays built before switching was removed; this
-tray no longer reads it. The private `~/.ccs/bar/native-status.json` contains only connection status, timestamp and
+The private `~/.ccs/bar/native-status.json` contains only connection status, timestamp and
 provider/account counts, allowing read-only verification of the installed GUI process itself.
 
 After connection deployment, `.build/release/ccs-bar-check --check-live` performs

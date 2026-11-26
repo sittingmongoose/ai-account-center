@@ -6,13 +6,12 @@
  *
  * Phase 1-6 refactor (issue #1164):
  *   Phase 1 → src/config/loader/io-locks.ts
- *   Phase 2 → src/config/loader/normalizers.ts
  *   Phase 3 → src/config/loader/yaml-serializer.ts
  *   Phase 4 → src/config/loader/defaults-merger.ts
  *   Phase 5 → src/config/loader/config-getters.ts
  *
- * The public surface contains active AAC accessors and the CLIProxy helpers
- * held for central-logins research. Retired launcher accessors are removed.
+ * The public surface contains active AAC accessors. Retired launcher and
+ * CLIProxy accessors are removed.
  */
 
 import * as fs from 'fs';
@@ -69,7 +68,6 @@ import { generateYamlHeader, generateYamlWithComments } from './loader/yaml-seri
 
 export { mergeWithDefaults } from './loader/defaults-merger';
 import { mergeWithDefaults } from './loader/defaults-merger';
-export { normalizeSessionAffinityTtl, hasPositiveDuration } from './loader/normalizers';
 
 // ---------------------------------------------------------------------------
 // Phase 5 re-exports: config-getters

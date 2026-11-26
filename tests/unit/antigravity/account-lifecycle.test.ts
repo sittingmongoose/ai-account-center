@@ -193,7 +193,7 @@ describe('Antigravity snapshot Remove', () => {
     expect(await code(agy.remove('party'))).toBe('resolved');
   });
 
-  it('refuses the runtime-verified active profile, a held lock, a pending switch and a running sign-in', async () => {
+  it('refuses the runtime-verified active profile, a held lock and a running sign-in', async () => {
     await save('gmail');
     await save('party');
     const registry = new AntigravityProfileRegistry(ccsDir);
@@ -223,11 +223,6 @@ describe('Antigravity snapshot Remove', () => {
     );
     expect(await code(agy.remove('gmail'))).toBe('activation_running');
     fs.rmSync(lock, { recursive: true });
-    await registry.withLock(async () => registry.beginTransaction('gmail', 'party', NOW));
-    expect(await agy.removeRefusal('gmail', { signinRunning: false, fresh: false })).toBe(
-      'activation_running'
-    );
-    expect(await code(agy.remove('gmail'))).toBe('activation_running');
     expect(agy.listProfiles().length).toBe(2);
   });
 
@@ -825,5 +820,39 @@ describe('Antigravity lifecycle review fixes', () => {
     expect(agy.removeFingerprint('party')).toMatch(/^[a-f0-9]{64}$/);
     expect(await agy.isLiveNativeProfile('party')).toBe(false);
     expect(fs.readdirSync(ccsDir)).toEqual(['antigravity-profiles']);
+  });
+
+  it('clears a legacy stuck transaction on write without blocking, while a held lock still blocks', async () => {
+    await save('gmail');
+    await save('party');
+    const profilesDir = path.join(ccsDir, 'antigravity-profiles');
+    const latest = fs
+      .readdirSync(profilesDir)
+      .filter((name) => /^registry-\d+\.json$/.test(name))
+      .sort()
+      .at(-1)!;
+    const raw = JSON.parse(fs.readFileSync(path.join(profilesDir, latest), 'utf8'));
+    raw.transaction = {
+      id: '0123456789abcdef0123456789abcdef',
+      state: 'recovery-required',
+      targetId: 'party',
+      previousId: 'gmail',
+      startedAt: new Date(NOW).toISOString(),
+    };
+    fs.writeFileSync(path.join(profilesDir, latest), JSON.stringify(raw), { mode: 0o600 });
+    const registry = new AntigravityProfileRegistry(ccsDir);
+    expect(registry.readState().transaction?.state).toBe('recovery-required');
+
+    const agy = lifecycle();
+    expect(agy.activationRunning()).toBe(false);
+    expect(await code(agy.remove('party'))).toBe('resolved');
+    expect(registry.readState().transaction).toBeNull();
+    expect(agy.listProfiles().map((profile) => profile.id)).toEqual(['gmail']);
+
+    // An active .transaction-lock held by a live process still reports busy.
+    await registry.withLock(async () => {
+      expect(agy.activationRunning()).toBe(true);
+    });
+    expect(agy.activationRunning()).toBe(false);
   });
 });

@@ -231,14 +231,6 @@ function dashboard(accounts: DashboardAccount[], extra: Record<string, unknown> 
     updatedAt: new Date(NOW).toISOString(),
     settings: { refreshIntervalSeconds: 60 },
     accounts,
-    codexAutoSwitch: {
-      enabled: false,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'idle',
-      message: 'Idle',
-      activationInProgress: false,
-    },
     ...extra,
   } as AccountDashboard;
 }

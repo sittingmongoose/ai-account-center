@@ -8,16 +8,9 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('');
   writeLine('Usage');
   writeLine('  ai-account-center antigravity signin <profile>');
-  writeLine('  ai-account-center antigravity status');
-  writeLine('  ai-account-center antigravity runtime refresh');
   writeLine('');
   writeLine('Commands');
   writeLine('  signin <profile>   Add a new saved profile, or sign in again to a saved one');
-  writeLine('  status             Show what the Antigravity runtime still needs (read-only)');
-  writeLine('  runtime refresh    Re-pin the installed runtime to the reviewed CLI build');
-  writeLine('');
-  writeLine('Managed in the dashboard (the CLI points there):');
-  writeLine('  recover            Finish or undo a stuck switch from an older version');
   writeLine('');
   writeLine('Notes');
   writeLine('  Runs on Ubuntu in an interactive terminal (over SSH is fine). The official');
@@ -28,129 +21,21 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  login is renewed too. Remove profiles in the dashboard. AI Account Center no');
   writeLine("  longer switches the live login (activate is retired); it reads each profile's");
   writeLine('  usage.');
-  writeLine('  Refresh re-verifies the installed CLI against the reviewed set and');
-  writeLine('  re-pins the install descriptor atomically, keeping the previous pin');
-  writeLine('  as a backup. An unreviewed CLI stays paused until it is reviewed.');
 }
-
-export function printAntigravityRuntimeHelp(writeLine: Writer = console.log): void {
-  writeLine('AI Account Center Antigravity runtime');
-  writeLine('');
-  writeLine('Usage');
-  writeLine('  ai-account-center antigravity runtime refresh');
-  writeLine('');
-  writeLine('Commands');
-  writeLine('  refresh   Re-pin the installed runtime to the reviewed CLI build');
-}
-
-/** Test seam: builds the runtime recover acts on. Production uses the installed one. */
-export type AntigravityRecoverRuntime = () => {
-  recover(): Promise<{
-    status: string;
-    profileId?: string;
-    email?: string;
-  }>;
-} | null;
 
 /** `ai-account-center antigravity ...`; returns the exit code. */
 export async function handleAntigravityCommand(
   args: string[],
-  writeLine: Writer = console.log,
-  recoverRuntime?: AntigravityRecoverRuntime
+  writeLine: Writer = console.log
 ): Promise<number> {
   if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
     printAntigravityHelp(writeLine);
     return 0;
   }
-  if (args[0] === 'status') {
-    if (args.length !== 1) {
-      writeLine('[X] Usage: ai-account-center antigravity status');
-      return 1;
-    }
-    const { formatAntigravityReleaseStatus, readAntigravityReleaseStatus } =
-      await import('../antigravity/release-status');
-    for (const line of formatAntigravityReleaseStatus(
-      readAntigravityReleaseStatus({ ccsDir: getCcsDir(), home: os.homedir() })
-    ))
-      writeLine(line);
-    return 0;
-  }
-  if (args[0] === 'recover') {
-    if (args.length !== 1) {
-      writeLine('[X] Usage: ai-account-center antigravity recover');
-      return 1;
-    }
-    // Loaded late so help and usage errors never construct a runtime.
-    const { createInstalledAntigravityRuntimeFactory } =
-      await import('../antigravity/production-runtime');
-    const { PrivateStorageError } = await import('../antigravity/registry');
-    const runtime = recoverRuntime
-      ? recoverRuntime()
-      : createInstalledAntigravityRuntimeFactory({ home: os.homedir() })(getCcsDir());
-    if (!runtime) {
-      writeLine('[X] No Antigravity profiles on this computer.');
-      return 1;
-    }
-    let result: { status: string; profileId?: string; email?: string };
-    try {
-      result = await runtime.recover();
-    } catch (error) {
-      if (error instanceof PrivateStorageError && error.code === 'busy') {
-        writeLine(
-          '[X] Another change to the saved Antigravity profiles is running. Try recovery again when it finishes.'
-        );
-        return 1;
-      }
-      throw error;
-    }
-    const who =
-      result.profileId && result.email
-        ? `${result.profileId} (${result.email})`
-        : (result.profileId ?? result.email ?? 'the live login');
-    if (result.status === 'completed') {
-      writeLine('[OK] Antigravity recovery completed the stuck switch on Ubuntu.');
-      writeLine(`The live login is ${who}, now the active profile.`);
-      return 0;
-    }
-    if (result.status === 'aborted') {
-      writeLine('[OK] Antigravity recovery undid the stuck switch on Ubuntu.');
-      writeLine(`The live login is ${who}, still the active profile.`);
-      return 0;
-    }
-    if (result.status === 'restored-previous') {
-      writeLine('[OK] Antigravity recovery restored the previous login on Ubuntu.');
-      writeLine(`The live login matched neither profile, so ${who} was restored and re-proved.`);
-      return 0;
-    }
-    if (result.status === 'no-recovery-pending') {
-      writeLine('[OK] No Antigravity switch needs recovery.');
-      return 0;
-    }
-    writeLine('[X] Antigravity recovery could not prove the live Ubuntu login.');
-    writeLine('The switch is still stuck; check the signed-in account, then run recovery again.');
-    return 1;
-  }
   if (args[0] === 'activate') {
     writeLine('[X] antigravity activate is retired in AI Account Center.');
     writeLine('    Account switching was removed; AI Account Center only reads usage and limits.');
     return 1;
-  }
-  if (args[0] === 'runtime') {
-    if (args.length === 1 || (args.length === 2 && ['help', '--help', '-h'].includes(args[1]))) {
-      printAntigravityRuntimeHelp(writeLine);
-      return 0;
-    }
-    if (args.length !== 2 || args[1] !== 'refresh') {
-      writeLine('[X] Usage: ai-account-center antigravity runtime refresh');
-      return 1;
-    }
-    // Loaded late so help and usage errors never touch the descriptor.
-    const { runAntigravityTerminalRefresh } = await import('../antigravity/terminal-refresh');
-    return runAntigravityTerminalRefresh({
-      ccsDir: getCcsDir(),
-      home: os.homedir(),
-      uid: process.getuid?.() ?? null,
-    });
   }
   if (args[0] !== 'signin') {
     writeLine(

@@ -2,9 +2,6 @@
  * Unit tests for unified config module
  */
 import { describe, it, expect } from 'bun:test';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 
 // Import only modules without transitive dependencies on config-manager
 import {
@@ -13,7 +10,6 @@ import {
   UNIFIED_CONFIG_VERSION,
 } from '../../src/config/unified-config-types';
 import { isUnifiedConfigEnabled } from '../../src/config/feature-flags';
-import { loadOrCreateUnifiedConfig } from '../../src/config/unified-config-loader';
 
 // Inline helper to test secret key detection (utility kept for potential reuse)
 function isSecretKey(key: string): boolean {
@@ -51,10 +47,9 @@ describe('unified-config-types', () => {
       expect(config.preferences.auto_update).toBe(true);
     });
 
-    it('should have CLIProxy providers list', () => {
+    it('should omit retired cliproxy defaults', () => {
       const config = createEmptyUnifiedConfig();
-      expect(config.cliproxy.providers).toContain('gemini');
-      expect(config.cliproxy.providers).toContain('codex');
+      expect('cliproxy' in config).toBe(false);
     });
   });
 
@@ -135,73 +130,5 @@ describe('feature-flags', () => {
       const result = isUnifiedConfigEnabled();
       expect(typeof result).toBe('boolean');
     });
-  });
-});
-
-describe('cliproxy session-affinity ttl normalization', () => {
-  it('normalizes invalid stored ttl values back to the safe default', () => {
-    const originalCcsHome = process.env.CCS_HOME;
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-affinity-ttl-home-'));
-    const ccsDir = path.join(tempHome, '.ccs');
-    fs.mkdirSync(ccsDir, { recursive: true });
-
-    fs.writeFileSync(
-      path.join(ccsDir, 'config.yaml'),
-      [
-        'version: 8',
-        'cliproxy:',
-        '  routing:',
-        '    strategy: round-robin',
-        '    session_affinity: true',
-        '    session_affinity_ttl: forever',
-        '',
-      ].join('\n')
-    );
-
-    process.env.CCS_HOME = tempHome;
-    try {
-      const config = loadOrCreateUnifiedConfig();
-      expect(config.cliproxy.routing.session_affinity_ttl).toBe('1h');
-    } finally {
-      if (originalCcsHome === undefined) {
-        delete process.env.CCS_HOME;
-      } else {
-        process.env.CCS_HOME = originalCcsHome;
-      }
-      fs.rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-
-  it('normalizes non-positive stored ttl values back to the safe default', () => {
-    const originalCcsHome = process.env.CCS_HOME;
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-affinity-zero-ttl-home-'));
-    const ccsDir = path.join(tempHome, '.ccs');
-    fs.mkdirSync(ccsDir, { recursive: true });
-
-    fs.writeFileSync(
-      path.join(ccsDir, 'config.yaml'),
-      [
-        'version: 8',
-        'cliproxy:',
-        '  routing:',
-        '    strategy: round-robin',
-        '    session_affinity: true',
-        '    session_affinity_ttl: 0s',
-        '',
-      ].join('\n')
-    );
-
-    process.env.CCS_HOME = tempHome;
-    try {
-      const config = loadOrCreateUnifiedConfig();
-      expect(config.cliproxy.routing.session_affinity_ttl).toBe('1h');
-    } finally {
-      if (originalCcsHome === undefined) {
-        delete process.env.CCS_HOME;
-      } else {
-        process.env.CCS_HOME = originalCcsHome;
-      }
-      fs.rmSync(tempHome, { recursive: true, force: true });
-    }
   });
 });

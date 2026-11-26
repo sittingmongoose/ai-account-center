@@ -332,18 +332,20 @@ describe('import-default — cliproxy-format rejection', () => {
       exitCalled = true;
       throw new Error('exit');
     };
-    const restore = silenceConsole();
+    const captured = captureOutput();
     try {
       await handleImportDefaultCodex(ctx, ['cliptest']);
     } catch {
       /* expected */
     } finally {
-      restore();
+      captured.restore();
       process.exit = origExit;
     }
 
     expect(exitCalled).toBe(true);
     expect(ctx.registry.hasProfile('cliptest')).toBe(false);
+    expect(captured.stderr.join('')).toContain('CLIPROXY_FORMAT');
+    expect(captured.stderr.join('')).not.toContain('ccs cliproxy');
   });
 });
 

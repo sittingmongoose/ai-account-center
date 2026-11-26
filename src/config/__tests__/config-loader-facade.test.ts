@@ -197,7 +197,7 @@ describe('config-loader-facade', () => {
       expect(typeof config.version).toBe('number');
       expect(config.accounts).toBeDefined();
       expect(config.profiles).toBeDefined();
-      expect(config.cliproxy).toBeDefined();
+      expect(config.dashboard_auth).toBeDefined();
     });
 
     it('auto-invalidates when config file is modified externally', async () => {

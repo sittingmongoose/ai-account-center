@@ -7,12 +7,10 @@ import {
   createAntigravityQuotaWorker,
   type AntigravityWorkerOptions,
   type PrivateWorkerSpawner,
+  type SavedQuotaRequest,
+  type SavedQuotaSnapshot,
 } from '../../../src/antigravity/quota-worker-transport';
 import { credentialFingerprint, identityKey } from '../../../src/antigravity/registry';
-import type {
-  SavedQuotaRequest,
-  SavedQuotaSnapshot,
-} from '../../../src/antigravity/runtime-composition';
 import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 
 const SAFE_FAILURE = 'Antigravity private account request failed safely.';

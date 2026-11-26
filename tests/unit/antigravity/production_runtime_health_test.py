@@ -114,36 +114,5 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(run().returncode, 2)
 
 
-class ResidentEntryParserTests(unittest.TestCase):
-    def test_missing_parser_names_the_module_instead_of_a_traceback(self):
-        probe = subprocess.run([sys.executable, '-I', '-c', 'import pyte'], capture_output=True, timeout=30)
-        if probe.returncode == 0:
-            self.skipTest('this interpreter has a system pyte, so the bundle parser cannot be missing')
-        with tempfile.TemporaryDirectory(prefix='aic-resident-') as temp:
-            library = Path(temp) / 'bundle/lib'
-            shutil.copytree(SOURCE / 'runtime', library, ignore=shutil.ignore_patterns('__pycache__'))
-            completed = subprocess.run(
-                [sys.executable, '-I', '-B', str(library / 'resident_main.py'),
-                 '--binary', str(Path(temp) / 'invented-agy'), '--database', str(Path(temp) / 'invented.db'),
-                 '--socket', str(Path(temp) / 'invented.sock')],
-                stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
-            self.assertEqual(completed.returncode, 1)
-            self.assertEqual(completed.stderr.decode().strip(),
-                             'Managed Antigravity runtime failed: missing Python module pyte (runtime-parser-missing).')
-            self.assertNotIn(b'Traceback', completed.stderr)
-            self.assertFalse((Path(temp) / 'invented.sock').exists())
-
-    def test_resident_entry_loads_the_version_neutral_parser_directory(self):
-        spec = importlib.util.spec_from_file_location('resident_main_fixture', SOURCE / 'runtime/resident_main.py')
-        sys.path.insert(0, str(SOURCE / 'runtime'))
-        try:
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-        finally:
-            sys.path.remove(str(SOURCE / 'runtime'))
-        self.assertEqual(module.PARSER, (SOURCE / 'runtime').resolve().parent / 'parser')
-        self.assertNotIn('site-packages', str(module.PARSER))
-
-
 if __name__ == '__main__':
     unittest.main(verbosity=2)

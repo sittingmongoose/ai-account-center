@@ -12,10 +12,6 @@ export type {
   EnvValue,
   ProfileMetadata,
   ProfilesRegistry,
-  CLIProxyVariantConfig,
-  CLIProxyVariantsConfig,
-  OpenAICompatProxyConfig,
-  OpenAICompatProxyRoutingConfig,
 } from './config';
 export { isConfig, isSettings } from './config';
 

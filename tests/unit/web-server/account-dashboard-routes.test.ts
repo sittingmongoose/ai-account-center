@@ -13,14 +13,6 @@ const dashboard: AccountDashboard = {
   schemaVersion: 1,
   updatedAt: '2026-10-01T12:00:00Z',
   accounts: [],
-  codexAutoSwitch: {
-    enabled: true,
-    thresholdPercent: 5,
-    pollIntervalSeconds: 60,
-    outcome: 'healthy',
-    message: 'Healthy',
-    activationInProgress: false,
-  },
 };
 
 beforeEach(async () => {

@@ -225,7 +225,7 @@ internal sealed class PairingFixture : IDisposable
                 {
                     "/api/accounts/settings" => new { refreshIntervalSeconds = 60 },
                     "/api/claude/desktop-profiles" => new { profiles = Array.Empty<object>() },
-                    _ => (object)(DashboardPayload ?? new { schemaVersion = 1, updatedAt = "2026-10-02T12:00:00.000Z", accounts = new[] { new { id = "codex:fixture", provider = "codex", providerLabel = "Codex", label = "fixture", email = "fixture@example.com", platform = "ubuntu", status = "ok", isActive = true, windows = new[] { new { key = "seven_day", label = "Weekly", usedPercent = 40, windowMinutes = 10080, kind = "rate_limit" } }, capabilities = new { codexProfile = "fixture" } } }, codexAutoSwitch = new { enabled = false, thresholdPercent = 5 } }),
+                    _ => (object)(DashboardPayload ?? new { schemaVersion = 1, updatedAt = "2026-10-02T12:00:00.000Z", accounts = new[] { new { id = "codex:fixture", provider = "codex", providerLabel = "Codex", label = "fixture", email = "fixture@example.com", platform = "ubuntu", status = "ok", isActive = true, windows = new[] { new { key = "seven_day", label = "Weekly", usedPercent = 40, windowMinutes = 10080, kind = "rate_limit" } }, capabilities = new { codexProfile = "fixture" } } } }),
                 };
             }
             else if (method == "POST" && path.StartsWith("/api/claude/desktop-profiles/", StringComparison.Ordinal) && path.EndsWith("/open", StringComparison.Ordinal) && bearer is not null)

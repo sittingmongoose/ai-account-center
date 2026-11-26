@@ -862,12 +862,6 @@ fn antigravity_section(
                 plan.to_string(),
                 cx.host_label(account)?,
                 age_or_status(cx, account)?,
-                // the live login whose runtime is not verified says so (view-model.mjs)
-                if bound.is_some_and(|b| b.unverified) {
-                    "runtime unverified".to_string()
-                } else {
-                    String::new()
-                },
             ]),
             status: match bound {
                 Some(b) if !b.status.is_empty() => b.status.clone(),
@@ -895,7 +889,6 @@ fn antigravity_section(
         run(n.to_string(), true, ""),
         plain(format!(" {}", plural(n))),
     ];
-    let problem = native.service_problem;
     Ok(SectionView {
         id: "antigravity".into(),
         kind: "accounts".into(),
@@ -904,19 +897,7 @@ fn antigravity_section(
         meta: format!("Google Antigravity CLI · {n} {}", plural(n)),
         meta_words: words_of(&meta_runs),
         meta_runs,
-        foot: match problem {
-            Some(p) => {
-                let runs = vec![plain(p)];
-                FootView {
-                    shown: true,
-                    warn: true,
-                    words: words_of(&runs),
-                    runs,
-                    when: String::new(),
-                }
-            }
-            None => no_foot(),
-        },
+        foot: no_foot(),
         empty: "No Antigravity accounts are reported yet.".into(),
         columns,
         rows,

@@ -571,7 +571,6 @@ export function dashboard(accounts = dashboardAccounts()) {
     settings: { hiddenProviders: ['muse'], hiddenAccountIds: ['claude:me'] },
     providers: buildDashboardProviders(accounts, ['muse'], [], facts),
     accounts,
-    codexAutoSwitch: { enabled: false } as never,
   };
 }
 

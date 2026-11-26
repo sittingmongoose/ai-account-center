@@ -49,7 +49,7 @@ const TYPED_ERROR_CLASSES = new Set([
 // P4 LOCKED denominator: typed-error adoption is measured ONLY over these
 // subdomains so the >40% goal cannot be gamed by narrowing scope. Emits both
 // numerator and denominator counts alongside the ratio.
-const TYPED_ADOPTION_SUBDOMAINS = ['cliproxy/quota', 'cliproxy/auth', 'web-server/routes', 'auth'];
+const TYPED_ADOPTION_SUBDOMAINS = ['web-server', 'auth'];
 
 // CLI-UX print surfaces exempt from the hotpath console.error sweep (P3).
 // Diagnostics here are legitimate user-facing terminal output, not loggable
@@ -88,16 +88,12 @@ function isCliUxExempt(relPath) {
 
 /**
  * Subdomain key for a src-relative path.
- *   src/cliproxy/quota/x.ts -> "cliproxy/quota"
  *   src/auth/x.ts           -> "auth"
  *   src/x.ts                -> "<root>"
  */
 function subdomainOf(relPath) {
   const rest = relPath.replace(/^src\//, '');
   const parts = rest.split('/');
-  if (parts[0] === 'cliproxy' && parts.length > 2) {
-    return parts[0] + '/' + parts[1];
-  }
   return parts[0] || '<root>';
 }
 

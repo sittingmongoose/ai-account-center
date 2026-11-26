@@ -1,46 +1,20 @@
 /**
  * Tests: config schemas re-export backward compatibility.
  *
- * Verifies that every type, interface, constant, and function originally
- * exported from unified-config-types.ts is still accessible via both
- * the barrel file and the schemas/index barrel.
+ * Verifies that active AAC types, constants, and functions exported from
+ * unified-config-types.ts stay accessible via both barrels.
  */
 
 import { describe, it, expect } from 'bun:test';
 
-// Import from the backward-compatible barrel (this is what all existing code uses)
 import * as barrel from '../../unified-config-types';
-
-// Import from the new schemas barrel (this is what the barrel delegates to)
 import * as schemas from '../index';
 
-// ---------------------------------------------------------------------------
-// Type-level checks (compile-time, not runtime)
-// ---------------------------------------------------------------------------
-
-// Verify key interfaces are accessible as types
 import type {
   UnifiedConfig,
   AccountConfig,
   ProfileConfig,
-  OAuthAccounts,
-  CLIProxyAuthConfig,
-  TokenRefreshSettings,
   DashboardAuthConfig,
-  CLIProxyVariantConfig,
-  CompositeTierConfig,
-  CompositeVariantConfig,
-  CLIProxyLoggingConfig,
-  CLIProxySafetyConfig,
-  CLIProxyRoutingConfig,
-  CLIProxyRetryConfig,
-  CLIProxyPoolRoutingConfig,
-  CLIProxyOAuthModelAliasEntry,
-  CLIProxyOAuthModelAliasConfig,
-  CLIProxyPayloadModelSelector,
-  CLIProxyPayloadOverrideRule,
-  CLIProxyPayloadConfig,
-  CLIProxyConfig,
   AutoQuotaConfig,
   RuntimeMonitorConfig,
   ManualQuotaConfig,
@@ -49,70 +23,44 @@ import type {
   LoggingLevel,
   LoggingConfig,
   PreferencesConfig,
-  ProxyRemoteConfig,
-  ProxyFallbackConfig,
-  ProxyLocalConfig,
-  OpenAICompatProxyRoutingConfig,
-  OpenAICompatProxyConfig,
-  CliproxyServerConfig,
 } from '../../unified-config-types';
 
 describe('config schemas backward compatibility', () => {
-  it('re-exports structured CLIProxy user routing types', () => {
-    const alias: CLIProxyOAuthModelAliasEntry = {
-      name: 'gpt-5.6-sol',
-      alias: 'gpt-5.6-sol-fast',
-    };
-    const aliases: CLIProxyOAuthModelAliasConfig = { codex: [alias] };
-    const selector: CLIProxyPayloadModelSelector = {
-      name: alias.alias,
-      protocol: 'codex',
-      'from-protocol': 'openai',
-    };
-    const rule: CLIProxyPayloadOverrideRule = {
-      models: [selector],
-      params: { service_tier: 'priority' },
-      headers: { 'x-tenant': 'alpha' },
-    };
-    const payload: CLIProxyPayloadConfig = { override: [rule] };
-    const retry: CLIProxyRetryConfig = { request_retry: 0 };
-    const pool: CLIProxyPoolRoutingConfig = { enabled: false };
-
-    expect({ aliases, payload, retry, pool }).toEqual({
-      aliases: { codex: [alias] },
-      payload: { override: [rule] },
-      retry: { request_retry: 0 },
-      pool: { enabled: false },
+  it('re-exports active config types', () => {
+    const prefs: PreferencesConfig = { theme: 'system', telemetry: false, auto_update: true };
+    const level: LoggingLevel = 'info';
+    const mode: QuotaManagementMode = 'auto';
+    const typeChecks: [
+      UnifiedConfig | null,
+      AccountConfig | null,
+      ProfileConfig | null,
+      DashboardAuthConfig | null,
+      AutoQuotaConfig | null,
+      RuntimeMonitorConfig | null,
+      ManualQuotaConfig | null,
+      QuotaManagementConfig | null,
+      LoggingConfig | null,
+    ] = [null, null, null, null, null, null, null, null, null];
+    expect({ prefs, level, mode, count: typeChecks.length }).toEqual({
+      prefs: { theme: 'system', telemetry: false, auto_update: true },
+      level: 'info',
+      mode: 'auto',
+      count: 9,
     });
   });
 
-  // -------------------------------------------------------------------------
-  // Constants
-  // -------------------------------------------------------------------------
   it('re-exports UNIFIED_CONFIG_VERSION', () => {
     expect(barrel.UNIFIED_CONFIG_VERSION).toBe(14);
     expect(schemas.UNIFIED_CONFIG_VERSION).toBe(14);
   });
 
-  it('re-exports CLIPROXY_SUPPORTED_PROVIDERS', () => {
-    expect(Array.isArray(barrel.CLIPROXY_SUPPORTED_PROVIDERS)).toBe(true);
-    expect(barrel.CLIPROXY_SUPPORTED_PROVIDERS.length).toBeGreaterThan(0);
-    expect(barrel.CLIPROXY_SUPPORTED_PROVIDERS).toEqual(schemas.CLIPROXY_SUPPORTED_PROVIDERS);
-  });
-
-  // -------------------------------------------------------------------------
-  // Default constants
-  // -------------------------------------------------------------------------
   const defaultConstants = [
-    'DEFAULT_CLIPROXY_SAFETY_CONFIG',
     'DEFAULT_LOGGING_CONFIG',
     'DEFAULT_DASHBOARD_AUTH_CONFIG',
     'DEFAULT_AUTO_QUOTA_CONFIG',
     'DEFAULT_MANUAL_QUOTA_CONFIG',
     'DEFAULT_RUNTIME_MONITOR_CONFIG',
     'DEFAULT_QUOTA_MANAGEMENT_CONFIG',
-    'DEFAULT_CLIPROXY_SERVER_CONFIG',
-    'DEFAULT_OPENAI_COMPAT_PROXY_CONFIG',
   ] as const;
 
   for (const name of defaultConstants) {
@@ -122,10 +70,7 @@ describe('config schemas backward compatibility', () => {
     });
   }
 
-  // -------------------------------------------------------------------------
-  // Functions
-  // -------------------------------------------------------------------------
-  it('re-exports createEmptyUnifiedConfig', () => {
+  it('re-exports createEmptyUnifiedConfig without retired CLIProxy sections', () => {
     expect(typeof barrel.createEmptyUnifiedConfig).toBe('function');
     expect(typeof schemas.createEmptyUnifiedConfig).toBe('function');
 
@@ -133,14 +78,13 @@ describe('config schemas backward compatibility', () => {
     expect(config.version).toBe(14);
     expect(config.accounts).toEqual({});
     expect(config.profiles).toEqual({});
-    expect(config.cliproxy).toBeDefined();
-    expect(config.cliproxy.oauth_accounts).toEqual({});
-    expect(config.cliproxy.variants).toEqual({});
+    expect(Object.hasOwn(config, 'cliproxy')).toBe(false);
+    expect(Object.hasOwn(config, 'cliproxy_server')).toBe(false);
+    expect(Object.hasOwn(config, 'proxy')).toBe(false);
     expect(config.logging).toBeDefined();
     expect(config.preferences).toBeDefined();
     expect(config.quota_management).toBeDefined();
     expect(config.dashboard_auth).toBeDefined();
-    expect(config.cliproxy_server).toBeDefined();
   });
 
   it('re-exports isUnifiedConfig', () => {
@@ -155,25 +99,16 @@ describe('config schemas backward compatibility', () => {
     expect(barrel.isUnifiedConfig('not an object')).toBe(false);
   });
 
-  // -------------------------------------------------------------------------
-  // Barrel has all expected runtime exports (type-only exports are verified
-  // at compile time via the import type block above — they are erased at
-  // runtime and cannot be checked with the `in` operator).
-  // -------------------------------------------------------------------------
   const expectedRuntimeExports = [
     'UNIFIED_CONFIG_VERSION',
-    'CLIPROXY_SUPPORTED_PROVIDERS',
     'createEmptyUnifiedConfig',
     'isUnifiedConfig',
-    'DEFAULT_CLIPROXY_SAFETY_CONFIG',
     'DEFAULT_LOGGING_CONFIG',
     'DEFAULT_DASHBOARD_AUTH_CONFIG',
     'DEFAULT_AUTO_QUOTA_CONFIG',
     'DEFAULT_MANUAL_QUOTA_CONFIG',
     'DEFAULT_RUNTIME_MONITOR_CONFIG',
     'DEFAULT_QUOTA_MANAGEMENT_CONFIG',
-    'DEFAULT_CLIPROXY_SERVER_CONFIG',
-    'DEFAULT_OPENAI_COMPAT_PROXY_CONFIG',
   ] as const;
 
   for (const name of expectedRuntimeExports) {

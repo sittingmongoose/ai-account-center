@@ -114,23 +114,6 @@ export function antigravityCreditsHint(account) {
 }
 
 const profileId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value);
-const range = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
-const moduleName = value => typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_.]{0,63}$/.test(value);
-const minor = value => typeof value === 'string' && /^\d{1,2}\.\d{1,3}$/.test(value);
-/** Why the Ubuntu runtime service is not running (server read-only check), in plain words; null when unknown. */
-export function antigravityServiceProblem(inventory) {
-  const problem = inventory?.runtimeServiceProblem;
-  if (!problem || typeof problem !== 'object') return null;
-  const name = moduleName(problem.module) ? problem.module : 'unknown';
-  const moved = minor(problem.python) && minor(problem.builtFor) && problem.python !== problem.builtFor
-    ? ` (Python ${problem.python}; runtime built for ${problem.builtFor})` : '';
-  const rebuild = '; managed updates wait until the runtime bundle is rebuilt';
-  if (problem.reason === 'missing-python-module') return `Runtime service failed: missing Python module ${name}${moved}${rebuild}`;
-  if (problem.reason === 'parser-mismatch') return `Runtime service failed: Python module ${name} is not the pinned version${moved}${rebuild}`;
-  if (problem.reason === 'parser-import-failed') return `Runtime service failed: Python module ${name} does not load${moved}${rebuild}`;
-  if (problem.reason === 'service-failed') return `Runtime service failed${range(problem.exitStatus, 1, 255) ? ` (exit status ${problem.exitStatus})` : ''}; managed updates wait until its cause is fixed`;
-  return null;
-}
 function boundProfiles(data, inventory) {
   if (inventory?.schemaVersion !== 1 || inventory.hostId !== 'ubuntu' || !Array.isArray(inventory.profiles) || inventory.profiles.length > 16) return [];
   const counts = new Map();
@@ -138,7 +121,7 @@ function boundProfiles(data, inventory) {
   const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
   return inventory.profiles.flatMap(profile => {
     if (!profileId(profile?.id) || counts.get(profile.id) !== 1 || profile.hostId !== 'ubuntu' || typeof profile.email !== 'string'
-      || typeof profile.available !== 'boolean' || typeof profile.selected !== 'boolean' || typeof profile.runtimeVerified !== 'boolean') return [];
+      || typeof profile.available !== 'boolean' || typeof profile.selected !== 'boolean') return [];
     const matches = accounts.filter(row => row.provider === 'antigravity' && row.id === `antigravity:profile:${profile.id}`
       && row.capabilities?.antigravityProfileId === profile.id && row.platform === 'ubuntu'
       && row.email === profile.email);
@@ -146,17 +129,16 @@ function boundProfiles(data, inventory) {
     return [{ profile, account: matches[0] }];
   });
 }
-/** The saved Ubuntu profiles bound to their dashboard rows: which login is live, and what the runtime reports. */
+/** The saved Ubuntu profiles bound to their dashboard rows: which login is live. */
 export function antigravityView(data, inventory) {
   const rows = boundProfiles(data, inventory);
   return {
     antigravityAccounts: rows.map(row => ({
       id: row.account.id, profile: row.profile.id, email: row.profile.email, plan: row.account.plan || row.profile.plan || '',
       ...(row.account.antigravityPlan ? { antigravityPlan: row.account.antigravityPlan } : {}),
-      selected: row.profile.selected, runtimeVerified: row.profile.runtimeVerified,
-      status: (row.profile.selected ? row.profile.runtimeVerified ? 'Selected · running verified' : 'Selected · runtime unverified' : row.account.status === 'needs_sign_in' ? 'Sign-in needed' : row.profile.available ? 'Saved login' : 'Login unavailable') + ({ cached: ' · Cached', needs_sign_in: ' · Sign-in needed', unavailable: ' · Usage unavailable', error: ' · Refresh failed' }[row.account.status] || ''),
+      selected: row.profile.selected,
+      status: (row.profile.selected ? 'Selected' : row.account.status === 'needs_sign_in' ? 'Sign-in needed' : row.profile.available ? 'Saved login' : 'Login unavailable') + ({ cached: ' · Cached', needs_sign_in: ' · Sign-in needed', unavailable: ' · Usage unavailable', error: ' · Refresh failed' }[row.account.status] || ''),
       note: [row.account.source, row.account.status, timeLabel(row.account.sampledAt, 'Sampled'), row.account.message].filter(Boolean).join(' · '),
     })),
-    antigravityServiceProblem: antigravityServiceProblem(inventory),
   };
 }

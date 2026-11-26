@@ -162,13 +162,12 @@ export class AntigravityAccountLifecycle {
   }
 
   /**
-   * A live switch, import or remove holds the lock, or an unresolved switch
-   * needs recovery. An abandoned lock does not count: the next Add, Sign in
-   * again or Remove takes it over.
+   * A live import or remove holds the lock. An abandoned lock does not count:
+   * the next Add, Sign in again or Remove takes it over.
    */
   activationRunning(): boolean {
     const registry = this.existingRegistry();
-    return registry !== null && (registry.lockHeldLive() || registry.hasRecovery());
+    return registry !== null && registry.lockHeldLive();
   }
 
   /** A terminal sign-in for this profile is running now. */
@@ -254,7 +253,6 @@ export class AntigravityAccountLifecycle {
     }
     try {
       return await registry.withLock(async () => {
-        if (registry.hasRecovery()) throw new AntigravityLifecycleError('activation_running');
         if (!registry.listProfiles().some((profile) => profile.id === profileId))
           throw new AntigravityLifecycleError('unknown_account');
         if (this.runtimeActiveProfileId() === profileId)
@@ -318,7 +316,6 @@ export class AntigravityAccountLifecycle {
     }
     try {
       return await registry.withLock(async () => {
-        if (registry.hasRecovery()) throw new AntigravityLifecycleError('activation_running');
         const profiles = registry.listProfiles();
         const existing = profiles.find((profile) => profile.id === profileId);
         if (mode === 'add') {

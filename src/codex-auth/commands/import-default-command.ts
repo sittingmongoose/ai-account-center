@@ -132,7 +132,7 @@ async function readAuthJsonSafe(authSrcPath: string): Promise<Record<string, unk
           parsed[CLIPROXY_TYPE_MARKER] === 'gemini')
       ) {
         throw new Error(
-          `CLIPROXY_FORMAT: Source is a CLIProxy auth file (type="${parsed[CLIPROXY_TYPE_MARKER]}"); use \`ccs cliproxy ...\` instead.`
+          `CLIPROXY_FORMAT: Source is a CLIProxy auth file (type="${parsed[CLIPROXY_TYPE_MARKER]}"); import a native Codex auth.json instead.`
         );
       }
 
@@ -387,5 +387,5 @@ export async function handleImportDefaultCodex(
   console.log(`  Email   : ${emailDisplay}`);
   console.log(`  History : ${historyStatus}`);
   console.log(`  Sessions: ${sessionsStatus}`);
-  console.log(`  Next    : ai-account-center codex-auth activate ${args.name}`);
+  console.log(`  Next    : ai-account-center codex-auth show ${args.name}`);
 }

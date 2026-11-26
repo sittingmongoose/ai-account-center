@@ -5,7 +5,7 @@
 //! - `registry.ts` `listProfiles` / `readCredential` / `readState` (read-only: TS stays the writer);
 //! - `switch-service.ts` `readInventory` (the live proof, its 5-minute window and the
 //!   selected/active overlay);
-//! - `runtime-composition.ts` `mapProfiles` (identityVerified, credentialRevision, runtimeVerified);
+//! - `map_profiles` (identityVerified, credentialRevision);
 //! - `usage-service.ts` `profiles` admission and `usage-normalization.ts` `publicProfile`
 //!   (the public inventory members, `hostId: "ubuntu"`).
 //!
@@ -478,8 +478,6 @@ pub(crate) fn map_profiles(ccs: &Path, state: &RegistryState, rows: &Value) -> V
                     "identityVerified": true,
                     "available": host.and_then(|h| h.get("available")) == Some(&json!(true)),
                     "selected": host.and_then(|h| h.get("selected")) == Some(&json!(true)),
-                    "runtimeVerified": host.and_then(|h| h.get("active")) == Some(&json!(true))
-                        && host.and_then(|h| h.get("verification")).and_then(Value::as_str) == Some("runtime"),
                     "verifiedAt": verified_at.unwrap_or_else(|| json!(identity.verified_at)),
                 }),
                 None => json!({
@@ -491,7 +489,6 @@ pub(crate) fn map_profiles(ccs: &Path, state: &RegistryState, rows: &Value) -> V
                     "identityVerified": false,
                     "available": false,
                     "selected": false,
-                    "runtimeVerified": false,
                     "verifiedAt": Value::Null,
                 }),
             }
@@ -515,7 +512,7 @@ fn public_inventory(rows: &[Value]) -> Option<Value> {
         let identity_key = row.get("identityKey")?.as_str()?;
         let revision = row.get("credentialRevision")?.as_str()?;
         let verified = row.get("identityVerified").and_then(Value::as_bool)?;
-        for key in ["available", "selected", "runtimeVerified"] {
+        for key in ["available", "selected"] {
             row.get(key)?.as_bool()?;
         }
         if !profile_id_ok(id)
@@ -538,13 +535,6 @@ fn public_inventory(rows: &[Value]) -> Option<Value> {
         return None;
     }
     Some(json!({ "schemaVersion": 1, "hostId": "ubuntu", "profiles": profiles }))
-}
-
-pub(crate) fn inventory_probe_fields(mut out: Value, problem: Option<&Value>) -> Value {
-    if let Some(problem) = aac_views::antigravity::runtime_problem_value(problem) {
-        out["runtimeServiceProblem"] = problem;
-    }
-    out
 }
 
 /// [`inventory`] at the wall clock, for a route answer that has no clock of its own.
@@ -754,8 +744,8 @@ mod tests {
             .and_then(LiveIdentity::from_value);
         let inventory = inventory(&ccs, live.as_ref(), now)
             .unwrap_or_else(|| panic!("state unreadable for {}", case["name"]));
-        let inventory = inventory_probe_fields(inventory, case.get("problem"));
         assert!(inventory.get("nativeUpdatePaused").is_none());
+        assert!(inventory.get("runtimeServiceProblem").is_none());
         let state = read_state(&ccs).unwrap();
         let overlay = read_inventory(&state, live.as_ref(), now);
         let selected = selected_profile_id(&ccs, live.as_ref(), now);
@@ -858,6 +848,25 @@ mod tests {
             cache.get(Path::new("/fixture/one"), 99_000),
             Some(first),
             "a built runtime survives the retry window"
+        );
+    }
+
+    #[test]
+    fn public_inventory_omits_retired_runtime_verified_and_service_problem() {
+        let cases: Value = serde_json::from_str(CASES).unwrap();
+        let now = js_date(cases["now"].as_str().unwrap()).unwrap();
+        let case = &cases["cases"][0];
+        let (_temp, ccs) = materialize(case);
+        let live = case
+            .get("live")
+            .filter(|value| !value.is_null())
+            .and_then(LiveIdentity::from_value);
+        let answered = inventory(&ccs, live.as_ref(), now).expect("fixture inventory");
+        assert!(answered.get("runtimeServiceProblem").is_none());
+        let profile = &answered["profiles"][0];
+        assert!(
+            profile.get("runtimeVerified").is_none(),
+            "retired runtimeVerified must be absent from public inventory: {profile}"
         );
     }
 }

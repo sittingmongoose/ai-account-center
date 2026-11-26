@@ -1,8 +1,4 @@
-import type {
-  ClaudeDashboardPlatform,
-  CodexAutoSwitchDashboardStatus,
-  DashboardAccount,
-} from './account-dashboard-types';
+import type { ClaudeDashboardPlatform, DashboardAccount } from './account-dashboard-types';
 import type { PendingClaudeProfile } from './claude-account-stores';
 
 /**
@@ -38,17 +34,6 @@ export function withAccountState(account: DashboardAccount): DashboardAccount {
   }
   return { ...account, lifecycle: { state: 'ready', jobId: null } };
 }
-
-/** Retired Codex auto-switch, always off, for the trays installed before switching was removed. */
-export const RETIRED_CODEX_AUTO_SWITCH: Readonly<CodexAutoSwitchDashboardStatus> = Object.freeze({
-  enabled: false,
-  thresholdPercent: 5,
-  thresholdUsedPercent: 95,
-  pollIntervalSeconds: 60,
-  outcome: 'disabled',
-  message: 'Account switching was removed. AI Account Center shows usage only.',
-  activationInProgress: false,
-});
 
 /** Running sign-in jobs by account id. */
 export type AccountJobStates = ReadonlyMap<

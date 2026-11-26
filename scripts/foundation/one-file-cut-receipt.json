@@ -82,23 +82,6 @@
       "fs::rename:b0c02fbbbc3351a813bceff7dad724a3dc8d35b090392d21aafd3d32025f4a00"
     ]
   },
-  "crates/aac-http/src/cli/antigravity.rs": {
-    "reason": "The native Antigravity CLI owns its installation pin, profile locks and temporary sign-in home.",
-    "uses": [
-      "File::open:db7f2a3acef157b4b0ef6db72a467048861f32b3ae61a0a61adcb71c90bf1288",
-      "O_NOFOLLOW:d45c4e52b0ee8f1fa4702da45454c9f1314ddedc2d8db92a83ca10a75c630c2f",
-      "O_NOFOLLOW:f19e06cadc5456cf803d2ab6b576a5e33e13e9912e88d82eaea5d0add04adfce",
-      "OpenOptions:12380944888a5d002f10ce4e65dd87efd91771d9429f0df7aff0b57b2a46517f",
-      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
-      "OpenOptions:85d62e57929530ccb17422316cebb41d7e2a64261638406b4ca0e514d24c615b",
-      "custom_flags:d45c4e52b0ee8f1fa4702da45454c9f1314ddedc2d8db92a83ca10a75c630c2f",
-      "custom_flags:f19e06cadc5456cf803d2ab6b576a5e33e13e9912e88d82eaea5d0add04adfce",
-      "fs::read:20aad536c484c868dc1a145278b044b11d874f61050a542876d613e36fe62202",
-      "fs::read_to_string:5d1a784e651910d5ce98306e247c20b22946a3e2ec95fefbda30c9b308f41df7",
-      "fs::read_to_string:e7448a0f3e48864e2806784715db53b64cd60cd2ef9e0a645d17ab833e31e09f",
-      "fs::rename:68006bd6360f6b155210ecb1a9bee89c2f730458b81a7fdb505e124b90d64e5a"
-    ]
-  },
   "crates/aac-http/src/cli/bar.rs": {
     "reason": "The native bar CLI stages and replaces installer artifacts and local tray installation records.",
     "uses": [

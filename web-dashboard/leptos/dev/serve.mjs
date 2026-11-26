@@ -50,7 +50,7 @@ function liveView() {
 // dashboard (no accounts reported), so a frame check that visits those tabs draws their empty state with nothing
 // failing. Made-up, never real. A check that needs rows hands its own view to the page (the `aac-dash` event).
 const DASHBOARD_READS = {
-  '/api/accounts/dashboard': () => ({ schemaVersion: 1, updatedAt: new Date().toISOString(), accounts: [], providers: [], settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] }, codexAutoSwitch: { enabled: false, thresholdPercent: 5 } }),
+  '/api/accounts/dashboard': () => ({ schemaVersion: 1, updatedAt: new Date().toISOString(), accounts: [], providers: [], settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] } }),
   '/api/accounts/settings': () => ({ refreshIntervalSeconds: 60 }),
   '/api/accounts/preferences': () => ({ timeZone: 'America/New_York' }),
   '/api/claude/desktop-profiles': () => ({ profiles: [] }),

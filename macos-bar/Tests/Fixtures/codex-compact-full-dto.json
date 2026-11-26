@@ -1165,15 +1165,5 @@
         "claudePlatforms": []
       }
     }
-  ],
-  "codexAutoSwitch": {
-    "enabled": false,
-    "thresholdPercent": 5,
-    "pollIntervalSeconds": 60,
-    "outcome": "disabled",
-    "message": "Synthetic offline fixture",
-    "activationInProgress": false,
-    "lastCheckedAt": null,
-    "lastSwitchedAt": null
-  }
+  ]
 }

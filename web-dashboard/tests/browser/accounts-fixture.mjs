@@ -42,7 +42,6 @@ export function dashboard({ rich = false } = {}) {
 		accounts,
 		providers: ['claude', 'codex', 'antigravity', 'cursor', 'muse', 'kimi-code', 'qwen', 'zai', 'opencode-go'].map((id) => provider(id, count(id))),
 		settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: rich ? ['cursor:c2'] : [], trayHiddenProviders: [], trayHiddenAccountIds: [] },
-		codexAutoSwitch: { enabled: true, thresholdPercent: 5, outcome: 'below_threshold', message: 'The active account is below the switch point.' },
 	};
 }
 

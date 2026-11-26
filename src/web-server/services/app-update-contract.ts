@@ -121,11 +121,6 @@ export interface AppUpdateJob {
   expectedResults: number | null;
 }
 
-const RUNTIME_CODES: MessageCode[] = [
-  'runtime_unavailable',
-  'runtime_paused',
-  'runtime_paused_blocked',
-];
 export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
 /** Every platform yields one result per app, a failure row included when its host is down. */
 export const EXPECTED_RESULTS = PLATFORMS.length * Object.keys(UPDATE_APP_LABELS).length;
@@ -434,12 +429,6 @@ export function normalizeAppUpdateRow(
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||
-    // Only the Ubuntu managed bridge reports these; only runtime_paused ran the updater.
-    (RUNTIME_CODES.includes(code) &&
-      (appId !== 'antigravity-cli' ||
-        platform !== 'ubuntu' ||
-        row.status !== 'failed' ||
-        (row.updateAttempted === true) !== (code === 'runtime_paused'))) ||
     ((code === 't3_sessions_kept' || code === 'background_sessions_kept') &&
       (!CLI_APPS.includes(appId) || row.status !== 'updated')) ||
     // Muse "updated but catalog stale" rows are never clean updated rows: the

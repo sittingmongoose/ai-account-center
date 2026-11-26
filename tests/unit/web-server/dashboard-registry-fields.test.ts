@@ -345,7 +345,8 @@ describe('visibility in the dashboard DTO', () => {
     expect(
       hiddenDashboard.accounts.find((account) => account.id === 'zai:acct:9f2c41d0')?.windows
     ).toHaveLength(1);
-    expect(hiddenDashboard.codexAutoSwitch).toEqual(visible.codexAutoSwitch);
+    expect('codexAutoSwitch' in hiddenDashboard).toBe(false);
+    expect('codexAutoSwitch' in visible).toBe(false);
     expect(visible.accounts.every((account) => account.hidden === false)).toBe(true);
   });
 

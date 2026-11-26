@@ -10,7 +10,7 @@ export const flush = async (rounds = 8) => { for (let i = 0; i < rounds; i++) aw
 
 /** A dashboard server with a session and the routes Home and Accounts read and change. Fresh state per call. */
 export function fixtureServer(over = {}) {
-  const s = { signedIn: true, revoked: false, auto: { enabled: false, thresholdPercent: 5 }, interval: 60, ...over };
+  const s = { signedIn: true, revoked: false, interval: 60, ...over };
   const updated = new Date(Date.now() - 30_000).toISOString();
   const accounts = [
     { id: 'codex:one', provider: 'codex', email: 'one@example.test', isActive: true, status: 'ok', windows: [], capabilities: { codexProfile: 'one' } },
@@ -40,7 +40,7 @@ export function fixtureServer(over = {}) {
     if (method === 'GET' && path.startsWith('/api/accounts/dashboard?')) {
       if (s.revoked) return { status: 401, payload: { error: 'Signed out', code: 'session_revoked' } };
       if (!s.signedIn) return { status: 401, payload: { error: 'Authentication required', code: 'auth_required' } };
-      return { payload: { schemaVersion: 1, updatedAt: updated, accounts: structuredClone(accounts), providers: [], settings: { refreshIntervalSeconds: s.interval, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] }, codexAutoSwitch: s.auto } };
+      return { payload: { schemaVersion: 1, updatedAt: updated, accounts: structuredClone(accounts), providers: [], settings: { refreshIntervalSeconds: s.interval, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] } } };
     }
     const route = routes[`${method} ${path}`];
     return route ? route(body) : { status: 404, payload: { code: 'not_found' } };

@@ -155,7 +155,6 @@ public sealed class AccountDashboard
     public int SchemaVersion { get; set; }
     public string UpdatedAt { get; set; } = "";
     public List<DashboardAccount> Accounts { get; set; } = new();
-    // codexAutoSwitch and antigravityAutoSwitch (retired with account switching, 2026-11-14) are no longer read.
     public AccountRefreshSettings? Settings { get; set; }
     /// <summary>The dashboard's provider list (B3a): label, order, and the "Show on dashboard" and "Show in tray" switches.</summary>
     public List<DashboardProvider>? Providers { get; set; }

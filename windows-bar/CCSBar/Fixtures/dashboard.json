@@ -834,8 +834,7 @@
      "claudeProfileId": null,
      "claudePlatforms": [],
      "antigravityProfileId": "example-1",
-     "antigravityHostIds": ["ubuntu"],
-     "antigravityCanActivate": true
+     "antigravityHostIds": ["ubuntu"]
     },
     "antigravityPlan": {
      "class": "pro",
@@ -915,8 +914,7 @@
      "claudeProfileId": null,
      "claudePlatforms": [],
      "antigravityProfileId": "example-3",
-     "antigravityHostIds": ["ubuntu"],
-     "antigravityCanActivate": true
+     "antigravityHostIds": ["ubuntu"]
     },
     "antigravityPlan": {
      "class": "free",
@@ -989,8 +987,7 @@
      "claudeProfileId": null,
      "claudePlatforms": [],
      "antigravityProfileId": "example-4",
-     "antigravityHostIds": ["ubuntu"],
-     "antigravityCanActivate": false
+     "antigravityHostIds": ["ubuntu"]
     },
     "antigravityPlan": {
      "class": "workspace",
@@ -1541,15 +1538,6 @@
      "claudePlatforms": []
     }
    }
-  ],
-  "codexAutoSwitch": {
-   "enabled": true,
-   "thresholdPercent": 5,
-   "pollIntervalSeconds": 60,
-   "outcome": "healthy",
-   "message": "The active Codex account has enough remaining quota.",
-   "activationInProgress": false,
-   "lastCheckedAt": "2026-10-01T15:15:25.773Z"
-  }
+  ]
  }
 }

@@ -150,7 +150,6 @@ stub('web-server/services/account-lifecycle-runtime.js', {
 });
 if (!owners) {
 }
-stub('antigravity/production-runtime.js', { getInstalledAntigravityRuntimeFactory: () => null });
 stub('store/store-service.js', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),
 });

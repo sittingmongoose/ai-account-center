@@ -29,7 +29,6 @@ export function demoDashboard(now) {
 			account('kimi-1', 'kimi-code', 'kimi.code.example@example.invalid', 'pro', [quota('weekly', 'Weekly usage', 63, 10080, 4000)]),
 			account('zai-1', 'zai', 'zai.coding.plan.example@example.invalid', 'pro', [quota('five_hour', 'Five-hour usage', 27, 300, 120)]),
 		],
-		codexAutoSwitch: { enabled: true, thresholdPercent: 10 },
 	};
 }
 

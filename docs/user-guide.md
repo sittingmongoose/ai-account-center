@@ -404,13 +404,10 @@ dashboard's user needs that alias (reachable without a prompt) and
 
 `ai-account-center antigravity signin <profile>` adds or signs in again a saved
 profile of the Antigravity CLI (`agy`) on the Linux dashboard computer; the
-dashboard reads every saved profile's usage and marks the live login. AI Account
-Center does not switch the live login: account switching was removed on
-2026-11-14. `ai-account-center antigravity status` reports what the managed
-runtime needs, read-only, and `ai-account-center antigravity recover` finishes a
-switch an older version or a managed update left unfinished. The runtime's
-install, adoption and rollback steps are in
-[the Antigravity runtime guide](antigravity-runtime.md).
+dashboard reads every saved profile's usage and renews the live login in place
+when you re-sign that profile. AI Account Center does not switch the live login:
+account switching and the managed Antigravity runtime were removed (see
+[activation (retired)](activate-in-place.md)).
 
 ## Platforms
 
@@ -527,7 +524,6 @@ its local dashboard and opens the installed app.
 | `ai-account-center codex-auth show [name]` | Inspect saved logins; `list` and `status` are aliases |
 | `ai-account-center codex-auth remove <name>` | Remove an inactive saved login with confirmation; `--force` overrides only saved-default protection |
 | `ai-account-center antigravity signin <profile>` | Sign in an Antigravity profile from a terminal on Ubuntu |
-| `ai-account-center antigravity status` | Read-only report of the Antigravity runtime gates |
 | `ai-account-center bar` | Mac local dashboard/app launch; `serve`, `stop`, `status`, `install`, `uninstall`, `version` are available |
 | `ai-account-center help` / `version` | Current command help / product version |
 

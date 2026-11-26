@@ -194,14 +194,7 @@ export function rustAntigravityInventoryInput(inventory: unknown): unknown {
 }
 
 export function isRustAntigravityInventory(value: unknown): boolean {
-  if (!object(value)) return false;
-  const names = Object.keys(value).join('\n');
-  return (
-    [
-      'schemaVersion\nhostId\nprofiles',
-      'schemaVersion\nhostId\nruntimeServiceProblem\nprofiles',
-    ].includes(names) && Array.isArray(value.profiles)
-  );
+  return keys(value, ['schemaVersion', 'hostId', 'profiles']) && Array.isArray(value.profiles);
 }
 
 /**

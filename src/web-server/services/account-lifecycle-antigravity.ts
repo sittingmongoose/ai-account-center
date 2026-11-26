@@ -19,10 +19,6 @@ import {
 } from '../../antigravity/signin-sandbox';
 import { claimAntigravitySignInMarker, type SignInMarker } from '../../antigravity/signin-marker';
 import { readMaskedCredential } from '../../antigravity/terminal-signin';
-import {
-  refreshRuntimeDescriptor,
-  type RuntimeRefreshResult,
-} from '../../antigravity/runtime-refresh';
 import { AGY_DRIVER_PYTHON, AGY_SIGNIN_DRIVER_PROGRAM } from '../../antigravity/signin-driver';
 import { LifecycleHttpError } from './account-lifecycle-accounts';
 import {
@@ -104,10 +100,6 @@ export function antigravityJobFlow(
   mode: 'add' | 'signin-again',
   deps: {
     preflight?: (home: string) => SignInPreflight;
-    refreshDescriptor?: (request: {
-      ccsDir: string;
-      home: string;
-    }) => Promise<RuntimeRefreshResult>;
   } = {}
 ): SignInFlowSpec {
   const accountId = mode === 'signin-again' ? `antigravity:profile:${profileName}` : null;
@@ -212,11 +204,6 @@ export function antigravityJobFlow(
           ? jobErrorCode(error.code)
           : new SignInJobError('write_failed');
       }
-      // Best effort: re-pin the installed runtime descriptor against the
-      // reviewed set so a later activation can run. Never fails the sign-in.
-      void (deps.refreshDescriptor ?? refreshRuntimeDescriptor)({ ccsDir, home }).catch(
-        () => undefined
-      );
       return {
         accountId: `antigravity:profile:${profileName}`,
         email: result.email,

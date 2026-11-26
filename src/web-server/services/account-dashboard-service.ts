@@ -56,7 +56,6 @@ import type {
 import {
   pendingClaudeAccount,
   withAccountState,
-  RETIRED_CODEX_AUTO_SWITCH,
   withJobState,
   type AccountJobStates,
 } from './account-dashboard-state';
@@ -1000,7 +999,6 @@ export class AccountDashboardService {
         (this.deps.providerFacts ?? lifecycleProviderFacts)(context)
       ),
       accounts: rows,
-      codexAutoSwitch: { ...RETIRED_CODEX_AUTO_SWITCH },
       ...(server ? { server } : {}),
       ...(claudeSignIns ? { claudeSignIns } : {}),
     };

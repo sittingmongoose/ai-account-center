@@ -249,12 +249,6 @@ impl Flow {
                 tokio::task::spawn_blocking(move || {
                     let identity =
                         antigravity::install(&native, &stage, &name, add, || jobs.stopped(&id))?;
-                    if let Some(home) = std::env::home_dir() {
-                        let root = native.agents.root().to_owned();
-                        tokio::task::spawn_blocking(move || {
-                            crate::cli::antigravity::refresh_after_signin(&root, &home)
-                        });
-                    }
                     Ok(json!({"accountId":format!("antigravity:profile:{name}"),
                         "email":identity.email,"plan":identity.plan}))
                 })
@@ -427,7 +421,7 @@ async fn antigravity_start(native: &NativeOwners, name: &str, add: bool, secure:
     let root = native.agents.root().to_owned();
     let gate = tokio::task::spawn_blocking(move || {
         let unavailable = || error(500, "registry_unavailable", "Account list could not be read safely.");
-        let (document, parsed) = antigravity::current(&root).map_err(|_| unavailable())?;
+        let (_document, parsed) = antigravity::current(&root).map_err(|_| unavailable())?;
         if add && parsed.as_ref().is_some_and(|parsed| parsed.profile(&name).is_some()) {
             return Err(error(409, "id_in_use", "That name is already used by another account."));
         }
@@ -446,7 +440,7 @@ async fn antigravity_start(native: &NativeOwners, name: &str, add: bool, secure:
         let race = || {
             let lock = aac_files::read::entry_exists(&root.join("antigravity-profiles/.transaction-lock"))
                 .map_err(|_| unavailable())?;
-            if lock || !document["transaction"].is_null() {
+            if lock {
                 return Err(error(409,"activation_running","Another change to these saved logins is running. Wait for it to finish."));
             }
             if lifecycle_maintenance::antigravity_signin_running(&root, &name) {

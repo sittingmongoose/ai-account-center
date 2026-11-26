@@ -825,8 +825,7 @@
     "antigravityProfileId": "agy-example-1",
     "antigravityHostIds": [
      "ubuntu"
-    ],
-    "antigravityCanActivate": true
+    ]
    },
    "antigravityPlan": {
     "class": "pro",
@@ -983,8 +982,7 @@
     "antigravityProfileId": "agy-example-2",
     "antigravityHostIds": [
      "ubuntu"
-    ],
-    "antigravityCanActivate": true
+    ]
    },
    "antigravityPlan": {
     "class": "pro",
@@ -1078,8 +1076,7 @@
     "antigravityProfileId": "agy-example-3",
     "antigravityHostIds": [
      "ubuntu"
-    ],
-    "antigravityCanActivate": true
+    ]
    },
    "antigravityPlan": {
     "class": "free",
@@ -1120,8 +1117,7 @@
     "antigravityProfileId": "agy-example-4",
     "antigravityHostIds": [
      "ubuntu"
-    ],
-    "antigravityCanActivate": true
+    ]
    },
    "antigravityPlan": {
     "class": "workspace",
@@ -1672,28 +1668,5 @@
     "claudePlatforms": []
    }
   }
- ],
- "codexAutoSwitch": {
-  "enabled": true,
-  "thresholdPercent": 5,
-  "pollIntervalSeconds": 60,
-  "outcome": "healthy",
-  "message": "The active Codex account has enough remaining quota.",
-  "activationInProgress": false,
-  "lastCheckedAt": "2026-10-01T15:15:25.773Z"
- },
- "antigravityAutoSwitch": {
-  "enabled": true,
-  "thresholdUsedPercent": 95,
-  "pollIntervalSeconds": 60,
-  "maxQuotaAgeSeconds": 300,
-  "cooldownSeconds": 600,
-  "selectedHostIds": [
-   "ubuntu"
-  ],
-  "requestedPoolId": "gemini-pool",
-  "outcome": "healthy",
-  "message": "The active Antigravity account has enough remaining quota.",
-  "activationInProgress": false
- }
+ ]
 }

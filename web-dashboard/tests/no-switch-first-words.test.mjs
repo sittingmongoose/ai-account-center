@@ -47,7 +47,7 @@ const PAGE = files('web-dashboard/public', 'web-dashboard/leptos/src');
 test('the scan reads the product sources it guards', () => {
   const names = PRODUCT.map(repoPath);
   for (const expected of ['src/antigravity/terminal-signin.ts', 'web-dashboard/public/accounts-view.mjs',
-    'web-dashboard/leptos/src/dash.rs', 'docs/antigravity-runtime.md', 'src/commands/antigravity-command.ts'])
+    'web-dashboard/leptos/src/dash.rs', 'docs/activate-in-place.md', 'src/commands/antigravity-command.ts'])
     assert.ok(names.includes(expected), expected);
 });
 

@@ -118,14 +118,14 @@ describe('maintainability-metrics.collectMaintainabilityMetrics (fixtures tree)'
       ["console.error('cli print');", "throw new Error('plain');"].join('\n')
     );
 
-    // src/cliproxy/quota/q.ts: createLogger present, 1 plain throw, 0 console.error
-    fs.mkdirSync(path.join(root, 'src', 'cliproxy', 'quota'), { recursive: true });
+    // src/web-server/routes/q.ts: createLogger present, 1 plain throw, 0 console.error
+    fs.mkdirSync(path.join(root, 'src', 'web-server', 'routes'), { recursive: true });
     fs.writeFileSync(
-      path.join(root, 'src', 'cliproxy', 'quota', 'q.ts'),
+      path.join(root, 'src', 'web-server', 'routes', 'q.ts'),
       [
         "import { createLogger } from '../../../services/logging';",
         'const logger = createLogger();',
-        "throw new Error('quota plain');",
+        "throw new Error('route plain');",
       ].join('\n')
     );
 
@@ -152,19 +152,14 @@ describe('maintainability-metrics.collectMaintainabilityMetrics (fixtures tree)'
     expect(metrics.hotpathConsoleErrors.hotpathOccurrences).toBe(1);
     expect(metrics.hotpathConsoleErrors.filesAffected).toBe(1);
 
-    // logger coverage: 3 source files, 1 with createLogger (cliproxy/quota)
+    // logger coverage: 3 source files, 1 with createLogger (web-server)
     expect(metrics.loggerCoverage.totalSourceFiles).toBe(3);
     expect(metrics.loggerCoverage.filesWithCreateLogger).toBe(1);
     expect(metrics.loggerCoverage.subdomainsWithZeroCreateLogger).toContain('auth');
 
-    // P4 LOCKED denominator: auth (1 typed / 1 total) + cliproxy/quota (0 typed / 1 total)
+    // P4 LOCKED denominator: auth (1 typed / 1 total) + web-server (0 typed / 1 total)
     // -> numerator 1, denominator 2
-    expect(metrics.typedErrorAdoption.subdomains).toEqual([
-      'cliproxy/quota',
-      'cliproxy/auth',
-      'web-server/routes',
-      'auth',
-    ]);
+    expect(metrics.typedErrorAdoption.subdomains).toEqual(['web-server', 'auth']);
     expect(metrics.typedErrorAdoption.numerator).toBe(1);
     expect(metrics.typedErrorAdoption.denominator).toBe(2);
 

@@ -330,7 +330,7 @@
     "status": 200,
     "cacheControl": "no-store",
     "contentType": "application/json; charset=utf-8",
-    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"runtimeServiceProblem\":{\"reason\":\"parser-mismatch\",\"module\":\"antigravity_parser.v2\",\"python\":\"3.12\",\"builtFor\":\"3.11\",\"exitStatus\":1},\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro ✨\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":true,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"},{\"id\":\"tz\",\"email\":\"tz@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":false,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.123Z\"},{\"id\":\"old\",\"email\":\"old@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"legacy\",\"email\":\"legacy@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"bad-date\",\"email\":\"ünï@exämple.de\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null}]}"
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro ✨\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"},{\"id\":\"tz\",\"email\":\"tz@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":false,\"selected\":false,\"verifiedAt\":\"2026-11-15T08:00:00.123Z\"},{\"id\":\"old\",\"email\":\"old@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"verifiedAt\":null},{\"id\":\"legacy\",\"email\":\"legacy@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"verifiedAt\":null},{\"id\":\"bad-date\",\"email\":\"ünï@exämple.de\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"verifiedAt\":null}]}"
   },
   {
     "name": "inventory: device token",
@@ -339,7 +339,7 @@
     "status": 200,
     "cacheControl": "no-store",
     "contentType": "application/json; charset=utf-8",
-    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"runtimeServiceProblem\":{\"reason\":\"parser-mismatch\",\"module\":\"antigravity_parser.v2\",\"python\":\"3.12\",\"builtFor\":\"3.11\",\"exitStatus\":1},\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro ✨\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":true,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"},{\"id\":\"tz\",\"email\":\"tz@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":false,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.123Z\"},{\"id\":\"old\",\"email\":\"old@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"legacy\",\"email\":\"legacy@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"bad-date\",\"email\":\"ünï@exämple.de\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null}]}"
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro ✨\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"},{\"id\":\"tz\",\"email\":\"tz@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":false,\"selected\":false,\"verifiedAt\":\"2026-11-15T08:00:00.123Z\"},{\"id\":\"old\",\"email\":\"old@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"verifiedAt\":null},{\"id\":\"legacy\",\"email\":\"legacy@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"verifiedAt\":null},{\"id\":\"bad-date\",\"email\":\"ünï@exämple.de\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"verifiedAt\":null}]}"
   },
   {
     "name": "inventory: truthy leftover pause ignored, unknown problem reason",
@@ -348,7 +348,7 @@
     "status": 200,
     "cacheControl": "no-store",
     "contentType": "application/json; charset=utf-8",
-    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"}]}"
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"}]}"
   },
   {
     "name": "inventory: duplicate ids (TS 500)",

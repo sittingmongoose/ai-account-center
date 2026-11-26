@@ -26,7 +26,6 @@ const FIXTURE = {
 	schemaVersion: 1,
 	updatedAt: at(-0.02),
 	accounts: [account('claude-1', 'one@example.invalid', 'max'), account('claude-2', 'two@example.invalid', 'pro')],
-	codexAutoSwitch: { enabled: false, thresholdUsedPercent: 95, outcome: 'disabled', message: '' },
 	claudeSignIns: {
 		runner: 'mac', runnerVersion: '1.0.0', generatedAt: at(-0.1), stale: false, renewWithinHours: 96,
 		needsYou: [{

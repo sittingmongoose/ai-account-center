@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1083,
-    "filesAffected": 107,
+    "totalOccurrences": 1022,
+    "filesAffected": 100,
     "hotpathOccurrences": 486,
     "hotpathFilesAffected": 54,
     "topHotpathFiles": [
@@ -318,24 +318,6 @@
         "markers": []
       },
       {
-        "file": "src/antigravity/runtime-refresh.ts",
-        "count": 25,
-        "calls": [
-          "closeSync",
-          "existsSync",
-          "fstatSync",
-          "fsyncSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
-          "renameSync",
-          "rmSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/web-server/services/dashboard-preferences.ts",
         "count": 22,
         "calls": [
@@ -353,12 +335,31 @@
           "writeFileSync"
         ],
         "markers": []
+      },
+      {
+        "file": "src/antigravity/signin-sandbox.ts",
+        "count": 21,
+        "calls": [
+          "accessSync",
+          "chmodSync",
+          "closeSync",
+          "fstatSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "rmSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
       }
     ]
   },
   "legacyShim": {
-    "totalMarkers": 185,
-    "filesAffected": 57,
+    "totalMarkers": 183,
+    "filesAffected": 56,
     "topFiles": [
       {
         "file": "src/web-server/rust-service.ts",
@@ -436,7 +437,7 @@
       },
       {
         "file": "src/utils/config-manager.ts",
-        "count": 13,
+        "count": 12,
         "calls": [],
         "markers": [
           "* Get config file path (legacy JSON path)",
@@ -445,7 +446,6 @@
           "* Returns Config with profiles from unified config.yaml or legacy config.json.",
           "* Returns config.yaml in unified mode, config.json in legacy mode.",
           "* then falls back to config.json for backward compatibility.",
-          "// Convert unified cliproxy variants to legacy format",
           "// Convert unified profiles to legacy format for compatibility",
           "// If not found in unified config, try legacy config.json as fallback",
           "// Legacy config is invalid JSON - that's OK in unified mode",
@@ -530,11 +530,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 713,
+      "totalThrows": 668,
       "typedThrows": 239,
       "plainThrows": 40,
-      "otherThrows": 434,
-      "adoptionRatio": 0.3352,
+      "otherThrows": 389,
+      "adoptionRatio": 0.3578,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -544,7 +544,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 137,
+          "count": 92,
           "typed": 0,
           "plain": 0
         },
@@ -588,20 +588,18 @@
     },
     "typedErrorAdoption": {
       "subdomains": [
-        "cliproxy/quota",
-        "cliproxy/auth",
-        "web-server/routes",
+        "web-server",
         "auth"
       ],
-      "numerator": 0,
-      "denominator": 0,
-      "ratio": 0,
+      "numerator": 173,
+      "denominator": 421,
+      "ratio": 0.4109,
       "targetRatio": 0.4
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 39,
-      "totalSourceFiles": 437,
-      "coverageRatio": 0.0892,
+      "totalSourceFiles": 421,
+      "coverageRatio": 0.0926,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "config",
@@ -624,11 +622,6 @@
           "withLogger": 9
         },
         {
-          "subdomain": "antigravity",
-          "count": 32,
-          "withLogger": 0
-        },
-        {
           "subdomain": "utils",
           "count": 30,
           "withLogger": 0
@@ -639,8 +632,13 @@
           "withLogger": 1
         },
         {
+          "subdomain": "antigravity",
+          "count": 19,
+          "withLogger": 0
+        },
+        {
           "subdomain": "config",
-          "count": 17,
+          "count": 14,
           "withLogger": 0
         },
         {
@@ -726,7 +724,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 66,
+      "countOver400": 64,
       "countOver600": 27,
       "topOver400": [
         {
@@ -767,7 +765,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 1048
+          "loc": 1046
         },
         {
           "file": "src/web-server/rust-service.ts",

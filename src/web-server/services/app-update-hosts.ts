@@ -6,7 +6,6 @@ import { deflateSync } from 'zlib';
 import { BinaryError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
-import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
 import { HOST_OS, SSH_ALIASES, helperPlatform } from './dashboard-hosts';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 
@@ -26,17 +25,9 @@ export const APP_UPDATE_SSH_HOSTS: Readonly<Record<RemotePlatform, string>> = SS
 /** Total progress output accepted from one host; a runaway helper is stopped. */
 const MAX_STREAM = 1024 * 1024;
 
-/**
- * The Antigravity CLI versions that passed a switching review, comma-joined
- * for older helpers' --agy-reviewed. Current helpers accept and ignore this
- * legacy argument after switching retirement. Empty when the release is unusable.
- * Versions are strictly validated (digits, dots, one -tag), so they are inert
- * on every command line below.
- */
-export function antigravityReviewedArgument(releaseFile = defaultNativeReleaseFile()): string {
-  return readNativeRelease(releaseFile)
-    .reviewed.map((entry) => entry.version)
-    .join(',');
+/** Legacy compatibility stub: Antigravity switching reviews are retired. */
+export function antigravityReviewedArgument(_releaseFile?: string): string {
+  return '';
 }
 
 /** A T3 server version the follow-up may name (app_update_t3.VERSION); anything else is "any". */

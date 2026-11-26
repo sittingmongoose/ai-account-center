@@ -6,12 +6,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1083 |
-| Sync fs files affected (all) | 107 |
+| Sync fs occurrences (all) | 1022 |
+| Sync fs files affected (all) | 100 |
 | Sync fs occurrences (runtime hotpaths) | 486 |
 | Sync fs files affected (runtime hotpaths) | 54 |
-| Legacy shim markers | 185 |
-| Legacy shim files affected | 57 |
+| Legacy shim markers | 183 |
+| Legacy shim files affected | 56 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -35,7 +35,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/rust-service.ts` | 29 |
 | `src/commands/bar/__tests__/native-app-paths.test.ts` | 24 |
 | `src/web-server/usage/account-activity-collector.ts` | 20 |
-| `src/utils/config-manager.ts` | 13 |
+| `src/utils/config-manager.ts` | 12 |
 | `src/commands/bar/native-app-paths.ts` | 8 |
 | `src/codex-auth/commands/import-default-command.ts` | 5 |
 | `src/web-server/routes/account-visibility-routes.ts` | 5 |
@@ -50,13 +50,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 33.5% (239/713) |
-| typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
+| typed-error adoption (typed/total throws) | 35.8% (239/668) |
+| typed-error adoption (P4 locked subdomains) | 41.1% (173/421), target 40% |
 | hotpath console.error/warn occurrences | 51 (221 total, 170 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
-| files with createLogger | 39/437 |
+| files with createLogger | 39/421 |
 | subdomains with zero createLogger | 8 (antigravity, config, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 66 |
+| files > 400 LOC | 64 |
 | files > 600 LOC | 27 |
 
 ### Top Hotpath console.error/warn Files
@@ -90,7 +90,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/antigravity/registry.ts` | 1206 |
 | `src/web-server/status/status-collectors.ts` | 1203 |
 | `src/web-server/rust-service-transport.ts` | 1124 |
-| `src/web-server/services/account-dashboard-service.ts` | 1048 |
+| `src/web-server/services/account-dashboard-service.ts` | 1046 |
 | `src/web-server/rust-service.ts` | 1035 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/additional-account-service.ts` | 938 |

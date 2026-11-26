@@ -69,14 +69,6 @@ const data = (accounts, extra = {}) => ({
   updatedAt: at(0),
   settings: { refreshIntervalSeconds: 60 },
   accounts,
-  codexAutoSwitch: {
-    enabled: true,
-    thresholdPercent: 5,
-    pollIntervalSeconds: 60,
-    outcome: 'healthy',
-    message: 'Healthy',
-    activationInProgress: false,
-  },
   ...extra,
 });
 const all = (vm) => [...vm.colA, ...vm.colB];
@@ -669,7 +661,7 @@ test('Antigravity: a newly live login keeps its renewal tip while the registry c
     capabilities: { antigravityProfileId: 'gmail' },
   });
   const inventory = (selected) => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [
-    { id: 'gmail', email: 'gmail@example.test', hostId: 'ubuntu', available: true, selected, runtimeVerified: true },
+    { id: 'gmail', email: 'gmail@example.test', hostId: 'ubuntu', available: true, selected },
   ] });
   const p = providers({ antigravity: { capabilities: { add: false, signInAgain: true, remove: true } } });
   const stale = registry([reg('antigravity:profile:gmail', 'antigravity', { actions: { signInAgain: true, remove: true }, removeRefusal: null })]);

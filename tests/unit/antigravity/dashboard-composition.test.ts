@@ -165,8 +165,7 @@ describe('bounded Antigravity dashboard integration', () => {
       result.accounts.filter((row) => row.provider === 'antigravity').map((row) => row.id)
     ).toEqual(['antigravity:usage']);
     expect(antigravityReads).toBe(0);
-    // Switching was removed; the trays installed before that still need this field, always off.
-    expect(result.codexAutoSwitch).toMatchObject({ enabled: false, outcome: 'disabled' });
+    expect('codexAutoSwitch' in result).toBe(false);
   });
 
   it('keeps two Antigravity profiles without duplicating Gmail or dropping another provider/wallet', async () => {
