@@ -344,10 +344,11 @@ export const tests = {
 			await open(t, server, pose);
 			await openDetails(t, 'zai:z1');
 			const group = t.page.locator('.details [data-probe="resets"]');
-			await group.getByText('Weekly reset pack', { exact: true }).waitFor();
+			await group.locator('tbody tr').filter({ hasText: 'Weekly reset pack' }).waitFor();
 			const text = await group.innerText();
 			await t.check('weekly pack explains both token windows and the monthly limit',
-				text.includes('Starts a new 7-day week') && text.includes('5-hour window') && text.includes('monthly limit'), text);
+				text.includes('Weekly reset pack') && text.includes('Starts a new 7-day week') &&
+				text.includes('5-hour window') && text.includes('monthly limit'), text);
 			await t.check('weekly claim is unproven and the 5-hour pack is read-only',
 				text.includes('key can use a reset pack') && text.includes('5-hour reset pack') && text.includes('know what this refills'), text);
 			await t.check('dashboard key has no send control or external claim link',
