@@ -475,6 +475,30 @@ impl StoreHost {
         outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }
 
+    /// Load one run's projected `run@1` document on demand from redb `RUN_PAYLOAD` using its
+    /// typed `RunFact` location (zero resident document text in memory).
+    pub(crate) fn load_run_doc(
+        &self,
+        fact: &aac_store::runs::RunFact,
+    ) -> Result<Option<Value>, String> {
+        let engine = self
+            .engine()
+            .ok_or_else(|| "service_down: the store host is closed".to_string())?;
+        aac_store::runs::load_run_doc(&engine, fact).map_err(|e| e.to_string())
+    }
+
+    /// Batch-load projected `run@1` documents on demand from redb `RUN_PAYLOAD` in one MVCC read
+    /// transaction with a bounded payload-block cache.
+    pub(crate) fn load_run_docs(
+        &self,
+        facts: &[&aac_store::runs::RunFact],
+    ) -> Result<Vec<Option<Value>>, String> {
+        let engine = self
+            .engine()
+            .ok_or_else(|| "service_down: the store host is closed".to_string())?;
+        aac_store::runs::load_run_docs(&engine, facts).map_err(|e| e.to_string())
+    }
+
     /// Read pre-aggregated Scoreboard buckets + metadata directly from `run_sb_*` tables in one
     /// MVCC redb read transaction (zero `run_payload` reads, zero `ResolvedHistory`).
     pub(crate) async fn scoreboard_read(

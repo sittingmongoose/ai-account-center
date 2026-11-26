@@ -136,28 +136,13 @@ struct PassState {
     problems: Vec<Json>,
 }
 
-/// Where one entry's projected doc lives: its serialized text (share rows), or the
-/// store's resident resolved history shared by `Arc` (store rows — no second copy).
-enum DocSource {
-    Text(Arc<str>),
-    Store {
-        history: Arc<aac_store::runs::ResolvedHistory>,
-        index: usize,
-    },
-}
-
-/// One run held compactly: its doc source (parsed back transiently where the composer
-/// needs JSON) plus the typed fields every reader picks by. One entry is the only
-/// per-run copy this owner keeps — the share scan cache and the held snapshot share
-/// the same `Arc`s, and store rows reference the store's own resident history —
-/// instead of several parsed `serde_json::Value` copies of the same doc.
-struct RunEntry {
-    /// The row's cursor time (`endedMs` for share rows, the query cursor for store rows).
+/// One share-fallback (or test) run kept compactly when the store is unavailable.
+struct ShareRunEntry {
     at: u64,
     file: String,
     first_seen_at: u64,
     sha256: String,
-    doc_source: DocSource,
+    doc_text: Arc<str>,
     id: String,
     writer: String,
     source: Option<String>,
@@ -169,68 +154,36 @@ struct RunEntry {
     has_void: bool,
 }
 
+/// One run entry in `HeldRuns`: store-backed rows share the store's typed `Arc<RunFact>`
+/// directly (zero duplicated strings, zero document text in memory; full docs read on demand
+/// from redb `RUN_PAYLOAD`). Share-only fallback rows retain compact UTF-8 text.
+enum RunEntry {
+    Store {
+        store: Arc<StoreHost>,
+        fact: Arc<aac_store::runs::RunFact>,
+    },
+    Share(Box<ShareRunEntry>),
+}
+
 impl std::fmt::Debug for RunEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunEntry")
-            .field("id", &self.id)
-            .field("file", &self.file)
-            .field("at", &self.at)
+            .field("id", &self.id())
+            .field("file", &self.file())
+            .field("at", &self.at())
             .finish_non_exhaustive()
     }
 }
 
 impl RunEntry {
-    /// The entry for one projected doc and its row facts.
+    /// The entry for one projected share doc and its row facts.
     fn from_doc(at: u64, file: String, first_seen_at: u64, sha256: String, doc: &Json) -> Self {
-        Self::from_parts(
+        Self::Share(Box::new(ShareRunEntry {
             at,
             file,
             first_seen_at,
             sha256,
-            doc,
-            DocSource::Text(Arc::from(doc.to_string())),
-        )
-    }
-
-    /// The entry for one row of the store's resident resolved history: typed fields copied
-    /// directly from CompactRun — the doc stays compact UTF-8 JSON bytes, parsed on demand.
-    fn from_store_row(history: &Arc<aac_store::runs::ResolvedHistory>, index: usize) -> Self {
-        let row = &history.compact_rows()[index];
-        Self {
-            at: row.cursor.0,
-            file: row.file.to_string(),
-            first_seen_at: row.first_seen_at,
-            sha256: row.sha256.to_string(),
-            doc_source: DocSource::Store {
-                history: Arc::clone(history),
-                index,
-            },
-            id: row.id.to_string(),
-            writer: row.writer.to_string(),
-            source: row.source.as_deref().map(str::to_string),
-            task_type: row.task_type.as_deref().map(str::to_string),
-            has_review: row.has_review,
-            seq: row.seq,
-            written_at: row.written_at.to_string(),
-            corrects: row.corrects.as_deref().map(str::to_string),
-            has_void: row.has_void,
-        }
-    }
-
-    fn from_parts(
-        at: u64,
-        file: String,
-        first_seen_at: u64,
-        sha256: String,
-        doc: &Json,
-        doc_source: DocSource,
-    ) -> Self {
-        Self {
-            at,
-            file,
-            first_seen_at,
-            sha256,
-            doc_source,
+            doc_text: Arc::from(doc.to_string()),
             id: doc["id"].as_str().unwrap_or_default().to_string(),
             writer: doc["writer"].as_str().unwrap_or_default().to_string(),
             source: doc["source"].as_str().map(str::to_string),
@@ -240,6 +193,14 @@ impl RunEntry {
             written_at: doc["writtenAt"].as_str().unwrap_or_default().to_string(),
             corrects: doc["corrects"].as_str().map(str::to_string),
             has_void: doc["void"].is_object(),
+        }))
+    }
+
+    /// Zero-copy reference to one typed `Arc<RunFact>` from the store's `ResolvedHistory`.
+    fn from_store_fact(store: &Arc<StoreHost>, fact: &Arc<aac_store::runs::RunFact>) -> Self {
+        Self::Store {
+            store: Arc::clone(store),
+            fact: Arc::clone(fact),
         }
     }
 
@@ -254,24 +215,168 @@ impl RunEntry {
         )
     }
 
-    /// The projected doc, parsed (or cloned from the store snapshot) for a compose or
-    /// a facts pass.
+    fn at(&self) -> u64 {
+        match self {
+            Self::Store { fact, .. } => fact.cursor.0,
+            Self::Share(s) => s.at,
+        }
+    }
+
+    fn file(&self) -> &str {
+        match self {
+            Self::Store { fact, .. } => &fact.file,
+            Self::Share(s) => &s.file,
+        }
+    }
+
+    fn first_seen_at(&self) -> u64 {
+        match self {
+            Self::Store { fact, .. } => fact.first_seen_at,
+            Self::Share(s) => s.first_seen_at,
+        }
+    }
+
+    fn sha256(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::Store { fact, .. } => std::borrow::Cow::Owned(fact.sha256_hex()),
+            Self::Share(s) => std::borrow::Cow::Borrowed(&s.sha256),
+        }
+    }
+
+    fn id(&self) -> &str {
+        match self {
+            Self::Store { fact, .. } => &fact.id,
+            Self::Share(s) => &s.id,
+        }
+    }
+
+    fn writer(&self) -> &str {
+        match self {
+            Self::Store { fact, .. } => &fact.writer,
+            Self::Share(s) => &s.writer,
+        }
+    }
+
+    fn source(&self) -> Option<&str> {
+        match self {
+            Self::Store { fact, .. } => Some(fact.source_str()),
+            Self::Share(s) => s.source.as_deref(),
+        }
+    }
+
+    fn task_type(&self) -> Option<&str> {
+        match self {
+            Self::Store { fact, .. } => fact.task_type.as_deref(),
+            Self::Share(s) => s.task_type.as_deref(),
+        }
+    }
+
+    fn has_review(&self) -> bool {
+        match self {
+            Self::Store { fact, .. } => fact.has_review(),
+            Self::Share(s) => s.has_review,
+        }
+    }
+
+    fn seq(&self) -> u64 {
+        match self {
+            Self::Store { fact, .. } => fact.seq,
+            Self::Share(s) => s.seq,
+        }
+    }
+
+    fn written_at(&self) -> &str {
+        match self {
+            Self::Store { fact, .. } => fact.written_at(),
+            Self::Share(s) => &s.written_at,
+        }
+    }
+
+    fn corrects(&self) -> Option<&str> {
+        match self {
+            Self::Store { fact, .. } => fact.corrects(),
+            Self::Share(s) => s.corrects.as_deref(),
+        }
+    }
+
+    fn has_void(&self) -> bool {
+        match self {
+            Self::Store { fact, .. } => fact.has_void(),
+            Self::Share(s) => s.has_void,
+        }
+    }
+
+    fn store_fact(&self) -> Option<&Arc<aac_store::runs::RunFact>> {
+        match self {
+            Self::Store { fact, .. } => Some(fact),
+            Self::Share(_) => None,
+        }
+    }
+
+    /// The projected doc, parsed from share text or loaded on demand from redb `RUN_PAYLOAD`.
     fn doc(&self) -> Json {
-        match &self.doc_source {
-            DocSource::Text(text) => serde_json::from_str(text).unwrap_or(Json::Null),
-            DocSource::Store { history, index } => history.compact_rows()[*index].doc(),
+        match self {
+            Self::Share(s) => serde_json::from_str(&s.doc_text).unwrap_or(Json::Null),
+            Self::Store { store, fact } => store
+                .load_run_doc(fact)
+                .ok()
+                .flatten()
+                .unwrap_or(Json::Null),
         }
     }
 
     /// This entry as the runs state carries it (`file`, `doc`, `firstSeenAt`, `sha256`).
-    fn state_row(&self) -> Json {
+    fn state_row_with_doc(&self, doc: Json) -> Json {
         json!({
-            "file": self.file,
-            "doc": self.doc(),
-            "firstSeenAt": self.first_seen_at,
-            "sha256": self.sha256,
+            "file": self.file(),
+            "doc": doc,
+            "firstSeenAt": self.first_seen_at(),
+            "sha256": self.sha256(),
         })
     }
+
+    fn state_row(&self) -> Json {
+        self.state_row_with_doc(self.doc())
+    }
+}
+
+/// Batch-load projected `run@1` documents for a slice of `RunEntry`s: store entries share one
+/// redb MVCC read transaction and bounded 16-block cache; share entries parse compact UTF-8 text.
+fn load_entry_docs(entries: &[&RunEntry]) -> Vec<Json> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut store_host: Option<&Arc<StoreHost>> = None;
+    let mut store_positions: Vec<usize> = Vec::new();
+    let mut store_facts: Vec<&aac_store::runs::RunFact> = Vec::new();
+    let mut out: Vec<Json> = vec![Json::Null; entries.len()];
+    for (pos, entry) in entries.iter().enumerate() {
+        match entry {
+            RunEntry::Store { store, fact } => {
+                if store_host.is_none() {
+                    store_host = Some(store);
+                }
+                if store_host.is_some_and(|h| Arc::ptr_eq(h, store)) {
+                    store_positions.push(pos);
+                    store_facts.push(fact);
+                } else {
+                    out[pos] = entry.doc();
+                }
+            }
+            RunEntry::Share(s) => {
+                out[pos] = serde_json::from_str(&s.doc_text).unwrap_or(Json::Null);
+            }
+        }
+    }
+    if let Some(store) = store_host
+        && !store_facts.is_empty()
+        && let Ok(loaded) = store.load_run_docs(&store_facts)
+    {
+        for (pos, doc_opt) in store_positions.into_iter().zip(loaded) {
+            out[pos] = doc_opt.unwrap_or(Json::Null);
+        }
+    }
+    out
 }
 
 /// Per held snapshot and catalog: what the composer derives from every row before it
@@ -319,10 +424,11 @@ impl PreparedDocs {
         {
             return positions.clone();
         }
-        let docs_owned: Vec<Json> = rows
-            .iter()
+        let entry_refs: Vec<&RunEntry> = rows.iter().map(Arc::as_ref).collect();
+        let docs_owned: Vec<Json> = load_entry_docs(&entry_refs)
+            .into_iter()
             .enumerate()
-            .map(|(index, entry)| normalized_doc(entry.doc(), &self.patches[index]))
+            .map(|(index, raw)| normalized_doc(raw, &self.patches[index]))
             .collect();
         let docs: Vec<&Json> = docs_owned.iter().collect();
         let positions =
@@ -409,12 +515,12 @@ impl HeldRuns {
     fn build_accepted_run_rows(&self) -> Vec<RunRow> {
         if let Some(history) = &self.store_history {
             history
-                .accepted_receipts()
+                .accepted_facts()
                 .iter()
                 .map(|r| RunRow {
                     file: r.file.to_string(),
                     seq: r.seq,
-                    sha256: r.sha256.to_string(),
+                    sha256: r.sha256_hex(),
                     first_seen_at: r.first_seen_at,
                 })
                 .collect()
@@ -428,12 +534,12 @@ impl HeldRuns {
         if let Some(history) = &self.store_history {
             Some(
                 history
-                    .accepted_receipts()
+                    .accepted_facts()
                     .iter()
                     .map(|r| {
                         json!({
                             "file": &*r.file,
-                            "sha256": &*r.sha256,
+                            "sha256": r.sha256_hex(),
                             "firstSeenAt": r.first_seen_at,
                             "doc": { "id": &*r.id, "seq": r.seq },
                         })
@@ -461,11 +567,11 @@ impl HeldRuns {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                from.is_none_or(|from| entry.at >= from)
-                    && to.is_none_or(|to| entry.at <= to)
-                    && source.is_none_or(|want| entry.source.as_deref() == Some(want))
-                    && task_type.is_none_or(|want| entry.task_type.as_deref() == Some(want))
-                    && (!reviews_only || entry.has_review)
+                from.is_none_or(|from| entry.at() >= from)
+                    && to.is_none_or(|to| entry.at() <= to)
+                    && source.is_none_or(|want| entry.source() == Some(want))
+                    && task_type.is_none_or(|want| entry.task_type() == Some(want))
+                    && (!reviews_only || entry.has_review())
             })
             .map(|(index, _)| index)
             .collect()
@@ -889,10 +995,10 @@ impl ScoreboardOwned {
                             .map(|&index| {
                                 let entry = &held.rows[index];
                                 RunRow {
-                                    file: entry.file.clone(),
-                                    seq: entry.seq,
-                                    sha256: entry.sha256.clone(),
-                                    first_seen_at: entry.first_seen_at,
+                                    file: entry.file().to_string(),
+                                    seq: entry.seq(),
+                                    sha256: entry.sha256().into_owned(),
+                                    first_seen_at: entry.first_seen_at(),
                                 }
                             })
                             .collect();
@@ -1138,8 +1244,10 @@ impl ScoreboardOwned {
         match store.runs_history().await {
             Ok(snapshot) => {
                 self.share_fallback.store(false, Ordering::SeqCst);
-                let rows: Vec<Arc<RunEntry>> = (0..snapshot.compact_rows().len())
-                    .map(|index| Arc::new(RunEntry::from_store_row(&snapshot, index)))
+                let rows: Vec<Arc<RunEntry>> = snapshot
+                    .facts()
+                    .iter()
+                    .map(|fact| Arc::new(RunEntry::from_store_fact(store, fact)))
                     .collect();
                 let held = Arc::new(
                     HeldRuns::from_entries(
@@ -1386,7 +1494,7 @@ impl ScoreboardOwned {
         // row's warning matches. Other refused paths stay withheld (M2).
         let mut retained_paths: HashMap<String, &str> = HashMap::new();
         for row in &held.rows {
-            let file = row.file.as_str();
+            let file = row.file();
             retained_paths.insert(path_hash(file), file);
         }
         let mut problems: Vec<Json> = if held.share.is_some() {
@@ -1418,17 +1526,23 @@ impl ScoreboardOwned {
         problems.extend(held.problems.iter().cloned());
         drop(safe_paths);
         let mut writers = std::collections::HashSet::new();
-        let runs: Vec<Json> = picked
-            .iter()
-            .map(|&index| {
-                writers.insert(held.rows[index].writer.as_str());
-                index
-            })
-            .collect::<Vec<usize>>()
-            .into_iter()
-            .filter(|_| rows)
-            .map(|index| held.rows[index].state_row())
-            .collect();
+        for &index in picked {
+            writers.insert(held.rows[index].writer());
+        }
+        let runs: Vec<Json> = if rows {
+            let entries: Vec<&RunEntry> = picked
+                .iter()
+                .map(|&index| held.rows[index].as_ref())
+                .collect();
+            let docs = load_entry_docs(&entries);
+            entries
+                .into_iter()
+                .zip(docs)
+                .map(|(entry, doc)| entry.state_row_with_doc(doc))
+                .collect()
+        } else {
+            Vec::new()
+        };
         // Built by moving the rows in (`json!` would serialize, a deep copy of every row).
         let writers = writers.len();
         let state = if let Some(share) = &held.share {
@@ -1542,8 +1656,9 @@ impl ScoreboardOwned {
         let mut patches = Vec::with_capacity(held.rows.len());
         let mut proto = Vec::with_capacity(held.rows.len());
         let mut facts = Vec::with_capacity(held.rows.len());
-        for entry in &held.rows {
-            let raw = entry.doc();
+        let entry_refs: Vec<&RunEntry> = held.rows.iter().map(Arc::as_ref).collect();
+        let raw_docs = load_entry_docs(&entry_refs);
+        for (entry, raw) in held.rows.iter().zip(raw_docs) {
             let id = raw["model"]["id"].as_str().unwrap_or_default();
             let patch = if id.is_empty() {
                 None
@@ -1556,12 +1671,7 @@ impl ScoreboardOwned {
                 ))
             };
             let normalized = normalized_doc(raw.clone(), &patch);
-            let state = json!({
-                "file": entry.file,
-                "doc": raw,
-                "firstSeenAt": entry.first_seen_at,
-                "sha256": entry.sha256,
-            });
+            let state = entry.state_row_with_doc(raw);
             proto.push(
                 aac_status::read_context::proto_named(&state)
                     || aac_status::read_context::proto_named(&normalized),
@@ -1770,50 +1880,97 @@ impl ScoreboardOwned {
                     }
                 };
                 for (index, entry) in rows.iter().enumerate() {
-                    if !entry.id.is_empty() {
-                        words.insert(entry.id.clone());
+                    if !entry.id().is_empty() {
+                        words.insert(entry.id().to_owned());
                     }
-                    if let Some(tt) = &entry.task_type {
-                        words.insert(tt.clone());
+                    if let Some(tt) = entry.task_type() {
+                        words.insert(tt.to_owned());
                     }
-                    if !entry.written_at.is_empty() {
-                        add_epoch(&entry.written_at);
-                    }
-                    let doc = entry.doc();
-                    if let Some(ended) = doc["endedAt"].as_str() {
-                        add_epoch(ended);
-                    }
-                    if let Some(bench) = doc["benchmark"].as_str()
-                        && !bench.is_empty()
-                    {
-                        words.insert(bench.to_owned());
-                    }
-                    if let Some(raw_model) = doc["model"]["id"].as_str()
-                        && !raw_model.is_empty()
-                    {
-                        words.insert(raw_model.to_owned());
+                    if !entry.written_at().is_empty() {
+                        add_epoch(entry.written_at());
                     }
                     let patch = prepared_owned.patches.get(index).and_then(Option::as_ref);
-                    let model_id = patch
-                        .map(|p| p.id.as_str())
-                        .filter(|s| !s.is_empty())
-                        .or_else(|| doc["model"]["id"].as_str())
-                        .unwrap_or("");
-                    if !model_id.is_empty() {
-                        let harness = doc["model"]["harness"].as_str().unwrap_or("");
-                        let effort = patch
-                            .and_then(|p| p.effort.as_deref())
-                            .or_else(|| doc["model"]["effort"].as_str())
+                    if let Some(fact) = entry.store_fact() {
+                        if !fact.ended_at.is_empty() {
+                            add_epoch(&fact.ended_at);
+                        }
+                        if let Some(bench) = fact.benchmark()
+                            && !bench.is_empty()
+                        {
+                            words.insert(bench.to_owned());
+                        }
+                        let shown_model = fact.model_id.as_deref().or(fact.model_raw.as_deref());
+                        if let Some(raw_model) = shown_model
+                            && !raw_model.is_empty()
+                        {
+                            words.insert(raw_model.to_owned());
+                        }
+                        let model_id = patch
+                            .map(|p| p.id.as_str())
+                            .filter(|s| !s.is_empty())
+                            .or(shown_model)
                             .unwrap_or("");
-                        let base_key = format!("{model_id}|{harness}|{effort}");
-                        let proc_id = doc["process"]["id"].as_str().unwrap_or("");
-                        let proc_ver = doc["process"]["version"].as_str().unwrap_or("");
-                        let proc_key = format!("{base_key}|{proc_id}|{proc_ver}");
-                        words.insert(base_key);
-                        words.insert(proc_key);
-                    }
-                    if aac_status::read_measures::outcome(&doc) == 0 {
-                        words.insert(normalized_unknown_outcome(&doc));
+                        if !model_id.is_empty() {
+                            let harness = fact.harness.as_deref().unwrap_or("");
+                            let effort = patch
+                                .and_then(|p| p.effort.as_deref())
+                                .or(fact.effort.as_deref())
+                                .unwrap_or("");
+                            let base_key = format!("{model_id}|{harness}|{effort}");
+                            let (proc_id, proc_ver) = fact
+                                .process()
+                                .map(|(id, ver)| (id, ver.unwrap_or("")))
+                                .unwrap_or(("", ""));
+                            let proc_key = format!("{base_key}|{proc_id}|{proc_ver}");
+                            words.insert(base_key);
+                            words.insert(proc_key);
+                        }
+                        if aac_store::scoreboard_agg::outcome_code(&fact.outcome) == 0 {
+                            let norm = fact
+                                .outcome
+                                .split(aac_status::read_context::js_whitespace)
+                                .filter(|part| !part.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .to_lowercase();
+                            words.insert(norm);
+                        }
+                    } else {
+                        let doc = entry.doc();
+                        if let Some(ended) = doc["endedAt"].as_str() {
+                            add_epoch(ended);
+                        }
+                        if let Some(bench) = doc["benchmark"].as_str()
+                            && !bench.is_empty()
+                        {
+                            words.insert(bench.to_owned());
+                        }
+                        if let Some(raw_model) = doc["model"]["id"].as_str()
+                            && !raw_model.is_empty()
+                        {
+                            words.insert(raw_model.to_owned());
+                        }
+                        let model_id = patch
+                            .map(|p| p.id.as_str())
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| doc["model"]["id"].as_str())
+                            .unwrap_or("");
+                        if !model_id.is_empty() {
+                            let harness = doc["model"]["harness"].as_str().unwrap_or("");
+                            let effort = patch
+                                .and_then(|p| p.effort.as_deref())
+                                .or_else(|| doc["model"]["effort"].as_str())
+                                .unwrap_or("");
+                            let base_key = format!("{model_id}|{harness}|{effort}");
+                            let proc_id = doc["process"]["id"].as_str().unwrap_or("");
+                            let proc_ver = doc["process"]["version"].as_str().unwrap_or("");
+                            let proc_key = format!("{base_key}|{proc_id}|{proc_ver}");
+                            words.insert(base_key);
+                            words.insert(proc_key);
+                        }
+                        if aac_status::read_measures::outcome(&doc) == 0 {
+                            words.insert(normalized_unknown_outcome(&doc));
+                        }
                     }
                 }
                 // Dates and epochs only: the order below ranks the compared words, so the
@@ -2103,22 +2260,37 @@ impl ScoreboardOwned {
         // Reviews outside the filter still join its rows; their validated files come along so the
         // composer can disclose a review source this pass could not read (2026-11-23 A).
         let (join_reviews, join_review_files) = if filtered {
-            let picked_ids: std::collections::HashSet<&str> = picked
-                .iter()
-                .map(|&index| held.rows[index].id.as_str())
-                .collect();
+            let picked_ids: std::collections::HashSet<&str> =
+                picked.iter().map(|&index| held.rows[index].id()).collect();
             let mut reviews_query = Map::new();
             if let Some(from_ms) = feed.from_ms {
                 reviews_query.insert("fromMs".to_string(), json!(from_ms));
             }
             reviews_query.insert("reviewsOnly".to_string(), json!(true));
-            let mut joined = Vec::new();
-            let mut joined_files = Vec::new();
+            let mut candidate_indices = Vec::new();
             for index in held.pick(&Json::Object(reviews_query)) {
-                if picked_ids.contains(held.rows[index].id.as_str()) {
+                let entry = &held.rows[index];
+                if picked_ids.contains(entry.id()) {
                     continue;
                 }
-                let raw = held.rows[index].doc();
+                // Store rows check `review.of` directly from `RunFact` without touching redb.
+                if let Some(fact) = entry.store_fact()
+                    && !fact
+                        .review()
+                        .is_some_and(|rev| picked_ids.contains(rev.of.as_ref()))
+                {
+                    continue;
+                }
+                candidate_indices.push(index);
+            }
+            let cand_refs: Vec<&RunEntry> = candidate_indices
+                .iter()
+                .map(|&idx| held.rows[idx].as_ref())
+                .collect();
+            let cand_docs = load_entry_docs(&cand_refs);
+            let mut joined = Vec::new();
+            let mut joined_files = Vec::new();
+            for (index, raw) in candidate_indices.into_iter().zip(cand_docs) {
                 if raw["review"]["of"]
                     .as_str()
                     .is_some_and(|target| picked_ids.contains(target))
@@ -2127,18 +2299,21 @@ impl ScoreboardOwned {
                         return Err(Decline::Unsupported);
                     }
                     joined.push(join_review_doc(&raw));
-                    joined_files.push(json!(held.rows[index].file.as_str()));
+                    joined_files.push(json!(held.rows[index].file()));
                 }
             }
             (joined, joined_files)
         } else {
             (Vec::new(), Vec::new())
         };
+        let picked_refs: Vec<&RunEntry> = picked
+            .iter()
+            .map(|&index| held.rows[index].as_ref())
+            .collect();
+        let picked_docs = load_entry_docs(&picked_refs);
         let mut rows_owned: Vec<Json> = Vec::with_capacity(picked.len());
         let mut docs_owned: Vec<Json> = Vec::with_capacity(picked.len());
-        for &index in &picked {
-            let entry = &held.rows[index];
-            let raw = entry.doc();
+        for (&index, raw) in picked.iter().zip(picked_docs) {
             // `compose_core` reads only `id`, `model.id`, `task.type`, and `endedAt` from `rows[i]["doc"]`
             // (for unscored examples); avoid cloning the entire raw run document.
             rows_owned.push(json!({
@@ -2660,11 +2835,11 @@ impl ScoreboardOwned {
         let picked: Vec<usize> = (0..held.rows.len()).collect();
         let runs = self.state_of(&held, &picked, now_ms()).await?;
         let prepared = self.held_docs(&held, &catalog, &catalog_hash);
-        let docs: Vec<Json> = held
-            .rows
-            .iter()
+        let entry_refs: Vec<&RunEntry> = held.rows.iter().map(Arc::as_ref).collect();
+        let docs: Vec<Json> = load_entry_docs(&entry_refs)
+            .into_iter()
             .enumerate()
-            .map(|(index, entry)| normalized_doc(entry.doc(), &prepared.patches[index]))
+            .map(|(index, raw)| normalized_doc(raw, &prepared.patches[index]))
             .collect();
         let identity = if held.share.is_some() {
             Json::Null
@@ -3038,28 +3213,28 @@ fn scan_share_runs_cached(
     // The newest copy of each run id (seq, then writtenAt, then file), as before.
     let mut best: HashMap<String, Arc<RunEntry>> = HashMap::new();
     for entry in parsed {
-        let newer = match best.get(&entry.id) {
+        let newer = match best.get(entry.id()) {
             None => true,
             Some(held) => {
-                entry.seq > held.seq
-                    || (entry.seq == held.seq && entry.written_at > held.written_at)
-                    || (entry.seq == held.seq
-                        && entry.written_at == held.written_at
-                        && entry.file > held.file)
+                entry.seq() > held.seq()
+                    || (entry.seq() == held.seq() && entry.written_at() > held.written_at())
+                    || (entry.seq() == held.seq()
+                        && entry.written_at() == held.written_at()
+                        && entry.file() > held.file())
             }
         };
         if newer {
-            best.insert(entry.id.clone(), entry);
+            best.insert(entry.id().to_string(), entry);
         }
     }
     let mut records: Vec<Arc<RunEntry>> = best.into_values().collect();
-    records.sort_by(|left, right| left.id.cmp(&right.id));
+    records.sort_by(|left, right| left.id().cmp(right.id()));
     // Correction chains are rare: with no `corrects` and no `void` anywhere, resolution
     // is the identity (verified against `resolve`), so the entries pass through shared
     // instead of being cloned through JSON. Otherwise the legacy path runs unchanged.
     let plain = records
         .iter()
-        .all(|entry| entry.corrects.is_none() && !entry.has_void);
+        .all(|entry| entry.corrects().is_none() && !entry.has_void());
     let rows: Vec<Arc<RunEntry>> = if plain {
         records
     } else {
@@ -3540,7 +3715,7 @@ mod tests {
     }
 
     fn has_bench(held: &HeldRuns) -> bool {
-        held.rows.iter().any(|entry| entry.id == "vm.lead--bench")
+        held.rows.iter().any(|entry| entry.id() == "vm.lead--bench")
     }
 
     #[test]
@@ -3551,7 +3726,7 @@ mod tests {
         assert_eq!(scan.read.state, "ok");
         assert_eq!(scan.read.scanned_at, Some(1_790_000_000_000));
         assert!(
-            scan.rows.iter().any(|entry| entry.id == "vm.lead--bench"),
+            scan.rows.iter().any(|entry| entry.id() == "vm.lead--bench"),
             "{} rows",
             scan.rows.len()
         );
@@ -3618,7 +3793,7 @@ mod tests {
         let mut seen = 0;
         for (index, entry) in held.rows.iter().enumerate() {
             let row = entry.state_row();
-            match entry.id.as_str() {
+            match entry.id() {
                 "vm.lead--bench" => {
                     seen += 1;
                     assert!(
@@ -3980,8 +4155,8 @@ mod tests {
         let first_seen = |held: &HeldRuns, id: &str| {
             held.rows
                 .iter()
-                .find(|entry| entry.id == id)
-                .map(|entry| entry.first_seen_at)
+                .find(|entry| entry.id() == id)
+                .map(|entry| entry.first_seen_at())
         };
         let held = owner.held(Some(t1)).await.expect("first scan");
         assert_eq!(first_seen(&held, "vm.lead--a"), Some(t1));
@@ -4011,7 +4186,7 @@ mod tests {
         let title = held
             .rows
             .iter()
-            .find(|entry| entry.id == "vm.lead--b")
+            .find(|entry| entry.id() == "vm.lead--b")
             .map(|entry| {
                 entry.doc()["task"]["title"]
                     .as_str()
@@ -4141,7 +4316,9 @@ mod tests {
             .expect("refresh after the rescan window");
         let held = held_after_scan(&owner, now + 65_000).await;
         assert!(
-            held.rows.iter().any(|entry| entry.id == "vm.lead--new-tie"),
+            held.rows
+                .iter()
+                .any(|entry| entry.id() == "vm.lead--new-tie"),
             "the new run landed ({} rows)",
             held.rows.len()
         );
@@ -4478,6 +4655,26 @@ mod tests {
             .answer(&feed_text_bare(now, "UTC"))
             .await
             .expect("answer over the store snapshot");
+        // Verify RunEntry::Store shares the exact Arc<RunFact> pointer (no string/doc copies)
+        // and loads full documents on demand from redb.
+        let bench_entry = held
+            .rows
+            .iter()
+            .find(|e| e.id() == "vm.lead--bench")
+            .expect("bench entry");
+        let bench_fact = bench_entry.store_fact().expect("store-backed RunFact");
+        let hist_fact = history
+            .facts()
+            .iter()
+            .find(|f| &*f.id == "vm.lead--bench")
+            .expect("history fact");
+        assert!(
+            Arc::ptr_eq(bench_fact, hist_fact),
+            "RunEntry must share the store snapshot Arc<RunFact> directly"
+        );
+        let loaded = bench_entry.doc();
+        assert_eq!(loaded["id"], json!("vm.lead--bench"));
+        assert_eq!(loaded["task"]["title"], json!("Task bench"));
     }
 
     /// M1 (round 3): a cold share waiter whose scan never lands (failed or panicked
@@ -5361,7 +5558,7 @@ mod tests {
             .expect("held")
             .rows
             .iter()
-            .any(|row| row.id == "mac.reviews--R1");
+            .any(|row| row.id() == "mac.reviews--R1");
         assert!(review, "the review under the unlistable folder is retained");
         let since = |state: &serde_json::Value| {
             state["problems"]
@@ -5446,10 +5643,8 @@ mod tests {
             .expect("presentation");
         let prepared = owner.held_docs(&held, &catalog, &catalog_hash);
         let (join_reviews, join_review_files) = if filtered {
-            let picked_ids: std::collections::HashSet<&str> = picked
-                .iter()
-                .map(|&index| held.rows[index].id.as_str())
-                .collect();
+            let picked_ids: std::collections::HashSet<&str> =
+                picked.iter().map(|&index| held.rows[index].id()).collect();
             let mut reviews_query = Map::new();
             if let Some(from_ms) = feed.from_ms {
                 reviews_query.insert("fromMs".to_string(), json!(from_ms));
@@ -5458,7 +5653,7 @@ mod tests {
             let mut joined = Vec::new();
             let mut joined_files = Vec::new();
             for index in held.pick(&Json::Object(reviews_query)) {
-                if picked_ids.contains(held.rows[index].id.as_str()) {
+                if picked_ids.contains(held.rows[index].id()) {
                     continue;
                 }
                 let raw = held.rows[index].doc();
@@ -5467,7 +5662,7 @@ mod tests {
                     .is_some_and(|target| picked_ids.contains(target))
                 {
                     joined.push(join_review_doc(&raw));
-                    joined_files.push(json!(held.rows[index].file.as_str()));
+                    joined_files.push(json!(held.rows[index].file()));
                 }
             }
             (joined, joined_files)

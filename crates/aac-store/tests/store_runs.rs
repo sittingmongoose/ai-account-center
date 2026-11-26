@@ -1819,12 +1819,12 @@ fn h1_removing_or_retargeting_correction_or_review_keeps_aggregate_in_sync() {
             &std::collections::HashMap::new(),
         )
         .unwrap();
-        let expected_eff = resolved.compact_rows().len() as u64;
+        let expected_eff = resolved.facts().len() as u64;
         assert_eq!(agg.effective_runs_total, expected_eff, "{label}: effective_runs_total");
         let bucket_n: u64 = agg.buckets.iter().map(|(_, b)| b.n).sum();
         assert_eq!(bucket_n, expected_eff, "{label}: sum of bucket n");
         let resolved_build_n = resolved
-            .compact_rows()
+            .facts()
             .iter()
             .filter(|r| r.task_type.as_deref() == Some("build"))
             .count() as u64;
@@ -2094,7 +2094,7 @@ fn h2_replay_after_rollback_with_pending_ledger_tail_rebuilds_aggregates() {
     )
     .unwrap();
     let resolved = runs::resolved_history_snapshot(&upgraded).unwrap();
-    assert_eq!(resolved.compact_rows().len(), 3, "primary history has A, B, C");
+    assert_eq!(resolved.facts().len(), 3, "primary history has A, B, C");
     assert_eq!(
         agg.effective_runs_total, 3,
         "rebuilt aggregate after rollback + replay tail must include A, B, and C"
@@ -2217,7 +2217,7 @@ fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_re
 
     let assert_agg_equals_resolver = |eng: &Engine, step: usize| {
         let resolved = runs::resolved_history_snapshot(eng).unwrap();
-        let all_rows = resolved.compact_rows();
+        let all_rows = resolved.facts();
         let filters = [
             ("all", ScoreboardFilter::default()),
             (
@@ -2272,9 +2272,7 @@ fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_re
                 .filter(|r| {
                     filter.from_ms.is_none_or(|f| r.cursor.0 >= f)
                         && filter.to_ms.is_none_or(|t| r.cursor.0 <= t)
-                        && filter
-                            .source_benchmark
-                            .is_none_or(|b| (r.source.as_deref() == Some("benchmark")) == b)
+                        && filter.source_benchmark.is_none_or(|b| r.source.is_benchmark() == b)
                         && filter
                             .task_type
                             .as_deref()
@@ -2285,18 +2283,17 @@ fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_re
             let agg_n: u64 = agg.buckets.iter().map(|(_, b)| b.n).sum();
             assert_eq!(agg_n, matched.len() as u64, "step {step} ({fname}): filtered n");
 
-            let res_done: u64 = matched
-                .iter()
-                .filter(|r| r.doc()["outcome"].as_str() == Some("done"))
-                .count() as u64;
+            let res_done: u64 = matched.iter().filter(|r| &*r.outcome == "done").count() as u64;
             let agg_done: u64 = agg.buckets.iter().map(|(_, b)| b.outcome_done).sum();
             assert_eq!(agg_done, res_done, "step {step} ({fname}): done count");
 
-            // Verify cost credits sum in exact RUN_BY_TIME order across all matched runs.
+            // Verify cost credits sum in exact RUN_BY_TIME order across all matched runs (loaded on demand).
+            let matched_refs: Vec<&runs::RunFact> = matched.iter().map(|r| r.as_ref()).collect();
+            let matched_docs = runs::load_run_docs(eng, &matched_refs).unwrap();
             let mut res_credits = 0.0f64;
             let mut res_credit_n = 0u64;
-            for r in &matched {
-                if let Some(c) = r.doc()["cost"]["credits"].as_f64() {
+            for doc_opt in &matched_docs {
+                if let Some(c) = doc_opt.as_ref().and_then(|d| d["cost"]["credits"].as_f64()) {
                     res_credits += c;
                     res_credit_n += 1;
                 }
@@ -2322,8 +2319,7 @@ fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_re
             let matched_ids: BTreeSet<&str> = matched.iter().map(|r| r.id.as_ref()).collect();
             let mut res_joins: BTreeMap<(String, String), usize> = BTreeMap::new();
             for r in all_rows {
-                let doc = r.doc();
-                if let Some(target) = doc["review"]["of"].as_str()
+                if let Some(target) = r.review().map(|rev| rev.of.as_ref())
                     && matched_ids.contains(target)
                 {
                     *res_joins.entry((target.to_string(), r.id.to_string())).or_insert(0) += 1;
@@ -2616,6 +2612,393 @@ fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_re
     assert_agg_equals_resolver(&final_eng, 999);
     final_eng.close().unwrap();
     drop(final_eng);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+/// Phase 4, step 3: `ResolvedHistory` holds compact typed `RunFact` rows (~0.5 KB each, zero
+/// `doc_json`), while full run documents stay in redb `RUN_PAYLOAD` and load on demand.
+#[test]
+fn run_facts_are_typed_compact_and_load_documents_on_demand() {
+    use std::sync::Arc;
+
+    assert!(
+        std::mem::size_of::<runs::RunFact>() <= 384,
+        "RunFact inline size must stay compact (got {} bytes)",
+        std::mem::size_of::<runs::RunFact>()
+    );
+
+    let share = Share::new("run-facts-typed");
+    let day = &iso(T0 + 2 * DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.facts/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+
+    // Build a large (~8 KB) prose-heavy run document so retaining doc text would blow past 0.5 KB.
+    let big_detail = "detailed-finding-prose-".repeat(35);
+    let big_evidence: Vec<Json> = (0..12)
+        .map(|i| {
+            json!({
+                "label": format!("artifact-{i}-{}", "x".repeat(80)),
+                "path": format!("/mnt/Cursor/share/example/artifact-{i}-{}.md", "y".repeat(120))
+            })
+        })
+        .collect();
+    let orig = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.facts--target-1",
+        "writer": "vm.facts",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 1_000),
+        "source": "observed",
+        "project": "aac",
+        "stream": "PERF",
+        "task": {
+            "id": "task-1",
+            "type": "build",
+            "title": "Heavy prose build run",
+            "size": { "records": 120, "files": 7, "items": 3, "words": 4200, "tasks": 2 }
+        },
+        "model": { "id": "gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+        "process": { "id": "phase4", "version": "1.2" },
+        "startedAt": iso(T0 + 2 * DAY),
+        "endedAt": iso(T0 + 2 * DAY + 1_000),
+        "wallSeconds": 42.5,
+        "outcome": "failed",
+        "imported": { "from": "legacy.jsonl", "at": iso(T0 + 2 * DAY + 500) },
+        "flags": [{ "kind": "shortcut", "detail": big_detail, "evidence": "/tmp/e.txt", "reportedBy": "vm.rev" }],
+        "evidence": big_evidence
+    });
+    let fix = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.facts--target-1-fix",
+        "writer": "vm.facts",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 2_000),
+        "source": "observed",
+        "corrects": "vm.facts--target-1",
+        "project": "aac",
+        "stream": "PERF",
+        "task": {
+            "id": "task-1",
+            "type": "build",
+            "title": "Heavy prose build run fixed",
+            "size": { "records": 120, "files": 7, "items": 3, "words": 4200, "tasks": 2 }
+        },
+        "model": { "id": "gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+        "process": { "id": "phase4", "version": "1.2" },
+        "startedAt": iso(T0 + 2 * DAY),
+        "endedAt": iso(T0 + 2 * DAY + 2_000),
+        "wallSeconds": 42.5,
+        "outcome": "done",
+        "imported": { "from": "legacy.jsonl", "at": iso(T0 + 2 * DAY + 500) },
+        "flags": [{ "kind": "shortcut", "detail": big_detail, "evidence": "/tmp/e.txt", "reportedBy": "vm.rev" }],
+        "evidence": big_evidence
+    });
+    let rev = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.facts--rev-1",
+        "writer": "vm.facts",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 3_000),
+        "source": "benchmark",
+        "benchmark": "bench-suite",
+        "task": { "id": "task-rev-1", "type": "review", "title": "Review target-1" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + 2 * DAY + 3_000),
+        "outcome": "done",
+        "review": {
+            "of": "vm.facts--target-1",
+            "verdict": "pass",
+            "findings": { "high": 0, "medium": 1, "low": 2 },
+            "overturned": true,
+            "disputed": false
+        }
+    });
+    fs::write(dir.join("vm.facts--target-1.json"), orig.to_string()).unwrap();
+    fs::write(dir.join("vm.facts--target-1-fix.json"), fix.to_string()).unwrap();
+    fs::write(dir.join("vm.facts--rev-1.json"), rev.to_string()).unwrap();
+
+    let db = temp_dir("run-facts-typed-store");
+    let engine = open(&db);
+    pass(&engine, &share, T0 + 3 * DAY, 1000, true);
+
+    let snap = runs::resolved_history_snapshot(&engine).unwrap();
+    assert_eq!(
+        snap.facts().len(),
+        2,
+        "target-1 is superseded; target-1-fix and rev-1 survive"
+    );
+    assert_eq!(snap.accepted_facts().len(), 3, "all 3 non-refused runs are accepted");
+
+    let fix_fact: &Arc<runs::RunFact> = snap
+        .facts()
+        .iter()
+        .find(|f| &*f.id == "vm.facts--target-1-fix")
+        .expect("fix fact");
+    assert!(
+        fix_fact.estimated_bytes() <= 640,
+        "prose-heavy run fact must stay ~0.5 KB, not hold doc text (got {} bytes)",
+        fix_fact.estimated_bytes()
+    );
+    assert_eq!(&*fix_fact.writer, "vm.facts");
+    assert_eq!(fix_fact.model_id.as_deref(), Some("openai/gpt-6.1-sol"));
+    assert_eq!(fix_fact.model_raw.as_deref(), Some("gpt-6.1-sol"));
+    assert_eq!(fix_fact.effort.as_deref(), Some("high"));
+    assert_eq!(fix_fact.harness.as_deref(), Some("codex"));
+    assert_eq!(fix_fact.task_type.as_deref(), Some("build"));
+    assert_eq!(fix_fact.task_size(), [Some(120), Some(7), Some(3), Some(4200), Some(2)]);
+    assert_eq!(&*fix_fact.outcome, "done");
+    assert_eq!(fix_fact.started_at_ms(), Some(T0 + 2 * DAY));
+    assert_eq!(fix_fact.ended_at_ms, T0 + 2 * DAY + 2_000);
+    assert_eq!(fix_fact.wall_seconds(), Some(42.5));
+    assert_eq!(fix_fact.project.as_deref(), Some("aac"));
+    assert_eq!(fix_fact.stream.as_deref(), Some("PERF"));
+    assert_eq!(fix_fact.process(), Some(("phase4", Some("1.2"))));
+    assert_eq!(fix_fact.corrects(), Some("vm.facts--target-1"));
+    assert!(fix_fact.imported());
+    assert!(!fix_fact.has_void());
+    assert!(!fix_fact.has_review());
+
+    let rev_fact = snap
+        .facts()
+        .iter()
+        .find(|f| &*f.id == "vm.facts--rev-1")
+        .expect("review fact");
+    assert_eq!(rev_fact.source, runs::RunSource::Benchmark);
+    assert_eq!(rev_fact.benchmark(), Some("bench-suite"));
+    let link = rev_fact.review().expect("review link");
+    assert_eq!(&*link.orig_of, "vm.facts--target-1");
+    assert_eq!(&*link.of, "vm.facts--target-1-fix", "retargeted through correction");
+    assert_eq!(&*link.verdict, "pass");
+    assert!(link.overturned);
+    assert!(!link.disputed);
+
+    // Load full documents on demand from redb RUN_PAYLOAD.
+    let loaded_fix = runs::load_run_doc(&engine, fix_fact).unwrap().expect("fix doc");
+    assert_eq!(loaded_fix["flags"][0]["detail"], json!(big_detail));
+    assert_eq!(loaded_fix["evidence"].as_array().unwrap().len(), 12);
+    assert_eq!(loaded_fix["model"]["id"], json!("openai/gpt-6.1-sol"));
+    assert_eq!(loaded_fix["model"]["provider"], Json::Null);
+
+    let batch_refs: Vec<&runs::RunFact> = snap.facts().iter().map(Arc::as_ref).collect();
+    let batch_docs = runs::load_run_docs(&engine, &batch_refs).unwrap();
+    assert_eq!(batch_docs.len(), 2);
+    let rev_pos = snap.facts().iter().position(|f| &*f.id == "vm.facts--rev-1").unwrap();
+    let rev_doc = batch_docs[rev_pos].as_ref().expect("rev doc");
+    assert_eq!(rev_doc["review"]["of"], json!("vm.facts--target-1-fix"));
+
+    // A newer revision later recorded must NOT disturb on-demand loading of the older snapshot RunFact.
+    let mut fix_v2 = fix.clone();
+    fix_v2["seq"] = json!(2);
+    fix_v2["task"]["title"] = json!("Revised v2 title");
+    fs::write(dir.join("vm.facts--target-1-fix.json"), fix_v2.to_string()).unwrap();
+    pass(&engine, &share, T0 + 4 * DAY, 1000, true);
+    let old_doc_still = runs::load_run_doc(&engine, fix_fact).unwrap().expect("old rev doc");
+    assert_eq!(old_doc_still["task"]["title"], json!("Heavy prose build run fixed"));
+    let snap2 = runs::resolved_history_snapshot(&engine).unwrap();
+    let new_fix_fact = snap2
+        .facts()
+        .iter()
+        .find(|f| &*f.id == "vm.facts--target-1-fix")
+        .unwrap();
+    let new_doc = runs::load_run_doc(&engine, new_fix_fact).unwrap().expect("new rev doc");
+    assert_eq!(new_doc["task"]["title"], json!("Revised v2 title"));
+
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+/// Phase 4, step 3: generations share unchanged `Arc<RunFact>` instances with zero whole-table
+/// copies and zero payload decompression for unchanged runs (and zero payload reads on cold open
+/// when `RUN_SB_FACT` is verified).
+#[test]
+fn run_facts_share_arcs_across_generations_and_avoid_whole_table_reads() {
+    use aac_store::scoreboard_agg;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let share = Share::new("run-facts-share");
+    let day = &iso(T0 + 2 * DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.share/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+
+    for i in 0..40u64 {
+        share.run(
+            "vm.share",
+            &format!("plain-{i:03}"),
+            1,
+            T0 + 2 * DAY + i * 1_000,
+            if i == 0 { "custom-alias" } else { "openai/gpt-6.1-sol" },
+            Some("high"),
+            Some("codex"),
+            Some("build"),
+        );
+    }
+    let fix = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.share--plain-001-fix",
+        "writer": "vm.share",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 50_000),
+        "source": "observed",
+        "corrects": "vm.share--plain-001",
+        "task": { "id": "t-fix", "type": "build", "title": "Fix 1" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+        "endedAt": iso(T0 + 2 * DAY + 50_000),
+        "outcome": "done"
+    });
+    let rev = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.share--rev-001",
+        "writer": "vm.share",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 60_000),
+        "source": "observed",
+        "task": { "id": "t-rev", "type": "review", "title": "Rev 1" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+        "endedAt": iso(T0 + 2 * DAY + 60_000),
+        "outcome": "done",
+        "review": {
+            "of": "vm.share--plain-001",
+            "verdict": "pass",
+            "findings": { "high": 0, "medium": 0, "low": 0 },
+            "overturned": false,
+            "disputed": false
+        }
+    });
+    fs::write(dir.join("vm.share--plain-001-fix.json"), fix.to_string()).unwrap();
+    fs::write(dir.join("vm.share--rev-001.json"), rev.to_string()).unwrap();
+
+    let db = temp_dir("run-facts-share-store");
+    let engine = open(&db);
+    pass(&engine, &share, T0 + 3 * DAY, 1000, true);
+
+    // 1. Cold build from verified `RUN_SB_FACT` reads ZERO payload blocks.
+    let gen1 = runs::resolved_history_snapshot(&engine).unwrap();
+    assert_eq!(
+        runs::history_payload_read_count(&engine),
+        0,
+        "cold build with verified RUN_SB_FACT must not decompress RUN_PAYLOAD"
+    );
+    assert_eq!(gen1.facts().len(), 41);
+    assert_eq!(gen1.accepted_facts().len(), 42);
+
+    // Every non-retargeted effective run in `facts()` shares the EXACT same `Arc<RunFact>` with `accepted_facts()`.
+    let acc1_by_id: HashMap<&str, &Arc<runs::RunFact>> = gen1.accepted_facts().iter().map(|f| (&*f.id, f)).collect();
+    for fact in gen1.facts() {
+        if fact.review().is_none_or(|r| r.of == r.orig_of) {
+            assert!(
+                Arc::ptr_eq(fact, acc1_by_id[&*fact.id]),
+                "effective run {} must share Arc between facts() and accepted_facts()",
+                fact.id
+            );
+        }
+    }
+    // Interned categorical strings share Arc pointers across runs.
+    assert!(Arc::ptr_eq(&gen1.facts()[2].writer, &gen1.facts()[3].writer));
+    assert!(Arc::ptr_eq(
+        gen1.facts()[2].model_id.as_ref().unwrap(),
+        gen1.facts()[3].model_id.as_ref().unwrap()
+    ));
+
+    // 2. Append 1 brand-new run -> generation moves; every unchanged run keeps the SAME Arc pointer
+    //    and ONLY the 1 new run reads RUN_PAYLOAD.
+    share.run(
+        "vm.share",
+        "plain-040",
+        1,
+        T0 + 2 * DAY + 70_000,
+        "openai/gpt-6.1-sol",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
+    pass(&engine, &share, T0 + 4 * DAY, 1000, true);
+    let gen2 = runs::resolved_history_snapshot(&engine).unwrap();
+    assert!(gen2.generation() > gen1.generation());
+    assert_eq!(gen2.facts().len(), 42);
+    assert_eq!(
+        runs::history_payload_read_count(&engine),
+        1,
+        "adding 1 run must decode at most 1 payload doc, not whole table"
+    );
+    let g1_by_id: HashMap<&str, &Arc<runs::RunFact>> = gen1.facts().iter().map(|f| (&*f.id, f)).collect();
+    let g2_by_id: HashMap<&str, &Arc<runs::RunFact>> = gen2.facts().iter().map(|f| (&*f.id, f)).collect();
+    for (id, f1) in &g1_by_id {
+        let f2 = g2_by_id[id];
+        assert!(
+            Arc::ptr_eq(f1, f2),
+            "unchanged run {id} must share the exact same Arc<RunFact> across generations"
+        );
+    }
+
+    // 3. Catalog alias change rekeys ONLY plain-000; unchanged runs still share Arcs, and even
+    //    the rekeyed run updates identity from Head+Dict with ZERO additional payload reads!
+    share.set_aliases(&[("custom-alias", "openai/gpt-6.1-sol")]);
+    pass(&engine, &share, T0 + 5 * DAY, 1000, true);
+    let gen3 = runs::resolved_history_snapshot(&engine).unwrap();
+    assert_eq!(
+        runs::history_payload_read_count(&engine),
+        1,
+        "catalog rekey must update identity from Head+Dict without decompressing RUN_PAYLOAD"
+    );
+    let g3_by_id: HashMap<&str, &Arc<runs::RunFact>> = gen3.facts().iter().map(|f| (&*f.id, f)).collect();
+    assert_eq!(
+        g3_by_id["vm.share--plain-000"].model_id.as_deref(),
+        Some("openai/gpt-6.1-sol")
+    );
+    assert!(!Arc::ptr_eq(
+        g2_by_id["vm.share--plain-000"],
+        g3_by_id["vm.share--plain-000"]
+    ));
+    for (id, f2) in &g2_by_id {
+        if *id == "vm.share--plain-000" {
+            continue;
+        }
+        assert!(
+            Arc::ptr_eq(f2, g3_by_id[id]),
+            "non-rekeyed run {id} must keep sharing Arc<RunFact> across catalog change"
+        );
+    }
+
+    // Keep gen1, gen2, gen3 alive together and verify runsQuery matches exact full docs.
+    let q = call(&engine, "runsQuery", json!({ "includeReceipts": true }));
+    assert_eq!(q["runs"].as_array().unwrap().len(), 42);
+    assert_eq!(q["accepted"].as_array().unwrap().len(), 43);
+    drop((gen1, gen2, gen3));
+
+    // 4. Fallback when `RUN_SB_FACT` is wiped/untrusted still builds identical facts from payload.
+    engine
+        .with_db(|db_ref| {
+            let txn = aac_store::engine::begin(db_ref)?;
+            scoreboard_agg::delete_tables(&txn)?;
+            scoreboard_agg::create_tables(&txn)?;
+            {
+                let mut meta = txn.open_table(runs::RUN_META)?;
+                meta.remove("sb_agg_version")?;
+            }
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    engine.close().unwrap();
+    drop(engine);
+
+    let reopened = open(&db);
+    let gen_fallback = runs::resolved_history_snapshot(&reopened).unwrap();
+    assert_eq!(gen_fallback.facts().len(), 42);
+    assert_eq!(gen_fallback.accepted_facts().len(), 43);
+    let rev_fb = gen_fallback
+        .facts()
+        .iter()
+        .find(|f| &*f.id == "vm.share--rev-001")
+        .unwrap();
+    assert_eq!(&*rev_fb.review().unwrap().of, "vm.share--plain-001-fix");
+
+    reopened.close().unwrap();
+    drop(reopened);
     fs::remove_dir_all(db).unwrap();
     fs::remove_dir_all(share.root).unwrap();
 }

@@ -42,7 +42,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 type Bytes = TableDefinition<'static, &'static [u8], &'static [u8]>;
 
@@ -279,7 +279,7 @@ const F_DISPUTED: u8 = 16;
 const F_UNKNOWN_MODEL: u8 = 32;
 const F_EFFORT_CONFLICT: u8 = 64;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Loc {
     pub day: u32,
     pub block: u32,
@@ -2069,55 +2069,226 @@ pub struct AcceptedReceipt {
     pub first_seen_at: u64,
 }
 
-/// One resolved run held compactly as UTF-8 JSON bytes + typed filter fields instead of a
-/// bloated `serde_json::Value` IndexMap tree (~1 KiB vs ~18 KiB per row).
-#[derive(Clone, Debug)]
-pub struct CompactRun {
-    /// `[endedMs, r]` cursor ordering this row in resolved history.
-    pub cursor: (u64, u32),
-    /// Relative path of the run file under the reports share.
-    pub file: Box<str>,
-    /// Hex SHA-256 of the run file bytes.
-    pub sha256: Box<str>,
-    /// Epoch milliseconds when the revision was first ingested.
-    pub first_seen_at: u64,
-    /// Compact serialized UTF-8 JSON of the resolved run `doc`.
-    pub doc_json: Box<str>,
-    /// Run identifier (`doc.id`).
-    pub id: Box<str>,
-    /// Writer identifier (`doc.writer`).
-    pub writer: Box<str>,
-    /// Optional run source (`doc.source`).
-    pub source: Option<Box<str>>,
-    /// Optional task type (`doc.task.type`).
-    pub task_type: Option<Box<str>>,
-    /// Whether the run carries a `review` object.
-    pub has_review: bool,
-    /// Revision sequence number (`doc.seq`).
-    pub seq: u64,
-    /// ISO timestamp string when the run was written (`doc.writtenAt`).
-    pub written_at: Box<str>,
-    /// Optional target run ID corrected by this run (`doc.corrects`).
-    pub corrects: Option<Box<str>>,
-    /// Whether the run carries a `void` object.
-    pub has_void: bool,
+/// Run source on a typed `RunFact` (1 byte instead of a heap string).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RunSource {
+    Observed,
+    Benchmark,
 }
 
-impl CompactRun {
-    /// Parse this row's compact JSON document on demand.
-    pub fn doc(&self) -> Json {
-        serde_json::from_str(&self.doc_json).unwrap_or(Json::Null)
+impl RunSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Benchmark => "benchmark",
+        }
+    }
+
+    pub fn is_benchmark(self) -> bool {
+        matches!(self, Self::Benchmark)
+    }
+}
+
+/// Compact review link carried on a typed `RunFact` (allocated only for review runs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunReviewLink {
+    /// Original `review.of` written in the run document.
+    pub orig_of: Box<str>,
+    /// Effective `review.of` after correction-chain resolution.
+    pub of: Box<str>,
+    /// Interned review verdict (`pass`, `fail`, `cannot-verify`).
+    pub verdict: Arc<str>,
+    pub overturned: bool,
+    pub disputed: bool,
+}
+
+/// Optional rarely-present fields packed behind one boxed allocation (8 bytes inline when absent).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunFactExtra {
+    pub benchmark: Option<Arc<str>>,
+    pub process: Option<(Arc<str>, Option<Arc<str>>)>,
+    /// `[records, files, items, words, tasks]` using `u64::MAX` as sentinel for `None`.
+    pub task_size: Option<[u64; 5]>,
+    pub corrects: Option<Box<str>>,
+    pub review: Option<Box<RunReviewLink>>,
+}
+
+const FACT_FLAG_VOID: u8 = 1;
+const FACT_FLAG_IMPORTED: u8 = 2;
+const FACT_FLAG_UNKNOWN_MODEL: u8 = 4;
+const FACT_FLAG_EFFORT_CONFLICT: u8 = 8;
+const NO_WALL_BITS: u64 = u64::MAX;
+
+/// One resolved run held in memory as a small typed fact (~0.5 KB total, zero document text).
+/// The full `run@1` document stays in redb `RUN_PAYLOAD` at `loc` and is loaded on demand via
+/// [`load_run_doc`] / [`load_run_docs`] only when a view or query needs it.
+/// Generations share unchanged facts by `Arc<RunFact>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunFact {
+    /// `[endedMs, r]` cursor ordering this row in resolved history.
+    pub cursor: (u64, u32),
+    /// Exact payload location `(day, block, slot)` in `RUN_PAYLOAD` for on-demand doc reads.
+    pub loc: Loc,
+    /// Raw 32-byte SHA-256 of the winning revision's file bytes.
+    pub sha: [u8; 32],
+    /// Epoch milliseconds when the revision was first ingested (`firstSeenAt`).
+    pub first_seen_at: u64,
+    /// Revision sequence number (`doc.seq`).
+    pub seq: u64,
+    /// Started timestamp in epoch ms (`UNKNOWN` when absent).
+    started_at_ms_raw: u64,
+    /// Ended timestamp in epoch ms (`head.ended_ms`).
+    pub ended_at_ms: u64,
+    /// Written timestamp in epoch ms (`head.written_ms`).
+    pub written_at_ms: u64,
+    /// Exact IEEE-754 bits of `doc.wallSeconds` (`NO_WALL_BITS` when absent).
+    wall_seconds_bits: u64,
+    /// Relative path of the run file under the reports share.
+    pub file: Box<str>,
+    /// Run identifier (`doc.id`).
+    pub id: Box<str>,
+    /// Task identifier (`doc.task.id`).
+    pub task_id: Box<str>,
+    /// Exact ISO `doc.endedAt` string.
+    pub ended_at: Box<str>,
+    /// Exact ISO `doc.writtenAt` string when it differs from `ended_at` (`None` => equals `ended_at`).
+    written_at_diff: Option<Box<str>>,
+    /// Writer identifier (`doc.writer`, interned).
+    pub writer: Arc<str>,
+    /// Canonical shown model id (`head.MODEL` or fallback `head.MODEL_RAW`, interned).
+    pub model_id: Option<Arc<str>>,
+    /// Raw written model id (`head.MODEL_RAW`, interned).
+    pub model_raw: Option<Arc<str>>,
+    /// Canonical model family (`head.FAMILY`, interned).
+    pub model_family: Option<Arc<str>>,
+    /// Canonical effort (`head.EFFORT`, interned).
+    pub effort: Option<Arc<str>>,
+    /// Canonical harness (`head.HARNESS`, interned).
+    pub harness: Option<Arc<str>>,
+    /// Optional project id (`doc.project`, interned).
+    pub project: Option<Arc<str>>,
+    /// Optional stream id (`doc.stream`, interned).
+    pub stream: Option<Arc<str>>,
+    /// Optional task type (`doc.task.type`, interned).
+    pub task_type: Option<Arc<str>>,
+    /// Outcome string (`doc.outcome`, interned).
+    pub outcome: Arc<str>,
+    /// Rarely-present fields (`benchmark`, `process`, `task_size`, `corrects`, `review`).
+    pub extra: Option<Box<RunFactExtra>>,
+    /// Run source (`observed` / `benchmark`).
+    pub source: RunSource,
+    /// Compact boolean flags (`FACT_FLAG_*`).
+    pub flags: u8,
+}
+
+impl RunFact {
+    pub fn started_at_ms(&self) -> Option<u64> {
+        (self.started_at_ms_raw != UNKNOWN).then_some(self.started_at_ms_raw)
+    }
+
+    pub fn wall_seconds(&self) -> Option<f64> {
+        (self.wall_seconds_bits != NO_WALL_BITS).then(|| f64::from_bits(self.wall_seconds_bits))
+    }
+
+    pub fn written_at(&self) -> &str {
+        self.written_at_diff.as_deref().unwrap_or(&self.ended_at)
+    }
+
+    pub fn sha256_hex(&self) -> String {
+        hex(&self.sha)
+    }
+
+    pub fn source_str(&self) -> &'static str {
+        self.source.as_str()
+    }
+
+    pub fn benchmark(&self) -> Option<&str> {
+        self.extra.as_ref().and_then(|e| e.benchmark.as_deref())
+    }
+
+    pub fn process(&self) -> Option<(&str, Option<&str>)> {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.process.as_ref())
+            .map(|(id, ver)| (id.as_ref(), ver.as_deref()))
+    }
+
+    pub fn task_size(&self) -> [Option<u64>; 5] {
+        match self.extra.as_ref().and_then(|e| e.task_size) {
+            Some(arr) => arr.map(|v| (v != u64::MAX).then_some(v)),
+            None => [None; 5],
+        }
+    }
+
+    pub fn corrects(&self) -> Option<&str> {
+        self.extra.as_ref().and_then(|e| e.corrects.as_deref())
+    }
+
+    pub fn review(&self) -> Option<&RunReviewLink> {
+        self.extra.as_ref().and_then(|e| e.review.as_deref())
+    }
+
+    pub fn has_review(&self) -> bool {
+        self.review().is_some()
+    }
+
+    pub fn has_void(&self) -> bool {
+        self.flags & FACT_FLAG_VOID != 0
+    }
+
+    pub fn imported(&self) -> bool {
+        self.flags & FACT_FLAG_IMPORTED != 0
+    }
+
+    pub fn unknown_model(&self) -> bool {
+        self.flags & FACT_FLAG_UNKNOWN_MODEL != 0
+    }
+
+    pub fn effort_conflict(&self) -> bool {
+        self.flags & FACT_FLAG_EFFORT_CONFLICT != 0
+    }
+
+    /// Approximate per-run resident bytes (inline struct + unique per-run heap allocations,
+    /// excluding interned `Arc<str>` strings shared across runs).
+    pub fn estimated_bytes(&self) -> usize {
+        let mut total = std::mem::size_of::<Self>()
+            + self.file.len()
+            + self.id.len()
+            + self.task_id.len()
+            + self.ended_at.len()
+            + self.written_at_diff.as_deref().map_or(0, str::len);
+        if let Some(extra) = &self.extra {
+            total += std::mem::size_of::<RunFactExtra>();
+            if let Some(c) = &extra.corrects {
+                total += c.len();
+            }
+            if let Some(rev) = &extra.review {
+                total += std::mem::size_of::<RunReviewLink>() + rev.orig_of.len() + rev.of.len();
+            }
+        }
+        total
+    }
+
+    fn with_effective_review_of(&self, new_of: &str) -> Self {
+        let mut cloned = self.clone();
+        if let Some(extra) = cloned.extra.as_mut()
+            && let Some(rev) = extra.review.as_mut()
+        {
+            rev.of = new_of.into();
+        }
+        cloned
     }
 }
 
 /// One immutable resolved history, keyed by the same database snapshot's run generation and
-/// catalog. Compact UTF-8 doc storage + typed receipts eliminates the 256 MiB Value tree bloat.
+/// catalog. Holds only typed `Arc<RunFact>` rows (~0.5 KB each, shared across generations and
+/// between `rows` and `accepted`); full run documents stay in redb `RUN_PAYLOAD` and load on demand.
 pub struct ResolvedHistory {
     key: (u64, Option<Vec<u8>>),
-    rows: Vec<CompactRun>,
+    rows: Vec<Arc<RunFact>>,
     problems: Vec<Json>,
     skipped: usize,
-    accepted: Vec<AcceptedReceipt>,
+    accepted: Vec<Arc<RunFact>>,
 }
 
 impl ResolvedHistory {
@@ -2134,9 +2305,15 @@ impl ResolvedHistory {
             .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
     }
 
-    /// The effective rows (corrections resolved), compactly stored.
-    pub fn compact_rows(&self) -> &[CompactRun] {
+    /// The effective rows (corrections resolved), as shared typed `RunFact`s.
+    pub fn facts(&self) -> &[Arc<RunFact>] {
         &self.rows
+    }
+
+    /// All non-refused revisions, sharing the same `Arc<RunFact>` instances as `facts()` for
+    /// effective runs (zero duplicate receipt string allocations).
+    pub fn accepted_facts(&self) -> &[Arc<RunFact>] {
+        &self.accepted
     }
 
     /// The correction refusals, as the first `runsQuery` page carries them.
@@ -2144,27 +2321,180 @@ impl ResolvedHistory {
         &self.problems
     }
 
-    /// The accepted revisions' receipts (readers-check fields only).
-    pub fn accepted_receipts(&self) -> &[AcceptedReceipt] {
-        &self.accepted
+    /// Count of stored runs whose payload failed projection when building this snapshot.
+    pub fn skipped(&self) -> usize {
+        self.skipped
     }
 }
 
-/// The engine's resident resolved-history snapshot: built once per generation and the
-/// same `Arc` on every call until the runs ledger or catalog moves.
-pub fn resolved_history_snapshot(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> {
+/// The engine's resident resolved-history snapshot: built once per generation, sharing unchanged
+/// `Arc<RunFact>` rows across generations without copying the table or keeping doc text in RAM.
+pub fn resolved_history_snapshot(engine: &Engine) -> Result<Arc<ResolvedHistory>> {
     resolved_history(engine)
 }
 
-/// Per-engine cache: no cross-store sharing, and at most one resident generation.
+/// Load and project one run's full `run@1` JSON document from redb `RUN_PAYLOAD` inside an
+/// existing read transaction, reusing a bounded 16-block decompression cache.
+pub(crate) fn load_run_doc_in_read<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    payloads: &T,
+    blocks: &mut HashMap<(u32, u32), Vec<Vec<u8>>>,
+    fact: &RunFact,
+) -> Result<Option<Json>> {
+    let block_key = (fact.loc.day, fact.loc.block);
+    if !blocks.contains_key(&block_key) {
+        if blocks.len() >= 16 {
+            blocks.clear();
+        }
+        let Some(bytes) = payloads.get(Key::new().u32(fact.loc.day).u32(fact.loc.block).as_slice())? else {
+            return Ok(None);
+        };
+        blocks.insert(block_key, block_decode(bytes.value())?.1);
+    }
+    let Some(doc_bytes) = blocks[&block_key].get(fact.loc.slot as usize) else {
+        return Ok(None);
+    };
+    let text = String::from_utf8_lossy(doc_bytes);
+    let Ok(mut run) = run_schema::parse_run_text(&text, &fact.writer) else {
+        return Ok(None);
+    };
+    let shown = fact.model_id.as_deref().or(fact.model_raw.as_deref());
+    run["model"]["id"] = opt_json(shown);
+    run["model"]["effort"] = opt_json(fact.effort.as_deref());
+    run["model"]["harness"] = opt_json(fact.harness.as_deref());
+    run["model"]["provider"] = Json::Null;
+    if let Some(rev) = fact.review()
+        && run["review"].is_object()
+    {
+        run["review"]["of"] = json!(&*rev.of);
+    }
+    Ok(Some(run))
+}
+
+/// Load one run's projected `run@1` JSON document on demand from redb `RUN_PAYLOAD`.
+pub fn load_run_doc(engine: &Engine, fact: &RunFact) -> Result<Option<Json>> {
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let payloads = read.open_table(RUN_PAYLOAD)?;
+        let mut blocks = HashMap::new();
+        load_run_doc_in_read(&payloads, &mut blocks, fact)
+    })
+}
+
+/// Batch-load projected `run@1` JSON documents on demand from redb `RUN_PAYLOAD` in one MVCC
+/// read transaction with a bounded 16-block decompression cache.
+pub fn load_run_docs(engine: &Engine, facts: &[&RunFact]) -> Result<Vec<Option<Json>>> {
+    if facts.is_empty() {
+        return Ok(Vec::new());
+    }
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let payloads = read.open_table(RUN_PAYLOAD)?;
+        let mut blocks = HashMap::new();
+        let mut out = Vec::with_capacity(facts.len());
+        for fact in facts {
+            out.push(load_run_doc_in_read(&payloads, &mut blocks, fact)?);
+        }
+        Ok(out)
+    })
+}
+
+/// All `Head` fields that determine a run's typed `RunFact` (excluding `revisions` and
+/// `event_seq`, so losing revisions do not invalidate cached `Arc<RunFact>` rows).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeadFactSig {
+    flags: u8,
+    verdict: u8,
+    seq: u64,
+    written_ms: u64,
+    ingested_ms: u64,
+    started_ms: u64,
+    ended_ms: u64,
+    wall_ms: u64,
+    sha: [u8; 32],
+    loc: Loc,
+    ids: [u32; 26],
+}
+
+impl HeadFactSig {
+    fn from_head(head: &Head) -> Self {
+        Self {
+            flags: head.flags,
+            verdict: head.verdict,
+            seq: head.seq,
+            written_ms: head.written_ms,
+            ingested_ms: head.ingested_ms,
+            started_ms: head.started_ms,
+            ended_ms: head.ended_ms,
+            wall_ms: head.wall_ms,
+            sha: head.sha,
+            loc: head.loc,
+            ids: head.ids,
+        }
+    }
+
+    /// True when the underlying payload document and writer did not change (only catalog identity
+    /// or path metadata moved), so `RunFact` can refresh from `Head` + `Dict` with zero payload reads.
+    fn same_doc_content(&self, other: &Self) -> bool {
+        self.sha == other.sha
+            && self.loc == other.loc
+            && self.seq == other.seq
+            && self.written_ms == other.written_ms
+            && self.started_ms == other.started_ms
+            && self.ended_ms == other.ended_ms
+            && self.wall_ms == other.wall_ms
+            && self.ids[at::WRITER] == other.ids[at::WRITER]
+    }
+}
+
+struct CachedBaseFact {
+    sig: HeadFactSig,
+    /// `None` when this revision's payload failed `parse_run_text` (counted in `skipped`).
+    fact: Option<Arc<RunFact>>,
+}
+
+/// Low-cardinality string pool shared across all runs and generations in one engine.
+#[derive(Default)]
+struct StringInterner {
+    pool: HashSet<Arc<str>>,
+}
+
+impl StringInterner {
+    fn intern(&mut self, text: &str) -> Arc<str> {
+        if let Some(hit) = self.pool.get(text) {
+            return Arc::clone(hit);
+        }
+        let arc: Arc<str> = Arc::from(text);
+        self.pool.insert(Arc::clone(&arc));
+        arc
+    }
+
+    fn intern_opt(&mut self, text: Option<&str>) -> Option<Arc<str>> {
+        text.map(|s| self.intern(s))
+    }
+
+    fn clear(&mut self) {
+        self.pool.clear();
+    }
+}
+
+/// Per-engine cache: no cross-store sharing, at most one active generation pointer, and
+/// cross-generation `Arc<RunFact>` reuse keyed by `r` + `HeadFactSig`.
 #[derive(Default)]
 pub(crate) struct HistoryCache {
-    snapshot: Option<std::sync::Arc<ResolvedHistory>>,
+    snapshot: Option<Arc<ResolvedHistory>>,
+    by_r: HashMap<u32, CachedBaseFact>,
+    retargeted: HashMap<(u32, Box<str>), (HeadFactSig, Arc<RunFact>)>,
+    intern: StringInterner,
     resolutions: u64,
+    payload_reads: u64,
 }
+
 impl HistoryCache {
     pub(crate) fn clear(&mut self) {
         self.snapshot = None;
+        self.by_r.clear();
+        self.retargeted.clear();
+        self.intern.clear();
     }
 }
 
@@ -2178,11 +2508,237 @@ pub fn correction_resolution_count(engine: &Engine) -> u64 {
         .resolutions
 }
 
-fn resolved_history(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> {
-    // Lock order is database then cache, also used by close. All pages of this build read
-    // one MVCC transaction, so concurrent ingestion cannot mix generations in the snapshot.
+/// Number of payload documents decoded from `RUN_PAYLOAD` while building `ResolvedHistory` snapshots.
+#[doc(hidden)]
+pub fn history_payload_read_count(engine: &Engine) -> u64 {
+    engine
+        .runs_history
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .payload_reads
+}
+
+fn fact_flags(has_void: bool, head_flags: u8) -> u8 {
+    let mut f = 0u8;
+    if has_void {
+        f |= FACT_FLAG_VOID;
+    }
+    if head_flags & F_IMPORTED != 0 {
+        f |= FACT_FLAG_IMPORTED;
+    }
+    if head_flags & F_UNKNOWN_MODEL != 0 {
+        f |= FACT_FLAG_UNKNOWN_MODEL;
+    }
+    if head_flags & F_EFFORT_CONFLICT != 0 {
+        f |= FACT_FLAG_EFFORT_CONFLICT;
+    }
+    f
+}
+
+fn pack_extra(
+    benchmark: Option<Arc<str>>,
+    process: Option<(Arc<str>, Option<Arc<str>>)>,
+    task_size: [Option<u64>; 5],
+    corrects: Option<Box<str>>,
+    review: Option<RunReviewLink>,
+) -> Option<Box<RunFactExtra>> {
+    let packed_size = if task_size.iter().any(Option::is_some) {
+        Some(task_size.map(|v| v.unwrap_or(u64::MAX)))
+    } else {
+        None
+    };
+    if benchmark.is_none() && process.is_none() && packed_size.is_none() && corrects.is_none() && review.is_none() {
+        None
+    } else {
+        Some(Box::new(RunFactExtra {
+            benchmark,
+            process,
+            task_size: packed_size,
+            corrects,
+            review: review.map(Box::new),
+        }))
+    }
+}
+
+fn fact_from_stored<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    dict: &mut Dict<'_, T>,
+    intern: &mut StringInterner,
+    ended_ms: u64,
+    r: u32,
+    head: &Head,
+    sb: &crate::scoreboard_agg::StoredRunFact,
+) -> Result<RunFact> {
+    let model_raw = dict.field(head, at::MODEL_RAW)?;
+    let model_family = dict.field(head, at::FAMILY)?;
+    let benchmark = intern.intern_opt(sb.benchmark.as_deref());
+    let process = sb
+        .process
+        .as_ref()
+        .map(|(id, ver)| (intern.intern(id), intern.intern_opt(ver.as_deref())));
+    let review = sb.review.as_ref().map(|rev| RunReviewLink {
+        orig_of: rev.orig_of.as_str().into(),
+        of: rev.orig_of.as_str().into(),
+        verdict: intern.intern(&rev.verdict),
+        overturned: rev.overturned,
+        disputed: rev.disputed,
+    });
+    let corrects = sb.corrects.as_deref().map(Into::into);
+    let written_at_diff = (sb.written_at != sb.ended_at).then(|| sb.written_at.as_str().into());
+    Ok(RunFact {
+        cursor: (ended_ms, r),
+        loc: head.loc,
+        sha: head.sha,
+        first_seen_at: head.ingested_ms,
+        seq: head.seq,
+        started_at_ms_raw: head.started_ms,
+        ended_at_ms: head.ended_ms,
+        written_at_ms: head.written_ms,
+        wall_seconds_bits: sb.wall_seconds.map(f64::to_bits).unwrap_or(NO_WALL_BITS),
+        file: sb.file.as_str().into(),
+        id: sb.id.as_str().into(),
+        task_id: sb.task_id.as_str().into(),
+        ended_at: sb.ended_at.as_str().into(),
+        written_at_diff,
+        writer: intern.intern(&sb.writer),
+        model_id: intern.intern_opt(sb.model_id.as_deref()),
+        model_raw: intern.intern_opt(model_raw.as_deref()),
+        model_family: intern.intern_opt(model_family.as_deref()),
+        effort: intern.intern_opt(sb.effort.as_deref()),
+        harness: intern.intern_opt(sb.harness.as_deref()),
+        project: intern.intern_opt(sb.project.as_deref()),
+        stream: intern.intern_opt(sb.stream.as_deref()),
+        task_type: intern.intern_opt(sb.task_type.as_deref()),
+        outcome: intern.intern(&sb.outcome_raw),
+        extra: pack_extra(benchmark, process, sb.task_size, corrects, review),
+        source: if sb.source_benchmark {
+            RunSource::Benchmark
+        } else {
+            RunSource::Observed
+        },
+        flags: fact_flags(sb.has_void, head.flags),
+    })
+}
+
+fn fact_from_payload_bytes<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    dict: &mut Dict<'_, T>,
+    intern: &mut StringInterner,
+    ended_ms: u64,
+    r: u32,
+    head: &Head,
+    doc_bytes: &[u8],
+) -> Result<Option<RunFact>> {
+    let writer = dict.field(head, at::WRITER)?.unwrap_or_default();
+    let text = String::from_utf8_lossy(doc_bytes);
+    let Ok(doc) = run_schema::parse_run_text(&text, &writer) else {
+        return Ok(None);
+    };
+    let model_raw = dict.field(head, at::MODEL_RAW)?;
+    let shown = dict.field(head, at::MODEL)?.or_else(|| model_raw.clone());
+    let model_family = dict.field(head, at::FAMILY)?;
+    let effort = dict.field(head, at::EFFORT)?;
+    let harness = dict.field(head, at::HARNESS)?;
+    let file = dict.field(head, at::PATH)?.unwrap_or_default();
+    let ended_at = doc["endedAt"].as_str().unwrap_or_default();
+    let written_at = doc["writtenAt"].as_str().unwrap_or_default();
+    let written_at_diff = (written_at != ended_at).then(|| written_at.into());
+    let task = &doc["task"];
+    let size = &task["size"];
+    let task_size = [
+        size["records"].as_u64(),
+        size["files"].as_u64(),
+        size["items"].as_u64(),
+        size["words"].as_u64(),
+        size["tasks"].as_u64(),
+    ];
+    let process = doc["process"].as_object().map(|p| {
+        (
+            intern.intern(p.get("id").and_then(Json::as_str).unwrap_or_default()),
+            intern.intern_opt(p.get("version").and_then(Json::as_str)),
+        )
+    });
+    let review = doc["review"].as_object().map(|rev| {
+        let of = rev.get("of").and_then(Json::as_str).unwrap_or_default();
+        RunReviewLink {
+            orig_of: of.into(),
+            of: of.into(),
+            verdict: intern.intern(rev.get("verdict").and_then(Json::as_str).unwrap_or_default()),
+            overturned: rev.get("overturned").and_then(Json::as_bool).unwrap_or(false),
+            disputed: rev.get("disputed").and_then(Json::as_bool).unwrap_or(false),
+        }
+    });
+    let corrects = doc.get("corrects").and_then(Json::as_str).map(Into::into);
+    let has_void = doc.get("void").is_some_and(Json::is_object);
+    let benchmark = intern.intern_opt(doc["benchmark"].as_str());
+    let wall_seconds_bits = doc["wallSeconds"]
+        .as_f64()
+        .filter(|n| n.is_finite())
+        .map(f64::to_bits)
+        .unwrap_or(NO_WALL_BITS);
+    Ok(Some(RunFact {
+        cursor: (ended_ms, r),
+        loc: head.loc,
+        sha: head.sha,
+        first_seen_at: head.ingested_ms,
+        seq: head.seq,
+        started_at_ms_raw: head.started_ms,
+        ended_at_ms: head.ended_ms,
+        written_at_ms: head.written_ms,
+        wall_seconds_bits,
+        file: file.into_boxed_str(),
+        id: doc["id"].as_str().unwrap_or_default().into(),
+        task_id: task["id"].as_str().unwrap_or_default().into(),
+        ended_at: ended_at.into(),
+        written_at_diff,
+        writer: intern.intern(&writer),
+        model_id: intern.intern_opt(shown.as_deref()),
+        model_raw: intern.intern_opt(model_raw.as_deref()),
+        model_family: intern.intern_opt(model_family.as_deref()),
+        effort: intern.intern_opt(effort.as_deref()),
+        harness: intern.intern_opt(harness.as_deref()),
+        project: intern.intern_opt(doc["project"].as_str()),
+        stream: intern.intern_opt(doc["stream"].as_str()),
+        task_type: intern.intern_opt(task["type"].as_str()),
+        outcome: intern.intern(doc["outcome"].as_str().unwrap_or_default()),
+        extra: pack_extra(benchmark, process, task_size, corrects, review),
+        source: if doc["source"].as_str() == Some("benchmark") {
+            RunSource::Benchmark
+        } else {
+            RunSource::Observed
+        },
+        flags: fact_flags(has_void, head.flags),
+    }))
+}
+
+fn refresh_fact_metadata<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    dict: &mut Dict<'_, T>,
+    intern: &mut StringInterner,
+    base: &RunFact,
+    head: &Head,
+) -> Result<RunFact> {
+    let model_raw = dict.field(head, at::MODEL_RAW)?;
+    let shown = dict.field(head, at::MODEL)?.or_else(|| model_raw.clone());
+    let model_family = dict.field(head, at::FAMILY)?;
+    let effort = dict.field(head, at::EFFORT)?;
+    let harness = dict.field(head, at::HARNESS)?;
+    let file = dict.field(head, at::PATH)?.unwrap_or_default();
+    let mut updated = base.clone();
+    updated.first_seen_at = head.ingested_ms;
+    updated.file = file.into_boxed_str();
+    updated.model_id = intern.intern_opt(shown.as_deref());
+    updated.model_raw = intern.intern_opt(model_raw.as_deref());
+    updated.model_family = intern.intern_opt(model_family.as_deref());
+    updated.effort = intern.intern_opt(effort.as_deref());
+    updated.harness = intern.intern_opt(harness.as_deref());
+    updated.flags = fact_flags(base.has_void(), head.flags);
+    Ok(updated)
+}
+
+fn resolved_history(engine: &Engine) -> Result<Arc<ResolvedHistory>> {
+    // Lock order is database then cache, also used by close. All reads share one MVCC
+    // transaction so concurrent ingestion cannot mix generations in the snapshot.
     engine.with_db(|db| {
-        let mut cache = engine.runs_history.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cache_guard = engine.runs_history.lock().unwrap_or_else(|p| p.into_inner());
+        let cache = &mut *cache_guard;
         let read = db.begin_read()?;
         let checkpoint = read.open_table(crate::db::CHECKPOINT)?;
         let generation = crate::db::read_checkpoint(&checkpoint, "runs/ledger")?
@@ -2191,83 +2747,259 @@ fn resolved_history(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> 
         let catalog = read.open_table(RUN_META)?.get("catalog")?.map(|v| v.value().to_vec());
         let key = (generation, catalog);
         if let Some(snapshot) = cache.snapshot.as_ref().filter(|s| s.key == key) {
-            return Ok(std::sync::Arc::clone(snapshot));
+            return Ok(Arc::clone(snapshot));
         }
-        let mut rows = Vec::new();
-        let mut after = None;
-        let mut skipped = 0;
-        loop {
-            let page = query_snapshot_inner(
-                &read,
-                &QueryArgs {
-                    after,
-                    limit: Some(20_000),
-                    ..Default::default()
-                },
-                false,
-            )?;
-            rows.extend(page["runs"].as_array().cloned().unwrap_or_default());
-            skipped += page["skipped"].as_u64().unwrap_or(0) as usize;
-            if page["next"].is_null() {
-                break;
+
+        let by_time = read.open_table(RUN_BY_TIME)?;
+        let heads = read.open_table(RUN_HEAD)?;
+        let dict_table = read.open_table(RUN_DICT)?;
+        let mut dict = Dict::new(&dict_table);
+
+        // Cold build fast path: when the cache is empty and `RUN_SB_FACT` passes full trust
+        // verification, build typed `RunFact` rows directly from `RUN_SB_FACT` + `RUN_HEAD`
+        // without decompressing `RUN_PAYLOAD` or parsing full JSON documents.
+        let use_sb_facts = cache.by_r.is_empty() && crate::scoreboard_agg::verify_trust_stamp_rd(&read)?;
+        let sb_fact_table = if use_sb_facts {
+            Some(read.open_table(crate::scoreboard_agg::RUN_SB_FACT)?)
+        } else {
+            None
+        };
+        let mut payloads_table = None;
+        let mut blocks: HashMap<(u32, u32), Vec<Vec<u8>>> = HashMap::new();
+
+        let total_hint = heads.len()? as usize;
+        let mut ordered: Vec<(u32, HeadFactSig, Arc<RunFact>)> = Vec::with_capacity(total_hint);
+        let mut seen_rs: HashSet<u32> = HashSet::with_capacity(total_hint);
+        let mut skipped = 0usize;
+
+        for item in by_time.iter()? {
+            let (k, _) = item?;
+            let (ended_ms, r) = (be_u64(k.value(), 0), be_u32(k.value(), 8));
+            let Some(hv) = heads.get(Key::new().u32(r).as_slice())? else {
+                continue;
+            };
+            let head = Head::decode(hv.value())?;
+            let sig = HeadFactSig::from_head(&head);
+            seen_rs.insert(r);
+
+            if let Some(cached) = cache.by_r.get(&r)
+                && cached.sig == sig
+            {
+                match &cached.fact {
+                    Some(fact) => ordered.push((r, sig, Arc::clone(fact))),
+                    None => skipped += 1,
+                }
+                continue;
             }
-            after = Some(serde_json::from_value(page["next"].clone())?);
+
+            // Metadata-only update (catalog rekey or path raise): refresh from Head + Dict with
+            // zero RUN_PAYLOAD reads.
+            if let Some(cached) = cache.by_r.get(&r)
+                && cached.sig.same_doc_content(&sig)
+                && let Some(prev_fact) = cached.fact.as_ref()
+            {
+                let updated = Arc::new(refresh_fact_metadata(&mut dict, &mut cache.intern, prev_fact, &head)?);
+                cache.by_r.insert(
+                    r,
+                    CachedBaseFact {
+                        sig: sig.clone(),
+                        fact: Some(Arc::clone(&updated)),
+                    },
+                );
+                ordered.push((r, sig, updated));
+                continue;
+            }
+
+            if let Some(ref sb_tbl) = sb_fact_table {
+                let fact_opt = match sb_tbl.get(Key::new().u32(r).as_slice())? {
+                    Some(bytes) => {
+                        let sb = crate::scoreboard_agg::StoredRunFact::decode(bytes.value())?;
+                        Some(Arc::new(fact_from_stored(
+                            &mut dict,
+                            &mut cache.intern,
+                            ended_ms,
+                            r,
+                            &head,
+                            &sb,
+                        )?))
+                    }
+                    None => None,
+                };
+                match &fact_opt {
+                    Some(fact) => ordered.push((r, sig.clone(), Arc::clone(fact))),
+                    None => skipped += 1,
+                }
+                cache.by_r.insert(r, CachedBaseFact { sig, fact: fact_opt });
+                continue;
+            }
+
+            // Read ONLY this changed/new run's payload block from redb.
+            if payloads_table.is_none() {
+                payloads_table = Some(read.open_table(RUN_PAYLOAD)?);
+            }
+            let payloads = payloads_table.as_ref().unwrap();
+            let block_key = (head.loc.day, head.loc.block);
+            if !blocks.contains_key(&block_key) {
+                if blocks.len() >= 16 {
+                    blocks.clear();
+                }
+                if let Some(bytes) = payloads.get(Key::new().u32(head.loc.day).u32(head.loc.block).as_slice())? {
+                    blocks.insert(block_key, block_decode(bytes.value())?.1);
+                }
+            }
+            let doc_opt = blocks.get(&block_key).and_then(|docs| docs.get(head.loc.slot as usize));
+            let fact_opt = match doc_opt {
+                Some(doc_bytes) => {
+                    cache.payload_reads += 1;
+                    fact_from_payload_bytes(&mut dict, &mut cache.intern, ended_ms, r, &head, doc_bytes)?.map(Arc::new)
+                }
+                None => None,
+            };
+            match &fact_opt {
+                Some(fact) => ordered.push((r, sig.clone(), Arc::clone(fact))),
+                None => skipped += 1,
+            }
+            cache.by_r.insert(r, CachedBaseFact { sig, fact: fact_opt });
         }
-        let result = crate::run_corrections::resolve(&rows, |v| v.as_str().and_then(run_schema::iso_ms));
-        let problems = rows
-            .iter()
-            .filter_map(|r| {
-                result
-                    .refused
-                    .get(r["doc"]["id"].as_str()?)
-                    .map(|reason| json!({"file":r["file"],"reason":reason,"since":r["firstSeenAt"]}))
-            })
-            .collect();
-        let accepted: Vec<AcceptedReceipt> = rows
-            .into_iter()
-            .filter(|r| !result.refused.contains_key(r["doc"]["id"].as_str().unwrap_or("")))
-            .map(|row| AcceptedReceipt {
-                file: row["file"].as_str().unwrap_or_default().into(),
-                id: row["doc"]["id"].as_str().unwrap_or_default().into(),
-                seq: row["doc"]["seq"].as_u64().unwrap_or(0),
-                sha256: row["sha256"].as_str().unwrap_or_default().into(),
-                first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
-            })
-            .collect();
-        let compact_rows: Vec<CompactRun> = result
-            .rows
-            .into_iter()
-            .map(|row| -> Result<CompactRun> {
-                let cursor: (u64, u32) = serde_json::from_value(row["_cursor"].clone())?;
-                let doc = &row["doc"];
-                let doc_json: Box<str> = serde_json::to_string(doc)?.into_boxed_str();
-                Ok(CompactRun {
-                    cursor,
-                    file: row["file"].as_str().unwrap_or_default().into(),
-                    sha256: row["sha256"].as_str().unwrap_or_default().into(),
-                    first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
-                    doc_json,
-                    id: doc["id"].as_str().unwrap_or_default().into(),
-                    writer: doc["writer"].as_str().unwrap_or_default().into(),
-                    source: doc["source"].as_str().map(Into::into),
-                    task_type: doc["task"]["type"].as_str().map(Into::into),
-                    has_review: doc["review"].is_object(),
-                    seq: doc["seq"].as_u64().unwrap_or(0),
-                    written_at: doc["writtenAt"].as_str().unwrap_or_default().into(),
-                    corrects: doc["corrects"].as_str().map(Into::into),
-                    has_void: doc["void"].is_object(),
+
+        if cache.by_r.len() > seen_rs.len() {
+            cache.by_r.retain(|r, _| seen_rs.contains(r));
+        }
+
+        // Resolve correction chains ONLY over the correction-chain closure; every unaffected run
+        // keeps its exact `Arc<RunFact>` pointer with zero JSON construction or cloning.
+        let has_any_corrects = ordered.iter().any(|(_, _, f)| f.corrects().is_some() || f.has_void());
+
+        let (rows, problems, accepted) = if !has_any_corrects {
+            let rows: Vec<Arc<RunFact>> = ordered.into_iter().map(|(_, _, f)| f).collect();
+            let accepted = rows.clone();
+            cache.retargeted.clear();
+            (rows, Vec::new(), accepted)
+        } else {
+            let id_to_idx: HashMap<&str, usize> =
+                ordered.iter().enumerate().map(|(i, (_, _, f))| (&*f.id, i)).collect();
+            let mut rev_by_target: HashMap<&str, Vec<usize>> = HashMap::new();
+            for (i, (_, _, f)) in ordered.iter().enumerate() {
+                if let Some(rev) = f.review() {
+                    rev_by_target.entry(&*rev.orig_of).or_default().push(i);
+                }
+            }
+            let mut closure: HashSet<usize> = HashSet::new();
+            let mut queue: Vec<usize> = Vec::new();
+            for (i, (_, _, f)) in ordered.iter().enumerate() {
+                if (f.corrects().is_some() || f.has_void()) && closure.insert(i) {
+                    queue.push(i);
+                }
+            }
+            let mut pos = 0;
+            while pos < queue.len() {
+                let idx = queue[pos];
+                pos += 1;
+                if let Some(target_id) = ordered[idx].2.corrects()
+                    && let Some(&t_idx) = id_to_idx.get(target_id)
+                    && closure.insert(t_idx)
+                {
+                    queue.push(t_idx);
+                }
+                if let Some(revs) = rev_by_target.get(&*ordered[idx].2.id) {
+                    for &ri in revs {
+                        if closure.insert(ri) {
+                            queue.push(ri);
+                        }
+                    }
+                }
+            }
+            let mut closure_indices: Vec<usize> = closure.iter().copied().collect();
+            closure_indices.sort_unstable();
+            let stubs: Vec<Json> = closure_indices
+                .iter()
+                .map(|&idx| {
+                    let f = &ordered[idx].2;
+                    let mut doc = json!({
+                        "id": &*f.id,
+                        "writer": &*f.writer,
+                        "seq": f.seq,
+                        "writtenAt": f.written_at(),
+                    });
+                    if let Some(target) = f.corrects() {
+                        doc["corrects"] = json!(target);
+                    }
+                    if f.has_void() {
+                        doc["void"] = json!({"reason": "void"});
+                    }
+                    if let Some(rev) = f.review() {
+                        doc["review"] = json!({"of": &*rev.orig_of});
+                    }
+                    json!({ "idx": idx, "doc": doc })
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let snapshot = std::sync::Arc::new(ResolvedHistory {
+                .collect();
+            let res = crate::run_corrections::resolve(&stubs, |v| v.as_str().and_then(run_schema::iso_ms));
+            let mut effective_in_closure: HashMap<usize, Option<String>> = HashMap::with_capacity(res.rows.len());
+            for row in &res.rows {
+                let idx = row["idx"].as_u64().unwrap_or(0) as usize;
+                effective_in_closure.insert(idx, row["doc"]["review"]["of"].as_str().map(str::to_string));
+            }
+
+            let mut rows = Vec::with_capacity(ordered.len());
+            let mut accepted = Vec::with_capacity(ordered.len());
+            let mut problems = Vec::new();
+            let mut active_retargeted: HashSet<(u32, Box<str>)> = HashSet::new();
+
+            for (idx, (r, sig, base_fact)) in ordered.into_iter().enumerate() {
+                if !closure.contains(&idx) {
+                    accepted.push(Arc::clone(&base_fact));
+                    rows.push(base_fact);
+                    continue;
+                }
+                if let Some(reason) = res.refused.get(&*base_fact.id) {
+                    problems.push(json!({
+                        "file": &*base_fact.file,
+                        "reason": reason,
+                        "since": base_fact.first_seen_at,
+                    }));
+                    continue;
+                }
+                match effective_in_closure.get(&idx) {
+                    Some(new_of_opt) => {
+                        let effective_fact = if let (Some(rev), Some(new_of)) = (base_fact.review(), new_of_opt)
+                            && new_of.as_str() != &*rev.orig_of
+                        {
+                            let rt_key: (u32, Box<str>) = (r, new_of.as_str().into());
+                            active_retargeted.insert(rt_key.clone());
+                            if let Some((prev_sig, prev_arc)) = cache.retargeted.get(&rt_key)
+                                && *prev_sig == sig
+                            {
+                                Arc::clone(prev_arc)
+                            } else {
+                                let built = Arc::new(base_fact.with_effective_review_of(new_of));
+                                cache.retargeted.insert(rt_key, (sig, Arc::clone(&built)));
+                                built
+                            }
+                        } else {
+                            base_fact
+                        };
+                        accepted.push(Arc::clone(&effective_fact));
+                        rows.push(effective_fact);
+                    }
+                    None => {
+                        // Non-refused but superseded or voided: kept in `accepted` receipts only.
+                        accepted.push(base_fact);
+                    }
+                }
+            }
+            cache.retargeted.retain(|k, _| active_retargeted.contains(k));
+            (rows, problems, accepted)
+        };
+
+        let snapshot = Arc::new(ResolvedHistory {
             key,
-            rows: compact_rows,
+            rows,
             problems,
             skipped,
             accepted,
         });
         cache.resolutions += 1;
-        cache.snapshot = Some(std::sync::Arc::clone(&snapshot));
+        cache.snapshot = Some(Arc::clone(&snapshot));
         Ok(snapshot)
     })
 }
@@ -2288,7 +3020,7 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
     let start = snapshot.rows.partition_point(|row| {
         args.after.is_some_and(|a| row.cursor <= a) || args.from_ms.is_some_and(|a| row.cursor.0 < a)
     });
-    let mut picked: Vec<&CompactRun> = Vec::new();
+    let mut picked: Vec<&RunFact> = Vec::new();
     let mut next = Json::Null;
     let mut last = Json::Null;
     for row in snapshot.rows.iter().skip(start) {
@@ -2296,12 +3028,12 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
         if args.to_ms.is_some_and(|a| cursor.0 > a) {
             break;
         }
-        if args.source.as_deref().is_some_and(|a| row.source.as_deref() != Some(a))
+        if args.source.as_deref().is_some_and(|a| row.source_str() != a)
             || args
                 .task_type
                 .as_deref()
                 .is_some_and(|a| row.task_type.as_deref() != Some(a))
-            || (args.reviews_only == Some(true) && !row.has_review)
+            || (args.reviews_only == Some(true) && !row.has_review())
         {
             continue;
         }
@@ -2315,8 +3047,10 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
     let out: Vec<Json> = engine.with_db(|db| {
         let read = db.begin_read()?;
         let heads = read.open_table(RUN_HEAD)?;
+        let payloads = read.open_table(RUN_PAYLOAD)?;
         let dict_table = read.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
+        let mut blocks: HashMap<(u32, u32), Vec<Vec<u8>>> = HashMap::new();
         let mut rows_out = Vec::with_capacity(picked.len());
         for row in picked {
             let (ended, r) = row.cursor;
@@ -2326,14 +3060,15 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
             } else {
                 (Json::Null, Json::Null)
             };
+            let doc = load_run_doc_in_read(&payloads, &mut blocks, row)?.unwrap_or(Json::Null);
             let mut obj = serde_json::Map::new();
             if args.include_cursors == Some(true) {
                 obj.insert("_cursor".into(), json!([ended, r]));
             }
             obj.insert("file".into(), json!(&*row.file));
-            obj.insert("sha256".into(), json!(&*row.sha256));
+            obj.insert("sha256".into(), json!(row.sha256_hex()));
             obj.insert("firstSeenAt".into(), json!(row.first_seen_at));
-            obj.insert("doc".into(), row.doc());
+            obj.insert("doc".into(), doc);
             obj.insert("identity".into(), identity);
             obj.insert("ids".into(), ids);
             rows_out.push(Json::Object(obj));
@@ -2358,7 +3093,7 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
         let accepted_json: Vec<Json> = snapshot
             .accepted
             .iter()
-            .map(|r| json!({"file": &*r.file, "sha256": &*r.sha256, "firstSeenAt": r.first_seen_at, "doc": {"id": &*r.id, "seq": r.seq}}))
+            .map(|r| json!({"file": &*r.file, "sha256": r.sha256_hex(), "firstSeenAt": r.first_seen_at, "doc": {"id": &*r.id, "seq": r.seq}}))
             .collect();
         page["accepted"] = Json::Array(accepted_json);
     }
