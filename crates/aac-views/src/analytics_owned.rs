@@ -255,33 +255,6 @@ fn presentation(records: &[Value], table: &[Value], instants: &[f64]) -> R<Prese
         .map_err(|_| Decline::Shape)
 }
 
-/// The store's plain window objects as the entry lists the composition port spreads. JSON carries
-/// no undefined members, so the entries reproduce each object exactly.
-#[allow(dead_code)]
-fn record_entries(records: &Value) -> R<Vec<Value>> {
-    let mut out = Vec::new();
-    for record in arr(records)? {
-        let record = obj(Some(record))?;
-        let mut copy = record.clone();
-        let windows = record
-            .get("windows")
-            .and_then(Value::as_array)
-            .ok_or(Decline::Shape)?;
-        let mut entries: Vec<Value> = Vec::new();
-        for window in windows {
-            let window = obj(Some(window))?;
-            let pairs: Vec<Value> = window
-                .iter()
-                .map(|(key, value)| json!([key, value]))
-                .collect();
-            entries.push(Value::Array(pairs));
-        }
-        copy.insert("windows".into(), Value::Array(entries));
-        out.push(Value::Object(copy));
-    }
-    Ok(out)
-}
-
 fn arr(value: &Value) -> R<&Vec<Value>> {
     value.as_array().ok_or(Decline::Shape)
 }
@@ -637,9 +610,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
             Value::Null
         }
     };
-    let mut history_map = Object::new();
-    history_map.insert("collectedSince".into(), collected_since);
-    history_map.insert("records".into(), records_value);
+    let records = analytics::native_records(records_value).map_err(|_| Decline::Unsupported)?;
     let mut data_map = Object::new();
     data_map.insert("query".into(), Value::Object(query));
     data_map.insert("now".into(), json!(now));
@@ -678,7 +649,6 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
     data_map.insert("resolution".into(), json!(resolution));
     data_map.insert("available".into(), Value::Bool(available));
     data_map.insert("stored".into(), Value::Bool(true));
-    data_map.insert("history".into(), Value::Object(history_map));
     data_map.insert("dashboard".into(), Value::Object(dashboard));
     data_map.insert("providerTable".into(), Value::Array(table));
     data_map.insert(
@@ -686,7 +656,8 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
         json!(providers_with_activity),
     );
     let mut composed =
-        analytics::compose_data(&ctx, &data_map).map_err(|_| Decline::Unsupported)?;
+        analytics::compose_with_records(&ctx, &data_map, Some((Some(collected_since), records)))
+            .map_err(|_| Decline::Unsupported)?;
     drop(data_map);
     if !ctx.valid() {
         return Err(Decline::Locale);

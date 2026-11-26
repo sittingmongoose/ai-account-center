@@ -23,6 +23,22 @@ pub fn req<T>(value: Option<T>) -> Admit<T> {
 pub struct Spread(Vec<(String, Option<Value>)>);
 
 impl Spread {
+    /// Consume a native window object without copying its values; entry lists remain supported.
+    pub(crate) fn from_owned(value: Value) -> Admit<Self> {
+        if let Value::Object(map) = value {
+            if map.contains_key("__proto__") {
+                return Err(Refuse);
+            }
+            Ok(Self(
+                map.into_iter()
+                    .map(|(key, value)| (key, Some(value)))
+                    .collect(),
+            ))
+        } else {
+            Self::decode(&value)
+        }
+    }
+
     /// Decode a plain JSON object (native path, zero `[[k, v]]` round-trip) or fall back to
     /// `Spread::decode` for TS entry lists.
     pub(crate) fn decode_or_object(value: &Value) -> Admit<Self> {

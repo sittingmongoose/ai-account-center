@@ -291,3 +291,97 @@ fn analytics_deep_all_keeps_one_bound_when_older_activity_arrives() {
     assert_eq!(answer["range"]["preset"], "all");
     assert_eq!(store.reads, 1);
 }
+
+// Fixed-clock quota fixtures pin the complete response bytes across the typed pipeline change.
+struct QuotaStore(Value);
+impl analytics_owned::AnalyticsStore for QuotaStore {
+    fn activity_oldest(&mut self) -> Result<Option<u64>, Decline> {
+        EmptyStore.activity_oldest()
+    }
+    fn quota_oldest(&mut self) -> Result<Option<u64>, Decline> {
+        EmptyStore.quota_oldest()
+    }
+    fn activity_range(&mut self, query: Value) -> Result<Value, Decline> {
+        EmptyStore.activity_range(query)
+    }
+    fn activity_sources(&mut self, from: u64, to: u64) -> Result<Value, Decline> {
+        EmptyStore.activity_sources(from, to)
+    }
+    fn history_records(&mut self, _: Value) -> Result<Value, Decline> {
+        Ok(self.0.clone())
+    }
+}
+
+fn quota_fixture() -> Value {
+    let stamp =
+        |offset: u64| aac_num::ecma::to_iso_string((NOW - offset) as i64).expect("quota fixture");
+    let rows: Vec<_> = (0..12).map(|i| json!({
+        "identity":aac_core::AccountKey::derive(&aac_core::ProviderId::new("codex").expect("quota fixture"), "fixture", None).expect("quota fixture").as_str(), "accountId":"fixture", "provider":"codex",
+        "source":"fixture", "platform":"mac", "status":"ok", "isActive":true,
+        "sampledAt":stamp(DAY - i * 300_000), "observedAt":stamp(DAY - i * 300_000),
+        "windows": if i == 4 { json!([]) } else { json!([
+            {"key":"weekly", "unit":"percent", "label":"Weekly é", "usedPercent":i,
+             "status":if i == 5 { "cached" } else { "ok" },
+             "sampledAt":stamp(DAY + if i == 5 { 300_000 } else { 0 })},
+            {"key":"weekly", "unit":"percent", "label":"Duplicate", "usedPercent":99},
+            {"key":"pool", "unit":"tokens", "poolId":"shared", "used": i * 10}
+        ]) }
+    })).collect();
+    json!(rows)
+}
+
+#[test]
+fn quota_pipeline_sha256_parity() {
+    use sha2::{Digest, Sha256};
+    for historical in [false, true] {
+        for preset in ["24h", "7d", "30d", "90d", "all"] {
+            let mut native = input("UTC");
+            native.query.insert("range".into(), json!(preset));
+            native.dashboard.insert("accounts".into(), if historical { Value::Null } else {
+                json!([[ ["provider","codex"], ["id","fixture"], ["status","ok"],
+                    ["windows", [{"key":"weekly", "unit":"percent", "label":"Weekly", "usedPercent":50}]] ]])
+            });
+            let answer = analytics_owned::compose_native(
+                native,
+                &mut QuotaStore(quota_fixture()),
+                |_, _| None,
+            )
+            .expect("quota fixture");
+            let bytes = js_json::write(&answer);
+            let mut plain = js_json::Writer::plain(1024);
+            plain.value(&answer);
+            assert_eq!(plain.into_bytes(), bytes);
+            let hash: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            let expected = match (historical, preset) {
+                (false, "24h") => {
+                    "f815403298f00ed10c92c60d905c52ba98d56e300833c75ca38c54e3895c9dc2"
+                }
+                (false, "7d") => "3535ef3cb83fcd2b4c3d8b0ebdbc69849e6dfce745420f066489991c80af1e1d",
+                (false, "30d") => {
+                    "de27ab38a6afdf87dd70536d2f40d975cbd91af707cb2d06a72863236784ff18"
+                }
+                (false, "90d") => {
+                    "e3d23ac1968df77b0f55a362e5808f5407ba85650774798bdf002f4c8f395f7d"
+                }
+                (false, "all") => {
+                    "ec24d0cbb2ccab543022a5a10e41cd24acaee289c63b1bd999a8be130a205943"
+                }
+                (true, "24h") => "043b32859553ac29925c57148692d2dcdcdd55c7f7a4aef4fc1f04251a9fcda2",
+                (true, "7d") => "0192e901699ea38d9215aa7e6363a59fb49a8a044751cb8dc1fbc9b9b42b01f8",
+                (true, "30d") => "c3055124baf7cbe352555919592c27d112fe320569c1d8bd8aeb038f09d43be5",
+                (true, "90d") => "892e346bcc1fc65fe5b304030266e278804a6a971634f3889ff9c4fa40f9ae50",
+                (true, "all") => "f7d1ee21c9b0c821d292a71a86063ac59b6473d7cc3e0d50a29f6e28e5008e30",
+                _ => unreachable!(),
+            };
+            assert_eq!(hash, expected, "{historical} {preset}");
+            assert_eq!(
+                answer["accounts"].as_array().expect("quota fixture").len(),
+                1
+            );
+            assert_eq!(answer["accounts"][0]["sampleCount"], 12);
+        }
+    }
+}

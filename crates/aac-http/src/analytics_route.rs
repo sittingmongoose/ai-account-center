@@ -44,7 +44,9 @@ pub(crate) fn encode(result: Answer, query: Option<&str>) -> Result<(u16, Vec<u8
         }
         Err(reason) => return Err(reason),
     };
-    Ok((status, aac_views::js_json::write(&value)))
+    let mut writer = aac_views::js_json::Writer::plain(64 * 1024);
+    writer.value(&value);
+    Ok((status, writer.into_bytes()))
 }
 
 pub(crate) fn snapshot(cache: &crate::account_usage::AccountUsageCache, now: i64) -> Option<Value> {

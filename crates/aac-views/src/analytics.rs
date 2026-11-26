@@ -181,7 +181,7 @@ fn decode_account(value: &Value) -> Admit<Account> {
 }
 
 /// One retained quota observation, with its windows decoded.
-struct Record {
+pub(crate) struct Record {
     value: Object,
     identity: String,
     sampled_at: String,
@@ -207,6 +207,34 @@ fn decode_record(value: &Value) -> Admit<Record> {
         value: meta,
         windows,
     })
+}
+
+// Consuming entry point for the native store; the compatibility decoder stays available.
+pub(crate) fn native_records(value: Value) -> Admit<Vec<Record>> {
+    let Value::Array(rows) = value else {
+        return Err(Refuse);
+    };
+    rows.into_iter()
+        .map(|row| {
+            let Value::Object(mut object) = row else {
+                return Err(Refuse);
+            };
+            let Some(Value::Array(windows)) = object.shift_remove("windows") else {
+                return Err(Refuse);
+            };
+            let windows = windows
+                .into_iter()
+                .map(Spread::from_owned)
+                .collect::<Admit<Vec<_>>>()?;
+            text(&object, "source")?;
+            Ok(Record {
+                identity: text(&object, "identity")?.to_owned(),
+                sampled_at: text(&object, "sampledAt")?.to_owned(),
+                value: object,
+                windows,
+            })
+        })
+        .collect()
 }
 
 /// The historical account's identity was already resolved when the reading was stored.
@@ -468,31 +496,32 @@ fn account_series(
     range: &Range,
     hidden: bool,
 ) -> Admit<Series> {
-    let mut selected: Vec<(&Record, Vec<(String, &Spread)>)> = Vec::new();
+    let mut selected: Vec<(&Record, HashMap<String, &Spread>)> = Vec::new();
     for &record in identity_records {
         let Some(sampled) = parse_time(ctx, Some(&json!(record.sampled_at)))? else {
             continue;
         };
         if sampled >= range.from && sampled <= range.to {
-            let mut win_ids = Vec::with_capacity(record.windows.len());
+            let mut win_ids = HashMap::with_capacity(record.windows.len());
             for window in &record.windows {
-                win_ids.push((window_identity(window)?, window));
+                // Matching uses the first duplicate, while window metadata below uses the last.
+                win_ids.entry(window_identity(window)?).or_insert(window);
             }
             selected.push((record, win_ids));
         }
     }
-    let mut windows: OrderedMap<Spread> = OrderedMap::new();
-    for (_, win_ids) in &selected {
-        for (id, window) in win_ids {
-            windows.set(id.clone(), (*window).clone());
+    let mut windows: OrderedMap<&Spread> = OrderedMap::new();
+    for (record, _) in &selected {
+        for window in &record.windows {
+            windows.set(window_identity(window)?, window);
         }
     }
     for window in &account.windows {
-        windows.set(window_identity(window)?, window.clone());
+        windows.set(window_identity(window)?, window);
     }
-    let mut current: OrderedMap<Spread> = OrderedMap::new();
+    let mut current: OrderedMap<&Spread> = OrderedMap::new();
     for window in &account.windows {
-        current.set(window_identity(window)?, window.clone());
+        current.set(window_identity(window)?, window);
     }
     let mut preferred = OrderedMap::new();
     for (key, window) in current.entries() {
@@ -513,10 +542,7 @@ fn account_series(
         let mut bucket_keys: Vec<i64> = Vec::new();
         let mut buckets: HashMap<i64, (f64, &Record, Option<&Spread>)> = HashMap::new();
         for (record, win_ids) in &selected {
-            let matching = win_ids
-                .iter()
-                .find(|(id, _)| id == &identity_key)
-                .map(|(_, w)| *w);
+            let matching = win_ids.get(&identity_key).copied();
             let sampled_val = point_sampled_at(record, matching);
             let Some(at) = parse_time(ctx, sampled_val.as_ref())? else {
                 continue;
@@ -537,7 +563,7 @@ fn account_series(
             .collect();
         points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
         let skip = points.len().saturating_sub(MAX_POINTS_PER_WINDOW);
-        let mut out = window.clone();
+        let mut out = (*window).clone();
         if !current.has(&identity_key) {
             for key in AMOUNTS {
                 out.set(key, Some(Value::Null));
@@ -590,6 +616,16 @@ pub fn compose(envelope: Envelope) -> Admit<Value> {
 }
 
 pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
+    compose_with_records(ctx, input, None)
+}
+
+// Native observations have already been consumed and decoded once. Compatibility envelopes
+// still use the original decoder, including its refusal behavior and entry-list semantics.
+pub(crate) fn compose_with_records(
+    ctx: &Context,
+    input: &Object,
+    native: Option<(Option<Value>, Vec<Record>)>,
+) -> Admit<Value> {
     let query = req(input.get("query").and_then(Value::as_object))?;
     let range_preset = text(query, "range")?;
     let now = num(input, "now")?;
@@ -646,16 +682,20 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
 
     let tz = text(input, "tz")?;
     let dashboard = req(input.get("dashboard").and_then(Value::as_object))?;
-    let mut records = match input.get("history") {
-        None | Some(Value::Null) => None,
-        Some(Value::Object(history)) => Some((
-            history.get("collectedSince").cloned(),
-            req(history.get("records").and_then(Value::as_array))?
-                .iter()
-                .map(decode_record)
-                .collect::<Admit<Vec<_>>>()?,
-        )),
-        Some(_) => return Err(Refuse),
+    let mut records = if let Some(history) = native {
+        Some(history)
+    } else {
+        match input.get("history") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(history)) => Some((
+                history.get("collectedSince").cloned(),
+                req(history.get("records").and_then(Value::as_array))?
+                    .iter()
+                    .map(decode_record)
+                    .collect::<Admit<Vec<_>>>()?,
+            )),
+            Some(_) => return Err(Refuse),
+        }
     };
     let inventory = req(dashboard.get("accounts"))?;
     let inventory_available = !inventory.is_null();
@@ -878,4 +918,65 @@ pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
         "providers": providers,
         "accounts": series,
     }))
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+    #[test]
+    fn native_decoder_preserves_compatibility_admission_and_values() {
+        let base = json!({"source":"fixture", "identity":"fixture", "sampledAt":"2026-11-19T00:00:00Z", "windows":[]});
+        for windows in [
+            json!([]),
+            json!([{}]),
+            json!([[["key", "weekly"], ["sampledAt"]]]),
+            json!([{"status":"cached", "sampledAt":null, "key":"weekly", "used":null}]),
+            json!([{"__proto__":{}}]),
+            json!([[["key", "a"], ["key", "b"]]]),
+            json!([null]),
+            json!([42]),
+            json!(null),
+        ] {
+            let mut row = base.clone();
+            row["windows"] = windows;
+            let old = decode_record(&row);
+            let new = native_records(json!([row]));
+            assert_eq!(old.is_ok(), new.is_ok());
+            if let (Ok(old), Ok(mut new)) = (old, new) {
+                let new = new.pop().expect("quota fixture");
+                assert_eq!(old.value, new.value);
+                assert_eq!(old.windows, new.windows);
+                assert_eq!(old.identity, new.identity);
+                assert_eq!(old.sampled_at, new.sampled_at);
+            }
+        }
+        for field in ["source", "identity", "sampledAt", "windows"] {
+            let mut row = base.clone();
+            row.as_object_mut()
+                .expect("quota fixture")
+                .shift_remove(field);
+            assert!(decode_record(&row).is_err());
+            assert!(native_records(json!([row])).is_err());
+        }
+    }
+
+    #[test]
+    fn native_window_strings_are_moved_without_copying() {
+        let value = json!([{"source":"test", "identity":"codex:test", "sampledAt":"2026-11-19T00:00:00Z",
+            "windows":[{"key":"weekly", "label":"A long native window label", "unit":"percent"}]}]);
+        let pointer = value[0]["windows"][0]["label"]
+            .as_str()
+            .expect("quota fixture")
+            .as_ptr();
+        let records = native_records(value).expect("quota fixture");
+        assert_eq!(
+            records[0].windows[0]
+                .get("label")
+                .expect("quota fixture")
+                .as_str()
+                .expect("quota fixture")
+                .as_ptr(),
+            pointer
+        );
+    }
 }
