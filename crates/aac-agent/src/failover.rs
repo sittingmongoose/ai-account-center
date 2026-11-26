@@ -1,9 +1,12 @@
 //! Read-only failover discovery. Only six reconstructed public fields leave this module.
 //! Unproved stores, grammar and IO outcomes delegate the entire inventory to Python.
+mod core;
+pub(crate) mod dispatch;
 use crate::{files, proof};
 use aac_core::Failure;
 use aac_files::read::{Ancestors, Mode, Owner, ReadPolicy};
 use base64::Engine;
+pub(crate) use dispatch::{Adapter, Context};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -422,7 +425,7 @@ fn core_candidates(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
             proof::reject();
             continue;
         }
-        let (storage, binding, revision, address, plan) = if provider == "codex" {
+        let (storage, binding, revision, address, plan, private) = if provider == "codex" {
             let storage = root.join("auth.json");
             let raw = read(&storage, CORE_CAP, true).unwrap_or(Value::Null);
             let tokens = &raw["tokens"];
@@ -502,6 +505,7 @@ fn core_candidates(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
                 json!([tokens, binding]),
                 address,
                 plan,
+                json!({"_token":secret(&tokens["access_token"]),"_account":account}),
             )
         } else {
             let metadata_path = if root == home.join(".claude") {
@@ -531,11 +535,15 @@ fn core_candidates(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
                 json!([oauth, account_id, org_id, address]),
                 address,
                 plan,
+                json!({"_token":secret(&oauth["accessToken"]),"_account":account_id,"_organization":org_id}),
             )
         };
-        let item = json!({"locator":digest(&json!([provider, storage.to_string_lossy().replace('\\', "/")])), "selectors":selectors,
+        let mut item = json!({"locator":digest(&json!([provider, storage.to_string_lossy().replace('\\', "/")])), "selectors":selectors,
             "identity":{"kind": if provider == "codex" { "codex-principal-v1" } else { "claude-account-org-v1" }, "key":digest(&json!([provider, binding]))},
             "revision":digest(&revision), "email":address, "plan":plan});
+        item.as_object_mut()
+            .expect("candidate")
+            .extend(private.as_object().expect("private").clone());
         if let Some(old) = unique.iter_mut().find(|v| v["locator"] == item["locator"]) {
             let mut selectors: Vec<_> = old["selectors"]
                 .as_array()
@@ -871,24 +879,27 @@ fn proof_rejected() -> Vec<Value> {
     proof::reject();
     vec![]
 }
-fn public_candidate(mut value: Value) -> Option<Value> {
-    let selectors = value["selectors"].as_array()?;
-    if selectors.is_empty()
-        || selectors.len() > 32
-        || selectors.iter().any(|v| {
-            v.as_str()
-                .is_none_or(|s| !matches(r"\A[A-Za-z0-9][A-Za-z0-9:_.@-]{0,159}\z", s))
-        })
-    {
-        return None;
-    }
-    if !value["email"].is_null() && email(&value["email"], true).is_none() {
-        return None;
-    }
-    value["email"] = json!(email(&value["email"], true));
-    value["plan"] = json!(public_text(&value["plan"], 160));
-    Some(value)
+fn public_candidate(value: Value) -> Option<Value> {
+    let provider = match value["identity"]["kind"].as_str()? {
+        "codex-principal-v1" => "codex",
+        "claude-account-org-v1" => "claude",
+        kind => kind,
+    };
+    // Existing additional inventories have provider-specific identity kinds.
+    let provider = provider.strip_suffix("-credential").unwrap_or(provider);
+    dispatch::candidate(
+        &value,
+        if provider == "qwen-session" {
+            "qwen"
+        } else if provider == "muse-native" {
+            "muse"
+        } else {
+            provider
+        },
+        false,
+    )
 }
+
 fn collect(args: &Value) -> Value {
     let Some(obj) = args.as_object().filter(|o| {
         o.keys().all(|k| {
@@ -954,7 +965,24 @@ fn collect(args: &Value) -> Value {
         proof::fallback()
     }
 }
+/// Integration hook for U1's Claude and U3's provider adapters. Called on the agent's
+/// blocking worker; credentials remain in the adapter's private inventory rows.
+pub(crate) fn run_with_adapter(args: &Value, mut adapter: impl Adapter) -> Value {
+    let Ok(clock) = aac_core::UtcMs::now() else {
+        return dispatch::failure("unavailable", &Value::Null, &Value::Null);
+    };
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return dispatch::failure("unavailable", &Value::Null, &Value::Null);
+    };
+    runtime.block_on(dispatch::execute(args, &mut adapter, clock.get() as i64))
+}
 pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
+    if args["action"] == "collect" {
+        return Ok(core::run(args));
+    }
     Ok(proof::scope(|| collect(args)))
 }
 
@@ -1001,5 +1029,69 @@ mod table_tests {
             inventory("retired-provider", home.path()),
             proof::fallback()
         );
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+    #[test]
+    fn stale_collect_request_is_source_changed_without_provider_io() {
+        let home = tempfile::tempdir().expect("home");
+        let candidate = json!({"locator":"a".repeat(64),"identity":{"kind":"codex-principal-v1","key":"b".repeat(64)},"revision":"c".repeat(64),"email":null,"plan":null,"selectors":["discover"]});
+        let args = json!({"version":1,"action":"collect","provider":"codex","homeDir":home.path(),"ccsDir":home.path().join(".ccs"),"candidate":candidate});
+        assert_eq!(run(&args).expect("run")["failureCode"], "source_changed");
+    }
+}
+
+#[cfg(test)]
+mod inventory_parity_tests {
+    use super::*;
+    use std::io::Write;
+    #[test]
+    fn core_inventory_matches_python_and_never_publishes_private_rows() {
+        let home = tempfile::tempdir().expect("synthetic home");
+        let claims = json!({"email":"native@example.test","https://api.openai.com/auth":{"chatgpt_account_id":"fixture-account","chatgpt_user_id":"fixture-user","chatgpt_plan_type":"plus"},"sub":"fixture-subject","iss":"fixture-issuer"});
+        let encode = |value: &Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(value).expect("JWT"))
+        };
+        let id_token = format!(
+            "{}.{}.c2ln",
+            encode(&json!({"alg":"none"})),
+            encode(&claims)
+        );
+        let auth = json!({"tokens":{"id_token":id_token,"access_token":"private-fixture-access","account_id":"fixture-account"}});
+        for root in [
+            home.path().join(".codex"),
+            home.path().join(".ccs/codex-instances/saved"),
+            home.path().join(".codex-t3/native"),
+        ] {
+            fs::create_dir_all(&root).expect("root");
+            fs::write(
+                root.join("auth.json"),
+                serde_json::to_vec(&auth).expect("auth"),
+            )
+            .expect("write");
+        }
+        let request = json!({"version":1,"action":"inventory","provider":"codex","homeDir":home.path(),"ccsDir":home.path().join(".ccs")});
+        let native = run(&request).expect("native");
+        let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/account-usage");
+        let mut child=std::process::Command::new("python3").arg("-c").arg("import sys,json;sys.path.insert(0,sys.argv[1]);import failover_usage;print(json.dumps(failover_usage.run(json.load(sys.stdin))))").arg(scripts).env("HOME",home.path()).env("CCS_HOME",home.path().join(".ccs")).env("PYTHONDONTWRITEBYTECODE","1").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().expect("Python oracle");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(&serde_json::to_vec(&request).expect("request"))
+            .expect("input");
+        let output = child.wait_with_output().expect("oracle");
+        assert!(output.status.success());
+        let expected: Value = serde_json::from_slice(&output.stdout).expect("public oracle");
+        assert_eq!(native, expected);
+        assert_eq!(
+            native["candidates"].as_array().expect("candidates").len(),
+            3
+        );
+        assert!(!native.to_string().contains("private-fixture-access"));
     }
 }
