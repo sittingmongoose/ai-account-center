@@ -3,7 +3,7 @@
   "crates/aac-http/src/public_auth/analytics_routes.rs": "14c119602573f9492e4c8bb9ca68eba924f26257011ebf79f2d155510f130777",
   "crates/aac-http/src/public_auth/home_group.rs": "5a4a4046d3f0b74ae58a6a52740b1b8d3db176524c73338e02715a22e2b6ea92",
   "crates/aac-http/src/public_auth/native_group.rs": "bd5ec5fba68779e0b11055bca13cc9b30982447b1743838e814b20a691986b8b",
-  "crates/aac-http/src/public_auth/reset_routes.rs": "927c44a3966f007f778defabd1d33a5ff64185b5d3a009c54fca1a32b94cf4d6",
+  "crates/aac-http/src/public_auth/reset_routes.rs": "0e2f27a5f4473605bf01548b916bb956879df73ef432509efc4dfc4394065514",
   "src/web-server/compose-request.ts": "b48b41b7f36c47236965168743dde68b39e8161e2f6508416f951b1d264c92f4",
   "src/web-server/compose-server.ts": "88495222e3f5f674f679305bce85e2fe70b482d30675ed78ca53a9027d9f8d97",
   "src/web-server/index.ts": "42a332154283b3e0b14f78dd6a43dd16dd2c56828286f25364a92ffcfe4a4542",
@@ -30,5 +30,5 @@
   "src/web-server/rust-service-transport.ts": "80a190f2e9a60a9d66e65bd3ae349ca03b96d578ddf0d635109a792e1afdad6d",
   "src/web-server/rust-service.ts": "9c42049eb2d78894d2b75ef20a1b328053b8fb15531026cf759a91a37eb83d62",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa",
-  "tests/fixtures/reset-adapter/reset-claim-routes.ts": "561743650eb6ccabf4c59dc2a121ed6dc2b65a0d548f21230dd377fca2b14c61"
+  "tests/fixtures/reset-adapter/reset-claim-routes.ts": "4ef4920ed7ce0fcef450aded790cddc8ece66b5a1e1d7b6b37cb0b96b1f72e82"
 }
