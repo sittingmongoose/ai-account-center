@@ -261,7 +261,20 @@ impl Cache {
             }
             prints.insert(key.clone(), saved);
         }
-        if !complete {
+        // Cursor deduplicates run IDs across every database it reads. With a full
+        // inventory, only confirmed paths may contribute, even if some records in
+        // those databases were unreadable. A limited inventory keeps missing paths.
+        let enumerated = complete
+            || kind == "cursor"
+                && answer["truncated"] == false
+                && state["state"] == "ok"
+                && state["unreadableRecords"].as_u64().is_some_and(|n| n > 0)
+                && ["readFailures", "unreadableFolders"]
+                    .iter()
+                    .all(|field| state[field].as_u64().unwrap_or(0) == 0)
+                && state["searchLimit"].is_null()
+                && state["walUnread"] != true;
+        if !enumerated {
             for (key, old) in prior {
                 if !replace.contains(key.as_str()) && !rejected.contains(&key) {
                     prints.entry(key.clone()).or_insert_with(|| old.clone());
@@ -286,7 +299,7 @@ impl Cache {
         let retain = |row: &Value| {
             row["k"] != kind
                 || row["f"].as_str().is_some_and(|file| {
-                    !replace.contains(file) && (!complete || prints.contains_key(file))
+                    !replace.contains(file) && (!enumerated || prints.contains_key(file))
                 })
         };
         self.rows
@@ -375,6 +388,110 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::io::Write;
+
+    #[test]
+    fn analytics_deep_cursor_move_keeps_one_readable_contribution() {
+        use aac_store::{collect, report};
+
+        let home = tempfile::tempdir().expect("fixture home");
+        let projects = home.path().join(".cursor/projects");
+        let db = projects.join("original/sdk-agent-store/a/index.db");
+        std::fs::create_dir_all(db.parent().expect("store parent")).expect("store directory");
+        let now = aac_store::engine::now_ms() as i64;
+        let at = aac_num::ecma::to_iso_string(now - 3_600_000).expect("run time");
+        let conn = rusqlite::Connection::open(&db).expect("Cursor database");
+        conn.execute_batch(
+            "CREATE TABLE runs (run_id TEXT, agent_id TEXT, model TEXT,
+            started_at TEXT, finished_at TEXT, usage_json TEXT);",
+        )
+        .expect("Cursor schema");
+        for (id, usage) in [
+            (
+                "readable",
+                r#"{"inputTokens":100,"outputTokens":10,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":110}"#,
+            ),
+            ("bad", r#"{"outputTokens":7}"#),
+        ] {
+            conn.execute(
+                "INSERT INTO runs VALUES (?, 'fixture-agent', 'grok-4.7', ?, ?, ?)",
+                rusqlite::params![id, at, at, usage],
+            )
+            .expect("fixture run");
+        }
+        conn.close().expect("close fixture database");
+
+        let mut cache = Cache::default();
+        let store = aac_store::ops::open_engine(
+            home.path()
+                .join("store")
+                .to_str()
+                .expect("fixture store path"),
+            None,
+            None,
+        )
+        .expect("activity store");
+        let pricing = super::super::ResolverPricing::new(home.path());
+        let env = aac_usage::discover::Env::new();
+        for moved in [false, true] {
+            if moved {
+                std::fs::rename(projects.join("original"), projects.join("moved"))
+                    .expect("move project");
+            }
+            let wire = json!({"kinds":["cursor"],"minDateMs":0,"fingerprints":cache.fingerprints});
+            let request = aac_usage::protocol::parse_request(wire.to_string().as_bytes())
+                .expect("scan request");
+            let answer = aac_usage::protocol::scan(&request, home.path(), &env);
+            assert!(!cache.apply("cursor", &answer, false, 0));
+            assert_eq!(cache.states["cursor"]["unreadableRecords"], 1);
+            let worker = collect::worker_from_scan(
+                &cache.rows,
+                &cache.srows,
+                "cursor",
+                "ubuntu",
+                now,
+                &pricing,
+            );
+            super::super::history::commit_report(
+                &store,
+                report::rows_report(&report::RowsReportArgs {
+                    computer: "ubuntu",
+                    tool: "cursor",
+                    data: &[worker],
+                    kind: "backfill",
+                    read_at: now,
+                    complete: false,
+                    unreadable_records: Some(1),
+                    cause: None,
+                    now,
+                }),
+            )
+            .expect("commit scan report");
+            let range = aac_store::ops::call(
+                &store,
+                "activityRange",
+                &json!({"fromMs": now - 7_200_000, "toMs": now}).to_string(),
+            )
+            .expect("stored usage");
+            let input: u64 = range["rows"]
+                .as_array()
+                .expect("hourly rows")
+                .iter()
+                .filter_map(|row| row[5].as_u64())
+                .sum();
+            assert_eq!(input, 100, "one run after moved={moved}: {range}");
+        }
+        let key = cache.rows[0]["f"]
+            .as_str()
+            .expect("moved file key")
+            .to_owned();
+        let inaccessible = json!({
+            "truncated": false,
+            "kinds":{"cursor":{"state":"ok","partial":true,"unreadableRecords":1,
+                "unreadableFolders":1,"fingerprints":{}}},
+        });
+        assert!(!cache.apply("cursor", &inaccessible, false, 0));
+        assert!(cache.rows.iter().any(|row| row["f"] == key));
+    }
 
     #[test]
     fn scanner_cache_keeps_rows_on_restart_and_adds_or_replaces_per_file() {

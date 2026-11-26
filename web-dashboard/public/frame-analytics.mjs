@@ -97,7 +97,7 @@ export function createFrameAnalytics({
   // a read is out for a range the answer on screen was not read for (a range change): the strip says "Updating"
   let rangeRead = false;
   let lastSaved = -Infinity;
-  const timers = { poll: 0, layout: 0, tick: 0, interval: 0, side: 0, save: 0 };
+  const timers = { poll: 0, retry: 0, layout: 0, tick: 0, interval: 0, side: 0, save: 0 };
   const pushed = new Map();
 
   const clear = (name) => {
@@ -142,7 +142,8 @@ export function createFrameAnalytics({
         lifetime?.abort();
         signedOut(code === 'session_revoked' ? 'revoked' : undefined);
       }
-      throw Object.assign(new Error(body?.error || `Request failed (${response.status}).`), { status: response.status, payload: body });
+      const retryAfter = response.headers?.get('Retry-After');
+      throw Object.assign(new Error(body?.error || `Request failed (${response.status}).`), { status: response.status, payload: body, retryAfter });
     }
     // the server accepted the session just now (bridge.js does the same): a later sign-out within its lifetime ended
     // early, and the frame's sign-in words it so (auth-view.mjs endedReason)
@@ -352,6 +353,7 @@ export function createFrameAnalytics({
    */
   async function refresh(force = false, mode = 'static', { silent = false, side = !silent, announce = force } = {}) {
     if (gone()) return;
+    clear('retry');
     const quiet = silent && !force;
     const gen = ++generation;
     if (!quiet) loading(true, '');
@@ -389,7 +391,19 @@ export function createFrameAnalytics({
     }
     const error = result.error || new Error('Unsupported analytics response.');
     render();
-    if (quiet && ++pollFails < 2) {
+    const retry = error.status === 503 && error.payload?.code === 'analytics_unavailable' && /^\d+$/.test(error.retryAfter || '');
+    if (retry && shown && visible()) {
+      clear('poll');
+      clear('interval');
+      const delay = Math.min(3600, Math.max(1, Number(error.retryAfter))) * 1000;
+      timers.retry = later(() => {
+        timers.retry = 0;
+        if (gen === generation && shown && visible() && !gone()) {
+          void refresh(false, 'morph', { side: false });
+        }
+      }, delay);
+    }
+    if (!retry && quiet && ++pollFails < 2) {
       renderFresh();
       return;
     }
@@ -418,7 +432,7 @@ export function createFrameAnalytics({
       return;
     }
     const age = now() - Date.parse(payload?.updatedAt ?? '');
-    if (payload && !restored && payload.stale !== true && Number.isFinite(age) && age >= 0 && age < intervalSeconds * 1000 && analyticsCovers(payload, page, now())) {
+    if (payload && !restored && readError === null && payload.stale !== true && Number.isFinite(age) && age >= 0 && age < intervalSeconds * 1000 && analyticsCovers(payload, page, now())) {
       const gen = generation;
       void readSide(false).then(() => {
         if (gen !== generation || !shown || stopped) return;
@@ -448,9 +462,11 @@ export function createFrameAnalytics({
   }
 
   async function changeRange() {
+    const retrying = timers.retry;
+    clear('retry');
     const covered = !!payload && analyticsCovers(payload, page, now());
     if (covered) render('morph');
-    if (!payload || payloadViewKey(payload) !== apiRangeFor(page, now())) await refresh(false, covered ? 'static' : 'morph', { side: false });
+    if (retrying || !payload || payloadViewKey(payload) !== apiRangeFor(page, now())) await refresh(false, covered ? 'static' : 'morph', { side: false });
   }
 
   function armTick() {
@@ -494,6 +510,9 @@ export function createFrameAnalytics({
     /** The window came back on screen (an app resumed): read now if what is shown is old. */
     resumed() {
       if (shown && !stopped) enter();
+    },
+    suspended() {
+      clear('retry');
     },
     dashboardChanged,
     /**
@@ -591,6 +610,7 @@ export function installFrameAnalytics(win = globalThis) {
   });
   const onVisible = () => {
     if (win.document?.visibilityState === 'visible') controller.resumed();
+    else controller.suspended();
   };
   win.document?.addEventListener?.('visibilitychange', onVisible);
   const stop = controller.stop;

@@ -50,6 +50,7 @@ function fakeServer(routes) {
     return {
       ok: answer.status >= 200 && answer.status < 300,
       status: answer.status,
+      headers: new Headers(answer.headers),
       json: async () => answer.body ?? null,
     };
   };
@@ -1204,4 +1205,57 @@ test('a kept answer saved mid-scan: while it is the one shown, only the read und
     loading: false,
     error: '',
   });
+});
+
+test('a cold analytics 503 retries at Retry-After before the dashboard interval', async () => {
+  let attempts = 0;
+  const normal = defaultRoutes();
+  const { controller, c } = make(defaultRoutes({
+    '/api/accounts/dashboard': () => ({ status: 200, body: dashboard({ settings: { refreshIntervalSeconds: 3600 } }) }),
+    '/api/accounts/analytics': (url) => ++attempts === 1
+      ? { status: 503, headers: { 'Retry-After': '1' }, body: { code: 'analytics_unavailable', error: 'Try again.' } }
+      : normal(url.pathname + url.search),
+  }));
+  controller.show();
+  await settle();
+  assert.equal(attempts, 1);
+  await c.run(999);
+  assert.equal(attempts, 1);
+  await c.run(1);
+  assert.equal(attempts, 2);
+  assert.equal(controller.state().hasPayload, true);
+});
+
+test('a warm All retry is cancelled when the user switches range or leaves Analytics', async () => {
+  for (const leave of ['range', 'tab', 'window']) {
+    let all = 0;
+    const normal = defaultRoutes();
+    const { controller, c } = make(defaultRoutes({
+      '/api/accounts/analytics': (url) => {
+        if (url.searchParams.get('range') !== 'all') return normal(url.pathname + url.search);
+        all++;
+        return { status: 503, headers: { 'Retry-After': '1' }, body: { code: 'analytics_unavailable' } };
+      },
+    }));
+    controller.show();
+    await settle();
+    assert.equal(controller.state().hasPayload, true);
+    controller.act('analytics-range', 'all');
+    await settle();
+    assert.equal(all, 1);
+    assert.ok(c.pending().includes(1000));
+    if (leave === 'range') controller.act('analytics-range', '7d');
+    else if (leave === 'tab') controller.hide();
+    else controller.suspended();
+    await c.run(1000);
+    assert.equal(all, 1);
+    controller.stop();
+  }
+});
+
+test('a saved response starting inside the month does not cover Month', () => {
+  setDisplayTimeZone('UTC');
+  const now = Date.parse('2026-10-31T00:30:00Z');
+  const partial = { range: { preset: '30d', from: '2026-10-01T00:30:00Z' } };
+  assert.equal(analyticsCovers(partial, { range: 'month' }, now), false);
 });

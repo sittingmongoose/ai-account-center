@@ -610,3 +610,11 @@ test('a fallback Cursor model keeps its measured totals and names the model issu
   assert.match(cursorAccountLine({ ...observations, state: 'unavailable', cause: 'read_in_progress' }, now),
     /^Cursor account read in progress\./);
 });
+
+test('a mixed read tooltip discloses unreadable records with zero selected usage', () => {
+  const inc = includedView(payload({ sources: [
+    { tool: 'devin', host: 'ubuntu', state: 'cached', rowCount: 0, unreadableRecords: 1, detail: '1 record unreadable' },
+  ] }), now);
+  const cell = inc.rows.find(r => r.tool === 'Devin CLI').cells.find(c => c.id === 'ubuntu');
+  assert.equal(cell.tip, '1 record unreadable. No complete read recorded.');
+});

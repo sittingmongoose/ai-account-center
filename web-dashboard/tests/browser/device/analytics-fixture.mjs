@@ -83,8 +83,9 @@ export function analyticsFixture({ range = '7d', now = Date.now(), accounts = []
 	// with the history store: 90D, All (everything kept, 120 days unless `keptDays` says more) and longer custom ranges
 	// a custom range answers the days it asked for (the history store keeps them)
 	const customFrom = range === 'custom' && days?.from ? Date.parse(`${days.from}T00:00:00Z`) : NaN;
-	const span = range === '24h' ? D : range === '30d' ? 30 * D : range === 'custom' ? (Number.isFinite(customFrom) ? Math.max(D, now - customFrom + D) : 30 * D) : range === '90d' ? 90 * D : range === 'all' ? keptDays * D : 7 * D;
 	const to = Math.floor(now / H) * H + H;
+	const monthFrom = Date.parse(new Date(now).toISOString().slice(0, 7) + '-01T00:00:00Z');
+	const span = range === 'month' ? to - monthFrom : range === '24h' ? D : range === '30d' ? 30 * D : range === 'custom' ? (Number.isFinite(customFrom) ? Math.max(D, now - customFrom + D) : 30 * D) : range === '90d' ? 90 * D : range === 'all' ? keptDays * D : 7 * D;
 	const from = to - span;
 	const rand = seeded(Math.floor(now / D));
 	const byHour = [];

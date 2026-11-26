@@ -284,21 +284,11 @@ pub(crate) fn compose(
     let now = now as f64;
     let store_engine = Arc::clone(&engine);
     let with_store = |store: &mut EngineStore| {
-        let oldest = aac_views::analytics_owned::oldest_bound(store, now);
         let span = if query["range"] == "90d" {
             90.0 * DAY_MS
         } else {
             RETAINED_MS
         };
-        // The proven zone window: floor(oldest/DAY)*DAY - DAY .. floor(now/DAY)*DAY + 2*DAY.
-        #[allow(clippy::cast_possible_truncation)]
-        let (window_from, window_now) = (oldest.min(now - span).max(0.0) as i64, now as i64);
-        let zone = (tz != "UTC")
-            .then(|| {
-                aac_files::zoneinfo::zone_for_window(&tz, window_from, window_now)
-                    .or_else(|| crate::zone_facts::analytics_zone(&tz, window_from, window_now))
-            })
-            .flatten();
         let models = aac_store::activity::models(&store_engine).unwrap_or_else(|_| json!({}));
         let names = |key: &str| -> Vec<String> {
             models
@@ -336,11 +326,23 @@ pub(crate) fn compose(
                 dashboard,
                 live_sources: Value::Array(Vec::new()),
                 refreshing: scanning,
-                zone,
                 pricing: Value::Object(pricing),
                 table,
             },
             store,
+            |oldest, tz| {
+                // Floor the oldest bound and leave room for local-day rounding.
+                #[allow(clippy::cast_possible_truncation)]
+                let (window_from, window_now) =
+                    (oldest.min(now - span).max(0.0) as i64, now as i64);
+                (tz != "UTC")
+                    .then(|| {
+                        aac_files::zoneinfo::zone_for_window(tz, window_from, window_now).or_else(
+                            || crate::zone_facts::analytics_zone(tz, window_from, window_now),
+                        )
+                    })
+                    .flatten()
+            },
         )
     };
     let mut store = EngineStore::new(engine);

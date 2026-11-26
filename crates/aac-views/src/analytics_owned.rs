@@ -385,21 +385,25 @@ pub struct NativeInput {
     pub live_sources: Value,
     /// A collection pass is running.
     pub refreshing: bool,
-    /// The proven display-zone offsets.
-    pub zone: Option<intl::Zone>,
     /// `Resolver::facts_table` over the store dictionary, as a JSON object.
     pub pricing: Value,
     /// `analytics_provider_table`, as `{id,label,order}` rows.
     pub table: Vec<Value>,
 }
 
-/// The owned answer from the native service's own inputs. The bounds and the provisional range are
-/// resolved here from the store, exactly as the composition checks them; no envelope is involved.
-pub fn compose_native(input: NativeInput, store: &mut dyn AnalyticsStore) -> R<Value> {
+/// The native service's owned answer. Use the same store bounds for the display zone
+/// and provisional range, even if a backfill adds older data during this request.
+pub fn compose_native(
+    input: NativeInput,
+    store: &mut dyn AnalyticsStore,
+    zone_for: impl FnOnce(f64, &str) -> Option<intl::Zone>,
+) -> R<Value> {
     let query = input.query;
     let now = input.now;
     let tz = input.tz;
-    if tz != "UTC" && input.zone.is_none() {
+    let (oldest, quota_oldest) = bounds(store, now);
+    let zone = zone_for(oldest, &tz);
+    if tz != "UTC" && zone.is_none() {
         return Err(Decline::Zone);
     }
     let live = LiveState {
@@ -409,8 +413,7 @@ pub fn compose_native(input: NativeInput, store: &mut dyn AnalyticsStore) -> R<V
         refreshing_remote: Value::Array(Vec::new()),
     };
     let pricing = Pricing::decode(Some(&input.pricing))?;
-    let (oldest, quota_oldest) = bounds(store, now);
-    let provisional = resolve_range(&query, now, oldest, Some(oldest), &tz, input.zone.as_ref())?;
+    let provisional = resolve_range(&query, now, oldest, Some(oldest), &tz, zone.as_ref())?;
     answer(
         Owned {
             query,
@@ -419,7 +422,7 @@ pub fn compose_native(input: NativeInput, store: &mut dyn AnalyticsStore) -> R<V
             // The store answered its bounds and history; a failed history read declines below.
             available: true,
             live,
-            zone: input.zone,
+            zone,
             pricing,
             table: input.table,
             dashboard: input.dashboard,
@@ -449,12 +452,6 @@ fn bounds(store: &mut dyn AnalyticsStore, now: f64) -> (f64, Option<u64>) {
         .copied()
         .fold(f64::INFINITY, analytics::js_min);
     (oldest, quota_oldest)
-}
-
-/// The retained window's oldest instant (`bounds`), for a caller that must build its zone facts
-/// before the composition runs. The composition reads the same bounds; both reads are equal.
-pub fn oldest_bound(store: &mut dyn AnalyticsStore, now: f64) -> f64 {
-    bounds(store, now).0
 }
 
 /// The validated owned facts, before the activity and quota reads.

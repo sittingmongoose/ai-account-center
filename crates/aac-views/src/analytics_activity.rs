@@ -1204,17 +1204,29 @@ fn coverage_of(sources_state: &Value) -> R<Value> {
     let mut backfill_rows: Vec<Value> = Vec::new();
     for source in sources {
         let source = obj(source)?;
-        let Some(backfill) = source.get("backfill").filter(|v| !v.is_null()) else {
+        let backfill = source
+            .get("backfill")
+            .filter(|v| !v.is_null())
+            .map(obj)
+            .transpose()?;
+        let evidence = source.get("backfillRead");
+        if backfill.is_none() && evidence.is_none() {
             continue;
-        };
-        let backfill = obj(backfill)?;
-        backfill_rows.push(json!({
+        }
+        let field = |key: &str| backfill.and_then(|b| b.get(key));
+        let mut row = json!({
             "host": text(source.get("computer"))?,
             "tool": text(source.get("tool"))?,
-            "state": backfill.get("state").and_then(Value::as_str).unwrap_or("pending"),
-            "filesRead": backfill.get("files_read").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null),
-            "filesTotal": backfill.get("files_total").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null),
-        }));
+             "state": field("state").and_then(Value::as_str)
+                .filter(|state| *state != "done" || evidence.is_none())
+                .unwrap_or(if evidence.is_some() { "partial" } else { "pending" }),
+            "filesRead": field("files_read").cloned().unwrap_or(Value::Null),
+            "filesTotal": field("files_total").cloned().unwrap_or(Value::Null),
+        });
+        if let Some(count) = evidence.and_then(|e| e.get("unreadableRecords")) {
+            row["unreadableRecords"] = count.clone();
+        }
+        backfill_rows.push(row);
     }
     let running = backfill_rows.iter().any(|row| {
         row.get("state").and_then(Value::as_str) == Some("pending")

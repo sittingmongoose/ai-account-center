@@ -628,6 +628,98 @@ mod tests {
         assert_retryable_unavailable(None).await;
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn analytics_deep_delivers_a_completed_large_owner_reply() {
+        use axum::body::to_bytes;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("owner socket directory");
+        let root = dir.path().canonicalize().expect("owner root");
+        let boot = "0123456789abcdef01234567";
+        let secret = "a".repeat(64);
+        let run = root.join("run");
+        let endpoint = root.join(format!("aac-http-{boot}"));
+        std::fs::create_dir(&run).expect("run directory");
+        std::fs::create_dir(&endpoint).expect("owner socket directory");
+        std::fs::set_permissions(&endpoint, std::fs::Permissions::from_mode(0o700))
+            .expect("owner directory mode");
+        let socket = endpoint.join("http.sock");
+        let listener = UnixListener::bind(&socket).expect("owner socket");
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
+            .expect("owner socket mode");
+        let descriptor = run.join("aac-http.json");
+        std::fs::write(
+            &descriptor,
+            json!({
+                "ccsDir": root, "socketPath": socket, "secret": secret, "bootId": boot
+            })
+            .to_string(),
+        )
+        .expect("owner descriptor");
+        std::fs::set_permissions(&descriptor, std::fs::Permissions::from_mode(0o600))
+            .expect("descriptor mode");
+        let link =
+            super::super::service_link::ServiceLink::load(&root).expect("fixture owner link");
+        let size = 16 * 1024 * 1024;
+        let owner = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("public connection");
+            let mut stream = BufReader::new(stream);
+            let expected = format!("x-aac-boot-secret: {secret}\r\n");
+            let mut authenticated = false;
+            loop {
+                let mut line = String::new();
+                assert!(
+                    stream
+                        .read_line(&mut line)
+                        .await
+                        .expect("owner request header")
+                        > 0
+                );
+                if line == "\r\n" {
+                    break;
+                }
+                authenticated |= line == expected;
+            }
+            assert!(authenticated);
+            let body = format!(r#"{{"points":["{}",42]}}"#, "a".repeat(size));
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nx-aac-service-boot: {boot}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(headers.as_bytes())
+                .await
+                .expect("owner headers");
+            let _ = stream.write_all(body.as_bytes()).await;
+        });
+        let hop: Hop = Arc::new(move |uri, principal, _| {
+            let link = link.clone();
+            Box::pin(async move { link.request("GET", &uri, &principal, &[], None).await })
+        });
+        let reply = composed(
+            access(),
+            Some("range=all"),
+            false,
+            false,
+            false,
+            None,
+            false,
+            Some(hop),
+        )
+        .await;
+        assert_eq!(reply.status(), 200);
+        let bytes = to_bytes(reply.into_body(), size + 1024)
+            .await
+            .expect("complete public response");
+        assert!(bytes.len() > size);
+        assert!(bytes.ends_with(b",42]}"));
+        owner.await.expect("owner task");
+    }
+
     #[test]
     fn the_guard_admits_the_route_defaults() {
         assert!(matches!(admitted_analytics(None, &PROVIDERS), Ok(None)));

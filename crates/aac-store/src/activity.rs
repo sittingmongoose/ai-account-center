@@ -646,6 +646,8 @@ struct SourceRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     read: Option<ReadRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    backfill_read: Option<ReadRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     bad_since: Option<u64>,
 }
 
@@ -987,6 +989,9 @@ fn project_read(txn: &WriteTransaction, entry: &ReadEvEntry) -> Result<()> {
             src.bad_since = None;
         }
         src.read = Some(r.clone());
+    }
+    if r.kind.as_deref() == Some("backfill") && src.backfill_read.as_ref().is_none_or(|old| r.at >= old.at) {
+        src.backfill_read = Some(r.clone());
     }
     if r.complete && live {
         src.last_complete = Some(src.last_complete.unwrap_or(0).max(r.at));
@@ -2362,6 +2367,7 @@ pub fn sources(engine: &Engine, q: &SourcesQuery) -> Result<Json> {
         let live_t = read.open_table(ACT_LIVE)?;
         let backfill_t = read.open_table(ACT_BACKFILL)?;
         let cover_t = read.open_table(ACT_COVER)?;
+        let scan_t = read.open_table(ACT_SCAN)?;
         let mut out = Vec::new();
         let mut per_computer: BTreeMap<String, (Option<u32>, Option<u32>, Option<u64>, Vec<(u32, u32)>)> = BTreeMap::new();
         let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
@@ -2399,7 +2405,23 @@ pub fn sources(engine: &Engine, q: &SourcesQuery) -> Result<Json> {
             entry.2 = entry.2.max(last_read);
             entry.3.extend(covers.iter().copied());
             let current = live.clone().or(src.read.clone());
-            out.push(json!({
+            let mut historical = src.backfill_read;
+            // A database built before the source projection was added still has
+            // the count in its scan ledger. Only an unfinished backfill needs
+            // this lookup, which ends as soon as its latest scan is found.
+            if historical.is_none() && let Some(job) = backfill.as_ref().filter(|b| b.state != "done") {
+                let lo = Key::new().u32(c).u32(t).u64(job.started.unwrap_or(0));
+                let hi = Key::new().u32(c).u32(t).u64(if job.state == "failed" { job.at } else { u64::MAX });
+                for item in scan_t.range(lo.as_slice()..=hi.as_slice())?.rev() {
+                    let (_, row) = item?;
+                    let row: ReadRow = db::unpack(row.value())?;
+                    if row.kind.as_deref() == Some("backfill") {
+                        historical = Some(row);
+                        break;
+                    }
+                }
+            }
+            let mut source = json!({
                 "computer": cn, "tool": tn,
                 "oldestMs": src.first_h.map(|h| h as u64 * HOUR_MS), "newestMs": src.last_h.map(|h| h as u64 * HOUR_MS),
                 "lastReadMs": last_read, "lastCompleteMs": src.last_complete,
@@ -2409,7 +2431,16 @@ pub fn sources(engine: &Engine, q: &SourcesQuery) -> Result<Json> {
                 "badSinceMs": src.bad_since, "backfill": backfill,
                 "futureDated": current.as_ref().and_then(|r| r.counts.as_ref()).and_then(|c| c.future_dated),
                 "covered": covers.iter().map(|(a, b)| json!([*a as u64 * HOUR_MS, *b as u64 * HOUR_MS])).collect::<Vec<_>>(),
-            }));
+            });
+            if let Some(historical) = historical.filter(|r| !r.complete)
+                && backfill.as_ref().is_none_or(|b| b.state != "done" || b.at < historical.at)
+                && let Some(count) = historical.counts.and_then(|c| c.unreadable_records).filter(|n| *n > 0)
+            {
+                source["backfillRead"] = json!({
+                    "state": historical.state, "cause": historical.cause, "unreadableRecords": count,
+                });
+            }
+            out.push(source);
         }
         // Sources only the live table knows (read, never stored a cell or a logged read yet).
         for item in live_t.iter()? {

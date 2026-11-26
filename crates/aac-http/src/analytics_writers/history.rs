@@ -102,6 +102,8 @@ impl<'a> Source<'a> {
         // The scanner's own unreadable-record count, bounded like the live writer's (r1 Medium):
         // an incomplete backfill records it in scan history, beyond the live window.
         let unreadable_records = unreadable_records_of(response, self.tool);
+        let readable = super::has_readable_records(response, &cache, self.tool);
+        let (_, cause) = super::scan_state(response, self.tool, readable);
         if self.tool == "claude" {
             // A later computer can reveal the original of a mirror seen in this scan.
             analytics_cache::put(store, &self.checkpoint(), &cache.encode()?)?;
@@ -114,7 +116,16 @@ impl<'a> Source<'a> {
             )?;
             claude_mirrors::keep_historical_originals(store, &mut part)?;
             if !part.rows.is_empty() || !part.sessions.is_empty() {
-                self.publish(store, &part.rows, &part.sessions, false, None, now, pricing)?;
+                self.publish(
+                    store,
+                    &part.rows,
+                    &part.sessions,
+                    false,
+                    None,
+                    None,
+                    now,
+                    pricing,
+                )?;
             }
             if complete {
                 store.set_meta(&self.ready_marker(), &self.epoch.to_string())?;
@@ -128,6 +139,7 @@ impl<'a> Source<'a> {
             &cache.srows,
             complete,
             unreadable_records,
+            cause,
             now,
             pricing,
         )?;
@@ -159,12 +171,13 @@ impl<'a> Source<'a> {
         sessions: &[Value],
         complete: bool,
         unreadable_records: Option<u64>,
+        cause: Option<&str>,
         now: i64,
         pricing: &dyn collect::Pricing,
     ) -> Result<()> {
         let worker =
             collect::worker_from_scan(rows, sessions, self.tool, self.computer, now, pricing);
-        let value = report::rows_report(&report::RowsReportArgs {
+        let mut value = report::rows_report(&report::RowsReportArgs {
             computer: self.computer,
             tool: self.tool,
             data: &[worker],
@@ -172,9 +185,15 @@ impl<'a> Source<'a> {
             read_at: now,
             complete,
             unreadable_records,
-            cause: None,
+            cause,
             now,
         });
+        if value["state"] == "scanning"
+            && (cause == Some("read_failed") || unreadable_records.is_some())
+        {
+            value["state"] = json!("unreadable");
+            value["cause"] = json!("read_failed");
+        }
         commit_report(store, value)?;
         if complete {
             self.mark(store, "done", None, now)?;
@@ -251,7 +270,16 @@ impl Job {
         }
         for ((source, ready), part) in pending.into_iter().zip(parts) {
             super::claude_contributions::remember(store, &part, "backfill", now, pricing)?;
-            source.publish(store, &part.rows, &part.sessions, ready, None, now, pricing)?;
+            source.publish(
+                store,
+                &part.rows,
+                &part.sessions,
+                ready,
+                None,
+                None,
+                now,
+                pricing,
+            )?;
             if !ready {
                 self.attempts
                     .entry(source.key())
@@ -489,6 +517,7 @@ mod tests {
                             &cache.rows,
                             &cache.srows,
                             false,
+                            None,
                             None,
                             now,
                             &ResolverPricing::new(home),
@@ -964,12 +993,71 @@ mod tests {
         assert_eq!((qwen.i, qwen.o), (80, 20));
     }
 
+    #[test]
+    fn analytics_deep_all_unreadable_backfill_records_read_failure() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let now = aac_store::engine::now_ms() as i64;
+        let engine = aac_store::ops::open_engine(
+            home.path().join("store").to_str().expect("fixture path"),
+            None,
+            None,
+        )
+        .expect("open activity store");
+        let source = Source {
+            computer: "ubuntu",
+            tool: "devin",
+            epoch: 0,
+        };
+        let response = json!({
+            "rows": [], "srows": [],
+            "kinds": {"devin":{"state":"ok","partial":true,"unreadableRecords":1,"fingerprints":{}}},
+        });
+        assert!(
+            !source
+                .accept(
+                    &engine,
+                    scan_state::Cache::default(),
+                    &response,
+                    false,
+                    now,
+                    &ResolverPricing::new(home.path())
+                )
+                .expect("commit unreadable backfill")
+        );
+        let sources = aac_store::ops::call(
+            &engine,
+            "activitySources",
+            &json!({"fromMs": now - 50 * super::super::DAY, "toMs": now}).to_string(),
+        )
+        .expect("activity sources");
+        let mut scan = Value::Null;
+        engine
+            .lock_logs()
+            .ledger
+            .read_after(None, |event| {
+                if event.event_type == "activity.read" {
+                    scan = aac_store::msgpack::to_json(&event.payload)["reads"][0].clone();
+                }
+                Ok(())
+            })
+            .expect("scan history");
+        assert_eq!(scan["state"], "unreadable");
+        assert_eq!(scan["cause"], "read_failed");
+        assert_eq!(scan["counts"]["unreadable_records"], 1);
+        let history = &sources["sources"][0]["backfillRead"];
+        assert_eq!(history["state"], "unreadable");
+        assert_eq!(history["cause"], "read_failed");
+        assert_eq!(history["unreadableRecords"], 1);
+        assert_eq!(sources["sources"][0]["covered"], json!([]));
+        assert!(sources["sources"][0]["state"].is_null());
+    }
+
     /// r1 Medium: a mixed backfill beyond the 31-day live window keeps its unreadable-record
     /// count: the backfill report carries it, an incomplete read is recorded in scan history
     /// (aac-store gate test), and the backfill never becomes live state. One readable reply
     /// and two unreadable ones, 40 days ago.
     #[test]
-    fn mixed_backfill_beyond_the_live_window_keeps_the_unreadable_count() {
+    fn analytics_deep_mixed_backfill_beyond_live_window() {
         let dir = tempfile::tempdir().expect("fixture home");
         let home = dir.path();
         let now = aac_store::engine::now_ms() as i64;
@@ -1106,6 +1194,10 @@ mod tests {
             &json!({"fromMs": now - 31 * super::super::DAY, "toMs": now}).to_string(),
         )
         .expect("activity sources");
+        assert_eq!(
+            sources["sources"][0]["backfillRead"]["unreadableRecords"],
+            2
+        );
         let live = sources["sources"]
             .as_array()
             .expect("source rows")
@@ -1115,5 +1207,57 @@ mod tests {
             live.is_none_or(|source| source["state"].is_null()),
             "the backfill never becomes live state: {sources}"
         );
+
+        // A healthy Devin live scan and overlapping Codex history must leave the Devin
+        // backfill disclosure intact in the actual All response.
+        let hour = |at: i64| {
+            aac_num::ecma::to_iso_string(at.div_euclid(3_600_000) * 3_600_000).expect("hour")
+        };
+        let read = |tool: &str, kind: Value, at: i64| {
+            json!({
+                "schema": "aac.usage-report.v1", "computer": "ubuntu", "tool": tool,
+                "kind": kind, "readAt": aac_num::ecma::to_iso_string(now).expect("live time"),
+                "state": "ok", "complete": true, "coverFrom": hour(at),
+                "cells": [{"hour": hour(at), "route": "", "modelRaw": "fixture-model",
+                    "inputTokens": 50, "outputTokens": 0, "cacheCreationTokens": 0,
+                    "cacheReadTokens": 0, "costUsd": 0, "fallbackCostUsd": 0, "events": 1}],
+            })
+        };
+        commit_report(&engine, read("devin", Value::Null, now - super::super::DAY))
+            .expect("complete live report");
+        commit_report(
+            &engine,
+            read("codex", json!("backfill"), old - super::super::DAY),
+        )
+        .expect("overlapping completed backfill");
+        source
+            .mark(&engine, "failed", Some("pass_limit"), now)
+            .expect("failed historical scan");
+        let composed = crate::analytics_route::compose(
+            Arc::new(engine),
+            home,
+            None,
+            &crate::analytics_live::Live::default(),
+            Some("range=all&tz=UTC"),
+            now,
+        )
+        .expect("All Analytics response");
+        let activity = &composed["activity"];
+        let live = activity["sources"]
+            .as_array()
+            .expect("live sources")
+            .iter()
+            .find(|row| row["tool"] == "devin")
+            .expect("Devin live source");
+        assert_eq!(live["state"], "ok");
+        assert!(live["unreadableRecords"].is_null());
+        let history = activity["history"]["backfill"]["sources"]
+            .as_array()
+            .expect("backfill sources")
+            .iter()
+            .find(|row| row["tool"] == "devin")
+            .expect("Devin historical source");
+        assert_eq!(history["state"], "failed");
+        assert_eq!(history["unreadableRecords"], 2);
     }
 }

@@ -58,7 +58,7 @@ fn table() -> Vec<Value> {
         .collect()
 }
 
-fn input(tz: &str, zone: Option<aac_num::intl::Zone>) -> NativeInput {
+fn input(tz: &str) -> NativeInput {
     let mut query = query();
     query.insert("tz".into(), json!(tz));
     NativeInput {
@@ -71,7 +71,6 @@ fn input(tz: &str, zone: Option<aac_num::intl::Zone>) -> NativeInput {
             .expect("object"),
         live_sources: json!([]),
         refreshing: false,
-        zone,
         pricing: json!({}),
         table: table(),
     }
@@ -79,8 +78,8 @@ fn input(tz: &str, zone: Option<aac_num::intl::Zone>) -> NativeInput {
 
 #[test]
 fn the_native_input_composes_a_complete_answer() {
-    let answer =
-        analytics_owned::compose_native(input("UTC", None), &mut EmptyStore).expect("composed");
+    let answer = analytics_owned::compose_native(input("UTC"), &mut EmptyStore, |_, _| None)
+        .expect("composed");
     let mut expected_keys = vec![
         "schemaVersion",
         "updatedAt",
@@ -120,7 +119,8 @@ fn the_native_input_composes_a_complete_answer() {
 
 #[test]
 fn a_non_utc_zone_without_proven_offsets_declines() {
-    let failed = analytics_owned::compose_native(input("America/New_York", None), &mut EmptyStore);
+    let failed =
+        analytics_owned::compose_native(input("America/New_York"), &mut EmptyStore, |_, _| None);
     assert_eq!(failed, Err(Decline::Zone));
 }
 
@@ -193,7 +193,7 @@ impl analytics_owned::AnalyticsStore for ActivityStore {
 }
 
 fn fixture_input(range: &str, models: &[&str]) -> NativeInput {
-    let mut native = input("UTC", None);
+    let mut native = input("UTC");
     native.query.insert("range".into(), json!(range));
     // A pricing key per model on the anthropic route: null is a missing fact (no rate), which the
     // projection accepts; an absent key would decline Unsupported before the collation sort runs.
@@ -216,9 +216,12 @@ fn a_non_ascii_activity_label_answers_90d_and_all() {
             models: vec!["ascii-model", "café"],
             costs: vec![1_000_000_000, 1_000_000_000],
         };
-        let answer =
-            analytics_owned::compose_native(fixture_input(range, &store.models), &mut store)
-                .unwrap_or_else(|err| panic!("{range} declined: {err:?}"));
+        let answer = analytics_owned::compose_native(
+            fixture_input(range, &store.models),
+            &mut store,
+            |_, _| None,
+        )
+        .unwrap_or_else(|err| panic!("{range} declined: {err:?}"));
         assert_eq!(answer["range"]["preset"], json!(range));
         let activity =
             String::from_utf8(js_json::write(&answer["activity"])).expect("utf-8 activity");
@@ -238,7 +241,10 @@ fn the_7d_ascii_activity_bytes_are_unchanged() {
         models: vec!["ascii-model", "gpt-4o"],
         costs: vec![1_000_000_000, 2_000_000_000],
     };
-    let answer = analytics_owned::compose_native(fixture_input("7d", &store.models), &mut store)
+    let answer =
+        analytics_owned::compose_native(fixture_input("7d", &store.models), &mut store, |_, _| {
+            None
+        })
         .expect("7d composes");
     let text = String::from_utf8(js_json::write(&answer["activity"])).expect("utf-8 activity");
     assert_eq!(
@@ -248,3 +254,40 @@ fn the_7d_ascii_activity_bytes_are_unchanged() {
 }
 
 const GOLDEN_7D_ACTIVITY: &str = r#"{"status":"ok","refreshing":false,"refreshingRemote":[],"scope":"multi-host-cli","timezone":"UTC","accountAttribution":"unavailable","costBasis":"estimated-api-equivalent","fetchedAt":"2026-11-19T00:00:00.000Z","message":"CLI activity kept in AAC's history (UTC hourly buckets; days are grouped in UTC). Cost is an API-equivalent estimate, not a subscription charge.","totals":{"inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false},"providers":[{"provider":"claude","label":"Claude","totals":{"inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false},"usageEvents":2,"sessionCount":0,"tools":["claude"]}],"byDay":[{"date":"2026-11-17","provider":"claude","inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"requestCount":2}],"byHour":[{"hour":"2026-11-17T00:00:00Z","provider":"claude","inputTokens":2000,"outputTokens":1000,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":3,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"requestCount":2}],"models":[{"model":"gpt-4o","provider":"claude","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":2,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"rates":null,"tools":["claude"]},{"model":"ascii-model","provider":"claude","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":1,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false,"rates":null,"tools":["claude"]}],"byDayModel":[{"date":"2026-11-17","provider":"claude","model":"gpt-4o","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":2,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false},{"date":"2026-11-17","provider":"claude","model":"ascii-model","inputTokens":1000,"outputTokens":500,"cacheCreationTokens":0,"cacheReadTokens":0,"estimatedCostUsd":1,"fallbackCostUsd":0,"costByType":null,"costByTypeReconciled":false}],"sessions":{"total":0,"sample":[],"truncated":false},"anomalies":{"thresholds":{"costSpikeMultiplier":2,"highInputTokens":10000000,"highIoRatio":100,"highCacheReadTokens":1000000000},"items":[],"summary":{"totalAnomalies":0,"highInputDays":0,"highIoRatioDays":0,"costSpikeDays":0,"highCacheReadDays":0}},"sources":[],"history":{"computers":[{"host":"ubuntu","oldestAt":"2026-08-11T00:00:00.000Z","newestAt":"2026-11-19T00:00:00.000Z","lastReadAt":"2026-11-19T00:00:00.000Z","gaps":[]}],"sources":[],"backfill":{"running":false,"sources":[]},"quality":[]},"resolution":"hour"}"#;
+
+#[test]
+fn analytics_deep_all_keeps_one_bound_when_older_activity_arrives() {
+    struct AdvancingStore {
+        reads: usize,
+    }
+    impl analytics_owned::AnalyticsStore for AdvancingStore {
+        fn activity_oldest(&mut self) -> Result<Option<u64>, Decline> {
+            self.reads += 1;
+            Ok(Some(NOW - if self.reads == 1 { 31 } else { 117 } * DAY))
+        }
+        fn quota_oldest(&mut self) -> Result<Option<u64>, Decline> {
+            Ok(None)
+        }
+        fn activity_range(&mut self, query: Value) -> Result<Value, Decline> {
+            EmptyStore.activity_range(query)
+        }
+        fn activity_sources(&mut self, from: u64, to: u64) -> Result<Value, Decline> {
+            EmptyStore.activity_sources(from, to)
+        }
+        fn history_records(&mut self, query: Value) -> Result<Value, Decline> {
+            EmptyStore.history_records(query)
+        }
+    }
+
+    let mut store = AdvancingStore { reads: 0 };
+    let zone_for = |oldest: f64, _: &str| {
+        let from = oldest as i64 - DAY as i64;
+        aac_num::intl::Zone::proven(from, (NOW + DAY) as i64, &[[from, -300]])
+    };
+    let mut args = input("America/New_York");
+    args.query.insert("range".into(), json!("all"));
+    let answer =
+        analytics_owned::compose_native(args, &mut store, zone_for).expect("warm All composes");
+    assert_eq!(answer["range"]["preset"], "all");
+    assert_eq!(store.reads, 1);
+}

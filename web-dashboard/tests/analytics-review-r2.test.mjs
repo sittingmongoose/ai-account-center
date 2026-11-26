@@ -60,7 +60,7 @@ test('display-zone midnights, daily buckets, calendar and month boundaries agree
   const boundary = Date.parse('2026-11-01T02:00:00Z');
   assert.equal(U.isoDay(boundary), '2026-10-31');
   assert.equal(T.zonedMonthStart(boundary), Date.parse('2026-10-01T04:00:00Z'));
-  assert.equal(U.apiRangeFor({ range: 'month' }, boundary), '30d');
+  assert.equal(U.apiRangeFor({ range: 'month' }, boundary), 'month');
   assert.equal(U.parseIsoDay('2026-02-30'), NaN);
 });
 
@@ -141,3 +141,35 @@ test('all-free cost donuts explain why they have no arcs', () => {
   assert.ok(view.donut.legend.length > 0);
 });
 
+
+test('Month includes the first hours of a 31-day month', () => {
+  T.setDisplayTimeZone('UTC');
+  const now = Date.parse('2026-10-31T12:00:00.605Z');
+  const page = state({ range: 'month' });
+  const starts = { month: T.zonedMonthStart(now), '30d': now - 30 * D };
+  const preset = U.apiRangeFor(page, now);
+  const from = starts[preset];
+  const rows = [
+    row(Date.parse('2026-10-01T04:00:00Z'), 1, { inputTokens: 100 }),
+    row(Date.parse('2026-10-31T10:00:00Z'), 1, { inputTokens: 5 }),
+  ].filter(r => Date.parse(r.hour) >= from);
+  const p = { ...payload(now, rows), range: { preset, from: new Date(from).toISOString() } };
+  assert.equal(U.usageView(p, page, { now }).kpis[0].num, 105);
+});
+
+test('All discloses unreadable historical records with a healthy live scan', () => {
+  T.setDisplayTimeZone('UTC');
+  const now = Date.parse('2026-11-26T01:00:00Z');
+  const p = payload(now, [row(now - 40 * D), row(now - H)], {
+    sources: [{ tool: 'devin', host: 'ubuntu', state: 'ok', lastScanAt: iso(now) }],
+    history: {
+      computers: [{ host: 'ubuntu', oldestAt: iso(now - 40 * D), lastReadAt: iso(now), gaps: [] }],
+      backfill: { sources: [{ host: 'ubuntu', tool: 'devin', state: 'failed', unreadableRecords: 2 }] },
+    },
+  });
+  const view = U.usageView(p, state({ range: 'all' }), { now });
+  assert.match(view.head.scope, /older usage incomplete/);
+  assert.match(view.scope.map(({ text }) => text).join(' '), /Older usage is incomplete.*Devin CLI.*2 records unreadable/);
+  const recent = U.usageView(p, state({ range: '7d' }), { now });
+  assert.doesNotMatch(recent.head.scope, /older usage incomplete/);
+});

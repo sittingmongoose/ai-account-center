@@ -221,13 +221,23 @@ impl ServiceLink {
         }
         let body = body.unwrap_or_default().to_vec();
         let request = builder.body(Body::from(body)).ok()?;
+        let path = uri.split_once('?').map_or(uri, |(path, _)| path);
+        // The trusted owner has already completed and bounded the Analytics query.
+        // Its All view can exceed the cap used for other route replies.
+        let reply_cap = |status| {
+            if method == "GET" && path == "/api/accounts/analytics" && status == 200 {
+                usize::MAX
+            } else {
+                REPLY_CAP
+            }
+        };
         let deadline = if matches!(
             uri,
             super::lifecycle_host::ENDPOINT | super::lifecycle_host::COLLECTION_ENDPOINT
         ) {
             Duration::from_secs(150)
         } else if matches!(
-            uri.split_once('?').map_or(uri, |(path, _)| path),
+            path,
             "/api/usage/history" | "/api/usage/at" | "/api/usage/burn"
         ) {
             // These reads can wait on the store's queue. Keep the old worker hop's limit.
@@ -248,7 +258,7 @@ impl ServiceLink {
                 }
                 let status = reply.status().as_u16();
                 let headers = reply.headers().clone();
-                let body = to_bytes(reply.into_body(), REPLY_CAP).await.ok()?;
+                let body = to_bytes(reply.into_body(), reply_cap(status)).await.ok()?;
                 return Some(ServiceReply {
                     status,
                     headers,
@@ -258,7 +268,9 @@ impl ServiceLink {
             let (reply, drive) = self.send(request).await?;
             let status = reply.status().as_u16();
             let headers = reply.headers().clone();
-            let body = to_bytes(Body::new(reply.into_body()), REPLY_CAP).await.ok();
+            let body = to_bytes(Body::new(reply.into_body()), reply_cap(status))
+                .await
+                .ok();
             drive.abort();
             let body = body?;
             Some(ServiceReply {

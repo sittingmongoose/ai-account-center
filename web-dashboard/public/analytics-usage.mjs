@@ -324,16 +324,21 @@ function modelSplit(row, tok, total, known) {
   return { cost: shares(), mode: 'shares', rate };
 }
 
-/** The analytics API range that covers a page range (the backend accepts 24h, 7d and 30d today). */
 /**
  * The answer a page range is drawn from, as a key: a preset the server answers (`24h`, `7d`, `30d`,
- * `90d`, `all`), or `custom:<first day>:<last day>` for a custom range longer than the last 30 days,
+ * `90d`, `month`, `all`), or `custom:<first day>:<last day>` for a custom range longer than the last 30 days,
  * which the history store answers for exactly those days. Shorter ranges are cut from a preset.
  */
 export function apiRangeFor(state, now = Date.now()) {
   const range = state?.range;
   if (range === '24h' || range === '7d' || range === '30d' || range === '90d' || range === 'all') return range;
-  if (range === 'month') return zonedParts(now).day <= 1 ? '24h' : dayStartMonth(now) >= now - 7 * D + H ? '7d' : '30d';
+  if (range === 'month') {
+    const start = zonedMonthStart(now);
+    if (start >= now - D) return '24h';
+    if (start >= now - 7 * D) return '7d';
+    if (start >= now - 30 * D) return '30d';
+    return 'month';
+  }
   if (range === 'custom' && finite(state.from)) {
     if (state.from >= now - 30 * D + H) return state.from >= now - D ? '24h' : state.from >= now - 7 * D ? '7d' : '30d';
     return `custom:${isoDay(state.from)}:${isoDay(Math.max(state.from, (finite(state.to) ? state.to : now) - 1))}`;
@@ -351,7 +356,6 @@ export function payloadViewKey(payload) {
   const days = payload?.range?.days;
   return preset === 'custom' && days && typeof days.from === 'string' && typeof days.to === 'string' ? `custom:${days.from}:${days.to}` : preset;
 }
-const dayStartMonth = now => zonedDayStart(zonedMonthStart(now));
 
 /**
  * Validated activity rows. Malformed and duplicate rows are dropped, never counted twice. So is `<synthetic>`,
@@ -370,10 +374,15 @@ function historyOf(raw) {
     gaps: (Array.isArray(c.gaps) ? c.gaps : []).map(g => [Date.parse(g?.[0]), Date.parse(g?.[1])]).filter(([a, b]) => finite(a) && finite(b) && b > a),
   }));
   const toolLabel = t => SOURCE_TOOLS.find(([id]) => id === t)?.[1] || text(t);
-  const backfill = raw.backfill && Array.isArray(raw.backfill.sources) ? raw.backfill.sources.filter(b => b && (b.state === 'pending' || b.state === 'running')).map(b => ({
+  const historicalReads = Array.isArray(raw.backfill?.sources) ? raw.backfill.sources.filter(Boolean) : [];
+  const backfill = historicalReads.filter(b => b.state === 'pending' || b.state === 'running').map(b => ({
     host: hostLabel(text(b.host)), tool: toolLabel(b.tool),
     pct: Number.isInteger(b.filesRead) && Number.isInteger(b.filesTotal) && b.filesTotal > 0 ? Math.min(99, Math.floor(b.filesRead / b.filesTotal * 100)) : null,
-  })) : [];
+  }));
+  const incomplete = historicalReads.filter(b => b.state === 'failed' || b.unreadableRecords > 0).map(b => ({
+    host: hostLabel(text(b.host)), tool: toolLabel(b.tool),
+    n: Number.isSafeInteger(b.unreadableRecords) && b.unreadableRecords > 0 ? b.unreadableRecords : 0,
+  }));
   // records a read left out because they were dated after it (a clock ahead, a bad log line)
   const future = (Array.isArray(raw.sources) ? raw.sources : []).filter(s => s && Number.isInteger(s.futureDated) && s.futureDated > 0)
     .map(s => ({ host: hostLabel(text(s.host)), tool: toolLabel(s.tool), n: s.futureDated }));
@@ -381,7 +390,7 @@ function historyOf(raw) {
   const quality = (Array.isArray(raw.quality) ? raw.quality : []).filter(q => q && Array.isArray(q.flags))
     .map(q => ({ tool: toolLabel(q.tool), flags: q.flags.filter(f => typeof f === 'string'), from: Date.parse(q.from), to: Date.parse(q.to) }))
     .filter(q => finite(q.from) && finite(q.to) && q.to > q.from);
-  return { computers, backfill, future, quality };
+  return { computers, backfill, incomplete, future, quality };
 }
 /** The tools whose output in the range counts reasoning twice (the retired Codex cache), and the local day after the last such hour. */
 function doubleReasoning(A) {
@@ -538,7 +547,7 @@ export function pageRange(state, A, now) {
   else if (range === '7d') a = now - 7 * D;
   else if (range === '30d') a = now - 30 * D;
   else if (range === '90d') a = now - 90 * D;
-  else if (range === 'month') a = dayStartMonth(now);
+  else if (range === 'month') a = zonedMonthStart(now);
   else if (range === 'custom' && finite(state.from) && finite(state.to)) { a = state.from; b = Math.min(now, state.to); }
   else a = A.win0;
   const a2 = Math.max(a, A.win0);
@@ -1318,7 +1327,7 @@ function dailyView(A, R, state, size) {
 }
 
 /** What the history store holds, per computer, and whether older usage is still being imported. */
-export function historyLines(A) {
+export function historyLines(A, all = false) {
   const H0 = A.history;
   if (!H0) return [];
   const known = H0.computers.filter(c => finite(c.oldest));
@@ -1332,6 +1341,11 @@ export function historyLines(A) {
   }
   if (H0.backfill.length)
     lines.push({ icon: 'download', text: `Importing older usage from the logs: ${andList(H0.backfill.map(b => `${b.host} ${b.tool}${b.pct === null ? '' : ` ${b.pct}%`}`))}. The oldest days fill in as it goes.` });
+  if (all && H0.incomplete?.length) {
+    const names = H0.incomplete.map(({ host, tool, n }) =>
+      `${tool} on ${host}${n ? ` (${nf0.format(n)} record${n === 1 ? '' : 's'} unreadable)` : ''}`);
+    lines.push({ icon: 'info', text: `Older usage is incomplete for ${andList(names)}.` });
+  }
   const twice = doubleReasoningNote(A);
   if (twice) lines.push({ icon: 'info', text: `${twice} Input and cached input are exact; those hours are left out of Cost by model.` });
   if (H0.future?.length) {
@@ -1559,7 +1573,7 @@ export function includedView(payload, now = Date.now()) {
     // A read with a note (a folder that did not answer, a write-ahead log, a cache cut) says it and is marked.
     if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: why ? 'cached' : 'ok', tip: [why.trim(), events(r), found(r), last].filter(Boolean).join(' · ') };
     if (r.state === 'stale') return { id, text: 'Stale', tone: 'cached', tip: `${why}Measured usage is included. ${last}` };
-    if (r.state === 'cached') return { id, text: r.cause === 'unreadable_folder' && r.rowCount > 0 ? 'Read, partial' : finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Usage from readable logs is included. ${last}` };
+    if (r.state === 'cached') return { id, text: r.cause === 'unreadable_folder' && r.rowCount > 0 ? 'Read, partial' : finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}${r.unreadableRecords > 0 ? '' : 'Usage from readable logs is included. '}${last}` };
     if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'installed_no_logs') return { id, text: 'Installed, no logs yet', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'no_reader') return r.cause === 'no_local_usage_records'
@@ -1699,8 +1713,9 @@ function headOf(A, R, state, now, zone, progress) {
   const updateNote = !updating ? ''
     : A.refreshing ? remote.length ? `Updating · refreshing ${andList(remote)}…` : 'Updating…'
       : `Updating · ${counts} · continues shortly`;
+  const historyNote = state.range === 'all' && A.history?.incomplete?.length ? ' · older usage incomplete' : '';
   return {
-    scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
+    scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''}${historyNote} · read `,
     read: finite(A.fetched) ? relTxt(A.fetched, now) : 'not read yet',
     updating,
     updateNote,
@@ -1766,7 +1781,7 @@ export function usageView(payload, state, opts = {}) {
         noRate ? `${noRate} model${noRate === 1 ? ' has' : 's have'} no listed rate; ${noRate === 1 ? 'its' : 'their'} split uses token shares of the logged cost.` : '',
       ].filter(Boolean).join(' ') : "Per-type costs use each model's rate as CCS prices it and match every model's logged estimate to the cent." },
       { icon: 'clock', text: `${finite(A.fetched) ? `Logs read ${timeTxt(A.fetched)}.` : 'Logs not read yet.'} Hours are shown in local time${zone ? ` (${zone})` : ''}.${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}` },
-      ...historyLines(A),
+      ...historyLines(A, state.range === 'all'),
     ],
     kpis: kpis(A, R, state, rows, K, C),
     providers: providersView(A, rows, state, opts.sizes?.trend?.w),

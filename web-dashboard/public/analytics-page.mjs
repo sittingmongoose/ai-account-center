@@ -33,7 +33,7 @@ export function analyticsCovers(payload, page, now = Date.now()) {
     : range === '90d' ? now - 90 * D
     : range === 'month' ? zonedMonthStart(now)
     : Number.isFinite(page.from) ? page.from : now - 30 * D;
-  return from <= start + H;
+  return from <= (range === 'month' ? start : start + H);
 }
 
 /**
