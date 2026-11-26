@@ -320,6 +320,19 @@
       "efforts": [],
       "prices": null,
       "notes": "Free trial model via OpenCode Go (owner, 2026-11-24, a few days)."
+    },
+    {
+      "model": "devin/swe-2-1-max",
+      "label": "SWE-2.1 Max",
+      "family": "SWE",
+      "runtimes": [
+        "devin"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "prices": null,
+      "notes": "Devin subscription, SWE-2.1 Max only, unlimited through 2026-12-08 (owner, 2026-11-25). T3 starts it as swe-2-1-medium with thought_level max."
     }
   ]
 }

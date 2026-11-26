@@ -137,7 +137,13 @@
     "zcode/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
     "zcode/muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
     "zcode/muse-wonder-1.0": "muse/muse-wonder-1.0",
-    "zcode/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0"
+    "zcode/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+    "swe-2-1-max": "devin/swe-2-1-max",
+    "swe-2-1-medium": "devin/swe-2-1-max",
+    "devin/swe-2-1-medium": "devin/swe-2-1-max",
+    "acpRegistry_devin/swe-2-1-max": "devin/swe-2-1-max",
+    "acpRegistry_devin/swe-2-1-medium": "devin/swe-2-1-max",
+    "SWE-2.1 Max": "devin/swe-2-1-max"
   },
   "effortSuffixes": [
     "-minimal",

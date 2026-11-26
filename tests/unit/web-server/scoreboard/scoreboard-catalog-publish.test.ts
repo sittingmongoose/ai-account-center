@@ -34,7 +34,7 @@ const packagedAliases = JSON.parse(packaged('model-aliases.json')) as {
   aliases: Record<string, string>;
   effortSuffixes: string[];
 };
-/** The models added after Nov 11 (through 2026-11-21), which the share's Nov 11 models.json lacks. */
+/** The models added after Nov 11 (through 2026-11-25), which the share's Nov 11 models.json lacks. */
 // Keep packaged order: seedCatalog appends missing entries in that order.
 const NEW_MODELS = [
   'openai/gpt-6.2-sol',
@@ -47,6 +47,7 @@ const NEW_MODELS = [
   'google/gemini-4-hydrogen',
   'xai/grok-4.6',
   'opencode-go/hungerg-free',
+  'devin/swe-2-1-max',
 ];
 const pretty = (doc: unknown) => `${JSON.stringify(doc, null, 2)}\n`;
 

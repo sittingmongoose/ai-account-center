@@ -69,8 +69,8 @@ describe('the published alias table', () => {
     for (const suffix of builtin.effortSuffixes) expect(packaged.effortSuffixes).toContain(suffix);
     // Our built-in copy's 104 plus explicit Qwen spellings (9), Gemini 4 Hydrogen (2),
     // DeepSeek V4.1 Flash (2), Astra 6.2 (6), Sol 6.2 (6), Z.ai account spellings (2),
-    // Gemini 4 Neon (2), Grok 4.6 (2) and HungerG Free (2).
-    expect(Object.keys(packaged.aliases)).toHaveLength(137);
+    // Gemini 4 Neon (2), Grok 4.6 (2), HungerG Free (2) and Devin SWE-2.1 Max (6).
+    expect(Object.keys(packaged.aliases)).toHaveLength(143);
     const known = new Set(models.map((model) => model.model));
     for (const canonical of Object.values(packaged.aliases))
       expect(known.has(canonical)).toBe(true);
@@ -110,6 +110,7 @@ describe('the published alias table', () => {
       'google/gemini-4-hydrogen',
       'xai/grok-4.6',
       'opencode-go/hungerg-free',
+      'devin/swe-2-1-max',
     ];
     const nov11 = published.models.filter((model) => !NEW_MODELS.includes(model.model));
     expect(nov11).toHaveLength(16);
@@ -147,6 +148,32 @@ describe('the published alias table', () => {
     expect(
       normalizeModel('gemini-4-hydrogen-high', null, published.models, published.table)
     ).toEqual({ id: 'google/gemini-4-hydrogen', effort: 'high' });
+  });
+
+  it('resolves every Devin SWE-2.1 Max spelling without splitting its model name', async () => {
+    const entry = models.find((model) => model.model === 'devin/swe-2-1-max');
+    expect(entry?.runtimes).toEqual(['devin']);
+    expect(entry?.efforts).toEqual(['max']);
+    const published = await publishedTable();
+    for (const written of [
+      'devin/swe-2-1-max',
+      'swe-2-1-max',
+      'swe-2-1-medium',
+      'devin/swe-2-1-medium',
+      'acpRegistry_devin/swe-2-1-max',
+      'acpRegistry_devin/swe-2-1-medium',
+      'SWE-2.1 Max',
+    ])
+      expect([written, normalizeModel(written, null, published.models, published.table)]).toEqual([
+        written,
+        { id: 'devin/swe-2-1-max', effort: null },
+      ]);
+    expect(
+      normalizeModel('swe-2-1-medium', 'max', published.models, published.table)
+    ).toEqual({ id: 'devin/swe-2-1-max', effort: 'max' });
+    expect(
+      normalizeModel('swe-2-1-max-high', null, published.models, published.table)
+    ).toEqual({ id: 'devin/swe-2-1-max', effort: 'high' });
   });
 
   it('resolves Astra 6.2 review spellings with max effort', async () => {
@@ -187,8 +214,12 @@ describe('the published alias table', () => {
       const name = model.model.slice(model.model.indexOf('/') + 1);
       return suffixes.some((suffix) => name.endsWith(suffix));
     });
-    // Today only Qwen 3.8 Max and Qwen 4 Max; a new one fails here until its entries are added.
-    expect(named.map((model) => model.model)).toEqual(['alibaba/qwen3.8-max', 'alibaba/qwen4-max']);
+    // Today only the Qwen Max models and Devin SWE-2.1 Max; a new one fails here until its entries are added.
+    expect(named.map((model) => model.model)).toEqual([
+      'alibaba/qwen3.8-max',
+      'alibaba/qwen4-max',
+      'devin/swe-2-1-max',
+    ]);
     for (const { model } of named) {
       const name = model.slice(model.indexOf('/') + 1);
       expect([name, packaged.aliases[name]]).toEqual([name, model]);
