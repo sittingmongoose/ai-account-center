@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findSecret } from '../../src/shared/secret-policy';
 import type { Request } from 'express';
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const tsOnly = process.argv.includes('--ts-only');
@@ -15,6 +16,11 @@ const reports = path.join(home, 'agent-reports');
 fs.mkdirSync(ccs, { mode: 0o700 });
 for (const key of Object.keys(process.env)) if (key.startsWith('CCS_')) delete process.env[key];
 Object.assign(process.env, { CCS_HOME: home, CCS_DIR: ccs, AAC_NO_LOCAL_RUST_BUILD: '1' });
+assert.equal(
+  findSecret('fixture text'),
+  null,
+  'build the native secret filter first: bun run status:build'
+);
 const { RustService } = await import('../../src/web-server/rust-service');
 const { requestRust } = await import('../../src/web-server/rust-service-transport');
 const { AgentReportsReader } = await import('../../src/web-server/status/agent-reports-reader');

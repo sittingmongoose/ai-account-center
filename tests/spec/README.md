@@ -161,10 +161,14 @@ reply counts, exact serialized bytes, mismatch refusal and explicit fallback for
 inputs. This is a transitional snapshot protocol: TS still builds the reference for each read,
 and only equal Rust candidates are admitted. Large views/files keep TS ownership.
 
+Build the native secret filter before this spec (`bun run status:build`), including in
+`--ts-only` mode. The reader refuses every fixture when the filter is missing; the spec now
+fails at startup with that prerequisite instead of a misleading zero-question assertion.
+
 An explicit `AAC_STATUS_MODULE` enables an eighth real-native-field parity case. It must
 point at a compatible module already built on Nas1 or the Mac; the harness fails if it
-cannot load or compose. The committed seven-case golden remains independent of optional
-native module availability.
+cannot load or compose. The committed seven-case golden remains unchanged by this optional
+case; the secret filter itself is required in every mode.
 
 
 ## M3 part 2 read views
