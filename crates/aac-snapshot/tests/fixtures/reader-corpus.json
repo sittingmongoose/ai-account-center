@@ -1,0 +1,2698 @@
+[
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Caf\u00e9 \ud800\udc00",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Caf\\xe9 \\U00010000  profile work  [Ubuntu VM]  current, sampled 1m ago\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Caf\u00e9 \ud800\udc00",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Caf\\u00e9 \\ud800\\udc00\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": []\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "--provider",
+      "anthropic"
+    ],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\nNo matching accounts.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": []\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "cached",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": "rate_limited"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  cached earlier reading, sampled 1m ago\n    provider refresh is rate limited\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "cached",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": "read_failed"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  cached earlier reading, sampled 1m ago\n    last provider read failed or was skipped\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "cached",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": "refresh_pending"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  cached earlier reading, sampled 1m ago\n    next provider read is pending\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "cached",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": "source_changed"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  cached earlier reading, sampled 1m ago\n    saved sign-in changed; next provider read is pending\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "cached",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": "PRIVATE_ERROR"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  cached earlier reading, sampled 1m ago\n    last provider read outcome was not recorded\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "unavailable",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": ""
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  no current reading, sampled 1m ago\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "error",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": ""
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  reading failed, sampled 1m ago\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "needs_sign_in",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [],
+          "cacheReason": ""
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  needs sign-in, sampled 1m ago\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "used": 0.125
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: 0.12 used\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "used": 0.125
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"used\": 0.125\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: no number reported\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\"\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "usedPercent": 70,
+              "remainingPercent": 30
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: 70% used (30% left)\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "usedPercent": 70,
+              "remainingPercent": 30
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"usedPercent\": 70,\n          \"remainingPercent\": 30\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "unlimited": true
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: unlimited\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "unlimited": true
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"unlimited\": true\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "remaining": 40,
+              "limit": 100,
+              "unit": "USD"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: 40 of 100 USD left\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "remaining": 40,
+              "limit": 100,
+              "unit": "USD"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"remaining\": 40,\n          \"limit\": 100,\n          \"unit\": \"USD\"\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "used": 5.5,
+              "unit": "tokens"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: 5.50 tokens used\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "used": 5.5,
+              "unit": "tokens"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"used\": 5.5,\n          \"unit\": \"tokens\"\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "cached": true
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: earlier reading, time unknown\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "cached": true
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"cached\": true\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "resetAt": "2027-01-15T07:59:30Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: reset at 07:59 UTC (30s ago) passed, new reading pending\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "resetAt": "2027-01-15T07:59:30Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"resetAt\": \"2027-01-15T07:59:30Z\",\n          \"resetPassed\": true,\n          \"burn\": null\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "resetAt": "2027-01-15T09:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: resets 09:00 UTC (in 1h 0m)\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "resetAt": "2027-01-15T09:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"resetAt\": \"2027-01-15T09:00:00Z\"\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "expiresAt": "2027-01-16T08:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: expires Jan 16 08:00 UTC (in 1d 0h)\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "expiresAt": "2027-01-16T08:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"expiresAt\": \"2027-01-16T08:00:00Z\"\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "cached": true,
+              "sampledAt": "2027-01-15T07:58:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    Weekly [team]: earlier reading from 2m ago\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "label": "Weekly",
+              "pool": "team",
+              "cached": true,
+              "sampledAt": "2027-01-15T07:58:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--json"
+    ],
+    "expected": "{\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"staleAfterSeconds\": 300,\n  \"accounts\": [\n    {\n      \"provider\": \"codex\",\n      \"providerLabel\": \"Codex\",\n      \"label\": \"Work\",\n      \"profile\": \"work\",\n      \"status\": \"ok\",\n      \"host\": \"ubuntu\",\n      \"sampledAt\": \"2027-01-15T07:59:00Z\",\n      \"windows\": [\n        {\n          \"key\": \"weekly\",\n          \"label\": \"Weekly\",\n          \"pool\": \"team\",\n          \"cached\": true,\n          \"sampledAt\": \"2027-01-15T07:58:00Z\"\n        }\n      ]\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 50,
+              "burn": {
+                "pace": 30,
+                "paceMinutes": 5,
+                "lastHour": 30,
+                "projectedFullAt": "2027-01-15T08:10:00Z",
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 50% used; pace 30%/h over 5 min, 30%/h over 1 h, full in 10m BEFORE the reset\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 100,
+              "burn": {
+                "pace": 30,
+                "paceMinutes": 5,
+                "lastHour": 30,
+                "projectedFullAt": "2027-01-15T08:10:00Z",
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 100% used; pace 30%/h over 5 min, 30%/h over 1 h, full in 10m BEFORE the reset\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 50,
+              "burn": {
+                "pace": -2.5,
+                "paceMinutes": 60,
+                "lastHour": 30,
+                "projectedFullAt": null,
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 50% used; usage falling -2.50%/h over 1 h\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 100,
+              "burn": {
+                "pace": -2.5,
+                "paceMinutes": 60,
+                "lastHour": 30,
+                "projectedFullAt": null,
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 100% used; usage falling -2.50%/h over 1 h\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 50,
+              "burn": {
+                "pace": 0,
+                "paceMinutes": 90,
+                "lastHour": 30,
+                "projectedFullAt": null,
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 50% used; pace 0%/h over 2 h\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 100,
+              "burn": {
+                "pace": 0,
+                "paceMinutes": 90,
+                "lastHour": 30,
+                "projectedFullAt": null,
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 100% used; pace 0%/h over 2 h\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 50,
+              "burn": {
+                "pace": 40,
+                "paceMinutes": 5,
+                "lastHour": 30,
+                "projectedFullAt": "2027-01-15T07:59:00Z",
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 50% used; pace 40%/h over 5 min, 30%/h over 1 h, reaching its limit about now at this pace\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": [
+            {
+              "key": "weekly",
+              "usedPercent": 100,
+              "burn": {
+                "pace": 40,
+                "paceMinutes": 5,
+                "lastHour": 30,
+                "projectedFullAt": "2027-01-15T07:59:00Z",
+                "runsOutBeforeReset": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n    weekly: 100% used; pace 40%/h over 5 min, 30%/h over 1 h, at its limit until the reset\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "ok",
+          "fixCommand": "codex login"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: healthy. no exact end published yet.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "ok",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T09:00:00Z",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: healthy. sign-in ends 2027-01-15T09:00:00Z.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "ok",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: ended 2027-01-15T07:00:00Z (past its deadline; awaiting recheck). re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "ok",
+          "fixCommand": "codex login",
+          "refreshExpiresAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: refresh expired 2027-01-15T07:00:00Z (awaiting recheck). re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "ok",
+          "fixCommand": "codex login",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: healthy. no exact end published yet.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "warn",
+          "fixCommand": "codex login"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: no access token in the store; the next run renews. the next run renews this login.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "warn",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T09:00:00Z",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: ends 2027-01-15T09:00:00Z. re-login before then: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "warn",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: ended 2027-01-15T07:00:00Z (past its deadline; awaiting recheck). re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "warn",
+          "fixCommand": "codex login",
+          "refreshExpiresAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: refresh expired 2027-01-15T07:00:00Z (awaiting recheck). re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "warn",
+          "fixCommand": "codex login",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: exact end unknown. re-login when the window ends: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "critical",
+          "fixCommand": "codex login"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: no access token in the store; the next run renews. the next run renews this login.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "critical",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T09:00:00Z",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: ends 2027-01-15T09:00:00Z. re-login before then: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "critical",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: ended 2027-01-15T07:00:00Z (past its deadline; awaiting recheck). re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "critical",
+          "fixCommand": "codex login",
+          "refreshExpiresAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: refresh expired 2027-01-15T07:00:00Z (awaiting recheck). re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "critical",
+          "fixCommand": "codex login",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: exact end unknown. re-login when the window ends: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unavailable",
+          "fixCommand": "codex login"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: not readable on this machine. reason unknown.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unavailable",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T09:00:00Z",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: not readable on this machine. reason unknown.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unavailable",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: not readable on this machine. reason unknown.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unavailable",
+          "fixCommand": "codex login",
+          "refreshExpiresAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: not readable on this machine. reason unknown.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unavailable",
+          "fixCommand": "codex login",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: not readable on this machine. reason unknown.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unsupported",
+          "fixCommand": "codex login"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: no expiry published. no login end time is published by codex.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unsupported",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T09:00:00Z",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: no expiry published. no login end time is published by codex.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unsupported",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: no expiry published. no login end time is published by codex.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unsupported",
+          "fixCommand": "codex login",
+          "refreshExpiresAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: no expiry published. no login end time is published by codex.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "unsupported",
+          "fixCommand": "codex login",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: no expiry published. no login end time is published by codex.\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "logged_out",
+          "fixCommand": "codex login"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: already logged out. tokens are gone or expired. re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "logged_out",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T09:00:00Z",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: already logged out. re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "logged_out",
+          "fixCommand": "codex login",
+          "loggedOutAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: already logged out. sign-in ended 2027-01-15T07:00:00Z. re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "logged_out",
+          "fixCommand": "codex login",
+          "refreshExpiresAt": "2027-01-15T07:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: already logged out. tokens are gone or expired. re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ],
+      "signIn": [
+        {
+          "provider": "codex",
+          "name": "work",
+          "machine": "ubuntu",
+          "state": "logged_out",
+          "fixCommand": "codex login",
+          "accessExpiresAt": "2027-01-15T09:00:00Z"
+        }
+      ]
+    },
+    "args": [],
+    "expected": "AI Account Center usage, snapshot now ago (/snapshot/usage.json)\n\nCodex\n  Work  profile work  [Ubuntu VM]  current, sampled 1m ago\n\nSign-in health\n  codex | ubuntu/work: already logged out. tokens are gone or expired. re-login: `codex login`\n",
+    "history": null,
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "history"
+    ],
+    "expected": "codex Work (-) Weekly:\n  2027-01-15T07:59:00Z  12.50%\n  invalid  40%\n",
+    "history": {
+      "version": 1,
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "series": [
+        {
+          "provider": "codex",
+          "label": "Work",
+          "accountId": "codex:work",
+          "window": "weekly",
+          "windowLabel": "Weekly",
+          "points": [
+            [
+              "2027-01-15T07:59:00Z",
+              12.5,
+              null
+            ],
+            [
+              "2026-01-01T00:00:00Z",
+              30,
+              70
+            ],
+            [
+              "invalid",
+              40,
+              null
+            ]
+          ]
+        },
+        {
+          "provider": "claude",
+          "hidden": true,
+          "points": []
+        }
+      ]
+    },
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "history",
+      "--json"
+    ],
+    "expected": "{\n  \"version\": 1,\n  \"generatedAt\": \"2027-01-15T08:00:00Z\",\n  \"series\": [\n    {\n      \"provider\": \"codex\",\n      \"label\": \"Work\",\n      \"accountId\": \"codex:work\",\n      \"window\": \"weekly\",\n      \"windowLabel\": \"Weekly\",\n      \"points\": [\n        [\n          \"2027-01-15T07:59:00Z\",\n          12.5,\n          null\n        ],\n        [\n          \"invalid\",\n          40,\n          null\n        ]\n      ]\n    }\n  ]\n}\n",
+    "history": {
+      "version": 1,
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "series": [
+        {
+          "provider": "codex",
+          "label": "Work",
+          "accountId": "codex:work",
+          "window": "weekly",
+          "windowLabel": "Weekly",
+          "points": [
+            [
+              "2027-01-15T07:59:00Z",
+              12.5,
+              null
+            ],
+            [
+              "2026-01-01T00:00:00Z",
+              30,
+              70
+            ],
+            [
+              "invalid",
+              40,
+              null
+            ]
+          ]
+        },
+        {
+          "provider": "claude",
+          "hidden": true,
+          "points": []
+        }
+      ]
+    },
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "history",
+      "--provider",
+      "openai"
+    ],
+    "expected": "codex Work (-) Weekly:\n  2027-01-15T07:59:00Z  12.50%\n  invalid  40%\n",
+    "history": {
+      "version": 1,
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "series": [
+        {
+          "provider": "codex",
+          "label": "Work",
+          "accountId": "codex:work",
+          "window": "weekly",
+          "windowLabel": "Weekly",
+          "points": [
+            [
+              "2027-01-15T07:59:00Z",
+              12.5,
+              null
+            ],
+            [
+              "2026-01-01T00:00:00Z",
+              30,
+              70
+            ],
+            [
+              "invalid",
+              40,
+              null
+            ]
+          ]
+        },
+        {
+          "provider": "claude",
+          "hidden": true,
+          "points": []
+        }
+      ]
+    },
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "history",
+      "--window",
+      "weekly"
+    ],
+    "expected": "codex Work (-) Weekly:\n  2027-01-15T07:59:00Z  12.50%\n  invalid  40%\n",
+    "history": {
+      "version": 1,
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "series": [
+        {
+          "provider": "codex",
+          "label": "Work",
+          "accountId": "codex:work",
+          "window": "weekly",
+          "windowLabel": "Weekly",
+          "points": [
+            [
+              "2027-01-15T07:59:00Z",
+              12.5,
+              null
+            ],
+            [
+              "2026-01-01T00:00:00Z",
+              30,
+              70
+            ],
+            [
+              "invalid",
+              40,
+              null
+            ]
+          ]
+        },
+        {
+          "provider": "claude",
+          "hidden": true,
+          "points": []
+        }
+      ]
+    },
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "history",
+      "--hours",
+      "1"
+    ],
+    "expected": "codex Work (-) Weekly:\n  2027-01-15T07:59:00Z  12.50%\n  invalid  40%\n",
+    "history": {
+      "version": 1,
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "series": [
+        {
+          "provider": "codex",
+          "label": "Work",
+          "accountId": "codex:work",
+          "window": "weekly",
+          "windowLabel": "Weekly",
+          "points": [
+            [
+              "2027-01-15T07:59:00Z",
+              12.5,
+              null
+            ],
+            [
+              "2026-01-01T00:00:00Z",
+              30,
+              70
+            ],
+            [
+              "invalid",
+              40,
+              null
+            ]
+          ]
+        },
+        {
+          "provider": "claude",
+          "hidden": true,
+          "points": []
+        }
+      ]
+    },
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "history",
+      "--account",
+      "work"
+    ],
+    "expected": "codex Work (-) Weekly:\n  2027-01-15T07:59:00Z  12.50%\n  invalid  40%\n",
+    "history": {
+      "version": 1,
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "series": [
+        {
+          "provider": "codex",
+          "label": "Work",
+          "accountId": "codex:work",
+          "window": "weekly",
+          "windowLabel": "Weekly",
+          "points": [
+            [
+              "2027-01-15T07:59:00Z",
+              12.5,
+              null
+            ],
+            [
+              "2026-01-01T00:00:00Z",
+              30,
+              70
+            ],
+            [
+              "invalid",
+              40,
+              null
+            ]
+          ]
+        },
+        {
+          "provider": "claude",
+          "hidden": true,
+          "points": []
+        }
+      ]
+    },
+    "signins": null
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "signins"
+    ],
+    "expected": "NEEDS YOU (Claude sign-in): Sign in once\nClaude sign-in renewal on ubuntu last ran 2h 0m ago: sign-ins are not being renewed.\nClaude Code sign-ins (renewal runner on ubuntu; each renews by itself 12 hours before it ends)\n  Ubuntu VM work        test@example.invalid           ok          ends Jan 16 08:00 UTC (in 1d 0h); last renewal: renewed ok\n",
+    "history": null,
+    "signins": {
+      "version": 1,
+      "runner": "ubuntu",
+      "generatedAt": "2027-01-15T06:00:00Z",
+      "staleAfterSeconds": 3600,
+      "renewWithinHours": 12,
+      "needsYou": [
+        {
+          "how": "Sign in once"
+        }
+      ],
+      "signIns": [
+        {
+          "host": "ubuntu",
+          "profile": "work",
+          "email": "test@example.invalid",
+          "state": "ok",
+          "signInEndsAt": "2027-01-16T08:00:00Z",
+          "lastResult": "renewed_ok"
+        }
+      ]
+    }
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "signins",
+      "--json"
+    ],
+    "expected": "{\n  \"version\": 1,\n  \"runner\": \"ubuntu\",\n  \"generatedAt\": \"2027-01-15T06:00:00Z\",\n  \"staleAfterSeconds\": 3600,\n  \"renewWithinHours\": 12,\n  \"needsYou\": [\n    {\n      \"how\": \"Sign in once\"\n    }\n  ],\n  \"signIns\": [\n    {\n      \"host\": \"ubuntu\",\n      \"profile\": \"work\",\n      \"email\": \"test@example.invalid\",\n      \"state\": \"ok\",\n      \"signInEndsAt\": \"2027-01-16T08:00:00Z\",\n      \"lastResult\": \"renewed_ok\"\n    }\n  ]\n}\n",
+    "history": null,
+    "signins": {
+      "version": 1,
+      "runner": "ubuntu",
+      "generatedAt": "2027-01-15T06:00:00Z",
+      "staleAfterSeconds": 3600,
+      "renewWithinHours": 12,
+      "needsYou": [
+        {
+          "how": "Sign in once"
+        }
+      ],
+      "signIns": [
+        {
+          "host": "ubuntu",
+          "profile": "work",
+          "email": "test@example.invalid",
+          "state": "ok",
+          "signInEndsAt": "2027-01-16T08:00:00Z",
+          "lastResult": "renewed_ok"
+        }
+      ]
+    }
+  },
+  {
+    "snapshot": {
+      "generatedAt": "2027-01-15T08:00:00Z",
+      "staleAfterSeconds": 300,
+      "accounts": [
+        {
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "label": "Work",
+          "profile": "work",
+          "status": "ok",
+          "host": "ubuntu",
+          "sampledAt": "2027-01-15T07:59:00Z",
+          "windows": []
+        }
+      ]
+    },
+    "args": [
+      "signins",
+      "--account",
+      "nobody"
+    ],
+    "expected": "NEEDS YOU (Claude sign-in): Sign in once\nClaude sign-in renewal on ubuntu last ran 2h 0m ago: sign-ins are not being renewed.\nClaude Code sign-ins (renewal runner on ubuntu; each renews by itself 12 hours before it ends)\n",
+    "history": null,
+    "signins": {
+      "version": 1,
+      "runner": "ubuntu",
+      "generatedAt": "2027-01-15T06:00:00Z",
+      "staleAfterSeconds": 3600,
+      "renewWithinHours": 12,
+      "needsYou": [
+        {
+          "how": "Sign in once"
+        }
+      ],
+      "signIns": [
+        {
+          "host": "ubuntu",
+          "profile": "work",
+          "email": "test@example.invalid",
+          "state": "ok",
+          "signInEndsAt": "2027-01-16T08:00:00Z",
+          "lastResult": "renewed_ok"
+        }
+      ]
+    }
+  }
+]

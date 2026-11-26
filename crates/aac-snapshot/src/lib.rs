@@ -42,3 +42,5 @@ pub const SNAPSHOT_HISTORY_HOURLY: &str = "history-hourly.json";
 pub const SNAPSHOT_HISTORY_DAILY: &str = "history-daily.json";
 /// The rolling history span: 7 days.
 pub const HISTORY_HOURS: i64 = 7 * 24;
+
+pub mod reader;

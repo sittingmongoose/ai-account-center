@@ -1,0 +1,268 @@
+[
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [],
+    "success": true,
+    "expected": true
+  },
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe"
+      ]
+    ],
+    "success": true,
+    "expected": false
+  },
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir=C:\\profiles\\work"
+      ]
+    ],
+    "success": true,
+    "expected": false
+  },
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir",
+        "C:\\profiles\\other"
+      ]
+    ],
+    "success": true,
+    "expected": true
+  },
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir",
+        "C:\\profiles\\alias"
+      ]
+    ],
+    "success": true,
+    "expected": false
+  },
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir"
+      ]
+    ],
+    "success": false,
+    "expected": null
+  },
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir=relative"
+      ]
+    ],
+    "success": false,
+    "expected": null
+  },
+  {
+    "profile": "gmail",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir=C:\\profiles\\work",
+        "--user-data-dir=C:\\profiles\\work"
+      ]
+    ],
+    "success": false,
+    "expected": null
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [],
+    "success": true,
+    "expected": true
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe"
+      ]
+    ],
+    "success": true,
+    "expected": true
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir=C:\\profiles\\work"
+      ]
+    ],
+    "success": true,
+    "expected": false
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir",
+        "C:\\profiles\\other"
+      ]
+    ],
+    "success": true,
+    "expected": true
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir",
+        "C:\\profiles\\alias"
+      ]
+    ],
+    "success": true,
+    "expected": false
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir"
+      ]
+    ],
+    "success": false,
+    "expected": null
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir=relative"
+      ]
+    ],
+    "success": false,
+    "expected": null
+  },
+  {
+    "profile": "platyr",
+    "root": "C:\\profiles\\work",
+    "identities": {
+      "C:\\profiles\\work": "target",
+      "C:\\profiles\\alias": "target",
+      "C:\\profiles\\other": "other"
+    },
+    "argv": [
+      [
+        "Claude.exe",
+        "--user-data-dir=C:\\profiles\\work",
+        "--user-data-dir=C:\\profiles\\work"
+      ]
+    ],
+    "success": false,
+    "expected": null
+  }
+]

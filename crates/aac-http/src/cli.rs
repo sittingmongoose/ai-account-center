@@ -109,6 +109,22 @@ fn root(config_dir: Option<PathBuf>) -> Option<PathBuf> {
 }
 
 fn dispatch(raw: &[String]) -> Result<i32, String> {
+    if raw.first().is_some_and(|s| s == "usage") {
+        let rest = &raw[1..];
+        if rest.iter().any(|s| s == "--help" || s == "-h") {
+            println!(
+                "aac-usage [history|signins|rules|install-rules] [--dir FOLDER] [--provider NAME] [--account TEXT] [--all] [--json]\nhistory: [--hours N] [--window TEXT]"
+            );
+            return Ok(0);
+        }
+        let opts = aac_snapshot::reader::Options::parse(rest)?;
+        let now = aac_core::UtcMs::now().map_err(|_| "Clock unavailable")?;
+        print!(
+            "{}",
+            aac_snapshot::reader::ascii(&aac_snapshot::reader::run(&opts, now.get() as i64)?)
+        );
+        return Ok(0);
+    }
     let mut args = raw.to_vec();
     let config_dir = match config_directory(&mut args) {
         Err(message) if message.is_empty() => return Ok(1),

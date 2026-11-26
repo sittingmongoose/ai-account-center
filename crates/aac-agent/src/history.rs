@@ -1,5 +1,4 @@
-//! Conservative Claude index reader. Unqualified guards and all writes delegate intact.
-use crate::proof;
+//! Native Claude history reads and guarded metadata transactions. No source-code fallback.
 use aac_core::Failure;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -12,6 +11,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod native;
+mod transcript;
+mod write;
+
 type Checked<T> = Result<T, ()>;
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -23,7 +26,11 @@ fn encoded(v: &Value) -> Checked<Vec<u8>> {
     serde_json::to_vec(v).map_err(|_| ())
 }
 fn object(bytes: &[u8]) -> Checked<Value> {
-    let v = proof::json(bytes, 2_000_000, true).ok_or(())?;
+    let v: Value = serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes))
+        .map_err(|_| ())?;
+    if bytes.len() > 2_000_000 {
+        return Err(());
+    }
     if !v.is_object() {
         return Err(());
     }
@@ -67,48 +74,16 @@ fn name(raw: &str) -> bool {
         .is_some_and(|s| uuid(s) && !s.bytes().any(|b| b.is_ascii_uppercase()))
 }
 
-#[cfg(unix)]
 fn directory(path: &Path) -> Checked<Value> {
-    use std::os::unix::fs::MetadataExt;
-    for part in path.ancestors() {
-        let m = fs::symlink_metadata(part).map_err(|_| ())?;
-        if !m.is_dir() || m.file_type().is_symlink() {
-            return Err(());
-        }
-    }
-    let m = fs::symlink_metadata(path).map_err(|_| ())?;
-    if m.dev() == 0 || m.ino() == 0 {
-        return Err(());
-    }
-    Ok(json!({"dev":m.dev().to_string(),"ino":m.ino().to_string()}))
+    let (dev, ino, _) = aac_files::history_transaction::directory(path).map_err(|_| ())?;
+    Ok(json!({"dev":dev.to_string(),"ino":ino.to_string()}))
 }
-#[cfg(not(unix))]
-fn directory(_path: &Path) -> Checked<Value> {
-    Err(())
-}
-
-#[cfg(unix)]
 fn regular(path: &Path, optional: bool, owned: bool) -> Checked<Option<Vec<u8>>> {
-    use std::os::unix::fs::MetadataExt;
-    directory(path.parent().ok_or(())?)?;
-    let (raw, opened) = match crate::files::read_regular(path, 2_000_000) {
-        crate::files::Regular::Read(raw, opened) => (raw, opened),
-        crate::files::Regular::Missing if optional => return Ok(None),
-        _ => return Err(()),
-    };
-    // The helper's own link rule: one name per record (two for the owned copy it keeps).
-    if !(opened.nlink() == 1 || owned && opened.nlink() == 2) {
-        return Err(());
+    match aac_files::history_transaction::read(path, owned) {
+        Ok((b, _)) => Ok(Some(b)),
+        Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => Err(()),
     }
-    let after = fs::symlink_metadata(path).map_err(|_| ())?;
-    if (after.dev(), after.ino()) != (opened.dev(), opened.ino()) {
-        return Err(());
-    }
-    Ok(Some(raw))
-}
-#[cfg(not(unix))]
-fn regular(_path: &Path, _optional: bool, _owned: bool) -> Checked<Option<Vec<u8>>> {
-    Err(())
 }
 
 fn entries(path: &Path, cap: usize) -> Checked<Vec<fs::DirEntry>> {
@@ -119,7 +94,7 @@ fn entries(path: &Path, cap: usize) -> Checked<Vec<fs::DirEntry>> {
         .map_err(|_| ())?;
     if values
         .iter()
-        .any(|e| e.file_name().to_str().is_none_or(|s| !proof::ascii(s)))
+        .any(|e| e.file_name().to_str().is_none_or(|s| s.contains('\0')))
     {
         return Err(());
     }
@@ -142,7 +117,6 @@ impl<'a> Bound<'a> {
                 "expectedEmail",
                 "expectedTarget",
                 "records",
-                "transactionSource",
                 "_historyFixture",
             ],
         )?;
@@ -209,10 +183,7 @@ impl<'a> Bound<'a> {
             let e = &policy["ssh"][p];
             keys(e, &["alias", "hostname", "username", "port"], &[])?;
             for k in ["alias", "hostname", "username"] {
-                let s = text(&e[k])?;
-                if s.is_empty() || s.len() > 255 || s.bytes().any(|b| !(32..127).contains(&b)) {
-                    return Err(());
-                }
+                clean_text(&e[k], 255)?;
             }
             let alias = text(&e["alias"])?;
             if !alias.as_bytes()[0].is_ascii_alphanumeric()
@@ -247,11 +218,21 @@ impl<'a> Bound<'a> {
         }
         let home = match fixture {
             Some(f) => PathBuf::from(text(&f["home"])?),
-            None => std::env::var_os("HOME").map(PathBuf::from).ok_or(())?,
+            None => std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(PathBuf::from)
+                .ok_or(())?,
         };
         // The agent's one home rule (crate::files): Python reads `Path.home()`, which rewrites
         // other spellings, so only an already-canonical home is proved here.
-        if !home.to_str().is_some_and(crate::files::canonical_home) {
+        if home.to_str().is_none()
+            || !home.is_absolute()
+            || home.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )
+            })
+        {
             return Err(());
         }
         let root = if platform == "mac" {
@@ -267,6 +248,7 @@ impl<'a> Bound<'a> {
             home.join("AppData/Roaming")
                 .join(format!("Claude-{profile}"))
         };
+        let root = root.components().collect::<PathBuf>();
         Ok(Self {
             profile,
             platform,
@@ -315,24 +297,24 @@ impl<'a> Bound<'a> {
         let raw = regular(&self.home.join(".ssh/config"), false, false)?.ok_or(())?;
         let ssh = std::str::from_utf8(raw.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&raw))
             .map_err(|_| ())?;
-        if !proof::ascii(ssh) {
-            return Err(());
-        }
         let alias = text(&endpoint["alias"])?;
         let mut selected = false;
         let mut blocks = Vec::new();
         let mut fields = serde_json::Map::new();
         for line in ssh
-            .split(['\n', '\r', '\u{b}', '\u{c}'])
+            .split([
+                '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}',
+                '\u{2029}',
+            ])
             .chain(std::iter::once("Host __ccs_end__"))
         {
-            let line = proof::strip(line);
+            let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let split = line.find(proof::space).ok_or(())?;
+            let split = line.find(char::is_whitespace).ok_or(())?;
             let key = line[..split].to_ascii_lowercase();
-            let value = proof::strip(&line[split..]).trim_matches('"');
+            let value = line[split..].trim().trim_matches('"');
             if matches!(
                 key.as_str(),
                 "include"
@@ -349,13 +331,16 @@ impl<'a> Bound<'a> {
                 if selected {
                     blocks.push(std::mem::take(&mut fields));
                 }
-                let patterns: Vec<_> = proof::words(value).collect();
-                // Wildcard/negation parsing remains the Python reference's responsibility.
-                if patterns
-                    .iter()
-                    .any(|p| p.bytes().any(|b| b"!*?[]".contains(&b)))
-                {
+                let patterns: Vec<_> = value.split_whitespace().collect();
+                if patterns.iter().any(|p| p.starts_with('!')) {
                     return Err(());
+                }
+                if !patterns.contains(&alias) {
+                    for pattern in &patterns {
+                        if native::host_pattern(pattern, alias)? {
+                            return Err(());
+                        }
+                    }
                 }
                 selected = patterns.contains(&alias);
                 fields.clear();
@@ -433,77 +418,17 @@ impl<'a> Bound<'a> {
         if let Some(f) = self.fixture {
             return f["closed"].as_bool().ok_or(());
         }
-        // The no-process case is exact. Active-process argv/alias qualification delegates.
-        if self.platform != "mac" {
-            return Err(());
-        }
-        let out = std::process::Command::new("/usr/bin/pgrep")
-            .args(["-x", "Claude"])
-            .output()
-            .map_err(|_| ())?;
-        if out.status.code() == Some(1) && out.stdout.is_empty() {
-            directory(&self.root)?;
-            Ok(true)
-        } else {
-            Err(())
-        }
+        native::closed(self.platform, self.profile, &self.root)
     }
     fn native(&self) -> Checked<Value> {
         if let Some(f) = self.fixture {
             return f.get("native").cloned().ok_or(());
         }
-        if self.platform != "mac" {
-            return Err(());
-        }
-        mac_native()
+        native::guard(self.platform)
     }
 
     fn unchanged(&self, args: &Value) -> Checked<Value> {
-        // Candidate-bearing checks include the writer's owned staging links and neutral
-        // record contract; delegate that complete guard to the reference transaction.
-        if args
-            .get("records")
-            .is_some_and(|v| v.as_array().is_none_or(|a| !a.is_empty()))
-        {
-            return Err(());
-        }
-        let expected = args.get("expectedTarget").ok_or(())?;
-        if expected["profileId"] != self.profile
-            || expected["platform"] != self.platform
-            || expected["snapshotStable"] != true
-            || expected["protectedSnapshotStable"] != true
-            || !self.closed()?
-        {
-            return Err(());
-        }
-        let current = self.collect()?;
-        for key in [
-            "localProfileClosed",
-            "snapshotStable",
-            "protectedSnapshotStable",
-            "noPendingInput",
-            "noScheduledWork",
-        ] {
-            if current[key] != true {
-                return Err(());
-            }
-        }
-        for key in [
-            "identity",
-            "endpoint",
-            "nativeGuard",
-            "protectedSnapshot",
-            "records",
-            "revision",
-        ] {
-            if current.get(key) != expected.get(key) {
-                return Err(());
-            }
-        }
-        if !self.closed()? {
-            return Err(());
-        }
-        Ok(json!({"unchanged":true}))
+        write::unchanged(self, args)
     }
     fn record_names(&self, registry: &Path) -> Checked<Vec<String>> {
         let mut names: Vec<_> = entries(registry, 1024)?
@@ -518,6 +443,9 @@ impl<'a> Bound<'a> {
         Ok(names)
     }
     fn collect(&self) -> Checked<Value> {
+        self.collect_owned(&HashSet::new())
+    }
+    fn collect_owned(&self, owned: &HashSet<String>) -> Checked<Value> {
         let (registry, identity, endpoint) = self.bind()?;
         let (before, _) = self.protection(&registry)?;
         let names = self.record_names(&registry)?;
@@ -531,7 +459,7 @@ impl<'a> Bound<'a> {
             if !self::name(name) {
                 return Err(());
             }
-            let raw = regular(&registry.join(name), false, false)?.ok_or(())?;
+            let raw = regular(&registry.join(name), false, owned.contains(name))?.ok_or(())?;
             total += raw.len();
             if total > 16_000_000 {
                 return Err(());
@@ -550,7 +478,12 @@ impl<'a> Bound<'a> {
             decoded.push(value);
         }
         for row in &records {
-            if regular(&registry.join(text(&row["name"])?), false, false)?.ok_or(())?
+            if regular(
+                &registry.join(text(&row["name"])?),
+                false,
+                owned.contains(text(&row["name"])?),
+            )?
+            .ok_or(())?
                 != STANDARD.decode(text(&row["base64"])?).map_err(|_| ())?
             {
                 stable = false;
@@ -564,7 +497,12 @@ impl<'a> Bound<'a> {
             && identity == after_identity
             && endpoint == after_endpoint;
         let empty = |v: &Value| {
-            v.is_null() || *v == false || *v == "" || *v == json!([]) || *v == json!({}) || *v == 0
+            v.is_null()
+                || *v == false
+                || *v == ""
+                || *v == json!([])
+                || *v == json!({})
+                || v.as_f64() == Some(0.)
         };
         let pending_keys = [
             "pendingFirstStart",
@@ -602,44 +540,34 @@ impl<'a> Bound<'a> {
 }
 
 pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
-    if !proof::proven(args) {
-        return Ok(proof::fallback());
-    }
-    // These paths keep the exact packaged writer, lease/receipt and pending-marker protocol.
-    // In particular, an append fallback is emitted BEFORE any filesystem mutation.
-    if !matches!(
-        args["mode"].as_str(),
-        Some("collect" | "closed-check" | "protected-check" | "snapshot-cleanup")
-    ) || args.get("transactionSource").is_some()
-    {
-        return Ok(proof::fallback());
-    }
-    let result = (|| {
+    let result = (|| -> Checked<Value> {
         let bound = Bound::new(args)?;
-        if args["mode"] == "snapshot-cleanup" {
-            #[cfg(unix)]
-            {
+        match args["mode"].as_str() {
+            Some("closed-check") => {
                 bound.bind()?;
-                let receipt = aac_files::history_snapshots::prune_history_snapshots(&bound.root)
-                    .map_err(|_| ())?;
-                return Ok(json!(receipt));
+                Ok(json!({"closed":bound.closed()?}))
             }
-            #[cfg(not(unix))]
-            return Err(());
+            Some("protected-check") => bound.unchanged(args),
+            Some("collect") => bound.collect(),
+            Some("append") => write::append(&bound, args),
+            Some("verify-transcripts") => transcript::verify(&bound, args),
+            Some("snapshot-cleanup") => write::cleanup(&bound),
+            _ => Err(()),
         }
-        if args["mode"] == "closed-check" {
-            bound.bind()?;
-            return Ok(json!({"closed":bound.closed()?}));
-        }
-        if args["mode"] == "protected-check" {
-            return bound.unchanged(args);
-        }
-        bound.collect()
     })();
-    match result {
-        Ok(v) if proof::proven(&v) => Ok(v),
-        _ => Ok(proof::fallback()),
+    if args["mode"] == "append" {
+        let mut receipt=result.unwrap_or_else(|_|json!({"schemaVersion":2,"status":"refused","createdCount":0,"recoveryRequired":true,"ownedFilesRolledBack":false,"snapshotBindingVerified":false,"privateSnapshotsPreserved":false,"profileApplyEndpointImplemented":false,"vendorResumeImplemented":false,"distributedLeaseImplemented":false}));
+        // This acknowledgement is emitted only after every synchronous mutation and
+        // owned rollback has returned. There is no child metadata writer to outlive it.
+        receipt["writerQuiescent"] = true.into();
+        return Ok(receipt);
     }
+    result.map_err(|_| {
+        Failure::new(
+            aac_core::Cause::Refused,
+            "Claude history guard refused the operation",
+        )
+    })
 }
 
 #[cfg(unix)]
@@ -735,3 +663,6 @@ fn mac_native() -> Checked<Value> {
 fn mac_native() -> Checked<Value> {
     Err(())
 }
+
+#[cfg(all(test, feature = "parity-fixtures"))]
+mod native_tests;

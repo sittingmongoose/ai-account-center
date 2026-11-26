@@ -20,8 +20,8 @@ mod signin;
 pub mod signin_session;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{
-    Control, Event, Handshake, MAX_FRAME_BYTES, MAX_SCAN_FRAME_BYTES, PROTOCOL_VERSION, Request,
-    frame_cap, max_deadline_ms,
+    Control, Event, Handshake, MAX_FRAME_BYTES, MAX_HISTORY_FRAME_BYTES, MAX_SCAN_FRAME_BYTES,
+    PROTOCOL_VERSION, Request, frame_cap, max_deadline_ms,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -81,7 +81,7 @@ pub async fn run(
 ) -> Result<i32, Failure> {
     let frame = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        read_line(&mut reader, MAX_SCAN_FRAME_BYTES),
+        read_line(&mut reader, MAX_HISTORY_FRAME_BYTES),
     )
     .await;
     #[derive(Deserialize)]

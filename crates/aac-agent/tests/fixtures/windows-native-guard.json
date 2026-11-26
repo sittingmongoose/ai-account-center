@@ -1,0 +1,90 @@
+[
+  {
+    "packages": [
+      {
+        "Version": "2.19675.0.0",
+        "PackageFullName": "Claude_2.19675.0.0_x64__pzs8sxrjxfjjc",
+        "InstallLocation": "C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc"
+      }
+    ],
+    "sha": "492242eb2c352f60a886031275b7a37fd2fc791946be98b8c8fdd4bbfc41ded6",
+    "success": true,
+    "expected": {
+      "version": "2.19675.0.0",
+      "managerSha256": "492242eb2c352f60a886031275b7a37fd2fc791946be98b8c8fdd4bbfc41ded6",
+      "warmGuardVerified": true,
+      "autoResumeGuardVerified": true
+    }
+  },
+  {
+    "packages": [
+      {
+        "Version": "2.19675.0.0",
+        "PackageFullName": "Claude_2.19675.0.0_x64__pzs8sxrjxfjjc",
+        "InstallLocation": "C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc"
+      }
+    ],
+    "sha": "0000000000000000000000000000000000000000000000000000000000000000",
+    "success": false,
+    "expected": null
+  },
+  {
+    "packages": [],
+    "sha": "492242eb2c352f60a886031275b7a37fd2fc791946be98b8c8fdd4bbfc41ded6",
+    "success": false,
+    "expected": null
+  },
+  {
+    "packages": [
+      {
+        "Version": "2.19675.0.0",
+        "PackageFullName": "Claude_2.19675.0.0_x64__pzs8sxrjxfjjc",
+        "InstallLocation": "C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc"
+      },
+      {
+        "Version": "2.19675.0.0",
+        "PackageFullName": "Claude_2.19675.0.0_x64__pzs8sxrjxfjjc",
+        "InstallLocation": "C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc"
+      }
+    ],
+    "sha": "492242eb2c352f60a886031275b7a37fd2fc791946be98b8c8fdd4bbfc41ded6",
+    "success": false,
+    "expected": null
+  },
+  {
+    "packages": [
+      {
+        "Version": "wrong",
+        "PackageFullName": "Claude_2.19675.0.0_x64__pzs8sxrjxfjjc",
+        "InstallLocation": "C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc"
+      }
+    ],
+    "sha": "492242eb2c352f60a886031275b7a37fd2fc791946be98b8c8fdd4bbfc41ded6",
+    "success": false,
+    "expected": null
+  },
+  {
+    "packages": [
+      {
+        "Version": "2.19675.0.0",
+        "PackageFullName": "wrong",
+        "InstallLocation": "C:\\Program Files\\WindowsApps\\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc"
+      }
+    ],
+    "sha": "492242eb2c352f60a886031275b7a37fd2fc791946be98b8c8fdd4bbfc41ded6",
+    "success": false,
+    "expected": null
+  },
+  {
+    "packages": [
+      {
+        "Version": "2.19675.0.0",
+        "PackageFullName": "Claude_2.19675.0.0_x64__pzs8sxrjxfjjc",
+        "InstallLocation": "wrong"
+      }
+    ],
+    "sha": "492242eb2c352f60a886031275b7a37fd2fc791946be98b8c8fdd4bbfc41ded6",
+    "success": false,
+    "expected": null
+  }
+]

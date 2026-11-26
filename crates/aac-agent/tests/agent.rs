@@ -547,3 +547,25 @@ fn scan_usage_live_shaped_settled_packed_stays_under_50_mib_vmhwm() {
         "aac-agent VmHWM exceeded 50 MiB budget: {max_rss_mib:.2} MiB ({max_rss_kib} KiB)"
     );
 }
+
+#[tokio::test]
+async fn large_history_frames_do_not_loosen_other_verb_limits() {
+    for (verb, expected) in [
+        ("claude-history", Cause::Refused),
+        ("quota-read", Cause::OutputTooLarge),
+    ] {
+        let mut bytes=serde_json::to_vec(&json!({"protocol":1,"id":"history-budget","verb":verb,"deadlineMs":1000,"args":{"mode":"collect","padding":"x".repeat(aac_protocol::MAX_FRAME_BYTES)}})).expect("large synthetic envelope");
+        bytes.push(b'\n');
+        let mut output = Vec::new();
+        assert_eq!(
+            aac_agent::run(tokio::io::BufReader::new(bytes.as_slice()), &mut output)
+                .await
+                .expect("bounded agent"),
+            1
+        );
+        match serde_json::from_slice::<Event>(&output).expect("failure event") {
+            Event::Failure { failure, .. } => assert_eq!(failure.cause, expected, "{verb}"),
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+}

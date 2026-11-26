@@ -1,0 +1,137 @@
+{
+  "oracleTransactionSha256": "0b3b4cbb14db144457684bf7683d53bbbc38529d4b92c9c6590ab089eff0c132",
+  "oracleBridgeSha256": "e1a25d0f6233d7d72b47dd7f466ef927cd1c18a272810c21e08755e7f3fcb319",
+  "scenarios": {
+    "success": {
+      "schemaVersion": 2,
+      "status": "created_metadata",
+      "createdCount": 1,
+      "protectedBytesUnchanged": true,
+      "recoveryRequired": false,
+      "ownedFilesRolledBack": false,
+      "snapshotBindingVerified": true,
+      "privateSnapshotsPreserved": true,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "exists": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 0,
+      "recoveryRequired": false,
+      "ownedFilesRolledBack": true,
+      "snapshotBindingVerified": false,
+      "privateSnapshotsPreserved": false,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "closed": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 0,
+      "recoveryRequired": false,
+      "ownedFilesRolledBack": true,
+      "snapshotBindingVerified": false,
+      "privateSnapshotsPreserved": false,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "private": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 0,
+      "recoveryRequired": false,
+      "ownedFilesRolledBack": true,
+      "snapshotBindingVerified": false,
+      "privateSnapshotsPreserved": false,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "protected": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 0,
+      "recoveryRequired": false,
+      "ownedFilesRolledBack": true,
+      "snapshotBindingVerified": true,
+      "privateSnapshotsPreserved": true,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "stage": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 0,
+      "recoveryRequired": true,
+      "ownedFilesRolledBack": false,
+      "snapshotBindingVerified": true,
+      "privateSnapshotsPreserved": true,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "created": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 1,
+      "recoveryRequired": true,
+      "ownedFilesRolledBack": false,
+      "snapshotBindingVerified": true,
+      "privateSnapshotsPreserved": true,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "registry": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 0,
+      "recoveryRequired": true,
+      "ownedFilesRolledBack": false,
+      "snapshotBindingVerified": false,
+      "privateSnapshotsPreserved": false,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    },
+    "publication-private": {
+      "schemaVersion": 2,
+      "status": "refused",
+      "createdCount": 0,
+      "createdCountBeforeRefusal": 0,
+      "recoveryRequired": false,
+      "ownedFilesRolledBack": true,
+      "snapshotBindingVerified": true,
+      "privateSnapshotsPreserved": true,
+      "profileApplyEndpointImplemented": false,
+      "vendorResumeImplemented": false,
+      "distributedLeaseImplemented": false
+    }
+  },
+  "cleanup": {
+    "kept": [
+      ".history-index-snapshot-00000000000000000000000000000005",
+      ".history-index-snapshot-00000000000000000000000000000004",
+      ".history-index-snapshot-00000000000000000000000000000003"
+    ],
+    "deleted": [
+      ".history-index-snapshot-00000000000000000000000000000002",
+      ".history-index-snapshot-00000000000000000000000000000001"
+    ],
+    "skipped": [
+      ".history-index-snapshot-00000000000000000000000000000000"
+    ]
+  }
+}

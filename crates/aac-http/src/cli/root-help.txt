@@ -3,6 +3,7 @@ AI Account Center
 Usage: ai-account-center <command> [options]
 
 Commands:
+  usage          Read offline shared account snapshots (aac-usage)
   dashboard      Open the account and usage dashboard
   codex-auth     Save Codex logins whose usage the dashboard reads
   antigravity    Add or sign in again to a saved Antigravity profile on Ubuntu

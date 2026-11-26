@@ -42,12 +42,9 @@ pub(crate) enum Regular {
     Foreign,
     /// Refused by the mode rule of the reader's policy.
     Loose,
-    /// The bytes (at most the cap) and the metadata of the descriptor they came from. Only the Unix
-    /// readers compare inode and mode, so the metadata is unread on Windows by design.
-    Read(
-        Vec<u8>,
-        #[cfg_attr(not(unix), allow(dead_code))] fs::Metadata,
-    ),
+    /// The bytes and descriptor metadata remain one policy outcome. Some consumers need only
+    /// the bytes; other provider lanes can still inspect the admitted descriptor metadata.
+    Read(Vec<u8>, #[allow(dead_code)] fs::Metadata),
 }
 
 impl From<Read> for Regular {
