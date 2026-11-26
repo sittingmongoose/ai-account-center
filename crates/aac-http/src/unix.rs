@@ -1343,13 +1343,14 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             if !valid {
                 return decline(handler, Decline::Shape);
             }
-            let Some(host) = shared
-                .store
-                .as_ref()
-                .filter(|host| host.analytics_engine().is_some())
-            else {
+            let Some(host) = shared.store.as_ref() else {
                 return decline(row.handler, Decline::Unsupported);
             };
+            // A read during the boot open waits for it (bounded) or declines busy, never
+            // "unsupported", which the front door turns into "no store on this computer".
+            if let Err(reason) = host.usage_read_ready().await {
+                return decline(row.handler, reason);
+            }
             let answer = match handler {
                 Handler::UsageHistory => {
                     crate::usage_routes::history(host, raw.as_deref(), aac_store::engine::now_ms())

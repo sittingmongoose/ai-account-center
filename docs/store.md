@@ -567,7 +567,7 @@ errors `{error, code}` with fixed sentences.
 | `GET /api/store/status` | open state, versions, file sizes, each log's watermark and segments, projector checkpoints and lag, last integrity check and backup, gaps, whether the native module loaded. The read never opens a write transaction: redb page statistics and the capture tables' stored bytes walk the whole file, so they come from the last measurement (`redbStats.measuredAt`, `capture.bytesMeasuredAt`; null before the first), kept in `meta` as `redb_stats_v1` across restarts. A read finding them missing or over 6 hours old starts one measurement on its own thread. While the boot open runs, the read answers busy after at most 2 s |
 | `GET /api/usage/history?account&window&from&to&resolution=raw\|hour\|day` | points or rollups for series, paged |
 | `GET /api/usage/at?t=` | every series' reading at time T (or "no reading") |
-| `GET /api/usage/burn?account&window&span=1h\|6h\|24h\|7d\|30d\|90d&from&to` | burn rate, coverage, reset periods in the span |
+| `GET /api/usage/burn?account&window&span=1h\|6h\|24h\|7d\|30d\|90d&from&to` | burn rate, coverage, reset periods in the span. While the boot open runs, history, at and burn wait at most 2 s, then answer a retryable 503 store_failed, never store_unavailable |
 | `GET /api/cost/models?model&effort&provider&plan&days` | `k`, quota per million tokens, n, coverage, measured and estimate apart |
 | `GET /api/cost/tasks?taskType&model&effort&days` | tokens, quota and wall time per task and per unit, n |
 | `GET /api/attribution?by=model-effort\|stream\|session&from&to` | attributed tokens and estimated points |

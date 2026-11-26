@@ -426,6 +426,25 @@ impl StoreHost {
         }
     }
 
+    /// A usage read's (history, at, burn) bounded wait for the boot open, like the other reads:
+    /// `Ok` once the engine is open, `Busy` (retryable) while the open still runs after
+    /// [`READY_WAIT`], `Unsupported` once the open ended without an engine. The boot open no
+    /// longer holds the slot, so "no engine yet" alone must not read as "no store here".
+    pub(crate) async fn usage_read_ready(self: &Arc<Self>) -> Result<(), Decline> {
+        if self.engine().is_some() {
+            return Ok(());
+        }
+        let host = Arc::clone(self);
+        let ready = tokio::task::spawn_blocking(move || host.ready_within(READY_WAIT))
+            .await
+            .unwrap_or(false);
+        match (self.engine().is_some(), ready) {
+            (true, _) => Ok(()),
+            (false, true) => Err(Decline::Unsupported),
+            (false, false) => Err(Decline::Busy),
+        }
+    }
+
     /// R5/A2: the owned Analytics read composes from this Engine in process.
     pub(crate) fn analytics_engine(&self) -> Option<Arc<Engine>> {
         self.engine()
@@ -1192,6 +1211,34 @@ mod tests {
         assert!(host.status_value().is_ok());
         assert!(host.runs_history_blocking().is_ok());
         host.close_engine();
+        Ok(())
+    }
+
+    /// N3 follow-up: a usage read that arrives while the boot open runs waits for it (bounded)
+    /// or answers a retryable busy, never "no store"; a failed open is still unsupported.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_usage_read_during_the_boot_open_is_never_a_missing_store() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        // Never opened: the bounded wait ends busy.
+        let host = StoreHost::new(boot(root.path().join("never")));
+        assert_eq!(host.usage_read_ready().await, Err(Decline::Busy));
+        // An open that finishes inside the wait: the read is served.
+        let host = StoreHost::new(boot(root.path().join("store")));
+        let opener = Arc::clone(&host);
+        let open = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            opener.open_at_boot();
+        });
+        assert_eq!(host.usage_read_ready().await, Ok(()));
+        open.join().map_err(|_| "the open panicked".to_string())?;
+        assert_eq!(host.usage_read_ready().await, Ok(()));
+        host.close_engine();
+        // A failed open (the store directory is a file): unsupported, as before.
+        let blocked = root.path().join("a-file");
+        std::fs::write(&blocked, b"x").map_err(|e| e.to_string())?;
+        let failed = StoreHost::new(boot(blocked));
+        failed.open_at_boot();
+        assert_eq!(failed.usage_read_ready().await, Err(Decline::Unsupported));
         Ok(())
     }
 

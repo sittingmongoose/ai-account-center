@@ -312,13 +312,15 @@ async fn store_route(
         return store_unavailable();
     }
     if let Some(owners) = routes.local().await {
-        let Some(store) = owners
-            .store
-            .as_ref()
-            .filter(|store| store.analytics_engine().is_some())
-        else {
+        let Some(store) = owners.store.as_ref() else {
             return store_unavailable();
         };
+        // Still opening is a retryable failure, never "no store on this computer".
+        match store.usage_read_ready().await {
+            Ok(()) => {}
+            Err(Decline::Busy) => return store_failed(),
+            Err(_) => return store_unavailable(),
+        }
         let now = now_ms();
         let answer = match path {
             "/api/usage/history" => crate::usage_routes::history(store, raw, now).await,
