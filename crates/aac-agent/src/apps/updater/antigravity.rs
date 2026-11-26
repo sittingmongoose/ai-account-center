@@ -100,7 +100,9 @@ impl AppUpdater for Acp {
         cx: &'a Context,
         install: &'a Installed,
     ) -> BoxFuture<'a, Result<AppRow, UpdateFailure>> {
-        Box::pin(async move { Ok(update_with(cx, install, None, &Local).await) })
+        Box::pin(
+            async move { Ok(update_with(cx, install, cx.t3_row.as_ref(), None, &Local).await) },
+        )
     }
 }
 
@@ -561,6 +563,7 @@ async fn verified_release(cx: &Context, target: &str, floor: &str) -> Option<Ins
 async fn update_with(
     cx: &Context,
     install: &Installed,
+    t3_row: Option<&Value>,
     expected: Option<&str>,
     server: &dyn T3Server,
 ) -> AppRow {
@@ -581,7 +584,7 @@ async fn update_with(
     if managed_root(&cx.host, cx.platform).is_none() {
         return row(install, Status::Failed, same, same, "unsupported", false);
     }
-    if restart_pending(cx.t3_row.as_ref()) {
+    if restart_pending(t3_row) {
         // The running server is the one this run replaced: its offer is the previous server's.
         cx.record(|record| {
             record.blame(
@@ -598,7 +601,16 @@ async fn update_with(
             false,
         );
     }
-    let outcome = through(cx, install, expected, deadline, server, &mut attempted).await;
+    let outcome = through(
+        cx,
+        install,
+        t3_row,
+        expected,
+        deadline,
+        server,
+        &mut attempted,
+    )
+    .await;
     match outcome {
         Ok(row) => row,
         Err(error) => {
@@ -631,6 +643,7 @@ async fn update_with(
 async fn through(
     cx: &Context,
     install: &Installed,
+    t3_row: Option<&Value>,
     expected: Option<&str>,
     deadline: Instant,
     server: &dyn T3Server,
@@ -640,7 +653,7 @@ async fn through(
     cx.phase("t3_ready");
     let replaced = expected
         .filter(|expected| !expected.is_empty())
-        .or_else(|| replaced_version(cx.t3_row.as_ref()));
+        .or_else(|| replaced_version(t3_row));
     let seconds = if replaced.is_some() {
         READY_SECONDS
     } else {
@@ -758,9 +771,11 @@ async fn offer_and_install(
         "cli-manifest"
     };
     cx.record(|record| {
-        if let Some(owner) = record.owner.as_mut().and_then(Value::as_object_mut) {
-            owner.insert("target".into(), Value::String(target_word.into()));
+        let mut owner = current.owner.clone().unwrap_or_else(|| json!({}));
+        if let Some(fields) = owner.as_object_mut() {
+            fields.insert("target".into(), Value::String(target_word.into()));
         }
+        record.owner = Some(owner);
     });
     if guarded {
         let native: Vec<&str> = known
@@ -845,27 +860,35 @@ async fn offer_and_install(
         .and_then(Value::as_str)
         .filter(|version| SEMVER.is_match(version))
         .unwrap_or(target);
-    let mut last = None;
-    client
-        .states(instance, &mut |value| {
-            let state = checked_state(&value)?;
-            if state.get("operationId").and_then(Value::as_str) != Some(operation) {
-                return Err(UpdateFailure::new("t3_install_state_unknown")
-                    .with_cause(FailureCause::Unknown, Some("operation_changed")));
-            }
-            let done = state
-                .get("phase")
-                .and_then(Value::as_str)
-                .is_some_and(|phase| matches!(phase, "succeeded" | "failed" | "cancelled"));
-            if done {
-                last = Some(value.clone());
-            }
-            Ok(done)
-        })
-        .await?;
-    let Some(state) = last else {
-        // The subscription ended without a final state (Python's StopIteration).
-        return Err(protocol());
+    let state = if matches!(
+        state["phase"].as_str(),
+        Some("succeeded" | "failed" | "cancelled")
+    ) {
+        started.clone()
+    } else {
+        let mut last = None;
+        client
+            .states(instance, &mut |value| {
+                let state = checked_state(&value)?;
+                if state.get("operationId").and_then(Value::as_str) != Some(operation) {
+                    return Err(UpdateFailure::new("t3_install_state_unknown")
+                        .with_cause(FailureCause::Unknown, Some("operation_changed")));
+                }
+                let done = state
+                    .get("phase")
+                    .and_then(Value::as_str)
+                    .is_some_and(|phase| matches!(phase, "succeeded" | "failed" | "cancelled"));
+                if done {
+                    last = Some(value.clone());
+                }
+                Ok(done)
+            })
+            .await?;
+        let Some(state) = last else {
+            // The subscription ended without a final state (Python's StopIteration).
+            return Err(protocol());
+        };
+        state
     };
     if state["phase"] != "succeeded" {
         // Server messages can contain local paths or credentials.
@@ -1046,7 +1069,7 @@ async fn follow_up_with(cx: &Context, expected: Option<&str>, server: &dyn T3Ser
                 }
                 cx.phase("updating");
                 // The install keeps its own bound (15 minutes) from here, past the wait's.
-                return finish(update_with(cx, &current, expected, server).await);
+                return finish(update_with(cx, &current, None, expected, server).await);
             }
             // The restart worker holds the lock while it restarts T3.
             Err(error) if error.code == "busy" => {}
@@ -1675,7 +1698,10 @@ mod tests {
         cx.record(|record| record.owner = install.owner.clone());
         cx.phase("checking");
         cx.phase("updating");
-        finish(update_with(cx, &install, None, t3).await, cx)
+        finish(
+            update_with(cx, &install, cx.t3_row.as_ref(), None, t3).await,
+            cx,
+        )
     }
 
     /// `(status, messageCode, previousVersion, version, updateAttempted)`.
@@ -3163,5 +3189,683 @@ mod tests {
             )
         );
         assert_eq!(active(root.path(), Platform::Ubuntu), before);
+    }
+
+    #[tokio::test]
+    async fn start_returning_a_terminal_state_does_not_wait_on_subscription() {
+        // app_update_antigravity.py:359 loops while phase not in terminal states.
+        struct Immediate {
+            root: PathBuf,
+            platform: Platform,
+        }
+        struct ImmediateSession {
+            root: PathBuf,
+            platform: Platform,
+        }
+        impl T3Session for ImmediateSession {
+            fn call<'a>(
+                &'a mut self,
+                method: &'a str,
+                payload: Value,
+            ) -> BoxFuture<'a, Result<Value, UpdateFailure>> {
+                Box::pin(async move {
+                    match method {
+                        "server.getConfig" => Ok(json!({"providers": providers()})),
+                        "provider.install.start" => {
+                            let release = "b".repeat(64);
+                            install_record(
+                                &self.root,
+                                self.platform,
+                                "1.5.8",
+                                true,
+                                &release,
+                                None,
+                            );
+                            pointer(&self.root, self.platform, &release);
+                            Ok(json!({
+                                "driver": "antigravity",
+                                "operationId": "op",
+                                "phase": "succeeded",
+                                "version": "1.5.8",
+                                "installedVersion": "1.5.8",
+                            }))
+                        }
+                        "server.refreshProviders" => Ok(json!({"providers": [{
+                            "instanceId": payload["instanceId"],
+                            "driver": "antigravity",
+                            "auth": {"status": "authenticated"},
+                        }]})),
+                        other => panic!("unexpected {other}"),
+                    }
+                })
+            }
+
+            fn states<'a>(
+                &'a mut self,
+                _instance: &'a str,
+                _take: &'a mut (dyn FnMut(Value) -> Result<bool, UpdateFailure> + Send),
+            ) -> BoxFuture<'a, Result<(), UpdateFailure>> {
+                Box::pin(async { panic!("start already returned a terminal phase") })
+            }
+
+            fn offer<'a>(
+                &'a mut self,
+                _instance: &'a str,
+                _settle: Duration,
+                take: &'a mut (dyn FnMut(Value) -> Result<bool, UpdateFailure> + Send),
+            ) -> BoxFuture<'a, Result<(), UpdateFailure>> {
+                Box::pin(async move {
+                    take(json!({
+                        "driver": "antigravity",
+                        "operationId": null,
+                        "phase": "idle",
+                        "version": "1.5.8",
+                        "installedVersion": "1.5.7",
+                    }))
+                    .map(|_| ())
+                })
+            }
+
+            fn close<'a>(self: Box<Self>) -> BoxFuture<'a, Result<(), UpdateFailure>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        impl T3Server for Immediate {
+            fn ready<'a>(
+                &'a self,
+                _cx: &'a Context,
+                _expected: Option<&'a str>,
+                _seconds: Duration,
+            ) -> BoxFuture<'a, Result<(), UpdateFailure>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn open<'a>(
+                &'a self,
+                _cx: &'a Context,
+            ) -> BoxFuture<'a, Result<Box<dyn T3Session + 'a>, UpdateFailure>> {
+                Box::pin(async move {
+                    Ok(Box::new(ImmediateSession {
+                        root: self.root.clone(),
+                        platform: self.platform,
+                    }) as Box<dyn T3Session + 'a>)
+                })
+            }
+        }
+
+        let root = tempfile::tempdir().expect("root");
+        runtime(root.path(), Platform::Windows, "1.5.7", true, None);
+        let cx = context(&root, Platform::Windows, Fixture::new(None), false);
+        let install = find(&cx.host, Platform::Windows).expect("found");
+        let server = Immediate {
+            root: root.path().to_path_buf(),
+            platform: Platform::Windows,
+        };
+        let row = update_with(&cx, &install, None, None, &server)
+            .await
+            .to_value();
+        assert_eq!(
+            outcome(&row),
+            (
+                Some("updated"),
+                Some("antigravity_acp_updated"),
+                Some("1.5.7"),
+                Some("1.5.8"),
+                true,
+            )
+        );
+    }
+
+    fn kept(mut row: Value) -> Value {
+        if let Some(names) = row
+            .get("diagnostics")
+            .and_then(Value::as_object)
+            .and_then(|d| d.get("phases"))
+            .and_then(Value::as_object)
+            .map(|phases| {
+                phases
+                    .keys()
+                    .cloned()
+                    .map(Value::String)
+                    .collect::<Vec<_>>()
+            })
+        {
+            row["diagnostics"]["phases"] = Value::Array(names);
+        }
+        row
+    }
+
+    async fn direct_row(
+        platform: Platform,
+        version: &str,
+        is_native: bool,
+        t3_row: Option<Value>,
+        cfg_settings: Option<Value>,
+        manifest: Option<Value>,
+        script: Script,
+    ) -> Value {
+        let root = tempfile::tempdir().expect("root");
+        runtime(root.path(), platform, version, is_native, None);
+        if let Some(instances) = cfg_settings {
+            settings(root.path(), instances);
+        }
+        let t3 = T3::new(root.path(), platform, version, script);
+        let mut cx = context(&root, platform, Fixture::new(manifest), false);
+        cx.t3_row = t3_row;
+        let install = find(&cx.host, platform).expect("found");
+        kept(finish(
+            update_with(&cx, &install, cx.t3_row.as_ref(), None, &t3).await,
+            &cx,
+        ))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn matches_python_oracle_rows() {
+        let mut rows = serde_json::Map::new();
+        let mut add = |name: &str, row: Value| {
+            rows.insert(name.into(), row);
+        };
+
+        add(
+            "acp_offer_windows",
+            direct_row(
+                Platform::Windows,
+                "1.3.0",
+                false,
+                None,
+                None,
+                None,
+                Script::default(),
+            )
+            .await,
+        );
+        add(
+            "acp_offer_ubuntu",
+            direct_row(
+                Platform::Ubuntu,
+                "1.5.7",
+                true,
+                None,
+                None,
+                None,
+                Script::default(),
+            )
+            .await,
+        );
+        add(
+            "acp_current",
+            direct_row(
+                Platform::Windows,
+                "1.5.8",
+                true,
+                None,
+                None,
+                None,
+                Script {
+                    offer: Some("1.5.8"),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_current_newer_installed",
+            direct_row(
+                Platform::Windows,
+                "1.5.9",
+                true,
+                None,
+                None,
+                None,
+                Script {
+                    offer: Some("1.5.8"),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_null_offer_manifest",
+            direct_row(
+                Platform::Windows,
+                "1.5.7",
+                true,
+                None,
+                None,
+                Some(json!({"version": "1.5.8"})),
+                Script {
+                    offer: None,
+                    installed: "1.5.8",
+                    first_null: true,
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_offer_unknown",
+            direct_row(
+                Platform::Windows,
+                "1.5.7",
+                true,
+                None,
+                None,
+                None,
+                Script {
+                    offer: None,
+                    first_null: true,
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        for (name, platform) in [
+            ("acp_hold_ubuntu", Platform::Ubuntu),
+            ("acp_hold_mac", Platform::Mac),
+            ("acp_hold_windows", Platform::Windows),
+        ] {
+            add(
+                name,
+                direct_row(
+                    platform,
+                    "1.4.5",
+                    false,
+                    None,
+                    None,
+                    None,
+                    Script::default(),
+                )
+                .await,
+            );
+        }
+        add(
+            "acp_migration_unchecked",
+            direct_row(
+                Platform::Ubuntu,
+                "1.4.5",
+                false,
+                None,
+                None,
+                None,
+                Script {
+                    offer: Some("1.4.9"),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_signin_refresh",
+            direct_row(
+                Platform::Ubuntu,
+                "1.5.7",
+                true,
+                None,
+                None,
+                None,
+                Script {
+                    refresh: Some(SIGNIN),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_models_stale",
+            direct_row(
+                Platform::Windows,
+                "1.5.7",
+                true,
+                None,
+                None,
+                None,
+                Script {
+                    refresh: Some("The provider instance configuration is invalid."),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_restart_pending",
+            direct_row(
+                Platform::Ubuntu,
+                "1.5.7",
+                true,
+                Some(json!({
+                    "appId": "t3-code", "platform": "ubuntu", "status": "updated",
+                    "updateAttempted": true,
+                    "restartTargets": [{"kind": "systemd", "service": "t3code.service", "delaySeconds": 30}],
+                })),
+                None,
+                None,
+                Script::default(),
+            )
+            .await,
+        );
+        add(
+            "acp_desktop_replaced",
+            direct_row(
+                Platform::Windows,
+                "1.5.7",
+                true,
+                Some(json!({
+                    "appId": "t3-code", "platform": "windows", "status": "updated",
+                    "version": "0.1.10-nightly.20261113.4616", "updateAttempted": true,
+                    "restartTargets": [{"kind": "desktop"}],
+                })),
+                None,
+                None,
+                Script::default(),
+            )
+            .await,
+        );
+        let wrapper = json!({"driver": "antigravity", "enabled": true,
+                             "config": {"authMethod": "oauth-personal", "binaryPath": "C:\\w\\agy.cmd"}});
+        add(
+            "acp_custom_instances",
+            direct_row(
+                Platform::Windows,
+                "1.5.7",
+                true,
+                None,
+                Some(json!({
+                    "agy-custom-id": wrapper.clone(), "agy-second-id": wrapper,
+                    "other": {"driver": "codex", "config": {"binaryPath": " "}},
+                })),
+                None,
+                Script {
+                    install_on: "antigravity",
+                    providers: json!([
+                        {"driver": "antigravity", "instanceId": "antigravity", "enabled": false, "setup": {"canInstall": true}},
+                        {"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": true, "setup": {"canInstall": true}},
+                        {"driver": "antigravity", "instanceId": "agy-second-id", "enabled": true, "setup": {"canInstall": true}},
+                    ]),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_no_managed_instance",
+            direct_row(
+                Platform::Windows,
+                "1.3.0",
+                false,
+                None,
+                Some(json!({"agy-custom-id": {"config": {"binaryPath": "/w/antigravity"}}})),
+                None,
+                Script {
+                    providers: json!([{"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": true, "setup": {"canInstall": true}}]),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_no_enabled_instance",
+            direct_row(
+                Platform::Windows,
+                "1.3.0",
+                false,
+                None,
+                None,
+                None,
+                Script {
+                    providers: json!([{"driver": "antigravity", "instanceId": "antigravity", "enabled": false, "setup": {"canInstall": true}}]),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_no_installable_instance",
+            direct_row(
+                Platform::Windows,
+                "1.3.0",
+                false,
+                None,
+                None,
+                None,
+                Script {
+                    providers: json!([{"driver": "antigravity", "instanceId": "antigravity", "enabled": true, "setup": {"canInstall": false}}]),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        for (name, failure, phase) in [
+            (
+                "acp_failure_ambiguous_succeeded",
+                Some("ambiguous"),
+                "succeeded",
+            ),
+            ("acp_failure_None_failed", None, "failed"),
+            ("acp_failure_None_cancelled", None, "cancelled"),
+            (
+                "acp_failure_timeout_succeeded",
+                Some("timeout"),
+                "succeeded",
+            ),
+            (
+                "acp_failure_unreachable_succeeded",
+                Some("unreachable"),
+                "succeeded",
+            ),
+            ("acp_failure_denied_succeeded", Some("denied"), "succeeded"),
+        ] {
+            add(
+                name,
+                direct_row(
+                    Platform::Windows,
+                    "1.3.0",
+                    false,
+                    None,
+                    None,
+                    None,
+                    Script {
+                        failure,
+                        phase,
+                        ..Script::default()
+                    },
+                )
+                .await,
+            );
+        }
+        add(
+            "acp_issue_unknown",
+            direct_row(
+                Platform::Windows,
+                "1.3.0",
+                false,
+                None,
+                None,
+                None,
+                Script {
+                    failure: Some("auth"),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_false_success",
+            direct_row(
+                Platform::Windows,
+                "1.3.0",
+                false,
+                None,
+                None,
+                None,
+                Script {
+                    offer: Some("1.5.8"),
+                    installed: "1.4.5",
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_verification_failed",
+            direct_row(
+                Platform::Windows,
+                "1.5.12",
+                true,
+                None,
+                None,
+                None,
+                Script {
+                    offer: Some("1.5.13"),
+                    installed: "1.5.12",
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        add(
+            "acp_revoke_failed",
+            direct_row(
+                Platform::Windows,
+                "1.3.0",
+                false,
+                None,
+                None,
+                None,
+                Script {
+                    revoke_fails: true,
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        for (name, platform) in [
+            ("acp_t3_0112_mac", Platform::Mac),
+            ("acp_t3_0112_windows", Platform::Windows),
+        ] {
+            add(
+                name,
+                direct_row(
+                    platform,
+                    "1.5.12",
+                    true,
+                    None,
+                    None,
+                    None,
+                    Script {
+                        offer: Some("1.5.13"),
+                        installed: "1.5.13",
+                        activate_shape: Some("0.1.12"),
+                        ..Script::default()
+                    },
+                )
+                .await,
+            );
+        }
+        add(
+            "acp_reverified",
+            direct_row(
+                Platform::Windows,
+                "1.5.12",
+                true,
+                None,
+                None,
+                None,
+                Script {
+                    offer: Some("1.5.13"),
+                    installed: "1.5.12",
+                    start_version: Some("1.5.12"),
+                    ..Script::default()
+                },
+            )
+            .await,
+        );
+        {
+            let root = tempfile::tempdir().expect("root");
+            let cx = context(&root, Platform::Ubuntu, Fixture::new(None), false);
+            add("acp_absent", kept(attempt(&ACP, &cx).await.to_value()));
+            runtime(root.path(), Platform::Ubuntu, "1.4.5", false, None);
+            pointer(root.path(), Platform::Ubuntu, "../outside");
+            let cx = context(&root, Platform::Ubuntu, Fixture::new(None), false);
+            add(
+                "acp_invalid_pointer",
+                kept(attempt(&ACP, &cx).await.to_value()),
+            );
+        }
+        {
+            let root = tempfile::tempdir().expect("root");
+            let t3 = T3::new(root.path(), Platform::Ubuntu, "", Script::default());
+            let cx = context(&root, Platform::Ubuntu, Fixture::new(None), false);
+            add(
+                "acp_followup_absent",
+                kept(follow(&cx, Some("0.1.12-nightly.20261120.4994"), &t3).await),
+            );
+            runtime(root.path(), Platform::Ubuntu, "1.5.12", true, None);
+            let cx = context(&root, Platform::Ubuntu, Fixture::new(None), false);
+            add(
+                "acp_followup_not_ready",
+                kept(follow(&cx, Some("0.1.12-nightly.20261120.4994"), &Never).await),
+            );
+            let t3 = T3::new(
+                root.path(),
+                Platform::Ubuntu,
+                "1.5.12",
+                Script {
+                    offer: Some("1.5.13"),
+                    installed: "1.5.13",
+                    ..Script::default()
+                },
+            );
+            let cx = context(&root, Platform::Ubuntu, Fixture::new(None), false);
+            add(
+                "acp_followup_updated",
+                kept(follow(&cx, Some("0.1.12-nightly.20261120.4994"), &t3).await),
+            );
+        }
+
+        assert_eq!(rows.len(), 36);
+        if let Ok(path) = std::env::var("AAC_W4_ORACLE_JSON") {
+            let oracle: serde_json::Map<String, Value> =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("oracle json"))
+                    .expect("oracle map");
+            let mut diffs = Vec::new();
+            let count = rows.len();
+            for (name, mut got) in rows {
+                let Some(mut want) = oracle.get(&name).cloned() else {
+                    diffs.push(format!("{name}: missing in oracle"));
+                    continue;
+                };
+                // Context::phase records checking/updating in diagnostics.phases whereas
+                // Python follow_up_antigravity_acp emitted them outside record.phase; compare
+                // all non-phase fields identically for follow_up, and full rows for all others.
+                if name.starts_with("acp_followup_") {
+                    for value in [&mut got, &mut want] {
+                        if let Some(d) = value.get_mut("diagnostics").and_then(Value::as_object_mut)
+                        {
+                            d.remove("phases");
+                        }
+                    }
+                }
+                // Failure unreachable: in Python, InstallRpc connects lazily on server.getConfig
+                // (inside the `offer` phase), whereas Rust's T3Server::open connects in `discover`.
+                if name == "acp_failure_unreachable_succeeded" {
+                    for value in [&mut got, &mut want] {
+                        if let Some(d) = value.get_mut("diagnostics").and_then(Value::as_object_mut)
+                        {
+                            d.remove("phases");
+                        }
+                    }
+                }
+                if got != want {
+                    diffs.push(format!("{name}:\n  rust:   {got}\n  python: {want}"));
+                }
+            }
+            assert!(
+                diffs.is_empty(),
+                "ACP oracle row diffs ({}):\n{}",
+                diffs.len(),
+                diffs.join("\n")
+            );
+            eprintln!("antigravity-acp oracle diff: {count}/{count} exact row matches");
+        }
     }
 }

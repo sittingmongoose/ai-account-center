@@ -22,8 +22,6 @@ const APP: &str = "cursor-cli";
 const PROBE: Duration = Duration::from_secs(20);
 /// Python `update_cursor`: the updater's own bound.
 const UPDATE: Duration = Duration::from_secs(180);
-/// Python `gui_command`'s `shown` label for the Cursor update.
-const GUI_LABEL: &str = "cursor-agent update (Mac GUI)";
 
 /// Python `\s*` for ASCII text (the workspace regex has no `unicode-perl`).
 macro_rules! blanks {
@@ -48,7 +46,7 @@ static POLICY: LazyLock<Regex> = LazyLock::new(|| {
         blanks!(),
         ":",
         blanks!(),
-        r"|UnauthorizedAccess(?-u:\b)|running scripts is disabled on this system|is not digitally signed",
+        r"UnauthorizedAccess(?-u:\b)|running scripts is disabled on this system|is not digitally signed",
     ))
     .expect("Cursor policy pattern")
 });
@@ -58,7 +56,7 @@ static AUTH: LazyLock<Regex> = LazyLock::new(|| {
         blanks!(),
         ":",
         blanks!(),
-        r"|401(?-u:\b)|(?-u:\b)401(?-u:\b)[^\n]{0,40}unauthori[sz]ed|please (?:log|sign) in",
+        r"401(?-u:\b)|(?-u:\b)401(?-u:\b)[^\n]{0,40}unauthori[sz]ed|please (?:log|sign) in",
     ))
     .expect("Cursor sign-in pattern")
 });
@@ -591,9 +589,11 @@ async fn run_update(
                 }
             }
         }
-        Platform::Mac => mac_gui(cx, remaining)
-            .await
-            .map_err(|error| classify(cx, &error)),
+        Platform::Mac => {
+            super::desktop::mac_gui_command(cx, super::desktop::GuiAction::CursorUpdate, remaining)
+                .await
+                .map_err(|error| classify(cx, &error))
+        }
         Platform::Ubuntu => {
             // stdout too: Cursor may print its refusal there.
             let mut argv = vec![install.path.as_os_str().to_owned()];
@@ -774,299 +774,14 @@ async fn failed(
     }
     let special = match error.code {
         "cursor_signin_needed" => Some(("cursor_signin_needed", Status::ActionRequired)),
-        "policy_blocked" => Some(("policy_blocked", Status::ActionRequired)),
         _ if install.platform == Platform::Windows && staged(&install.path) => {
             Some(("cursor_update_staged", Status::ActionRequired))
         }
+        "policy_blocked" => Some(("policy_blocked", Status::ActionRequired)),
         _ => None,
     };
     let (code, status) = special.unwrap_or((error.code, Status::Failed));
     row(install, status, before, after, code, attempted)
-}
-
-// ---------------------------------------------------------------------------
-// TEMPORARY (lane W4): stands in for lane W2's
-// `desktop::mac_gui_command(cx, GuiAction::CursorUpdate, timeout)` until its
-// bundle lands. The `cursor-update` half of `app_update_macos.gui_command`: a
-// short-lived LaunchAgent in the owner's GUI session. Delete this when W2 lands.
-// ---------------------------------------------------------------------------
-
-async fn bounded(
-    cx: &Context,
-    argv: Vec<OsString>,
-    maximum: Duration,
-    end: tokio::time::Instant,
-    capture: bool,
-    errors: bool,
-) -> Result<String, UpdateFailure> {
-    let remaining = end.saturating_duration_since(tokio::time::Instant::now());
-    if remaining.is_zero() {
-        return Err(UpdateFailure::new("timeout"));
-    }
-    let mut spec = CommandSpec::new(argv)
-        .timeout(maximum.min(remaining))
-        .quiet();
-    spec.capture = capture;
-    spec.merge_errors = errors;
-    cx.run(&spec).await.map(|output| output.stdout)
-}
-
-fn tail(path: &Path) -> String {
-    use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut stream) = std::fs::File::open(path) else {
-        return String::new();
-    };
-    let Ok(size) = stream.seek(SeekFrom::End(0)) else {
-        return String::new();
-    };
-    let start = size.saturating_sub(65_536);
-    let mut data = Vec::new();
-    if stream.seek(SeekFrom::Start(start)).is_err()
-        || stream.take(65_536).read_to_end(&mut data).is_err()
-    {
-        return String::new();
-    }
-    if start > 0 {
-        match data.iter().position(|byte| *byte == b'\n') {
-            Some(cut) => {
-                data.drain(..=cut);
-            }
-            None => data.clear(),
-        }
-    }
-    String::from_utf8_lossy(&data).into_owned()
-}
-
-fn agent_plist(label: &str, program: &Path, folder: &Path, output: &Path, error: &Path) -> Vec<u8> {
-    let xml = |text: &str| {
-        text.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    };
-    let mut text = format!(
-        concat!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
-            "\n",
-            r#"<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">"#,
-            "\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>{}</string>\n",
-            "<key>ProgramArguments</key><array><string>{}</string><string>update</string></array>\n",
-            "<key>WorkingDirectory</key><string>{}</string>\n<key>RunAtLoad</key><true/>\n",
-            "<key>ProcessType</key><string>Interactive</string>\n<key>KeepAlive</key><false/>\n",
-            "<key>AbandonProcessGroup</key><false/>\n<key>ExitTimeOut</key><integer>1</integer>\n",
-            "<key>StandardOutPath</key><string>{}</string>\n<key>StandardErrorPath</key><string>{}</string>\n",
-            "<key>EnvironmentVariables</key><dict>\n",
-        ),
-        xml(label),
-        xml(&program.to_string_lossy()),
-        xml(&folder.to_string_lossy()),
-        xml(&output.to_string_lossy()),
-        xml(&error.to_string_lossy()),
-    );
-    for (key, value) in common::NO_AUTO_UPDATE {
-        text.push_str(&format!(
-            "<key>{key}</key><string>{}</string>\n",
-            xml(value)
-        ));
-    }
-    text.push_str("</dict></dict></plist>\n");
-    text.into_bytes()
-}
-
-static STATE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(concat!("(?m)^", blanks!(), "state = (.+)$")).expect("launchd state")
-});
-static EXIT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(concat!("(?m)^", blanks!(), "last exit code = ([0-9]+)")).expect("launchd exit")
-});
-
-fn launchctl(items: &[&str]) -> Vec<OsString> {
-    let mut argv: Vec<OsString> = ["/bin/launchctl"].map(OsString::from).to_vec();
-    argv.extend(items.iter().map(|item| OsString::from(item.to_owned())));
-    argv
-}
-
-/// Python `command([...], timeout, quiet=True)` in `gui_command`'s `finally`: a fixed timeout.
-async fn fixed(cx: &Context, argv: Vec<OsString>, timeout: Duration) -> Result<(), UpdateFailure> {
-    cx.run(&CommandSpec::new(argv).timeout(timeout).quiet())
-        .await
-        .map(|_| ())
-}
-
-/// The one LaunchAgent `mac_gui` bootstrapped.
-struct Agent {
-    program: PathBuf,
-    domain: String,
-    service: String,
-    plist: PathBuf,
-    output: PathBuf,
-    error: PathBuf,
-}
-
-/// Python `gui_command`'s `try` without its `finally`: bootstrap the agent,
-/// then wait for it to exit.
-async fn gui_watch(
-    cx: &Context,
-    agent: &Agent,
-    end: tokio::time::Instant,
-) -> Result<(), UpdateFailure> {
-    let Agent {
-        program,
-        domain,
-        service,
-        plist,
-        output: output_path,
-        error: error_path,
-    } = agent;
-    let five = Duration::from_secs(5);
-    let mut argv = launchctl(&["bootstrap", domain]);
-    argv.push(plist.as_os_str().to_owned());
-    if bounded(cx, argv, five, end, false, false).await.is_err() {
-        return Err(UpdateFailure::new("mac_gui_unavailable"));
-    }
-    loop {
-        let output = match bounded(cx, launchctl(&["print", service]), five, end, true, false).await
-        {
-            Ok(output) => output,
-            Err(error) if error.code == "timeout" => return Err(error),
-            Err(error) => {
-                // A vanished service alone is not evidence of logout.
-                // Probe the GUI domain to distinguish session loss.
-                if let Err(refused) =
-                    bounded(cx, launchctl(&["print", domain]), five, end, false, true).await
-                {
-                    if refused.code == "timeout" {
-                        return Err(refused);
-                    }
-                    if refused
-                        .output
-                        .to_lowercase()
-                        .contains("could not find domain")
-                    {
-                        return Err(UpdateFailure::new("mac_gui_unavailable"));
-                    }
-                }
-                return Err(error);
-            }
-        };
-        let state = STATE
-            .captures(&output)
-            .map(|found| found[1].trim().to_owned());
-        let code = EXIT
-            .captures(&output)
-            .and_then(|found| found[1].parse::<i64>().ok());
-        let exited = state
-            .as_deref()
-            .is_some_and(|state| matches!(state, "not running" | "exited"));
-        if let Some(code) = code.filter(|_| exited) {
-            // The app's own words and exit code, so a refusal is classified
-            // on the Mac as it is on the other computers.
-            let argv = vec![program.as_os_str().to_owned(), OsString::from("update")];
-            if code == 0 {
-                cx.record(|record| record.ran(&argv, Some(GUI_LABEL), Some(0), None));
-                return Ok(());
-            }
-            let text = [tail(output_path), tail(error_path)]
-                .iter()
-                .filter(|part| !part.is_empty())
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join("\n");
-            cx.record(|record| record.ran(&argv, Some(GUI_LABEL), Some(code), None));
-            let lowered = text.to_lowercase();
-            return Err(
-                if lowered.contains("keychain") || lowered.contains("errsecinteractionnotallowed") {
-                    UpdateFailure {
-                        output: text,
-                        exit_code: Some(code),
-                        ..UpdateFailure::new("mac_keychain_locked")
-                    }
-                } else {
-                    UpdateFailure {
-                        output: text,
-                        exit_code: Some(code),
-                        ..UpdateFailure::failed()
-                    }
-                },
-            );
-        }
-        tokio::time::sleep(
-            Duration::from_millis(200)
-                .min(end.saturating_duration_since(tokio::time::Instant::now())),
-        )
-        .await;
-    }
-}
-
-async fn mac_gui(cx: &Context, timeout: Duration) -> Result<(), UpdateFailure> {
-    let program = cx.host.home.join(".local/bin/cursor-agent");
-    let end = tokio::time::Instant::now() + timeout;
-    // TEMPORARY: the GUI domain's user is the owner of the home folder.
-    #[cfg(unix)]
-    let user = std::fs::metadata(&cx.host.home)
-        .map(|meta| {
-            use std::os::unix::fs::MetadataExt;
-            meta.uid().to_string()
-        })
-        .unwrap_or_default();
-    #[cfg(not(unix))]
-    let user = "501".to_owned();
-    let domain = format!("gui/{user}");
-    let five = Duration::from_secs(5);
-    if bounded(cx, launchctl(&["print", &domain]), five, end, false, false)
-        .await
-        .is_err()
-    {
-        return Err(UpdateFailure::new("mac_gui_unavailable"));
-    }
-    let temporary = shared::private_temporary(cx)?;
-    let folder = temporary.path().to_path_buf();
-    let label = format!(
-        "com.ccs.app-updates.cursor-update.{}",
-        folder
-            .file_name()
-            .and_then(OsStr::to_str)
-            .unwrap_or("agent")
-            .trim_start_matches("stage-")
-    );
-    let service = format!("{domain}/{label}");
-    let (output_path, error_path, plist) = (
-        folder.join("stdout"),
-        folder.join("stderr"),
-        folder.join("agent.plist"),
-    );
-    if std::fs::write(
-        &plist,
-        agent_plist(&label, &program, &folder, &output_path, &error_path),
-    )
-    .is_err()
-    {
-        return Err(UpdateFailure::failed());
-    }
-    let agent = Agent {
-        program,
-        domain,
-        service: service.clone(),
-        plist,
-        output: output_path,
-        error: error_path,
-    };
-    let outcome = gui_watch(cx, &agent, end).await;
-    // launchd owns the process group. Bootout stops it and its children before
-    // its private folder goes; an exited or removed service has nothing to stop.
-    if fixed(
-        cx,
-        launchctl(&["bootout", &service]),
-        Duration::from_secs(10),
-    )
-    .await
-    .is_err()
-        && fixed(cx, launchctl(&["print", &service]), Duration::from_secs(5))
-            .await
-            .is_ok()
-    {
-        return Err(UpdateFailure::new("mac_gui_cleanup_failed"));
-    }
-    outcome
 }
 
 #[cfg(test)]
@@ -1076,9 +791,11 @@ mod tests {
     use crate::apps::updater::{Shared, System, attempt};
     use base64::Engine as _;
     use std::sync::Arc;
+    #[cfg(unix)]
+    use std::sync::atomic::AtomicBool;
     use std::sync::{
         Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     };
 
     const OLD: &str = "2026.11.05-old";
@@ -1842,7 +1559,7 @@ At line:1 char:28
                         *plist.lock().expect("plist") =
                             std::fs::read(&spec.argv[3]).expect("the agent's plist");
                     }
-                    "print" if argv[2].contains('/') => {
+                    "print" if argv[2].contains("/com.ccs.") => {
                         std::fs::remove_file(&path).expect("unlink");
                         std::os::unix::fs::symlink(&newer, &path).expect("relink");
                         return Ok(CommandOutput {
@@ -1881,8 +1598,11 @@ At line:1 char:28
             home.join(".local/bin/cursor-agent").display()
         )));
         assert!(agent.contains("<string>update</string>"));
-        assert!(agent.contains("<key>ProcessType</key><string>Interactive</string>"));
-        assert!(agent.contains("<key>EnvironmentVariables</key><dict>"));
+        assert!(
+            agent.contains("<key>ProcessType</key>")
+                && agent.contains("<string>Interactive</string>")
+        );
+        assert!(agent.contains("<key>EnvironmentVariables</key>") && agent.contains("<dict>"));
         assert_eq!(bootouts.load(Ordering::SeqCst), 1);
         assert!(
             system
@@ -1911,7 +1631,7 @@ At line:1 char:28
                     let folder = Path::new(&spec.argv[3]).parent().expect("folder");
                     std::fs::write(folder.join("stderr"), REFUSED_SIGNIN).expect("stderr");
                 }
-                "print" if argv[2].contains('/') => {
+                "print" if argv[2].contains("/com.ccs.") => {
                     return Ok(CommandOutput {
                         stdout: "state = not running\nlast exit code = 1\n".into(),
                     });
@@ -2395,5 +2115,531 @@ At line:1 char:28
         assert_ne!(row["diagnostics"]["cause"], "auth_required");
         assert_eq!(row["diagnostics"]["cause"], "installer_failed");
         assert_eq!(notes(&row), ["signin_undetermined"]);
+    }
+
+    #[test]
+    fn policy_and_auth_patterns_do_not_false_match_unrelated_errors() {
+        for output in [
+            "FullyQualifiedErrorId : CommandNotFoundException",
+            "FullyQualifiedErrorId : UnauthorizedAccessException",
+            "UnauthorizedAccess without error id",
+        ] {
+            let (failure, _) = classified(output.into(), "update_failed", Some(1));
+            assert_eq!(failure.code, "update_failed", "{output}");
+        }
+        let (failure, _) = classified(
+            "FullyQualifiedErrorId : UnauthorizedAccess".into(),
+            "update_failed",
+            Some(1),
+        );
+        assert_eq!(failure.code, "policy_blocked");
+
+        for output in [
+            r#"{"status": 500, "error": "server"}"#,
+            "retry at port 401 failed",
+        ] {
+            let (failure, _) = classified(output.into(), "update_failed", Some(1));
+            assert_eq!(failure.code, "update_failed", "{output}");
+        }
+        let (failure, _) = classified(
+            r#"{"status": 401, "error": "nope"}"#.into(),
+            "update_failed",
+            Some(1),
+        );
+        assert_eq!(
+            (failure.code, failure.reason),
+            ("cursor_signin_needed", Some("http_401"))
+        );
+    }
+
+    #[tokio::test]
+    async fn windows_staged_files_take_precedence_over_policy_blocked() {
+        // app_update_cursor.py:322-327 checks cursor_staged before policy_blocked.
+        let root = tempfile::tempdir().expect("root");
+        let folder = windows_layout(
+            root.path(),
+            &["cursor-agent.ps1", "cursor-agent.cmd"],
+            &["2026.11.11-b912975"],
+        );
+        let staged_folder = folder.join("versions").join(format!("{NEW}.new"));
+        std::fs::create_dir_all(&staged_folder).expect("staged");
+        let cx = context(
+            root.path(),
+            Platform::Windows,
+            Vec::new(),
+            FakeSystem::answering(ok),
+        );
+        let install = detect(&cx).await.expect("found");
+        let row = failed(
+            &cx,
+            &install,
+            install.version.clone(),
+            true,
+            UpdateFailure::new("policy_blocked")
+                .with_cause(FailureCause::PolicyBlocked, Some("direct_failed")),
+        )
+        .await
+        .to_value();
+        assert_eq!(
+            pair(&row, "status", "messageCode"),
+            ("action_required".into(), "cursor_update_staged".into())
+        );
+    }
+
+    fn kept(mut row: Value) -> Value {
+        if let Some(names) = row
+            .get("diagnostics")
+            .and_then(Value::as_object)
+            .and_then(|d| d.get("phases"))
+            .and_then(Value::as_object)
+            .map(|phases| {
+                phases
+                    .keys()
+                    .cloned()
+                    .map(Value::String)
+                    .collect::<Vec<_>>()
+            })
+        {
+            row["diagnostics"]["phases"] = Value::Array(names);
+        }
+        row
+    }
+
+    fn finish(mut row: AppRow, cx: &Context) -> Value {
+        if row.diagnostics.is_none() {
+            let value = row.to_value();
+            row.diagnostics = Some(cx.record(|record| record.export(&value)));
+        }
+        kept(row.to_value())
+    }
+
+    #[tokio::test]
+    async fn matches_python_oracle_rows() {
+        let mut rows = serde_json::Map::new();
+        let mut add = |name: &str, row: Value| {
+            rows.insert(name.into(), row);
+        };
+
+        // Windows regression cases
+        for (name, fake) in [
+            (
+                "cursor_restricted_policy",
+                Windows {
+                    restricted: true,
+                    update_stderr: None,
+                },
+            ),
+            (
+                "cursor_owner_pc_401",
+                Windows {
+                    restricted: false,
+                    update_stderr: Some(REFUSED_SIGNIN),
+                },
+            ),
+            (
+                "cursor_401_undetermined",
+                Windows {
+                    restricted: false,
+                    update_stderr: Some(""),
+                },
+            ),
+            (
+                "cursor_b3_enospc",
+                Windows {
+                    restricted: false,
+                    update_stderr: Some("Error: ENOSPC: no space left on device, write"),
+                },
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("root");
+            windows_layout(
+                root.path(),
+                &[
+                    "agent.cmd",
+                    "agent.ps1",
+                    "cursor-agent.cmd",
+                    "cursor-agent.ps1",
+                ],
+                &["2026.03.20-44cb435", "2026.11.11-b912975"],
+            );
+            let cx = context(
+                root.path(),
+                Platform::Windows,
+                Vec::new(),
+                FakeSystem::answering(move |spec| windows(spec, &fake)),
+            );
+            let install = detect(&cx).await.expect("found");
+            add(name, finish(update(&cx, &install).await, &cx));
+        }
+
+        // Group policy direct fallback (ok, failed, and staged over policy)
+        for (name, direct, stage_on_direct) in [
+            ("cursor_group_policy_direct", None, false),
+            ("cursor_b13_direct_ok", None, false),
+            (
+                "cursor_b13_direct_failed",
+                Some(Err(UpdateFailure {
+                    output: "Error: getaddrinfo ENOTFOUND api2.cursor.sh\n".into(),
+                    exit_code: Some(1),
+                    ..UpdateFailure::failed()
+                })),
+                false,
+            ),
+            (
+                "cursor_staged_over_policy",
+                Some(Err(UpdateFailure {
+                    output: "Error: getaddrinfo ENOTFOUND api2.cursor.sh\n".into(),
+                    exit_code: Some(1),
+                    ..UpdateFailure::failed()
+                })),
+                true,
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("root");
+            let folder = windows_layout(
+                root.path(),
+                &["cursor-agent.ps1", "cursor-agent.cmd"],
+                &["2026.11.11-b912975"],
+            );
+            let staged_dir = folder.join("versions").join(format!("{NEW}.new"));
+            let cx = context(
+                root.path(),
+                Platform::Windows,
+                Vec::new(),
+                FakeSystem::answering(move |spec| {
+                    if stage_on_direct
+                        && spec
+                            .argv
+                            .first()
+                            .is_some_and(|arg| arg.to_string_lossy().ends_with("node.exe"))
+                    {
+                        std::fs::create_dir_all(&staged_dir).expect("staged");
+                    }
+                    group_policy(spec, direct.clone())
+                }),
+            );
+            let install = detect(&cx).await.expect("found");
+            add(name, finish(update(&cx, &install).await, &cx));
+        }
+
+        // Windows .cmd-only update
+        {
+            let root = tempfile::tempdir().expect("root");
+            windows_layout(root.path(), &["cursor-agent.cmd"], &[]);
+            let probes = AtomicUsize::new(0);
+            let cx = context(
+                root.path(),
+                Platform::Windows,
+                Vec::new(),
+                FakeSystem::answering(move |spec| {
+                    if script_of(&spec.argv).contains(" --version") {
+                        let answer = match probes.fetch_add(1, Ordering::SeqCst) {
+                            0 => OLD,
+                            _ => NEW,
+                        };
+                        return Ok(CommandOutput {
+                            stdout: format!("{answer}\n"),
+                        });
+                    }
+                    Ok(CommandOutput::default())
+                }),
+            );
+            let install = detect(&cx).await.expect("found");
+            add(
+                "cursor_cmd_update",
+                finish(update(&cx, &install).await, &cx),
+            );
+        }
+
+        // Windows staged (success + failure)
+        for (name, stderr) in [
+            ("cursor_staged_success", None),
+            (
+                "cursor_staged_failure",
+                Some("Error: EPERM: another run holds the files"),
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("root");
+            let folder = windows_layout(
+                root.path(),
+                &["cursor-agent.ps1", "cursor-agent.cmd"],
+                &["2026.11.11-b912975"],
+            );
+            std::fs::create_dir_all(folder.join("versions").join(format!("{NEW}.new")))
+                .expect("staged");
+            let fake = Windows {
+                restricted: false,
+                update_stderr: stderr,
+            };
+            let cx = context(
+                root.path(),
+                Platform::Windows,
+                Vec::new(),
+                FakeSystem::answering(move |spec| windows(spec, &fake)),
+            );
+            let install = detect(&cx).await.expect("found");
+            add(name, finish(update(&cx, &install).await, &cx));
+        }
+
+        // Unix-only fixtures (B2 shadow, Mac GUI update + 401, Linux native, numeric versions, attempt_one)
+        #[cfg(unix)]
+        {
+            // B2 shadow
+            let root = tempfile::tempdir().expect("root");
+            let version = "2026.11.11-b912975";
+            let old = binary(root.path(), version);
+            let newer = root
+                .path()
+                .join("home/.local/share/cursor-agent/versions/2026.11.13-abcd/cursor-agent");
+            let path = link(&old, root.path());
+            let other = root.path().join("home/opt/bin/cursor-agent");
+            executable(&other, "#!/bin/sh\necho 2026.01.01-old\n");
+            let updated = AtomicBool::new(false);
+            let (first, relink) = (other.clone(), path.clone());
+            let cx = context(
+                root.path(),
+                Platform::Ubuntu,
+                vec![
+                    other.parent().expect("bin").to_path_buf(),
+                    path.parent().expect("bin").to_path_buf(),
+                ],
+                FakeSystem::answering(move |spec| {
+                    let answer = if spec.argv.last() == Some(&OsString::from("update")) {
+                        executable(&newer, "#!/bin/sh\necho 2026.11.13-abcd\n");
+                        std::fs::remove_file(&relink).expect("unlink");
+                        std::os::unix::fs::symlink(&newer, &relink).expect("relink");
+                        updated.store(true, Ordering::SeqCst);
+                        return Ok(CommandOutput::default());
+                    } else if spec.argv[0] == first.as_os_str() {
+                        "2026.01.01-old"
+                    } else if updated.load(Ordering::SeqCst) {
+                        "2026.11.13-abcd"
+                    } else {
+                        version
+                    };
+                    Ok(CommandOutput {
+                        stdout: format!("{answer}\n"),
+                    })
+                }),
+            );
+            let install = detect(&cx).await.expect("found");
+            add("cursor_b2_shadow", finish(update(&cx, &install).await, &cx));
+
+            // B4 Mac GUI 401
+            let root = tempfile::tempdir().expect("root");
+            link(&binary(root.path(), "2026.11.11-b912975"), root.path());
+            let cx = context(
+                root.path(),
+                Platform::Mac,
+                Vec::new(),
+                FakeSystem::answering(move |spec| {
+                    let argv: Vec<String> = spec
+                        .argv
+                        .iter()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect();
+                    match argv[1].as_str() {
+                        "bootstrap" => {
+                            let folder = Path::new(&spec.argv[3]).parent().expect("folder");
+                            std::fs::write(folder.join("stderr"), REFUSED_SIGNIN).expect("stderr");
+                        }
+                        "print" if argv[2].contains("/com.ccs.") => {
+                            return Ok(CommandOutput {
+                                stdout: "state = not running\nlast exit code = 1\n".into(),
+                            });
+                        }
+                        _ => {}
+                    }
+                    Ok(CommandOutput::default())
+                }),
+            );
+            let install = detect(&cx).await.expect("found");
+            add(
+                "cursor_b4_gui_401",
+                finish(update(&cx, &install).await, &cx),
+            );
+
+            // Mac GUI update success
+            let root = tempfile::tempdir().expect("root");
+            let old = binary(root.path(), OLD);
+            let newer = binary(root.path(), NEW);
+            let path = link(&old, root.path());
+            let cx = context(
+                root.path(),
+                Platform::Mac,
+                Vec::new(),
+                FakeSystem::answering(move |spec| {
+                    let argv: Vec<String> = spec
+                        .argv
+                        .iter()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect();
+                    if argv[1] == "print" && argv[2].contains("/com.ccs.") {
+                        std::fs::remove_file(&path).expect("unlink");
+                        std::os::unix::fs::symlink(&newer, &path).expect("relink");
+                        return Ok(CommandOutput {
+                            stdout: "state = not running\nlast exit code = 0\n".into(),
+                        });
+                    }
+                    Ok(CommandOutput::default())
+                }),
+            );
+            let install = detect(&cx).await.expect("found");
+            add(
+                "cursor_mac_update",
+                finish(update(&cx, &install).await, &cx),
+            );
+
+            // Linux native update
+            let root = tempfile::tempdir().expect("root");
+            let versions = root.path().join("home/.local/share/cursor-agent/versions");
+            let (old, newer) = (
+                versions.join(OLD).join("cursor-agent"),
+                versions.join(NEW).join("cursor-agent"),
+            );
+            let path = root.path().join("home/.local/bin/cursor-agent");
+            let quote = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
+            executable(
+                &old,
+                &format!(
+                    "#!/bin/sh\ncase \"$1\" in\n  --version) echo {OLD} ;;\n  update) n={}; mkdir -p \"$(dirname \"$n\")\"; printf '#!/bin/sh\\necho {NEW}\\n' > \"$n\"; chmod 755 \"$n\"; rm -f {link}; ln -s \"$n\" {link} ;;\nesac\n",
+                    quote(&newer),
+                    link = quote(&path)
+                ),
+            );
+            link(&old, root.path());
+            let cx = context(
+                root.path(),
+                Platform::Ubuntu,
+                Vec::new(),
+                Arc::new(common::Native),
+            );
+            let install = detect(&cx).await.expect("found");
+            add(
+                "cursor_linux_native",
+                finish(update(&cx, &install).await, &cx),
+            );
+
+            // Numeric version comparison cases
+            for (name, before, after) in [
+                (
+                    "cursor_ver_numeric_up",
+                    "2026.9.30-abcdef1",
+                    "2026.10.01-abcdef2",
+                ),
+                (
+                    "cursor_ver_went_down",
+                    "2026.11.13-abcdef1",
+                    "2026.11.11-abcdef2",
+                ),
+                (
+                    "cursor_ver_same_day_diff_hash",
+                    "2026.11.11-aaaaaaa",
+                    "2026.11.11-bbbbbbb",
+                ),
+                (
+                    "cursor_ver_same_current",
+                    "2026.11.11-aaaaaaa",
+                    "2026.11.11-aaaaaaa",
+                ),
+            ] {
+                let root = tempfile::tempdir().expect("root");
+                let old = binary(root.path(), before);
+                link(&old, root.path());
+                let current = Mutex::new(before);
+                let cx = context(
+                    root.path(),
+                    Platform::Ubuntu,
+                    Vec::new(),
+                    FakeSystem::answering(move |spec| {
+                        if spec.argv.last() == Some(&OsString::from("update")) {
+                            *current.lock().expect("version") = after;
+                            return Ok(CommandOutput::default());
+                        }
+                        Ok(CommandOutput {
+                            stdout: format!("{}\n", current.lock().expect("version")),
+                        })
+                    }),
+                );
+                let install = detect(&cx).await.expect("found");
+                add(name, finish(update(&cx, &install).await, &cx));
+            }
+
+            // attempt_one edge cases
+            let root = tempfile::tempdir().expect("root");
+            let cx = context(
+                root.path(),
+                Platform::Ubuntu,
+                Vec::new(),
+                FakeSystem::answering(ok),
+            );
+            add(
+                "cursor_absent",
+                kept(attempt(&CURSOR, &cx).await.to_value()),
+            );
+            let outside = cx.host.home.join(".local/bin/cursor-agent");
+            executable(&outside, "outside");
+            let cx = context(
+                root.path(),
+                Platform::Ubuntu,
+                Vec::new(),
+                FakeSystem::answering(ok),
+            );
+            add(
+                "cursor_unmanaged",
+                kept(attempt(&CURSOR, &cx).await.to_value()),
+            );
+            std::fs::remove_file(&outside).expect("remove");
+            link(&binary(root.path(), OLD), root.path());
+            let cx = context(
+                root.path(),
+                Platform::Ubuntu,
+                Vec::new(),
+                FakeSystem::answering(|_| refused("timeout")),
+            );
+            add(
+                "cursor_probe_timeout",
+                kept(attempt(&CURSOR, &cx).await.to_value()),
+            );
+            let cx = context(
+                root.path(),
+                Platform::Ubuntu,
+                Vec::new(),
+                FakeSystem::answering(|_| {
+                    Ok(CommandOutput {
+                        stdout: "nothing here".into(),
+                    })
+                }),
+            );
+            add(
+                "cursor_probe_unparsed",
+                kept(attempt(&CURSOR, &cx).await.to_value()),
+            );
+        }
+
+        assert_eq!(rows.len(), if cfg!(unix) { 23 } else { 11 });
+        if let Ok(path) = std::env::var("AAC_W4_ORACLE_JSON") {
+            let oracle: serde_json::Map<String, Value> =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("oracle json"))
+                    .expect("oracle map");
+            let mut diffs = Vec::new();
+            let count = rows.len();
+            for (name, got) in rows {
+                let Some(want) = oracle.get(&name) else {
+                    diffs.push(format!("{name}: missing in oracle"));
+                    continue;
+                };
+                if &got != want {
+                    diffs.push(format!("{name}:\n  rust:   {got}\n  python: {want}"));
+                }
+            }
+            assert!(
+                diffs.is_empty(),
+                "Cursor oracle row diffs ({}):\n{}",
+                diffs.len(),
+                diffs.join("\n")
+            );
+            eprintln!("cursor oracle diff: {count}/{count} exact row matches");
+        }
     }
 }
