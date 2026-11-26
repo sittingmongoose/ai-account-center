@@ -3,6 +3,7 @@
 pub mod build;
 pub mod bundle;
 pub mod file_policy;
+pub mod fixture;
 pub mod guards;
 pub mod lineage;
 pub mod perf;
@@ -72,12 +73,13 @@ pub fn dispatch(root: &Path, args: &[String]) -> Result<(), Box<dyn Error>> {
         "perf" => perf::run(root, rest),
         "release" => release::run(root, rest),
         "check" => guards::run(root, rest),
+        "fixture" => fixture::run(rest),
         other => Err(format!("Unknown xtask command: {other}").into()),
     }
 }
 
 fn print_usage() {
     println!(
-        "Usage: aac-xtask <command> [args...]\n\nCommands:\n  build         Build dashboard UI and native artifacts\n  ui-validate   Validate built Leptos UI artifacts\n  release       Verify, stage, and rehearse release packages\n  check         Check personal details, line endings, docs, and inventory\n  perf          Run memory budget benchmark or generate synthetic fixture"
+        "Usage: aac-xtask <command> [args...]\n\nCommands:\n  build         Build dashboard UI and native artifacts\n  ui-validate   Validate built Leptos UI artifacts\n  release       Verify, stage, and rehearse release packages\n  check         Check personal details, line endings, docs, and inventory\n  perf          Run memory budget benchmark or generate synthetic fixture\n  fixture       Generate Status or Scoreboard reports"
     );
 }

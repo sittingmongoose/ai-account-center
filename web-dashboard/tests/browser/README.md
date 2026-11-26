@@ -214,3 +214,19 @@ the band at 82 pt, and the account menu and toasts start below a taller band.
 - An open exact-token explanation follows a live model update.
 
 The fixture server answers `/` with the start page, which the frame warms 4 s after it starts.
+
+### Native fixture generators
+
+`aac-xtask fixture status <reports-dir> --no-video` and
+`aac-xtask fixture scoreboard <reports-dir>` generate the same synthetic documents as
+the existing scripts. Status accepts `--ccs-dir`, `--with-kinds`, `--with-problems`,
+`--no-video`, and `--no-quota`. `--now <Unix milliseconds>` fixes the clock;
+`--json` returns the same metadata as the old module exports. Existing report trees
+are refused. Signing keys and answer history stay inside the explicitly supplied
+fixture store. Video is optional and needs ffmpeg.
+
+`native-fixtures.mjs` exports `writeStatusFixture` and `writeScoreboardFixture` with
+the existing module option shapes. Set `AAC_XTASK` to a built executable (otherwise
+it uses `target/debug/aac-xtask`). The adapter starts no build and clears inherited
+store settings, so module callers only write answers when they pass `ccsDir`.
+The current kit still imports the old scripts until the coordinated caller cutover.
