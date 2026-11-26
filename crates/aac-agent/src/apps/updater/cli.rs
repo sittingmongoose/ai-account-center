@@ -3,8 +3,8 @@
 //! `_current_block`, `claude_current`, `check_readiness`, `update_cli`,
 //! `perform_cli_update`, `npm_view_latest` and the Muse helpers).
 use super::{
-    AppRow, AppUpdater, BoxFuture, CommandSpec, Context, Detection, FailureCause, Installed,
-    Platform, Probe, Status, UpdateFailure,
+    AppRow, AppUpdater, BoxFuture, CommandSpec, Context, Detection, Installed, Platform, Probe,
+    Status, UpdateFailure,
     common::{version_text, version_tuple, write_private_json},
     processes::{self, CliInstances, Process, ProcessTable},
     shared::{self, Probed},
@@ -61,8 +61,6 @@ const PACKAGE_JSON_LIMIT: u64 = 64 * 1024;
 /// Python `CODEX_BRIDGE_SECONDS`.
 const CODEX_BRIDGE_SECONDS: u64 = 420;
 const CLAUDE_RELEASES: &str = "https://downloads.claude.ai/claude-code-releases/";
-/// Python `MUSE_WARM_PROMPT` (`app_update_macos.py`).
-const MUSE_WARM_PROMPT: &str = "Reply with the word: ok";
 const MUSE_QUOTA_MARKER: &str = "subscription quota exhausted";
 const MUSE_QUOTA_RESET_MAX: usize = 64;
 
@@ -741,7 +739,12 @@ async fn muse_warm_catalog(
     if !binary.is_file() {
         return Ok(false);
     }
-    let words = ["exec", "--contributor-mode", "off", MUSE_WARM_PROMPT];
+    let words = [
+        "exec",
+        "--contributor-mode",
+        "off",
+        super::desktop::MUSE_WARM_PROMPT,
+    ];
     let argv: Vec<OsString> = if refreshed.platform == Platform::Windows {
         let launcher = binary.with_file_name(".muse-launcher.ps1");
         if !launcher.is_file() {
@@ -794,11 +797,10 @@ async fn muse_warm_catalog(
     }
 }
 
-/// The Mac warm runs in the user's GUI session: W2's `desktop::mac_gui_command("muse-warm")`
-/// (Python `app_update_macos.gui_command`). Until W2's export lands it cannot run.
+/// The Mac warm runs in the user's GUI session (Python `app_update_macos.gui_command`,
+/// W2's `desktop::mac_gui_command`).
 async fn mac_muse_warm(cx: &Context, timeout: Duration) -> Result<(), UpdateFailure> {
-    let _ = (cx, timeout);
-    Err(UpdateFailure::new("readiness_unknown"))
+    super::desktop::mac_gui_command(cx, super::desktop::GuiAction::MuseWarm, timeout).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1435,23 +1437,17 @@ async fn codex_daemon_update(
     Ok(payload)
 }
 
-/// W2's `desktop::codex_bridge(cx, Cli, None, false, seconds)` (lead decision A: W2 ports
-/// `app_update_codex.cjs` once on P2's runtime). Until it lands the row is an honest unknown.
+/// Ubuntu Codex with its shared daemon: W2's port of `app_update_codex.cjs`
+/// (`desktop::codex_bridge`). It takes `~/.codex/.ccs-activation.lock` itself.
 async fn codex_bridge(
     cx: &Context,
-    install: &Installed,
+    _install: &Installed,
     seconds: u64,
 ) -> Result<AppRow, UpdateFailure> {
-    let _ = seconds;
-    cx.record(|record| record.blame(FailureCause::Unknown, Some("codex_bridge")));
-    let version = install.version.as_deref();
-    Ok(AppRow::of(
-        install,
-        Status::Unknown,
-        version,
-        version,
-        "readiness_unknown",
-    ))
+    Ok(
+        super::desktop::codex_bridge(cx, super::desktop::BridgeMode::Cli, None, false, seconds)
+            .await,
+    )
 }
 
 #[cfg(test)]

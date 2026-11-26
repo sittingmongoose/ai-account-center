@@ -257,3 +257,18 @@ async fn scan_uses_the_shared_library_without_changing_its_reply_bytes() {
         )
     );
 }
+
+/// W6: T3's helper subcommands dispatch before agent framing (`aac-agent --t3-issuer`
+/// with no parent and CLI exits 125, as W5's issuer bootstrap answers; any other
+/// unknown argument would exit 2).
+#[test]
+fn t3_helper_subcommands_run_before_agent_framing() {
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_aac-agent"))
+        .arg("--t3-issuer")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("agent runs");
+    assert_eq!(status.code(), Some(125));
+}

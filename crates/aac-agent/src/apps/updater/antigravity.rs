@@ -404,7 +404,9 @@ pub(super) trait T3Session: Send {
     ) -> BoxFuture<'a, Result<(), UpdateFailure>>;
 
     /// Python `InstallRpc.close`: end the session (its bearer is revoked).
-    fn close<'a>(self: Box<Self>) -> BoxFuture<'a, Result<(), UpdateFailure>>;
+    fn close<'a>(self: Box<Self>) -> BoxFuture<'a, Result<(), UpdateFailure>>
+    where
+        Self: 'a;
 }
 
 /// How the updater reaches the local T3 server (Python `wait_ready`, `discover`
@@ -1099,9 +1101,9 @@ async fn follow_up_with(cx: &Context, expected: Option<&str>, server: &dyn T3Ser
 }
 
 // ---------------------------------------------------------------------------
-// TEMPORARY (lane W4): the production binding is lane W5's `t3.rs`. Until its
-// bundle lands the local client answers honestly that it is not there, so a
-// row reads `action_required` / `t3_not_ready` and nothing is installed.
+// The production binding (wired by W6): lane W5's T3 RPC client in `t3.rs`
+// (`discover`, `wait_ready`, `Session`, Python `t3_rpc.discover` / `wait_ready` /
+// `InstallRpc`).
 // ---------------------------------------------------------------------------
 
 struct Local;
@@ -1109,24 +1111,85 @@ struct Local;
 impl T3Server for Local {
     fn ready<'a>(
         &'a self,
-        _cx: &'a Context,
-        _expected: Option<&'a str>,
-        _seconds: Duration,
+        cx: &'a Context,
+        expected: Option<&'a str>,
+        seconds: Duration,
     ) -> BoxFuture<'a, Result<(), UpdateFailure>> {
-        Box::pin(async {
-            Err(UpdateFailure::new("t3_not_ready")
-                .with_cause(FailureCause::T3NotReady, Some("t3_rpc_not_ported")))
-        })
+        Box::pin(super::t3::wait_ready(cx, expected, seconds))
     }
 
     fn open<'a>(
         &'a self,
-        _cx: &'a Context,
+        cx: &'a Context,
     ) -> BoxFuture<'a, Result<Box<dyn T3Session + 'a>, UpdateFailure>> {
-        Box::pin(async {
-            Err(UpdateFailure::new("t3_not_ready")
-                .with_cause(FailureCause::T3NotReady, Some("t3_rpc_not_ported")))
+        Box::pin(async move {
+            let endpoint = super::t3::discover(cx).await?;
+            Ok(
+                Box::new(LocalSession(super::t3::Session::new(cx, &endpoint)))
+                    as Box<dyn T3Session + 'a>,
+            )
         })
+    }
+}
+
+/// One `InstallRpc` session on W5's client.
+struct LocalSession<'c>(super::t3::Session<'c>);
+
+impl T3Session for LocalSession<'_> {
+    fn call<'a>(
+        &'a mut self,
+        method: &'a str,
+        payload: Value,
+    ) -> BoxFuture<'a, Result<Value, UpdateFailure>> {
+        Box::pin(self.0.call(method, payload))
+    }
+
+    fn states<'a>(
+        &'a mut self,
+        instance: &'a str,
+        take: &'a mut (dyn FnMut(Value) -> Result<bool, UpdateFailure> + Send),
+    ) -> BoxFuture<'a, Result<(), UpdateFailure>> {
+        Box::pin(async move {
+            // Dropping the stream after `take` says stop interrupts the subscription.
+            let mut stream = self.0.subscribe(instance).await?;
+            while let Some(item) = stream.next().await {
+                if take(item?)? {
+                    break;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn offer<'a>(
+        &'a mut self,
+        instance: &'a str,
+        settle: Duration,
+        take: &'a mut (dyn FnMut(Value) -> Result<bool, UpdateFailure> + Send),
+    ) -> BoxFuture<'a, Result<(), UpdateFailure>> {
+        Box::pin(async move {
+            let mut stream = self.0.watch(instance, settle).await?;
+            while let Some(item) = stream.next().await {
+                match item {
+                    // Python `read_offer`: a quiet stream past the settle time ends the read.
+                    Err(failure) if failure.code == "t3_install_timeout" => break,
+                    Err(failure) => return Err(failure),
+                    Ok(value) => {
+                        if take(value)? {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn close<'a>(self: Box<Self>) -> BoxFuture<'a, Result<(), UpdateFailure>>
+    where
+        Self: 'a,
+    {
+        Box::pin(self.0.close())
     }
 }
 
@@ -3168,9 +3231,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn without_a_t3_client_the_row_says_so_and_nothing_is_installed() {
-        // The binding lane W5's `t3.rs` backs: until it lands the local client is not
-        // there, and the row says so instead of guessing.
+    async fn without_t3_on_the_host_the_row_says_so_and_nothing_is_installed() {
+        // The production client (W5's `t3.rs`) finds no T3 under this host: Python's
+        // `wait_ready` raises `t3_absent` (reason `no_t3_install`) and nothing is installed.
         let root = tempfile::tempdir().expect("root");
         runtime(root.path(), Platform::Ubuntu, "1.5.7", true, None);
         let before = active(root.path(), Platform::Ubuntu);
@@ -3184,8 +3247,8 @@ mod tests {
             ),
             (
                 Some("action_required"),
-                Some("t3_not_ready"),
-                Some("t3_not_ready")
+                Some("t3_absent"),
+                Some("t3_absent")
             )
         );
         assert_eq!(active(root.path(), Platform::Ubuntu), before);

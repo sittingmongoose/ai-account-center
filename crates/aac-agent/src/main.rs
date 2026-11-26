@@ -24,6 +24,11 @@ async fn main() {
         }
     } else if args.first().is_some_and(|arg| arg == "--console-probe") {
         aac_agent::console_probe(&args[1..])
+    } else if let Some(code) = args
+        .first()
+        .and_then(|flag| aac_agent::app_update_subcommand(flag, &args[1..]))
+    {
+        code
     } else if args.len() == 1 && args[0] == "--app-update-task" {
         aac_agent::app_update_task().await
     } else if args.first().is_some_and(|arg| arg == "--terminal-child") {

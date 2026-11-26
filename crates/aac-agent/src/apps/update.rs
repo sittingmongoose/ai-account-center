@@ -67,8 +67,14 @@ pub(crate) async fn run(
     {
         return Err(refused());
     }
+    // No helper fallback: a request for another platform is refused (Python's
+    // "the selected platform must match this computer"), a host without a home fails.
     let Some(worker) = Worker::open(platform) else {
-        return Ok(crate::proof::fallback());
+        return Err(if Platform::native() == Some(platform) {
+            Failure::new(Cause::Damaged, "app update host has no home folder")
+        } else {
+            refused()
+        });
     };
     match request.args["action"].as_str() {
         Some("update") => {
@@ -220,7 +226,10 @@ impl Worker {
             );
         let (phase_tx, mut phases) = mpsc::unbounded_channel();
         // One run's cross-app state (Python module globals such as UBUNTU_RUN).
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            agent_job: Some(job.to_owned()),
+            ..Shared::default()
+        });
         let mut pending = expected;
         let mut workers = JoinSet::new();
         while !pending.is_empty() || !workers.is_empty() {
@@ -850,6 +859,29 @@ mod tests {
             running: Vec::new(),
             apps: apps.map(|apps| apps.iter().map(|app| (*app).to_owned()).collect()),
         }
+    }
+
+    /// W6: no helper fallback answer is left: another computer's platform is refused.
+    #[tokio::test]
+    async fn a_foreign_platform_is_refused_never_a_helper_fallback() {
+        let foreign = match Platform::native() {
+            Some(Platform::Ubuntu) => "mac",
+            _ => "ubuntu",
+        };
+        let request = Request {
+            protocol: aac_protocol::PROTOCOL_VERSION,
+            verb: "apps".into(),
+            id: "w6".into(),
+            deadline_ms: 60_000,
+            args: json!({"action": "update", "platform": foreign, "jobId": "0123456789abcdef0123456789abcdef"}),
+        };
+        let mut sink = Vec::new();
+        let answer = run(&request, &mut sink).await;
+        assert!(
+            matches!(answer, Err(ref failure) if failure.cause == Cause::Refused),
+            "{answer:?}"
+        );
+        assert!(sink.is_empty());
     }
 
     #[test]

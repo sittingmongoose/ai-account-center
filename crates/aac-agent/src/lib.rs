@@ -34,6 +34,12 @@ pub fn console_probe(args: &[std::ffi::OsString]) -> i32 {
     apps::updater::terminal::console_probe(args)
 }
 
+/// `aac-agent --t3-restart ...` / `--t3-issuer ...`: T3 helper subcommands
+/// (see `apps::updater::t3`); `None` when `flag` is neither.
+pub fn app_update_subcommand(flag: &std::ffi::OsStr, args: &[std::ffi::OsString]) -> Option<i32> {
+    apps::updater::subcommand(flag.to_str()?, args)
+}
+
 /// `aac-agent --app-update-task`: the Windows interactive-task child (see `apps::updater::windows_task`).
 pub async fn app_update_task() -> i32 {
     apps::updater::windows_task::child().await

@@ -1404,8 +1404,13 @@ async fn update_running_desktop(
 
 async fn schedule_restart(cx: &Context, version: &str) -> Result<Value, Fault> {
     common::write_private_json(&cx.state.join(PENDING_MARKER), &json!({"version": version}))?;
-    let agent_job = std::env::var("AAC_UPDATE_AGENT_JOB")
-        .ok()
+    // The agent's coordinator names its job in the run's shared state; the env var is
+    // the Python worker's spelling of the same thing.
+    let agent_job = cx
+        .shared
+        .agent_job
+        .clone()
+        .or_else(|| std::env::var("AAC_UPDATE_AGENT_JOB").ok())
         .filter(|job| AGENT_JOB.is_match(job));
     let dashboard = std::env::var("AAC_UPDATE_DASHBOARD_JOB").ok().as_deref() == Some("1");
     let unit = format!("aac-t3-restart-{}", &rpc::random_hex(16)[..12]);

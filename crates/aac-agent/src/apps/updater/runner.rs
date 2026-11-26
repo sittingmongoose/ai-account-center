@@ -77,6 +77,8 @@ impl Job<'_> {
 /// and dropping the attempt kills its commands.
 pub(crate) async fn run_app(app: &'static str, job: Job<'_>, phases: Phases) -> Outcome {
     let platform = job.platform;
+    // Python ran every worker under `session_signals()`: a termination revokes live T3 sessions.
+    super::t3::session_signals().await;
     let Some(updater) = updater(app) else {
         return row(app, platform, Status::Failed, "update_failed");
     };
@@ -118,6 +120,7 @@ pub(crate) async fn run_app(app: &'static str, job: Job<'_>, phases: Phases) -> 
 pub(crate) async fn follow_up(job: Job<'_>, expected: Option<&str>) -> Outcome {
     let app = "antigravity-acp";
     let platform = job.platform;
+    super::t3::session_signals().await;
     let _lock = match execution_lock(job.state, &format!("agent-worker-{app}.lock")) {
         Ok(lock) => lock,
         Err(failure) => return row(app, platform, Status::Failed, failure.code),
@@ -134,18 +137,10 @@ pub(crate) async fn follow_up(job: Job<'_>, expected: Option<&str>) -> Outcome {
     }
 }
 
-/// W4's `antigravity::follow_up(cx, expected)` (lead decision). Until it lands the
-/// follow-up row is an honest unknown and nothing is installed.
+/// W4's port of `follow_up_antigravity_acp` (`antigravity::follow_up`): it waits for
+/// the named T3 server, takes the helper lock itself and always returns a row.
 async fn acp_follow_up(cx: &Context, expected: Option<&str>) -> AppRow {
-    let _ = expected;
-    cx.record(|record| {
-        record.blame(super::FailureCause::Unknown, Some("acp_follow_up"));
-    });
-    let mut row =
-        AppRow::new("antigravity-acp", cx.platform, Status::Unknown).code("readiness_unknown");
-    let value = row.to_value();
-    row.diagnostics = Some(cx.record(|record| record.export(&value)));
-    row
+    super::antigravity::follow_up(cx, expected).await
 }
 
 /// The row fields and diagnostics keys a worker row may carry (U13), with every

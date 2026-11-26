@@ -124,6 +124,12 @@ pub(crate) trait AppUpdater: Send + Sync {
     ) -> BoxFuture<'a, Result<AppRow, UpdateFailure>>;
 }
 
+/// `aac-agent --t3-restart ...` / `--t3-issuer ...`: W5's helper subcommands, which run
+/// before normal agent framing. `None` for any other flag.
+pub(crate) fn subcommand(flag: &str, args: &[std::ffi::OsString]) -> Option<i32> {
+    t3::subcommand(flag, args)
+}
+
 /// The updater for one app id; `None` for an id outside the inventory.
 pub(crate) fn updater(app: &str) -> Option<&'static dyn AppUpdater> {
     Some(match app {
@@ -529,6 +535,9 @@ pub(crate) struct Shared {
     /// Python `UBUNTU_RUN["unsettled"]`: a timed-out wait for Ubuntu's adapter
     /// oneshot. While set, npm and T3 work reports `busy` until the unit finished.
     pub adapter_unit_unsettled: AtomicBool,
+    /// The dashboard job this run belongs to (Python `AAC_UPDATE_AGENT_JOB`): T3's
+    /// detached restart waits for this job's host journal to finish.
+    pub agent_job: Option<String>,
 }
 
 /// Everything one app's attempt may use. Built by the coordinator per app.
