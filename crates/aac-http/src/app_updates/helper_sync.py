@@ -9,7 +9,7 @@ FILES = (
     'app_update_t3_rpc.py', 'app_update_cursor.py', 'app_update_antigravity.py',
     'app_update_antigravity_release.py', 'app_update_macos.py', 'app_update_processes.py',
     'app_update_terminal.py', 'app_update_terminal_child.py', 'app_update_pipe.py',
-    'app_update_probe.py', 'app_update_confirmed_codex.py', 'app_update_zcode.py',
+    'app_update_confirmed_codex.py', 'app_update_zcode.py',
     'app_update_codex.cjs', 'app_update_codex_runtime.cjs',
 )
 LIMIT = 16 * 1024 * 1024

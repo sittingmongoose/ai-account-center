@@ -13,7 +13,7 @@ use std::{ffi::OsString, path::Path, time::Duration};
 
 /// Every file the agent's helper imports or starts. The Codex runtime is generated into
 /// `dist/app-updates` by the package build; the rest are the package's source helpers.
-pub(super) const HELPER_FILES: [&str; 18] = [
+pub(super) const HELPER_FILES: [&str; 17] = [
     "app_updates.py",
     "app_update_common.py",
     "app_update_desktop.py",
@@ -27,7 +27,6 @@ pub(super) const HELPER_FILES: [&str; 18] = [
     "app_update_terminal.py",
     "app_update_terminal_child.py",
     "app_update_pipe.py",
-    "app_update_probe.py",
     "app_update_confirmed_codex.py",
     "app_update_zcode.py",
     "app_update_codex.cjs",

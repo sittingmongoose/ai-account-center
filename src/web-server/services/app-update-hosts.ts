@@ -323,7 +323,6 @@ export const HELPER_FILES = [
   'app_update_terminal.py',
   'app_update_terminal_child.py',
   'app_update_pipe.py',
-  'app_update_probe.py',
   'app_update_confirmed_codex.py',
   'app_update_zcode.py',
   'app_update_codex.cjs',
