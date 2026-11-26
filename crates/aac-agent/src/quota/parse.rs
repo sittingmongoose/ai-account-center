@@ -1054,7 +1054,10 @@ mod tests {
                     return proof::fallback();
                 }
                 match case["function"].as_str() {
-                    Some("number" | "percent") => json!(number(&case["input"])),
+                    Some("number") => {
+                        json!(case["input"].as_f64().filter(|n| n.is_finite() && *n >= 0.))
+                    }
+                    Some("percent") => json!(api_number(&case["input"])),
                     Some("reset_at") => reset(&case["input"]),
                     Some("retry_after_seconds") => json!(super::super::retry(
                         case["input"].as_str(),

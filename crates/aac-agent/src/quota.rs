@@ -365,22 +365,29 @@ fn safari_cookies(contents: &[u8], allowed: &[&str], now: f64) -> Vec<SafariCook
             }
             let record = &page[offset..offset + record_size];
             let parsed = (|| {
-                let raw = safari_string(record, 16)?.to_ascii_lowercase();
+                let raw = safari_string(record, 16)
+                    .map_err(|_| true)?
+                    .to_ascii_lowercase();
                 let domain = raw.trim_start_matches('.').to_owned();
                 if !allowed.contains(&domain.as_str()) {
-                    return Err(());
+                    return Err(false);
                 }
-                let expiry =
-                    f64::from_le_bytes(record.get(40..48).ok_or(())?.try_into().map_err(|_| ())?);
+                let expiry = f64::from_le_bytes(
+                    record
+                        .get(40..48)
+                        .ok_or(true)?
+                        .try_into()
+                        .map_err(|_| true)?,
+                );
                 if !expiry.is_finite()
                     || expiry < 0.
                     || (expiry != 0. && expiry + 978307200. <= now)
                 {
-                    return Err(());
+                    return Err(false);
                 }
-                let name = safari_string(record, 20)?;
-                let path = safari_string(record, 24)?;
-                let value = safari_string(record, 28)?;
+                let name = safari_string(record, 20).map_err(|_| true)?;
+                let path = safari_string(record, 24).map_err(|_| true)?;
+                let value = safari_string(record, 28).map_err(|_| true)?;
                 let valid_name = !name.is_empty()
                     && name.len() <= 256
                     && name
@@ -390,7 +397,7 @@ fn safari_cookies(contents: &[u8], allowed: &[&str], now: f64) -> Vec<SafariCook
                     || value.is_empty()
                     || value.bytes().any(|b| matches!(b, b';' | b'\r' | b'\n' | 0))
                 {
-                    return Err(());
+                    return Err(false);
                 }
                 if !path.starts_with('/')
                     || !["/tool/user/info.json", "/data/api.json", "/cn-beijing"]
@@ -400,7 +407,7 @@ fn safari_cookies(contents: &[u8], allowed: &[&str], now: f64) -> Vec<SafariCook
                                 || r.starts_with(&(path.trim_end_matches('/').to_owned() + "/"))
                         })
                 {
-                    return Err(());
+                    return Err(false);
                 }
                 Ok(SafariCookie {
                     name,
@@ -411,8 +418,12 @@ fn safari_cookies(contents: &[u8], allowed: &[&str], now: f64) -> Vec<SafariCook
                     host_only: !raw.starts_with('.'),
                 })
             })();
-            if let Ok(cookie) = parsed {
-                result.push(cookie);
+            match parsed {
+                Ok(cookie) => result.push(cookie),
+                // Python rejects the complete file on malformed offsets/UTF-8,
+                // while well-formed cookies outside the scope are skipped.
+                Err(true) => return vec![],
+                Err(false) => {}
             }
         }
     }
@@ -456,14 +467,15 @@ fn safari_qwen(home: &Path, out: &mut Vec<Value>) {
                 .then(b.expiry.total_cmp(&a.expiry))
         });
         let header_for = |host: &str, request: &str| {
-            let mut selected = std::collections::BTreeMap::new();
+            let mut selected: Vec<(String, String)> = Vec::new();
+            let mut names = std::collections::HashSet::new();
             for c in &cookies {
                 let domain =
                     host == c.domain || (!c.host_only && host.ends_with(&format!(".{}", c.domain)));
                 let path = request == c.path
                     || request.starts_with(&(c.path.trim_end_matches('/').to_owned() + "/"));
-                if domain && path {
-                    selected.entry(c.name.clone()).or_insert(c.value.clone());
+                if domain && path && names.insert(c.name.clone()) {
+                    selected.push((c.name.clone(), c.value.clone()));
                 }
             }
             selected
@@ -836,7 +848,19 @@ fn publish(mut value: Value) -> Value {
             _ => {}
         }
     }
+    let email = value["email"]
+        .as_str()
+        .and_then(|email| email_address(Some(email)))
+        .filter(|email| aac_core::scrub_usage_email(email).as_str() == *email)
+        .map(str::to_owned);
+    let label_is_email = email.as_ref().is_some_and(|email| value["label"] == *email);
     check(&mut value);
+    if let Some(email) = email {
+        value["email"] = json!(email);
+        if label_is_email {
+            value["label"] = json!(email);
+        }
+    }
     value
 }
 pub(crate) async fn run(args: &Value) -> Result<Value, Failure> {
@@ -1453,6 +1477,19 @@ mod table_tests {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
+    #[test]
+    fn account_email_keeps_identity_without_exempting_credentials_or_other_fields() {
+        let email = "reader@example.test";
+        let safe = publish(json!({"email":email,"label":email,"message":email}));
+        assert_eq!(safe["email"], email);
+        assert_eq!(safe["label"], email);
+        assert_eq!(safe["message"], "error");
+        let secret_address = format!("sk-ant-{}@example.test", "a".repeat(32));
+        let refused = publish(json!({"email":secret_address,"label":secret_address}));
+        assert_eq!(refused["email"], "error");
+        assert_eq!(refused["label"], "error");
+    }
+
     #[test]
     fn every_text_field_passes_the_shared_scrub_and_uncheckable_text_is_dropped() {
         let raw = json!({"message":"{\"access_token\":\"fixture-dummy-token\"}","windows":[{"label":"x".repeat(4097)}],"source":"[redacted]","status":"error"});

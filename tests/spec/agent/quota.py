@@ -79,18 +79,24 @@ def main():
     if len(sys.argv) > 2 and sys.argv[2] == '--production':
         with tempfile.TemporaryDirectory(prefix='aac-quota-prod-') as directory:
             home = Path(directory)
+            count = 0
             for provider in common.PROVIDERS:
                 args = {'provider': provider, 'platform': 'ubuntu', 'home': str(home)}
-                for injection in (False, True):
-                    if injection: args.update(endpoint='http://127.0.0.1:1', now=NOW)
+                base = args.copy()
+                for injection in ({}, {'endpoint': 'http://127.0.0.1:1'}, {'now': NOW},
+                                  {'endpoint': 'http://127.0.0.1:1', 'now': NOW}):
+                    args = {**base, **injection}
                     request = {'protocol': 1, 'verb': 'quota-read', 'id': 'production', 'deadlineMs': 1000, 'args': args}
                     p = subprocess.run([binary], input=json.dumps(request)+'\n', text=True, capture_output=True, check=True, env={'PATH': os.defpath})
                     event = json.loads(p.stdout)
                     assert event['type'] == 'result' and event['id'] == 'production' and event['protocol'] == 1
                     with mock.patch.dict(os.environ, {}, clear=True):
                         reference = usage.collect(provider, 'ubuntu', home=home)
-                    assert event['value'] == ({'fallback': 'python'} if injection else reference)
-        print('8 production empty-home/injection-refusal cases passed')
+                    assert event['value'] == ({'fallback': 'python'} if injection else reference), (
+                        provider, sorted(injection),
+                        'production mode requires a binary built WITHOUT --features parity-fixtures')
+                    count += 1
+        print(f'{count} production empty-home/injection-refusal cases passed')
         return
     equal = fallback = 0
     fallback_cases = []
