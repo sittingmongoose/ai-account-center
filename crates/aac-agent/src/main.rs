@@ -22,6 +22,8 @@ async fn main() {
             }
             Err(_) => 1,
         }
+    } else if args.first().is_some_and(|arg| arg == "--console-probe") {
+        aac_agent::console_probe(&args[1..])
     } else if args.first().is_some_and(|arg| arg == "--terminal-child") {
         aac_agent::terminal_child(&args[1..])
     } else if args.is_empty() {

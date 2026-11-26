@@ -27,6 +27,11 @@ pub fn terminal_child(args: &[std::ffi::OsString]) -> i32 {
     apps::updater::terminal::terminal_child(args)
 }
 
+/// `aac-agent --console-probe ...`: the Windows console-window probe (see `apps::updater::terminal`).
+pub fn console_probe(args: &[std::ffi::OsString]) -> i32 {
+    apps::updater::terminal::console_probe(args)
+}
+
 /// Return the exact build identity used by shipping's manifest handshake.
 pub fn handshake() -> Handshake {
     Handshake {

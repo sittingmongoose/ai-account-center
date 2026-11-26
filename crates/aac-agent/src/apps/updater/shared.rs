@@ -636,57 +636,110 @@ fn le64(data: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_le_bytes(data.get(at..at + 8)?.try_into().ok()?))
 }
 
-/// The central directory of a ZIP (ZIP64 included), or `None` when it is not a readable ZIP.
-fn zip_entries(file: &mut std::fs::File) -> Option<Vec<ZipEntry>> {
-    use std::io::{Read, Seek, SeekFrom};
-    let length = file.metadata().ok()?.len();
+/// Why a ZIP read stopped: a byte range it still needs (remote reads), or a bad archive.
+enum Need {
+    Missing(u64, u64),
+    Bad,
+}
+
+/// Random access to a ZIP's bytes.
+trait At {
+    fn size(&self) -> u64;
+    fn at(&mut self, offset: u64, len: u64) -> Result<Vec<u8>, Need>;
+}
+
+impl At for std::fs::File {
+    fn size(&self) -> u64 {
+        self.metadata().map_or(0, |info| info.len())
+    }
+
+    fn at(&mut self, offset: u64, len: u64) -> Result<Vec<u8>, Need> {
+        use std::io::{Read, Seek, SeekFrom};
+        self.seek(SeekFrom::Start(offset)).map_err(|_| Need::Bad)?;
+        let mut data = vec![0; usize::try_from(len).map_err(|_| Need::Bad)?];
+        self.read_exact(&mut data).map_err(|_| Need::Bad)?;
+        Ok(data)
+    }
+}
+
+/// Fetched byte ranges of one remote file (Python `RangeReader`'s spans).
+struct Spans {
+    size: u64,
+    spans: Vec<(u64, Vec<u8>)>,
+}
+
+impl At for Spans {
+    fn size(&self) -> u64 {
+        self.size
+    }
+
+    fn at(&mut self, offset: u64, len: u64) -> Result<Vec<u8>, Need> {
+        let end = offset
+            .checked_add(len)
+            .filter(|end| *end <= self.size)
+            .ok_or(Need::Bad)?;
+        for (start, data) in &self.spans {
+            if *start <= offset && end <= start + data.len() as u64 {
+                let from = usize::try_from(offset - start).map_err(|_| Need::Bad)?;
+                let to = usize::try_from(end - start).map_err(|_| Need::Bad)?;
+                return Ok(data[from..to].to_vec());
+            }
+        }
+        Err(Need::Missing(offset, len))
+    }
+}
+
+fn bad<T>(value: Option<T>) -> Result<T, Need> {
+    value.ok_or(Need::Bad)
+}
+
+/// The central directory of a ZIP (ZIP64 included).
+fn zip_entries(source: &mut impl At) -> Result<Vec<ZipEntry>, Need> {
+    let length = source.size();
     let tail_size = length.min(65_536 + 22);
-    file.seek(SeekFrom::Start(length - tail_size)).ok()?;
-    let mut tail = vec![0; usize::try_from(tail_size).ok()?];
-    file.read_exact(&mut tail).ok()?;
-    let end = (0..tail.len().saturating_sub(21))
+    let tail = source.at(length - tail_size, tail_size)?;
+    let end = bad((0..tail.len().saturating_sub(21))
         .rev()
-        .find(|at| tail[*at..].starts_with(&[0x50, 0x4b, 0x05, 0x06]))?;
-    let mut count = le16(&tail, end + 10)?;
-    let mut size = le32(&tail, end + 12)?;
-    let mut start = le32(&tail, end + 16)?;
+        .find(|at| tail[*at..].starts_with(&[0x50, 0x4b, 0x05, 0x06])))?;
+    let mut count = bad(le16(&tail, end + 10))?;
+    let mut size = bad(le32(&tail, end + 12))?;
+    let mut start = bad(le32(&tail, end + 16))?;
     if count == 0xffff || size == 0xffff_ffff || start == 0xffff_ffff {
         // ZIP64: the locator sits right before the end record.
-        let locator = end.checked_sub(20)?;
+        let locator = bad(end.checked_sub(20))?;
         if !tail[locator..].starts_with(&[0x50, 0x4b, 0x06, 0x07]) {
-            return None;
+            return Err(Need::Bad);
         }
-        let record_at = le64(&tail, locator + 8)?;
-        file.seek(SeekFrom::Start(record_at)).ok()?;
-        let mut record = [0_u8; 56];
-        file.read_exact(&mut record).ok()?;
+        let record = source.at(bad(le64(&tail, locator + 8))?, 56)?;
         if !record.starts_with(&[0x50, 0x4b, 0x06, 0x06]) {
-            return None;
+            return Err(Need::Bad);
         }
-        count = le64(&record, 32)?;
-        size = le64(&record, 40)?;
-        start = le64(&record, 48)?;
+        count = bad(le64(&record, 32))?;
+        size = bad(le64(&record, 40))?;
+        start = bad(le64(&record, 48))?;
     }
-    if count > 100_000 || size > 64 * 1024 * 1024 || start.checked_add(size)? > length {
-        return None;
+    if count > 100_000 || size > 64 * 1024 * 1024 || bad(start.checked_add(size))? > length {
+        return Err(Need::Bad);
     }
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut directory = vec![0; usize::try_from(size).ok()?];
-    file.read_exact(&mut directory).ok()?;
+    let directory = source.at(start, size)?;
+    bad(parse_directory(&directory, count))
+}
+
+fn parse_directory(directory: &[u8], count: u64) -> Option<Vec<ZipEntry>> {
     let mut entries = Vec::new();
     let mut at = 0;
     for _ in 0..count {
         if !directory.get(at..)?.starts_with(&[0x50, 0x4b, 0x01, 0x02]) {
             return None;
         }
-        let method = u16::try_from(le16(&directory, at + 10)?).ok()?;
-        let mut compressed = le32(&directory, at + 20)?;
-        let mut uncompressed = le32(&directory, at + 24)?;
-        let name_len = usize::try_from(le16(&directory, at + 28)?).ok()?;
-        let extra_len = usize::try_from(le16(&directory, at + 30)?).ok()?;
-        let comment_len = usize::try_from(le16(&directory, at + 32)?).ok()?;
-        let mode = u32::try_from(le32(&directory, at + 38)? >> 16).ok()?;
-        let mut offset = le32(&directory, at + 42)?;
+        let method = u16::try_from(le16(directory, at + 10)?).ok()?;
+        let mut compressed = le32(directory, at + 20)?;
+        let mut uncompressed = le32(directory, at + 24)?;
+        let name_len = usize::try_from(le16(directory, at + 28)?).ok()?;
+        let extra_len = usize::try_from(le16(directory, at + 30)?).ok()?;
+        let comment_len = usize::try_from(le16(directory, at + 32)?).ok()?;
+        let mode = u32::try_from(le32(directory, at + 38)? >> 16).ok()?;
+        let mut offset = le32(directory, at + 42)?;
         let raw_name = directory.get(at + 46..at + 46 + name_len)?.to_vec();
         let extra = directory.get(at + 46 + name_len..at + 46 + name_len + extra_len)?;
         // ZIP64 extended information: only the fields whose 32-bit value is saturated, in order.
@@ -725,32 +778,101 @@ fn zip_entries(file: &mut std::fs::File) -> Option<Vec<ZipEntry>> {
     Some(entries)
 }
 
-/// A small entry's contents (stored or deflated).
-fn zip_read(file: &mut std::fs::File, entry: &ZipEntry) -> Option<Vec<u8>> {
-    use std::io::{Read, Seek, SeekFrom};
-    file.seek(SeekFrom::Start(entry.offset)).ok()?;
-    let mut header = [0_u8; 30];
-    file.read_exact(&mut header).ok()?;
-    if !header.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
-        return None;
+/// One entry's contents (stored or deflated), at most `cap` bytes either way.
+fn zip_read(source: &mut impl At, entry: &ZipEntry, cap: u64) -> Result<Vec<u8>, Need> {
+    use std::io::Read as _;
+    if entry.compressed > cap || entry.size > cap {
+        return Err(Need::Bad);
     }
-    let skip = le16(&header, 26)? + le16(&header, 28)?;
-    file.seek(SeekFrom::Current(i64::try_from(skip).ok()?))
-        .ok()?;
-    let mut data = vec![0; usize::try_from(entry.compressed.min(65_536)).ok()?];
-    file.read_exact(&mut data).ok()?;
+    let header = source.at(entry.offset, 30)?;
+    if !header.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
+        return Err(Need::Bad);
+    }
+    let skip = bad(le16(&header, 26))? + bad(le16(&header, 28))?;
+    let data = source.at(entry.offset + 30 + skip, entry.compressed)?;
     match entry.method {
-        0 => Some(data),
+        0 => Ok(data),
         8 => {
             let mut out = Vec::new();
             flate2::read::DeflateDecoder::new(&data[..])
-                .take(entry.size.min(65_536))
+                .take(cap)
                 .read_to_end(&mut out)
-                .ok()?;
-            Some(out)
+                .map_err(|_| Need::Bad)?;
+            Ok(out)
         }
-        _ => None,
+        _ => Err(Need::Bad),
     }
+}
+
+/// Python `RangeReader` + `zipfile` reading one member: the contents of `member` in the
+/// remote ZIP at `url`, read through HTTP byte ranges without downloading the package.
+/// Fixed limits: `timeout` in total, 12 requests, 8 MiB. `Ok(None)` when the member is absent.
+pub(crate) async fn remote_zip_member(
+    cx: &Context,
+    url: &str,
+    member: &str,
+    timeout: Duration,
+) -> Result<Option<Vec<u8>>, UpdateFailure> {
+    const MAXIMUM_BYTES: u64 = 8 * 1024 * 1024;
+    const MAXIMUM_REQUESTS: u32 = 12;
+    const READAHEAD: u64 = 256 * 1024;
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut url = url.to_owned();
+    let mut fetched = 0;
+    let mut requests = 0;
+    let mut get = async |url: &mut String, range: String| -> Result<RangeReply, UpdateFailure> {
+        requests += 1;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if requests > MAXIMUM_REQUESTS || remaining.is_zero() {
+            return Err(UpdateFailure::new("timeout"));
+        }
+        let reply = cx
+            .system
+            .range(url, &range, remaining.min(Duration::from_secs(15)))
+            .await?;
+        fetched += reply.data.len() as u64;
+        if fetched > MAXIMUM_BYTES {
+            return Err(UpdateFailure::failed());
+        }
+        url.clone_from(&reply.url);
+        Ok(reply)
+    };
+    let first = get(&mut url, "bytes=-65536".into()).await?;
+    let mut spans = Spans {
+        size: first.total,
+        spans: vec![(first.start, first.data)],
+    };
+    loop {
+        let missing = match zip_entries(&mut spans) {
+            Ok(entries) => match entries.iter().find(|entry| entry.name == member) {
+                None => return Ok(None),
+                Some(entry) => match zip_read(&mut spans, entry, 4 * 1024 * 1024) {
+                    Ok(data) => return Ok(Some(data)),
+                    Err(Need::Bad) => return Err(UpdateFailure::failed()),
+                    Err(Need::Missing(offset, len)) => (offset, len),
+                },
+            },
+            Err(Need::Bad) => return Err(UpdateFailure::failed()),
+            Err(Need::Missing(offset, len)) => (offset, len),
+        };
+        let (offset, len) = missing;
+        let last = spans.size.min((offset + len).max(offset + READAHEAD)) - 1;
+        let reply = get(&mut url, format!("bytes={offset}-{last}")).await?;
+        if reply.start != offset {
+            return Err(UpdateFailure::failed());
+        }
+        spans.spans.push((reply.start, reply.data));
+    }
+}
+
+/// One `206 Partial Content` answer (see [`super::System::range`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RangeReply {
+    pub start: u64,
+    pub data: Vec<u8>,
+    pub total: u64,
+    /// The final https URL behind any redirect.
+    pub url: String,
 }
 
 /// Python `PurePosixPath(name).parts`.
@@ -771,7 +893,7 @@ fn archive_key(parts: &[&str]) -> String {
 pub(crate) fn check_mac_archive(package: &Path) -> Result<(), UpdateFailure> {
     let refused = || UpdateFailure::new("signature_failed");
     let mut file = std::fs::File::open(package).map_err(|_| UpdateFailure::failed())?;
-    let entries = zip_entries(&mut file).ok_or_else(UpdateFailure::failed)?;
+    let entries = zip_entries(&mut file).map_err(|_| UpdateFailure::failed())?;
     if entries.len() > 100_000
         || entries.iter().map(|item| item.size).sum::<u64>() > 2 * 1024 * 1024 * 1024
     {
@@ -799,7 +921,7 @@ pub(crate) fn check_mac_archive(package: &Path) -> Result<(), UpdateFailure> {
             if item.size > 4096 {
                 return Err(refused());
             }
-            let target = zip_read(&mut file, item).ok_or_else(refused)?;
+            let target = zip_read(&mut file, item, 4096).map_err(|_| refused())?;
             let target = String::from_utf8(target).map_err(|_| refused())?;
             if target.is_empty()
                 || target.starts_with('/')
@@ -856,15 +978,128 @@ pub(crate) fn check_mac_archive(package: &Path) -> Result<(), UpdateFailure> {
     Ok(())
 }
 
-/// Python `display_path`: a path with home as `~` and other users as `<user>`, bounded.
-/// W1 ports the credential-flag guard next; until then only the home folder is shortened.
+static CONTROL: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"[\x00-\x08\x0b-\x1f\x7f-\x{9f}]").expect("control"));
+static ANSI: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?",
+    )
+    .expect("ansi")
+});
+static CREDENTIAL_FLAG: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)--?(?:password|passwd|pass|token|api-?key|auth(?:-?token)?|secret|access-?token|otp)(?-u:\b)")
+        .expect("credential flag")
+});
+static SHORT_PASSWORD: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"-p(?:[ \t\r\n\x0b\x0c]*=|[ \t\r\n\x0b\x0c]*["'])"#).expect("short flag")
+});
+
+/// Python `CREDENTIAL_REST`.
+pub(crate) const CREDENTIAL_REST: &str = "<rest of output removed: may contain a credential>";
+
+fn flag_in(view: &str) -> bool {
+    let view = CONTROL.replace_all(view, "");
+    if CREDENTIAL_FLAG.is_match(&view) {
+        return true;
+    }
+    // `(?<![\w-])-p...`: the regex crate has no look-behind, so check the byte before each match.
+    SHORT_PASSWORD.find_iter(&view).any(|found| {
+        view[..found.start()]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !(before.is_alphanumeric() || before == '_' || before == '-'))
+    })
+}
+
+/// Python `_credential_flag`: complete text holds a recognised credential flag.
+pub(crate) fn credential_flag(text: &str) -> bool {
+    flag_in(text) || flag_in(&ANSI.replace_all(text, ""))
+}
+
+fn home_forms(home: &str) -> Vec<String> {
+    let mut forms = vec![
+        home.to_owned(),
+        home.replace('\\', "/"),
+        home.replace('\\', "\\\\"),
+        home.replace('/', "\\"),
+    ];
+    forms.retain(|form| form.chars().count() > 2);
+    forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+    forms.dedup();
+    forms
+}
+
+/// Python `_scrub_paths`: home as `~`, any other user's folder as `<user>`.
+pub(crate) fn scrub_paths(host: &Host, text: &str) -> String {
+    static WINDOWS_USER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?i)([A-Z]:(?:\\\\|\\|/){1,4}Users(?:\\\\|\\|/){1,4})[^\\/"'\n]{1,128}"#,
+        )
+        .expect("windows user")
+    });
+    static MAC_USER: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r#"(/Users/)[^/"'\n]{1,128}"#).expect("mac user"));
+    static LINUX_USER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(/home/)[^/ \t\r\n\x0b\x0c"']{1,128}"#).expect("linux user")
+    });
+    let mut text = text.to_owned();
+    for form in home_forms(&host.home.to_string_lossy()) {
+        // Case-insensitive, and only a whole folder name: the next character is a separator or the end.
+        let Ok(pattern) = regex::Regex::new(&format!("(?i){}", regex::escape(&form))) else {
+            continue;
+        };
+        let mut out = String::new();
+        let mut last = 0;
+        for found in pattern.find_iter(&text) {
+            let next = text[found.end()..].chars().next();
+            if next.is_none_or(|ch| {
+                matches!(ch, '\\' | '/' | '"' | '\'' | ':' | ';' | ',' | ')') || ch.is_whitespace()
+            }) {
+                out.push_str(&text[last..found.start()]);
+                out.push('~');
+                last = found.end();
+            }
+        }
+        out.push_str(&text[last..]);
+        text = out;
+    }
+    let text = WINDOWS_USER.replace_all(&text, "${1}<user>");
+    let text = MAC_USER.replace_all(&text, "${1}<user>");
+    LINUX_USER.replace_all(&text, "${1}<user>").into_owned()
+}
+
+fn last_chars(text: &str, count: usize) -> &str {
+    match text.char_indices().rev().nth(count.saturating_sub(1)) {
+        Some((start, _)) if text.chars().count() > count => &text[start..],
+        _ => text,
+    }
+}
+
+/// Python `display_path`: a path with home as `~` and other users as `<user>`, bounded;
+/// a path holding a credential flag shows only [`CREDENTIAL_REST`].
 pub(crate) fn display_path(host: &Host, path: &Path) -> String {
     let text = path.to_string_lossy();
-    let home = host.home.to_string_lossy();
-    let shown = match text.strip_prefix(home.as_ref()) {
-        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => format!("~{rest}"),
-        _ => text.into_owned(),
-    };
-    let start = shown.len().saturating_sub(160);
-    shown[shown.ceil_char_boundary(start)..].to_owned()
+    if credential_flag(&text.replace(['\r', '\n'], " ")) {
+        return CREDENTIAL_REST.into();
+    }
+    let scrubbed = scrub_paths(host, last_chars(&text, 1024));
+    last_chars(&scrubbed, 160).to_owned()
+}
+
+/// A held Python `execution_lock`: released when dropped.
+pub(crate) struct ExecutionLock(#[allow(dead_code)] std::fs::File);
+
+/// Python `execution_lock(name, root)`: a non-blocking exclusive lock file; `busy` when held.
+/// Read+write like Python's `a+b`: Windows cannot lock an append-only handle.
+pub(crate) fn execution_lock(root: &Path, name: &str) -> Result<ExecutionLock, UpdateFailure> {
+    super::common::private_dir(root).map_err(|_| UpdateFailure::new("busy"))?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root.join(name))
+        .map_err(|_| UpdateFailure::new("busy"))?;
+    file.try_lock().map_err(|_| UpdateFailure::new("busy"))?;
+    Ok(ExecutionLock(file))
 }

@@ -501,6 +501,19 @@ pub(crate) trait System: Send + Sync {
         url: &'a str,
         timeout: Duration,
     ) -> BoxFuture<'a, Option<Fingerprint>>;
+
+    /// One HTTP byte-range GET (Python `RangeReader._get`): only a `206` at an https
+    /// URL with a matching `Content-Range` is an answer. Use [`shared::remote_zip_member`].
+    /// Added after the freeze with a default, so existing implementations still build.
+    fn range<'a>(
+        &'a self,
+        url: &'a str,
+        range: &'a str,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<shared::RangeReply, UpdateFailure>> {
+        let _ = (url, range, timeout);
+        Box::pin(async { Err(UpdateFailure::failed()) })
+    }
 }
 
 /// State shared by every app of one host run (Python module globals).

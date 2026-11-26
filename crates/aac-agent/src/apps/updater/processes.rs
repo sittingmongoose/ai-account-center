@@ -658,9 +658,43 @@ pub(crate) async fn terminal_attached(cx: &Context, items: &[Process]) -> HashSe
                 }
             }
         }
-        // W1 ports the Windows console-window probe next; until then nothing counts as attached,
-        // so no Windows CLI instance is stopped (the Python default for an unreadable probe).
-        Platform::Windows => {}
+        Platform::Windows => {
+            // Only this desktop session's processes are probed: window handles belong to one session.
+            let Some(session) = own_session() else {
+                return attached;
+            };
+            let local: Vec<&Process> = items
+                .iter()
+                .filter(|item| item.session == Some(session))
+                .collect();
+            let Ok(agent) = std::env::current_exe() else {
+                return attached;
+            };
+            if local.is_empty() {
+                return attached;
+            }
+            let mut argv = vec![agent.into_os_string(), "--console-probe".into()];
+            argv.extend(
+                local
+                    .iter()
+                    .map(|item| format!("{}:{}", item.pid, item.identity).into()),
+            );
+            let spec = super::CommandSpec::new(argv)
+                .timeout(Duration::from_secs(20))
+                .capture()
+                .quiet();
+            // An unreadable probe attaches nothing, so no Windows CLI instance is stopped.
+            if let Ok(output) = cx.run(&spec).await
+                && let Ok(serde_json::Value::Array(found)) = serde_json::from_str(&output.stdout)
+            {
+                attached.extend(
+                    found
+                        .iter()
+                        .filter_map(|pid| pid.as_u64().and_then(|pid| u32::try_from(pid).ok()))
+                        .filter(|pid| local.iter().any(|item| item.pid == *pid)),
+                );
+            }
+        }
     }
     attached
 }

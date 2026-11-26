@@ -608,6 +608,15 @@ impl System for Native {
     ) -> BoxFuture<'a, Option<Fingerprint>> {
         Box::pin(fingerprint(url, timeout))
     }
+
+    fn range<'a>(
+        &'a self,
+        url: &'a str,
+        range: &'a str,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<super::shared::RangeReply, UpdateFailure>> {
+        Box::pin(range_get(url, range, timeout))
+    }
 }
 
 enum Bounded {
@@ -994,5 +1003,75 @@ pub(crate) async fn fingerprint(url: &str, timeout: Duration) -> Option<Fingerpr
         url: response.url().to_string(),
         size,
         validator: validator[..end].to_owned(),
+    })
+}
+
+/// Python `RangeReader._get`.
+pub(crate) async fn range_get(
+    url: &str,
+    range: &str,
+    timeout: Duration,
+) -> Result<super::shared::RangeReply, UpdateFailure> {
+    static CONTENT_RANGE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\Abytes ([0-9]+)-([0-9]+)/([0-9]+)\z").expect("content range")
+    });
+    let deadline = Instant::now() + timeout;
+    let mut response = tokio::time::timeout_at(
+        deadline,
+        client(timeout)?
+            .get(url)
+            .header(reqwest::header::RANGE, range)
+            .send(),
+    )
+    .await
+    .map_err(|_| UpdateFailure::new("timeout"))?
+    .map_err(|_| UpdateFailure::failed())?;
+    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+        || response.url().scheme() != "https"
+    {
+        return Err(UpdateFailure::failed());
+    }
+    let header = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let found = CONTENT_RANGE
+        .captures(&header)
+        .ok_or_else(UpdateFailure::failed)?;
+    let number = |index: usize| {
+        found[index]
+            .parse::<u64>()
+            .map_err(|_| UpdateFailure::failed())
+    };
+    let (first, last, total) = (number(1)?, number(2)?, number(3)?);
+    let expected = last
+        .checked_sub(first)
+        .map(|span| span + 1)
+        .ok_or_else(UpdateFailure::failed)?;
+    let final_url = response.url().to_string();
+    let mut data = Vec::new();
+    loop {
+        match tokio::time::timeout_at(deadline, response.chunk()).await {
+            Err(_) => return Err(UpdateFailure::new("timeout")),
+            Ok(Err(_)) => return Err(UpdateFailure::failed()),
+            Ok(Ok(None)) => break,
+            Ok(Ok(Some(chunk))) => {
+                data.extend_from_slice(&chunk);
+                if data.len() as u64 > expected {
+                    return Err(UpdateFailure::failed());
+                }
+            }
+        }
+    }
+    if data.len() as u64 != expected {
+        return Err(UpdateFailure::failed());
+    }
+    Ok(super::shared::RangeReply {
+        start: first,
+        data,
+        total,
+        url: final_url,
     })
 }

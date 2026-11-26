@@ -481,3 +481,24 @@ fn receive_socket(path: &str) -> Option<Vec<u8>> {
         None
     }
 }
+
+/// `aac-agent --console-probe pid:start ...`: prints the JSON list of PIDs whose console
+/// window the user sees (Windows only; elsewhere an empty list).
+pub fn console_probe(args: &[std::ffi::OsString]) -> i32 {
+    let pairs: Vec<String> = args
+        .iter()
+        .filter_map(|arg| arg.to_str().map(str::to_owned))
+        .collect();
+    #[cfg(windows)]
+    let found = super::os_windows::console_probe(&pairs);
+    #[cfg(not(windows))]
+    let found: Vec<u32> = {
+        let _ = pairs;
+        Vec::new()
+    };
+    println!(
+        "{}",
+        serde_json::to_string(&found).unwrap_or_else(|_| "[]".into())
+    );
+    0
+}

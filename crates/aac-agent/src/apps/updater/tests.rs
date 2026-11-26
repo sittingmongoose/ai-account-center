@@ -9,6 +9,8 @@ type Answer = Box<dyn Fn(&CommandSpec) -> Result<CommandOutput, UpdateFailure> +
 pub(crate) struct FakeSystem {
     pub runs: Mutex<Vec<Vec<OsString>>>,
     pub answer: Answer,
+    /// The one remote file `range` serves (empty: every range request fails).
+    pub remote: Mutex<Vec<u8>>,
 }
 
 use std::ffi::OsString;
@@ -20,6 +22,7 @@ impl FakeSystem {
         Arc::new(Self {
             runs: Mutex::new(Vec::new()),
             answer: Box::new(answer),
+            remote: Mutex::new(Vec::new()),
         })
     }
 }
@@ -75,6 +78,48 @@ impl System for FakeSystem {
 
     fn fingerprint<'a>(&'a self, _: &'a str, _: Duration) -> BoxFuture<'a, Option<Fingerprint>> {
         Box::pin(async { None })
+    }
+
+    fn range<'a>(
+        &'a self,
+        url: &'a str,
+        range: &'a str,
+        _: Duration,
+    ) -> BoxFuture<'a, Result<shared::RangeReply, UpdateFailure>> {
+        Box::pin(async move {
+            let body = self.remote.lock().expect("remote").clone();
+            if body.is_empty() {
+                return Err(UpdateFailure::failed());
+            }
+            let total = body.len() as u64;
+            let spec = range
+                .strip_prefix("bytes=")
+                .ok_or_else(UpdateFailure::failed)?;
+            let (first, last) = match spec.strip_prefix('-') {
+                Some(suffix) => (
+                    total.saturating_sub(suffix.parse().map_err(|_| UpdateFailure::failed())?),
+                    total - 1,
+                ),
+                None => {
+                    let (first, last) = spec.split_once('-').ok_or_else(UpdateFailure::failed)?;
+                    (
+                        first.parse().map_err(|_| UpdateFailure::failed())?,
+                        last.parse::<u64>()
+                            .map_err(|_| UpdateFailure::failed())?
+                            .min(total - 1),
+                    )
+                }
+            };
+            if first > last {
+                return Err(UpdateFailure::failed());
+            }
+            Ok(shared::RangeReply {
+                start: first,
+                data: body[first as usize..=last as usize].to_vec(),
+                total,
+                url: url.to_owned(),
+            })
+        })
     }
 }
 
@@ -869,4 +914,95 @@ fn the_terminal_child_refuses_anything_but_its_own_endpoint() {
         1
     );
     assert_eq!(terminal::terminal_child(&args(&["--exec", "/bin/sh"])), 1);
+}
+
+#[test]
+fn display_paths_hide_homes_users_and_credential_flags() {
+    let root = tempfile::tempdir().expect("root");
+    let mut host = Arc::into_inner(host(root.path(), Platform::Ubuntu)).expect("host");
+    host.home = PathBuf::from("/home/me");
+    assert_eq!(
+        shared::display_path(&host, Path::new("/home/me/.local/bin/agy")),
+        "~/.local/bin/agy"
+    );
+    assert_eq!(
+        shared::display_path(&host, Path::new("/home/meadow/x")),
+        "/home/<user>/x"
+    );
+    assert_eq!(
+        shared::display_path(&host, Path::new("/Users/someone else/x")),
+        "/Users/<user>/x"
+    );
+    assert_eq!(
+        shared::display_path(&host, Path::new("C:\\Users\\Other\\npm")),
+        "C:\\Users\\<user>\\npm"
+    );
+    assert_eq!(
+        shared::display_path(&host, Path::new("/opt/x --token=abc")),
+        shared::CREDENTIAL_REST
+    );
+    assert_eq!(
+        shared::display_path(&host, Path::new("/opt/x -p 'secret'")),
+        shared::CREDENTIAL_REST
+    );
+    assert_eq!(
+        shared::display_path(&host, Path::new("/opt/my-p='x'")),
+        "/opt/my-p='x'"
+    );
+    let long = format!("/opt/{}", "a".repeat(300));
+    assert_eq!(
+        shared::display_path(&host, Path::new(&long))
+            .chars()
+            .count(),
+        160
+    );
+}
+
+#[tokio::test]
+async fn a_remote_zip_member_is_read_through_ranges() {
+    let root = tempfile::tempdir().expect("root");
+    let package = root.path().join("remote.msix");
+    let mut entries: Vec<(String, Option<String>)> = (0..40)
+        .map(|index| (format!("pad/{index}"), None))
+        .collect();
+    entries.push(("AppxManifest.xml".into(), None));
+    let borrowed: Vec<(&str, Option<&str>)> = entries
+        .iter()
+        .map(|(name, target)| (name.as_str(), target.as_deref()))
+        .collect();
+    write_zip(&package, &borrowed);
+    let system = FakeSystem::answering(ok);
+    *system.remote.lock().expect("remote") = std::fs::read(&package).expect("zip");
+    let cx = context(root.path(), Platform::Windows, system.clone(), false);
+    let url = "https://example.invalid/app.msix";
+    let member = shared::remote_zip_member(&cx, url, "AppxManifest.xml", Duration::from_secs(5))
+        .await
+        .expect("read");
+    assert_eq!(member.as_deref(), Some(&b"fixture"[..]));
+    assert_eq!(
+        shared::remote_zip_member(&cx, url, "missing.xml", Duration::from_secs(5))
+            .await
+            .expect("read"),
+        None
+    );
+    system.remote.lock().expect("remote").clear();
+    assert!(
+        shared::remote_zip_member(&cx, url, "AppxManifest.xml", Duration::from_secs(5))
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn an_execution_lock_is_exclusive() {
+    let root = tempfile::tempdir().expect("root");
+    let held = shared::execution_lock(root.path(), "helper-update.lock").expect("first");
+    assert_eq!(
+        shared::execution_lock(root.path(), "helper-update.lock")
+            .err()
+            .map(|f| f.code),
+        Some("busy")
+    );
+    drop(held);
+    assert!(shared::execution_lock(root.path(), "helper-update.lock").is_ok());
 }

@@ -414,8 +414,10 @@ pub(super) fn context(pid: u32) -> Result<(String, Vec<(String, String)>), Updat
 
 fn utf16(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     String::from_utf16_lossy(&units)
 }
@@ -657,4 +659,45 @@ pub(super) fn list2cmdline(argv: &[String]) -> String {
         }
     }
     line
+}
+
+/// `aac-agent --console-probe pid:start ...` (Python `WINDOWS_CONSOLE_PROBE`): the PIDs,
+/// still at that start, whose console has a window the user sees. Runs in its own short
+/// process: a process attached to another console receives that console's events.
+pub(super) fn console_probe(pairs: &[String]) -> Vec<u32> {
+    use windows_sys::Win32::{
+        System::Console::{AttachConsole, FreeConsole, GetConsoleWindow, SetConsoleCtrlHandler},
+        UI::WindowsAndMessaging::{GW_OWNER, GetWindow, IsWindowVisible},
+    };
+    let mut seen = Vec::new();
+    // SAFETY: console and window queries with plain arguments; handles are only compared.
+    unsafe {
+        SetConsoleCtrlHandler(None, 1);
+        for pair in pairs {
+            let Some((pid, identity)) = pair.split_once(':') else {
+                continue;
+            };
+            let Ok(pid) = pid.parse::<u32>() else {
+                continue;
+            };
+            FreeConsole();
+            if AttachConsole(pid) == 0 {
+                continue;
+            }
+            let window = GetConsoleWindow();
+            let owner = if window.is_null() {
+                std::ptr::null_mut()
+            } else {
+                GetWindow(window, GW_OWNER)
+            };
+            let visible = !window.is_null()
+                && (IsWindowVisible(window) != 0
+                    || (!owner.is_null() && IsWindowVisible(owner) != 0));
+            if visible && started(pid).as_deref() == Some(identity) {
+                seen.push(pid);
+            }
+            FreeConsole();
+        }
+    }
+    seen
 }
