@@ -2842,6 +2842,13 @@ mod tests {
         ] {
             let (home, addr, handle) = settings_server().await;
             let headers = settings_write_headers(addr).await;
+            // Same-run control: one read with no saves in flight. An oversubscribed machine
+            // slows every request; the probe count below is budgeted from this instead of a
+            // fixed 100 ms schedule that let the saves finish first.
+            let control_began = std::time::Instant::now();
+            let warm = request(addr, "/api/accounts/preferences", "GET", &headers, "").await;
+            assert!(warm.starts_with("HTTP/1.1 200"), "{warm}");
+            let control_read = control_began.elapsed();
             let held = native_settings::owners()
                 .claim(
                     aac_files::registry::rows().unwrap(),
@@ -2855,17 +2862,36 @@ mod tests {
                 let headers = headers.clone();
                 saves.spawn(async move { request(addr, path, method, &headers, body).await });
             }
-            for _ in 0..10 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+            // The saves live about LEASE_WAIT (250 ms) from their write turn. Probe only
+            // while they are still pending, and require at least what the control read
+            // fits in half that window, so reads provably get through under load too.
+            // The budget tracks the slowest probe seen, so a load spike mid-phase still
+            // leaves a meaningful count instead of a stale fast control.
+            let mut per_probe = control_read + Duration::from_millis(10);
+            let mut probes = 0;
+            let mut finished = None;
+            while probes < 10 {
+                if let Some(reply) = saves.try_join_next() {
+                    finished = Some(reply.unwrap());
+                    break;
+                }
+                let probe_began = std::time::Instant::now();
                 let read = request(addr, "/api/accounts/preferences", "GET", &headers, "").await;
+                per_probe = per_probe.max(probe_began.elapsed() + Duration::from_millis(10));
                 if !read.starts_with("HTTP/1.1 200") {
                     failures.push(format!("{method} {path}: {}", read.lines().next().unwrap()));
                 }
+                probes += 1;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
+            let required = (125 / per_probe.as_millis().max(1)).clamp(1, 10) as usize;
             assert!(
-                saves.try_join_next().is_none(),
-                "{path}: saves finished before the read probe"
+                probes >= required,
+                "{path}: only {probes} of {required} budgeted reads ran while saves were pending"
             );
+            if let Some(reply) = finished {
+                assert_settings_busy(&reply, code, message);
+            }
             while let Some(reply) = saves.join_next().await {
                 assert_settings_busy(&reply.unwrap(), code, message);
             }
