@@ -1,42 +1,83 @@
 use super::{error, proof};
 use serde_json::{Value, json};
-fn number(v: &Value) -> Option<f64> {
-    let n = match v {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) => {
-            if s.contains('.') || s != proof::strip(s) {
-                proof::reject();
+fn python_float_text(raw: &str) -> Option<f64> {
+    // Python float(str): surrounding whitespace, signs, decimal/exponent forms and digit
+    // underscores. Underscores are valid only between digits; Rust's parser does not know them.
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (sign, body) = if let Some(rest) = text.strip_prefix('+') {
+        ("", rest)
+    } else if let Some(rest) = text.strip_prefix('-') {
+        ("-", rest)
+    } else {
+        ("", text)
+    };
+    let lower = body.to_ascii_lowercase();
+    if matches!(lower.as_str(), "inf" | "infinity" | "nan") {
+        return None; // callers need finite nonnegative values
+    }
+    let bytes = body.as_bytes();
+    let mut cleaned = String::with_capacity(body.len());
+    for (i, &c) in bytes.iter().enumerate() {
+        if c == b'_' {
+            let before = i > 0 && bytes[i - 1].is_ascii_digit();
+            let after = i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit();
+            if !before || !after {
                 return None;
             }
-            let s = proof::strip(s);
-            if !proof::decimal(s) {
-                return None;
-            }
-            s.parse().ok()
+            continue;
         }
-        _ => None,
-    }?;
+        cleaned.push(c as char);
+    }
+    let cleaned = format!("{sign}{cleaned}");
+    let n = cleaned.parse::<f64>().ok()?;
     (n.is_finite() && n >= 0.).then_some(n)
 }
-/// `plan_common.reset_at`: a positive number (milliseconds above 1e11) read by `datetime.fromtimestamp`, which
-/// rounds to the microsecond before the second is written, or the one raw ISO shape proved against it; then
-/// years 2000 to 2200 only. Both readings are aac-num's (`py`).
+fn api_number(v: &Value) -> Option<f64> {
+    // plan_common.api_number/percent: float(value), finite and nonnegative.
+    match v {
+        Value::Number(n) => n.as_f64().filter(|n| n.is_finite() && *n >= 0.),
+        Value::String(s) => python_float_text(s),
+        _ => None,
+    }
+}
+/// `plan_common.reset_at`: numeric seconds/milliseconds or a datetime string normalized by
+/// `datetime.fromisoformat(...replace("Z", "+00:00"))`, then years 2000 to 2200 only.
 fn reset(v: &Value) -> Value {
     if v.is_null() || v.is_boolean() {
         return Value::Null;
     }
     let instant = if v.is_number()
-        || v.as_str()
-            .is_some_and(|s| s.bytes().all(|c| c.is_ascii_digit()))
-    {
-        number(v).filter(|n| *n > 0.).and_then(|n| {
+        || v.as_str().is_some_and(|s| {
+            let t = s.trim();
+            !t.is_empty()
+                && t.bytes().all(|c| {
+                    c.is_ascii_digit()
+                        || c == b'.'
+                        || c == b'+'
+                        || c == b'-'
+                        || c == b'e'
+                        || c == b'E'
+                        || c == b'_'
+                })
+                && t.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit() || c == '+' || c == '-')
+        }) {
+        api_number(v).filter(|n| *n > 0.).and_then(|n| {
             aac_num::py::iso_seconds_of_timestamp(if n > 100_000_000_000. { n / 1000. } else { n })
         })
-    } else if let Some(s) = v.as_str() {
-        match aac_num::py::parse_z_seconds(s) {
-            // Year 0 parses but has no Python word: it is then no time, as Python's ValueError gives.
-            Some((seconds, year)) => aac_num::py::iso_seconds(seconds).map(|word| (word, year)),
-            None => {
+    } else if let Some(raw) = v.as_str() {
+        let text = raw.trim().replace('Z', "+00:00");
+        match chrono::DateTime::parse_from_rfc3339(&text) {
+            Ok(d) => {
+                let seconds = d.timestamp();
+                aac_num::py::iso_seconds(seconds)
+                    .map(|word| (word, d.format("%Y").to_string().parse::<i64>().unwrap_or(0)))
+            }
+            Err(_) => {
                 proof::reject();
                 return Value::Null;
             }
@@ -50,6 +91,41 @@ fn reset(v: &Value) -> Value {
         .unwrap_or(Value::Null)
 }
 #[allow(clippy::too_many_arguments)]
+fn window_full(
+    key: &str,
+    label: &str,
+    ratio: Option<f64>,
+    reset_raw: &Value,
+    minutes: Option<f64>,
+    used: Option<f64>,
+    limit: Option<f64>,
+    unit: Option<&str>,
+    kind: &str,
+    remaining: Option<f64>,
+    expires_at: Option<&Value>,
+    unlimited: Option<bool>,
+    enabled: Option<bool>,
+) -> Value {
+    let ratio = ratio.filter(|n| n.is_finite() && *n >= 0.);
+    let mut w = json!({"key":key,"label":label,"usedPercent":ratio,"remainingPercent":ratio.map(|n| aac_num::py::round((100.-n).max(0.), 8).unwrap_or_else(|| { proof::reject(); n })),"resetAt":reset(reset_raw),"windowMinutes":minutes,"used":used,"limit":limit,"unit":unit});
+    if matches!(kind, "rate_limit" | "balance" | "spend" | "extra_usage") {
+        w["kind"] = json!(kind);
+    }
+    if let Some(remaining) = remaining {
+        w["remaining"] = json!(remaining);
+    }
+    if let Some(expiry) = expires_at {
+        w["expiresAt"] = reset(expiry);
+    }
+    if let Some(unlimited) = unlimited {
+        w["unlimited"] = json!(unlimited);
+    }
+    if let Some(enabled) = enabled {
+        w["enabled"] = json!(enabled);
+    }
+    w
+}
+#[allow(clippy::too_many_arguments)]
 fn window(
     key: &str,
     label: &str,
@@ -61,11 +137,21 @@ fn window(
     unit: Option<&str>,
     remaining: &Value,
 ) -> Value {
-    let mut w = json!({"key":key,"label":label,"usedPercent":ratio,"remainingPercent":ratio.map(|n| aac_num::py::round((100.-n).max(0.), 8).unwrap_or_else(|| { proof::reject(); n })),"resetAt":reset(reset_raw),"windowMinutes":minutes,"used":used,"limit":limit,"unit":unit,"kind":"rate_limit"});
-    if !remaining.is_null() {
-        w["remaining"] = json!(number(remaining));
-    }
-    w
+    window_full(
+        key,
+        label,
+        ratio,
+        reset_raw,
+        minutes,
+        used,
+        limit,
+        unit,
+        "rate_limit",
+        api_number(remaining),
+        None,
+        None,
+        None,
+    )
 }
 fn valid(plan: Value, windows: Vec<Value>) -> Value {
     let windows: Vec<_> = windows
@@ -116,7 +202,7 @@ fn go(p: &Value) -> Value {
         ("monthly", "Monthly", None),
     ] {
         let item = &p["usage"][key];
-        let ratio = number(&item["percent"]);
+        let ratio = api_number(&item["percent"]);
         if !matches!(item["status"].as_str(), Some("ok" | "rate-limited")) || ratio.is_none() {
             return error(
                 "error",
@@ -138,9 +224,9 @@ fn go(p: &Value) -> Value {
     valid(json!("Go"), windows)
 }
 fn counts(d: &Value) -> (Option<f64>, Option<f64>, Option<f64>) {
-    let limit = number(&d["limit"]);
-    let mut used = number(&d["used"]);
-    let left = number(&d["remaining"]);
+    let limit = api_number(&d["limit"]);
+    let mut used = api_number(&d["used"]);
+    let left = api_number(&d["remaining"]);
     if let Some(l) = limit.filter(|l| *l > 0.) {
         if used.is_none()
             && let Some(r) = left.filter(|r| *r <= l)
@@ -158,6 +244,80 @@ fn kimi_reset(d: &Value) -> &Value {
         .find(|v| !reset(v).is_null())
         .unwrap_or(&Value::Null)
 }
+fn kimi_booster(p: &Value) -> Vec<Value> {
+    let wallet = &p["boosterWallet"];
+    if !wallet.is_object() {
+        return Vec::new();
+    }
+    let monthly_limit = &wallet["monthlyChargeLimit"];
+    let monthly_used = &wallet["monthlyUsed"];
+    let currency = monthly_limit["currency"]
+        .as_str()
+        .or_else(|| monthly_used["currency"].as_str())
+        .filter(|c| c.len() == 3 && c.bytes().all(|b| b.is_ascii_uppercase()));
+    let scale = if currency.is_some() { 100. } else { 1. };
+    let unit = currency.unwrap_or("cents");
+    let mut result = Vec::new();
+    let balance = &wallet["balance"];
+    if balance["type"] == "BOOSTER" {
+        let cents = |raw: Option<f64>| -> Option<f64> {
+            raw.map(|n| {
+                let value = n.trunc() / 1_000_000.;
+                if value > 0. && value < 1. {
+                    1.
+                } else {
+                    (value + 0.5).floor()
+                }
+            })
+        };
+        let total = cents(api_number(&balance["amount"]));
+        let left = cents(api_number(&balance["amountLeft"]));
+        if let Some(total) = total.filter(|n| *n > 0.) {
+            let used = left.filter(|l| *l <= total).map(|l| total - l);
+            let ratio = used.map(|u| 100. * u / total);
+            result.push(window_full(
+                "booster-balance",
+                "Booster balance",
+                ratio,
+                &Value::Null,
+                None,
+                used.map(|u| u / scale),
+                Some(total / scale),
+                Some(unit),
+                "balance",
+                left.map(|l| l / scale),
+                None,
+                None,
+                None,
+            ));
+        }
+    }
+    let limit = api_number(&monthly_limit["priceInCents"]);
+    let used = api_number(&monthly_used["priceInCents"]);
+    let enabled = wallet["monthlyChargeLimitEnabled"].as_bool();
+    if limit.is_some() || used.is_some() || enabled.is_some() {
+        let ratio = used
+            .zip(limit.filter(|l| *l > 0.))
+            .map(|(u, l)| 100. * u / l);
+        let remaining = limit.zip(used).and_then(|(l, u)| (u <= l).then_some(l - u));
+        result.push(window_full(
+            "booster-monthly-spend",
+            "Monthly booster spend",
+            ratio,
+            &Value::Null,
+            None,
+            used.map(|u| u / scale),
+            limit.map(|l| l / scale),
+            Some(unit),
+            "spend",
+            remaining.map(|r| r / scale),
+            None,
+            None,
+            enabled,
+        ));
+    }
+    result
+}
 fn kimi(p: &Value) -> Value {
     if p["user"]["membership"]["level"].is_array()
         || p["user"]["membership"]["level"].is_object()
@@ -165,12 +325,6 @@ fn kimi(p: &Value) -> Value {
             rows.iter()
                 .any(|r| r["window"]["timeUnit"].is_array() || r["window"]["timeUnit"].is_object())
         })
-    {
-        return proof::fallback();
-    }
-    // Wallet and transitional modern/legacy overlap require their own proof table.
-    if p.get("boosterWallet").is_some()
-        || (p["usages"].is_object() && (p["usage"].is_object() || p["limits"].is_array()))
     {
         return proof::fallback();
     }
@@ -207,7 +361,9 @@ fn kimi(p: &Value) -> Value {
                 Some("TIME_UNIT_SECOND") => Some(1. / 60.),
                 _ => None,
             };
-            let minutes = number(&w["duration"]).zip(multiplier).map(|(d, m)| d * m);
+            let minutes = api_number(&w["duration"])
+                .zip(multiplier)
+                .map(|(d, m)| d * m);
             let (key, label) = match minutes {
                 Some(300.) => ("5h".into(), "5 hours".into()),
                 Some(10080.) => ("weekly".into(), "Weekly".into()),
@@ -230,8 +386,30 @@ fn kimi(p: &Value) -> Value {
         ("limit_month_code", "monthly-code", "Monthly coding", None),
     ] {
         let item = &p["usages"][up];
-        let ratio = number(&item["used_ratio"]).filter(|n| *n <= 1.);
-        if item.is_object() && (ratio.is_some() || !reset(&item["reset_time"]).is_null()) {
+        let ratio = api_number(&item["used_ratio"]).filter(|n| *n <= 1.);
+        let modern_reset = reset(&item["reset_time"]);
+        if item.is_object()
+            && ratio == Some(0.)
+            && !p["usages"]["limit_month_total"].is_object()
+            && windows.get(key).is_some_and(|legacy| {
+                legacy["used"].as_f64().is_some_and(|u| u > 0.)
+                    && legacy["windowMinutes"].as_f64() == minutes
+                    && !modern_reset.is_null()
+                    && !legacy["resetAt"].is_null()
+                    && legacy["resetAt"]
+                        .as_str()
+                        .zip(modern_reset.as_str())
+                        .is_some_and(|(a, b)| {
+                            chrono::DateTime::parse_from_rfc3339(a)
+                                .ok()
+                                .zip(chrono::DateTime::parse_from_rfc3339(b).ok())
+                                .is_some_and(|(x, y)| (x.timestamp() - y.timestamp()).abs() <= 2)
+                        })
+            })
+        {
+            continue;
+        }
+        if item.is_object() && (ratio.is_some() || !modern_reset.is_null()) {
             windows.insert(
                 key.into(),
                 window(
@@ -257,6 +435,7 @@ fn kimi(p: &Value) -> Value {
             .then_with(|| x.unwrap_or(0.).total_cmp(&y.unwrap_or(0.)))
             .then_with(|| a["key"].as_str().cmp(&b["key"].as_str()))
     });
+    windows.extend(kimi_booster(p));
     let level = p["user"]["membership"]["level"].as_str().unwrap_or("");
     let legacy = p["version"].is_null() || p["version"] == "GOODS_VERSION_V1";
     let plan = match (legacy, level) {
@@ -272,7 +451,6 @@ fn kimi(p: &Value) -> Value {
         (false, "LEVEL_ADVANCED") => Some("Advanced"),
         _ => None,
     };
-    // plan_usage.parse_kimi: a membership level Kimi added after this table keeps its own words.
     let plan = plan.map(str::to_owned).or_else(|| kimi_new_level(level));
     valid(json!(plan), windows)
 }
@@ -323,34 +501,56 @@ fn zai(p: &Value) -> Value {
             Some("CREDIT_LIMIT") => "Credits",
             _ => continue,
         };
-        let count = number(&item["number"]);
-        let unit = item["unit"].as_i64();
-        // Python hashes a float's spelling into its public key. Prove only small integral counts.
-        if count.is_none_or(|n| n.fract() != 0. || n > 999999.) || unit.is_none() {
-            return proof::fallback();
-        }
-        let n = count.unwrap_or(0.);
-        let unit = unit.unwrap_or(0);
-        let monthly = kind == "Requests" && unit == 5 && n == 1.;
+        let count = api_number(&item["number"]);
+        let unit_value = &item["unit"];
+        let unit = unit_value.as_i64();
+        let monthly = kind == "Requests" && unit == Some(5) && count == Some(1.);
         let multiplier = match unit {
-            1 => Some(1440.),
-            3 => Some(60.),
-            6 => Some(10080.),
+            Some(1) => Some(1440.),
+            Some(3) => Some(60.),
+            Some(6) => Some(10080.),
             _ => None,
         };
         let minutes = if monthly {
             None
         } else {
-            multiplier.map(|m| n * m)
+            count.zip(multiplier).map(|(n, m)| n * m)
         };
+        fn py_g(n: f64) -> String {
+            if n == 0. {
+                return "0".into();
+            }
+            let exponent = n.abs().log10().floor() as i32;
+            if !(-4..6).contains(&exponent) {
+                let text = format!("{:.5e}", n);
+                let Some(epos) = text.find('e') else {
+                    return py_g(0.);
+                };
+                let exp = text[epos + 1..].parse::<i32>().unwrap_or(0);
+                let mantissa = text[..epos].trim_end_matches('0').trim_end_matches('.');
+                format!(
+                    "{}e{}{:02}",
+                    mantissa,
+                    if exp < 0 { "-" } else { "+" },
+                    exp.abs()
+                )
+            } else {
+                let precision = (5 - exponent).max(0) as usize;
+                let mut text = format!("{n:.precision$}");
+                if text.contains('.') {
+                    text = text.trim_end_matches('0').trim_end_matches('.').to_owned();
+                }
+                text
+            }
+        }
         let duration = match minutes {
             Some(300.) => "5 hours".into(),
             Some(10080.) => "Weekly".into(),
             _ if monthly => "Monthly".into(),
-            _ => match unit {
-                1 => format!("{n} days"),
-                3 => format!("{n} hours"),
-                6 => format!("{n} weeks"),
+            _ => match (count, unit) {
+                (Some(n), Some(1)) => format!("{} days", py_g(n)),
+                (Some(n), Some(3)) => format!("{} hours", py_g(n)),
+                (Some(n), Some(6)) => format!("{} weeks", py_g(n)),
                 _ => "Plan limit".into(),
             },
         };
@@ -360,16 +560,28 @@ fn zai(p: &Value) -> Value {
             .to_lowercase()
             .replace("_limit", "");
         // plan_usage.py `"{}".format(count)` on a float: its repr ("5.0").
-        let mut key = format!("{meter}-{unit}-{}", aac_num::py::repr(n));
+        let count_key = count
+            .map(aac_num::py::repr)
+            .unwrap_or_else(|| "None".into());
+        let unit_key = match unit_value {
+            Value::Null => "None".into(),
+            Value::Number(n) => n.to_string(),
+            Value::String(s) => s.clone(),
+            _ => {
+                proof::reject();
+                return proof::fallback();
+            }
+        };
+        let mut key = format!("{meter}-{unit_key}-{count_key}");
         if !seen.insert(key.clone()) {
             key.push_str(&format!("-{index}"));
         }
-        let used = number(&item["currentValue"]);
-        let limit = number(&item["usage"]);
+        let used = api_number(&item["currentValue"]);
+        let limit = api_number(&item["usage"]);
         let ratio = used
             .zip(limit.filter(|l| *l > 0.))
             .map(|(u, l)| 100. * u / l)
-            .or_else(|| number(&item["percentage"]));
+            .or_else(|| api_number(&item["percentage"]));
         let label = format!("{duration} · {kind}");
         let unit_name = if kind == "Requests" {
             "requests".into()
@@ -403,7 +615,7 @@ fn zai(p: &Value) -> Value {
                     Some("zread") => "Zread",
                     _ => continue,
                 };
-                if let Some(u) = number(&d["usage"]) {
+                if let Some(u) = api_number(&d["usage"]) {
                     let mut w = window(
                         &format!("{key}-{}", d["modelCode"].as_str().unwrap_or("")),
                         label,
@@ -566,7 +778,7 @@ pub(super) fn packs(p: &Value, now: i64) -> Value {
     }
 }
 
-fn unwrap_qwen(p: &Value) -> Result<Value, Value> {
+fn unwrap_qwen_markers(p: &Value, markers: &[&str]) -> Result<Value, Value> {
     let mut v = p.clone();
     for _ in 0..7 {
         if !v.is_object() {
@@ -578,17 +790,7 @@ fn unwrap_qwen(p: &Value) -> Result<Value, Value> {
                 "The Qwen console session could not access token-plan usage.",
             ));
         }
-        if [
-            "per5HourPercentage",
-            "per1WeekPercentage",
-            "per1MonthPercentage",
-            "per5HourResetTime",
-            "per1WeekResetTime",
-            "per1MonthResetTime",
-        ]
-        .iter()
-        .any(|k| v.get(k).is_some())
-        {
+        if markers.iter().any(|k| v.get(*k).is_some()) {
             return Ok(v);
         }
         let next = v
@@ -598,7 +800,7 @@ fn unwrap_qwen(p: &Value) -> Result<Value, Value> {
             .cloned()
             .unwrap_or(Value::Null);
         v = if let Some(s) = next.as_str() {
-            proof::json(s.as_bytes(), super::CAP, false).unwrap_or(Value::Null)
+            serde_json::from_str(s).unwrap_or(Value::Null)
         } else {
             next
         };
@@ -608,39 +810,230 @@ fn unwrap_qwen(p: &Value) -> Result<Value, Value> {
         "The Qwen console returned no valid token-plan quota response.",
     ))
 }
+fn unwrap_qwen(p: &Value) -> Result<Value, Value> {
+    unwrap_qwen_markers(
+        p,
+        &[
+            "per5HourPercentage",
+            "per1WeekPercentage",
+            "per1MonthPercentage",
+            "per5HourResetTime",
+            "per1WeekResetTime",
+            "per1MonthResetTime",
+        ],
+    )
+}
 pub(super) fn qwen(payloads: &[Value]) -> Value {
     let data = match unwrap_qwen(&payloads[0]) {
         Ok(data) => data,
         Err(failure) => return failure,
     };
-    // Optional subscription/config/pack layouts delegate as a unit until proven.
-    if payloads[1..].iter().any(|p| !p.is_null()) {
-        return proof::fallback();
-    }
+    let subscription_data = payloads.get(1).filter(|p| !p.is_null()).and_then(|p| {
+        unwrap_qwen_markers(
+            p,
+            &["specCode", "spec_code", "planName", "plan_name", "endTime"],
+        )
+        .ok()
+    });
+    let tier = subscription_data
+        .as_ref()
+        .and_then(|s| s["specCode"].as_str().or_else(|| s["spec_code"].as_str()));
+    let quotas = tier
+        .and_then(|tier| {
+            payloads
+                .get(2)
+                .filter(|p| !p.is_null())
+                .and_then(|p| unwrap_qwen_markers(p, &[tier]).ok())
+                .map(|configs| (tier, configs))
+        })
+        .and_then(|(tier, configs)| configs.get(tier).cloned())
+        .filter(|q| q.is_object());
+    let quota = quotas.as_ref().unwrap_or(&Value::Null);
     let mut windows = Vec::new();
     for (prefix, key, label, minutes) in [
         ("per5Hour", "5h", "5 hours", Some(300.)),
         ("per1Week", "weekly", "Weekly", Some(10080.)),
         ("per1Month", "monthly", "Monthly", None),
     ] {
-        let ratio = number(&data[format!("{prefix}Percentage")]);
+        let ratio = api_number(&data[format!("{prefix}Percentage")]);
         let r = &data[format!("{prefix}ResetTime")];
         if ratio.is_none() && reset(r).is_null() {
             continue;
         }
-        windows.push(window(
+        let used_percent = ratio.map(|n| if n <= 1. { n * 100. } else { n });
+        let names: &[&str] = match key {
+            "5h" => &["five_hour", "fiveHour"],
+            "weekly" => &["weekly"],
+            _ => &["monthly"],
+        };
+        let limit = names.iter().find_map(|name| api_number(&quota[*name]));
+        let used = limit.zip(used_percent).map(|(l, p)| l * p / 100.);
+        let remaining = limit.zip(used).map(|(l, u)| l - u);
+        windows.push(window_full(
             key,
             label,
-            ratio.map(|n| if n <= 1. { n * 100. } else { n }),
+            used_percent,
             r,
             minutes,
+            used,
+            limit,
+            limit.map(|_| "credits"),
+            "rate_limit",
+            remaining,
             None,
             None,
             None,
-            &Value::Null,
         ));
     }
-    valid(Value::Null, windows)
+    let mut plan = Value::Null;
+    if let Some(subscription) = subscription_data {
+        plan = plan_label(
+            &subscription["planName"]
+                .clone()
+                .as_str()
+                .or_else(|| subscription["plan_name"].as_str())
+                .map_or(Value::Null, |s| json!(s)),
+        );
+        if plan.is_null() {
+            plan = plan_label(
+                &subscription["specCode"]
+                    .clone()
+                    .as_str()
+                    .or_else(|| subscription["spec_code"].as_str())
+                    .map_or(Value::Null, |s| json!(s)),
+            );
+        }
+        let expiry = &subscription["endTime"];
+        if !reset(expiry).is_null() {
+            windows.push(window_full(
+                "subscription",
+                "Plan subscription",
+                None,
+                &Value::Null,
+                None,
+                None,
+                None,
+                None,
+                "rate_limit",
+                None,
+                Some(expiry),
+                None,
+                None,
+            ));
+        }
+    }
+    if let Some(addon) = payloads.get(3).filter(|p| !p.is_null())
+        && let Ok(extras) = unwrap_qwen_markers(
+            addon,
+            &["remainingCredits", "totalCredits", "activeCount", "items"],
+        )
+    {
+        let limit = api_number(&extras["totalCredits"]);
+        let remaining = api_number(&extras["remainingCredits"]);
+        let used = limit
+            .zip(remaining)
+            .and_then(|(l, r)| (r <= l).then_some(l - r));
+        let ratio = used
+            .zip(limit.filter(|l| *l > 0.))
+            .map(|(u, l)| 100. * u / l);
+        if limit.is_some() || remaining.is_some() {
+            windows.push(window_full(
+                "addon-credits",
+                "Additional credits",
+                ratio,
+                &Value::Null,
+                None,
+                used,
+                limit,
+                Some("credits"),
+                "balance",
+                remaining,
+                None,
+                None,
+                None,
+            ));
+        }
+        if let Some(active) = api_number(&extras["activeCount"]) {
+            windows.push(window_full(
+                "addon-packs",
+                "Active credit packs",
+                None,
+                &Value::Null,
+                None,
+                None,
+                None,
+                Some("packs"),
+                "balance",
+                Some(active),
+                None,
+                None,
+                None,
+            ));
+        }
+        if let Some(items) = extras["items"].as_array() {
+            for (index, item) in items.iter().take(100).enumerate() {
+                if !item.is_object() {
+                    continue;
+                }
+                let total = api_number(&item["totalCredits"]);
+                let remaining = api_number(&item["remainingCredits"]);
+                let expiry = &item["endTime"];
+                if total.is_none() && remaining.is_none() && reset(expiry).is_null() {
+                    continue;
+                }
+                let spent = total
+                    .zip(remaining)
+                    .and_then(|(t, r)| (r <= t).then_some(t - r));
+                let ratio = spent
+                    .zip(total.filter(|t| *t > 0.))
+                    .map(|(u, t)| u / t * 100.);
+                let identifier = match &item["orderId"] {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    _ => index.to_string(),
+                };
+                let digest = aac_core::sha256_hex(identifier.as_bytes());
+                windows.push(window_full(
+                    &format!("addon-pack-{}", &digest[..12]),
+                    &format!("Additional credit pack {}", index + 1),
+                    ratio,
+                    &Value::Null,
+                    None,
+                    spent,
+                    total,
+                    Some("credits"),
+                    "balance",
+                    remaining,
+                    Some(expiry),
+                    None,
+                    None,
+                ));
+            }
+            if items.iter().all(|item| {
+                item.is_object()
+                    && (api_number(&item["totalCredits"]).is_some()
+                        || api_number(&item["remainingCredits"]).is_some()
+                        || !reset(&item["endTime"]).is_null())
+            }) {
+                windows.push(window_full(
+                    "addon-listed-packs",
+                    "Listed active credit packs",
+                    None,
+                    &Value::Null,
+                    None,
+                    None,
+                    None,
+                    Some("packs"),
+                    "balance",
+                    Some(items.len() as f64),
+                    None,
+                    None,
+                    None,
+                ));
+            }
+        }
+    }
+    valid(plan, windows)
 }
 
 #[cfg(test)]

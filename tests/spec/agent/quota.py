@@ -93,6 +93,7 @@ def main():
         print('8 production empty-home/injection-refusal cases passed')
         return
     equal = fallback = 0
+    fallback_cases = []
     live_providers = set()
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -113,9 +114,19 @@ def main():
                 if provider == 'kimi-code':
                     variants += [('level-' + level, response({**KIMI, 'version': 'GOODS_VERSION_V2', 'user': {'membership': {'level': level}}}))
                                  for level in ('LEVEL_ADVANCED', 'LEVEL_ULTRA_MAX', 'LEVEL_lower', 'LEVEL_A_B_C_D')]
+                    variants += [('booster', response({**KIMI, 'boosterWallet': {
+                        'balance': {'type': 'BOOSTER', 'amount': '100000000', 'amountLeft': '25000000'},
+                        'monthlyChargeLimit': {'priceInCents': '5000', 'currency': 'USD'},
+                        'monthlyUsed': {'priceInCents': '1250', 'currency': 'USD'},
+                        'monthlyChargeLimitEnabled': True}}))]
+                    variants += [('transitional-overlap', response({**KIMI,
+                        'usage': {'limit': 100, 'used': 25, 'resetTime': STAMP},
+                        'usages': {'limit_7d': {'used_ratio': 0, 'reset_time': STAMP}}}))]
                 if provider == 'zai':
                     variants += [('level-' + str(i), response({**ZAI, 'data': {**ZAI['data'], 'level': level}}))
                                  for i, level in enumerate(('max', 'Coder', 'max_plus', 'Pro 2', ' pro', 'Plan 20261119', 'x' * 17, 'sk-' + 'a' * 40))]
+                    large = {'type': 'TIME_LIMIT', 'number': '18014398509481985', 'unit': 5, 'usage': '100.5', 'currentValue': '25.25', 'nextResetTime': 1767225600000}
+                    variants += [('large-count-key', response({**ZAI, 'data': {**ZAI['data'], 'limits': [large]}}))]
                 for name, first in variants:
                     replies = [first] + ([response(PACKS)] if provider == 'zai' else [])
                     Handler.queue = replies.copy()
@@ -135,7 +146,7 @@ def main():
                     value = event['value']
                     assert 'fixture-dummy-token' not in process.stdout + process.stderr
                     if value == {'fallback': 'python'}:
-                        fallback += 1
+                        fallback += 1; fallback_cases.append((provider,name))
                     else:
                         assert value == reference, (provider, name, value, reference)
                         # Request auth and fixed headers must match as well as parsed replies.
@@ -167,8 +178,7 @@ def main():
                 event = json.loads(process.stdout)
                 assert event['type'] == 'result' and event['id'] == request['id'] and event['protocol'] == 1
                 value = event['value']
-                if optional == 'fraction': assert value == {'fallback': 'python'}
-                if value == {'fallback': 'python'}: fallback += 1
+                if value == {'fallback': 'python'}: fallback += 1; fallback_cases.append(('qwen-packed',str(optional)))
                 else:
                     live_providers.add('qwen')
                     assert value == reference, ('qwen-packed', value, reference)
@@ -186,6 +196,24 @@ def main():
                             assert first == second, 'qwen form body'
 
                     equal += 1
+            # China-region Qwen reads SEC_TOKEN from the console HTML, then uses the CN gateway.
+            auth.write_text(json.dumps({'alibaba-token-plan': {'type': 'api', 'key': json.dumps({'cookie': 'fixture-cn-cookie=made-up', 'baseUrl': 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'})}}))
+            replies = [(200, {}, b'<script>SEC_TOKEN: "fixture-cn-sec"</script>'), response(QWEN), response({'data': {}}), response({'data': {}}), response({'data': {}})]
+            Handler.queue = replies.copy(); Handler.calls = []
+            client = common.HttpClient(); client.opener = LocalOpener(client.opener, endpoint)
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(usage, 'utc_now', return_value=STAMP):
+                reference = usage.collect('qwen', 'ubuntu', home=home, client=client)
+            py_calls = Handler.calls.copy()
+            Handler.queue = replies.copy(); Handler.calls = []
+            request['args'] = {'provider': 'qwen', 'platform': 'ubuntu', 'home': str(home), 'endpoint': endpoint, 'now': NOW}
+            process = subprocess.run([binary], input=json.dumps(request)+'\n', text=True, capture_output=True, check=True, env={'PATH': os.defpath})
+            value = json.loads(process.stdout)['value']
+            assert value == reference, ('qwen-cn', value, reference)
+            assert [c[0] for c in Handler.calls] == [c[0] for c in py_calls] == ['GET', 'POST', 'POST', 'POST', 'POST']
+            actual = {k.lower(): v for k, v in Handler.calls[0][1].items()}
+            expected = {k.lower(): v for k, v in py_calls[0][1].items()}
+            assert actual.get('accept') == expected.get('accept') == 'text/html'
+            equal += 1; live_providers.add('qwen')
             # Target-bound Unix key records, including absent/private/invalid records.
             keydir = home / '.ccs/account-usage/keys'
             keydir.mkdir(parents=True, mode=0o700)
@@ -210,7 +238,7 @@ def main():
                     event = json.loads(process.stdout)
                     assert event['type'] == 'result' and event['id'] == request['id'] and event['protocol'] == 1
                     value = event['value']
-                    if value == {'fallback': 'python'}: fallback += 1
+                    if value == {'fallback': 'python'}: fallback += 1; fallback_cases.append(('qwen-packed',str(optional))); print("STDERR",process.stderr[:2500])
                     else:
                         assert value == reference, (provider, state, value, reference)
                         equal += 1
@@ -224,7 +252,7 @@ def main():
                     reference = usage.collect(provider, 'ubuntu', home=home)
                 assert value == reference or value == {'fallback': 'python'}
                 if value == reference: equal += 1
-                else: fallback += 1
+                else: fallback += 1; fallback_cases.append((provider,'empty'))
     finally:
         server.shutdown()
         server.server_close()

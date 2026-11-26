@@ -5,6 +5,52 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf};
 
+#[cfg(windows)]
+fn windows_protect(plaintext: &[u8]) -> Result<Vec<u8>, Failure> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptProtectData};
+    const ENTROPY: &[u8] = b"AAC/account-key/v1";
+    #[allow(unsafe_code)]
+    unsafe {
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: plaintext.len() as u32,
+            pbData: plaintext.as_ptr() as *mut u8,
+        };
+        let entropy = CRYPT_INTEGER_BLOB {
+            cbData: ENTROPY.len() as u32,
+            pbData: ENTROPY.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        // CRYPTPROTECT_UI_FORBIDDEN: never prompt.
+        if CryptProtectData(
+            &input,
+            std::ptr::null(),
+            &entropy,
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+            &mut output,
+        ) == 0
+        {
+            return Err(Failure::new(
+                Cause::Refused,
+                "key store could not be written safely",
+            ));
+        }
+        if output.pbData.is_null() {
+            return Err(Failure::new(
+                Cause::Refused,
+                "key store could not be written safely",
+            ));
+        }
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        LocalFree(output.pbData as _);
+        Ok(bytes)
+    }
+}
 fn refused() -> Failure {
     Failure::new(Cause::Refused, "key store could not be written safely")
 }
@@ -20,10 +66,6 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
             })
         })
     {
-        return Ok(proof::fallback());
-    }
-    // DPAPI requires native Windows qualification. Delegate before touching any path.
-    if cfg!(windows) {
         return Ok(proof::fallback());
     }
     let action = args["action"].as_str().ok_or_else(refused)?;
@@ -48,7 +90,8 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     if !home.is_absolute() || !home.to_str().is_some_and(proof::ascii) {
         return Ok(proof::fallback());
     }
-    let name = format!("{provider}-{id}.json");
+    let extension = if cfg!(windows) { "dpapi" } else { "json" };
+    let name = format!("{provider}-{id}.{extension}");
     let target = home.join(".ccs/account-usage/keys").join(&name);
     if action == "delete" {
         match fs::symlink_metadata(&target) {
@@ -106,7 +149,27 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
         store.write(&payload).map_err(|_| refused())?;
         Ok(json!({"ok":true,"fingerprint":fingerprint,"last4":last4}))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let payload = windows_protect(&payload[..payload.len() - 1])?; // DPAPI covers the exact compact JSON text, without the Unix newline.
+        let directory = home.join(".ccs/account-usage/keys");
+        fs::create_dir_all(&directory).map_err(|_| refused())?;
+        let meta = fs::symlink_metadata(&directory).map_err(|_| refused())?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(refused());
+        }
+        let mut staged = tempfile::Builder::new()
+            .prefix(&format!(".{name}."))
+            .suffix(".tmp")
+            .tempfile_in(&directory)
+            .map_err(|_| refused())?;
+        use std::io::Write;
+        staged.write_all(&payload).map_err(|_| refused())?;
+        staged.as_file().sync_all().map_err(|_| refused())?;
+        staged.persist(&target).map_err(|_| refused())?;
+        Ok(json!({"ok":true,"fingerprint":fingerprint,"last4":last4}))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         Ok(proof::fallback())
     }
