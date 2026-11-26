@@ -54,8 +54,8 @@ impl Adapter for Native {
     }
 }
 pub(super) fn run(request: &Value) -> Value {
-    // TEMPORARY: U1 supplies a Claude Adapter to super::run_with_adapter.
-    // Keep the existing Python route until that qualified reader is integrated.
+    // Claude routes to its own adapter before this point (failover::claude); providers
+    // without a native collector here keep their existing route.
     if request["provider"] != "codex" {
         return proof::fallback();
     }

@@ -22,6 +22,10 @@ fn main() {
             }
             Err(_) => 1,
         }
+    } else if args.len() == 1 && args[0] == "--claude-reset" {
+        aac_agent::claude_reset_stdio().await
+    } else if args.len() == 2 && args[0] == "--claude-reset-gui" {
+        aac_agent::claude_reset_gui(std::path::Path::new(&args[1])).await
     } else if args.is_empty() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)

@@ -44,7 +44,6 @@ fn read_file(path: &Path, cap: u64) -> Result<Option<Vec<u8>>, ()> {
 
 /// `usageHelperProcessTimeoutMs('inventory')`: the claim runs under the inventory request.
 const CLAIM_TIMEOUT: Duration = Duration::from_secs(12);
-const BOOTSTRAP: &str = "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));sys.stdin=io.StringIO(json.dumps(_p['request']));exec(compile(_p['helperSource'],'managed-usage','exec'))";
 const SSH_ISOLATION: [&str; 13] = [
     "BatchMode=yes",
     "ConnectTimeout=5",
@@ -68,7 +67,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) struct SourceContext {
     /// The canonical private root the service owns.
     pub ccs: PathBuf,
-    /// The package root (`AAC_AGENT_PACKAGE_ROOT`), for `scripts/account-usage/claude_usage.py`.
+    /// The package root (`AAC_AGENT_PACKAGE_ROOT`), for the pinned agent catalog.
     pub package: Option<PathBuf>,
     /// `CCS_HOME ?? HOME`, the default known-hosts pin's home.
     pub home: OsString,
@@ -945,18 +944,64 @@ fn ssh_argv(
     Ok(argv)
 }
 
-/// `usageHelperCommand('windows')`.
-pub(crate) fn windows_helper_command() -> String {
+/// The pinned agent artifact a Claude credential host runs (`config/agent-artifacts.json`).
+#[derive(Clone, Debug)]
+pub(crate) struct ClaudeAgent {
+    sha256: String,
+    file: PathBuf,
+}
+
+/// The catalog entry for `platform`, as the agent transport picks it.
+fn claude_agent(ctx: &SourceContext, platform: ClaudePlatform) -> Res<ClaudeAgent> {
+    let package = ctx
+        .package
+        .as_deref()
+        .ok_or("credential-host-unavailable")?;
+    let catalog = std::env::var_os("AAC_AGENT_CATALOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| package.join("config/agent-artifacts.json"));
+    let bytes = read_file(&catalog, 65536)
+        .ok()
+        .flatten()
+        .ok_or("credential-host-unavailable")?;
+    let catalog: Value =
+        serde_json::from_slice(&bytes).map_err(|_| "credential-host-unavailable")?;
+    let artifacts = catalog["artifacts"]
+        .as_array()
+        .filter(|a| a.len() <= 16)
+        .ok_or("credential-host-unavailable")?;
+    artifacts
+        .iter()
+        .find(|a| match platform {
+            ClaudePlatform::Windows => a["target"] == "x86_64-pc-windows-msvc",
+            ClaudePlatform::Mac => {
+                a["target"] == "aarch64-apple-darwin" || a["target"] == "x86_64-apple-darwin"
+            }
+        })
+        .and_then(|a| {
+            let sha256 = a["sha256"].as_str()?;
+            let file = a["file"].as_str()?;
+            (sha256.len() == 64
+                && sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()))
+            .then(|| ClaudeAgent {
+                sha256: sha256.to_owned(),
+                file: package.join(file),
+            })
+        })
+        .ok_or("credential-host-unavailable")
+}
+
+/// Remote Windows command: the shipped agent, only at its pinned hash, in reset-host mode.
+pub(crate) fn windows_agent_command(sha256: &str) -> String {
     use base64::Engine;
     let script = [
         "$ErrorActionPreference = 'Stop'".to_owned(),
         "$ProgressPreference = 'SilentlyContinue'".to_owned(),
-        "$env:PYTHONIOENCODING = 'utf-8'".to_owned(),
-        "$env:PYTHONUTF8 = '1'".to_owned(),
-        "$venv = [IO.Path]::Combine($HOME, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')".to_owned(),
-        "$python = if (Test-Path -LiteralPath $venv -PathType Leaf) { $venv } else { (Get-Command python3.exe,python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source }".to_owned(),
-        "if (-not $python) { exit 1 }".to_owned(),
-        format!("& $python -c '{}'", BOOTSTRAP.replace('\'', "''")),
+        "$f = Join-Path $env:LOCALAPPDATA 'ai-account-center\\bin\\aac-agent.exe'".to_owned(),
+        format!("if (!(Test-Path -LiteralPath $f -PathType Leaf) -or (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() -ne '{sha256}') {{ exit 87 }}"),
+        "& $f --claude-reset".to_owned(),
         "exit $LASTEXITCODE".to_owned(),
     ]
     .join("; ");
@@ -967,48 +1012,11 @@ pub(crate) fn windows_helper_command() -> String {
     )
 }
 
-/// Remote POSIX command for the macOS Claude helper; double-quoted because `BOOTSTRAP` has only
-/// single quotes and no shell-expanded characters.
-pub(crate) fn mac_helper_command() -> String {
-    format!(r#"/usr/bin/env PYTHONIOENCODING=utf-8 PYTHONUTF8=1 /usr/bin/python3 -c "{BOOTSTRAP}""#)
-}
-
-/// The adapter's `source`: the packaged Claude helper wrapped so it runs `reset_host(request)`.
-/// Windows keeps the exact legacy wrapper for TS parity; macOS also passes `__aac_source__` so
-/// remote SSH sessions can bridge into the desktop `gui/<uid>` Keychain session without secrets.
-fn claude_helper_source(ctx: &SourceContext, platform: ClaudePlatform) -> Res<String> {
-    let bytes = read_file(
-        &ctx.package
-            .as_deref()
-            .ok_or("credential-host-unavailable")?
-            .join("scripts/account-usage/claude_usage.py"),
-        2 * 1024 * 1024,
+/// Remote macOS command (any POSIX login shell): the shipped agent at its pinned hash.
+pub(crate) fn mac_agent_command(sha256: &str) -> String {
+    format!(
+        r#"f="$HOME/.cache/ai-account-center/bin/aac-agent"; [ -f "$f" ] && [ ! -L "$f" ] && [ "$(/usr/bin/shasum -a 256 "$f" | cut -d ' ' -f 1)" = '{sha256}' ] || exit 87; exec "$f" --claude-reset"#
     )
-    .ok()
-    .flatten()
-    .ok_or("credential-host-unavailable")?;
-    let script = String::from_utf8(bytes).map_err(|_| "credential-host-unavailable")?;
-    let literal = serde_json::to_string(&serde_json::to_string(&script).map_err(|_| "shape")?)
-        .map_err(|_| "shape")?;
-    match platform {
-        ClaudePlatform::Windows => Ok([
-            "import json,sys".to_owned(),
-            "scope={\"__name__\":\"aac_private_reset\"}".to_owned(),
-            format!("exec(compile(json.loads({literal}),\"managed-reset\",\"exec\"),scope)"),
-            "request=json.load(sys.stdin)".to_owned(),
-            "print(json.dumps(scope[\"reset_host\"](request),allow_nan=False))".to_owned(),
-        ]
-        .join("\n")),
-        ClaudePlatform::Mac => Ok([
-            "import json,sys".to_owned(),
-            format!("_src=json.loads({literal})"),
-            "scope={\"__name__\":\"aac_private_reset\",\"__aac_source__\":_src}".to_owned(),
-            "exec(compile(_src,\"managed-reset\",\"exec\"),scope)".to_owned(),
-            "request=json.load(sys.stdin)".to_owned(),
-            "print(json.dumps(scope[\"reset_host\"](request),allow_nan=False))".to_owned(),
-        ]
-        .join("\n")),
-    }
 }
 
 fn claude_input(target: &Target, write: Option<&Value>) -> Value {
@@ -1034,18 +1042,19 @@ fn claude_input(target: &Target, write: Option<&Value>) -> Value {
     })
 }
 
-/// `privateUsageInvocation` + `sshLaunch`: the exact command the native helper spawns.
+/// `privateUsageInvocation` + `sshLaunch`: the exact command the reset transaction spawns.
+/// The payload carries only the non-secret request; the host agent reads it on stdin.
 fn claude_command(
     ctx: &SourceContext,
     platform: ClaudePlatform,
     ssh_host: Option<&str>,
-    helper_source: String,
+    agent: &ClaudeAgent,
     input: Value,
 ) -> Res<HelperCommand> {
     let (executable, args) = if let Some(ssh_host) = ssh_host {
         let remote = match platform {
-            ClaudePlatform::Windows => windows_helper_command(),
-            ClaudePlatform::Mac => mac_helper_command(),
+            ClaudePlatform::Windows => windows_agent_command(&agent.sha256),
+            ClaudePlatform::Mac => mac_agent_command(&agent.sha256),
         };
         let args = ssh_argv(ctx, ssh_host, &remote, 3)?;
         let executable = ssh_launch(ctx, &args)?;
@@ -1054,29 +1063,19 @@ fn claude_command(
             args,
         )
     } else {
-        let executable = match platform {
-            ClaudePlatform::Windows => {
-                let venv = std::env::var_os("USERPROFILE")
-                    .map(PathBuf::from)
-                    .map(|home| home.join(".ccs/claude-session-migration/venv/Scripts/python.exe"));
-                venv.filter(|path| path.is_file())
-                    .and_then(|path| path.into_os_string().into_string().ok())
-                    .unwrap_or_else(|| "python".to_owned())
-            }
-            ClaudePlatform::Mac => {
-                if Path::new("/usr/bin/python3").is_file() {
-                    "/usr/bin/python3".to_owned()
-                } else {
-                    "python3".to_owned()
-                }
-            }
-        };
-        (executable, vec!["-c".to_owned(), BOOTSTRAP.to_owned()])
+        (
+            agent
+                .file
+                .to_str()
+                .ok_or("credential-host-unavailable")?
+                .to_owned(),
+            vec!["--claude-reset".to_owned()],
+        )
     };
     Ok(HelperCommand {
         executable,
         args,
-        payload: json!({"helperSource": helper_source, "request": input}),
+        payload: json!({"request": input}),
     })
 }
 
@@ -1117,12 +1116,12 @@ fn read_claude_target(
     else {
         return Err("credential-host-unavailable");
     };
-    let source = claude_helper_source(ctx, *platform)?;
+    let agent = claude_agent(ctx, *platform)?;
     let command = claude_command(
         ctx,
         *platform,
         ssh_host.as_deref(),
-        source,
+        &agent,
         claude_input(target, None),
     )?;
     let body = json!({
@@ -1205,15 +1204,15 @@ pub(crate) fn send(ctx: &SourceContext, db: &Path, write: &Value) -> Res<Value> 
     }
     if account.starts_with("claude:") {
         // Everything before the host command is dispatched proves nothing was sent.
-        let prepared = (|| -> Res<(Target, String)> {
+        let prepared = (|| -> Res<(Target, ClaudeAgent)> {
             let target = resolve_claude_for_write(&ctx.ccs, account, write)?;
             let Target::Claude { platform, .. } = &target else {
                 return Err("credential-host-unavailable");
             };
-            let source = claude_helper_source(ctx, *platform)?;
-            Ok((target, source))
+            let agent = claude_agent(ctx, *platform)?;
+            Ok((target, agent))
         })();
-        let Ok((target, source)) = prepared else {
+        let Ok((target, agent)) = prepared else {
             return Ok(json!({"outcome": "not-sent"}));
         };
         let Target::Claude {
@@ -1224,7 +1223,7 @@ pub(crate) fn send(ctx: &SourceContext, db: &Path, write: &Value) -> Res<Value> 
         };
         let input = claude_input(&target, Some(write));
         // Dispatched from here: a failure may follow a spend, so it is an error (ambiguous).
-        let command = claude_command(ctx, *platform, ssh_host.as_deref(), source, input.clone())
+        let command = claude_command(ctx, *platform, ssh_host.as_deref(), &agent, input.clone())
             .map_err(|_| "host-unconfirmed")?;
         return aac_status::reset_claude_source::run(&command, input, CLAIM_TIMEOUT)
             .map_err(|_| "host-unconfirmed");
@@ -1322,9 +1321,9 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_helper_command_is_the_encoded_bootstrap() {
+    fn the_windows_reset_command_runs_only_the_pinned_agent() {
         use base64::Engine;
-        let command = windows_helper_command();
+        let command = windows_agent_command(&"a".repeat(64));
         let b64 = command
             .strip_prefix("powershell.exe -NoProfile -NonInteractive -EncodedCommand ")
             .unwrap();
@@ -1337,7 +1336,9 @@ mod tests {
             .collect();
         let script = String::from_utf16(&units).unwrap();
         assert!(script.starts_with("$ErrorActionPreference = 'Stop'; "));
-        assert!(script.contains("_p=json.loads(sys.stdin.buffer.read().decode(''utf-8''))"));
+        assert!(script.contains(&format!("-ne '{}') {{ exit 87 }}", "a".repeat(64))));
+        assert!(script.contains("& $f --claude-reset"));
+        assert!(!script.contains("python"));
         assert!(script.ends_with("; exit $LASTEXITCODE"));
     }
 
@@ -1424,10 +1425,10 @@ mod tests {
             );
         }
 
-        let cmd = mac_helper_command();
-        assert!(cmd.contains("/usr/bin/python3 -c"));
-        assert!(cmd.contains("PYTHONIOENCODING=utf-8 PYTHONUTF8=1"));
-        assert!(cmd.contains(BOOTSTRAP));
+        let cmd = mac_agent_command(&"b".repeat(64));
+        assert!(cmd.contains(&format!("= '{}' ] || exit 87", "b".repeat(64))));
+        assert!(cmd.ends_with(r#"exec "$f" --claude-reset"#));
+        assert!(!cmd.contains("python"));
     }
 
     #[cfg(unix)]
@@ -1441,10 +1442,14 @@ mod tests {
     #[cfg(unix)]
     fn test_context(root: &Path, bin_dir: &Path) -> SourceContext {
         let pkg = root.join("pkg");
-        std::fs::create_dir_all(pkg.join("scripts/account-usage")).unwrap();
+        std::fs::create_dir_all(pkg.join("config")).unwrap();
         std::fs::write(
-            pkg.join("scripts/account-usage/claude_usage.py"),
-            "def reset_host(req): return {'unavailable': True}\n",
+            pkg.join("config/agent-artifacts.json"),
+            json!({"artifacts":[
+                {"target":"x86_64-pc-windows-msvc","version":"0.1.0","sha256":"a".repeat(64),"file":"dist/agent/x86_64-pc-windows-msvc/aac-agent.exe"},
+                {"target":"aarch64-apple-darwin","version":"0.1.0","sha256":"b".repeat(64),"file":"dist/agent/aarch64-apple-darwin/aac-agent"}
+            ]})
+            .to_string(),
         )
         .unwrap();
         let ssh_dir = root.join(".ssh");
@@ -1509,7 +1514,7 @@ remote_cmd = argv[sep + 2]
 payload = json.loads(sys.stdin.buffer.read().decode('utf-8'))
 req = payload['request']
 with Path({log:?}).open('a', encoding='utf-8') as f:
-    f.write(json.dumps({{'alias': alias, 'action': req.get('action'), 'host': req.get('host'), 'has_src_var': '__aac_source__' in payload.get('helperSource', ''), 'remote_cmd': remote_cmd}}) + '\n')
+    f.write(json.dumps({{'alias': alias, 'action': req.get('action'), 'host': req.get('host'), 'keys': sorted(payload), 'remote_cmd': remote_cmd}}) + '\n')
 if alias == 'fixture-win':
     mode = Path({win_mode:?}).read_text().strip()
     if mode == 'down':
@@ -1569,16 +1574,17 @@ elif action == 'claim':
             .collect();
         assert_eq!(calls.len(), 3);
         assert_eq!(calls[0]["alias"], "fixture-win");
-        assert_eq!(calls[0]["has_src_var"], false);
-        assert_eq!(calls[1]["alias"], "fixture-mac");
-        assert_eq!(calls[1]["action"], "capture");
-        assert_eq!(calls[1]["has_src_var"], true);
+        assert_eq!(calls[0]["keys"], json!(["request"]));
         assert!(
-            calls[1]["remote_cmd"]
+            calls[0]["remote_cmd"]
                 .as_str()
                 .unwrap()
-                .contains("/usr/bin/python3 -c")
+                .starts_with("powershell.exe ")
         );
+        assert_eq!(calls[1]["alias"], "fixture-mac");
+        assert_eq!(calls[1]["action"], "capture");
+        assert_eq!(calls[1]["keys"], json!(["request"]));
+        assert_eq!(calls[1]["remote_cmd"], mac_agent_command(&"b".repeat(64)));
         assert_eq!(calls[2]["alias"], "fixture-mac");
         assert_eq!(calls[2]["action"], "read");
 

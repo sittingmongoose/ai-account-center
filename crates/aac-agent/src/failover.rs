@@ -1,5 +1,6 @@
 //! Read-only failover discovery. Only six reconstructed public fields leave this module.
 //! Unproved stores, grammar and IO outcomes delegate the entire inventory to Python.
+mod claude;
 mod console;
 mod core;
 pub(crate) mod dispatch;
@@ -536,7 +537,8 @@ fn core_candidates(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
                 json!([oauth, account_id, org_id, address]),
                 address,
                 plan,
-                json!({"_token":secret(&oauth["accessToken"]),"_account":account_id,"_organization":org_id}),
+                json!({"_token":secret(&oauth["accessToken"]),"_account":account_id,"_organization":org_id,
+                    "_expires":oauth["expiresAt"].as_f64().filter(|n| n.is_finite()).and(oauth.get("expiresAt").cloned())}),
             )
         };
         let mut item = json!({"locator":digest(&json!([provider, storage.to_string_lossy().replace('\\', "/")])), "selectors":selectors,
@@ -981,6 +983,10 @@ pub(crate) fn run_with_adapter(args: &Value, mut adapter: impl Adapter) -> Value
     runtime.block_on(dispatch::execute(args, &mut adapter, clock.get() as i64))
 }
 pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
+    // Claude inventory and collection are native on every platform (U1): never Python.
+    if args["provider"] == "claude" {
+        return Ok(run_with_adapter(args, claude::Claude));
+    }
     if matches!(args["provider"].as_str(), Some("muse" | "opencode-wallet")) {
         return Ok(run_with_adapter(args, console::Console::new()));
     }
