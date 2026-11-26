@@ -49,6 +49,8 @@ impl Routes {
             "/api/accounts/{id}/remove",
             "/api/accounts/{id}/signin-again",
             "/api/accounts/{id}/key",
+            "/api/accounts/web-session",
+            "/api/accounts/web-session/{surface}",
         ] {
             let routes = self.clone();
             router = router.route(
@@ -158,7 +160,15 @@ mod unix {
         }
         if !collection
             && !matches!(*request.method(), Method::GET | Method::HEAD)
-            && let Err(reply) = lifecycle::mutation_admission(&request)
+            && let Err(reply) = if request
+                .uri()
+                .path()
+                .starts_with("/api/accounts/web-session/")
+            {
+                lifecycle::mutation_admission_capped(&request, lifecycle::WEB_SESSION_BODY_CAP)
+            } else {
+                lifecycle::mutation_admission(&request)
+            }
         {
             return reply;
         }
@@ -279,6 +289,9 @@ mod unix {
         let path = path.trim_end_matches('/');
         if NativeOwners::owns_lifecycle(&Method::GET, path) {
             return lifecycle::options("GET, HEAD", "9");
+        }
+        if path.starts_with("/api/accounts/web-session/") {
+            return lifecycle::options("PUT, DELETE", "11");
         }
         if NativeOwners::owns_lifecycle(&Method::PUT, path) {
             return lifecycle::options("PUT", "3");

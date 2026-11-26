@@ -25,6 +25,7 @@ mod scan;
 mod signin;
 /// Interactive sign-in session state machine, PTY driver, journal and verb.
 pub mod signin_session;
+pub mod web_session;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{
     Control, Event, Handshake, MAX_FRAME_BYTES, MAX_HISTORY_FRAME_BYTES, MAX_SCAN_FRAME_BYTES,
@@ -543,7 +544,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     if request.verb == "quota-read" {
         return quota::run(&request.args).await;
     }
-
+    if request.verb == "web-session" {
+        return web_session::run_verb(&request.args).await;
+    }
     if request.verb == "apps" {
         return apps::run_inventory(&request.args).await;
     }

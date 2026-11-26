@@ -19,7 +19,7 @@ import { COMPUTERS } from './computers.mjs';
 //   storage                                     localStorage, for the one-time migration of "Show on dashboard"
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
-import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
+import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord, platformLabel } from './view-model.mjs';
@@ -33,6 +33,7 @@ export const TERMINAL_WATCH_MS = 15 * 60_000;
 export const LEGACY_HIDDEN_KEY = 'aac-hidden-providers';
 const PROVIDERS = Object.keys(PROVIDER_LABELS);
 const KEY_PROVIDERS = ['kimi-code', 'zai', 'opencode-go'];
+const WEB_SESSION_SURFACES = Object.freeze({ qwen: 'qwen', 'opencode-go': 'opencode-wallet', muse: 'muse' });
 const text = value => typeof value === 'string' ? value : '';
 const label = provider => PROVIDER_LABELS[provider] || 'This provider';
 const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
@@ -43,7 +44,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
-  'flow-open-app', 'flow-recheck', 'claude-host', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
+  'flow-open-app', 'flow-recheck', 'web-session-pick', 'claude-host', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
   'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
 ]));
@@ -117,6 +118,8 @@ export function createAccountsController(deps) {
   // sign-in jobs this page closed (Cancel, Done, Close): a registry read never opens them again
   const dismissedJobs = new Set();
   const cancelledFlows = new Set();
+  // Write-only pasted cookies held only in closure memory while picking a workspace/team (never in state.flows).
+  const pendingWebSecrets = new Map();
   // visibility saves run one at a time, each from the lists the one before it saved
   let visibilityChain = Promise.resolve();
   let serial = 0;
@@ -266,7 +269,7 @@ export function createAccountsController(deps) {
     });
   }
   /** An account id the server accepts in a visibility list (account-visibility.ts). */
-  const ACCOUNT_ID = /^(?:[a-z0-9][a-z0-9-]{0,31}(?::[A-Za-z0-9@._+-]{1,128}){1,2}|plan-opencode-go-console-mac-[a-f0-9]{12})$/;
+  const ACCOUNT_ID = /^(?:[a-z0-9][a-z0-9-]{0,31}(?::[A-Za-z0-9@._+-]{1,128}){1,2}|plan-opencode-go-console-(?:mac|web)-[a-f0-9]{12})$/;
   /** One account's "Show on dashboard": only `hiddenAccountIds` is sent, so its tray switch is never touched. */
   function setAccountShown(id, show) {
     const settings = data()?.settings;
@@ -324,6 +327,7 @@ export function createAccountsController(deps) {
   function stopPolling(provider) { if (timers[provider]) { cancel(timers[provider]); delete timers[provider]; } }
   function closeFlow(provider) {
     stopPolling(provider);
+    pendingWebSecrets.delete(provider);
     const id = text(state.flows[provider]?.job?.id);
     if (id) dismissedJobs.add(id);
     delete state.flows[provider]; changed();
@@ -549,11 +553,81 @@ export function createAccountsController(deps) {
       } catch (error) { put({ step: 'key', busy: false, error: errorText(error, { provider, what: flow.type === 'key-replace' ? 'replace' : 'add' }) }); }
       return;
     }
+    if (flow.type === 'web-session' && flow.step === 'paste') {
+      const cookie = String(input || '').trim();
+      const problem = webSessionProblem(cookie, flow.surface);
+      if (problem) { put({ error: { title: problem, body: '' } }); return; }
+      const body = flow.surface === 'qwen' ? { cookie, region: flow.region || 'intl' } : { cookie };
+      put({ step: 'checking', busy: true, error: null });
+      try {
+        const { payload } = await call(requests.saveWebSession(flow.surface, body));
+        pendingWebSecrets.delete(provider);
+        put({ step: 'done', busy: false, result: { check: payload?.check || 'ok', session: payload?.session || null } });
+        toast('ok', `${label(provider)} session saved`, 'Stored privately on the dashboard computer and never shown again.');
+        void reload();
+      } catch (error) {
+        const code = text(error?.payload?.code);
+        if (code === 'choose_workspace' && Array.isArray(error?.payload?.workspaces) && error.payload.workspaces.length) {
+          pendingWebSecrets.set(provider, cookie);
+          put({ step: 'choose', busy: false, choiceKind: 'workspace', choices: error.payload.workspaces, error: null });
+          return;
+        }
+        if (code === 'choose_team' && Array.isArray(error?.payload?.teams) && error.payload.teams.length) {
+          pendingWebSecrets.set(provider, cookie);
+          put({ step: 'choose', busy: false, choiceKind: 'team', choices: error.payload.teams, error: null });
+          return;
+        }
+        pendingWebSecrets.delete(provider);
+        put({ step: 'paste', busy: false, error: errorText(error, { provider }) });
+      }
+      return;
+    }
     if (flow.type === 'purge' && flow.step === 'type') {
       await commitPurge(provider, input);
     }
     if (flow.type === 'remove-email' && flow.step === 'type') {
       await commitRemoveEmail(provider, input);
+    }
+  }
+  function openPasteSession(value) {
+    const [rawProvider = '', accountId = ''] = String(value ?? '').split(':');
+    const provider = WEB_SESSION_SURFACES[rawProvider] ? rawProvider : providerOf(value);
+    const surface = WEB_SESSION_SURFACES[provider];
+    if (!surface) return;
+    pendingWebSecrets.delete(provider);
+    setFlow(provider, { type: 'web-session', step: 'paste', surface, region: 'intl', accountId: accountId || null });
+  }
+  function setWebSessionRegion(value) {
+    const [provider = '', region = ''] = String(value ?? '').split(':');
+    const flow = state.flows[provider];
+    if (!flow || flow.type !== 'web-session' || flow.surface !== 'qwen' || !['intl', 'cn'].includes(region) || flow.busy) return;
+    state.flows[provider] = { ...flow, region, error: null };
+    changed();
+  }
+  async function pickWebSessionChoice(value) {
+    const idx = String(value ?? '').indexOf(':');
+    if (idx < 1) return;
+    const provider = String(value).slice(0, idx);
+    const choiceId = String(value).slice(idx + 1);
+    const flow = state.flows[provider];
+    if (!flow || flow.type !== 'web-session' || flow.step !== 'choose' || flow.busy || !choiceId) return;
+    const cookie = pendingWebSecrets.get(provider);
+    const put = patch => { if (state.flows[provider]?.serial === flow.serial) { state.flows[provider] = { ...state.flows[provider], ...patch }; changed(); } };
+    if (!cookie) {
+      put({ step: 'paste', busy: false, error: { title: 'Paste the session cookie again.', body: 'The pasted cookie was cleared for safety.' } });
+      return;
+    }
+    const body = flow.choiceKind === 'team' ? { cookie, teamId: choiceId } : { cookie, workspaceId: choiceId };
+    put({ step: 'checking', busy: true, error: null });
+    try {
+      const { payload } = await call(requests.saveWebSession(flow.surface, body));
+      pendingWebSecrets.delete(provider);
+      put({ step: 'done', busy: false, result: { check: payload?.check || 'ok', session: payload?.session || null } });
+      toast('ok', `${label(provider)} session saved`, 'Stored privately on the dashboard computer and never shown again.');
+      void reload();
+    } catch (error) {
+      pendingWebSecrets.delete(provider);
+      put({ step: 'paste', busy: false, error: errorText(error, { provider }) });
     }
   }
   async function cancelFlow(provider) {
@@ -981,6 +1055,9 @@ export function createAccountsController(deps) {
       case 'add': await begin(v); return true;
       case 'add-key': if (KEY_PROVIDERS.includes(v)) addKey(v); return true;
       case 'replace-key': { const p = providerOf(v); if (KEY_PROVIDERS.includes(p)) setFlow(p, { type: 'key-replace', step: 'key', accountId: v }); return true; }
+      case 'paste-session': openPasteSession(v); return true;
+      case 'web-session-region': setWebSessionRegion(v); return true;
+      case 'web-session-pick': await pickWebSessionChoice(v); return true;
       case 'signin-again': case 'signin': await signInAgain(v); return true;
       case 'session-signin': await sessionSignIn(v); return true;
       case 'recheck': await recheck(v); return true;
@@ -1027,6 +1104,7 @@ export function createAccountsController(deps) {
   function reset() {
     for (const p of Object.keys(timers)) stopPolling(p);
     dismissedJobs.clear();
+    pendingWebSecrets.clear();
     state.registry = null; state.flows = {}; state.lines = {}; state.busyAct = ''; state.visPending = [];
     state.signin = { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' };
   }

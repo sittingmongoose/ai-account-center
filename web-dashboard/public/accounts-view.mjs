@@ -112,6 +112,16 @@ export function gate(entry, kind, provider) {
   }
   return { live: false, coming: true, reason: 'Not on this server yet.' };
 }
+/** Whether the server advertises pasted web-session support for this provider (Qwen, OpenCode Zen, Muse). */
+function hasWebSessionCap(entry) {
+  return !!entry && typeof entry.capabilities?.webSession === 'boolean';
+}
+function webSessionGate(entry, provider) {
+  if (!hasWebSessionCap(entry)) return null;
+  if (entry.capabilities.webSession === true) return { live: true, coming: false, reason: '' };
+  const why = unavailableText(entry.capabilities.webSessionReason, provider);
+  return { live: false, coming: why.coming, reason: why.text || 'Paste a session over a trusted connection.' };
+}
 /** A control drawn from a gate: live (enabled), coming (dimmed with the caption) or off with its reason. */
 function gated(fields, g, liveTip = '') {
   if (g.live) return action({ ...fields, enabled: true, tip: liveTip });
@@ -130,10 +140,11 @@ function rowStatus(account, now, reg) {
   const normal = account.status === 'ok' || account.status === 'cached';
   const stale = !!at && now - Date.parse(at) > STALE_MS;
   const signIn = account.provider === 'claude' ? claudeSignInNeeded(account) : '';
+  const expiredWithCache = account.status === 'needs_sign_in' && text(account?.source).startsWith('Pasted ') && validDate(account.sampledAt) && Array.isArray(account.windows) && account.windows.length > 0;
   return {
-    status: signIn ? `Sign-in needed on ${signIn}` : !normal ? statusWord(account) : stale ? 'Stale' : '',
+    status: signIn ? `Sign-in needed on ${signIn}` : expiredWithCache ? 'Needs sign-in · cached' : !normal ? statusWord(account) : stale ? 'Stale' : '',
     sampled: at ? `sampled ${relative(at, now)}` : 'no reading yet',
-    sampledTip: at ? `Last reading ${dateTime.format(new Date(at))}${account.status === 'cached' ? ', from the cache' : ''}` : 'No reading has arrived yet',
+    sampledTip: at ? `Last reading ${dateTime.format(new Date(at))}${account.status === 'cached' || expiredWithCache ? ', from the cache' : ''}` : 'No reading has arrived yet',
   };
 }
 function sourceLines(provider, account, reg) {
@@ -142,8 +153,12 @@ function sourceLines(provider, account, reg) {
     const platforms = Array.isArray(account.capabilities?.claudePlatforms) ? account.capabilities.claudePlatforms : [];
     return [def.src, platforms.length ? platforms.map(platformLabel).join(' and ') : hostLabel(account)];
   }
-  if (provider === 'opencode-go' && isConsole(account)) return ['Console session in a browser', 'Wallet and usage'];
-  if (provider === 'qwen') return [def.src, 'by browser extension'];
+  const pastedSource = text(account?.source).startsWith('Pasted ');
+  if (provider === 'opencode-go' && isConsole(account)) {
+    return pastedSource ? ['Pasted console session', 'Wallet and usage'] : ['Console session in a browser', 'Wallet and usage'];
+  }
+  if (provider === 'qwen') return pastedSource ? ['Pasted console session', hostLabel(account)] : [def.src, 'by browser extension'];
+  if (provider === 'muse' && pastedSource) return ['Pasted portal session', hostLabel(account)];
   const credential = reg?.credential;
   if (credential?.kind === 'aac-key') {
     return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || (account.host ?? account.platform))}`];
@@ -265,6 +280,13 @@ function rowActions(provider, account, homeRow, ctx) {
     }
     case 'apikey': {
       if (isConsole(account)) {
+        const ws = webSessionGate(entry, provider);
+        if (ws) {
+          const reconnect = account.status === 'needs_sign_in';
+          const fields = { act: 'paste-session', value: provider, label: reconnect ? 'Reconnect session' : 'Paste session', icon: 'key', style: reconnect ? 'accent-line' : 'default', probe: `paste-session:${provider}` };
+          return [gated(fields, ws, 'Paste a fresh OpenCode console Cookie header; stored privately and never shown again.'),
+            removeControl(provider, account, reg, entry)];
+        }
         const fields = { act: 'signin', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin:${account.id}` };
         const live = reg ? reg.actions?.signInAgain === true : false;
         return [live ? action({ ...fields, enabled: true, tip: 'Open the OpenCode console in the browser with the extension and sign in there.' })
@@ -308,6 +330,13 @@ function rowActions(provider, account, homeRow, ctx) {
       return [replace, removeControl(provider, account, reg, entry)];
     }
     case 'browser': {
+      const ws = webSessionGate(entry, provider);
+      if (ws) {
+        const reconnect = account.status === 'needs_sign_in';
+        const fields = { act: 'paste-session', value: provider, label: reconnect ? 'Reconnect session' : 'Paste session', icon: 'key', style: reconnect ? 'accent-line' : 'default', probe: `paste-session:${provider}` };
+        return [gated(fields, ws, 'Paste a fresh Qwen console Cookie header; stored privately and never shown again.'),
+          removeControl(provider, account, reg, entry)];
+      }
       const fields = { act: 'signin', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin:${account.id}` };
       const g = gate(entry, 'signInAgain', provider);
       const signin = g.live && (!reg || reg.actions?.signInAgain !== false)
@@ -315,8 +344,18 @@ function rowActions(provider, account, homeRow, ctx) {
         : gated(fields, g.live ? { live: false, coming: false, reason: 'Signing in is not possible for this account now.' } : g);
       return [signin, removeControl(provider, account, reg, entry)];
     }
-    case 'app':
+    case 'app': {
+      if (provider === 'muse') {
+        const ws = webSessionGate(entry, provider);
+        if (ws) {
+          const reconnect = account.status === 'needs_sign_in';
+          const fields = { act: 'paste-session', value: provider, label: reconnect ? 'Reconnect session' : 'Paste session', icon: 'key', style: reconnect ? 'accent-line' : 'default', probe: `paste-session:${provider}` };
+          return [gated(fields, ws, 'Paste a dev.meta.ai portal Cookie header; stored privately and never shown again.'),
+            removeControl(provider, account, reg, entry)];
+        }
+      }
       return [action({ kind: 'quiet', label: 'Session from the app' }), removeControl(provider, account, reg, entry)];
+    }
     default:
       return [];
   }
@@ -337,11 +376,17 @@ function footActions(provider, accounts, ctx) {
     case 'app': case 'browser': {
       const first = accounts[0] || null;
       const reg = first ? ctx.registry.get(first.id) : null;
+      const ws = (provider === 'qwen' || provider === 'muse') ? webSessionGate(entry, provider) : null;
       const signInGate = first ? gate(entry, 'signInAgain', provider) : add;
-      const signin = gated({ act: 'session-signin', value: provider, label: 'Sign in', icon: def.kind === 'browser' ? 'globe' : 'login', probe: `session-signin:${provider}` }, signInGate,
-        provider === 'muse' ? 'Start a device-code sign-in on the Mac; approve a code in any browser, then Sync in the Brave extension.'
-          : provider === 'cursor' ? 'Sign in inside Cursor on any computer the dashboard reads, then re-check. The dashboard uses whichever of those computers is signed in.'
-            : def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
+      const signin = ws
+        ? gated({ act: 'paste-session', value: provider, label: first?.status === 'needs_sign_in' ? 'Reconnect session' : 'Paste session', icon: 'key', style: 'primary', probe: `paste-session:${provider}` }, ws,
+          provider === 'qwen'
+            ? 'Paste a Qwen console Cookie header once on a trusted connection; never shown again.'
+            : 'Paste a dev.meta.ai Cookie header once on a trusted connection for Muse Code portal quota; never shown again.')
+        : gated({ act: 'session-signin', value: provider, label: 'Sign in', icon: def.kind === 'browser' ? 'globe' : 'login', probe: `session-signin:${provider}` }, signInGate,
+          provider === 'muse' ? 'Start a device-code sign-in on the Mac; approve a code in any browser, then Sync in the Brave extension.'
+            : provider === 'cursor' ? 'Sign in inside Cursor on any computer the dashboard reads, then re-check. The dashboard uses whichever of those computers is signed in.'
+              : def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
       const recheckGate = first ? (reg ? (reg.actions?.recheck === true ? { live: true } : { live: false, coming: false, reason: 'Re-check is not available for this account.' }) : gate(entry, 'recheck', provider))
         : { live: false, coming: false, reason: `Sign in first; there is no ${label} account to check yet.` };
       const recheck = gated({ act: 'recheck', value: first?.id || provider, label: 'Re-check', icon: 'refresh', probe: `recheck:${provider}`, busy: ctx.busyAct === `recheck:${first?.id}` }, recheckGate, 'Read the session again now.');
@@ -352,7 +397,16 @@ function footActions(provider, accounts, ctx) {
       const fields = hasKey
         ? { act: 'add-key', value: provider, label: `Add another ${label} key`, icon: 'plus', style: 'ghost', probe: `add-key:${provider}` }
         : { act: 'add-key', value: provider, label: `Add ${article(label)} ${label} key`, icon: 'key', style: 'primary', probe: `add-key:${provider}` };
-      return [gated(fields, add, 'Each key becomes its own account; the key is stored on the dashboard computer and never shown again.')];
+      const list = [gated(fields, add, 'Each key becomes its own account; the key is stored on the dashboard computer and never shown again.')];
+      if (provider === 'opencode-go') {
+        const ws = webSessionGate(entry, provider);
+        if (ws) {
+          const hasWallet = accounts.some(isConsole);
+          list.push(gated({ act: 'paste-session', value: provider, label: hasWallet ? 'Reconnect wallet' : 'Paste wallet session', icon: 'key', style: 'ghost', probe: `paste-session:${provider}` }, ws,
+            'Paste an opencode.ai/console Cookie header once on a trusted connection for Zen prepaid wallet balance; never shown again.'));
+        }
+      }
+      return list;
     }
     default:
       return [];
@@ -366,6 +420,7 @@ const STEPS = {
   'claude-add': ['Name the profile', 'Account email', 'Where to sign in', 'Sign in'],
   'key-add': ['Paste the key', 'Check', 'Stored'],
   'key-replace': ['Paste the key', 'Check', 'Stored'],
+  'web-session': ['Paste cookie', 'Verify', 'Saved'],
   guide: ['Open', 'Sign in', 'Re-check'],
   terminal: ['Run the command'],
   purge: ['Type DELETE', 'Deleted'],
@@ -541,6 +596,67 @@ export function flowView(provider, f, ctx = {}) {
       v.body = f.result?.check === 'unverified'
         ? `${label} could not be reached to check it, so it was kept; the row shows its readings after the next refresh.`
         : 'Only the dashboard computer keeps it; this page no longer has it.';
+      v.actions = [doneBtn];
+      return v;
+    }
+    case 'web-session': {
+      v.steps = STEPS['web-session'];
+      const surface = f.surface || (provider === 'opencode-go' ? 'opencode-wallet' : provider);
+      if (f.step === 'paste') {
+        const region = f.region === 'cn' ? 'cn' : 'intl';
+        if (surface === 'qwen') {
+          v.title = 'Paste Qwen console session';
+          v.body = region === 'cn'
+            ? 'In your browser, sign in at bailian.console.aliyun.com, open DevTools Network, copy the Cookie request header, and paste it below. Stored privately and never shown again.'
+            : 'In your browser, sign in at home.qwencloud.com, open DevTools Network, copy the Cookie request header, and paste it below. Stored privately and never shown again.';
+          Object.assign(v, { inputKind: 'web-session', inputLabel: 'Cookie header', inputPlaceholder: 'Paste Cookie header', inputPassword: true });
+          v.actions = [
+            btn('flow-submit', provider, 'Verify and save', { style: 'primary', busy: !!f.busy, enabled: !f.busy }),
+            btn('web-session-region', 'qwen:intl', 'International', { style: region === 'intl' ? 'accent-line' : 'ghost', enabled: !f.busy }),
+            btn('web-session-region', 'qwen:cn', 'China', { style: region === 'cn' ? 'accent-line' : 'ghost', enabled: !f.busy }),
+            cancel,
+          ];
+        } else if (surface === 'opencode-wallet') {
+          v.title = 'Paste OpenCode console wallet session';
+          v.body = 'In your browser, sign in at opencode.ai/console, open DevTools Network, copy the Cookie header (containing auth or __Host-console_session), and paste it below. Stored privately and never shown again.';
+          Object.assign(v, { inputKind: 'web-session', inputLabel: 'Cookie header', inputPlaceholder: 'auth=...; __Host-console_session=...', inputPassword: true });
+          v.actions = [btn('flow-submit', provider, 'Verify and save', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        } else {
+          v.title = 'Paste Muse Code portal session';
+          v.body = 'In your browser, sign in at dev.meta.ai, open DevTools Network, copy the Cookie header (containing llama_dev_sess or llm_sess — never a dca: CLI token), and paste it below. Stored privately and never shown again.';
+          Object.assign(v, { inputKind: 'web-session', inputLabel: 'Cookie header', inputPlaceholder: 'llama_dev_sess=...', inputPassword: true });
+          v.actions = [btn('flow-submit', provider, 'Verify and save', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        }
+        v.note = trustNote;
+        err();
+        return v;
+      }
+      if (f.step === 'checking') {
+        v.cur = 1;
+        v.title = 'Verifying session';
+        v.waiting = `Checking the pasted ${label} session directly over HTTPS`;
+        return v;
+      }
+      if (f.step === 'choose') {
+        v.cur = 1;
+        const isTeam = f.choiceKind === 'team';
+        v.title = isTeam ? 'Choose a Muse Code team' : 'Choose an OpenCode workspace';
+        v.body = isTeam
+          ? 'Multiple Muse Code teams belong to this session. Pick the team you want the dashboard to read.'
+          : 'Multiple OpenCode workspaces belong to this session. Pick the workspace with your prepaid Zen wallet.';
+        const choices = Array.isArray(f.choices) ? f.choices : [];
+        v.actions = [
+          ...choices.map((c, idx) => btn('web-session-pick', `${provider}:${text(c.id)}`, text(c.name) || text(c.id), { style: idx === 0 ? 'primary' : 'default', busy: !!f.busy, enabled: !f.busy })),
+          cancel,
+        ];
+        err();
+        return v;
+      }
+      v.cur = 3;
+      const meta = f.result?.session || {};
+      const detail = text(meta.email) || text(meta.workspaceId) || (text(meta.teamId) ? `team ${meta.teamId}` : '') || (meta.region === 'cn' ? 'China console' : meta.region === 'intl' ? 'International console' : '');
+      v.done = `${label} session saved${detail ? ` (${detail})` : ''}`;
+      v.body = 'Only the dashboard computer keeps it; this page no longer has it. Readings continue on the refresh interval.';
       v.actions = [doneBtn];
       return v;
     }
@@ -1113,8 +1229,19 @@ export function accountsViewModel(data, ctx = {}) {
     const count = rows.length;
     const addGate = gate(server, 'add', entry.id);
     const needs = entry.id === 'antigravity' && !addGate.live ? `Needs setup: ${addGate.reason}` : '';
+    const wsCap = hasWebSessionCap(server);
+    const kindLabel = wsCap && entry.id === 'qwen' ? 'Pasted console session'
+      : wsCap && entry.id === 'opencode-go' ? 'API key, console wallet by pasted session'
+        : def.kindLabel;
+    const how = needs || (wsCap && entry.id === 'qwen'
+      ? 'Paste a Qwen console Cookie header once on a trusted connection; the dashboard reads usage directly over HTTPS.'
+      : wsCap && entry.id === 'muse'
+        ? 'Paste a dev.meta.ai Cookie header once on a trusted connection for portal quota; never paste a dca: CLI token.'
+        : wsCap && entry.id === 'opencode-go'
+          ? 'API keys for Go usage; paste an opencode.ai/console Cookie header once for the Zen prepaid wallet.'
+          : def.how);
     return {
-      id: entry.id, label: entry.longLabel, kindLabel: def.kindLabel, kindIcon: def.icon, count,
+      id: entry.id, label: entry.longLabel, kindLabel, kindIcon: def.icon, count,
       countText: `${count} ${count === 1 ? 'account' : 'accounts'}`,
       column: COL_A.includes(entry.id) ? 'a' : 'b',
       visible: !hiddenServer,
@@ -1126,7 +1253,7 @@ export function accountsViewModel(data, ctx = {}) {
       trayComing: !trayKnown,
       trayTip: trayKnown ? 'Saved on the dashboard: the Mac and Windows trays follow this choice.' : 'Showing or hiding a provider in the trays is not on this server yet.',
       slots: def.slots, actsMin: def.actsMin,
-      how: needs || def.how, needs: !!needs, foot: footActions(entry.id, mine, c),
+      how, needs: !!needs, foot: footActions(entry.id, mine, c),
       empty: count ? '' : `No ${entry.label} accounts yet.`,
       flow: flowView(entry.id, c.flows?.[entry.id], { now, trustNote, busyAct: c.busyAct }),
       trash: entry.id === 'claude' ? trashRows(ctx.registry?.trash, c, now) : [],

@@ -137,6 +137,26 @@ impl Usage {
             Err(reply) => return reply,
         };
 
+        if id.starts_with("plan-opencode-go-console-web-") {
+            if !body.is_empty() {
+                return invalid_body();
+            }
+            if let Some(reply) = self.admit_recheck(&id) {
+                return reply;
+            }
+            return match self
+                .producer
+                .recheck_web_wallet(&self.cache, &self.companions(), &id)
+                .await
+            {
+                Ok(Some(row)) => {
+                    self.publish();
+                    super::super::response(200, json!({"account": row}))
+                }
+                Ok(None) => unknown(),
+                Err(_) => internal(),
+            };
+        }
         if !sources::is_additional_account_id(&id)
             && crate::account_usage::producer::recheck::discovered_key_id(&id).is_none()
         {

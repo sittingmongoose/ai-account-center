@@ -41,7 +41,14 @@ pub(super) fn admit(request: &Request) -> Result<&DashboardAccess, Reply> {
 pub(super) async fn mutation_body(
     request: Request,
 ) -> Result<serde_json::Map<String, serde_json::Value>, Reply> {
-    mutation_admission(&request)?;
+    mutation_body_capped(request, BODY_CAP).await
+}
+
+pub(super) async fn mutation_body_capped(
+    request: Request,
+    cap: usize,
+) -> Result<serde_json::Map<String, serde_json::Value>, Reply> {
+    mutation_admission_capped(&request, cap)?;
     // The front door already imposed Express's parser cap. Lifecycle also checks
     // the serialized object, including when the request was sent in chunks.
     let bytes = axum::body::to_bytes(request.into_body(), 100 * 1024)
@@ -52,15 +59,20 @@ pub(super) async fn mutation_body(
     }
     let body: serde_json::Map<String, serde_json::Value> =
         serde_json::from_slice(&bytes).map_err(|_| super::invalid_body())?;
-    if serde_json::to_vec(&body).map_or(true, |bytes| bytes.len() > BODY_CAP) {
+    if serde_json::to_vec(&body).map_or(true, |bytes| bytes.len() > cap) {
         return Err(super::invalid_body());
     }
     Ok(body)
 }
 
 const BODY_CAP: usize = 8 * 1024;
+pub(super) const WEB_SESSION_BODY_CAP: usize = 48 * 1024;
 
 pub(super) fn mutation_admission(request: &Request) -> Result<(), Reply> {
+    mutation_admission_capped(request, BODY_CAP)
+}
+
+pub(super) fn mutation_admission_capped(request: &Request, cap: usize) -> Result<(), Reply> {
     use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
 
     let access = admit(request)?;
@@ -86,7 +98,7 @@ pub(super) fn mutation_admission(request: &Request) -> Result<(), Reply> {
     }
     if declared
         .and_then(|length| length.to_str().ok()?.parse::<usize>().ok())
-        .is_some_and(|length| length > BODY_CAP)
+        .is_some_and(|length| length > cap)
     {
         return Err(super::invalid_body());
     }
