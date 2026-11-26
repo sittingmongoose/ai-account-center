@@ -730,6 +730,20 @@ private func checkVisibleUsageWindows() throws {
     && goRows[2].meta(now: at) == "Account 4 · Unavailable"
     && goRows[0].accountHelp.hasPrefix("OpenCode Go Account 2 (Go) usage details"),
     "An OpenCode Go row must name its account, plan and own status, never \"1 of N\": \(goRows.map { $0.meta(now: at) })")
+  let goOnlyVisible = goOneNamed
+  var goHiddenNamed = goTwoNamed
+  goHiddenNamed["trayHidden"] = true
+  var goHiddenUnavailable = goUnavailable
+  goHiddenUnavailable["trayHidden"] = true
+  goDashboardObject["accounts"] = [goOnlyVisible, goHiddenNamed, goHiddenUnavailable]
+  let singleGoDashboard = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: goDashboardObject))
+  let singleGoRows = singleGoDashboard.providerGroups.flatMap(\.trayRows)
+  try expect(singleGoRows.map(\.id) == ["opencode-go|go-account-one"]
+    && singleGoRows[0].isAccountRow
+    && singleGoRows[0].accounts.map(\.id) == ["go-account-one"]
+    && singleGoRows[0].meta(now: at) == "Account 2 · Live 1m ago",
+    "One OpenCode Go account left after tray hides keeps its account row id and label: \(singleGoRows.map { $0.id }) \(singleGoRows.map { $0.meta(now: at) })")
   // Card OCG1: a stored key's row is named by its identity digest; a name that repeats the title keeps the digest.
   var keyRow = goOneNamed
   keyRow["id"] = "opencode-go:usage:beadcafe"; keyRow["label"] = "OpenCode Go beadcafe"

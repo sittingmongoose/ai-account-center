@@ -576,10 +576,10 @@ public static class Formatting
     /// (owner, 2026-11-21): every OpenCode Go account has its own meters, reset times and status.</summary>
     public static readonly string[] PerAccountProviders = { "opencode-go" };
 
-    /// <summary>The tray rows for one provider's shown accounts: one row per account for a per-account provider with
-    /// more than one account, otherwise one row holding them all (today's representative rule).</summary>
+    /// <summary>The tray rows for one provider's shown accounts: one row per account for a per-account provider,
+    /// otherwise one row holding them all (today's representative rule).</summary>
     public static DashboardAccount[][] TrayRows(string provider, DashboardAccount[] accounts) =>
-        PerAccountProviders.Contains(provider) && accounts.Length > 1
+        PerAccountProviders.Contains(provider)
             ? accounts.Select(account => new[] { account }).ToArray()
             : new[] { accounts };
 

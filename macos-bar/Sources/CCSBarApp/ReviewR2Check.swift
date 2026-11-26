@@ -108,6 +108,20 @@ enum ReviewR2Check {
         && AlignmentProbe.frames["row|provider|opencode-go"] == nil, "three OpenCode Go rows render (\(label))")
       check(text.contains("beadcafe") && text.contains("Account 2") && text.contains("Account 3") && !text.contains(" of 3"),
         "each OpenCode Go row shows its whole name (\(label)): \(text)")
+      var singleAccounts = accounts
+      for index in singleAccounts.indices where singleAccounts[index]["id"] as? String != "opencode-go:usage:beadcafe" {
+        singleAccounts[index]["trayHidden"] = true
+      }
+      object["accounts"] = singleAccounts
+      let single = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+      AlignmentProbe.frames = [:]
+      let (singleHost, _, singleWindow) = PreviewRenderer.host(single, options: PreviewRenderer.Options([]))
+      defer { singleWindow.orderOut(nil) }
+      let singleText = try PreviewRenderer.recognizedText(singleHost).joined(separator: " ")
+      check(AlignmentProbe.frames["row|provider|opencode-go|opencode-go:usage:beadcafe"] != nil
+        && AlignmentProbe.frames["row|provider|opencode-go"] == nil
+        && singleText.contains("beadcafe"),
+        "one visible OpenCode Go key row keeps its digest (\(label)): \(singleText)")
     }
   }
 }

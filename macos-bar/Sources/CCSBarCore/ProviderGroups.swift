@@ -98,7 +98,7 @@ enum ProviderGroupBuilder {
       else { return nil }
 
       var group = Self.group(id: provider, provider: provider, accounts: providerAccounts, representative: representative)
-      group.trayRows = Self.perAccountProviders.contains(provider) && providerAccounts.count > 1
+      group.trayRows = Self.perAccountProviders.contains(provider)
         ? providerAccounts.map { account in
           var row = Self.group(id: "\(provider)|\(account.id)", provider: provider, accounts: [account], representative: account)
           row.isAccountRow = true

@@ -520,7 +520,7 @@ public partial class MainWindow : Window
             var accounts = shown.Where(account => account.Provider == provider).ToArray();
             if (provider is "claude" or "codex" or "antigravity") { ContentPanel.Children.Add(AccountSection(provider, accounts)); continue; }
             var rows = Formatting.TrayRows(provider, accounts);
-            foreach (var row in rows) ContentPanel.Children.Add(ProviderCard(provider, row, accountRow: rows.Length > 1));
+            foreach (var row in rows) ContentPanel.Children.Add(ProviderCard(provider, row, accountRow: Formatting.PerAccountProviders.Contains(provider)));
         }
         if (dashboard.Accounts.Count == 0) RenderEmpty("No accounts found", "Your signed-in accounts appear here when AI Account Center discovers them.");
         else if (ContentPanel.Children.Count == (staleSample ? 1 : 0))

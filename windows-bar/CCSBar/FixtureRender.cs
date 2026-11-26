@@ -203,6 +203,17 @@ public static class FixtureRender
                 && All(goDetails).OfType<TextBlock>().Any()
                 && !Shows("opencode-go-1@example.com") && !Shows("opencode-go-2@example.com");
             window.ToggleDetailsForCheck("prov:opencode-go:opencode-go:example-1");
+
+            var goSingle = Clone(goTwo);
+            goSingle.Accounts.First(account => account.Id == "opencode-go:example-2").TrayHidden = true;
+            window.ApplyDashboardSample(goSingle);
+            await Settle(window);
+            var goSingleCard = FindUid(window.ContentPanel, "provider:opencode-go:opencode-go:example-1");
+            report.Checks[$"{name}_opencode_go_single_row_keeps_account_presentation"] = goSingleCard is not null
+                && FindUid(window.ContentPanel, "provider:opencode-go") is null
+                && FindUid(window.ContentPanel, "provider:opencode-go:opencode-go:example-2") is null
+                && Meta("opencode-go:example-1") is var singleGoMeta && singleGoMeta.Contains(" · Cached ", StringComparison.Ordinal)
+                && FindUid(goSingleCard!, "meta:opencode-go:example-1") is not null;
             await Settle(window);
 
             // Card OCG1, the owner's shape: Account 2, Account 3 and one stored key's row, each its own row with its own name.
@@ -227,6 +238,16 @@ public static class FixtureRender
                 && Meta("opencode-go:usage:beadcafe").StartsWith("beadcafe · ", StringComparison.Ordinal)
                 && Meta("opencode-go:acct:52f3251b").StartsWith("Account 2 · ", StringComparison.Ordinal)
                 && Meta("opencode-go:acct:2e034ec2").StartsWith("Account 3 · ", StringComparison.Ordinal);
+
+            var keyOnly = Clone(three);
+            foreach (var account in keyOnly.Accounts.Where(account => account.Id != "opencode-go:usage:beadcafe")) account.TrayHidden = true;
+            window.ApplyDashboardSample(keyOnly);
+            await Settle(window);
+            var keyOnlyCard = FindUid(window.ContentPanel, "provider:opencode-go:opencode-go:usage:beadcafe");
+            report.Checks[$"{name}_opencode_go_single_key_row_keeps_digest"] = keyOnlyCard is not null
+                && FindUid(window.ContentPanel, "provider:opencode-go") is null
+                && Meta("opencode-go:usage:beadcafe").StartsWith("beadcafe · ", StringComparison.Ordinal)
+                && keyOnlyCard is { } keyRow && FindUid(keyRow, "meta:opencode-go:usage:beadcafe") is not null;
 
             // Details: full-row expansion under Claude 1.
             window.ApplyDashboardSample(Clone(fixture));
