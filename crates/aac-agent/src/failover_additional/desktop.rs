@@ -36,8 +36,11 @@ pub(crate) const AGY_USER_AGENT: &str =
 pub(crate) const MUSE_URL: &str = "https://api.meta.ai/muse-code/key";
 
 static SECRET_TEXT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(bearer[ \t\r\n\f\v]|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})")
+    Regex::new(r"(?i)(dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})")
         .unwrap_or_else(|_| unreachable!("constant regex"))
+});
+static DIGITS_1_12_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\A[0-9]{1,12}\z").unwrap_or_else(|_| unreachable!("constant regex"))
 });
 static EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\A[^ \t\r\n\f\v@]+@[^ \t\r\n\f\v@]+\.[^ \t\r\n\f\v@]+\z")
@@ -281,13 +284,36 @@ fn has_forbidden_control(text: &str) -> bool {
     })
 }
 
+fn is_py_whitespace(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\x1c'..='\x1f')
+}
+
+fn has_bearer_whitespace(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 6 < bytes.len() {
+        if bytes[i..i + 6].eq_ignore_ascii_case(b"bearer")
+            && let Some(next) = text[i + 6..].chars().next()
+            && is_py_whitespace(next)
+        {
+            return true;
+        }
+        i += text[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    false
+}
+
 pub(crate) fn safe_text(value: &Value, maximum: usize) -> Option<String> {
     let raw = value.as_str()?;
     if raw.chars().count() > maximum {
         return None;
     }
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || has_forbidden_control(trimmed) || SECRET_TEXT_RE.is_match(trimmed) {
+    let trimmed = raw.trim_matches(is_py_whitespace);
+    if trimmed.is_empty()
+        || has_forbidden_control(trimmed)
+        || has_bearer_whitespace(trimmed)
+        || SECRET_TEXT_RE.is_match(trimmed)
+    {
         return None;
     }
     Some(trimmed.to_owned())
@@ -353,6 +379,18 @@ pub(crate) fn parse_iso_utc(raw: &str) -> Option<DateTime<Utc>> {
     None
 }
 
+/// Parse an ISO-8601 timestamp matching Python `datetime.fromisoformat(value.replace("Z", "+00:00"))`
+/// with explicit timezone required and no leading/trailing whitespace or lowercase `'z'`.
+pub(crate) fn parse_iso_utc_strict(raw: &str) -> Option<DateTime<Utc>> {
+    if raw.is_empty() || raw.len() > 64 || raw != raw.trim_matches(is_py_whitespace) {
+        return None;
+    }
+    if raw.ends_with('z') {
+        return None;
+    }
+    parse_iso_utc(raw)
+}
+
 /// `desktop_helpers.reset_at`: years 2000..=2100, seconds precision.
 pub(crate) fn reset_at(value: &Value) -> Option<String> {
     if let Some(mut secs) = number(value) {
@@ -363,11 +401,54 @@ pub(crate) fn reset_at(value: &Value) -> Option<String> {
         return (2000..=2100).contains(&year).then_some(iso);
     }
     let raw = value.as_str()?;
-    let dt = parse_iso_utc(raw)?;
+    let dt = parse_iso_utc_strict(raw)?;
     if !(2000..=2100).contains(&dt.year()) {
         return None;
     }
     Some(dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+}
+
+/// `desktop_helpers.retry_after_seconds`: integer ceiling clamped to `300..=86400`, default `600`.
+pub(crate) fn desktop_retry_after_seconds(value: &Value, now_secs: Option<f64>) -> u64 {
+    let now = now_unix_secs(now_secs);
+    let mut seconds: Option<f64> = None;
+    if let Some(raw) = value.as_str()
+        && raw.chars().count() <= 128
+    {
+        let trimmed = raw.trim_matches(is_py_whitespace);
+        if DIGITS_1_12_RE.is_match(trimmed) {
+            seconds = trimmed.parse::<u64>().ok().map(|n| n as f64);
+        } else if let Ok(instant) = DateTime::parse_from_rfc2822(raw) {
+            seconds = Some(instant.timestamp() as f64 - now);
+        } else if let Ok(instant) = DateTime::parse_from_rfc2822(trimmed) {
+            seconds = Some(instant.timestamp() as f64 - now);
+        }
+    }
+    match seconds.filter(|s| s.is_finite()) {
+        Some(s) => {
+            let ceiled = s.ceil();
+            if ceiled <= 300.0 {
+                300
+            } else if ceiled >= 86_400.0 {
+                86_400
+            } else {
+                ceiled as u64
+            }
+        }
+        None => 600,
+    }
+}
+
+/// `desktop_helpers.is_invalid_grant`: recognize an OAuth 400 `invalid_grant` body (capped at 4 KiB).
+pub(crate) fn is_invalid_grant(raw: &[u8]) -> bool {
+    let capped = &raw[..raw.len().min(4096)];
+    let Ok(val) = serde_json::from_slice::<Value>(capped) else {
+        return false;
+    };
+    val.as_object()
+        .and_then(|o| o.get("error"))
+        .and_then(Value::as_str)
+        == Some("invalid_grant")
 }
 
 #[derive(Default)]
@@ -677,10 +758,10 @@ pub(crate) fn normalize_muse(payload: &Value) -> Vec<Value> {
     if let Some(usage) = payload.get("subs_usage").and_then(Value::as_object) {
         for (key, default_dur) in [("window", None), ("weekly", Some(10_080.0))] {
             if let Some(bucket) = usage.get(key).and_then(Value::as_object) {
-                let dur = bucket
-                    .get("window_duration_mins")
-                    .and_then(number)
-                    .or(default_dur);
+                let dur = match bucket.get("window_duration_mins") {
+                    Some(v) => number(v),
+                    None => default_dur,
+                };
                 let label = muse_window_label(key, dur);
                 let w = quota_window(WindowSpec {
                     key,
@@ -1019,8 +1100,78 @@ impl<'de> Deserialize<'de> for StrictValue {
     }
 }
 
+/// Windows ACL check matching `desktop_usage.windows_private_metadata`.
+/// Fails closed if `powershell.exe` is unavailable, times out after 8 s, or reports non-private ACLs.
+#[cfg(windows)]
+pub(crate) fn windows_private_metadata(path: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let literal = path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "$ErrorActionPreference='Stop';\
+         $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;\
+         $acl=Get-Acl -LiteralPath '{literal}';\
+         if(-not $acl.AreAccessRulesProtected){{exit 1}};\
+         $owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value;\
+         if($owner -ne $sid -and $owner -ne 'S-1-5-32-544'){{exit 1}};\
+         $rules=$acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]);\
+         if($rules.Count -gt 16){{exit 1}};\
+         foreach($rule in $rules){{\
+         if($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -ne $sid \
+         -and $rule.IdentityReference.Value -ne 'S-1-5-18'){{exit 1}}}};\
+         [Console]::Write('private')"
+    );
+    let Ok(mut child) = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return false;
+                }
+                let mut out = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    use std::io::Read as _;
+                    let _ = stdout.take(64).read_to_string(&mut out);
+                }
+                return out == "private";
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
 /// Read installed-app Antigravity OAuth client credentials privately (`desktop_usage.antigravity_oauth_client`).
 pub(crate) fn antigravity_oauth_client(home: &Path) -> Result<(String, String), UsageError> {
+    antigravity_oauth_client_with(home, None)
+}
+
+/// Read installed-app Antigravity OAuth client credentials privately with optional Windows ACL override.
+pub(crate) fn antigravity_oauth_client_with<'a>(
+    home: &Path,
+    windows_acl: Option<&'a (dyn Fn(&Path) -> bool + Send + Sync + 'a)>,
+) -> Result<(String, String), UsageError> {
     let failure = || {
         UsageError::new(
             "unavailable",
@@ -1028,14 +1179,25 @@ pub(crate) fn antigravity_oauth_client(home: &Path) -> Result<(String, String), 
         )
     };
     let path = home.join(".ccs/account-usage/antigravity-oauth-client.json");
-    if let Some(parent) = path.parent()
-        && std::fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_symlink())
+    if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
+        || path
+            .parent()
+            .is_some_and(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
     {
         return Err(failure());
     }
-    let root = path.ancestors().last().unwrap_or(&path);
+    if let Some(check) = windows_acl {
+        if !check(&path) {
+            return Err(failure());
+        }
+    } else {
+        #[cfg(windows)]
+        if !windows_private_metadata(&path) {
+            return Err(failure());
+        }
+    }
     let policy = ReadPolicy::capped(4096)
-        .ancestors(Ancestors::NoLinkBelow(root))
+        .ancestors(Ancestors::NoLinkBelow(home))
         .owner(Owner::Mine)
         .mode(Mode::Private);
     let (raw, meta) = match aac_files::read::read(&path, &policy) {
