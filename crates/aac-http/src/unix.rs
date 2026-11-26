@@ -2266,6 +2266,11 @@ async fn serve_inner(
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { crate::answers_owned::jobs(jobs, stop).await });
     }
+    // Claude sign-in renewal: dormant until its settings exist.
+    tokio::spawn(crate::claude_renew_job::jobs(
+        state.0.boot.ccs_dir.clone(),
+        Arc::clone(&jobs_stop),
+    ));
     if let Some(owner) = &scoreboard_owned {
         owner.seed().await;
         let jobs = Arc::clone(owner);

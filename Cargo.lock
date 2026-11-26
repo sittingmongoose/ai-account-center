@@ -41,6 +41,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aac-claude-renew"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "aac-config"
 version = "0.1.0"
 dependencies = [
@@ -92,6 +103,7 @@ name = "aac-http"
 version = "0.1.0"
 dependencies = [
  "aac-api",
+ "aac-claude-renew",
  "aac-config",
  "aac-core",
  "aac-diag",

@@ -29,6 +29,7 @@ aac-views.workspace = true
 aac-store.workspace = true
 aac-status.workspace = true
 aac-renewal.workspace = true
+aac-claude-renew.workspace = true
 aac-snapshot.workspace = true
 aac-usage = { path = "../../native/aac-usage" }
 base64 = "0.22"
