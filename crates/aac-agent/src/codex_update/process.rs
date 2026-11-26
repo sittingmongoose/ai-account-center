@@ -67,6 +67,8 @@ impl Process {
     pub(super) fn same(&self, other: &Self) -> bool {
         self.pid == other.pid && self.start_time == other.start_time
     }
+    // Read only by the Linux backend (`native.rs`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(super) fn fingerprint(&self) -> String {
         let bytes =
             serde_json::to_vec(&(&self.exe, &self.args, &self.cwd)).expect("strings serialize");
