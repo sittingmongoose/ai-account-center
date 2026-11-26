@@ -40,6 +40,6 @@ fn main() {
     // that dies mid-scan), the watchdog answers for the scan, every kind "pending", so the server
     // keeps what it had and names the stall, and the process ends without waiting for it.
     aac_usage::protocol::watchdog(&request);
-    let response = aac_usage::protocol::scan(&request, &home, &env);
+    let response = aac_usage::protocol::scan_persistent(&request, &home, &env);
     aac_usage::protocol::answer(&response);
 }

@@ -52,6 +52,19 @@ tokens or cost. Coverage completeness comes from the usage read itself:
 
 Old fingerprints are read once to establish their measured clocks.
 
+Installed agents and the standalone scanner keep a private discovery index in
+`CCS_HOME/analytics-scan-index-v1` (default `~/.ccs/analytics-scan-index-v1`).
+It saves directory listings and the unfinished optional experiment walk between
+pulls, so a bounded walk continues beyond its first page. Changed directories
+are listed again; build/dependency trees (`target`, `node_modules`, `.git`) stay
+excluded. Log contents and credentials are never stored in this index. Reader
+fingerprints still own usage cursors, append checks and replacement detection.
+An incomplete optional walk remains disclosed as `optionalSearchLimited`;
+known unread roots and permission failures retain their partial states. An
+unavailable, busy or corrupt index falls back to discovery without inventing
+coverage. The index is capped at 16 MiB; oversized listings remain usable for
+the current call but are not saved. Pinned agents must be rebuilt for rollout.
+
 A source's measured numbers can stand while its coverage does not. A
 usage-shaped record the reader could not decode is named on the file's
 fingerprint (`unreadUsage`): the tokens already measured stay, the source reports

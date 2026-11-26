@@ -49,7 +49,7 @@ pub(crate) async fn run(args: &Value) -> Result<Value, Failure> {
         let home = home
             .filter(|home| home.is_dir())
             .ok_or_else(|| Failure::new(Cause::NotInstalled, "scan home is unavailable"))?;
-        Ok(protocol::scan(&request, &home, &env))
+        Ok(protocol::scan_persistent(&request, &home, &env))
     });
     match tokio::time::timeout(wait, worker).await {
         Ok(result) => result.map_err(|_| Failure::new(Cause::Bug, "scan worker failed"))?,

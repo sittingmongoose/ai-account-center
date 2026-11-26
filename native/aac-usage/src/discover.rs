@@ -1019,7 +1019,7 @@ const EXPERIMENT_KINDS: [&str; 4] = ["codex", "claude", "omp", "muse"];
 /// Codex `rollout-*.jsonl[.zst]`, OMP `<time>_<id>.jsonl`, Muse `<id>/session.jsonl`, Claude any
 /// `.jsonl`. The second value says a listing inside it failed, so logs may hide there
 /// (RECHECK-BIG-1 M3).
-fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
+pub(crate) fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
     let mut pending = vec![(dir.to_path_buf(), 0usize)];
     let mut seen = 0usize;
     let mut failed = false;
@@ -1180,4 +1180,10 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
     }
     result.optional_limited = cut;
     result
+}
+
+/// Optional experiment discovery with a local persistent listing index and durable bounded
+/// traversal frontier. An unavailable index falls back to the ordinary honest bounded walk.
+pub fn experiment_roots_indexed(home: &Path, cache: &Path, budget: Duration, max_entries: usize) -> ExperimentRoots {
+    crate::scan_index::walk(home, cache, budget, max_entries)
 }

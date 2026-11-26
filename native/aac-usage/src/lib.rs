@@ -8,6 +8,7 @@ pub mod discover;
 pub mod fsx;
 pub mod protocol;
 pub mod read;
+mod scan_index;
 pub mod util;
 
 use std::path::PathBuf;

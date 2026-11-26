@@ -219,8 +219,14 @@ fn experiment_dirs(
     request: &Request,
     home: &Path,
     kind: &str,
+    index: Option<&Path>,
 ) -> ExperimentDirs {
-    let discovered = found.get_or_insert_with(|| discover::experiment_roots(home, Duration::from_secs(2)));
+    let discovered = found.get_or_insert_with(|| match index {
+        Some(cache) => {
+            discover::experiment_roots_indexed(home, cache, Duration::from_secs(2), discover::EXPERIMENT_MAX_ENTRIES)
+        }
+        None => discover::experiment_roots(home, Duration::from_secs(2)),
+    });
     let mut list = paths_of(&request.experiment_roots, kind);
     for path in discovered.found.get(kind).cloned().unwrap_or_default() {
         if !list.contains(&path) {
@@ -362,6 +368,21 @@ pub fn watchdog(request: &Request) {
 
 /// One scan: every requested kind in order, then the response.
 pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
+    scan_with_index(request, home, env, None)
+}
+
+/// Installed scanners share a durable discovery index between short-lived pulls. Reader cursors
+/// and their measured usage remain owned by the existing fingerprint protocol.
+pub fn scan_persistent(request: &Request, home: &Path, env: &Env) -> Value {
+    let ccs = env
+        .get("CCS_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".ccs"));
+    scan_with_index(request, home, env, Some(&ccs.join("analytics-scan-index-v1")))
+}
+
+fn scan_with_index(request: &Request, home: &Path, env: &Env, index: Option<&Path>) -> Value {
     let mut collector = Collector::new(request.min_date_ms, request.budget, request.fingerprints.clone());
     collector.capture_cwd = request.cwd;
     collector.messages_wanted = request.messages;
@@ -379,7 +400,7 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         collector.fresh.entry(kind.clone()).or_default();
         let cut_before = collector.truncated;
         let experiment_list = if ["claude", "codex", "omp", "muse"].contains(&kind.as_str()) {
-            let (list, limit, failed) = experiment_dirs(&mut found, request, home, kind);
+            let (list, limit, failed) = experiment_dirs(&mut found, request, home, kind, index);
             let requested = paths_of(&request.experiment_roots, kind);
             collector.optional_roots.insert(
                 kind.clone(),
