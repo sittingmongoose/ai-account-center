@@ -1753,7 +1753,8 @@ fn scoreboard_aggregates_update_atomically_and_migrate_from_existing_runs() {
             Ok((ver, seq))
         })
         .unwrap();
-    assert_eq!(seq_after.0.as_deref(), Some("2"));
+    let want_ver = scoreboard_agg::SB_AGG_VERSION.to_string();
+    assert_eq!(seq_after.0.as_deref(), Some(want_ver.as_str()));
     assert_eq!(
         seq_after.1.as_deref().and_then(|s| s.parse::<u64>().ok()),
         Some(runs::generation(&migrated).unwrap())
@@ -2287,9 +2288,10 @@ fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_re
             let agg_done: u64 = agg.buckets.iter().map(|(_, b)| b.outcome_done).sum();
             assert_eq!(agg_done, res_done, "step {step} ({fname}): done count");
 
-            // Verify cost credits sum in exact RUN_BY_TIME order across all matched runs (loaded on demand).
-            let matched_refs: Vec<&runs::RunFact> = matched.iter().map(|r| r.as_ref()).collect();
-            let matched_docs = runs::load_run_docs(eng, &matched_refs).unwrap();
+            // Verify cost credits sum in exact file-derived `(cursor_ms, run_id)` order.
+            let mut matched_sorted: Vec<&runs::RunFact> = matched.iter().map(|r| r.as_ref()).collect();
+            matched_sorted.sort_by(|a, b| a.cursor.0.cmp(&b.cursor.0).then_with(|| a.id.cmp(&b.id)));
+            let matched_docs = runs::load_run_docs(eng, &matched_sorted).unwrap();
             let mut res_credits = 0.0f64;
             let mut res_credit_n = 0u64;
             for doc_opt in &matched_docs {
@@ -2299,7 +2301,7 @@ fn property_random_sequence_of_runs_corrections_reviews_refusals_matches_full_re
                 }
             }
             let mut agg_samples: Vec<_> = agg.buckets.iter().flat_map(|(_, b)| b.cost_samples.iter()).collect();
-            agg_samples.sort_by(|a, b| a.cursor_ms.cmp(&b.cursor_ms).then_with(|| a.r.cmp(&b.r)));
+            agg_samples.sort_by(|a, b| a.cursor_ms.cmp(&b.cursor_ms).then_with(|| a.run_id.cmp(&b.run_id)));
             let mut agg_credits = 0.0f64;
             let mut agg_credit_n = 0u64;
             for s in agg_samples {
@@ -2969,8 +2971,23 @@ fn run_facts_share_arcs_across_generations_and_avoid_whole_table_reads() {
     assert_eq!(q["accepted"].as_array().unwrap().len(), 43);
     drop((gen1, gen2, gen3));
 
-    // 4. Fallback when `RUN_SB_FACT` is wiped/untrusted still builds identical facts from payload.
-    engine
+    // 4. Fallback when `RUN_SB_FACT` is wiped/untrusted on a cold cache (AFTER reopen, so
+    // `finish_replay` cannot silently rebuild `run_sb_*` before the snapshot runs) must decode
+    // from `RUN_PAYLOAD` (positive payload_read_count delta) and match trusted facts identically.
+    let trusted_snapshot = runs::resolved_history_snapshot(&engine).unwrap();
+    let trusted_facts: Vec<runs::RunFact> = trusted_snapshot.facts().iter().map(|f| (**f).clone()).collect();
+    let trusted_accepted: Vec<runs::RunFact> = trusted_snapshot
+        .accepted_facts()
+        .iter()
+        .map(|f| (**f).clone())
+        .collect();
+    drop(trusted_snapshot);
+    engine.close().unwrap();
+    drop(engine);
+
+    let reopened = open(&db);
+    // Wipe `run_sb_*` AFTER reopen while `HistoryCache` is still completely cold.
+    reopened
         .with_db(|db_ref| {
             let txn = aac_store::engine::begin(db_ref)?;
             scoreboard_agg::delete_tables(&txn)?;
@@ -2983,13 +3000,25 @@ fn run_facts_share_arcs_across_generations_and_avoid_whole_table_reads() {
             Ok(())
         })
         .unwrap();
-    engine.close().unwrap();
-    drop(engine);
-
-    let reopened = open(&db);
+    assert_eq!(runs::history_payload_read_count(&reopened), 0);
     let gen_fallback = runs::resolved_history_snapshot(&reopened).unwrap();
+    assert_eq!(
+        runs::history_payload_read_count(&reopened),
+        43,
+        "cold untrusted fallback must decode all 43 heads from RUN_PAYLOAD (M4)"
+    );
     assert_eq!(gen_fallback.facts().len(), 42);
     assert_eq!(gen_fallback.accepted_facts().len(), 43);
+    let fallback_facts: Vec<runs::RunFact> = gen_fallback.facts().iter().map(|f| (**f).clone()).collect();
+    let fallback_accepted: Vec<runs::RunFact> = gen_fallback.accepted_facts().iter().map(|f| (**f).clone()).collect();
+    assert_eq!(
+        fallback_facts, trusted_facts,
+        "cold payload fallback facts must match trusted RUN_SB_FACT facts"
+    );
+    assert_eq!(
+        fallback_accepted, trusted_accepted,
+        "cold payload fallback accepted receipts must match trusted path"
+    );
     let rev_fb = gen_fallback
         .facts()
         .iter()
@@ -2999,6 +3028,361 @@ fn run_facts_share_arcs_across_generations_and_avoid_whole_table_reads() {
 
     reopened.close().unwrap();
     drop(reopened);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+/// Deep review Astra H3: an upgraded release-1 ledger containing `"corrects": null` must still
+/// project cleanly (not drop to zero runs), and any unprojected head must NEVER be acknowledged
+/// as accepted by `accepted_receipts` without disclosing a projection problem.
+#[test]
+fn deep_h6_upgraded_store_handles_legacy_null_corrects_and_never_acks_unprojected_heads() {
+    use aac_store::engine::LogId;
+    use aac_store::event::Event;
+    use aac_store::msgpack;
+    use aac_store::scoreboard_agg;
+
+    let make_recorded_event = |run_id: &str, path: &str, doc_text: &str, ended_ms: u64| -> Event {
+        let sha = runs::sha256(doc_text.as_bytes());
+        let sha_hex: String = sha.iter().map(|b| format!("{b:02x}")).collect();
+        let payload = json!({
+            "eventId": format!("agent-report:run:{run_id}:{sha_hex}"),
+            "path": path,
+            "size": doc_text.len() as u64,
+            "mtimeMs": ended_ms,
+            "sha256": sha_hex,
+            "ingestedAtMs": ended_ms + 1_000,
+            "doc": doc_text,
+            "ids": {
+                "runId": run_id,
+                "writer": "vm.upgrade",
+                "machine": "vm",
+                "computer": "ubuntu",
+                "taskId": "task-up",
+                "taskType": "build",
+                "t3ThreadId": null,
+                "t3ThreadSource": null,
+                "t3TaskId": null,
+                "projectId": "aac",
+                "streamId": null,
+                "provider": "openai",
+                "accountRaw": null,
+                "eventAtMs": ended_ms,
+                "observedAtMs": ended_ms,
+                "startedAtMs": null,
+                "wallMs": 60000,
+                "seq": 1,
+                "outcome": "done",
+                "source": "observed",
+                "benchmark": null,
+                "reviewVerdict": null,
+                "overturned": false,
+                "disputed": false,
+                "imported": false,
+                "unknownModel": false
+            },
+            "identity": {
+                "modelRaw": "openai/gpt-6.1-sol",
+                "modelId": "openai/gpt-6.1-sol",
+                "modelSource": "canonical",
+                "modelFamily": "openai",
+                "effortRaw": "high",
+                "effort": "high",
+                "effortSource": "written",
+                "effortConflict": false,
+                "harnessRaw": "codex",
+                "harness": "codex",
+                "harnessSource": "written",
+                "modelCatalogHash": "0".repeat(64)
+            }
+        });
+        let mut e = Event::new("run.recorded", ended_ms + 1_000, msgpack::from_json(&payload).unwrap());
+        e.idempotency_key = Some(format!("agent-report:run:{run_id}:{sha_hex}"));
+        e
+    };
+
+    // Part A: pre-a23d1f47c stored run with extra `"corrects": null`.
+    let db_a = temp_dir("deep-h6-legacy-null-corrects");
+    {
+        let eng = open(&db_a);
+        let legacy_doc = json!({
+            "schema": "agent-reports/run@1",
+            "id": "vm.upgrade--legacy-1",
+            "writer": "vm.upgrade",
+            "seq": 1,
+            "writtenAt": iso(T0 + DAY),
+            "source": "observed",
+            "project": "aac",
+            "task": { "id": "t-1", "type": "build", "title": "Legacy run" },
+            "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+            "endedAt": iso(T0 + DAY),
+            "wallSeconds": 60,
+            "outcome": "done",
+            "corrects": null
+        })
+        .to_string();
+        let ev = make_recorded_event(
+            "vm.upgrade--legacy-1",
+            "writers/vm.upgrade/runs/2026-11-02/vm.upgrade--legacy-1.json",
+            &legacy_doc,
+            T0 + DAY,
+        );
+        eng.commit(LogId::Ledger, |batch| {
+            batch.push(ev)?;
+            Ok(())
+        })
+        .unwrap();
+        eng.close().unwrap();
+    }
+    fs::remove_file(db_a.join("aac.redb")).unwrap();
+    {
+        let upgraded = open(&db_a);
+        let sb = scoreboard_agg::read_for_scoreboard(
+            &upgraded,
+            &scoreboard_agg::ScoreboardFilter::default(),
+            &[],
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            sb.effective_runs_total, 1,
+            "upgraded pre-a23d1f47c run with corrects:null must stay projected, not drop to 0"
+        );
+        let hist = runs::resolved_history_snapshot(&upgraded).unwrap();
+        assert_eq!(hist.facts().len(), 1);
+        assert_eq!(hist.skipped(), 0);
+        let (_, receipts) = scoreboard_agg::accepted_receipts(&upgraded).unwrap();
+        assert_eq!(receipts.len(), 1);
+        upgraded.close().unwrap();
+    }
+    fs::remove_dir_all(db_a).unwrap();
+
+    // Part B: a stored head whose payload genuinely cannot parse must NOT be acknowledged as
+    // accepted AND must disclose a projection problem on the aggregate read.
+    let db_b = temp_dir("deep-h6-unprojected-head");
+    {
+        let eng = open(&db_b);
+        let unparseable_doc = json!({
+            "schema": "agent-reports/run@1",
+            "id": "vm.upgrade--broken-1",
+            "writer": "vm.upgrade",
+            "seq": 1,
+            "writtenAt": iso(T0 + DAY),
+            "source": "observed",
+            "task": { "id": "t-b", "type": "build", "title": "Broken outcome type" },
+            "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+            "endedAt": iso(T0 + DAY),
+            "outcome": 12345
+        })
+        .to_string();
+        let ev = make_recorded_event(
+            "vm.upgrade--broken-1",
+            "writers/vm.upgrade/runs/2026-11-02/vm.upgrade--broken-1.json",
+            &unparseable_doc,
+            T0 + DAY,
+        );
+        eng.commit(LogId::Ledger, |batch| {
+            batch.push(ev)?;
+            Ok(())
+        })
+        .unwrap();
+        eng.close().unwrap();
+    }
+    fs::remove_file(db_b.join("aac.redb")).unwrap();
+    {
+        let upgraded = open(&db_b);
+        let sb = scoreboard_agg::read_for_scoreboard(
+            &upgraded,
+            &scoreboard_agg::ScoreboardFilter::default(),
+            &[],
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(sb.effective_runs_total, 0);
+        assert!(
+            !sb.correction_problems.is_empty(),
+            "an unprojected head must disclose a projection problem instead of staying silent"
+        );
+        let (_, receipts) = scoreboard_agg::accepted_receipts(&upgraded).unwrap();
+        assert!(
+            receipts.is_empty(),
+            "an unprojected head must NEVER be acknowledged as accepted: {receipts:?}"
+        );
+        upgraded.close().unwrap();
+    }
+    fs::remove_dir_all(db_b).unwrap();
+}
+
+/// Deep review Astra H7: a revision committed between `resolved_history` row selection and
+/// metadata loading in `runsQuery` must never return a torn page mixing seq-1 doc with seq-2 ids.
+#[test]
+fn deep_h8_corrected_history_query_never_mixes_revisions_across_transactions() {
+    use std::sync::Arc;
+
+    let share = Share::new("deep-h8-torn-page");
+    let day = &iso(T0 + 2 * DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.race/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+
+    // Unrelated valid correction so `has_corrections` is true and `runsQuery` uses resolved history.
+    share.run(
+        "vm.race",
+        "c-orig",
+        1,
+        T0 + 2 * DAY + 1_000,
+        "openai/gpt-6.1-sol",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
+    let c_fix = json!({
+        "schema": "agent-reports/run@1",
+        "id": "vm.race--c-fix",
+        "writer": "vm.race",
+        "seq": 1,
+        "writtenAt": iso(T0 + 2 * DAY + 2_000),
+        "source": "observed",
+        "corrects": "vm.race--c-orig",
+        "task": { "id": "t-c", "type": "build", "title": "Fix" },
+        "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+        "endedAt": iso(T0 + 2 * DAY + 2_000),
+        "outcome": "done"
+    });
+    fs::write(dir.join("vm.race--c-fix.json"), c_fix.to_string()).unwrap();
+
+    // Target run at seq=1 with task.type = "build".
+    share.run(
+        "vm.race",
+        "target",
+        1,
+        T0 + 2 * DAY + 5_000,
+        "openai/gpt-6.1-sol",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
+
+    let db = temp_dir("deep-h8-store");
+    let engine = Arc::new(open(&db));
+    pass(&engine, &share, T0 + 3 * DAY, 1000, true);
+    let gen_before = runs::generation(&engine).unwrap();
+
+    // Between row selection and metadata read in `runsQuery`, commit seq=2 of `vm.race--target`
+    // with `task.type = "fix"`.
+    let eng_hook = Arc::clone(&engine);
+    let share_root = share.root.clone();
+    engine.set_before_query_meta_read_hook(Box::new(move || {
+        let rev2 = json!({
+            "schema": "agent-reports/run@1",
+            "id": "vm.race--target",
+            "writer": "vm.race",
+            "seq": 2,
+            "writtenAt": iso(T0 + 2 * DAY + 6_000),
+            "source": "observed",
+            "project": "proj",
+            "task": { "id": "node:delegated-task:command%3Atarget", "type": "fix", "title": "Task target seq2" },
+            "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+            "startedAt": iso(T0 + 2 * DAY + 5_000 - 60_000),
+            "endedAt": iso(T0 + 2 * DAY + 5_000),
+            "wallSeconds": 60,
+            "outcome": "done"
+        });
+        let day_dir = share_root
+            .join("v1/writers/vm.race/runs")
+            .join(&iso(T0 + 2 * DAY)[..10]);
+        fs::write(day_dir.join("vm.race--target.json"), rev2.to_string()).unwrap();
+        let scan = call(
+            &eng_hook,
+            "runsScan",
+            json!({ "root": share_root, "budget": 1000, "full": true }),
+        );
+        call(
+            &eng_hook,
+            "runsRecord",
+            json!({
+                "files": scan["files"],
+                "refused": scan["refused"],
+                "threads": scan["threads"],
+                "catalog": scan["catalog"],
+                "nowMs": T0 + 4 * DAY
+            }),
+        );
+    }));
+
+    let page = call(&engine, "runsQuery", json!({}));
+    let target_row = page["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["doc"]["id"].as_str() == Some("vm.race--target"))
+        .expect("target row");
+    assert_eq!(
+        target_row["doc"]["task"]["type"], target_row["ids"]["taskType"],
+        "doc.task.type and ids.taskType must come from the same revision (page gen={}, before={gen_before}): {target_row}",
+        page["generation"]
+    );
+    assert_eq!(
+        target_row["doc"]["seq"],
+        json!(2),
+        "retried page must reflect the committed seq=2 revision coherently"
+    );
+    assert!(
+        page["generation"].as_u64().unwrap() > gen_before,
+        "retried page must label itself with the newer generation"
+    );
+
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+/// Deep review Sol #7 / Astra M1: revising a run repeatedly with distinct interned strings
+/// (`process.version`) must release unreferenced strings from `HistoryCache::intern` instead of
+/// leaking them for the lifetime of the engine.
+#[test]
+fn deep_m1_history_interner_evicts_strings_from_retired_revisions() {
+    let share = Share::new("deep-m1-intern");
+    let day = &iso(T0 + 2 * DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.intern/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("vm.intern--r1.json");
+
+    let db = temp_dir("deep-m1-store");
+    let engine = open(&db);
+
+    let mut base_pool_len = 0usize;
+    for seq in 1..=120u64 {
+        let doc = json!({
+            "schema": "agent-reports/run@1",
+            "id": "vm.intern--r1",
+            "writer": "vm.intern",
+            "seq": seq,
+            "writtenAt": iso(T0 + 2 * DAY + seq * 1_000),
+            "source": "observed",
+            "task": { "id": "t-m1", "type": "scout", "title": "Intern test" },
+            "model": { "id": "openai/gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "high" },
+            "process": { "id": "scout-proc", "version": format!("ver-{seq:04}") },
+            "endedAt": iso(T0 + 2 * DAY),
+            "outcome": "done"
+        });
+        fs::write(&path, doc.to_string()).unwrap();
+        pass(&engine, &share, T0 + 3 * DAY + seq * 1_000, 1000, true);
+        let snap = runs::resolved_history_snapshot(&engine).unwrap();
+        assert_eq!(snap.facts().len(), 1);
+        drop(snap);
+        if seq == 2 {
+            base_pool_len = runs::history_intern_pool_len(&engine);
+        }
+    }
+    let final_pool_len = runs::history_intern_pool_len(&engine);
+    assert!(
+        final_pool_len <= base_pool_len + 2,
+        "retired process.version strings leaked in HistoryCache::intern: final={final_pool_len}, base={base_pool_len}"
+    );
+
+    engine.close().unwrap();
+    drop(engine);
     fs::remove_dir_all(db).unwrap();
     fs::remove_dir_all(share.root).unwrap();
 }

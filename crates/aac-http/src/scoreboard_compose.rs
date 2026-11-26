@@ -11,8 +11,8 @@ use aac_status::read_context::{
     PROTO_NAMES, age, array, median, number, plural, proto_named, rounded, s,
 };
 use aac_store::scoreboard_agg::{
-    BucketAgg, BucketCostSample, BucketFlag, BucketJoinedReview, BucketKey, BucketRunSummary,
-    ScoreboardFilter, ScoreboardRead, SpeedSample, newest_cmp,
+    BucketAgg, BucketCostSample, BucketFlag, BucketJoinedReview, BucketKey, BucketMetricRow,
+    BucketRunSummary, ScoreboardFilter, ScoreboardRead, SpeedSample, newest_cmp,
 };
 use aac_views::decline::Decline;
 use serde_json::{Map, Value as V, json};
@@ -40,10 +40,9 @@ pub(crate) struct ComposeInput<'a> {
     pub(crate) importing: bool,
 }
 
-/// Composed Scoreboard view plus the runs problems list (for readers-check recording).
+/// Composed Scoreboard view.
 pub(crate) struct ComposedView {
     pub(crate) view: V,
-    pub(crate) problems: Vec<V>,
 }
 
 struct ClockCtx<'a> {
@@ -466,18 +465,18 @@ fn collect_valid_reviews<'a>(
             });
         }
     }
-    // Exact order of `Index::new` + `for run in runs`: ascending `(target_cursor_ms, target_r)`
-    // outer, and within each target: ascending `review_ended_epoch` with `docs` before `join`
-    // and ascending `(review_cursor_ms, review_r)`.
+    // File-derived deterministic order: ascending `(target_cursor_ms, target_id)` outer, and
+    // within each target: ascending `review_ended_epoch` with `docs` before `join` and ascending
+    // `(review_cursor_ms, review_id)` — independent of internal dictionary ids `r`.
     out.sort_by(|a, b| {
         a.rev
             .target_cursor_ms
             .cmp(&b.rev.target_cursor_ms)
-            .then_with(|| a.rev.target_r.cmp(&b.rev.target_r))
+            .then_with(|| a.rev.target_id.cmp(&b.rev.target_id))
             .then_with(|| a.rev.review_ended_epoch.cmp(&b.rev.review_ended_epoch))
             .then_with(|| b.in_filter.cmp(&a.in_filter))
             .then_with(|| a.rev.review_cursor_ms.cmp(&b.rev.review_cursor_ms))
-            .then_with(|| a.rev.review_r.cmp(&b.rev.review_r))
+            .then_with(|| a.rev.review_id.cmp(&b.rev.review_id))
     });
     Ok(out)
 }
@@ -491,9 +490,13 @@ fn compute_cost(
     for b in buckets {
         samples.extend(b.agg.cost_samples.iter());
     }
-    // Preserve exact legacy RUN_BY_TIME `(cursor_ms, r)` addition order across arrival orders
-    // and across buckets merged into one displayed column (IEEE-754 bit-exact with `read_measures`).
-    samples.sort_by(|a, b| a.cursor_ms.cmp(&b.cursor_ms).then_with(|| a.r.cmp(&b.r)));
+    // Sum cost rates in file-derived `(cursor_ms, run_id)` order across arrival orders,
+    // rebuilds, and buckets merged into one displayed column.
+    samples.sort_by(|a, b| {
+        a.cursor_ms
+            .cmp(&b.cursor_ms)
+            .then_with(|| a.run_id.cmp(&b.run_id))
+    });
 
     let u_opt = unit_index(unit);
     let overturned_targets: HashSet<u32> = valid_reviews
@@ -759,31 +762,48 @@ fn compute_measures(
     valid_reviews: &[ValidJoinedReview<'_>],
 ) -> Option<V> {
     let mut out = json!({});
-    let total_metric_rows: usize = buckets.iter().map(|b| b.agg.metric_rows.len()).sum();
+    let mut all_metric_rows: Vec<&BucketMetricRow> = buckets
+        .iter()
+        .flat_map(|b| b.agg.metric_rows.iter())
+        .collect();
+    // Sum catalog metrics in file-derived `(cursor_ms, run_id)` order across arrival orders,
+    // bucket merges, and rebuilds (order-independent IEEE-754 sums).
+    all_metric_rows.sort_by(|a, b| {
+        a.cursor_ms
+            .cmp(&b.cursor_ms)
+            .then_with(|| a.run_id.cmp(&b.run_id))
+    });
+    let total_metric_rows = all_metric_rows.len();
     for id_val in listed {
         let id = s(id_val);
         let Some(def) = defs.iter().find(|d| d["id"] == id) else {
             continue;
         };
         let label = s(&def["unit"]);
-        let mut custom_behind: Option<Vec<&Vec<(String, f64)>>> = None;
+        let mut custom_behind: Option<Vec<&BucketMetricRow>> = None;
         let mut value = if def["metric"].is_object() {
             let of_key = s(&def["metric"]["of"]);
             let per_key = s(&def["metric"]["per"]);
             let (mut of_sum, mut per_sum) = (0.0, 0.0);
-            let mut behind: Vec<&Vec<(String, f64)>> = Vec::new();
-            for b in buckets {
-                for row in &b.agg.metric_rows {
-                    let a = row.iter().find(|(k, _)| k == of_key).map(|(_, v)| *v);
-                    let p = row.iter().find(|(k, _)| k == per_key).map(|(_, v)| *v);
-                    if let (Some(a), Some(p)) = (a, p)
-                        && a >= 0.0
-                        && p > 0.0
-                    {
-                        of_sum += a;
-                        per_sum += p;
-                        behind.push(row);
-                    }
+            let mut behind: Vec<&BucketMetricRow> = Vec::new();
+            for row in &all_metric_rows {
+                let a = row
+                    .metrics
+                    .iter()
+                    .find(|(k, _)| k == of_key)
+                    .map(|(_, v)| *v);
+                let p = row
+                    .metrics
+                    .iter()
+                    .find(|(k, _)| k == per_key)
+                    .map(|(_, v)| *v);
+                if let (Some(a), Some(p)) = (a, p)
+                    && a >= 0.0
+                    && p > 0.0
+                {
+                    of_sum += a;
+                    per_sum += p;
+                    behind.push(*row);
                 }
             }
             let n = behind.len();
@@ -815,15 +835,12 @@ fn compute_measures(
         };
         let preliminary = def["preliminaryUnless"].as_str().is_some_and(|name| {
             let row_lacks_one =
-                |row: &Vec<(String, f64)>| !row.iter().any(|(k, v)| k == name && *v == 1.0);
+                |row: &BucketMetricRow| !row.metrics.iter().any(|(k, v)| k == name && *v == 1.0);
             match &custom_behind {
                 Some(rows) => rows.iter().any(|row| row_lacks_one(row)),
                 None => {
                     total_metric_rows < total_n
-                        || buckets
-                            .iter()
-                            .flat_map(|b| b.agg.metric_rows.iter())
-                            .any(row_lacks_one)
+                        || all_metric_rows.iter().any(|row| row_lacks_one(row))
                 }
             }
         });
@@ -1204,6 +1221,7 @@ fn base_rows(
     let by_process = task["byProcess"] == true;
     struct Group<'a> {
         key: String,
+        earliest_cursor: (u64, &'a str),
         model: String,
         runtime: Option<String>,
         effort: Option<String>,
@@ -1226,25 +1244,40 @@ fn base_rows(
         } else {
             format!("{}|{}|{}", b.norm_model, harness, effort)
         };
+        let cand_cursor = (b.agg.min_cursor.0, b.agg.min_cursor.1.as_str());
+        let make_proc = |b: &BucketRef<'_>| {
+            if by_process && !b.key.proc_id.is_empty() {
+                Some((
+                    b.key.proc_id.clone(),
+                    (!b.key.proc_ver.is_empty()).then(|| b.key.proc_ver.clone()),
+                ))
+            } else {
+                None
+            }
+        };
         let pos = match group_idx.get(&key) {
-            Some(&p) => p,
+            Some(&p) => {
+                // When distinct buckets collide on `|`, select display metadata from the earliest
+                // contributing run by `(cursor_ms, run_id)` to match `read_scoreboard::base_rows`.
+                if cand_cursor < groups[p].earliest_cursor {
+                    groups[p].earliest_cursor = cand_cursor;
+                    groups[p].model = b.norm_model.clone();
+                    groups[p].runtime = (!b.key.harness.is_empty()).then(|| b.key.harness.clone());
+                    groups[p].effort = b.norm_effort.clone();
+                    groups[p].process = make_proc(b);
+                }
+                p
+            }
             None => {
                 let p = groups.len();
                 group_idx.insert(key.clone(), p);
-                let proc_val = if by_process && !b.key.proc_id.is_empty() {
-                    Some((
-                        b.key.proc_id.clone(),
-                        (!b.key.proc_ver.is_empty()).then(|| b.key.proc_ver.clone()),
-                    ))
-                } else {
-                    None
-                };
                 groups.push(Group {
                     key,
+                    earliest_cursor: cand_cursor,
                     model: b.norm_model.clone(),
                     runtime: (!b.key.harness.is_empty()).then(|| b.key.harness.clone()),
                     effort: b.norm_effort.clone(),
-                    process: proc_val,
+                    process: make_proc(b),
                     buckets: Vec::new(),
                 });
                 p
@@ -1840,7 +1873,7 @@ fn catalog_source_of(
 
 // Match `read_scoreboard::native_input`: emit integral JS Numbers as integer tokens before
 // deserializing `aac_status::scoreboard::ViewIn`.
-fn native_input(value: V) -> V {
+fn native_input(value: &V) -> V {
     match value {
         V::Number(number) => {
             if let Some(value) = number.as_f64()
@@ -1849,16 +1882,16 @@ fn native_input(value: V) -> V {
             {
                 return json!(value as i64);
             }
-            V::Number(number)
+            V::Number(number.clone())
         }
-        V::Array(items) => json!(items.into_iter().map(native_input).collect::<Vec<_>>()),
+        V::Array(items) => V::Array(items.iter().map(native_input).collect()),
         V::Object(object) => V::Object(
             object
-                .into_iter()
-                .map(|(key, value)| (key, native_input(value)))
+                .iter()
+                .map(|(key, value)| (key.clone(), native_input(value)))
                 .collect(),
         ),
-        value => value,
+        value => value.clone(),
     }
 }
 
@@ -2014,8 +2047,8 @@ pub(crate) fn compose(input: &ComposeInput<'_>) -> Result<ComposedView, Decline>
         }
     }
 
-    // Order `negative_quota` by `(cursor_ms, r)` to match `RUN_BY_TIME` doc iteration.
-    negative_quota.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    // Order `negative_quota` by file-derived `(cursor_ms, run_id)`.
+    negative_quota.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
 
     let unreadable = problems
         .iter()
@@ -2220,9 +2253,14 @@ pub(crate) fn compose(input: &ComposeInput<'_>) -> Result<ComposedView, Decline>
         "importing": input.importing,
     });
 
-    let typed =
-        serde_json::from_value::<aac_status::scoreboard::ViewIn>(native_input(view.clone()))
-            .map_err(|_| Decline::Stale)?;
+    let view_in = json!({
+        "catalog": native_input(&view["catalog"]),
+        "uses": native_input(&view["uses"]),
+        "sources": native_input(&view["sources"]),
+        "identity": native_input(&view["identity"]),
+    });
+    let typed = serde_json::from_value::<aac_status::scoreboard::ViewIn>(view_in)
+        .map_err(|_| Decline::Stale)?;
     if let Ok(by_model) = aac_status::scoreboard::by_model(&typed) {
         view["byModel"] = serde_json::to_value(by_model).map_err(|_| Decline::Stale)?;
         if let Ok(groups) = aac_status::scoreboard::group_keys(&typed) {
@@ -2233,5 +2271,6 @@ pub(crate) fn compose(input: &ComposeInput<'_>) -> Result<ComposedView, Decline>
     view["cacheAgeSeconds"] = json!(0);
     view["refreshing"] = json!(false);
 
-    Ok(ComposedView { view, problems })
+    let _ = problems;
+    Ok(ComposedView { view })
 }

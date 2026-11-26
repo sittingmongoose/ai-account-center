@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, RwLock};
 
 pub const PROJECTOR_BATCH: usize = 4096;
+/// Monotonic process-local counter giving each opened `Engine` a unique incarnation id.
+static NEXT_INCARNATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 pub const DAY_MS: u64 = 86_400_000;
 const REDB_FILE: &str = "aac.redb";
 /// The store's release, written when this build creates a store: `1`. Stores written by the
@@ -186,11 +188,15 @@ pub struct Engine {
     pub instance_id: String,
     pub opened_ms: u64,
     pub integrity: Mutex<Json>,
+    incarnation: u64,
     pub(crate) runs_history: Mutex<crate::runs::HistoryCache>,
     pub(crate) write_seq: std::sync::atomic::AtomicU64,
-    pub(crate) runs_write_seq: std::sync::atomic::AtomicU64,
+    pub(crate) runs_file_rev: std::sync::atomic::AtomicU64,
     pub(crate) db_stats_cache: Mutex<Option<(u64, Json)>>,
     pub(crate) capture_health_cache: Mutex<Option<(u64, Json)>>,
+    has_test_hooks: std::sync::atomic::AtomicBool,
+    after_sb_begin_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    before_query_meta_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Last, so it is released after the logs and redb (fields drop in declaration order).
     _lock: fsx::StoreLock,
 }
@@ -201,9 +207,67 @@ impl Engine {
         self.write_seq.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    /// Monotonic counter bumped only when `run.*` events or run file-state repairs commit.
+    /// Unique process-local incarnation id of this opened `Engine` (changes on every open).
+    pub fn incarnation(&self) -> u64 {
+        self.incarnation
+    }
+
+    /// Persisted run-file state revision (`RUN_META["file_rev"]`), advanced in the same redb write
+    /// transaction as every `run.*` commit, file-state repair, or aggregate rebuild.
+    pub fn runs_file_rev(&self) -> u64 {
+        self.runs_file_rev.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Back-compat alias for [`Self::runs_file_rev`].
     pub fn runs_write_seq(&self) -> u64 {
-        self.runs_write_seq.load(std::sync::atomic::Ordering::Acquire)
+        self.runs_file_rev()
+    }
+
+    pub(crate) fn note_runs_file_rev(&self, rev: u64) {
+        self.runs_file_rev.fetch_max(rev, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    #[doc(hidden)]
+    pub fn set_after_sb_begin_read_hook(&self, hook: Box<dyn FnOnce() + Send>) {
+        *self.after_sb_begin_read_hook.lock().unwrap_or_else(|p| p.into_inner()) = Some(hook);
+        self.has_test_hooks.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    #[doc(hidden)]
+    pub fn set_before_query_meta_read_hook(&self, hook: Box<dyn FnOnce() + Send>) {
+        *self
+            .before_query_meta_read_hook
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(hook);
+        self.has_test_hooks.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn fire_after_sb_begin_read_hook(&self) {
+        if !self.has_test_hooks.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let hook = self
+            .after_sb_begin_read_hook
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(f) = hook {
+            f();
+        }
+    }
+
+    pub(crate) fn fire_before_query_meta_read_hook(&self) {
+        if !self.has_test_hooks.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let hook = self
+            .before_query_meta_read_hook
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(f) = hook {
+            f();
+        }
     }
 }
 
@@ -395,14 +459,20 @@ impl Engine {
             instance_id,
             opened_ms: now_ms(),
             integrity: Mutex::new(integrity),
+            incarnation: NEXT_INCARNATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             runs_history: Mutex::new(crate::runs::HistoryCache::default()),
             write_seq: std::sync::atomic::AtomicU64::new(1),
-            runs_write_seq: std::sync::atomic::AtomicU64::new(1),
+            runs_file_rev: std::sync::atomic::AtomicU64::new(0),
             db_stats_cache: Mutex::new(None),
             capture_health_cache: Mutex::new(None),
+            has_test_hooks: std::sync::atomic::AtomicBool::new(false),
+            after_sb_begin_read_hook: Mutex::new(None),
+            before_query_meta_read_hook: Mutex::new(None),
             _lock: lock,
         };
         let replay_findings = engine.replay(&findings)?;
+        let initial_file_rev = crate::runs::read_file_rev(&engine)?;
+        engine.note_runs_file_rev(initial_file_rev);
         merge_findings(&mut findings, replay_findings);
         // What earlier opens disclosed stays disclosed until it is resolved (2.6), whatever the
         // checkpoint: kept in redb, and rebuilt from the ledger's `store.integrity_detected`.
@@ -743,6 +813,11 @@ impl Engine {
                 .map(|(_, cp)| cp.last_sequence_id);
             crate::scoreboard_agg::finish_commit(&txn, new_runs_seq)?;
             let touches_runs = log_id == LogId::Ledger && events.iter().any(|e| e.event_type.starts_with("run."));
+            let next_file_rev = if touches_runs {
+                Some(crate::runs::bump_file_rev_tx(&txn)?)
+            } else {
+                None
+            };
             log.write(&events)?;
             #[cfg(feature = "parity-fixtures")]
             self.drill_checkpoint("append-synced");
@@ -752,8 +827,8 @@ impl Engine {
             }
             txn.commit()?;
             self.write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
-            if touches_runs {
-                self.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            if let Some(rev) = next_file_rev {
+                self.note_runs_file_rev(rev);
             }
             Ok(result)
         })

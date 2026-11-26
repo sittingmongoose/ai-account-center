@@ -31,7 +31,7 @@ use crate::fail;
 use crate::run_schema;
 use crate::runs::{
     self, AcceptedReceipt, Dict, Head, RUN_BY_TIME, RUN_DICT, RUN_DICT_REV, RUN_FILE, RUN_HEAD, RUN_META, RUN_PAYLOAD,
-    at, block_decode, hex, kind, lookup_id, meta_get, meta_set, path_key,
+    RUN_REV, at, block_decode, hex, kind, lookup_id, meta_get, meta_set, path_key,
 };
 use redb::{
     Database, ReadTransaction, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition,
@@ -168,6 +168,7 @@ pub const RUN_SB_BUCKET: Bytes = TableDefinition::new("run_sb_bucket");
 pub const RUN_SB_REVIEWS_BY_TARGET: Index = TableDefinition::new("run_sb_reviews_by_target");
 pub const RUN_SB_CORRECTIONS: Index = TableDefinition::new("run_sb_corrections");
 pub const RUN_SB_CORRECTION_REFUSED: Bytes = TableDefinition::new("run_sb_correction_refused");
+pub const RUN_SB_SKIPPED: Bytes = TableDefinition::new("run_sb_skipped");
 pub const RUN_SB_PATH_RUNS: Index = TableDefinition::new("run_sb_path_runs");
 pub const RUN_SB_BY_WRITER_DAY: Index = TableDefinition::new("run_sb_by_writer_day");
 
@@ -178,8 +179,8 @@ const LEGACY_RUN_SB_BUCKET_MEMBERS: Index = TableDefinition::new("run_sb_bucket_
 
 /// Bump when the binary format or derivation rules of `run_sb_*` change: `ensure_migrated`
 /// rebuilds the aggregate tables once from existing `run_head` + `run_payload` rows.
-pub const SB_AGG_VERSION: u32 = 2;
-const BIN_VERSION: u8 = 2;
+pub const SB_AGG_VERSION: u32 = 3;
+const BIN_VERSION: u8 = 3;
 const META_VERSION: &str = "sb_agg_version";
 const META_SEQ: &str = "sb_agg_seq";
 const META_CATALOG: &str = "sb_agg_catalog";
@@ -273,7 +274,7 @@ pub fn normalized_unknown_outcome(raw: &str) -> String {
 }
 
 pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
-    for def in [RUN_SB_FACT, RUN_SB_BUCKET, RUN_SB_CORRECTION_REFUSED] {
+    for def in [RUN_SB_FACT, RUN_SB_BUCKET, RUN_SB_CORRECTION_REFUSED, RUN_SB_SKIPPED] {
         txn.open_table(def)?;
     }
     for def in [
@@ -291,6 +292,7 @@ pub fn delete_tables(txn: &WriteTransaction) -> Result<()> {
     for def in [RUN_SB_FACT, RUN_SB_BUCKET, RUN_SB_CORRECTION_REFUSED] {
         txn.delete_table(def)?;
     }
+    let _ = txn.delete_table(RUN_SB_SKIPPED);
     for def in [
         RUN_SB_REVIEWS_BY_TARGET,
         RUN_SB_CORRECTIONS,
@@ -687,14 +689,25 @@ impl StoredRunFact {
 }
 
 /// Compact per-run cost sample stored inside a bucket so cost rates are summed in exact
-/// `RUN_BY_TIME` `(cursor_ms, r)` order regardless of arrival order or cross-bucket column merges.
+/// file-derived `(cursor_ms, run_id)` order regardless of arrival order, rebuilds, or bucket merges.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BucketCostSample {
     pub cursor_ms: u64,
     pub r: u32,
+    pub run_id: String,
     pub outcome_done: bool,
     pub task_size: [Option<u64>; 5],
     pub cost: StoredCost,
+}
+
+/// Compact per-run custom catalog metric row keyed by `(cursor_ms, run_id)` so summed catalog
+/// measures (e.g. `facts-kept`) are order-independent across arrival order, merges, and rebuilds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BucketMetricRow {
+    pub cursor_ms: u64,
+    pub r: u32,
+    pub run_id: String,
+    pub metrics: Vec<(String, f64)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -800,6 +813,8 @@ pub struct BucketAgg {
     pub n: u64,
     pub imported: u64,
     pub proto_count: u64,
+    /// Earliest contributing run by file-derived `(cursor_ms, run_id)` for deterministic group metadata.
+    pub min_cursor: (u64, String),
     pub max_cursor: (u64, u32),
     pub outcome_done: u64,
     pub outcome_known: u64,
@@ -813,7 +828,7 @@ pub struct BucketAgg {
     pub thoroughness_records: Vec<f64>,
     pub thoroughness_min: Vec<f64>,
     pub cost_samples: Vec<BucketCostSample>,
-    pub metric_rows: Vec<Vec<(String, f64)>>,
+    pub metric_rows: Vec<BucketMetricRow>,
     pub flags: Vec<BucketFlag>,
     pub joined_reviews: Vec<BucketJoinedReview>,
     pub own_review_refs: Vec<OwnReviewRef>,
@@ -831,6 +846,9 @@ impl BucketAgg {
     /// Fold one effective run (and its effective joined reviews) into this bucket.
     /// When folding in ascending `(cursor_ms, r)` order, float sums match `main` bit-for-bit.
     pub fn fold_run(&mut self, fact: &StoredRunFact, joined: &[BucketJoinedReview], own_ref: Option<OwnReviewRef>) {
+        if self.n == 0 || (fact.cursor_ms, fact.id.as_str()) < (self.min_cursor.0, self.min_cursor.1.as_str()) {
+            self.min_cursor = (fact.cursor_ms, fact.id.clone());
+        }
         self.n += 1;
         if fact.imported.is_some() {
             self.imported += 1;
@@ -888,7 +906,12 @@ impl BucketAgg {
             });
         }
         if !fact.metrics.is_empty() {
-            self.metric_rows.push(fact.metrics.clone());
+            self.metric_rows.push(BucketMetricRow {
+                cursor_ms: fact.cursor_ms,
+                r: fact.r,
+                run_id: fact.id.clone(),
+                metrics: fact.metrics.clone(),
+            });
         }
         for (idx, flag) in fact.flags.iter().enumerate() {
             self.flags.push(BucketFlag {
@@ -901,12 +924,13 @@ impl BucketAgg {
                 reported_by: flag.reported_by.clone(),
             });
         }
-        // Store per-run cost samples keyed by `(cursor_ms, r)` so the composer always sums cost
-        // rates in exact `RUN_BY_TIME` order across arrival orders and cross-bucket column merges.
+        // Store per-run cost samples keyed by `(cursor_ms, run_id)` so the composer always sums
+        // cost rates in file-derived order across arrival orders, rebuilds, and bucket merges.
         if let Some(cost) = &fact.cost {
             self.cost_samples.push(BucketCostSample {
                 cursor_ms: fact.cursor_ms,
                 r: fact.r,
+                run_id: fact.id.clone(),
                 outcome_done: fact.outcome_code == 1,
                 task_size: fact.task_size,
                 cost: cost.clone(),
@@ -1477,6 +1501,8 @@ impl BucketAgg {
         w.u64(self.n);
         w.u64(self.imported);
         w.u64(self.proto_count);
+        w.u64(self.min_cursor.0);
+        w.str(&self.min_cursor.1);
         w.u64(self.max_cursor.0);
         w.u32(self.max_cursor.1);
         w.u64(self.outcome_done);
@@ -1516,14 +1542,18 @@ impl BucketAgg {
         for cs in &self.cost_samples {
             w.u64(cs.cursor_ms);
             w.u32(cs.r);
+            w.str(&cs.run_id);
             w.bool(cs.outcome_done);
             w.task_size(&cs.task_size);
             w.stored_cost(&cs.cost);
         }
         w.u32(self.metric_rows.len() as u32);
         for row in &self.metric_rows {
-            w.u32(row.len() as u32);
-            for (k, v) in row {
+            w.u64(row.cursor_ms);
+            w.u32(row.r);
+            w.str(&row.run_id);
+            w.u32(row.metrics.len() as u32);
+            for (k, v) in &row.metrics {
                 w.str(k);
                 w.f64(*v);
             }
@@ -1644,6 +1674,7 @@ impl BucketAgg {
         let n = r.u64()?;
         let imported = r.u64()?;
         let proto_count = r.u64()?;
+        let min_cursor = (r.u64()?, r.str()?);
         let max_cursor = (r.u64()?, r.u32()?);
         let outcome_done = r.u64()?;
         let outcome_known = r.u64()?;
@@ -1689,6 +1720,7 @@ impl BucketAgg {
             cost_samples.push(BucketCostSample {
                 cursor_ms: r.u64()?,
                 r: r.u32()?,
+                run_id: r.str()?,
                 outcome_done: r.bool()?,
                 task_size: r.task_size()?,
                 cost: r.stored_cost()?,
@@ -1697,12 +1729,20 @@ impl BucketAgg {
         let mr_len = r.u32()? as usize;
         let mut metric_rows = Vec::with_capacity(mr_len);
         for _ in 0..mr_len {
+            let cursor_ms = r.u64()?;
+            let row_r = r.u32()?;
+            let run_id = r.str()?;
             let row_len = r.u32()? as usize;
-            let mut row = Vec::with_capacity(row_len);
+            let mut metrics = Vec::with_capacity(row_len);
             for _ in 0..row_len {
-                row.push((r.str()?, r.f64()?));
+                metrics.push((r.str()?, r.f64()?));
             }
-            metric_rows.push(row);
+            metric_rows.push(BucketMetricRow {
+                cursor_ms,
+                r: row_r,
+                run_id,
+                metrics,
+            });
         }
         let fl_len = r.u32()? as usize;
         let mut flags = Vec::with_capacity(fl_len);
@@ -1839,6 +1879,7 @@ impl BucketAgg {
             n,
             imported,
             proto_count,
+            min_cursor,
             max_cursor,
             outcome_done,
             outcome_known,
@@ -1870,11 +1911,12 @@ fn extract_fact<T: ReadableTable<&'static [u8], &'static [u8]>>(
     r: u32,
     head: &Head,
     doc_bytes: &[u8],
-) -> Result<Option<StoredRunFact>> {
+) -> Result<std::result::Result<StoredRunFact, String>> {
     let writer = dict.field(head, at::WRITER)?.unwrap_or_default();
     let text = String::from_utf8_lossy(doc_bytes);
-    let Ok(mut doc) = run_schema::parse_run_text(&text, &writer) else {
-        return Ok(None);
+    let mut doc = match run_schema::parse_stored_run_text(&text, &writer) {
+        Ok(doc) => doc,
+        Err(invalid) => return Ok(Err(invalid.0)),
     };
     let shown = dict.field(head, at::MODEL)?.or(dict.field(head, at::MODEL_RAW)?);
     let effort = dict.field(head, at::EFFORT)?;
@@ -1999,7 +2041,7 @@ fn extract_fact<T: ReadableTable<&'static [u8], &'static [u8]>>(
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Some(StoredRunFact {
+    Ok(Ok(StoredRunFact {
         r,
         writer_id: head.id(at::WRITER),
         cursor_ms: head.ended_ms,
@@ -2140,29 +2182,60 @@ fn runs_at_path_hash_rd<T: ReadableTable<&'static [u8], ()>>(table: &T, path_has
     Ok(out)
 }
 
-fn has_waiting_correction_for_tx(txn: &WriteTransaction, target_r: u32) -> Result<bool> {
+/// Key for `RUN_SB_CORRECTIONS` and `RUN_SB_REVIEWS_BY_TARGET`: `target_id || 0x00 || source_r`.
+/// Keying by `target_id` string avoids interning unseen targets into `kind::RUN_ID` in `RUN_DICT`.
+fn target_ref_key(target_id: &str, source_r: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(target_id.len() + 5);
+    out.extend_from_slice(target_id.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&source_r.to_be_bytes());
+    out
+}
+
+fn has_waiting_correction_for_tx(txn: &WriteTransaction, target_id: &str) -> Result<bool> {
     let tbl = txn.open_table(RUN_SB_CORRECTIONS)?;
-    let lo = Key::new().u32(target_r).u32(0);
-    let hi = Key::new().u32(target_r).u32(u32::MAX);
+    let lo = target_ref_key(target_id, 0);
+    let hi = target_ref_key(target_id, u32::MAX);
     Ok(tbl.range(lo.as_slice()..=hi.as_slice())?.next().is_some())
 }
 
-fn has_waiting_review_for_tx(txn: &WriteTransaction, target_r: u32) -> Result<bool> {
+fn has_waiting_review_for_tx(txn: &WriteTransaction, target_id: &str) -> Result<bool> {
     let tbl = txn.open_table(RUN_SB_REVIEWS_BY_TARGET)?;
-    let lo = Key::new().u32(target_r).u32(0);
-    let hi = Key::new().u32(target_r).u32(u32::MAX);
+    let lo = target_ref_key(target_id, 0);
+    let hi = target_ref_key(target_id, u32::MAX);
     Ok(tbl.range(lo.as_slice()..=hi.as_slice())?.next().is_some())
 }
 
-fn reviews_of_target_rd<T: ReadableTable<&'static [u8], ()>>(table: &T, target_r: u32) -> Result<Vec<u32>> {
-    let lo = Key::new().u32(target_r).u32(0);
-    let hi = Key::new().u32(target_r).u32(u32::MAX);
+fn reviews_of_target_rd<T: ReadableTable<&'static [u8], ()>>(table: &T, target_id: &str) -> Result<Vec<u32>> {
+    let lo = target_ref_key(target_id, 0);
+    let hi = target_ref_key(target_id, u32::MAX);
+    let off = target_id.len() + 1;
     let mut out = Vec::new();
     for item in table.range(lo.as_slice()..=hi.as_slice())? {
         let (k, _) = item?;
-        out.push(be_u32(k.value(), 4));
+        if k.value().len() == off + 4 {
+            out.push(be_u32(k.value(), off));
+        }
     }
     Ok(out)
+}
+
+fn encode_skipped_head(cursor_ms: u64, ingested_ms: u64, file: &str, reason: &str) -> Vec<u8> {
+    let mut w = BinWriter::with_capacity(32 + file.len() + reason.len());
+    w.u8(BIN_VERSION);
+    w.u64(cursor_ms);
+    w.u64(ingested_ms);
+    w.str(file);
+    w.str(reason);
+    w.0
+}
+
+fn decode_skipped_head(bytes: &[u8]) -> Result<(u64, u64, String, String)> {
+    let mut r = BinReader::new(bytes);
+    if r.u8()? != BIN_VERSION {
+        fail!("unsupported", "scoreboard skipped head version");
+    }
+    Ok((r.u64()?, r.u64()?, r.str()?, r.str()?))
 }
 
 fn load_payload_doc_tx(txn: &WriteTransaction, head: &Head) -> Result<Option<Vec<u8>>> {
@@ -2215,7 +2288,7 @@ pub(crate) fn on_head_recorded(
             }
         },
     };
-    let Some(mut new_fact) = ({
+    let Ok(mut new_fact) = ({
         let dict_table = txn.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
         extract_fact(&mut dict, r, new_head, bytes)?
@@ -2228,8 +2301,8 @@ pub(crate) fn on_head_recorded(
         || new_fact.has_void
         || new_fact.review.is_some()
         || has_any_path_hash_tx(txn, &ph)?
-        || has_waiting_correction_for_tx(txn, r)?
-        || has_waiting_review_for_tx(txn, r)?;
+        || has_waiting_correction_for_tx(txn, &new_fact.id)?
+        || has_waiting_review_for_tx(txn, &new_fact.id)?;
     if is_rare {
         mark_full_rebuild();
         return Ok(());
@@ -2280,12 +2353,13 @@ pub(crate) fn ensure_migrated(db: &Database) -> Result<()> {
     if up_to_date {
         return Ok(());
     }
-    rebuild_all_aggregates(db)
+    let _ = rebuild_all_aggregates(db)?;
+    Ok(())
 }
 
 /// Full atomic rebuild of all `run_sb_*` tables in a standalone write transaction, stamping the
-/// verified trust checkpoint from inside that transaction.
-pub(crate) fn rebuild_all_aggregates(db: &Database) -> Result<()> {
+/// verified trust checkpoint and advancing persisted `file_rev` from inside that transaction.
+pub(crate) fn rebuild_all_aggregates(db: &Database) -> Result<u64> {
     let txn = crate::engine::begin(db)?;
     let cp_seq = {
         let cp_table = txn.open_table(crate::db::CHECKPOINT)?;
@@ -2294,16 +2368,19 @@ pub(crate) fn rebuild_all_aggregates(db: &Database) -> Result<()> {
             .unwrap_or(0)
     };
     rebuild_all_aggregates_in_write(&txn, cp_seq)?;
+    let next_file_rev = runs::bump_file_rev_tx(&txn)?;
     txn.commit()?;
-    Ok(())
+    Ok(next_file_rev)
 }
 
 /// Canonical full rebuild of all `run_sb_*` tables inside an existing `WriteTransaction`, streaming
 /// payload blocks with a bounded 16-block cache so RSS stays small.
 pub(crate) fn rebuild_all_aggregates_in_write(txn: &WriteTransaction, checkpoint_seq: u64) -> Result<()> {
-    // Pass 1: stream RUN_BY_TIME -> RUN_HEAD -> RUN_PAYLOAD into compact `StoredRunFact`s, and
-    // compute the canonical `(head_count, head_digest)` directly from `RUN_HEAD`.
+    // Pass 1: stream RUN_BY_TIME -> RUN_HEAD -> RUN_PAYLOAD into compact `StoredRunFact`s,
+    // recording any unprojected heads in `skipped_heads` so none are silently dropped or acked,
+    // and compute the canonical `(head_count, head_digest)` directly from `RUN_HEAD`.
     let mut facts: Vec<StoredRunFact> = Vec::new();
+    let mut skipped_heads: Vec<(u32, u64, u64, String, String)> = Vec::new();
     let (head_count, head_digest) = {
         let by_time = txn.open_table(RUN_BY_TIME)?;
         let heads = txn.open_table(RUN_HEAD)?;
@@ -2324,19 +2401,41 @@ pub(crate) fn rebuild_all_aggregates_in_write(txn: &WriteTransaction, checkpoint
                     blocks.clear();
                 }
                 let Some(bytes) = payloads.get(Key::new().u32(head.loc.day).u32(head.loc.block).as_slice())? else {
+                    let file = dict.field(&head, at::PATH)?.unwrap_or_default();
+                    skipped_heads.push((
+                        r,
+                        head.ended_ms,
+                        head.ingested_ms,
+                        file,
+                        "stored run payload block is missing".to_string(),
+                    ));
                     continue;
                 };
                 blocks.insert(block_key, block_decode(bytes.value())?.1);
             }
             let Some(doc_bytes) = blocks[&block_key].get(head.loc.slot as usize) else {
+                let file = dict.field(&head, at::PATH)?.unwrap_or_default();
+                skipped_heads.push((
+                    r,
+                    head.ended_ms,
+                    head.ingested_ms,
+                    file,
+                    "stored run payload slot is missing".to_string(),
+                ));
                 continue;
             };
-            if let Some(fact) = extract_fact(&mut dict, r, &head, doc_bytes)? {
-                facts.push(fact);
+            match extract_fact(&mut dict, r, &head, doc_bytes)? {
+                Ok(fact) => facts.push(fact),
+                Err(reason) => {
+                    let file = dict.field(&head, at::PATH)?.unwrap_or_default();
+                    skipped_heads.push((r, head.ended_ms, head.ingested_ms, file, reason));
+                }
             }
         }
         compute_heads_stamp_from_table(&heads)?
     };
+    // Canonical file-derived `(cursor_ms, run_id)` order so Pass 2/3 never depend on numeric `r`.
+    facts.sort_by(|a, b| a.cursor_ms.cmp(&b.cursor_ms).then_with(|| a.id.cmp(&b.id)));
 
     // Pass 2: resolve corrections over the correction-chain closure only (if any `corrects` exist).
     let mut refused_reasons: Vec<(u32, String)> = Vec::new();
@@ -2457,45 +2556,10 @@ pub(crate) fn rebuild_all_aggregates_in_write(txn: &WriteTransaction, checkpoint
     }
 
     // Pass 4: replace all `run_sb_*` tables + trust stamp atomically inside `txn`.
+    // Waiting correction/review targets are keyed by `target_id` string directly so `kind::RUN_ID`
+    // in `RUN_DICT` is NEVER mutated by aggregate builds.
     delete_tables(txn)?;
     create_tables(txn)?;
-    let mut missing_run_ids: BTreeSet<String> = BTreeSet::new();
-    {
-        let rev_tbl = txn.open_table(RUN_DICT_REV)?;
-        for fact in &facts {
-            if let Some(corr) = &fact.corrects
-                && lookup_id(&rev_tbl, kind::RUN_ID, corr)?.is_none()
-            {
-                missing_run_ids.insert(corr.clone());
-            }
-            if let Some(rev) = &fact.review
-                && lookup_id(&rev_tbl, kind::RUN_ID, &rev.effective_of)?.is_none()
-            {
-                missing_run_ids.insert(rev.effective_of.clone());
-            }
-        }
-    }
-    for missing in missing_run_ids {
-        runs::intern_run_id(txn, &missing)?;
-    }
-    let mut run_id_cache: HashMap<String, u32> = facts.iter().map(|f| (f.id.clone(), f.r)).collect();
-    {
-        let rev_tbl = txn.open_table(RUN_DICT_REV)?;
-        for fact in &facts {
-            if let Some(corr) = &fact.corrects
-                && !run_id_cache.contains_key(corr)
-                && let Some(id) = lookup_id(&rev_tbl, kind::RUN_ID, corr)?
-            {
-                run_id_cache.insert(corr.clone(), id);
-            }
-            if let Some(rev) = &fact.review
-                && !run_id_cache.contains_key(&rev.effective_of)
-                && let Some(id) = lookup_id(&rev_tbl, kind::RUN_ID, &rev.effective_of)?
-            {
-                run_id_cache.insert(rev.effective_of.clone(), id);
-            }
-        }
-    }
     {
         let mut fact_tbl = txn.open_table(RUN_SB_FACT)?;
         let mut rev_tbl = txn.open_table(RUN_SB_REVIEWS_BY_TARGET)?;
@@ -2505,15 +2569,11 @@ pub(crate) fn rebuild_all_aggregates_in_write(txn: &WriteTransaction, checkpoint
         for fact in &facts {
             fact_tbl.insert(Key::new().u32(fact.r).as_slice(), fact.encode().as_slice())?;
             wd_tbl.insert(writer_day_key(fact.writer_id, &fact.file, fact.r).as_slice(), ())?;
-            if let Some(corr) = &fact.corrects
-                && let Some(&tr) = run_id_cache.get(corr)
-            {
-                corr_tbl.insert(Key::new().u32(tr).u32(fact.r).as_slice(), ())?;
+            if let Some(corr) = &fact.corrects {
+                corr_tbl.insert(target_ref_key(corr, fact.r).as_slice(), ())?;
             }
-            if let Some(rev) = &fact.review
-                && let Some(&tr) = run_id_cache.get(&rev.effective_of)
-            {
-                rev_tbl.insert(Key::new().u32(tr).u32(fact.r).as_slice(), ())?;
+            if let Some(rev) = &fact.review {
+                rev_tbl.insert(target_ref_key(&rev.effective_of, fact.r).as_slice(), ())?;
             }
             if fact.effective {
                 let ph = path_key(&fact.file);
@@ -2525,6 +2585,15 @@ pub(crate) fn rebuild_all_aggregates_in_write(txn: &WriteTransaction, checkpoint
         let mut ref_tbl = txn.open_table(RUN_SB_CORRECTION_REFUSED)?;
         for (r, reason) in refused_reasons {
             ref_tbl.insert(Key::new().u32(r).as_slice(), reason.as_bytes())?;
+        }
+    }
+    {
+        let mut skip_tbl = txn.open_table(RUN_SB_SKIPPED)?;
+        for (r, cursor_ms, ingested_ms, file, reason) in skipped_heads {
+            skip_tbl.insert(
+                Key::new().u32(r).as_slice(),
+                encode_skipped_head(cursor_ms, ingested_ms, &file, &reason).as_slice(),
+            )?;
         }
     }
     {
@@ -2639,13 +2708,16 @@ pub fn read_for_scoreboard(
 ) -> Result<ScoreboardRead> {
     engine.with_db(|db| {
         let mut read = db.begin_read()?;
+        engine.fire_after_sb_begin_read_hook();
         if !verify_trust_stamp_rd(&read)? {
             drop(read);
-            rebuild_all_aggregates(db)?;
-            engine.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            let rev = rebuild_all_aggregates(db)?;
+            engine.note_runs_file_rev(rev);
             read = db.begin_read()?;
         }
-        let write_seq = engine.runs_write_seq();
+        // Read persisted `file_rev` from the SAME MVCC `ReadTransaction` as `RUN_FILE`, never from
+        // an atomic counter that a concurrent repair could advance after `begin_read()`.
+        let write_seq = runs::read_file_rev_rd(&read)?;
         let identity = runs::identity_table_in_read(&read)?;
         let cp_table = read.open_table(crate::db::CHECKPOINT)?;
         let generation = crate::db::read_checkpoint(&cp_table, "runs/ledger")?
@@ -2698,8 +2770,8 @@ pub fn read_for_scoreboard(
             refused.sort_by(|a, b| a.path_hash.cmp(&b.path_hash));
         }
 
-        // 2. Read persisted correction refusal problems in RUN_BY_TIME (cursor_ms, r) order.
-        let mut correction_problems_ordered: Vec<(u64, u32, CorrectionProblem)> = Vec::new();
+        // 2. Read persisted correction refusal + unprojected-head problems in deterministic order.
+        let mut correction_problems_ordered: Vec<(u64, String, u32, CorrectionProblem)> = Vec::new();
         {
             let ref_tbl = read.open_table(RUN_SB_CORRECTION_REFUSED)?;
             for item in ref_tbl.iter()? {
@@ -2709,6 +2781,7 @@ pub fn read_for_scoreboard(
                 if let Some(fact) = load_fact_rd(&fact_table, r)? {
                     correction_problems_ordered.push((
                         fact.cursor_ms,
+                        fact.id.clone(),
                         fact.r,
                         CorrectionProblem {
                             file: fact.file,
@@ -2719,9 +2792,28 @@ pub fn read_for_scoreboard(
                 }
             }
         }
-        correction_problems_ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        {
+            let skip_tbl = read.open_table(RUN_SB_SKIPPED)?;
+            for item in skip_tbl.iter()? {
+                let (k, v) = item?;
+                let r = be_u32(k.value(), 0);
+                let (cursor_ms, ingested_ms, file, reason) = decode_skipped_head(v.value())?;
+                correction_problems_ordered.push((
+                    cursor_ms,
+                    file.clone(),
+                    r,
+                    CorrectionProblem {
+                        file,
+                        reason,
+                        since: ingested_ms,
+                    },
+                ));
+            }
+        }
+        correction_problems_ordered
+            .sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
         let correction_problems: Vec<CorrectionProblem> =
-            correction_problems_ordered.into_iter().map(|(_, _, p)| p).collect();
+            correction_problems_ordered.into_iter().map(|(_, _, _, p)| p).collect();
 
         // 3. Decide fast path (direct `run_sb_bucket`) vs date-range scan (`run_by_time` -> `run_sb_fact`).
         let by_time = read.open_table(RUN_BY_TIME)?;
@@ -2773,7 +2865,7 @@ pub fn read_for_scoreboard(
                     if !fact.effective || !filter.matches_fact(&fact) {
                         continue;
                     }
-                    let rev_rs = reviews_of_target_rd(&rev_by_target, r)?;
+                    let rev_rs = reviews_of_target_rd(&rev_by_target, &fact.id)?;
                     let mut joined = Vec::new();
                     for rev_r in rev_rs {
                         if let Some(rev_fact) = load_fact_rd(&fact_table, rev_r)?
@@ -2786,7 +2878,7 @@ pub fn read_for_scoreboard(
                     joined.sort_by(|a, b| {
                         a.review_cursor_ms
                             .cmp(&b.review_cursor_ms)
-                            .then_with(|| a.review_r.cmp(&b.review_r))
+                            .then_with(|| a.review_id.cmp(&b.review_id))
                     });
                     let own_ref = if let Some(rev) = &fact.review {
                         let target = match lookup_id(&rev_dict, kind::RUN_ID, &rev.effective_of)? {
@@ -2944,43 +3036,143 @@ pub fn read_for_scoreboard(
     })
 }
 
-/// Read accepted readers-check receipts directly from `run_head` + `run_dict` +
-/// `run_sb_correction_refused` without touching `run_payload` or building `ResolvedHistory`.
-pub fn accepted_receipts(engine: &Engine) -> Result<(u64, Vec<AcceptedReceipt>)> {
+/// Read accepted readers-check receipts resolved by path from current `RUN_FILE` state,
+/// considering only projected (`RUN_SB_FACT`) and non-refused (`!RUN_SB_CORRECTION_REFUSED`)
+/// runs, without touching `run_payload` or building `ResolvedHistory`.
+///
+/// Explicit refusal rule: if `RUN_FILE[path_key(path)]` currently has `state == 2` (refused),
+/// or points at a correction-refused / unprojected run, NO accepted receipt is emitted for that
+/// path so `ReadersCheckWriter::record_runs` publishes the active refusal instead.
+pub fn accepted_receipts_with_rev(engine: &Engine) -> Result<(u64, u64, Vec<AcceptedReceipt>)> {
     engine.with_db(|db| {
         let mut read = db.begin_read()?;
         if !verify_trust_stamp_rd(&read)? {
             drop(read);
-            rebuild_all_aggregates(db)?;
-            engine.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            let rev = rebuild_all_aggregates(db)?;
+            engine.note_runs_file_rev(rev);
             read = db.begin_read()?;
         }
         let cp_table = read.open_table(crate::db::CHECKPOINT)?;
         let generation = crate::db::read_checkpoint(&cp_table, "runs/ledger")?
             .map(|c| c.last_sequence_id)
             .unwrap_or(0);
+        let file_rev = runs::read_file_rev_rd(&read)?;
+        let fact_tbl = read.open_table(RUN_SB_FACT)?;
         let refused_tbl = read.open_table(RUN_SB_CORRECTION_REFUSED)?;
         let heads = read.open_table(RUN_HEAD)?;
+        let revs = read.open_table(RUN_REV)?;
+        let files_tbl = read.open_table(RUN_FILE)?;
         let dict_table = read.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
-        let mut out = Vec::with_capacity(heads.len()? as usize);
+
+        // Collect every projected, non-refused head grouped by its path.
+        let mut by_path: BTreeMap<String, Vec<(u32, Head, String)>> = BTreeMap::new();
         for item in heads.iter()? {
             let (k, v) = item?;
             let r = be_u32(k.value(), 0);
-            if refused_tbl.get(k.value())?.is_some() {
+            if fact_tbl.get(k.value())?.is_none() || refused_tbl.get(k.value())?.is_some() {
                 continue;
             }
             let head = Head::decode(v.value())?;
             let id = dict.text(kind::RUN_ID, r)?.unwrap_or_default();
             let file = dict.field(&head, at::PATH)?.unwrap_or_default();
-            out.push(AcceptedReceipt {
-                file: file.into_boxed_str(),
-                id: id.into_boxed_str(),
-                seq: head.seq,
-                sha256: hex(&head.sha).into_boxed_str(),
-                first_seen_at: head.ingested_ms,
-            });
+            if file.is_empty() {
+                continue;
+            }
+            by_path.entry(file).or_default().push((r, head, id));
         }
-        Ok((generation, out))
+
+        let find_rev_by_sha = |r: u32, want_sha: &[u8; 32]| -> Result<Option<Head>> {
+            let lo = Key::new().u32(r).bytes(&[0, 0]);
+            let hi = Key::new().u32(r).bytes(&[0xff, 0xff]);
+            for item in revs.range(lo.as_slice()..=hi.as_slice())? {
+                let row = Head::decode(item?.1.value())?;
+                if row.sha == *want_sha {
+                    return Ok(Some(row));
+                }
+            }
+            Ok(None)
+        };
+
+        let mut out = Vec::with_capacity(by_path.len());
+        for (file, candidates) in by_path {
+            let ph = path_key(&file);
+            if let Some(fv) = files_tbl.get(ph.as_slice())? {
+                let frow = runs::decode_file_row(fv.value())?;
+                if frow.state != 1 {
+                    // Explicit refusal rule: current file at this path is refused (state == 2),
+                    // so do not emit an accepted receipt that would hide the active refusal.
+                    continue;
+                }
+                if frow.run != 0 {
+                    let r_key = Key::new().u32(frow.run);
+                    // Only emit if the currently-accepted run at this path is projected and not
+                    // correction-refused; otherwise leave room for its refusal problem.
+                    if fact_tbl.get(r_key.as_slice())?.is_none() || refused_tbl.get(r_key.as_slice())?.is_some() {
+                        continue;
+                    }
+                    let Some(hv) = heads.get(r_key.as_slice())? else {
+                        continue;
+                    };
+                    let head = Head::decode(hv.value())?;
+                    let chosen = if head.sha == frow.sha {
+                        head
+                    } else {
+                        find_rev_by_sha(frow.run, &frow.sha)?.unwrap_or(head)
+                    };
+                    let id = dict.text(kind::RUN_ID, frow.run)?.unwrap_or_default();
+                    out.push(AcceptedReceipt {
+                        file: file.into_boxed_str(),
+                        id: id.into_boxed_str(),
+                        seq: chosen.seq,
+                        sha256: hex(&chosen.sha).into_boxed_str(),
+                        first_seen_at: chosen.ingested_ms,
+                    });
+                    continue;
+                }
+                // Legacy `touch` row with `run == 0`: match current file sha among eligible candidates.
+                let mut matched: Option<(String, Head)> = None;
+                for (r, head, id) in &candidates {
+                    if head.sha == frow.sha {
+                        matched = Some((id.clone(), head.clone()));
+                        break;
+                    }
+                    if let Some(rev) = find_rev_by_sha(*r, &frow.sha)? {
+                        matched = Some((id.clone(), rev));
+                        break;
+                    }
+                }
+                if let Some((id, chosen)) = matched {
+                    out.push(AcceptedReceipt {
+                        file: file.into_boxed_str(),
+                        id: id.into_boxed_str(),
+                        seq: chosen.seq,
+                        sha256: hex(&chosen.sha).into_boxed_str(),
+                        first_seen_at: chosen.ingested_ms,
+                    });
+                }
+                continue;
+            }
+            // No `RUN_FILE` row (synthetic/legacy): pick deterministically by max `(ended_ms, id)`.
+            if let Some((_, head, id)) = candidates
+                .into_iter()
+                .max_by(|a, b| a.1.ended_ms.cmp(&b.1.ended_ms).then_with(|| a.2.cmp(&b.2)))
+            {
+                out.push(AcceptedReceipt {
+                    file: file.into_boxed_str(),
+                    id: id.into_boxed_str(),
+                    seq: head.seq,
+                    sha256: hex(&head.sha).into_boxed_str(),
+                    first_seen_at: head.ingested_ms,
+                });
+            }
+        }
+        Ok((generation, file_rev, out))
     })
+}
+
+/// Read accepted readers-check receipts resolved by path from current `RUN_FILE` state.
+pub fn accepted_receipts(engine: &Engine) -> Result<(u64, Vec<AcceptedReceipt>)> {
+    let (generation, _, receipts) = accepted_receipts_with_rev(engine)?;
+    Ok((generation, receipts))
 }

@@ -448,6 +448,14 @@ fn decline(handler: Handler, reason: Decline) -> Response {
     response
         .headers_mut()
         .insert(DECLINE_HEADER, HeaderValue::from_static(reason.as_str()));
+    if handler == Handler::ScoreboardInputs
+        && matches!(reason, Decline::Stale | Decline::Busy | Decline::Deadline)
+    {
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            HeaderValue::from_static("1"),
+        );
+    }
     response
 }
 
@@ -2448,5 +2456,22 @@ mod dto_tests {
         ] {
             assert!(crate::table::rows(&format!("[{raw},{tail}]")).is_err());
         }
+    }
+    #[test]
+    fn scoreboard_inputs_retryable_decline_returns_503_with_retry_after() {
+        let resp = decline(Handler::ScoreboardInputs, Decline::Stale);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers()
+                .get(DECLINE_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("stale")
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("1")
+        );
     }
 }

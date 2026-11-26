@@ -173,8 +173,30 @@ pub(crate) fn meta_set(txn: &WriteTransaction, key: &str, value: &str) -> Result
     Ok(())
 }
 
-pub(crate) fn intern_run_id(txn: &WriteTransaction, run_id: &str) -> Result<u32> {
-    intern(txn, kind::RUN_ID, Some(run_id))
+pub(crate) const META_FILE_REV: &str = "file_rev";
+
+pub(crate) fn read_file_rev_rd(read: &redb::ReadTransaction) -> Result<u64> {
+    let meta = read.open_table(RUN_META)?;
+    Ok(meta
+        .get(META_FILE_REV)?
+        .and_then(|v| std::str::from_utf8(v.value()).ok()?.parse::<u64>().ok())
+        .unwrap_or(0))
+}
+
+pub(crate) fn read_file_rev(engine: &Engine) -> Result<u64> {
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        read_file_rev_rd(&read)
+    })
+}
+
+pub(crate) fn bump_file_rev_tx(txn: &WriteTransaction) -> Result<u64> {
+    let next = meta_get(txn, META_FILE_REV)?
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0)
+        + 1;
+    meta_set(txn, META_FILE_REV, &next.to_string())?;
+    Ok(next)
 }
 
 /// This projector's id for `text` under `kind` (0 means none). Ids start at 1 per kind.
@@ -941,7 +963,10 @@ fn raise_path(txn: &WriteTransaction, r: u32, index: u16, mut row: Head, path: &
 }
 
 fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64, update_agg: bool) -> Result<()> {
-    if serde_json::from_str::<Json>(&p.doc)?.get("corrects").is_some() {
+    if serde_json::from_str::<Json>(&p.doc)?
+        .get("corrects")
+        .is_some_and(|v| !v.is_null())
+    {
         meta_set(txn, "corrections", "1")?;
     }
     let Some(sha) = unhex32(&p.sha256) else {
@@ -1618,8 +1643,8 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
         .map(|(w, text)| (w.clone(), thread_facts(text, w)))
         .collect();
     let (mut recorded, mut known, mut refused) = (0usize, 0usize, 0usize);
-    // (path, size, mtime, sha, state): a stat refresh of content already on record.
-    let mut touch: Vec<(String, u64, u64, [u8; 32], u8)> = Vec::new();
+    // (path, size, mtime, sha, state, run_id): a stat/file-state refresh of content already on record.
+    let mut touch: Vec<(String, u64, u64, [u8; 32], u8, Option<String>)> = Vec::new();
     // A refused file is recorded by its path's hash: its path, name and writer are never kept,
     // nor put in the event's idempotency key, and a reason that quotes the writer folder (the id
     // rule does) says "<writer>" instead.
@@ -1659,7 +1684,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
             .is_some_and(|row| row.state == 2 && r.sha256.as_deref().and_then(unhex32).is_none_or(|s| s == row.sha));
         if same {
             let sha = r.sha256.as_deref().and_then(unhex32).unwrap_or([0; 32]);
-            touch.push((r.path.clone(), r.size, r.mtime_ms, sha, 2));
+            touch.push((r.path.clone(), r.size, r.mtime_ms, sha, 2, None));
             known += 1;
             continue;
         }
@@ -1683,7 +1708,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                 )?;
                 refused += 1;
             } else {
-                touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 2));
+                touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 2, None));
                 known += 1;
             }
             continue;
@@ -1705,7 +1730,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
             Err(reason) => {
                 let same = file_state(&f.path)?.is_some_and(|row| row.state == 2 && row.sha == sha);
                 if same {
-                    touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 2));
+                    touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 2, None));
                     known += 1;
                 } else {
                     refuse(&mut events, &f.path, f.size, f.mtime_ms, Some(sha_hex), &reason.0)?;
@@ -1753,7 +1778,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                 known_paths.insert(key, f.path.clone());
             } else {
                 known_paths.insert(key, greatest);
-                touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 1));
+                touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 1, Some(run_id)));
             }
             known += 1;
             continue;
@@ -1807,7 +1832,24 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     if !touch.is_empty() {
         engine.with_db(|db| {
             let txn = crate::engine::begin(db)?;
-            for (path, size, mtime, sha, state) in &touch {
+            let mut resolved_runs: HashMap<String, u32> = HashMap::new();
+            {
+                let rev_tbl = txn.open_table(RUN_DICT_REV)?;
+                for (_, _, _, _, _, run_id_opt) in &touch {
+                    if let Some(run_id) = run_id_opt
+                        && !resolved_runs.contains_key(run_id)
+                        && let Some(r) = lookup_id(&rev_tbl, kind::RUN_ID, run_id)?
+                    {
+                        resolved_runs.insert(run_id.clone(), r);
+                    }
+                }
+            }
+            let mut any_state_changed = false;
+            for (path, size, mtime, sha, state, run_id_opt) in &touch {
+                let touched_run = run_id_opt
+                    .as_deref()
+                    .and_then(|id| resolved_runs.get(id).copied())
+                    .unwrap_or(0);
                 let row = match get(&txn, RUN_FILE, &path_key(path))? {
                     Some(bytes) => {
                         let mut row = FileRow {
@@ -1815,33 +1857,53 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                             mtime_ms: *mtime,
                             ..FileRow::decode(&bytes)?
                         };
-                        // Valid bytes read again (an exact-byte repair takes this known-content
-                        // path): the file is no longer refused, so its active refusal ends here
-                        // (M2). A refused stat refresh keeps its refusal.
-                        if *state == 1 && row.state == 2 {
+                        // Valid bytes read again (an exact-byte repair or reverting a path back to
+                        // already-recorded bytes of an earlier run): refresh state, sha, and run
+                        // pointer and clear any active refusal. A refused stat refresh keeps its refusal.
+                        if *state == 1 {
+                            let changed = row.state != 1
+                                || row.sha != *sha
+                                || (touched_run != 0 && row.run != touched_run)
+                                || row.reason != 0;
                             row.state = 1;
                             row.sha = *sha;
+                            if touched_run != 0 {
+                                row.run = touched_run;
+                            }
                             row.reason = 0;
-                            row.at_ms = args.now_ms;
+                            if changed {
+                                row.at_ms = args.now_ms;
+                                any_state_changed = true;
+                            }
                         }
                         row
                     }
                     // The same content under another path: remember the path's stat so it is not
                     // read on every pass (keyed by its hash; no path text).
-                    None => FileRow {
-                        state: *state,
-                        size: *size,
-                        mtime_ms: *mtime,
-                        sha: *sha,
-                        run: 0,
-                        reason: 0,
-                        at_ms: args.now_ms,
-                    },
+                    None => {
+                        any_state_changed = true;
+                        FileRow {
+                            state: *state,
+                            size: *size,
+                            mtime_ms: *mtime,
+                            sha: *sha,
+                            run: if *state == 1 { touched_run } else { 0 },
+                            reason: 0,
+                            at_ms: args.now_ms,
+                        }
+                    }
                 };
                 put(&txn, RUN_FILE, &path_key(path), &row.encode())?;
             }
+            let next_file_rev = if any_state_changed {
+                Some(bump_file_rev_tx(&txn)?)
+            } else {
+                None
+            };
             txn.commit()?;
-            engine.runs_write_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+            if let Some(rev) = next_file_rev {
+                engine.note_runs_file_rev(rev);
+            }
             Ok(())
         })?;
     }
@@ -2354,7 +2416,7 @@ pub(crate) fn load_run_doc_in_read<T: ReadableTable<&'static [u8], &'static [u8]
         return Ok(None);
     };
     let text = String::from_utf8_lossy(doc_bytes);
-    let Ok(mut run) = run_schema::parse_run_text(&text, &fact.writer) else {
+    let Ok(mut run) = run_schema::parse_stored_run_text(&text, &fact.writer) else {
         return Ok(None);
     };
     let shown = fact.model_id.as_deref().or(fact.model_raw.as_deref());
@@ -2395,6 +2457,56 @@ pub fn load_run_docs(engine: &Engine, facts: &[&RunFact]) -> Result<Vec<Option<J
             out.push(load_run_doc_in_read(&payloads, &mut blocks, fact)?);
         }
         Ok(out)
+    })
+}
+
+/// Stream projected `run@1` JSON documents one at a time in one MVCC read transaction with a
+/// bounded 16-block decompression cache. Fails immediately with `missing_doc` if any requested
+/// document cannot be loaded or projected; each `Json` drops before the next is parsed.
+pub fn for_each_run_doc<F>(engine: &Engine, facts: &[&RunFact], mut f: F) -> Result<()>
+where
+    F: FnMut(usize, Json) -> Result<()>,
+{
+    if facts.is_empty() {
+        return Ok(());
+    }
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let payloads = read.open_table(RUN_PAYLOAD)?;
+        let mut blocks = HashMap::new();
+        for (index, fact) in facts.iter().enumerate() {
+            let Some(doc) = load_run_doc_in_read(&payloads, &mut blocks, fact)? else {
+                fail!(
+                    "missing_doc",
+                    "run payload document could not be loaded for {}",
+                    fact.id
+                );
+            };
+            f(index, doc)?;
+        }
+        Ok(())
+    })
+}
+
+/// Test helper: clear all `RUN_PAYLOAD` blocks on an open engine without closing it.
+#[doc(hidden)]
+pub fn wipe_payload_blocks_for_test(engine: &Engine) -> Result<()> {
+    engine.with_db(|db| {
+        let txn = crate::engine::begin(db)?;
+        let keys: Vec<Vec<u8>> = {
+            let tbl = txn.open_table(RUN_PAYLOAD)?;
+            tbl.iter()?
+                .map(|item| item.map(|(k, _)| k.value().to_vec()))
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        {
+            let mut tbl = txn.open_table(RUN_PAYLOAD)?;
+            for k in keys {
+                tbl.remove(k.as_slice())?;
+            }
+        }
+        txn.commit()?;
+        Ok(())
     })
 }
 
@@ -2472,6 +2584,13 @@ impl StringInterner {
         text.map(|s| self.intern(s))
     }
 
+    fn sweep(&mut self) {
+        self.pool.retain(|s| Arc::strong_count(s) > 1);
+        if self.pool.capacity() > 256 && self.pool.len() * 4 < self.pool.capacity() {
+            self.pool.shrink_to_fit();
+        }
+    }
+
     fn clear(&mut self) {
         self.pool.clear();
     }
@@ -2516,6 +2635,18 @@ pub fn history_payload_read_count(engine: &Engine) -> u64 {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .payload_reads
+}
+
+/// Number of live strings currently retained in this engine's `HistoryCache` string interner.
+#[doc(hidden)]
+pub fn history_intern_pool_len(engine: &Engine) -> usize {
+    engine
+        .runs_history
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .intern
+        .pool
+        .len()
 }
 
 fn fact_flags(has_void: bool, head_flags: u8) -> u8 {
@@ -2629,7 +2760,7 @@ fn fact_from_payload_bytes<T: ReadableTable<&'static [u8], &'static [u8]>>(
 ) -> Result<Option<RunFact>> {
     let writer = dict.field(head, at::WRITER)?.unwrap_or_default();
     let text = String::from_utf8_lossy(doc_bytes);
-    let Ok(doc) = run_schema::parse_run_text(&text, &writer) else {
+    let Ok(doc) = run_schema::parse_stored_run_text(&text, &writer) else {
         return Ok(None);
     };
     let model_raw = dict.field(head, at::MODEL_RAW)?;
@@ -3000,6 +3131,7 @@ fn resolved_history(engine: &Engine) -> Result<Arc<ResolvedHistory>> {
         });
         cache.resolutions += 1;
         cache.snapshot = Some(Arc::clone(&snapshot));
+        cache.intern.sweep();
         Ok(snapshot)
     })
 }
@@ -3015,89 +3147,103 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
         }
         return Ok(page);
     }
-    let snapshot = resolved_history(engine)?;
     let limit = args.limit.unwrap_or(5000).clamp(1, 20_000);
-    let start = snapshot.rows.partition_point(|row| {
-        args.after.is_some_and(|a| row.cursor <= a) || args.from_ms.is_some_and(|a| row.cursor.0 < a)
-    });
-    let mut picked: Vec<&RunFact> = Vec::new();
-    let mut next = Json::Null;
-    let mut last = Json::Null;
-    for row in snapshot.rows.iter().skip(start) {
-        let cursor = row.cursor;
-        if args.to_ms.is_some_and(|a| cursor.0 > a) {
-            break;
-        }
-        if args.source.as_deref().is_some_and(|a| row.source_str() != a)
-            || args
-                .task_type
-                .as_deref()
-                .is_some_and(|a| row.task_type.as_deref() != Some(a))
-            || (args.reviews_only == Some(true) && !row.has_review())
-        {
-            continue;
-        }
-        if picked.len() == limit {
-            next = last;
-            break;
-        }
-        last = json!(cursor);
-        picked.push(row);
-    }
-    let out: Vec<Json> = engine.with_db(|db| {
-        let read = db.begin_read()?;
-        let heads = read.open_table(RUN_HEAD)?;
-        let payloads = read.open_table(RUN_PAYLOAD)?;
-        let dict_table = read.open_table(RUN_DICT)?;
-        let mut dict = Dict::new(&dict_table);
-        let mut blocks: HashMap<(u32, u32), Vec<Vec<u8>>> = HashMap::new();
-        let mut rows_out = Vec::with_capacity(picked.len());
-        for row in picked {
-            let (ended, r) = row.cursor;
-            let (identity, ids) = if let Some(value) = heads.get(Key::new().u32(r).as_slice())? {
-                let head = Head::decode(value.value())?;
-                (identity_json(&mut dict, &head)?, ids_json(&mut dict, r, &head)?)
-            } else {
-                (Json::Null, Json::Null)
-            };
-            let doc = load_run_doc_in_read(&payloads, &mut blocks, row)?.unwrap_or(Json::Null);
-            let mut obj = serde_json::Map::new();
-            if args.include_cursors == Some(true) {
-                obj.insert("_cursor".into(), json!([ended, r]));
+    for _attempt in 0..8 {
+        let snapshot = resolved_history(engine)?;
+        let start = snapshot.rows.partition_point(|row| {
+            args.after.is_some_and(|a| row.cursor <= a) || args.from_ms.is_some_and(|a| row.cursor.0 < a)
+        });
+        let mut picked: Vec<&RunFact> = Vec::new();
+        let mut next = Json::Null;
+        let mut last = Json::Null;
+        for row in snapshot.rows.iter().skip(start) {
+            let cursor = row.cursor;
+            if args.to_ms.is_some_and(|a| cursor.0 > a) {
+                break;
             }
-            obj.insert("file".into(), json!(&*row.file));
-            obj.insert("sha256".into(), json!(row.sha256_hex()));
-            obj.insert("firstSeenAt".into(), json!(row.first_seen_at));
-            obj.insert("doc".into(), doc);
-            obj.insert("identity".into(), identity);
-            obj.insert("ids".into(), ids);
-            rows_out.push(Json::Object(obj));
+            if args.source.as_deref().is_some_and(|a| row.source_str() != a)
+                || args
+                    .task_type
+                    .as_deref()
+                    .is_some_and(|a| row.task_type.as_deref() != Some(a))
+                || (args.reviews_only == Some(true) && !row.has_review())
+            {
+                continue;
+            }
+            if picked.len() == limit {
+                next = last;
+                break;
+            }
+            last = json!(cursor);
+            picked.push(row);
         }
-        Ok(rows_out)
-    })?;
-    let problems = if args.after.is_none() {
-        snapshot.problems.clone()
-    } else {
-        Vec::new()
-    };
-    let catalog = snapshot
-        .key
-        .1
-        .as_ref()
-        .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
-    let mut page = json!({
-        "runs":out,"next":next,"skipped":snapshot.skipped,"problems":problems,
-        "correctionsResolved":true,"generation":snapshot.key.0,"catalogHash":catalog
-    });
-    if args.include_receipts == Some(true) && args.after.is_none() {
-        let accepted_json: Vec<Json> = snapshot
-            .accepted
-            .iter()
-            .map(|r| json!({"file": &*r.file, "sha256": r.sha256_hex(), "firstSeenAt": r.first_seen_at, "doc": {"id": &*r.id, "seq": r.seq}}))
-            .collect();
-        page["accepted"] = Json::Array(accepted_json);
+        engine.fire_before_query_meta_read_hook();
+        let want_gen = snapshot.key.0;
+        let want_cat = snapshot
+            .key
+            .1
+            .as_ref()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+        let rows_opt: Option<Vec<Json>> = engine.with_db(|db| {
+            let read = db.begin_read()?;
+            let (cur_gen, cur_cat) = snapshot_key(&read)?;
+            if cur_gen != want_gen || cur_cat != want_cat {
+                return Ok(None);
+            }
+            let heads = read.open_table(RUN_HEAD)?;
+            let payloads = read.open_table(RUN_PAYLOAD)?;
+            let dict_table = read.open_table(RUN_DICT)?;
+            let mut dict = Dict::new(&dict_table);
+            let mut blocks: HashMap<(u32, u32), Vec<Vec<u8>>> = HashMap::new();
+            let mut rows_out = Vec::with_capacity(picked.len());
+            for row in picked {
+                let (ended, r) = row.cursor;
+                let Some(value) = heads.get(Key::new().u32(r).as_slice())? else {
+                    fail!("corrupt", "missing run head for {}", row.id);
+                };
+                let head = Head::decode(value.value())?;
+                let identity = identity_json(&mut dict, &head)?;
+                let ids = ids_json(&mut dict, r, &head)?;
+                let Some(doc) = load_run_doc_in_read(&payloads, &mut blocks, row)? else {
+                    fail!("corrupt", "missing run payload for {}", row.id);
+                };
+                let mut obj = serde_json::Map::new();
+                if args.include_cursors == Some(true) {
+                    obj.insert("_cursor".into(), json!([ended, r]));
+                }
+                obj.insert("file".into(), json!(&*row.file));
+                obj.insert("sha256".into(), json!(row.sha256_hex()));
+                obj.insert("firstSeenAt".into(), json!(row.first_seen_at));
+                obj.insert("doc".into(), doc);
+                obj.insert("identity".into(), identity);
+                obj.insert("ids".into(), ids);
+                rows_out.push(Json::Object(obj));
+            }
+            Ok(Some(rows_out))
+        })?;
+        let Some(out) = rows_opt else {
+            continue;
+        };
+        let problems = if args.after.is_none() {
+            snapshot.problems.clone()
+        } else {
+            Vec::new()
+        };
+        let mut page = json!({
+            "runs":out,"next":next,"skipped":snapshot.skipped,"problems":problems,
+            "correctionsResolved":true,"generation":want_gen,"catalogHash":want_cat
+        });
+        if args.include_receipts == Some(true) && args.after.is_none() {
+            let accepted_json: Vec<Json> = snapshot
+                .accepted
+                .iter()
+                .map(|r| json!({"file": &*r.file, "sha256": r.sha256_hex(), "firstSeenAt": r.first_seen_at, "doc": {"id": &*r.id, "seq": r.seq}}))
+                .collect();
+            page["accepted"] = Json::Array(accepted_json);
+        }
+        return Ok(page);
     }
-    Ok(page)
+    fail!("stale", "run history changed while reading page")
 }
 
 /// The snapshot a page belongs to: the runs ledger generation and the catalog hash, read in
@@ -3203,7 +3349,7 @@ fn query_snapshot_inner(read: &redb::ReadTransaction, args: &QueryArgs, include_
         let writer = dict.field(&head, at::WRITER)?.unwrap_or_default();
         let text = String::from_utf8_lossy(doc);
         // Stored text was accepted at ingest; a projection that now fails is counted, not shown.
-        let Ok(mut run) = run_schema::parse_run_text(&text, &writer) else {
+        let Ok(mut run) = run_schema::parse_stored_run_text(&text, &writer) else {
             skipped += 1;
             continue;
         };
@@ -3380,21 +3526,32 @@ pub fn identity_table(engine: &Engine) -> Result<Json> {
 /// Every distinct written model, effort and harness with counts and what each maps to, the
 /// unmapped strings and the data-quality counts (DESIGN.md 1.1 to 1.5).
 pub fn audit(engine: &Engine) -> Result<Json> {
-    let correction_history = has_corrections(engine)?;
-    let history = if correction_history {
-        Some(resolved_history(engine)?)
-    } else {
-        None
-    };
-    let effective: std::collections::HashSet<&str> = history
-        .iter()
-        .flat_map(|h| &h.rows)
-        .filter(|r| !r.id.is_empty())
-        .map(|r| r.id.as_ref())
-        .collect();
-    engine.with_db(|db| {
-        let read = db.begin_read()?;
-        let heads = read.open_table(RUN_HEAD)?;
+    for _attempt in 0..8 {
+        let correction_history = has_corrections(engine)?;
+        let history = if correction_history {
+            Some(resolved_history(engine)?)
+        } else {
+            None
+        };
+        let effective: std::collections::HashSet<&str> = history
+            .iter()
+            .flat_map(|h| &h.rows)
+            .filter(|r| !r.id.is_empty())
+            .map(|r| r.id.as_ref())
+            .collect();
+        let want_key = history.as_ref().map(|h| (h.generation(), h.catalog_hash()));
+        let res = engine.with_db(|db| {
+            let read = db.begin_read()?;
+            let cur_corr = read.open_table(RUN_META)?.get("corrections")?.is_some();
+            if cur_corr != correction_history {
+                return Ok(None);
+            }
+            if let Some(want) = &want_key
+                && snapshot_key(&read)? != *want
+            {
+                return Ok(None);
+            }
+            let heads = read.open_table(RUN_HEAD)?;
         let dict_table = read.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
         let mut models: BTreeMap<(Option<String>, Option<String>, Option<String>), u64> = BTreeMap::new();
@@ -3468,15 +3625,20 @@ pub fn audit(engine: &Engine) -> Result<Json> {
         harness_rows.sort_by(|a, b| b["runs"].as_u64().cmp(&a["runs"].as_u64()));
         let mut unmapped_rows: Vec<Json> = unmapped.into_iter().map(|(id, n)| json!({ "modelRaw": id, "runs": n })).collect();
         unmapped_rows.sort_by(|a, b| b["runs"].as_u64().cmp(&a["runs"].as_u64()));
-        Ok(json!({
-            "runs": total,
-            "models": rows(models, ["modelRaw", "modelId", "modelSource"]),
-            "efforts": rows(efforts, ["effortRaw", "effort", "effortSource"]),
-            "harnesses": harness_rows,
-            "unmapped": unmapped_rows,
-            "quality": quality,
-        }))
-    })
+            Ok(Some(json!({
+                "runs": total,
+                "models": rows(models, ["modelRaw", "modelId", "modelSource"]),
+                "efforts": rows(efforts, ["effortRaw", "effort", "effortSource"]),
+                "harnesses": harness_rows,
+                "unmapped": unmapped_rows,
+                "quality": quality,
+            })))
+        })?;
+        if let Some(out) = res {
+            return Ok(out);
+        }
+    }
+    fail!("stale", "run history changed while auditing")
 }
 
 /// Counts and sizes of the run tables, the current catalog and the generation.

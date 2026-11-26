@@ -200,16 +200,20 @@ struct State {
 
 /// One queued store call: the method contract plus the channel that carries its answer back
 /// to the async handler. The reply is dropped (the caller hung up) without disturbing the run.
+type AcceptedReceiptsReply = Result<(u64, u64, Vec<aac_store::runs::AcceptedReceipt>), String>;
+
 enum StoreCall {
     Json {
         method: String,
         args: String,
         reply: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
-    /// The Scoreboard's typed snapshot read: the store's resident resolved history,
+    /// The Scoreboard's typed snapshot read: `(engine_incarnation, resolved_history)`,
     /// shared by `Arc` instead of serialized through `runsQuery` text.
     RunsHistory {
-        reply: tokio::sync::oneshot::Sender<Result<Arc<aac_store::runs::ResolvedHistory>, String>>,
+        reply: tokio::sync::oneshot::Sender<
+            Result<(u64, Arc<aac_store::runs::ResolvedHistory>), String>,
+        >,
     },
     /// The Scoreboard's aggregate-backed read: precomputed per-model/per-task-type totals
     /// plus bounded recent windows in one MVCC redb read transaction (no payload reads).
@@ -220,12 +224,10 @@ enum StoreCall {
         reply:
             tokio::sync::oneshot::Sender<Result<aac_store::scoreboard_agg::ScoreboardRead, String>>,
     },
-    /// Accepted readers-check receipts straight from `run_head` + `run_dict` +
-    /// `run_sb_correction_refused` (no payload reads, no `ResolvedHistory`).
+    /// Accepted readers-check receipts resolved by path from current `RUN_FILE` state:
+    /// `(generation, file_rev, receipts)` (no payload reads, no `ResolvedHistory`).
     AcceptedReceipts {
-        reply: tokio::sync::oneshot::Sender<
-            Result<(u64, Vec<aac_store::runs::AcceptedReceipt>), String>,
-        >,
+        reply: tokio::sync::oneshot::Sender<AcceptedReceiptsReply>,
     },
 }
 
@@ -406,9 +408,21 @@ impl StoreHost {
         self.engine()
     }
 
-    /// Monotonic counter that bumps only when `run.*` events or run file-state repairs commit.
-    pub(crate) fn runs_write_seq(&self) -> Option<u64> {
-        self.engine().map(|engine| engine.runs_write_seq())
+    /// Unique incarnation id of the currently open `Engine`, or `None` when closed.
+    pub(crate) fn engine_incarnation(&self) -> Option<u64> {
+        self.engine().map(|engine| engine.incarnation())
+    }
+
+    /// Persisted run-file state revision (`RUN_META["file_rev"]`), advanced inside the same redb
+    /// write transaction as every `run.*` commit, file-state repair, or aggregate rebuild.
+    pub(crate) fn runs_file_rev(&self) -> Option<u64> {
+        self.engine().map(|engine| engine.runs_file_rev())
+    }
+
+    /// Test-only accessor for the currently open `Engine`.
+    #[cfg(test)]
+    pub(crate) fn engine_for_test(&self) -> Option<Arc<aac_store::engine::Engine>> {
+        self.engine()
     }
 
     /// Why [`Self::analytics_engine`] has no engine, as a reader's fixed cause: still opening or
@@ -449,12 +463,11 @@ impl StoreHost {
             .map_err(|_| "service_down: the store host is stopping".to_string())?
     }
 
-    /// The store's resident resolved run history, shared by `Arc` with the Scoreboard
-    /// owner: queued on the store pool like a method call, but the answer never becomes
-    /// `runsQuery` text for the owner to re-parse into a second resident copy.
+    /// The store's resident resolved run history paired with its engine incarnation, shared by
+    /// `Arc` with the Scoreboard owner.
     pub(crate) async fn runs_history(
         &self,
-    ) -> Result<Arc<aac_store::runs::ResolvedHistory>, String> {
+    ) -> Result<(u64, Arc<aac_store::runs::ResolvedHistory>), String> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         self.sender
             .send(StoreCall::RunsHistory { reply })
@@ -464,39 +477,62 @@ impl StoreHost {
             .map_err(|_| "service_down: the store host is stopping".to_string())?
     }
 
-    fn runs_history_blocking(&self) -> Result<Arc<aac_store::runs::ResolvedHistory>, String> {
+    fn runs_history_blocking(
+        &self,
+    ) -> Result<(u64, Arc<aac_store::runs::ResolvedHistory>), String> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.wait_ready();
             let engine = self
                 .engine()
-                .ok_or_else(|| "service_down: the store host is closed".to_string())?;
-            aac_store::runs::resolved_history_snapshot(&engine).map_err(|e| e.to_string())
+                .ok_or_else(|| "stale_engine: the store host is closed".to_string())?;
+            let incarnation = engine.incarnation();
+            let snapshot =
+                aac_store::runs::resolved_history_snapshot(&engine).map_err(|e| e.to_string())?;
+            Ok((incarnation, snapshot))
         }));
         outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }
 
-    /// Load one run's projected `run@1` document on demand from redb `RUN_PAYLOAD` using its
-    /// typed `RunFact` location (zero resident document text in memory).
-    pub(crate) fn load_run_doc(
+    /// Load one run's projected `run@1` document on demand from redb `RUN_PAYLOAD`, verifying the
+    /// open engine still matches `expected_incarnation` and failing explicitly if missing.
+    pub(crate) fn load_run_doc_for(
         &self,
+        expected_incarnation: u64,
         fact: &aac_store::runs::RunFact,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Value, String> {
         let engine = self
             .engine()
-            .ok_or_else(|| "service_down: the store host is closed".to_string())?;
-        aac_store::runs::load_run_doc(&engine, fact).map_err(|e| e.to_string())
+            .ok_or_else(|| "stale_engine: the store host is closed".to_string())?;
+        if engine.incarnation() != expected_incarnation {
+            return Err("stale_engine: the store engine was replaced".to_string());
+        }
+        match aac_store::runs::load_run_doc(&engine, fact).map_err(|e| e.to_string())? {
+            Some(doc) => Ok(doc),
+            None => Err(format!("missing_doc: run payload missing for {}", fact.id)),
+        }
     }
 
-    /// Batch-load projected `run@1` documents on demand from redb `RUN_PAYLOAD` in one MVCC read
-    /// transaction with a bounded payload-block cache.
-    pub(crate) fn load_run_docs(
+    /// Stream projected `run@1` documents one at a time in one MVCC read transaction, verifying
+    /// `expected_incarnation` and failing immediately if any document is missing or unreadable.
+    pub(crate) fn for_each_run_doc_for<F>(
         &self,
+        expected_incarnation: u64,
         facts: &[&aac_store::runs::RunFact],
-    ) -> Result<Vec<Option<Value>>, String> {
+        mut f: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(usize, Value) -> Result<(), String>,
+    {
         let engine = self
             .engine()
-            .ok_or_else(|| "service_down: the store host is closed".to_string())?;
-        aac_store::runs::load_run_docs(&engine, facts).map_err(|e| e.to_string())
+            .ok_or_else(|| "stale_engine: the store host is closed".to_string())?;
+        if engine.incarnation() != expected_incarnation {
+            return Err("stale_engine: the store engine was replaced".to_string());
+        }
+        aac_store::runs::for_each_run_doc(&engine, facts, |index, doc| {
+            f(index, doc).map_err(|msg| aac_store::error::Error::new("doc_callback", msg))
+        })
+        .map_err(|e| e.to_string())
     }
 
     /// Read pre-aggregated Scoreboard buckets + metadata directly from `run_sb_*` tables in one
@@ -543,11 +579,11 @@ impl StoreHost {
         outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }
 
-    /// Read accepted readers-check receipts from `run_head` + `run_dict` +
-    /// `run_sb_correction_refused` without touching `run_payload` or `ResolvedHistory`.
+    /// Read accepted readers-check receipts resolved by path from current `RUN_FILE` state,
+    /// returning `(generation, file_rev, receipts)` without touching `run_payload`.
     pub(crate) async fn accepted_receipts(
         &self,
-    ) -> Result<(u64, Vec<aac_store::runs::AcceptedReceipt>), String> {
+    ) -> Result<(u64, u64, Vec<aac_store::runs::AcceptedReceipt>), String> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         self.sender
             .send(StoreCall::AcceptedReceipts { reply })
@@ -559,13 +595,14 @@ impl StoreHost {
 
     fn accepted_receipts_blocking(
         &self,
-    ) -> Result<(u64, Vec<aac_store::runs::AcceptedReceipt>), String> {
+    ) -> Result<(u64, u64, Vec<aac_store::runs::AcceptedReceipt>), String> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.wait_ready();
             let engine = self
                 .engine()
                 .ok_or_else(|| "service_down: the store host is closed".to_string())?;
-            aac_store::scoreboard_agg::accepted_receipts(&engine).map_err(|e| e.to_string())
+            aac_store::scoreboard_agg::accepted_receipts_with_rev(&engine)
+                .map_err(|e| e.to_string())
         }));
         outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }

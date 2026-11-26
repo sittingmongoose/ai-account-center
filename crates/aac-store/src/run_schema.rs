@@ -609,6 +609,39 @@ pub fn parse_run_text(text: &str, writer: &str) -> R<Json> {
     project_run(&value, writer)
 }
 
+/// Project a run document already persisted in the store's ledger/payload tables.
+/// Keeps [`parse_run_text`] strict for fresh ingest while tolerating legacy release-1
+/// stored documents that carried explicit `"corrects": null` or `"void": null`.
+pub fn parse_stored_run_text(text: &str, writer: &str) -> R<Json> {
+    match parse_run_text(text, writer) {
+        Ok(projected) => Ok(projected),
+        Err(err) => {
+            if text.len() > RUN_CAP_BYTES || text.is_empty() || text.as_bytes().contains(&0) {
+                return Err(err);
+            }
+            let Ok(mut value) = serde_json::from_str::<Json>(text) else {
+                return Err(err);
+            };
+            let Some(map) = value.as_object_mut() else {
+                return Err(err);
+            };
+            let mut stripped = false;
+            if matches!(map.get("corrects"), Some(Json::Null)) {
+                map.remove("corrects");
+                stripped = true;
+            }
+            if matches!(map.get("void"), Some(Json::Null)) {
+                map.remove("void");
+                stripped = true;
+            }
+            if !stripped {
+                return Err(err);
+            }
+            project_run(&value, writer)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,5 +769,25 @@ mod tests {
         assert!(!is_writer_name("vm.a--b", &machines));
         assert!(!is_writer_name("vm.Lead", &machines));
         assert!(!is_writer_name("vm.", &machines));
+    }
+
+    #[test]
+    fn stored_run_text_tolerates_legacy_null_corrects_while_fresh_ingest_rejects_it() {
+        let mut d = minimal();
+        d["corrects"] = Json::Null;
+        let text = d.to_string();
+        assert!(parse_run_text(&text, "vm.lead").is_err());
+        let stored = parse_stored_run_text(&text, "vm.lead").expect("legacy null corrects");
+        assert!(stored.get("corrects").is_none());
+
+        d["void"] = Json::Null;
+        let text2 = d.to_string();
+        assert!(parse_run_text(&text2, "vm.lead").is_err());
+        let stored2 = parse_stored_run_text(&text2, "vm.lead").expect("legacy null void");
+        assert!(stored2.get("void").is_none());
+
+        let mut bad = minimal();
+        bad["corrects"] = json!(123);
+        assert!(parse_stored_run_text(&bad.to_string(), "vm.lead").is_err());
     }
 }
