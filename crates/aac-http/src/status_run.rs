@@ -1,11 +1,11 @@
 //! G16c: the read-only command runner the Status collectors use.
 //!
-//! One spawn without a shell, never rejects, always settles: a child that ignores the
-//! deadline's kill is waited for; output past the cap is a failure, never a truncated reading.
-//! The environment is the dashboard's allowlist (no session or T3 thread variables leak into
-//! a probe) with this process's own PATH plus `~/.local/bin`; ssh gets the isolation options
-//! the front door's policy sets (BatchMode, host-key checking, no forwarding) and the fixed
-//! keepalives the collectors ask for.
+//! One helper process at a time, without a shell, never rejects, always settles: a child
+//! that ignores the deadline's kill is waited for; output past the cap is a failure, never
+//! a truncated reading. The environment is the dashboard's allowlist (no session or T3
+//! thread variables leak into a probe) with this process's own PATH plus `~/.local/bin`;
+//! ssh gets the isolation options the front door's policy sets (BatchMode, host-key
+//! checking, no forwarding) and the fixed keepalives the collectors ask for.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -57,62 +57,78 @@ fn child_env() -> Vec<(String, String)> {
     env
 }
 
-/// `findExecutable`: the first PATH folder (then `~/.local/bin`, already on the PATH) that
-/// holds an executable `name`; the bare name when none does.
-#[must_use]
-pub(crate) fn find_executable(name: &str) -> PathBuf {
-    if name.contains(['/', '\\']) {
-        return PathBuf::from(name);
-    }
-    let path = child_env()
-        .into_iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
-        .map(|(_, value)| value)
-        .unwrap_or_default();
-    for dir in std::env::split_paths(&path).filter(|dir| !dir.as_os_str().is_empty()) {
-        let candidate = dir.join(name);
-        if is_executable(&candidate) {
-            return candidate;
+/// One Status helper process at a time, across machines, pins and tool state readers.
+static HELPER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// One synchronous read-only command under the same gate as [`run`].
+pub(crate) fn run_sync(file: &Path, args: &[String], timeout_ms: u64, max_bytes: usize) -> Run {
+    let _guard = HELPER_LOCK.blocking_lock();
+    let mut command = std::process::Command::new(file);
+    command
+        .args(args)
+        .env_clear()
+        .envs(child_env())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Run {
+                missing: true,
+                ..Run::default()
+            };
         }
-        #[cfg(windows)]
-        if candidate.extension().is_none() {
-            for extension in ["exe", "cmd", "bat", "com"] {
-                let executable = candidate.with_extension(extension);
-                if is_executable(&executable) {
-                    return executable;
+        Err(_) => return Run::default(),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let mut stdout = Vec::new();
+    let Some(child_stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Run::default();
+    };
+    let mut reader = std::io::BufReader::new(child_stdout);
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Run {
+                timed_out: true,
+                ..Run::default()
+            };
+        }
+        match std::io::Read::read(&mut reader, &mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                stdout.extend_from_slice(&buffer[..count]);
+                if stdout.len() > max_bytes {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Run::default();
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Run::default();
             }
         }
     }
-    PathBuf::from(name)
-}
-
-fn is_executable(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path)
-            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        // Windows resolves an executable by its extension (PATHEXT), not by a mode bit.
-        let name = path
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
-        std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
-            && extensions.split(';').any(|extension| {
-                !extension.is_empty() && name.ends_with(&extension.to_ascii_lowercase())
-            })
+    let code = child.wait().ok().and_then(|status| status.code());
+    Run {
+        code,
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        timed_out: false,
+        missing: false,
     }
 }
 
 /// One read-only command with a deadline and an output cap.
 pub(crate) async fn run(file: &Path, args: &[String], timeout_ms: u64, max_bytes: usize) -> Run {
+    let _guard = HELPER_LOCK.lock().await;
     let mut command = tokio::process::Command::new(file);
     command
         .args(args)
@@ -172,8 +188,8 @@ const SSH_ISOLATION: [&str; 11] = [
     "ClearAllForwardings=yes",
 ];
 
-/// `sshArgv(host, command, {interval, countMax})`: the isolation options, the keepalives, the
-/// fixed alias and the one remote command.
+/// `sshArgv(host, command, {interval, countMax})`: the isolation options, the keepalives
+/// and the fixed alias and the one remote command.
 #[must_use]
 pub(crate) fn ssh_argv(host: &str, command: &str, keepalive: Option<(u64, u64)>) -> Vec<String> {
     let mut args = vec!["-T".to_owned()];

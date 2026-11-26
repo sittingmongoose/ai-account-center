@@ -69,6 +69,7 @@ mod status_fed;
 mod status_owned;
 mod status_produce;
 mod status_run;
+mod status_tools;
 mod store_host;
 mod table;
 #[cfg(unix)]

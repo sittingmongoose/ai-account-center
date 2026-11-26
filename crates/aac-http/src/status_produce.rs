@@ -7,8 +7,8 @@
 //! - the 10 s report scan is [`crate::status_owned`]'s; after each pass the six sources are
 //!   rebuilt from its snapshots (the answers' shared copies fed into the answer store first);
 //! - the 60 s collect ([`Produce::maybe_collect`], and at once after a quiet spell) reads this
-//!   computer and the other machines over ssh, `browser-check slots --json` and
-//!   `simlock status --json`; a read that fails keeps the last good reading and names the part;
+//!   computer and the other machines over ssh, browser-check's fleet/backend state files and
+//!   Simlock's gateway status; a read that fails keeps the last good reading and names the part;
 //! - the pinned threads are re-read with every collect and composed over the reports;
 //! - the answer history is read from the store (G16b's engine) and merged with verified share
 //!   copies, as `readAnswerHistory` did;
@@ -30,7 +30,8 @@ use crate::limits::Limits;
 use crate::status_fed::StatusCompose;
 #[cfg(test)]
 use crate::status_owned::Scan;
-use crate::status_run::{find_executable, run, ssh_argv};
+use crate::status_run::{run, run_sync, ssh_argv};
+use crate::status_tools;
 use aac_num::intl::Zone;
 use aac_status::answers_engine::closing_card_versions;
 use aac_status::produce::answered::{ResolvedWaits, resolved_card_waits};
@@ -671,18 +672,23 @@ impl Produce {
         let previous_pins = self.state().pins.machines.clone();
         // Machines, simlock+browsers, and pins are independent I/O groups; run them together.
         let machines_fut = futures_util::future::join_all(pending);
+        let browser_local = local.clone();
         let simlock_and_browsers_fut = async move {
-            let simlock = find_executable("simlock");
-            let simlock_result = read_simlock(&simlock).await;
+            let simlock_result = read_simlock().await;
             let fresh_workers = simlock_result
                 .as_ref()
                 .ok()
-                .and_then(|(_, _, workers)| workers.clone());
+                .and_then(|reading| reading.workers.clone());
             let workers = fresh_workers.or(cached_workers);
-            let browsers_result = read_browsers(workers.as_deref()).await;
+            let browsers_result = read_browsers(
+                &browser_local,
+                workers.as_deref(),
+                simlock_result.as_ref().ok().map(|reading| &reading.raw),
+            )
+            .await;
             (simlock_result, browsers_result)
         };
-        let pins_fut = read_pins(&rows, local, previous_pins);
+        let pins_fut = read_pins(&rows, local.clone(), previous_pins);
         let (results, (simlock_result, browsers_result), pins) =
             tokio::join!(machines_fut, simlock_and_browsers_fut, pins_fut);
         let now_i64 = clamp_i64(now);
@@ -711,17 +717,18 @@ impl Produce {
                 }
             }
             match simlock_result {
-                Ok((status, worker_only, workers)) => {
-                    if let Some(workers) = workers {
+                Ok(reading) => {
+                    if let Some(workers) = reading.workers {
                         state.simlock_workers = Some(workers);
                     }
                     let problems = simlock_problems(
-                        &status,
-                        worker_only,
+                        &reading.status,
+                        reading.worker_only,
                         state.simlock.problems.as_deref(),
                         now_i64,
                     );
-                    state.simlock = Collected::succeeded(status, now_i64).with_problems(problems);
+                    state.simlock =
+                        Collected::succeeded(reading.status, now_i64).with_problems(problems);
                 }
                 Err((reason, missing)) => {
                     let before = state.simlock.clone();
@@ -1313,17 +1320,10 @@ fn hostname() -> String {
     if cfg!(windows) {
         return std::env::var("COMPUTERNAME").unwrap_or_default();
     }
-    // Linux keeps the name in procfs; macOS has `uname -n`. (No unsafe call for one word.)
     if let Some(name) = read_file("/proc/sys/kernel/hostname") {
         return name.trim().to_owned();
     }
-    std::process::Command::new("uname")
-        .arg("-n")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        .unwrap_or_default()
+    std::env::var("HOSTNAME").unwrap_or_default()
 }
 
 fn local_machine() -> String {
@@ -1342,15 +1342,16 @@ fn read_file(path: &str) -> Option<String> {
 /// from `df -Pk <home>` (the same 1 KiB blocks and the same filesystem the probe reads).
 #[cfg(not(windows))]
 fn statfs_at(path: &str) -> Option<(f64, f64)> {
-    let output = std::process::Command::new("df")
-        .args(["-Pk", path])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let result = run_sync(
+        Path::new("df"),
+        &["-Pk".to_owned(), path.to_owned()],
+        5_000,
+        64 * 1024,
+    );
+    if result.code != Some(0) {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let row = text.lines().nth(1)?;
+    let row = result.stdout.lines().nth(1)?;
     let fields: Vec<&str> = row.split_whitespace().collect();
     let total: f64 = fields.get(1)?.parse().ok()?;
     let available: f64 = fields.get(3)?.parse().ok()?;
@@ -1406,30 +1407,13 @@ fn linux_total_memory() -> (Option<f64>, Option<f64>) {
 /// A synchronous Mac probe with the same 5 s deadline the reference gives it.
 #[cfg(not(windows))]
 fn mac_probe(command: &str, timeout: Duration) -> Option<String> {
-    use std::io::Read;
-    let mut child = std::process::Command::new("/bin/sh")
-        .args(["-c", command])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait().ok()? {
-            Some(status) if status.success() => {
-                let mut out = String::new();
-                child.stdout.take()?.read_to_string(&mut out).ok()?;
-                return Some(out);
-            }
-            Some(_) => return None,
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            None => std::thread::sleep(Duration::from_millis(20)),
-        }
-    }
+    let result = run_sync(
+        Path::new("/bin/sh"),
+        &["-c".to_owned(), command.to_owned()],
+        timeout.as_millis().try_into().unwrap_or(5_000),
+        64 * 1024,
+    );
+    (result.code == Some(0)).then_some(result.stdout)
 }
 
 /// `readLocalMachine`: this computer, from the host facts the way Node read them.
@@ -1642,46 +1626,120 @@ fn apply_machine(
     }
 }
 
-async fn read_browsers(workers: Option<&[&str]>) -> Result<Vec<BrowserMachine>, (String, bool)> {
-    let program = find_executable("browser-check");
-    let result = run(
-        &program,
-        &["slots".to_owned(), "--json".to_owned()],
-        45_000,
-        4 * 1024 * 1024,
-    )
-    .await;
-    if result.code != Some(0) {
-        return Err((command_failure("browser-check", &result), result.missing));
+async fn read_browsers(
+    local: &str,
+    workers: Option<&[&str]>,
+    simlock: Option<&Json>,
+) -> Result<Vec<BrowserMachine>, (String, bool)> {
+    let (fleet, fleet_error) = match status_tools::read_browser_fleet() {
+        Ok(fleet) => (fleet, None),
+        Err(reason) => (status_tools::fallback_browser_fleet(), Some(reason)),
+    };
+    let machines = fleet["machines"].as_array().cloned().unwrap_or_default();
+    let rows = computers_rows();
+    let mut pending: Vec<
+        futures_util::future::BoxFuture<
+            'static,
+            (String, Result<status_tools::BrowserState, String>),
+        >,
+    > = Vec::new();
+    for machine in machines {
+        let Some(name) = machine["name"].as_str() else {
+            continue;
+        };
+        let Some(computer) = aac_status::computers::exact_computer(name) else {
+            continue;
+        };
+        if let Some(reason) = fleet_error.clone() {
+            pending.push(Box::pin(async move {
+                (
+                    computer.to_owned(),
+                    Err(format!("browser-check state is unavailable: {reason}")),
+                )
+            }));
+            continue;
+        }
+        if computer == local {
+            pending.push(Box::pin(async move {
+                (
+                    computer.to_owned(),
+                    status_tools::read_local_browser_state(&machine).await,
+                )
+            }));
+            continue;
+        }
+        let Some((_, os, alias)) = rows.iter().find(|(id, _, _)| id == computer) else {
+            continue;
+        };
+        let alias = alias.clone();
+        let (Some(host), Some(alias)) = (HostOs::of(os), alias) else {
+            continue;
+        };
+        pending.push(Box::pin(async move {
+            (
+                computer.to_owned(),
+                status_tools::read_remote_browser_state(host, &alias).await,
+            )
+        }));
     }
-    let raw: Json = serde_json::from_str(&result.stdout).map_err(|_| {
-        (
-            "browser-check answered in an unknown shape.".to_owned(),
-            false,
-        )
-    })?;
+    let states: BTreeMap<String, Result<status_tools::BrowserState, String>> =
+        futures_util::future::join_all(pending)
+            .await
+            .into_iter()
+            .collect();
+    let raw =
+        status_tools::browser_slots_json(&fleet, local, states, simlock, now_ms() as f64 / 1000.0);
     browsers::parse_slots_with_workers(&raw, workers).map_err(|reason| (reason.to_owned(), false))
 }
 
-type SimlockReading = (SimlockStatus, bool, Option<Vec<&'static str>>);
+struct SimlockReading {
+    raw: Json,
+    status: SimlockStatus,
+    worker_only: bool,
+    workers: Option<Vec<&'static str>>,
+}
 
-async fn read_simlock(program: &Path) -> Result<SimlockReading, (String, bool)> {
-    let mut args = vec![
-        "status".to_owned(),
-        "--json".to_owned(),
-        "--gateway".to_owned(),
-    ];
-    let mut result = run(program, &args, 20_000, 4 * 1024 * 1024).await;
-    let worker_only = result.code != Some(0);
-    if worker_only {
-        args.pop();
-        result = run(program, &args, 20_000, 4 * 1024 * 1024).await;
-    }
-    if result.code != Some(0) {
-        return Err((command_failure("simlock", &result), result.missing));
-    }
-    let raw: Json = serde_json::from_str(&result.stdout)
-        .map_err(|_| ("simlock answered in an unknown shape.".to_owned(), false))?;
+async fn read_simlock() -> Result<SimlockReading, (String, bool)> {
+    let home = if let Some(home) = std::env::var_os("SIMLOCK_HOME") {
+        std::path::PathBuf::from(home)
+    } else {
+        std::env::home_dir()
+            .map(|home| home.join(".simlock"))
+            .ok_or_else(|| {
+                (
+                    "Simlock state is unavailable: no home directory.".to_owned(),
+                    false,
+                )
+            })?
+    };
+    let gateway = home.join("gateway");
+    let worker_home = home.clone();
+    let (raw, worker_only) = tokio::task::spawn_blocking(move || {
+        let gateway_result = status_tools::read_simlock_gateway(
+            &gateway.join("config.json"),
+            &gateway.join("admin.token"),
+        );
+        match gateway_result {
+            Ok(raw) => Ok((raw, false)),
+            Err(gateway_error) => {
+                #[cfg(unix)]
+                if crate::antigravity_probes::socket_state(&worker_home.join("daemon.sock"), 1_000)
+                    == crate::antigravity_probes::SocketState::Listening
+                {
+                    return status_tools::read_simlock_worker(
+                        &worker_home.join("state.db"),
+                        &worker_home.join("config.json"),
+                        true,
+                    )
+                    .map(|raw| (raw, true))
+                    .map_err(|error| (error, false));
+                }
+                Err((gateway_error, false))
+            }
+        }
+    })
+    .await
+    .map_err(|_| ("Simlock state is unavailable.".to_owned(), false))??;
     let status =
         simlock::parse_status(&raw).map_err(|error| (error.message().to_owned(), false))?;
     let workers = raw["workers"]
@@ -1695,7 +1753,12 @@ async fn read_simlock(program: &Path) -> Result<SimlockReading, (String, bool)> 
                 })
                 .collect()
         });
-    Ok((status, worker_only, workers))
+    Ok(SimlockReading {
+        raw,
+        status,
+        worker_only,
+        workers,
+    })
 }
 
 fn simlock_problems(
@@ -1735,56 +1798,28 @@ fn simlock_problems(
     problems
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod simlock_tests {
-    use super::{read_simlock, simlock_problems};
-    use std::os::unix::fs::PermissionsExt;
+    use super::simlock_problems;
 
-    #[tokio::test]
-    async fn simlock_prefers_the_fleet_and_labels_a_worker_only_answer() {
-        let temp = tempfile::tempdir().expect("fixture directory");
-        for (gateway, worker_only) in [
-            (
-                "echo '{\"capacity\":{\"ios\":{\"running\":3}}}'; exit 0",
-                false,
-            ),
-            ("exit 1", true),
-        ] {
-            let program = temp
-                .path()
-                .join(if worker_only { "local" } else { "fleet" });
-            std::fs::write(
-                &program,
-                format!(
-                    "#!/bin/sh\nif [ \"${{3-}}\" = --gateway ]; then {gateway}; fi\necho '{{\"capacity\":{{\"ios\":{{\"running\":1}}}}}}'\n"
-                ),
-            )
-            .expect("fixture script");
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
-                .expect("fixture executable");
-            let (status, local, _) = read_simlock(&program)
-                .await
-                .expect("Simlock fixture answer");
-            assert_eq!(local, worker_only);
-            assert_eq!(
-                status.capacity[0].running,
-                Some(if worker_only { 1 } else { 3 })
-            );
-            let problems = simlock_problems(&status, local, None, 100);
-            if worker_only {
-                assert_eq!(problems.len(), 1);
-                assert_eq!(
-                    problems[0].reason,
-                    "Read this computer's Simlock worker only; the fleet gateway did not answer"
-                );
-                assert_eq!(
-                    simlock_problems(&status, local, Some(&problems), 200)[0].since,
-                    100
-                );
-            } else {
-                assert!(problems.is_empty());
-            }
-        }
+    #[test]
+    fn a_worker_only_answer_names_the_gateway_problem_once() {
+        let status = aac_status::produce::simlock::Status {
+            capacity: Vec::new(),
+            leases: Vec::new(),
+            problems: Vec::new(),
+        };
+        let problems = simlock_problems(&status, true, None, 100);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(
+            problems[0].reason,
+            "Read this computer's Simlock worker only; the fleet gateway did not answer"
+        );
+        assert_eq!(
+            simlock_problems(&status, true, Some(&problems), 200)[0].since,
+            100
+        );
+        assert!(simlock_problems(&status, false, None, 100).is_empty());
     }
 }
 

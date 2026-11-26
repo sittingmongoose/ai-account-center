@@ -86,7 +86,13 @@ export const ALLOWLIST = [
     reason:
       "The service hashes its own executable image at start (L1 build check). That is not a " +
       'private file, and the open must follow the path the kernel ran.',
-  },  {
+  },
+  {
+    path: 'crates/aac-http/src/status_tools.rs',
+    reason:
+      'Phase 4 step 5 reads browser-check and Simlock state files (another tool data and kernel /proc) directly instead of spawning Node helpers; tool state is not an AAC private registry row, and the readers are size-bounded with honest missing/damaged errors.',
+  },
+  {
     path: 'crates/aac-log/src/lib.rs',
     reason:
       "The dashboard's structured log stream (logs/current.jsonl and logs/archive), not a " +
