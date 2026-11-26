@@ -1,7 +1,7 @@
 // What each control sends and what each answer means (public/account-actions.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText, terminalCommand } from '../public/account-actions.mjs';
+import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText, terminalCommand } from '../public/account-actions.mjs';
 
 const err = (status, code, extra = {}) => ({ status, payload: { error: 'server sentence', code, ...extra } });
 
@@ -180,4 +180,54 @@ test('purge failure shows each host receipt without promising no change', () => 
   assert.equal(partial.body, 'Deleted on Mac. Deletion on Windows could not be confirmed. The trash entry is kept for retry.');
   const unresolved = errorText(err(502, 'purge_incomplete', { hosts: { mac: 'unresolved', windows: 'unresolved' } }));
   assert.equal(unresolved.body, 'Deletion on Mac could not be confirmed. Deletion on Windows could not be confirmed. The trash entry is kept for retry.');
+});
+
+test('web-session requests, local validation, and calm error messages cover Qwen, OpenCode Zen, and Muse without echoing secrets', () => {
+  assert.deepEqual(requests.webSessions(), { method: 'GET', path: '/api/accounts/web-session' });
+  assert.deepEqual(requests.saveWebSession('opencode-wallet', { cookie: 'auth=x' }), {
+    method: 'PUT',
+    path: '/api/accounts/web-session/opencode-wallet',
+    body: { cookie: 'auth=x' },
+  });
+  assert.deepEqual(requests.deleteWebSession('muse'), {
+    method: 'DELETE',
+    path: '/api/accounts/web-session/muse',
+    body: {},
+  });
+
+  // Local validation catches bad inputs and never echoes secrets
+  const secret = 'auth=secret-fixture-value-999';
+  assert.equal(webSessionProblem(secret, 'opencode-wallet'), '');
+  assert.equal(webSessionProblem('llama_dev_sess=fixture-val', 'muse'), '');
+  assert.equal(webSessionProblem('login_aliyunid_ticket=fixture', 'qwen'), '');
+  for (const [raw, surface, match] of [
+    ['', 'qwen', /Cookie header first/],
+    ['other=abc', 'opencode-wallet', /__Host-console_session/],
+    ['llama_dev_sess=dca:wrong-cli-token', 'muse', /CLI or API token/],
+    ['other=abc', 'muse', /llama_dev_sess/],
+    ['auth=line1\nline2', 'opencode-wallet', /line break/],
+  ]) {
+    const msg = webSessionProblem(raw, surface);
+    assert.match(msg, match);
+    assert.ok(!msg.includes('wrong-cli-token') && !msg.includes('line2'));
+  }
+
+  for (const [code, match] of [
+    ['invalid_session', /Nothing was saved/],
+    ['session_rejected', /Nothing was saved/],
+    ['choose_workspace', /multiple workspaces/],
+    ['workspace_mismatch', /Nothing was saved/],
+    ['wallet_not_prepaid', /prepaid/],
+    ['choose_team', /multiple teams/],
+    ['team_mismatch', /Nothing was saved/],
+    ['account_mismatch', /different account/],
+    ['plan_mismatch', /Nothing was saved/],
+    ['identity_unavailable', /Nothing was saved/],
+    ['session_store_unavailable', /Nothing was saved/],
+    ['provider_unreachable', /Nothing was saved/],
+  ]) {
+    const out = errorText(err(422, code), { provider: 'muse' });
+    assert.match(`${out.title} ${out.body}`, match, code);
+    assert.doesNotMatch(`${out.title} ${out.body}`, /server sentence/);
+  }
 });

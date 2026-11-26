@@ -6,6 +6,7 @@ mod history;
 pub mod recheck;
 mod selection;
 mod signin_state;
+mod web_sessions;
 
 use super::coordinator::FailoverCoordinator;
 use super::{AccountUsageCache, Desktop, dashboard, rows, sampler, sources};
@@ -60,6 +61,8 @@ pub struct Producer {
     failover: Arc<FailoverCoordinator>,
     /// The cached `claude-host` session answers (the TS five-minute probe).
     sign_in_state: signin_state::SignInCache,
+    /// Local in-process cache and 429 cooldown state for pasted web sessions.
+    web_sessions: Arc<web_sessions::WebSessionState>,
     #[cfg(test)]
     mac_session_fixture: Option<signin_state::SessionFixture>,
 }
@@ -97,9 +100,15 @@ impl Producer {
             renewal_status: Arc::default(),
             failover,
             sign_in_state: Arc::default(),
+            web_sessions: Arc::default(),
             #[cfg(test)]
             mac_session_fixture: None,
         }
+    }
+
+    /// Clear cached web-session reading and cooldown state for one surface after a save/delete.
+    pub(crate) fn clear_web_session_cache(&self, surface: aac_files::web_session::Surface) {
+        self.web_sessions.clear(surface);
     }
 
     /// Point the renewal snapshot's homes at a fixture root (tests only).

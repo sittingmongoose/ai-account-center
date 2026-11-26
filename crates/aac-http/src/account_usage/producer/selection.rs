@@ -175,7 +175,7 @@ impl Producer {
             read.into_iter().map(|(_, _, row)| row).collect()
         };
         if problem.is_none()
-            && let Some(wallet) = self.wallet(now).await
+            && let Some(wallet) = self.wallet(now, force).await
         {
             result.push(wallet);
         }
@@ -261,6 +261,31 @@ impl Producer {
         {
             return row;
         }
+        if source.provider == "qwen"
+            && let Some(row) = super::web_sessions::collect_qwen(
+                &self.root,
+                &self.web_sessions,
+                source,
+                now,
+                force,
+            )
+            .await
+        {
+            return row;
+        }
+        if source.provider == "muse"
+            && let Some(row) = super::web_sessions::collect_muse(
+                &self.root,
+                self.home.as_deref(),
+                &self.web_sessions,
+                source,
+                now,
+                force,
+            )
+            .await
+        {
+            return row;
+        }
         let supported = matches!(
             source.credential,
             Credential::Discover
@@ -278,7 +303,13 @@ impl Producer {
         self.failover().collect(&target, &template()).await
     }
 
-    async fn wallet(&self, now: i64) -> Option<Value> {
+    pub(super) async fn wallet(&self, now: i64, force: bool) -> Option<Value> {
+        if let Some(row) =
+            super::web_sessions::collect_opencode_wallet(&self.root, &self.web_sessions, now, force)
+                .await
+        {
+            return Some(row);
+        }
         let root = self.root.clone();
         let binding = tokio::task::spawn_blocking(move || provider_caches::wallet_source(&root))
             .await

@@ -38,6 +38,7 @@ mod lifecycle_maintenance;
 mod lifecycle_open;
 mod lifecycle_registry;
 mod lifecycle_remove;
+mod lifecycle_sessions;
 mod lifecycle_trash;
 pub(super) mod recheck;
 
@@ -266,6 +267,7 @@ impl NativeOwners {
                                 row.id.as_str(),
                                 "account-registry"
                                     | "account-keys"
+                                    | "web-sessions"
                                     | "claude-desktop-profiles"
                                     | "claude-pending"
                                     | "claude-trash"
@@ -382,6 +384,7 @@ impl NativeOwners {
             || lifecycle_jobs::route(method, path).is_some()
             || lifecycle_registry::route(method, path)
             || lifecycle_keys::route(method, path).is_some()
+            || lifecycle_sessions::route(method, path).is_some()
             || lifecycle_remove::route(method, path).is_some()
             || lifecycle_login::route(method, path).is_some()
             || lifecycle_trash::route(method, path).is_some()
@@ -573,6 +576,11 @@ impl NativeOwners {
         {
             let id = id.to_owned();
             return lifecycle_keys::handle(self, action, &id, request).await;
+        }
+        if self.lifecycle_jobs.is_some()
+            && let Some(op) = lifecycle_sessions::route(request.method(), path)
+        {
+            return lifecycle_sessions::handle(self, op, request).await;
         }
         if let Some(jobs) = &self.lifecycle_jobs
             && lifecycle_registry::route(request.method(), path)

@@ -104,6 +104,29 @@ fn provider(
         Cursor if lifecycle.mounted => json!(["mac"]),
         _ => json!([]),
     };
+    let mut capabilities = json!({
+        "multiAccount":multi,
+        "add": available && count < 16 && (multi || count == 0),
+        "signInAgain":lifecycle.mounted && kind != "api-key" &&
+            (available || matches!(kind,"desktop-profile"|"app-session"|"browser-session")),
+        "replaceKey":kind == "api-key" && available,
+        "remove":lifecycle.mounted && !lifecycle.remove_disabled.contains(&row.id),
+        "openApp":open,
+        "recheck":lifecycle.mounted && !lifecycle.recheck_disabled.contains(&row.id)
+    });
+    if matches!(row.id, Qwen | OpencodeGo | Muse)
+        && let Some(caps) = capabilities.as_object_mut()
+    {
+        let web_reason = if !lifecycle.mounted {
+            json!("not_implemented")
+        } else if !secure {
+            json!("secure_transport_required")
+        } else {
+            Value::Null
+        };
+        caps.insert("webSession".into(), json!(web_reason.is_null()));
+        caps.insert("webSessionReason".into(), web_reason);
+    }
     json!({
         "id":id, "label":row.label, "longLabel":row.long_label, "iconKey":id, "order":row.index,
         "visible":!listed(&visibility["hiddenProviders"], &id_value),
@@ -112,16 +135,7 @@ fn provider(
         "signIn":{"kind":kind,"label":label,"platforms":platforms,"secureTransportRequired":requires_secure,
             "available":available,"unavailableReason":reason},
         "extras":extras,
-        "capabilities":{
-            "multiAccount":multi,
-            "add": available && count < 16 && (multi || count == 0),
-            "signInAgain":lifecycle.mounted && kind != "api-key" &&
-                (available || matches!(kind,"desktop-profile"|"app-session"|"browser-session")),
-            "replaceKey":kind == "api-key" && available,
-            "remove":lifecycle.mounted && !lifecycle.remove_disabled.contains(&row.id),
-            "openApp":open,
-            "recheck":lifecycle.mounted && !lifecycle.recheck_disabled.contains(&row.id)
-        }
+        "capabilities":capabilities
     })
 }
 

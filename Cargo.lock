@@ -91,6 +91,7 @@ dependencies = [
 name = "aac-http"
 version = "0.1.0"
 dependencies = [
+ "aac-agent",
  "aac-api",
  "aac-config",
  "aac-core",

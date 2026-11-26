@@ -50,7 +50,9 @@ pub(crate) fn public_account_id(value: &Value) -> bool {
     let Some(id) = value.as_str() else {
         return false;
     };
-    if let Some(hex) = id.strip_prefix("plan-opencode-go-console-mac-")
+    if let Some(hex) = id
+        .strip_prefix("plan-opencode-go-console-mac-")
+        .or_else(|| id.strip_prefix("plan-opencode-go-console-web-"))
         && hex.len() == 12
         && hex
             .bytes()

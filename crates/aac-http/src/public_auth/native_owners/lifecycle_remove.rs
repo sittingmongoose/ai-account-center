@@ -130,6 +130,9 @@ pub(super) async fn handle(native: &NativeOwners, raw_id: &str, request: Request
         .await;
     }
     let root = native.agents.root().to_owned();
+    if id.starts_with("plan-opencode-go-console-web-") {
+        return web_wallet(native, &id, &session, offered).await;
+    }
     if id.starts_with("plan-opencode-go-console-") {
         return wallet(native, &id, &session, offered).await;
     }
@@ -299,6 +302,78 @@ fn removed_reply() -> Reply {
         200,
         json!({"removed":true,"trashId":null,"purgeAfter":null}),
     ))
+}
+
+async fn web_wallet(native: &NativeOwners, id: &str, session: &str, token: Option<&str>) -> Reply {
+    if running(native, id) {
+        return Refusal::Running.reply();
+    }
+    let owner = native.clone();
+    let target = id.to_owned();
+    let session = session.to_owned();
+    let token = token.map(str::to_owned);
+    match tokio::task::spawn_blocking(move || {
+        let native = owner;
+        let id = target;
+        let root = native.agents.root();
+        let absent = if token.is_some() {
+            Refusal::Stale
+        } else {
+            Refusal::Missing
+        };
+        let stored =
+            aac_files::web_session::load(root, aac_files::web_session::Surface::OpencodeWallet)
+                .map_err(|_| Refusal::Failed)?
+                .ok_or(absent)?;
+        let expected_id = stored
+            .meta
+            .workspace_id
+            .as_deref()
+            .map(aac_agent::web_session::opencode::wallet_account_id);
+        if expected_id.as_deref() != Some(id.as_str()) {
+            return Err(absent);
+        }
+        let fingerprint = storage::sha(
+            &json!([id, stored.meta.fingerprint, stored.meta.workspace_id]).to_string(),
+        );
+        if let Some(reply) = approve(
+            &native,
+            Review {
+                subject: &id,
+                session: &session,
+                fingerprint: &fingerprint,
+                token: token.as_deref(),
+                effects: &[
+                    "The pasted OpenCode console session is deleted from the dashboard computer.",
+                    "Its sign-in in the browser is not changed.",
+                ],
+            },
+        ) {
+            return Ok(reply);
+        }
+        if running(&native, &id) {
+            return Err(Refusal::Running);
+        }
+        aac_files::web_session::delete_with_owners(
+            &native.owners,
+            root,
+            aac_files::web_session::Surface::OpencodeWallet,
+        )
+        .map_err(|_| Refusal::Failed)?;
+        if let Some(usage) = &native.usage {
+            usage
+                .producer
+                .clear_web_session_cache(aac_files::web_session::Surface::OpencodeWallet);
+        }
+        native.changed();
+        Ok(removed_reply())
+    })
+    .await
+    {
+        Ok(Ok(reply)) => reply,
+        Ok(Err(refusal)) => refusal.reply(),
+        Err(_) => Refusal::Failed.reply(),
+    }
 }
 
 async fn wallet(native: &NativeOwners, id: &str, session: &str, token: Option<&str>) -> Reply {

@@ -2743,3 +2743,99 @@ test('OpenCode Go native registry response enables per-key Re-check without a ba
   const goneVm = accountsViewModel(data([], { providers: providers() }), { now, registry: disabledReg });
   assert.deepEqual(provider(goneVm, 'opencode-go').rows, []);
 });
+
+test('webSession capability renders write-only paste controls, masked password flow, region/team pickers, and Needs sign-in cached status', () => {
+  const now = Date.parse('2026-11-26T15:00:00Z');
+  const sampled = '2026-11-26T14:55:00Z';
+  const expiredQwen = account({
+    id: 'qwen:usage',
+    provider: 'qwen',
+    label: 'Qwen Token Plan',
+    source: 'Pasted Qwen console session',
+    status: 'needs_sign_in',
+    sampledAt: sampled,
+    fetchedAt: '2026-11-26T14:59:00Z',
+    windows: [{ key: '5h', label: '5 hours', usedPercent: 31, remainingPercent: 69 }],
+  });
+  const webWallet = account({
+    id: 'plan-opencode-go-console-web-0123456789ab',
+    provider: 'opencode-go',
+    label: 'OpenCode console wallet',
+    source: 'Pasted OpenCode console session',
+    status: 'ok',
+    sampledAt: sampled,
+    fetchedAt: sampled,
+    windows: [{ key: 'zen-balance', label: 'Zen balance', kind: 'balance', remaining: 14.5, unit: 'USD' }],
+  });
+  const museAcct = account({
+    id: 'muse:usage',
+    provider: 'muse',
+    email: 'dev@example.test',
+    source: 'Pasted Muse Code portal session',
+    status: 'ok',
+    sampledAt: sampled,
+    fetchedAt: sampled,
+    windows: [{ key: 'window', label: 'Current usage', usedPercent: 18, remainingPercent: 82 }],
+  });
+  const wsProviders = providers({
+    qwen: { capabilities: { webSession: true, webSessionReason: null } },
+    'opencode-go': { capabilities: { webSession: true, webSessionReason: null } },
+    muse: { capabilities: { webSession: true, webSessionReason: null } },
+  });
+  const vm = accountsViewModel(
+    data([expiredQwen, webWallet, museAcct], { providers: wsProviders }),
+    {
+      now,
+      registry: registry([
+        reg('qwen:usage', 'qwen', { actions: { signInAgain: true, remove: true, recheck: true } }),
+        reg('plan-opencode-go-console-web-0123456789ab', 'opencode-go', { actions: { signInAgain: true, remove: true, recheck: true } }),
+        reg('muse:usage', 'muse', { actions: { signInAgain: false, remove: true, recheck: true } }),
+      ]),
+    }
+  );
+  const qwenRow = row(vm, 'qwen:usage');
+  assert.equal(qwenRow.status, 'Needs sign-in · cached');
+  assert.equal(qwenRow.src, 'Pasted console session');
+  assert.deepEqual(qwenRow.actions.map(a => [a.act, a.label, a.enabled]), [
+    ['paste-session', 'Reconnect session', true],
+    ['remove', 'Remove', true],
+  ]);
+  const walletRow = row(vm, 'plan-opencode-go-console-web-0123456789ab');
+  assert.equal(walletRow.src, 'Pasted console session');
+  assert.equal(walletRow.actions[0].act, 'paste-session');
+  assert.ok(provider(vm, 'opencode-go').foot.some(a => a.act === 'paste-session'));
+  const museRow = row(vm, 'muse:usage');
+  assert.equal(museRow.src, 'Pasted portal session');
+  assert.equal(museRow.actions[0].act, 'paste-session');
+  assert.equal(provider(vm, 'muse').foot[0].act, 'paste-session');
+
+  // Flow view enforces masked password input and zero secret echo
+  const qwenPaste = flowView('qwen', { type: 'web-session', step: 'paste', surface: 'qwen', region: 'intl', serial: 1 });
+  assert.equal(qwenPaste.open, true);
+  assert.equal(qwenPaste.inputPassword, true);
+  assert.ok(qwenPaste.actions.some(a => a.act === 'web-session-region' && a.value === 'qwen:cn'));
+
+  const teamPick = flowView('muse', {
+    type: 'web-session',
+    step: 'choose',
+    surface: 'muse',
+    choiceKind: 'team',
+    choices: [{ id: '42', name: 'Alpha' }, { id: '99', name: 'Beta' }],
+    serial: 2,
+  });
+  assert.equal(teamPick.title, 'Choose a Muse Code team');
+  assert.deepEqual(teamPick.actions.slice(0, 2).map(a => [a.act, a.value, a.label]), [
+    ['web-session-pick', 'muse:42', 'Alpha'],
+    ['web-session-pick', 'muse:99', 'Beta'],
+  ]);
+
+  const saved = flowView('opencode-go', {
+    type: 'web-session',
+    step: 'done',
+    surface: 'opencode-wallet',
+    result: { check: 'ok', session: { workspaceId: 'wrk_main' } },
+    serial: 3,
+  });
+  assert.match(saved.done, /wrk_main/);
+  assert.match(saved.body, /never|no longer has it/i);
+});

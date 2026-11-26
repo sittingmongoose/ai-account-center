@@ -1095,3 +1095,56 @@ test('raw JSONL field drafts validate underscores and reset only after a success
   assert.equal(h.sent.length, before);
   assert.match(h.ctl.state.prefs.logSourcesError, /dot path/);
 });
+
+test('write-only paste session flow saves Qwen CN, handles OpenCode multi-workspace picker, and never retains secrets in state', async () => {
+  const qwenSecret = 'login_aliyunid_ticket=qwen-secret-fixture-42';
+  const h = harness({
+    routes: {
+      'PUT /api/accounts/web-session/qwen': body => {
+        assert.equal(body.region, 'cn');
+        assert.equal(body.cookie, qwenSecret);
+        return { ok: true, check: 'ok', session: { surface: 'qwen', region: 'cn', fingerprint: 'sha256:0123456789abcdef' } };
+      },
+    },
+  });
+  await h.ctl.handle('paste-session', 'qwen');
+  assert.equal(h.ctl.state.flows.qwen.type, 'web-session');
+  assert.equal(h.ctl.state.flows.qwen.region, 'intl');
+  await h.ctl.handle('web-session-region', 'qwen:cn');
+  assert.equal(h.ctl.state.flows.qwen.region, 'cn');
+  await h.ctl.handle('flow-submit', `qwen\n${qwenSecret}\n`);
+  assert.equal(h.ctl.state.flows.qwen.step, 'done');
+  assert.equal(JSON.stringify(h.ctl.state).includes(qwenSecret), false, 'secret never stored in state');
+  assert.match(last(h.toasts).title, /Qwen Token Plan session saved/);
+
+  // OpenCode multi-workspace 409 -> picker -> verified save without echoing cookie into state
+  const ocSecret = 'auth=opencode-secret-fixture-77';
+  const oc = harness({
+    routes: {
+      'PUT /api/accounts/web-session/opencode-wallet': body => {
+        if (!body.workspaceId) {
+          throw refusal(409, 'choose_workspace', { workspaces: [{ id: 'wrk_1', name: 'Personal' }, { id: 'wrk_2', name: 'Work' }] });
+        }
+        return { ok: true, check: 'ok', session: { surface: 'opencode-wallet', workspaceId: body.workspaceId } };
+      },
+    },
+  });
+  await oc.ctl.handle('paste-session', 'opencode-go');
+  await oc.ctl.handle('flow-submit', `opencode-go\n${ocSecret}\n`);
+  assert.equal(oc.ctl.state.flows['opencode-go'].step, 'choose');
+  assert.equal(oc.ctl.state.flows['opencode-go'].choices.length, 2);
+  assert.equal(JSON.stringify(oc.ctl.state).includes(ocSecret), false, 'secret stays out of state during picker');
+  await oc.ctl.handle('web-session-pick', 'opencode-go:wrk_2');
+  assert.equal(oc.ctl.state.flows['opencode-go'].step, 'done');
+  const putReq = oc.sent.filter(r => r.method === 'PUT').at(-1);
+  assert.equal(putReq?.body?.workspaceId, 'wrk_2');
+  assert.equal(JSON.stringify(oc.ctl.state).includes(ocSecret), false);
+
+  // Muse rejects dca: token locally without hitting the server
+  const muse = harness();
+  await muse.ctl.handle('paste-session', 'muse');
+  await muse.ctl.handle('flow-submit', 'muse\nllama_dev_sess=dca:bad-cli-token\n');
+  assert.equal(muse.sent.length, 0);
+  assert.match(muse.ctl.state.flows.muse.error.title, /CLI or API token/);
+  assert.equal(JSON.stringify(muse.ctl.state).includes('bad-cli-token'), false);
+});

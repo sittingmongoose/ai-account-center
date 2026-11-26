@@ -30,6 +30,7 @@ aac-store.workspace = true
 aac-status.workspace = true
 aac-renewal.workspace = true
 aac-snapshot.workspace = true
+aac-agent = { path = "../aac-agent" }
 aac-usage = { path = "../../native/aac-usage" }
 base64 = "0.22"
 indexmap = "2.14.2"

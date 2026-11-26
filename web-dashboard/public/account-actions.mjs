@@ -39,6 +39,9 @@ export const requests = Object.freeze({
   addSupervised: (provider, profileName) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, profileName } }),
   signInAgain: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/signin-again`, body: {} }),
   replaceKey: (id, key) => ({ method: 'PUT', path: `/api/accounts/${enc(id)}/key`, body: { key } }),
+  webSessions: () => ({ method: 'GET', path: '/api/accounts/web-session' }),
+  saveWebSession: (surface, body) => ({ method: 'PUT', path: `/api/accounts/web-session/${enc(surface)}`, body }),
+  deleteWebSession: surface => ({ method: 'DELETE', path: `/api/accounts/web-session/${enc(surface)}`, body: {} }),
   removeAsk: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: {} }),
   removeCommit: (id, confirmationToken, confirm) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: typeof confirm === 'string' ? { confirmationToken, confirm } : { confirmationToken } }),
   openApp: (id, platform) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/open`, body: { platform } }),
@@ -104,6 +107,30 @@ export function keyProblem(key) {
   if (!/^[\x21-\x7e]+$/.test(value)) return 'The key has a character a key cannot contain. Paste it again.';
   if (value.length < 8) return 'That is too short to be a key.';
   if (value.length > 512) return 'That is too long to be a key.';
+  return '';
+}
+/** A pasted web-session Cookie header checked before sending. Never echoes the pasted value. */
+export function webSessionProblem(raw, surface) {
+  const value = String(raw ?? '').trim();
+  if (!value) return 'Paste the Cookie header first.';
+  if (value.length > 32768) return 'That pasted session is larger than allowed.';
+  if (/[\0\r\n]/.test(value)) return 'The pasted session has a line break or control character. Paste the Cookie header on one line.';
+  if (surface === 'muse') {
+    if (/(?:^|[;=\s])dca:/i.test(value) || /^sk-/i.test(value)) {
+      return 'That looks like a CLI or API token, not a dev.meta.ai browser Cookie header.';
+    }
+    if (!/(?:^|;\s*)(?:llama_dev_sess|llm_sess)=/i.test(value)) {
+      return 'Paste the Cookie header from dev.meta.ai containing llama_dev_sess or llm_sess.';
+    }
+  } else if (surface === 'opencode-wallet') {
+    if (!/(?:^|;\s*)(?:auth|__Host-console_session)=/i.test(value)) {
+      return 'Paste the Cookie header from opencode.ai/console containing auth or __Host-console_session.';
+    }
+  } else if (surface === 'qwen') {
+    if (!value.includes('=') && !value.startsWith('{')) {
+      return 'Paste the Cookie header from the Qwen console (name=value; ...).';
+    }
+  }
   return '';
 }
 /** A suggested name for a new profile that is not taken: "codex-4". */
@@ -232,6 +259,18 @@ export function errorText(error, ctx = {}) {
     case 'duplicate_key': return t('Key already saved', 'That key is already saved for another account. Nothing was stored.');
     case 'key_rejected': return t('The provider refused the key', ctx.what === 'replace' ? 'The old key is still in use.' : 'Nothing was stored.');
     case 'key_store_unavailable': return t('Key not stored', 'The key could not be stored safely. Nothing was saved.');
+    case 'invalid_session': return t('Session cookie not accepted', 'Copy the Cookie header from a signed-in browser tab and paste it on one line. Nothing was saved.');
+    case 'session_rejected': return t(`${label(p)} rejected that session`, 'Sign in to the web console in your browser, copy a fresh Cookie header, and try again. Nothing was saved.');
+    case 'choose_workspace': return t('Choose an OpenCode workspace', 'This session belongs to multiple workspaces. Pick one below to save.');
+    case 'workspace_mismatch': return t('Workspace not found in that session', 'Pick a workspace that belongs to the signed-in account. Nothing was saved.');
+    case 'wallet_not_prepaid': return t('Not a prepaid Zen wallet', 'That OpenCode workspace does not have a pay-as-you-go prepaid balance. Nothing was saved.');
+    case 'choose_team': return t('Choose a Muse Code team', 'This session belongs to multiple teams. Pick one below to save.');
+    case 'team_mismatch': return t('Team not found in that session', 'Pick a team that belongs to the signed-in account. Nothing was saved.');
+    case 'account_mismatch': return t('Different Muse Code account', 'That dev.meta.ai session is signed in as a different account. Sign in with the matching account and try again. Nothing was saved.');
+    case 'plan_mismatch': return t('Different Muse Code plan', 'The portal team plan does not match the expected tier. Nothing was saved.');
+    case 'identity_unavailable': return t('Account identity missing', 'dev.meta.ai did not return an account email for that session. Nothing was saved.');
+    case 'session_store_unavailable': return t('Session not saved', 'The session could not be stored safely on the dashboard computer. Nothing was saved.');
+    case 'provider_unreachable': return t(`${label(p)} could not be reached`, 'The session could not be verified right now. Nothing was saved. Try again shortly.');
     case 'not_aac_owned': return t('Key belongs to another app', 'This account reads a key another app saved. Add a key here to manage it from the dashboard.');
     case 'use_replace_key': return t('Use Replace key', 'This account signs in with a key; replace the key instead.');
     // Only Remove refuses the live login; it signs in again in place, so a sign-in refusal is a server too old.

@@ -14,7 +14,7 @@ export const PAGE_ACTIONS = Object.freeze(new Set([
   'details', 'details-closed', 'launch',
   // Accounts & Settings (accounts-controller.mjs handle())
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray',
-  'add', 'add-key', 'replace-key', 'signin-again', 'signin', 'session-signin', 'recheck',
+  'add', 'add-key', 'replace-key', 'paste-session', 'web-session-region', 'web-session-pick', 'signin-again', 'signin', 'session-signin', 'recheck',
   'flow-submit', 'flow-cancel', 'flow-done', 'flow-retry', 'flow-copy', 'flow-open-url', 'flow-open-app', 'flow-recheck',
   'claude-host', 'claude-open',
   'remove', 'refuse', 'line-cancel', 'remove-commit', 'restore', 'restore-commit', 'purge',

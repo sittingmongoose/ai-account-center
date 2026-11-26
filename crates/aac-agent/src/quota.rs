@@ -176,12 +176,34 @@ fn credential(provider: &str, home: &Path, selector: &Value, isolated: bool) -> 
     if selector["kind"] == "aac-key" {
         return key_credential(provider, home, selector);
     }
-    // These stores need native decryption/SQLite/safari grammar proof. Delegate before
-    // reading an alternative store, so selection can never silently change identity.
-    if selector
+    let is_discover = selector
         .get("kind")
         .and_then(Value::as_str)
-        .is_some_and(|k| k != "discover")
+        .is_none_or(|k| k == "discover");
+    if provider == "qwen"
+        && is_discover
+        && let Ok(Some(stored)) =
+            aac_files::web_session::load(&home.join(".ccs"), aac_files::web_session::Surface::Qwen)
+        && let Some((cookie, gateway_cookie, region)) = stored.secret.qwen_parts()
+    {
+        let base_url = if region == "cn" {
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        } else {
+            "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+        };
+        let packed = json!({
+            "cookie": cookie,
+            "gatewayCookie": gateway_cookie,
+            "baseUrl": base_url,
+        });
+        return json!({
+            "secret": packed.to_string(),
+            "source": "Pasted Qwen console session",
+        });
+    }
+    // These stores need native decryption/SQLite/safari grammar proof. Delegate before
+    // reading an alternative store, so selection can never silently change identity.
+    if !is_discover
         || home.join(".omp/agent/agent.db").exists()
         || (provider == "qwen"
             && (home
@@ -607,141 +629,114 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
     Ok(result)
 }
 
-fn form(pairs: &[(&str, String)]) -> String {
-    let mut url =
-        reqwest::Url::parse("http://localhost/").unwrap_or_else(|_| unreachable!("constant URL"));
-    {
-        let mut q = url.query_pairs_mut();
-        for (k, v) in pairs {
-            q.append_pair(k, v);
-        }
+struct ClientTransport<'a>(&'a Client);
+
+impl crate::web_session::HttpTransport for ClientTransport<'_> {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        url: &'a str,
+        headers: &'a [(&'a str, &'a str)],
+        body: Option<&'a [u8]>,
+        cap: usize,
+        timeout: Duration,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::web_session::HttpResponse,
+                        crate::web_session::HttpError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        let method = method.to_owned();
+        let url = url.to_owned();
+        let headers: Vec<(String, String)> = headers
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let body = body.map(|b| b.to_vec());
+        Box::pin(async move {
+            let remaining = self.0.deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(crate::web_session::HttpError::Network);
+            }
+            let destination = self.0.endpoint.as_deref().unwrap_or(&url);
+            let mut request = match method.as_str() {
+                "POST" => self.0.client.post(destination),
+                _ => self.0.client.get(destination),
+            }
+            .timeout(remaining.min(timeout));
+            if self.0.endpoint.is_some() {
+                request = request.header("x-aac-fixture-url", &url);
+            }
+            for (name, value) in &headers {
+                request = request.header(name.as_str(), value.as_str());
+            }
+            if let Some(bytes) = body {
+                request = request.body(bytes);
+            }
+            let mut response = request
+                .send()
+                .await
+                .map_err(|_| crate::web_session::HttpError::Network)?;
+            let status = response.status().as_u16();
+            if (300..400).contains(&status) {
+                return Err(crate::web_session::HttpError::Redirect);
+            }
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|h| h.to_str().ok())
+                .map(str::to_owned);
+            let mut out = Vec::new();
+            // Error bodies are deliberately never read, decoded, or logged.
+            if status < 400 {
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| crate::web_session::HttpError::Network)?
+                {
+                    let take = chunk
+                        .len()
+                        .min(cap.saturating_add(1).saturating_sub(out.len()));
+                    out.extend_from_slice(&chunk[..take]);
+                    if out.len() > cap {
+                        return Err(crate::web_session::HttpError::TooLarge);
+                    }
+                }
+            }
+            Ok(crate::web_session::HttpResponse {
+                status,
+                retry_after,
+                body: out,
+            })
+        })
     }
-    url.query().unwrap_or("").to_owned()
 }
-async fn qwen(client: &impl Http, secret: &str, now: i64) -> Value {
-    let packed: Value = serde_json::from_str(secret).unwrap_or(Value::Null);
-    if proof::scope(|| {
-        if !proof::proven(&packed) {
-            proof::reject();
-        }
-        Value::Null
-    }) == proof::fallback()
-    {
-        return proof::fallback();
+
+async fn qwen(client: &Client, secret: &str, now: i64) -> Value {
+    use crate::web_session::qwen::{QwenError, collect_packed};
+    let transport = ClientTransport(client);
+    match collect_packed(&transport, secret, now.saturating_mul(1000)).await {
+        Ok(reading) => json!({
+            "plan": reading.plan,
+            "windows": reading.windows,
+        }),
+        Err(QwenError::NeedsSignIn(message)) => error("needs_sign_in", &message),
+        Err(QwenError::Unavailable(message)) => error("unavailable", &message),
+        Err(QwenError::RateLimited {
+            retry_after_seconds,
+            message,
+        }) => json!({
+            "status": "error",
+            "message": aac_core::scrub(&message),
+            "retryAfterSeconds": retry_after_seconds,
+        }),
+        Err(QwenError::ProviderError(message)) => error("error", &message),
     }
-    if packed.get("baseUrl").is_some_and(|v| !v.is_string()) {
-        return error(
-            "unavailable",
-            "The saved Qwen token-plan region is unsupported.",
-        );
-    }
-    let Some(cookie) = packed["cookie"]
-        .as_str()
-        .filter(|s| !s.trim_matches(proof::space).is_empty())
-    else {
-        return error(
-            "unavailable",
-            "The saved Qwen API key has no console session; live token-plan usage requires its existing console cookie.",
-        );
-    };
-    if cookie.len() > 32768 || cookie.bytes().any(|c| matches!(c, 0 | 10 | 13)) {
-        return error("unavailable", "The saved Qwen console session is invalid.");
-    }
-    let base = packed
-        .get("baseUrl")
-        .and_then(Value::as_str)
-        .unwrap_or("https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1")
-        .trim_end_matches('/');
-    if base == "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" {
-        return proof::fallback();
-    }
-    if base != "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" {
-        return error(
-            "unavailable",
-            "The saved Qwen token-plan region is unsupported.",
-        );
-    }
-    let gateway_cookie = packed.get("gatewayCookie").unwrap_or(&packed["cookie"]);
-    let Some(gateway_cookie) = gateway_cookie
-        .as_str()
-        .filter(|s| s.len() <= 32768 && !s.bytes().any(|c| matches!(c, 0 | 10 | 13)))
-    else {
-        return error("unavailable", "The saved Qwen gateway session is invalid.");
-    };
-    // Percent-decoding of CSRF is a separate grammar boundary; do not silently omit it.
-    if gateway_cookie.split(';').any(|s| {
-        s.trim_matches(proof::space).starts_with("csrf=")
-            || s.trim_matches(proof::space)
-                .starts_with("login_aliyunid_csrf=")
-    }) {
-        return proof::fallback();
-    }
-    let info = match fetch(
-        client,
-        "https://home.qwencloud.com/tool/user/info.json",
-        &[("Cookie", cookie)],
-        now,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
-    let Some(token) = info["data"]["secToken"]
-        .as_str()
-        .filter(|s| !s.is_empty() && s.len() <= 16384)
-    else {
-        return error(
-            "needs_sign_in",
-            "The saved Qwen console session has expired or is incomplete.",
-        );
-    };
-    let mut headers = vec![
-        ("Content-Type", "application/x-www-form-urlencoded"),
-        ("Origin", "https://home.qwencloud.com"),
-        (
-            "Referer",
-            "https://home.qwencloud.com/analytics/token-plan/individual",
-        ),
-        ("X-Requested-With", "XMLHttpRequest"),
-    ];
-    if !gateway_cookie.is_empty() {
-        headers.push(("Cookie", gateway_cookie));
-    }
-    let mut payloads = Vec::new();
-    for suffix in ["usage", "addon/list", "subscription", "quota-config"] {
-        let endpoint = format!("zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/{suffix}");
-        let mut data = json!({"cornerstoneParam":{"domain":"home.qwencloud.com","consoleSite":"QWENCLOUD","console":"ONE_CONSOLE","xsp_lang":"en-US","protocol":"V2","productCode":"p_efm"}});
-        if suffix == "subscription" {
-            data["commodityCode"] = json!("sfm_tokenplansolo_public_intl");
-        }
-        if suffix == "addon/list" {
-            data["commodityCode"] = json!("sfm_tokenplansoloaddon_public_intl");
-            data["status"] = json!(["ACTIVE"]);
-            data["pageNum"] = json!(1);
-            data["pageSize"] = json!(10);
-        }
-        let params = json!({"Api":endpoint,"Data":data,"V":"1.0"});
-        let query = form(&[
-            ("product", "sfm_bailian".into()),
-            ("action", "IntlBroadScopeAspnGateway".into()),
-            ("api", endpoint),
-        ]);
-        let body = form(&[
-            ("product", "sfm_bailian".into()),
-            ("action", "IntlBroadScopeAspnGateway".into()),
-            ("region", "ap-southeast-1".into()),
-            ("sec_token", token.into()),
-            ("params", params.to_string()),
-        ]);
-        let url = format!("https://cs-data.qwencloud.com/data/api.json?{query}");
-        match fetch_body(client, &url, &headers, now, Some(body.as_bytes())).await {
-            Ok(v) => payloads.push(v),
-            Err(e) if suffix == "usage" || e == proof::fallback() => return e,
-            Err(_) => payloads.push(Value::Null),
-        }
-    }
-    proof::scope(|| parse::qwen(&payloads))
 }
 
 #[cfg(test)]
@@ -792,5 +787,32 @@ mod publication_tests {
         assert_eq!(published["status"], "error");
         assert_eq!(published["source"], "error");
         assert!(!published.to_string().contains("fixture-dummy-token"));
+    }
+
+    #[test]
+    fn quota_read_uses_pasted_qwen_web_session_without_python_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ccs = dir.path().join(".ccs");
+        let raw_cookie = "login_aliyunid_ticket=fixture-ticket; login_aliyunid_csrf=tok%2B1%3D%3D";
+        let parsed = aac_files::web_session::parse_pasted(
+            aac_files::web_session::Surface::Qwen,
+            raw_cookie,
+            &aac_files::web_session::PasteOptions {
+                region: Some("intl".into()),
+                ..Default::default()
+            },
+            "2026-11-26T12:00:00Z",
+        )
+        .expect("parse");
+        aac_files::web_session::save_as_agent(&ccs, aac_files::web_session::Surface::Qwen, &parsed)
+            .expect("save");
+        let found = credential("qwen", dir.path(), &json!({"kind": "discover"}), true);
+        assert_eq!(found["source"], "Pasted Qwen console session");
+        assert!(
+            found["secret"]
+                .as_str()
+                .is_some_and(|s| s.contains("fixture-ticket"))
+        );
+        assert_ne!(found, proof::fallback());
     }
 }

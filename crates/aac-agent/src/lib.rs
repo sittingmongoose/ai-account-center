@@ -15,6 +15,7 @@ mod quota;
 mod scan;
 mod signin;
 mod signin_session;
+pub mod web_session;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{
     Control, Event, Handshake, MAX_FRAME_BYTES, MAX_SCAN_FRAME_BYTES, PROTOCOL_VERSION, Request,
@@ -299,6 +300,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     }
     if request.verb == "quota-read" {
         return quota::run(&request.args).await;
+    }
+    if request.verb == "web-session" {
+        return web_session::run_verb(&request.args).await;
     }
     if request.verb == "scan-usage" {
         return scan::run(&request.args).await;
