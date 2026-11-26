@@ -22,6 +22,11 @@ use aac_protocol::{
 };
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
+/// `aac-agent --terminal-child ...`: the app-update relaunch child (see `apps::updater::terminal`).
+pub fn terminal_child(args: &[std::ffi::OsString]) -> i32 {
+    apps::updater::terminal::terminal_child(args)
+}
+
 /// Return the exact build identity used by shipping's manifest handshake.
 pub fn handshake() -> Handshake {
     Handshake {

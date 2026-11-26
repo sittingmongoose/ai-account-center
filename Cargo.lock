@@ -17,6 +17,7 @@ dependencies = [
  "aac-usage",
  "base64 0.22.1",
  "chrono",
+ "flate2",
  "libc",
  "nix",
  "regex",
@@ -29,6 +30,7 @@ dependencies = [
  "tokio",
  "unicode-normalization",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

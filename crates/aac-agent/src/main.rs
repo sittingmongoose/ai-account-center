@@ -22,6 +22,8 @@ async fn main() {
             }
             Err(_) => 1,
         }
+    } else if args.first().is_some_and(|arg| arg == "--terminal-child") {
+        aac_agent::terminal_child(&args[1..])
     } else if args.is_empty() {
         aac_agent::run(BufReader::new(tokio::io::stdin()), tokio::io::stdout())
             .await

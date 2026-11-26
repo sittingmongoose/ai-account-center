@@ -4,6 +4,9 @@ mod cli;
 mod packages;
 mod python;
 pub(crate) mod update;
+// Wired into `update.rs` by lane W6; until then only its tests use it.
+#[allow(dead_code)]
+pub(crate) mod updater;
 
 use aac_core::{Cause, Failure};
 use aac_files::read::{self, Read, ReadPolicy};
@@ -18,8 +21,8 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Platform {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Platform {
     Ubuntu,
     Mac,
     Windows,
@@ -44,7 +47,7 @@ impl Platform {
     }
 }
 
-struct Host {
+pub(crate) struct Host {
     platform: Platform,
     home: PathBuf,
     local: PathBuf,
