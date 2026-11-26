@@ -21,7 +21,7 @@ person (the Mac). Each run:
    `Claude Code-credentials-<first 8 hex of sha256(config dir)>` (`Claude Code-credentials` for
    `~/.claude`), which only a process in the Mac's desktop session can do; elsewhere
    `<config dir>/.credentials.json`.
-2. **Renews** each sign-in whose end is within `renewWithinHours` (96) or that is already logged out,
+2. **Renews** each sign-in whose end is within `renewWithinHours` (24) or that is already logged out,
    grouped by account. It runs `claude auth login --claudeai` for that profile under a terminal (a
    pty here, `ssh -tt` there), opens the printed link in that account's own Chrome profile
    (`browser_auth.mjs`, over the DevTools protocol), checks the page says "Logged in as <email>",
@@ -103,7 +103,7 @@ Private to this computer (0600). Host names, addresses and emails live only here
 }
 ```
 
-Other keys: `renewWithinHours`, `verifyAfterHours`, `humanWaitMinutes`, `chromeProfilesDir` (default
+Other keys: `renewWithinHours`, `captchaBackoffHours` (12: after an unsolved CAPTCHA, wait before reopening claude.ai for that account), `verifyAfterHours`, `humanWaitMinutes`, `chromeProfilesDir` (default
 `<CCS dir>/claude-signin/chrome/<email>`; a profile left by the earlier `claude-relogin` tool in
 `~/.claude-relogin/chrome/<email>` is used where it is), `notify`, `nodePath`, `claudePaths`
 (`{"<host>": "<path to claude>"}`). Use the AI Account Center computer names (`mac`, `ubuntu`,

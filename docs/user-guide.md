@@ -115,7 +115,7 @@ holds no AI Account Center account state.
 Every Claude Code sign-in ends about 30 days after it was made, and refreshing it does not move that
 end. The sign-in renewal runner ([scripts/claude-signin](../scripts/claude-signin/README.md)) runs
 every 10 minutes on the computer with the browser (the Mac), reads every sign-in on every computer,
-renews each one about four days before it ends through a Chrome profile kept signed in to claude.ai
+renews each one about a day before it ends (after an unsolved CAPTCHA it waits 12 hours and asks you once instead of retrying) through a Chrome profile kept signed in to claude.ai
 for that account, and checks the renewal again 9 hours later.
 
 - **Home:** each Claude row says "Auto-renews · next end Nov 29", or what needs attention ("Sign-in

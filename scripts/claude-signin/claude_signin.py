@@ -61,8 +61,12 @@ DEFAULTS = {
     "ignoreProfiles": [],
     # "host/profile" pairs never renewed automatically (still tracked).
     "skip": [],
-    # Renew a sign-in once its end is this close.
-    "renewWithinHours": 96,
+    # Renew a sign-in once its end is this close. Each automatic renewal can meet a claude.ai
+    # CAPTCHA only a person can pass, so renew late (one day ahead), not days ahead.
+    "renewWithinHours": 24,
+    # After a CAPTCHA that nobody solved in time, wait this long before opening claude.ai again for
+    # that account (a person was already asked once; "renew" by hand bypasses the wait).
+    "captchaBackoffHours": 12,
     # Re-check a renewal this long after it (a running Claude can write its old sign-in back).
     "verifyAfterHours": 9,
     # Write claude-signins.json / .md here (the AI Account Center usage snapshot folder).
@@ -462,6 +466,17 @@ def due_reason(row, cfg, pst, now):
 
 def backoff_ok(pst, now):
     return now >= (pst.get("retryAfter") or 0)
+
+
+def note_captcha_wait(pst, now, cfg, ends_at=None):
+    """A CAPTCHA went unsolved: ask once (already done by the hook) and back off instead of reopening
+    claude.ai every run. The wait never passes the point an hour before the sign-in ends."""
+    pst["lastResult"] = "waiting_for_you"
+    pst["lastAttemptAt"] = now
+    wait = int(float(cfg.get("captchaBackoffHours") or 12) * HOUR_MS)
+    if ends_at and ends_at - HOUR_MS > now:
+        wait = min(wait, max(HOUR_MS, ends_at - HOUR_MS - now))
+    pst["retryAfter"] = now + wait
 
 
 def note_failure(pst, now, reason):
@@ -983,6 +998,8 @@ def renew_due(cfg, st, results, only=None, force=False, dry_run=False):
         email = row["email"]
         k = key(h, row["profile"])
         if email in blocked:
+            note_captcha_wait(st["profiles"].setdefault(k, {}), now_ms(), cfg, row.get("signInEndsAt"))
+            save_state(st)
             outcomes.append((k, "waiting_for_you"))
             continue
         pst = st["profiles"].setdefault(k, {})
@@ -1000,8 +1017,7 @@ def renew_due(cfg, st, results, only=None, force=False, dry_run=False):
         if result == "captcha_timeout":
             # A person is needed for this account's browser; its other sign-ins wait for the next run.
             blocked.add(email)
-            pst["lastResult"] = "waiting_for_you"
-            pst["lastAttemptAt"] = now_ms()
+            note_captcha_wait(pst, now_ms(), cfg, row.get("signInEndsAt"))
             save_state(st)
             outcomes.append((k, "waiting_for_you"))
             continue

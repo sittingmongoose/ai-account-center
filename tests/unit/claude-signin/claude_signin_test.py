@@ -174,6 +174,33 @@ class DecisionTests(Home):
         self.assertEqual(pst["retryAfter"] - NOW, 6 * H)
         self.assertFalse(runner.backoff_ok(pst, NOW + H))
 
+    def test_default_window_is_one_day(self):
+        cfg = dict(runner.DEFAULTS)
+        self.assertIsNone(runner.due_reason(self.row(signInEndsAt=NOW + 25 * H), cfg, {}, NOW))
+        self.assertEqual(runner.due_reason(self.row(signInEndsAt=NOW + 23 * H), cfg, {}, NOW), "ends_soon")
+
+    def test_an_unsolved_captcha_backs_off_instead_of_reopening_every_run(self):
+        cfg = dict(runner.DEFAULTS)
+        pst = {}
+        runner.note_captcha_wait(pst, NOW, cfg, NOW + 3 * 24 * H)
+        self.assertEqual(pst["lastResult"], "waiting_for_you")
+        self.assertEqual(pst["retryAfter"] - NOW, 12 * H)
+        self.assertFalse(runner.backoff_ok(pst, NOW + H))
+        near = {}
+        runner.note_captcha_wait(near, NOW, cfg, NOW + 5 * H)
+        self.assertEqual(near["retryAfter"] - NOW, 4 * H)  # never waits past an hour before the end
+        last = {}
+        runner.note_captcha_wait(last, NOW, cfg, NOW + 30 * 60 * 1000)
+        self.assertEqual(last["retryAfter"] - NOW, 12 * H)  # already inside the last hour: the plain wait
+
+    def test_renew_due_skips_an_account_backing_off_from_a_captcha(self):
+        cfg = dict(runner.DEFAULTS)
+        st = {"profiles": {"ubuntu/gmail": {"retryAfter": NOW + 6 * H, "lastResult": "waiting_for_you"}}, "accounts": {}, "events": []}
+        rows = [self.row(signInEndsAt=NOW + 10 * H)]
+        with mock.patch.object(runner, "now_ms", return_value=NOW):
+            out = runner.renew_due(cfg, st, [({"name": "ubuntu"}, {"profiles": rows})], dry_run=True)
+        self.assertEqual(out, [])
+
     def test_verification_spots_an_old_sign_in_written_back(self):
         pst = {"expectEnd": NOW + 29 * 24 * H, "lastRenewAt": NOW - 9 * H, "verify": [NOW - 1]}
         st = {"events": []}
