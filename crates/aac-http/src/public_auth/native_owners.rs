@@ -548,7 +548,10 @@ impl NativeOwners {
         };
         if Self::dashboard_route(request.method(), path) {
             let (parts, _) = request.into_parts();
-            return self.dashboard(&access, parts.uri, parts.headers).await;
+            let head = parts.method == Method::HEAD;
+            return self
+                .dashboard(&access, parts.uri, parts.headers, head)
+                .await;
         }
         if let Some(id) = lifecycle_open::route(request.method(), path).map(str::to_owned) {
             return lifecycle_open::handle(&self.agents, &id, request).await;
@@ -613,6 +616,7 @@ impl NativeOwners {
         access: &DashboardAccess,
         uri: Uri,
         headers: axum::http::HeaderMap,
+        head: bool,
     ) -> Reply {
         if matches!(access.principal, DashboardPrincipal::Anonymous) {
             return no_store(super::plain(401, "Authentication required"));
@@ -630,7 +634,7 @@ impl NativeOwners {
                     headers: axum::http::HeaderMap| async move {
             self.limits
                 .blocking(Pool::Reads, move || {
-                    crate::dashboard_fed::latest_for_access(&cache, &uri, &headers, secure)
+                    crate::dashboard_fed::latest_for_access(&cache, &uri, &headers, secure, head)
                 })
                 .await
                 .unwrap_or_else(|_| unavailable())

@@ -11,7 +11,14 @@
 //! result. The identity, and so the ETag, does not include `generatedAt`. A different identity is
 //! a different tag: the tag is stored with the bytes it was hashed from and is not reused for
 //! another key.
+//!
+//! Views at or above [`crate::compress::MIN_COMPRESS_BYTES`] are stored as a pre-deflated
+//! [`SpliceGzip`] so gzip clients stitch `generatedAt` with zero recompression and cache memory
+//! stays ~10x smaller.
+use crate::compress::{MIN_COMPRESS_BYTES, SpliceGzip};
+use crate::view_reply::EncodedView;
 use aac_status::read_status::FedTrace;
+use axum::body::Bytes;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -23,14 +30,96 @@ pub(crate) const SLOTS: usize = 2;
 /// `Date#toISOString` inside the admitted domain.
 pub(crate) const ISO_LEN: usize = 24;
 
+/// A cached Status body stored in pre-compressed splice form when compressible, or plain bytes
+/// when below the compression threshold.
+pub(crate) enum CachedStatusBody {
+    Splice(SpliceGzip),
+    Plain { bytes: Bytes, at: usize },
+}
+
+impl CachedStatusBody {
+    /// Build a cached Status body from `raw` while also returning the uncompressed `Bytes` for the
+    /// initial cache-miss caller (zero extra copy when storing `Splice`).
+    pub(crate) fn from_raw_and_keep(raw: Vec<u8>, at: usize) -> (Self, Bytes) {
+        let raw_bytes = Bytes::from(raw);
+        if raw_bytes.len() >= MIN_COMPRESS_BYTES
+            && let Some(splice) = SpliceGzip::build(&raw_bytes, at, at + ISO_LEN)
+            && splice.stored_len() < raw_bytes.len()
+        {
+            return (Self::Splice(splice), raw_bytes);
+        }
+        (
+            Self::Plain {
+                bytes: raw_bytes.clone(),
+                at,
+            },
+            raw_bytes,
+        )
+    }
+
+    /// Render this cached view with `iso` spliced into `generatedAt`, returning pre-compressed
+    /// gzip `Bytes` when `accept_gzip` is true and the view is compressible.
+    pub(crate) fn render_encoded(
+        &self,
+        iso: &str,
+        accept_gzip: bool,
+        etag: String,
+    ) -> Option<EncodedView> {
+        if iso.len() != ISO_LEN {
+            return None;
+        }
+        match self {
+            Self::Splice(splice) => {
+                let raw_len = splice.raw_len(ISO_LEN);
+                if accept_gzip {
+                    let bytes = splice.render_gzip(iso.as_bytes());
+                    Some(EncodedView::Payload {
+                        bytes,
+                        raw_len,
+                        gzip: true,
+                        etag,
+                    })
+                } else {
+                    let bytes = splice.render_raw(iso.as_bytes()).ok()?;
+                    Some(EncodedView::Payload {
+                        bytes,
+                        raw_len,
+                        gzip: false,
+                        etag,
+                    })
+                }
+            }
+            Self::Plain { bytes, at } => {
+                let filled = fill(bytes, *at, iso)?;
+                let raw_len = filled.len();
+                Some(EncodedView::Payload {
+                    bytes: Bytes::from(filled),
+                    raw_len,
+                    gzip: false,
+                    etag,
+                })
+            }
+        }
+    }
+
+    /// Render the uncompressed JSON bytes with `iso` spliced into `generatedAt`.
+    pub(crate) fn render_raw(&self, iso: &str) -> Option<Vec<u8>> {
+        if iso.len() != ISO_LEN {
+            return None;
+        }
+        match self {
+            Self::Splice(splice) => splice.render_raw(iso.as_bytes()).ok().map(|b| b.to_vec()),
+            Self::Plain { bytes, at } => fill(bytes, *at, iso),
+        }
+    }
+}
+
 struct Slot {
     clock: String,
     day: String,
     trace: FedTrace,
-    bytes: Arc<Vec<u8>>,
+    body: Arc<CachedStatusBody>,
     etag: String,
-    /// Byte offset of the 24-character `generatedAt` text.
-    at: usize,
 }
 
 struct Set {
@@ -53,6 +142,7 @@ pub(crate) fn hit(ids: &[String; 6], clock: &str, day: &str, now: i64) -> Option
     CACHE.lock().ok()?.lookup(ids, clock, day, now)
 }
 
+#[cfg(test)]
 pub(crate) struct Kept {
     pub(crate) ids: [String; 6],
     pub(crate) clock: String,
@@ -63,19 +153,27 @@ pub(crate) struct Kept {
     pub(crate) at: usize,
 }
 
-/// Keep a composed view. A trace that must not be kept, or bytes without `generatedAt`, is ignored.
-pub(crate) fn remember(kept: Kept) {
+/// Keep a pre-built cached view body. A trace that must not be kept is ignored.
+pub(crate) fn remember_body(
+    ids: [String; 6],
+    clock: String,
+    day: String,
+    trace: FedTrace,
+    body: Arc<CachedStatusBody>,
+    etag: String,
+) {
+    if !trace.keep() {
+        return;
+    }
     if let Ok(mut cache) = CACHE.lock() {
-        cache.store(kept);
+        cache.store_body(ids, clock, day, trace, body, etag);
     }
 }
 
-/// A hit: the bytes with `generatedAt` still from the instant they were composed, and that
-/// instant's ETag.
+/// A hit: the cached body with `generatedAt` patchable per request, and that view's ETag.
 pub(crate) struct Hit {
-    pub bytes: Arc<Vec<u8>>,
+    pub body: Arc<CachedStatusBody>,
     pub etag: String,
-    pub at: usize,
 }
 
 impl Cache {
@@ -93,16 +191,14 @@ impl Cache {
             slot.clock == clock && slot.day == day && slot.trace.keep() && slot.trace.matches(now)
         });
         let hit = found.map(|slot| Hit {
-            bytes: slot.bytes.clone(),
+            body: slot.body.clone(),
             etag: slot.etag.clone(),
-            at: slot.at,
         });
         self.sets.push_back(set);
         hit
     }
 
-    /// Keep `bytes` for this generation identity and these clock and day words. A trace that must
-    /// not be kept is ignored. The oldest set, and the oldest slot of this set, go at the bounds.
+    #[cfg(test)]
     fn store(&mut self, kept: Kept) {
         let Kept {
             ids,
@@ -116,13 +212,30 @@ impl Cache {
         if !trace.keep() || at + ISO_LEN > bytes.len() {
             return;
         }
+        let (body, _) = CachedStatusBody::from_raw_and_keep(bytes, at);
+        self.store_body(ids, clock, day, trace, Arc::new(body), etag);
+    }
+
+    /// Keep `body` for this generation identity and these clock and day words. A trace that must
+    /// not be kept is ignored. The oldest set, and the oldest slot of this set, go at the bounds.
+    fn store_body(
+        &mut self,
+        ids: [String; 6],
+        clock: String,
+        day: String,
+        trace: FedTrace,
+        body: Arc<CachedStatusBody>,
+        etag: String,
+    ) {
+        if !trace.keep() {
+            return;
+        }
         let slot = Slot {
             clock,
             day,
             trace,
-            bytes: Arc::new(bytes),
+            body,
             etag,
-            at,
         };
         if let Some(pos) = self.sets.iter().position(|set| set.ids == ids) {
             let mut set = self.sets.remove(pos).expect("the set was just found");
@@ -238,7 +351,8 @@ mod tests {
             .lookup(&ids(2), "12:00 PM", "Nov 14", 1_000)
             .expect("two");
         assert_eq!(other.etag, "etag-two");
-        assert!(other.bytes.windows(3).any(|w| w == b"two"));
+        let other_raw = other.body.render_raw(iso).expect("two raw");
+        assert!(other_raw.windows(3).any(|w| w == b"two"));
         assert_ne!(other.etag, "etag-one");
         // The same generations, across the threshold: not the kept bytes.
         assert!(cache.lookup(&ids(1), "12:00 PM", "Nov 14", 500).is_none());
@@ -246,7 +360,10 @@ mod tests {
             .lookup(&ids(1), "12:00 PM", "Nov 14", 1_000)
             .expect("one");
         assert_eq!(hit.etag, "etag-one");
-        assert_eq!(hit.bytes.as_slice(), first.as_slice());
+        assert_eq!(
+            hit.body.render_raw(iso).expect("one raw").as_slice(),
+            first.as_slice()
+        );
         // A different page clock is a different entry.
         assert!(cache.lookup(&ids(1), "12:01 PM", "Nov 14", 1_000).is_none());
     }
@@ -263,6 +380,35 @@ mod tests {
         assert!(filled.windows(3).any(|w| w == b"one"));
         assert!(fill(&raw, at, "short").is_none());
         assert!(generated_at(&raw, "2026-11-14T12:00:00.999Z").is_none());
+    }
+
+    #[test]
+    fn large_status_body_splices_generated_at_in_gzip_and_raw() {
+        let iso = "2026-11-14T12:00:00.500Z";
+        let next = "2026-11-14T12:00:04.123Z";
+        let pad = "a".repeat(8192);
+        let raw = format!(r#"{{"version":1,"generatedAt":"{iso}","pad":"{pad}"}}"#).into_bytes();
+        let at = generated_at(&raw, iso).expect("offset");
+        let (body, _) = CachedStatusBody::from_raw_and_keep(raw.clone(), at);
+        assert!(matches!(body, CachedStatusBody::Splice(_)));
+        let expected = fill(&raw, at, next).expect("expected");
+        let EncodedView::Payload {
+            bytes: gz,
+            raw_len,
+            gzip,
+            ..
+        } = body
+            .render_encoded(next, true, "W/\"tag\"".into())
+            .expect("gzip render")
+        else {
+            panic!("expected payload");
+        };
+        assert!(gzip);
+        assert_eq!(raw_len, expected.len());
+        assert!(gz.len() < expected.len());
+        let inflated = crate::compress::gzip_decompress(&gz, raw_len).expect("gunzip");
+        assert_eq!(inflated.as_ref(), expected.as_slice());
+        assert_eq!(body.render_raw(next).expect("raw render"), expected);
     }
 
     #[test]

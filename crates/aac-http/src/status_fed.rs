@@ -19,10 +19,13 @@
 //! written by `aac_views::js_json` as Node writes it, with the revalidated-view ETag. Anything unproven declines
 //! with a named reason, and TS answers.
 use crate::feed::{Feeds, Generation, Prepared};
+use crate::status_cache::CachedStatusBody;
+use crate::view_reply::EncodedView;
 use aac_status::read_context::{Date, Presentation};
 use aac_status::read_status::{self, FedTrace, Unproven};
 use aac_views::decline::Decline;
 use aac_views::js_json::Writer;
+use axum::body::Bytes;
 use serde::Deserialize;
 use serde_json::{Value, value::RawValue};
 use sha2::{Digest, Sha256};
@@ -170,7 +173,7 @@ pub(crate) fn answer_generations(
     day: String,
 ) -> Result<(Vec<u8>, String), Decline> {
     let composed = compose_generations(held, now_ms, clock, day)?;
-    Ok(((*composed.bytes).clone(), composed.etag))
+    Ok((composed.raw.to_vec(), composed.etag))
 }
 
 #[cfg(unix)]
@@ -203,11 +206,75 @@ fn resolve_fed(feeds: &Feeds, feed: &str) -> Result<(Feed, [Arc<Generation>; 6])
 
 #[derive(Clone)]
 struct Composed {
-    bytes: Arc<Vec<u8>>,
+    body: Option<Arc<CachedStatusBody>>,
+    raw: Bytes,
+    composed_iso: String,
     etag: String,
     at: Option<usize>,
     trace: Option<FedTrace>,
     composed_now: i64,
+}
+
+impl Composed {
+    fn encode_for(
+        &self,
+        iso: &str,
+        exact_or_shared: bool,
+        accept_gzip: bool,
+        if_none_match: Option<&str>,
+    ) -> Option<EncodedView> {
+        if crate::compress::not_modified(if_none_match, &self.etag) {
+            return Some(EncodedView::NotModified {
+                etag: self.etag.clone(),
+            });
+        }
+        if exact_or_shared {
+            if accept_gzip {
+                if let Some(body) = &self.body
+                    && let Some(view) =
+                        body.render_encoded(&self.composed_iso, true, self.etag.clone())
+                {
+                    return Some(view);
+                }
+                if let Some(gz) = crate::compress::compress_for_tag(Some(&self.etag), &self.raw) {
+                    return Some(EncodedView::Payload {
+                        bytes: gz,
+                        raw_len: self.raw.len(),
+                        gzip: true,
+                        etag: self.etag.clone(),
+                    });
+                }
+            }
+            return Some(EncodedView::Payload {
+                bytes: self.raw.clone(),
+                raw_len: self.raw.len(),
+                gzip: false,
+                etag: self.etag.clone(),
+            });
+        }
+        if let Some(body) = &self.body {
+            return body.render_encoded(iso, accept_gzip, self.etag.clone());
+        }
+        let at = self.at?;
+        let filled = crate::status_cache::fill(&self.raw, at, iso)?;
+        let raw_len = filled.len();
+        if accept_gzip
+            && let Some(gz) = crate::compress::compress_for_tag(Some(&self.etag), &filled)
+        {
+            return Some(EncodedView::Payload {
+                bytes: gz,
+                raw_len,
+                gzip: true,
+                etag: self.etag.clone(),
+            });
+        }
+        Some(EncodedView::Payload {
+            bytes: Bytes::from(filled),
+            raw_len,
+            gzip: false,
+            etag: self.etag.clone(),
+        })
+    }
 }
 
 fn validate_prepared(held: &[Arc<Generation>; 6]) -> Result<(), Decline> {
@@ -252,12 +319,14 @@ fn compose_generations(
     // is checked before a hit so a clock `toISOString` cannot write still declines.
     let date = Date::of_now(now_ms, clock.clone(), day.clone()).ok_or(Decline::Date)?;
     if let Some(hit) = crate::status_cache::hit(&key_ids, &clock, &day, now_ms)
-        && let Some(bytes) = crate::status_cache::fill(&hit.bytes, hit.at, date.iso_text())
+        && let Some(bytes) = hit.body.render_raw(date.iso_text())
     {
         return Ok(Composed {
-            bytes: Arc::new(bytes),
+            body: Some(hit.body),
+            raw: Bytes::from(bytes),
+            composed_iso: date.iso_text().to_owned(),
             etag: hit.etag,
-            at: Some(hit.at),
+            at: None,
             trace: None,
             composed_now: now_ms,
         });
@@ -303,19 +372,25 @@ fn compose_generations(
     );
     let tag = etag(key, &identity);
     let at = crate::status_cache::generated_at(&bytes, &iso);
-    if let Some(at) = at {
-        crate::status_cache::remember(crate::status_cache::Kept {
-            ids: key_ids,
+    let (body, raw) = if let Some(at) = at {
+        let (cached_body, raw) = CachedStatusBody::from_raw_and_keep(bytes, at);
+        let body = Arc::new(cached_body);
+        crate::status_cache::remember_body(
+            key_ids,
             clock,
             day,
-            trace: traced.clone(),
-            bytes: bytes.clone(),
-            etag: tag.clone(),
-            at,
-        });
-    }
+            traced.clone(),
+            Arc::clone(&body),
+            tag.clone(),
+        );
+        (Some(body), raw)
+    } else {
+        (None, Bytes::from(bytes))
+    };
     Ok(Composed {
-        bytes: Arc::new(bytes),
+        body,
+        raw,
+        composed_iso: iso,
         etag: tag,
         at,
         trace: Some(traced),
@@ -378,21 +453,32 @@ impl StatusCompose {
         self.compose_delay_ms.store(ms, Ordering::SeqCst);
     }
 
-    /// Singleflight `x-aac-feed` Status read: strict `feed.now` fidelity (`share_concurrent_window`
-    /// is false so an `x-aac-feed` follower only reuses a leader when `FedTrace` proves equality).
+    /// Singleflight `x-aac-feed` Status read returning pre-compressed gzip or `304 Not Modified`.
     #[cfg(unix)]
-    pub(crate) async fn answer_fed(
+    pub(crate) async fn answer_fed_encoded(
         &self,
         feeds: &Feeds,
         limits: &crate::limits::Limits,
         feed: &str,
-    ) -> Result<(Vec<u8>, String), Decline> {
+        accept_gzip: bool,
+        if_none_match: Option<&str>,
+    ) -> Result<EncodedView, Decline> {
         let (feed, held) = resolve_fed(feeds, feed)?;
-        self.answer_generations_async(Some(limits), held, feed.now, feed.clock, feed.day, false)
-            .await
+        self.answer_generations_encoded(
+            Some(limits),
+            held,
+            feed.now,
+            feed.clock,
+            feed.day,
+            false,
+            accept_gzip,
+            if_none_match,
+        )
+        .await
     }
 
-    /// Singleflight Status compose over six resolved generations. Waiters hold zero pool permits.
+    /// Singleflight Status compose over six resolved generations (uncompressed compatibility wrapper).
+    #[cfg(test)]
     pub(crate) async fn answer_generations_async(
         &self,
         limits: Option<&crate::limits::Limits>,
@@ -402,12 +488,51 @@ impl StatusCompose {
         day: String,
         share_concurrent_window: bool,
     ) -> Result<(Vec<u8>, String), Decline> {
+        match self
+            .answer_generations_encoded(
+                limits,
+                held,
+                now_ms,
+                clock,
+                day,
+                share_concurrent_window,
+                false,
+                None,
+            )
+            .await?
+        {
+            EncodedView::Payload { bytes, etag, .. } => Ok((bytes.to_vec(), etag)),
+            EncodedView::NotModified { .. } => Err(Decline::Internal),
+        }
+    }
+
+    /// Singleflight Status compose over six resolved generations. Short-circuits to `304` on
+    /// matching `If-None-Match` before splicing or rendering, and serves pre-compressed gzip
+    /// `Bytes` when `accept_gzip` is true. Waiters hold zero pool permits.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn answer_generations_encoded(
+        &self,
+        limits: Option<&crate::limits::Limits>,
+        held: [Arc<Generation>; 6],
+        now_ms: i64,
+        clock: String,
+        day: String,
+        share_concurrent_window: bool,
+        accept_gzip: bool,
+        if_none_match: Option<&str>,
+    ) -> Result<EncodedView, Decline> {
         let date = Date::of_now(now_ms, clock.clone(), day.clone()).ok_or(Decline::Date)?;
         let ids: [String; 6] = std::array::from_fn(|i| held[i].id.clone());
-        if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms)
-            && let Some(bytes) = crate::status_cache::fill(&hit.bytes, hit.at, date.iso_text())
-        {
-            return Ok((bytes, hit.etag));
+        if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms) {
+            if crate::compress::not_modified(if_none_match, &hit.etag) {
+                return Ok(EncodedView::NotModified { etag: hit.etag });
+            }
+            if let Some(view) = hit
+                .body
+                .render_encoded(date.iso_text(), accept_gzip, hit.etag)
+            {
+                return Ok(view);
+            }
         }
         validate_prepared(&held)?;
         let key = ComposeKey {
@@ -488,17 +613,20 @@ impl StatusCompose {
                 }
             };
             let composed = outcome?;
-            if composed.composed_now == now_ms {
-                return Ok(((*composed.bytes).clone(), composed.etag));
+            if composed.composed_now == now_ms
+                && let Some(view) =
+                    composed.encode_for(date.iso_text(), true, accept_gzip, if_none_match)
+            {
+                return Ok(view);
             }
             if composed
                 .trace
                 .as_ref()
                 .is_some_and(|trace| trace.keep() && trace.matches(now_ms))
-                && let Some(at) = composed.at
-                && let Some(bytes) = crate::status_cache::fill(&composed.bytes, at, date.iso_text())
+                && let Some(view) =
+                    composed.encode_for(date.iso_text(), false, accept_gzip, if_none_match)
             {
-                return Ok((bytes, composed.etag));
+                return Ok(view);
             }
             // One-sided: a follower may reuse the leader's bytes only when its own clock is at
             // or after the leader's instant, so `generatedAt` is never in the follower's future
@@ -506,16 +634,25 @@ impl StatusCompose {
             if share_concurrent_window
                 && now_ms >= composed.composed_now
                 && now_ms - composed.composed_now <= 1_000
+                && let Some(view) =
+                    composed.encode_for(date.iso_text(), true, accept_gzip, if_none_match)
             {
-                return Ok(((*composed.bytes).clone(), composed.etag));
+                return Ok(view);
             }
-            if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms)
-                && let Some(bytes) = crate::status_cache::fill(&hit.bytes, hit.at, date.iso_text())
-            {
-                return Ok((bytes, hit.etag));
+            if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms) {
+                if crate::compress::not_modified(if_none_match, &hit.etag) {
+                    return Ok(EncodedView::NotModified { etag: hit.etag });
+                }
+                if let Some(view) = hit
+                    .body
+                    .render_encoded(date.iso_text(), accept_gzip, hit.etag)
+                {
+                    return Ok(view);
+                }
             }
         }
         // Final fallback if a second-boundary race required a fresh compose directly.
+        let iso = date.iso_text().to_owned();
         let work = move || compose_generations(&held, now_ms, clock, day);
         let composed = match limits {
             Some(limits) => limits.blocking_status(work).await?,
@@ -523,7 +660,9 @@ impl StatusCompose {
                 .await
                 .unwrap_or(Err(Decline::Internal))?,
         };
-        Ok(((*composed.bytes).clone(), composed.etag))
+        composed
+            .encode_for(&iso, true, accept_gzip, if_none_match)
+            .ok_or(Decline::Internal)
     }
 }
 

@@ -17,12 +17,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// One request to the owner host (the running private service, or the in-process one a
-/// worker-less boot starts): `(status, body)` of its reply, or `None` when no owner answers.
-pub(super) type Hop = Arc<dyn Fn(String, String) -> HopFuture + Send + Sync>;
+/// worker-less boot starts): its [`super::owner_host::ServiceReply`], or `None` when no owner answers.
+pub(super) type Hop = Arc<dyn Fn(String, String, Vec<(String, String)>) -> HopFuture + Send + Sync>;
 
 /// The hop's future: the service reply, shared with the route's own `Send` requirement.
 pub(super) type HopFuture =
-    Pin<Box<dyn std::future::Future<Output = Option<(u16, Vec<u8>)>> + Send>>;
+    Pin<Box<dyn std::future::Future<Output = Option<super::owner_host::ServiceReply>> + Send>>;
 
 /// The capture setting's file, from the one private-file registry (`analytics-capture`).
 const CAPTURE: &str = "analytics-capture";
@@ -401,18 +401,32 @@ pub(super) async fn capture(
 }
 
 /// The composed read, including the public receipt when the native owner is unavailable.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn analytics(
     access: Option<DashboardAccess>,
     raw_query: Option<String>,
     head: bool,
     cross_site: bool,
+    accept_gzip: bool,
+    if_none_match: Option<String>,
+    no_cache: bool,
     hop: Option<Hop>,
 ) -> Reply {
     let Some(access) = access else {
         return super::service_error();
     };
     headless(
-        composed(access, raw_query.as_deref(), cross_site, hop).await,
+        composed(
+            access,
+            raw_query.as_deref(),
+            cross_site,
+            head,
+            accept_gzip,
+            if_none_match.as_deref(),
+            no_cache,
+            hop,
+        )
+        .await,
         head,
     )
 }
@@ -426,10 +440,15 @@ fn exact_cwd(body: &[u8]) -> Option<bool> {
         .flatten()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn composed(
     access: super::DashboardAccess,
     raw_query: Option<&str>,
     cross_site: bool,
+    head: bool,
+    accept_gzip: bool,
+    if_none_match: Option<&str>,
+    no_cache: bool,
     hop: Option<Hop>,
 ) -> Reply {
     if let Err(reply) = session(&access) {
@@ -460,14 +479,79 @@ async fn composed(
         Some(query) => format!("/api/accounts/analytics?{query}"),
         None => "/api/accounts/analytics".to_owned(),
     };
+    let force_refresh =
+        url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
+            .any(|(key, value)| key == "refresh" && value == "true");
+    let reload = force_refresh || no_cache;
+    let mut hop_headers: Vec<(String, String)> = Vec::new();
+    if !head && accept_gzip {
+        hop_headers.push((
+            crate::compress::ACCEPT_GZIP_HEADER.to_owned(),
+            "1".to_owned(),
+        ));
+    }
+    if !reload && let Some(inm) = if_none_match {
+        hop_headers.push(("if-none-match".to_owned(), inm.to_owned()));
+    }
+    if no_cache {
+        hop_headers.push(("cache-control".to_owned(), "no-cache".to_owned()));
+    }
     if let Some(hop) = hop
-        && let Some((status, body)) = hop(uri, principal).await
+        && let Some(reply) = hop(uri, principal, hop_headers).await
     {
-        return if status == 503 {
-            unavailable()
-        } else {
-            no_store(super::json_bytes(status, body))
-        };
+        if reply.status == 503 {
+            return unavailable();
+        }
+        if reply.status == 304 {
+            let mut out = super::empty(304);
+            if let Some(etag) = reply
+                .headers
+                .get(header::ETAG)
+                .and_then(|v| v.to_str().ok())
+            {
+                super::set_header(&mut out, "etag", etag);
+            }
+            if let Some(vary) = reply
+                .headers
+                .get(header::VARY)
+                .and_then(|v| v.to_str().ok())
+            {
+                super::set_header(&mut out, "vary", vary);
+            }
+            return no_store(out);
+        }
+        let gzip = reply
+            .headers
+            .get(header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|enc| enc.eq_ignore_ascii_case("gzip"));
+        let raw_len = reply
+            .headers
+            .get(crate::compress::RAW_LENGTH_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(|| reply.body.len());
+        let etag = reply
+            .headers
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::compress::weak_etag_sha1(&reply.body));
+        if reply.status == 200 && !reload && crate::compress::not_modified(if_none_match, &etag) {
+            let mut out = super::empty(304);
+            super::set_header(&mut out, "etag", &etag);
+            if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+                crate::compress::append_vary(out.headers_mut(), "Accept-Encoding");
+            }
+            return no_store(out);
+        }
+        let mut out = super::json_bytes_tagged(reply.status, reply.body, raw_len, gzip, &etag);
+        if raw_len >= crate::compress::MIN_COMPRESS_BYTES
+            || reply.headers.contains_key(header::VARY)
+        {
+            crate::compress::append_vary(out.headers_mut(), "Accept-Encoding");
+        }
+        return no_store(out);
     }
     unavailable()
 }
@@ -497,7 +581,17 @@ mod tests {
     }
 
     async fn assert_retryable_unavailable(hop: Option<Hop>) {
-        let reply = composed(access(), Some("range=all"), false, hop).await;
+        let reply = composed(
+            access(),
+            Some("range=all"),
+            false,
+            false,
+            false,
+            None,
+            false,
+            hop,
+        )
+        .await;
         assert_eq!(reply.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(reply.headers()["cache-control"], "no-store");
         assert_eq!(reply.headers()["retry-after"], "1");
@@ -515,12 +609,15 @@ mod tests {
 
     #[tokio::test]
     async fn an_owner_decline_is_a_retryable_public_unavailable_reply() {
-        let hop: Hop = Arc::new(|_, _| {
+        let hop: Hop = Arc::new(|_, _, _| {
             Box::pin(async {
-                Some((
-                    503,
-                    br#"{"error":"TypeScript read fallback required"}"#.to_vec(),
-                ))
+                Some(super::super::owner_host::ServiceReply {
+                    status: 503,
+                    headers: axum::http::HeaderMap::new(),
+                    body: axum::body::Bytes::from_static(
+                        br#"{"error":"TypeScript read fallback required"}"#,
+                    ),
+                })
             })
         });
         assert_retryable_unavailable(Some(hop)).await;

@@ -93,7 +93,7 @@ pub(crate) fn latest(
         (Some(Ok("1")), None) => true,
         _ => return Ok(invalid()),
     };
-    latest_with(cache, uri, headers, secure, false)
+    latest_with(cache, uri, headers, secure, false, false)
 }
 
 /// Serve the same generation to a caller whose transport was already authenticated.
@@ -102,8 +102,9 @@ pub(crate) fn latest_for_access(
     uri: &Uri,
     headers: &HeaderMap,
     secure: bool,
+    head: bool,
 ) -> Result<Response, Decline> {
-    latest_with(cache, uri, headers, secure, true)
+    latest_with(cache, uri, headers, secure, true, head)
 }
 
 fn latest_with(
@@ -112,6 +113,7 @@ fn latest_with(
     headers: &HeaderMap,
     secure: bool,
     public: bool,
+    head: bool,
 ) -> Result<Response, Decline> {
     let Some((platform, refresh)) = selection(uri) else {
         return Ok(if public {
@@ -133,33 +135,55 @@ fn latest_with(
     let now = aac_core::UtcMs::now().map_err(|_| Decline::Date)?.get() as i64;
     let dashboard = prepared(&generation)?;
     let bytes = dashboard.render(&updated, now);
-    let reload = refresh
-        || headers.get_all(header::CACHE_CONTROL).iter().any(|value| {
-            value.to_str().is_ok_and(|value| {
-                value
-                    .split(',')
-                    .any(|word| word.trim().eq_ignore_ascii_case("no-cache"))
-            })
-        });
-    let mut response = if public {
-        crate::public_auth::json_bytes(200, bytes)
-    } else {
-        let identity = Sha256::digest(&bytes);
-        crate::view_reply::respond_bytes(VIEW, VERSION, bytes, &identity)
-    };
+    let reload = refresh || crate::compress::has_no_cache(headers);
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok());
+    if public {
+        let raw_len = bytes.len();
+        let etag = crate::compress::weak_etag_sha1(&bytes);
+        let mut response = if !reload && crate::compress::not_modified(if_none_match, &etag) {
+            let mut out = StatusCode::NOT_MODIFIED.into_response();
+            if let Ok(val) = HeaderValue::from_str(&etag) {
+                out.headers_mut().insert(header::ETAG, val);
+            }
+            if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+                crate::compress::append_vary(out.headers_mut(), "Accept-Encoding");
+            }
+            out
+        } else if !head
+            && crate::compress::accepts_gzip(headers)
+            && let Some(gz) = crate::compress::compress_for_tag(Some(&etag), &bytes)
+        {
+            let mut out = crate::public_auth::json_bytes_tagged(200, gz, raw_len, true, &etag);
+            crate::compress::append_vary(out.headers_mut(), "Accept-Encoding");
+            out
+        } else {
+            let mut out = crate::public_auth::json_bytes_tagged(
+                200,
+                axum::body::Bytes::from(bytes),
+                raw_len,
+                false,
+                &etag,
+            );
+            if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+                crate::compress::append_vary(out.headers_mut(), "Accept-Encoding");
+            }
+            out
+        };
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return Ok(response);
+    }
+    let identity = Sha256::digest(&bytes);
+    let mut response = crate::view_reply::respond_bytes(VIEW, VERSION, bytes, &identity);
     if !reload
         && let Some(current) = response
             .headers()
             .get(header::ETAG)
             .and_then(|etag| etag.to_str().ok())
-        && headers.get_all(header::IF_NONE_MATCH).iter().any(|value| {
-            value.to_str().is_ok_and(|value| {
-                value.split(',').any(|etag| {
-                    let etag = etag.trim();
-                    etag == "*" || etag.trim_start_matches("W/") == current.trim_start_matches("W/")
-                })
-            })
-        })
+        && crate::compress::not_modified(if_none_match, current)
     {
         *response.status_mut() = StatusCode::NOT_MODIFIED;
         response.headers_mut().remove(header::CONTENT_TYPE);

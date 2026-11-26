@@ -1,10 +1,12 @@
 //! The public front door's authenticated hop to the private service.
 //!
 //! The front door owns public admission and HTTP encoding; the private service owns the
-//! readers, the producers, the store and the answer journal. A route the service answers is
-//! asked over this one loopback connection with the boot secret and the verified principal,
-//! exactly as the TypeScript adapter's transport did, so there is still one owner of every
-//! collector and one writer of every file.
+//! readers, the producers, the store and the answer journal. When the private service is
+//! embedded in this process, requests cross directly in process via [`crate::unix::LocalService`]
+//! sharing `Bytes` without a loopback Unix socket or a second body copy. When adopting an
+//! external private service process, requests cross its loopback Unix socket with the boot
+//! secret and verified principal so there is still one owner of every collector and one writer
+//! of every file.
 //!
 //! The endpoint is the service's own `run/aac-http.json` (written at boot): its boot id, its
 //! 32 random bytes, and a socket in a private folder. All of them are checked here; a missing
@@ -46,24 +48,50 @@ struct CollectionEndpoint {
     store: Option<crate::store_host::StoreBoot>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(super) struct ServiceLink {
     socket: PathBuf,
     secret: String,
     boot_id: String,
     native_lifecycle: bool,
     store: Option<crate::store_host::StoreBoot>,
+    /// Present when the private service runs in this process: bypasses the Unix socket hop and
+    /// hands reply `Bytes` across directly.
+    in_process: Option<crate::unix::LocalService>,
 }
 
+impl PartialEq for ServiceLink {
+    fn eq(&self, other: &Self) -> bool {
+        self.socket == other.socket
+            && self.secret == other.secret
+            && self.boot_id == other.boot_id
+            && self.native_lifecycle == other.native_lifecycle
+            && self.store == other.store
+    }
+}
+
+impl Eq for ServiceLink {}
+
 impl ServiceLink {
-    pub(super) fn embedded(socket: PathBuf, secret: String, boot_id: String) -> Self {
+    pub(super) fn embedded(
+        socket: PathBuf,
+        secret: String,
+        boot_id: String,
+        local: crate::unix::LocalService,
+    ) -> Self {
         Self {
             socket,
             secret,
             boot_id,
             native_lifecycle: false,
             store: None,
+            in_process: Some(local),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_in_process(&self) -> bool {
+        self.in_process.is_some()
     }
 
     pub(super) async fn healthy(&self) -> bool {
@@ -108,6 +136,7 @@ impl ServiceLink {
                 boot_id: endpoint.boot_id,
                 native_lifecycle: endpoint.native_lifecycle,
                 store: endpoint.store,
+                in_process: None,
             })
     }
 
@@ -207,6 +236,25 @@ impl ServiceLink {
             DEADLINE
         };
         tokio::time::timeout(deadline, async {
+            if let Some(local) = &self.in_process {
+                let reply = local.call(request).await?;
+                if reply
+                    .headers()
+                    .get(ENDPOINT_HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    != Some(self.boot_id.as_str())
+                {
+                    return None;
+                }
+                let status = reply.status().as_u16();
+                let headers = reply.headers().clone();
+                let body = to_bytes(reply.into_body(), REPLY_CAP).await.ok()?;
+                return Some(ServiceReply {
+                    status,
+                    headers,
+                    body,
+                });
+            }
             let (reply, drive) = self.send(request).await?;
             let status = reply.status().as_u16();
             let headers = reply.headers().clone();
@@ -216,7 +264,7 @@ impl ServiceLink {
             Some(ServiceReply {
                 status,
                 headers,
-                body: body.to_vec(),
+                body,
             })
         })
         .await
@@ -232,6 +280,25 @@ impl ServiceLink {
         else {
             return;
         };
+        if let Some(local) = &self.in_process {
+            if let Ok(Some(reply)) = tokio::time::timeout(DEADLINE, local.call(request)).await
+                && reply
+                    .headers()
+                    .get(ENDPOINT_HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    == Some(self.boot_id.as_str())
+                && reply.status() == 200
+                && reply
+                    .headers()
+                    .get("content-type")
+                    .is_some_and(|type_| type_ == "application/x-ndjson")
+            {
+                let _ = events
+                    .read_owner_feed(reply.into_body(), cut && self.native_lifecycle)
+                    .await;
+            }
+            return;
+        }
         if let Ok(Some((reply, drive))) = tokio::time::timeout(DEADLINE, self.send(request)).await {
             if reply.status() == 200
                 && reply

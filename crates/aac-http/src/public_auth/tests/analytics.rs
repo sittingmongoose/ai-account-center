@@ -165,7 +165,7 @@ fn real_analytics_owner(root: &Path, populate: bool) -> (analytics_routes::Hop, 
         assert_eq!(ingested["put"], 1);
     }
     let root = root.to_owned();
-    let hop: analytics_routes::Hop = Arc::new(move |uri, _principal| {
+    let hop: analytics_routes::Hop = Arc::new(move |uri, _principal, _headers| {
         let engine = Arc::clone(&engine);
         let result = crate::analytics_route::compose(
             engine,
@@ -177,7 +177,13 @@ fn real_analytics_owner(root: &Path, populate: bool) -> (analytics_routes::Hop, 
         );
         let answer =
             crate::analytics_route::encode(result, uri.split_once('?').map(|(_, query)| query));
-        Box::pin(async move { answer.ok() })
+        Box::pin(async move {
+            answer.ok().map(|(status, body)| owner_host::ServiceReply {
+                status,
+                headers: axum::http::HeaderMap::new(),
+                body: axum::body::Bytes::from(body),
+            })
+        })
     });
     (hop, now)
 }

@@ -3,8 +3,10 @@
 //! follows `revalidated-view.ts`: SHA-256 of the view's JSON with the clock-only keys
 //! (`generatedAt`, `ageSeconds`, `cacheAgeSeconds`) left out at any depth, written `W/"<hex>"`.
 //! R1 (Home) is the first route group that uses it ([`respond_bytes`]).
+use crate::compress::RAW_LENGTH_HEADER;
 use axum::{
-    http::{HeaderValue, StatusCode, header},
+    body::Bytes,
+    http::{HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde_json::Value;
@@ -42,6 +44,21 @@ pub fn etag(view: &Value) -> String {
     let identity = without_clock(view).to_string();
     let digest: [u8; 32] = Sha256::digest(identity.as_bytes()).into();
     format!("W/\"{}\"", hex_digest(&digest))
+}
+
+/// One pre-encoded view answer from a service or local owner: either `304 Not Modified`
+/// (short-circuited before splicing or copying) or a `200 OK` payload carrying shared `Bytes`
+/// (raw or pre-compressed gzip) plus its uncompressed length and `ETag`.
+pub(crate) enum EncodedView {
+    NotModified {
+        etag: String,
+    },
+    Payload {
+        bytes: Bytes,
+        raw_len: usize,
+        gzip: bool,
+        etag: String,
+    },
 }
 
 /// The response a view route sends: the serialized bytes, its ETag and its view version.
@@ -96,6 +113,50 @@ pub fn respond_tagged(name: &'static str, version: u32, bytes: Vec<u8>, etag: &s
         headers.insert("x-aac-view", value);
     }
     response
+}
+
+/// Respond from an [`EncodedView`]: `304 Not Modified` with empty body or `200 OK` with shared
+/// `Bytes` (pre-compressed gzip or raw JSON) and its view/ETag headers.
+pub(crate) fn respond_encoded(name: &'static str, version: u32, view: EncodedView) -> Response {
+    match view {
+        EncodedView::NotModified { etag } => {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            let headers = response.headers_mut();
+            if let Ok(value) = HeaderValue::from_str(&etag) {
+                headers.insert(header::ETAG, value);
+            }
+            if let Ok(value) = HeaderValue::from_str(&format!("{name}@{version}")) {
+                headers.insert("x-aac-view", value);
+            }
+            response
+        }
+        EncodedView::Payload {
+            bytes,
+            raw_len,
+            gzip,
+            etag,
+        } => {
+            let mut response = (StatusCode::OK, bytes).into_response();
+            let headers = response.headers_mut();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            if let Ok(value) = HeaderValue::from_str(&etag) {
+                headers.insert(header::ETAG, value);
+            }
+            if let Ok(value) = HeaderValue::from_str(&format!("{name}@{version}")) {
+                headers.insert("x-aac-view", value);
+            }
+            if gzip {
+                headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+                if let Ok(value) = HeaderValue::from_str(&raw_len.to_string()) {
+                    headers.insert(HeaderName::from_static(RAW_LENGTH_HEADER), value);
+                }
+            }
+            response
+        }
+    }
 }
 
 #[cfg(test)]

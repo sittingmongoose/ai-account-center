@@ -1,8 +1,8 @@
 {
   "config/rust-service-routes.json": "b271655b6a46fd8b471bbc7fca329562f3be1d922089cc8d95ab2af051f37fe3",
-  "crates/aac-http/src/public_auth/analytics_routes.rs": "b9bd6413bc445cd15dab771fb554face74127ffc34f392e08b6b09fdae3d98a7",
-  "crates/aac-http/src/public_auth/home_group.rs": "ee9929cb6ccc8d667730a2bde933ce3e739ead20b32165dbd227d75689174c81",
-  "crates/aac-http/src/public_auth/native_group.rs": "c8331d494c1a07398540d21dd42f0044b3c6d0f67b14cfa8a3bba2aab4890cc4",
+  "crates/aac-http/src/public_auth/analytics_routes.rs": "35c30a12abcb2eb0a4368dfe3174cdf6b37880b1d0cab55cd349503f1f3d7aeb",
+  "crates/aac-http/src/public_auth/home_group.rs": "5a4a4046d3f0b74ae58a6a52740b1b8d3db176524c73338e02715a22e2b6ea92",
+  "crates/aac-http/src/public_auth/native_group.rs": "bd5ec5fba68779e0b11055bca13cc9b30982447b1743838e814b20a691986b8b",
   "crates/aac-http/src/public_auth/reset_routes.rs": "927c44a3966f007f778defabd1d33a5ff64185b5d3a009c54fca1a32b94cf4d6",
   "src/web-server/compose-request.ts": "b48b41b7f36c47236965168743dde68b39e8161e2f6508416f951b1d264c92f4",
   "src/web-server/compose-server.ts": "88495222e3f5f674f679305bce85e2fe70b482d30675ed78ca53a9027d9f8d97",

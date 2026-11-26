@@ -132,13 +132,14 @@ fn profiles(
     })
 }
 
-/// One fed Home answer: its bytes and the identity its `ETag` hashes.
+/// One fed Home answer: its rendered JSON bytes and content-derived weak ETag.
 pub(crate) struct Answer {
     pub(crate) bytes: Vec<u8>,
-    /// R1b (review L2): a digest of everything the bytes are a function of (this build, the three generations'
-    /// contents, the manifest bytes, the front door's per-request facts and the page's context), so an equal tag means
-    /// equal bytes, clock-named members included. It costs a few hundred bytes of hashing, not the answer's 200 KB.
-    pub(crate) identity: Vec<u8>,
+    /// Content-derived ETag (`W/"<sha256>"`) over build commit, generation digests, manifest digest,
+    /// page context, and the rendered bytes (excluding the per-request millisecond `now` header so
+    /// consecutive identical renders share an ETag and answer `304 Not Modified`, while any
+    /// `resetPassed` flip or input change changes `bytes` and moves the ETag).
+    pub(crate) etag: String,
 }
 
 /// The answer of one fed Home request. Runs on the blocking pool (it reads the manifest).
@@ -202,20 +203,23 @@ pub(crate) fn answer(
         now: header.now,
         updated_at: &header.updated_at,
     })?;
-    let mut identity = Vec::with_capacity(256 + feed.len() + page.map_or(0, str::len));
+    let mut hash = Sha256::new();
     for part in [
         concat!("home@3\0", env!("AAC_BUILD_COMMIT"), "\0").as_bytes(),
         &dashboard_gen.digest,
         &opens_gen.digest,
         &antigravity_gen.digest,
         &manifest_digest,
-        feed.as_bytes(),
         b"\0",
         page.unwrap_or("-").as_bytes(),
+        b"\0",
+        bytes.as_slice(),
     ] {
-        identity.extend_from_slice(part);
+        hash.update(part);
     }
-    Ok(Answer { bytes, identity })
+    let digest: [u8; 32] = hash.finalize().into();
+    let etag = format!("W/\"{}\"", crate::view_reply::hex_digest(&digest));
+    Ok(Answer { bytes, etag })
 }
 
 #[cfg(test)]

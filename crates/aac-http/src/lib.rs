@@ -27,6 +27,7 @@ pub mod cli;
 mod codex_quotas;
 mod collection;
 mod collection_cache;
+mod compress;
 mod dashboard_fed;
 pub mod dashboard_observations;
 mod feed;

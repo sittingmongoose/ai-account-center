@@ -14,8 +14,10 @@
 //! from a bounded, validated share scan: history filters stay off, and the runs state names
 //! that share read.
 
+use crate::compress::{CachedBody, MIN_COMPRESS_BYTES, SpliceGzip};
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
+use crate::view_reply::EncodedView;
 use aac_files::registry::{Owners, Role};
 use aac_status::model_identity::{AliasTable, Model, normalize_model};
 use aac_status::read_context::{Date, Presentation};
@@ -25,6 +27,7 @@ use aac_status::share::{NodeFs, Problem, ReadError, ShareFs, is_missing, showabl
 use aac_status::validate;
 use aac_views::decline::Decline;
 use aac_views::js_json::Writer;
+use axum::body::Bytes;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::{Map, Value as Json, json};
@@ -641,17 +644,134 @@ impl Drop for ScanRunning<'_> {
     }
 }
 
+enum CachedScoreboardBody {
+    Splice(SpliceGzip),
+    Whole(CachedBody),
+}
+
+impl CachedScoreboardBody {
+    fn build(raw: Vec<u8>, etag: &str, age_value_offset: Option<usize>) -> (Self, Bytes) {
+        if let Some(pos) = age_value_offset
+            && raw.len() >= MIN_COMPRESS_BYTES
+            && let Some(splice) = SpliceGzip::build(&raw, pos, pos + 1)
+            && splice.stored_len() < raw.len()
+        {
+            return (Self::Splice(splice), Bytes::from(raw));
+        }
+        let (whole, raw_bytes) = CachedBody::from_raw_with_identity(raw, etag.to_owned());
+        (Self::Whole(whole), raw_bytes)
+    }
+
+    fn stored_len(&self) -> usize {
+        match self {
+            Self::Splice(s) => s.stored_len(),
+            Self::Whole(w) => w.stored_len(),
+        }
+    }
+
+    fn raw_len_zero(&self) -> usize {
+        match self {
+            Self::Splice(s) => s.raw_len(1),
+            Self::Whole(w) => w.raw_len(),
+        }
+    }
+
+    fn raw_at_zero(&self) -> Option<Bytes> {
+        match self {
+            Self::Splice(s) => s.render_raw(b"0").ok(),
+            Self::Whole(w) => w.serve(false).ok().map(|(b, _)| b),
+        }
+    }
+
+    fn render_initial(&self, raw_bytes: Bytes, etag: String, accept_gzip: bool) -> EncodedView {
+        if accept_gzip {
+            match self {
+                Self::Splice(splice) => {
+                    let bytes = splice.render_gzip(b"0");
+                    return EncodedView::Payload {
+                        bytes,
+                        raw_len: raw_bytes.len(),
+                        gzip: true,
+                        etag,
+                    };
+                }
+                Self::Whole(whole) if whole.is_gzipped() => {
+                    if let Ok((bytes, true)) = whole.serve(true) {
+                        return EncodedView::Payload {
+                            bytes,
+                            raw_len: raw_bytes.len(),
+                            gzip: true,
+                            etag,
+                        };
+                    }
+                }
+                Self::Whole(_) => {}
+            }
+        }
+        let raw_len = raw_bytes.len();
+        EncodedView::Payload {
+            bytes: raw_bytes,
+            raw_len,
+            gzip: false,
+            etag,
+        }
+    }
+}
+
 struct CachedView {
     at: u64,
     /// The held-snapshot sequence this view was composed from: a newer snapshot makes
     /// the view stale however young it is.
     seq: u64,
-    /// Pre-serialized view bytes (with `"cacheAgeSeconds":0`), shared by `Arc` between
-    /// `views` and `last_good` — ~3 MiB bytes instead of 2x ~25 MiB `serde_json::Value` trees.
-    bytes: Vec<u8>,
+    /// Pre-compressed view bytes (with `"cacheAgeSeconds":0`), shared by `Arc` between
+    /// `views` and `last_good` — ~250 KiB compressed instead of ~3 MiB raw or 25 MiB JSON trees.
+    body: CachedScoreboardBody,
     /// Start byte offset of the `0` value in `"cacheAgeSeconds":0` (fast splice on fresh hits).
     age_value_offset: Option<usize>,
     etag: String,
+}
+
+impl CachedView {
+    fn from_raw(
+        at: u64,
+        seq: u64,
+        raw: Vec<u8>,
+        age_value_offset: Option<usize>,
+        etag: String,
+    ) -> (Self, Bytes) {
+        let (body, raw_bytes) = CachedScoreboardBody::build(raw, &etag, age_value_offset);
+        (
+            Self {
+                at,
+                seq,
+                body,
+                age_value_offset,
+                etag,
+            },
+            raw_bytes,
+        )
+    }
+
+    fn stored_len(&self) -> usize {
+        self.body.stored_len()
+    }
+
+    #[cfg(test)]
+    fn from_uncompressed(
+        at: u64,
+        seq: u64,
+        raw: Vec<u8>,
+        age_value_offset: Option<usize>,
+        etag: String,
+    ) -> Self {
+        Self {
+            at,
+            seq,
+            body: CachedScoreboardBody::Whole(CachedBody::from_uncompressed(raw, etag.clone())),
+            age_value_offset,
+            etag,
+        }
+    }
 }
 
 fn find_age_zero_offset(bytes: &[u8]) -> Option<usize> {
@@ -671,20 +791,79 @@ fn find_age_zero_offset(bytes: &[u8]) -> Option<usize> {
     None
 }
 
-/// A served view's bytes at `now`: the view itself with only `cacheAgeSeconds` filled.
-/// Fresh hits splice the formatted number directly into the cached byte buffer (zero JSON clone,
-/// zero re-serialization). Rare stale serves parse the cached bytes and apply the stale markers.
-fn cached_bytes(cached: &CachedView, now: u64, stale: bool) -> (Vec<u8>, String) {
-    let age_seconds = now.saturating_sub(cached.at) as f64 / 1000.0;
-    if !stale && let Some(pos) = cached.age_value_offset {
-        let age_bytes = aac_views::js_json::write(&json!(age_seconds));
-        let mut out = Vec::with_capacity(cached.bytes.len() + age_bytes.len());
-        out.extend_from_slice(&cached.bytes[..pos]);
-        out.extend_from_slice(&age_bytes);
-        out.extend_from_slice(&cached.bytes[pos + 1..]);
-        return (out, cached.etag.clone());
+/// A served view at `now`: short-circuits to `304 Not Modified` before splicing when `If-None-Match`
+/// matches on a fresh hit, otherwise splices `cacheAgeSeconds` into pre-compressed gzip (zero
+/// recompression of the static body) or raw bytes. Rare stale serves patch `refreshing`/`sources`.
+fn render_cached_view(
+    cached: &CachedView,
+    now: u64,
+    stale: bool,
+    accept_gzip: bool,
+    if_none_match: Option<&str>,
+) -> EncodedView {
+    if !stale && crate::compress::not_modified(if_none_match, &cached.etag) {
+        return EncodedView::NotModified {
+            etag: cached.etag.clone(),
+        };
     }
-    let mut view: Json = serde_json::from_slice(&cached.bytes).unwrap_or(Json::Null);
+    let age_seconds = now.saturating_sub(cached.at) as f64 / 1000.0;
+    if !stale {
+        match &cached.body {
+            CachedScoreboardBody::Splice(splice) => {
+                let age_bytes = aac_views::js_json::write(&json!(age_seconds));
+                let raw_len = splice.raw_len(age_bytes.len());
+                if accept_gzip {
+                    let bytes = splice.render_gzip(&age_bytes);
+                    return EncodedView::Payload {
+                        bytes,
+                        raw_len,
+                        gzip: true,
+                        etag: cached.etag.clone(),
+                    };
+                }
+                if let Ok(bytes) = splice.render_raw(&age_bytes) {
+                    return EncodedView::Payload {
+                        bytes,
+                        raw_len,
+                        gzip: false,
+                        etag: cached.etag.clone(),
+                    };
+                }
+            }
+            CachedScoreboardBody::Whole(whole) => {
+                if let Some(pos) = cached.age_value_offset
+                    && let Ok((raw, _)) = whole.serve(false)
+                {
+                    let age_bytes = aac_views::js_json::write(&json!(age_seconds));
+                    let mut out = Vec::with_capacity(raw.len() + age_bytes.len());
+                    out.extend_from_slice(&raw[..pos]);
+                    out.extend_from_slice(&age_bytes);
+                    out.extend_from_slice(&raw[pos + 1..]);
+                    let raw_len = out.len();
+                    if accept_gzip
+                        && raw_len >= MIN_COMPRESS_BYTES
+                        && let Some(gz) = crate::compress::gzip_compress(&out)
+                        && gz.len() < raw_len
+                    {
+                        return EncodedView::Payload {
+                            bytes: gz,
+                            raw_len,
+                            gzip: true,
+                            etag: cached.etag.clone(),
+                        };
+                    }
+                    return EncodedView::Payload {
+                        bytes: Bytes::from(out),
+                        raw_len,
+                        gzip: false,
+                        etag: cached.etag.clone(),
+                    };
+                }
+            }
+        }
+    }
+    let base = cached.body.raw_at_zero().unwrap_or_default();
+    let mut view: Json = serde_json::from_slice(&base).unwrap_or(Json::Null);
     view["cacheAgeSeconds"] = json!(age_seconds);
     if stale {
         view["refreshing"] = json!(true);
@@ -702,15 +881,45 @@ fn cached_bytes(cached: &CachedView, now: u64, stale: bool) -> (Vec<u8>, String)
             }
         }
     }
-    let mut writer = Writer::with_capacity(cached.bytes.len() + 256);
+    let mut writer = Writer::with_capacity(cached.body.raw_len_zero() + 256);
     writer.value(&view);
     let (bytes, identity_bytes) = writer.finish();
-    if stale {
+    let etag = if stale {
         let digest = Sha256::digest(&identity_bytes);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        (bytes, format!("W/\"{hex}\""))
+        format!("W/\"{hex}\"")
     } else {
-        (bytes, cached.etag.clone())
+        cached.etag.clone()
+    };
+    if crate::compress::not_modified(if_none_match, &etag) {
+        return EncodedView::NotModified { etag };
+    }
+    let raw_len = bytes.len();
+    if accept_gzip
+        && raw_len >= MIN_COMPRESS_BYTES
+        && let Some(gz) = crate::compress::gzip_compress(&bytes)
+        && gz.len() < raw_len
+    {
+        return EncodedView::Payload {
+            bytes: gz,
+            raw_len,
+            gzip: true,
+            etag,
+        };
+    }
+    EncodedView::Payload {
+        bytes: Bytes::from(bytes),
+        raw_len,
+        gzip: false,
+        etag,
+    }
+}
+
+#[cfg(test)]
+fn cached_bytes(cached: &CachedView, now: u64, stale: bool) -> (Vec<u8>, String) {
+    match render_cached_view(cached, now, stale, false, None) {
+        EncodedView::Payload { bytes, etag, .. } => (bytes.to_vec(), etag),
+        EncodedView::NotModified { etag } => (Vec::new(), etag),
     }
 }
 
@@ -721,10 +930,10 @@ fn trim_view_cache(map: &mut IndexMap<String, Arc<CachedView>>) {
     while map.len() > CACHE_ENTRIES {
         map.shift_remove_index(0);
     }
-    let mut bytes: usize = map.values().map(|view| view.bytes.len()).sum();
+    let mut bytes: usize = map.values().map(|view| view.stored_len()).sum();
     while bytes > CACHE_BYTES && map.len() > 1 {
         if let Some((_, evicted)) = map.shift_remove_index(0) {
-            bytes -= evicted.bytes.len();
+            bytes -= evicted.stored_len();
         }
     }
 }
@@ -2046,7 +2255,7 @@ impl ScoreboardOwned {
                 set: &owner.composing,
                 key: cache_key,
             };
-            if let Err(reason) = owner.answer_inner(&feed_text, true).await {
+            if let Err(reason) = owner.answer_inner(&feed_text, true, false, None).await {
                 eprintln!(
                     "aac-http: scoreboard refresh declined ({})",
                     reason.as_str()
@@ -2055,17 +2264,34 @@ impl ScoreboardOwned {
         });
     }
 
-    /// The owned answer: the final bytes and ETag, or a named decline.
-    pub(crate) async fn answer(&self, feed: &str) -> Result<(Vec<u8>, String), Decline> {
-        self.answer_inner(feed, false).await
+    /// The owned answer with pre-compressed gzip and `304 Not Modified` short-circuiting.
+    pub(crate) async fn answer_encoded(
+        &self,
+        feed: &str,
+        accept_gzip: bool,
+        if_none_match: Option<&str>,
+    ) -> Result<EncodedView, Decline> {
+        self.answer_inner(feed, false, accept_gzip, if_none_match)
+            .await
     }
 
-    /// [`Self::answer`]; a refresh composes instead of serving the stale view it replaces.
+    /// The owned answer: the final bytes and ETag, or a named decline.
+    #[cfg(test)]
+    pub(crate) async fn answer(&self, feed: &str) -> Result<(Vec<u8>, String), Decline> {
+        match self.answer_encoded(feed, false, None).await? {
+            EncodedView::Payload { bytes, etag, .. } => Ok((bytes.to_vec(), etag)),
+            EncodedView::NotModified { .. } => Err(Decline::Internal),
+        }
+    }
+
+    /// [`Self::answer_encoded`]; a refresh composes instead of serving the stale view it replaces.
     async fn answer_inner(
         &self,
         feed_text: &str,
         refresh: bool,
-    ) -> Result<(Vec<u8>, String), Decline> {
+        accept_gzip: bool,
+        if_none_match: Option<&str>,
+    ) -> Result<EncodedView, Decline> {
         let feed: Feed = crate::json_object::from_slice_with_optional(
             feed_text.as_bytes(),
             &[
@@ -2128,6 +2354,8 @@ impl ScoreboardOwned {
                     &catalog_hash,
                     now,
                     refresh,
+                    accept_gzip,
+                    if_none_match,
                 )
                 .await
         {
@@ -2194,11 +2422,23 @@ impl ScoreboardOwned {
             // Fresh only on the snapshot it was composed from: a landed rescan makes
             // even a young view stale (served marked, refreshed behind).
             if hit.seq == seq && now.saturating_sub(hit.at) < CACHE_MS {
-                return Ok(cached_bytes(&hit, now, false));
+                return Ok(render_cached_view(
+                    &hit,
+                    now,
+                    false,
+                    accept_gzip,
+                    if_none_match,
+                ));
             }
             if !refresh {
                 self.spawn_refresh(feed_text, &cache_key);
-                return Ok(cached_bytes(&hit, now, true));
+                return Ok(render_cached_view(
+                    &hit,
+                    now,
+                    true,
+                    accept_gzip,
+                    if_none_match,
+                ));
             }
         }
         // One compose per view-cache key. A request that finds its key being composed (its
@@ -2222,7 +2462,13 @@ impl ScoreboardOwned {
                     good.get(&filter_key).cloned()
                 });
                 if let Some(hit) = hit {
-                    return Ok(cached_bytes(&hit, now, true));
+                    return Ok(render_cached_view(
+                        &hit,
+                        now,
+                        true,
+                        accept_gzip,
+                        if_none_match,
+                    ));
                 }
                 return Err(Decline::Busy);
             } else {
@@ -2437,15 +2683,14 @@ impl ScoreboardOwned {
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let etag = format!("W/\"{hex}\"");
         let age_value_offset = find_age_zero_offset(&bytes);
-        let cached = Arc::new(CachedView {
-            at: now,
-            seq,
-            bytes: bytes.clone(),
-            age_value_offset,
-            etag: etag.clone(),
-        });
-        self.keep_view(cache_key, filter_key, cached);
-        Ok((bytes, etag))
+        let (cached_view, raw_bytes) =
+            CachedView::from_raw(now, seq, bytes, age_value_offset, etag.clone());
+        let cached = Arc::new(cached_view);
+        self.keep_view(cache_key, filter_key, Arc::clone(&cached));
+        if crate::compress::not_modified(if_none_match, &etag) {
+            return Ok(EncodedView::NotModified { etag });
+        }
+        Ok(cached.body.render_initial(raw_bytes, etag, accept_gzip))
     }
 
     /// Store-backed aggregate answer path. Returns `None` when the store is unavailable
@@ -2460,7 +2705,9 @@ impl ScoreboardOwned {
         catalog_hash: &str,
         now: u64,
         refresh: bool,
-    ) -> Option<Result<(Vec<u8>, String), Decline>> {
+        accept_gzip: bool,
+        if_none_match: Option<&str>,
+    ) -> Option<Result<EncodedView, Decline>> {
         self.ensure_catalog(now);
         let mut catalog = self
             .catalog_state
@@ -2541,7 +2788,13 @@ impl ScoreboardOwned {
                 views.get(&admitted_cache_key).cloned()
             };
             if let Some(hit) = hit {
-                return Some(Ok(cached_bytes(&hit, now, false)));
+                return Some(Ok(render_cached_view(
+                    &hit,
+                    now,
+                    false,
+                    accept_gzip,
+                    if_none_match,
+                )));
             }
         }
 
@@ -2561,7 +2814,13 @@ impl ScoreboardOwned {
                     good.get(&filter_key).cloned()
                 });
                 if let Some(hit) = hit {
-                    return Some(Ok(cached_bytes(&hit, now, true)));
+                    return Some(Ok(render_cached_view(
+                        &hit,
+                        now,
+                        true,
+                        accept_gzip,
+                        if_none_match,
+                    )));
                 }
                 return Some(Err(Decline::Busy));
             } else {
@@ -2735,7 +2994,13 @@ impl ScoreboardOwned {
                 views.get(&final_cache_key).cloned()
             };
             if let Some(hit) = hit {
-                return Some(Ok(cached_bytes(&hit, now, false)));
+                return Some(Ok(render_cached_view(
+                    &hit,
+                    now,
+                    false,
+                    accept_gzip,
+                    if_none_match,
+                )));
             }
         }
 
@@ -2752,9 +3017,8 @@ impl ScoreboardOwned {
         let root_str = self.root.to_string_lossy().into_owned();
 
         struct ComposedBytes {
-            bytes: Vec<u8>,
-            etag: String,
-            age_value_offset: Option<usize>,
+            cached: CachedView,
+            raw_bytes: Bytes,
             problems: Vec<Json>,
         }
 
@@ -2787,19 +3051,19 @@ impl ScoreboardOwned {
             let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
             let etag = format!("W/\"{hex}\"");
             let age_value_offset = find_age_zero_offset(&bytes);
+            let (cached, raw_bytes) =
+                CachedView::from_raw(now, read_write_seq, bytes, age_value_offset, etag);
             Ok(ComposedBytes {
-                bytes,
-                etag,
-                age_value_offset,
+                cached,
+                raw_bytes,
                 problems: composed.problems,
             })
         })
         .await;
 
         let ComposedBytes {
-            bytes,
-            etag,
-            age_value_offset,
+            cached,
+            raw_bytes,
             problems,
         } = match composed {
             Ok(Ok(out)) => out,
@@ -2808,15 +3072,13 @@ impl ScoreboardOwned {
         };
 
         self.record_check_store(Arc::clone(store), problems, read_gen);
-        let cached = Arc::new(CachedView {
-            at: now,
-            seq: read_write_seq,
-            bytes: bytes.clone(),
-            age_value_offset,
-            etag: etag.clone(),
-        });
-        self.keep_view(final_cache_key, filter_key, cached);
-        Some(Ok((bytes, etag)))
+        let etag = cached.etag.clone();
+        let cached = Arc::new(cached);
+        self.keep_view(final_cache_key, filter_key, Arc::clone(&cached));
+        if crate::compress::not_modified(if_none_match, &etag) {
+            return Some(Ok(EncodedView::NotModified { etag }));
+        }
+        Some(Ok(cached.body.render_initial(raw_bytes, etag, accept_gzip)))
     }
 
     /// The service's unfiltered input (a superset of every filter's rows), the catalog,
@@ -4311,7 +4573,7 @@ mod tests {
             .replace("\"Task bench\"", "\"Task newtie quixotic\"");
         std::fs::write(dir.join("vm.lead--new-tie.json"), new_run).expect("new run");
         owner
-            .answer_inner(&feed_text(now + 65_000, "0::t0"), true)
+            .answer_inner(&feed_text(now + 65_000, "0::t0"), true, false, None)
             .await
             .expect("refresh after the rescan window");
         let held = held_after_scan(&owner, now + 65_000).await;
@@ -4765,13 +5027,9 @@ mod tests {
             ]
         });
         let bytes = serde_json::to_vec(&view).expect("view bytes");
-        let cached = super::CachedView {
-            at: 1_000_000,
-            seq: 1,
-            age_value_offset: super::find_age_zero_offset(&bytes),
-            bytes,
-            etag: "W/\"x\"".to_string(),
-        };
+        let age_offset = super::find_age_zero_offset(&bytes);
+        let (cached, _) =
+            super::CachedView::from_raw(1_000_000, 1, bytes, age_offset, "W/\"x\"".to_string());
         let (bytes, _) = super::cached_bytes(&cached, 1_300_000, true);
         let served: serde_json::Value = serde_json::from_slice(&bytes).expect("view");
         assert!(
@@ -5470,18 +5728,18 @@ mod tests {
         let owner = owner(root.path().to_path_buf(), None);
         let big = 5 * 1024 * 1024;
         for i in 0..4u64 {
-            let cached = Arc::new(CachedView {
-                at: 1_790_000_000_000 + i * 1_000,
-                seq: 1,
-                bytes: vec![b'x'; big],
-                age_value_offset: None,
-                etag: format!("W/\"{i}\""),
-            });
+            let cached = Arc::new(CachedView::from_uncompressed(
+                1_790_000_000_000 + i * 1_000,
+                1,
+                vec![b'x'; big],
+                None,
+                format!("W/\"{i}\""),
+            ));
             owner.keep_view(format!("cache-{i}"), format!("filter-{i}"), cached);
         }
         {
             let views = owner.views.lock().unwrap_or_else(|p| p.into_inner());
-            let total: usize = views.values().map(|view| view.bytes.len()).sum();
+            let total: usize = views.values().map(|view| view.stored_len()).sum();
             assert!(
                 total <= CACHE_BYTES,
                 "views held {total} bytes over the {CACHE_BYTES} cap"
@@ -5494,20 +5752,20 @@ mod tests {
         }
         {
             let good = owner.last_good.lock().unwrap_or_else(|p| p.into_inner());
-            let total: usize = good.values().map(|view| view.bytes.len()).sum();
+            let total: usize = good.values().map(|view| view.stored_len()).sum();
             assert!(total <= CACHE_BYTES, "last good held {total} bytes");
             assert!(good.contains_key("filter-3"));
         }
         owner.keep_view(
             "solo".into(),
             "solo-filter".into(),
-            Arc::new(CachedView {
-                at: 1_790_000_100_000,
-                seq: 2,
-                bytes: vec![b'y'; CACHE_BYTES + 1],
-                age_value_offset: None,
-                etag: "W/\"solo\"".into(),
-            }),
+            Arc::new(CachedView::from_uncompressed(
+                1_790_000_100_000,
+                2,
+                vec![b'y'; CACHE_BYTES + 1],
+                None,
+                "W/\"solo\"".into(),
+            )),
         );
         let views = owner.views.lock().unwrap_or_else(|p| p.into_inner());
         assert_eq!(views.len(), 1, "one oversized view keeps only itself");

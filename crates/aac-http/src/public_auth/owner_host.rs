@@ -8,6 +8,7 @@
 use super::service_link::ServiceLink;
 use super::{HubCache, native_owners};
 use crate::public_auth::DashboardEvents;
+use axum::body::Bytes;
 use axum::http::HeaderMap;
 #[cfg(unix)]
 use serde_json::Value as Json;
@@ -27,7 +28,7 @@ pub(super) const SWITCH: &str = "AAC_RUST_CUT_NATIVE_ROUTES";
 pub(super) struct ServiceReply {
     pub status: u16,
     pub headers: HeaderMap,
-    pub body: Vec<u8>,
+    pub body: Bytes,
 }
 
 pub(super) struct OwnerHost {
@@ -59,6 +60,8 @@ pub(super) struct OwnerHost {
     analytics_reads: crate::limits::Limits,
     #[cfg(not(unix))]
     cursor: std::sync::Arc<crate::account_usage::cursor::Reader>,
+    #[cfg(not(unix))]
+    analytics_cache: Mutex<std::collections::VecDeque<(String, i64, crate::compress::CachedBody)>>,
 }
 
 struct PublicOwners {
@@ -114,6 +117,8 @@ impl OwnerHost {
             analytics_reads: crate::limits::Limits::new(),
             #[cfg(not(unix))]
             cursor: std::sync::Arc::default(),
+            #[cfg(not(unix))]
+            analytics_cache: Mutex::default(),
         })
     }
 
@@ -458,7 +463,7 @@ impl OwnerHost {
                 return Some(ServiceReply {
                     status: 401,
                     headers,
-                    body: br#"{"error":"Authentication required"}"#.to_vec(),
+                    body: Bytes::from_static(br#"{"error":"Authentication required"}"#),
                 });
             }
             let result = match self
@@ -473,12 +478,12 @@ impl OwnerHost {
                 None => Err(Decline::Unsupported),
             };
             let (status, body) = match result {
-                Ok(value) => (200, serde_json::to_vec(value.as_ref()).ok()?),
+                Ok(value) => (200, Bytes::from(serde_json::to_vec(value.as_ref()).ok()?)),
                 Err(reason) => {
                     headers.insert("x-aac-decline", HeaderValue::from_static(reason.as_str()));
                     (
                         503,
-                        br#"{"error":"TypeScript read fallback required"}"#.to_vec(),
+                        Bytes::from_static(br#"{"error":"TypeScript read fallback required"}"#),
                     )
                 }
             };
@@ -490,22 +495,113 @@ impl OwnerHost {
         }
     }
 
-    pub(super) async fn analytics(&self, uri: &str, principal: &str) -> Option<(u16, Vec<u8>)> {
+    pub(super) async fn analytics(
+        &self,
+        uri: &str,
+        principal: &str,
+        req_headers: &[(&str, &str)],
+    ) -> Option<ServiceReply> {
         #[cfg(unix)]
         {
-            self.request("GET", uri, principal, &[], None)
-                .await
-                .map(|reply| (reply.status, reply.body))
+            self.request("GET", uri, principal, req_headers, None).await
         }
         #[cfg(not(unix))]
         {
+            use axum::http::{HeaderName, HeaderValue, header};
             let _ = principal;
+            let accept_gzip = req_headers.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case(crate::compress::ACCEPT_GZIP_HEADER) && *v == "1"
+            });
+            let if_none_match = req_headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
+                .map(|(_, v)| *v);
+            let no_cache = req_headers.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case("cache-control")
+                    && v.split(',')
+                        .any(|w| w.trim().eq_ignore_ascii_case("no-cache"))
+            });
             let engine = self.local().await?.store.as_ref()?.analytics_engine()?;
             let query = uri.split_once('?').map(|(_, query)| query.to_owned());
-            let root = self.root.clone();
-            let live = self.analytics_live.clone();
+            let force_refresh =
+                url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
+                    .any(|(key, value)| key == "refresh" && value == "true");
+            let reload = force_refresh || no_cache;
             let native = self.public_owners();
             let cache = native.as_ref().and_then(|owner| owner.usage_cache());
+            let now_check = super::now();
+            let cache_key = (!force_refresh).then(|| {
+                let mac_gen = cache
+                    .as_ref()
+                    .and_then(|c| c.generation(crate::account_usage::Desktop::Mac, false))
+                    .unwrap_or_default();
+                let win_gen = cache
+                    .as_ref()
+                    .and_then(|c| c.generation(crate::account_usage::Desktop::Windows, false))
+                    .unwrap_or_default();
+                format!(
+                    "{}|{}|{}|{}|{}",
+                    query.as_deref().unwrap_or_default(),
+                    engine.write_seq(),
+                    self.analytics_live.refreshing(),
+                    mac_gen,
+                    win_gen
+                )
+            });
+            let build_reply = |cached: &crate::compress::CachedBody,
+                               raw_fallback: Option<Bytes>|
+             -> Option<ServiceReply> {
+                let mut headers = HeaderMap::new();
+                if let Ok(val) = HeaderValue::from_str(&cached.etag) {
+                    headers.insert(header::ETAG, val);
+                }
+                if cached.raw_len() >= crate::compress::MIN_COMPRESS_BYTES {
+                    crate::compress::append_vary(&mut headers, "Accept-Encoding");
+                }
+                if !reload && crate::compress::not_modified(if_none_match, &cached.etag) {
+                    return Some(ServiceReply {
+                        status: 304,
+                        headers,
+                        body: Bytes::new(),
+                    });
+                }
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json; charset=utf-8"),
+                );
+                let (body, gzip) = if !accept_gzip && let Some(raw) = raw_fallback {
+                    (raw, false)
+                } else {
+                    cached.serve(accept_gzip).ok()?
+                };
+                if gzip {
+                    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+                    if let Ok(val) = HeaderValue::from_str(&cached.raw_len().to_string()) {
+                        headers.insert(
+                            HeaderName::from_static(crate::compress::RAW_LENGTH_HEADER),
+                            val,
+                        );
+                    }
+                }
+                Some(ServiceReply {
+                    status: 200,
+                    headers,
+                    body,
+                })
+            };
+            if let Some(key) = &cache_key {
+                let hit = self.analytics_cache.lock().ok().and_then(|guard| {
+                    guard
+                        .iter()
+                        .find(|(k, at, _)| k == key && now_check.saturating_sub(*at) < 30_000)
+                        .map(|(_, _, body)| body.clone())
+                });
+                if let Some(cached) = hit {
+                    return build_reply(&cached, None);
+                }
+            }
+            let root = self.root.clone();
+            let live = self.analytics_live.clone();
             let (mut answer, engine, now, query) = self
                 .analytics_reads
                 .blocking(crate::table::Pool::Reads, move || {
@@ -528,18 +624,40 @@ impl OwnerHost {
                 && let Ok(value) = &mut answer
                 && let Some(activity) = value["activity"].as_object_mut()
             {
-                let force =
-                    url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
-                        .any(|(key, value)| key == "refresh" && value == "true");
                 if let Some(status) = self
                     .cursor()
-                    .analytics(self.root.clone(), owners, engine, now, force)
+                    .analytics(self.root.clone(), owners, engine, now, force_refresh)
                     .await
                 {
                     activity.insert("cursorAccount".into(), status);
                 }
             }
-            crate::analytics_route::encode(answer, query.as_deref()).ok()
+            let (status, bytes) = crate::analytics_route::encode(answer, query.as_deref()).ok()?;
+            if status != 200 {
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                return Some(ServiceReply {
+                    status,
+                    headers,
+                    body: Bytes::from(bytes),
+                });
+            }
+            let etag = crate::compress::weak_etag_sha1(&bytes);
+            let (cached, raw_bytes) =
+                crate::compress::CachedBody::from_raw_with_identity(bytes, etag);
+            if let Some(key) = cache_key
+                && let Ok(mut guard) = self.analytics_cache.lock()
+            {
+                guard.retain(|(k, _, _)| k != &key);
+                guard.push_back((key, now_check, cached.clone()));
+                while guard.len() > 4 {
+                    guard.pop_front();
+                }
+            }
+            build_reply(&cached, Some(raw_bytes))
         }
     }
 
@@ -681,39 +799,37 @@ impl OwnerHost {
             }
         };
         let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            if let Err(error) = crate::unix::serve(boot, async {
-                let _ = stopped.await;
-            })
+            if let Err(error) = crate::unix::serve_embedded(
+                boot,
+                async {
+                    let _ = stopped.await;
+                },
+                ready_tx,
+            )
             .await
             {
                 tracing::warn!(%error, "the in-process private service stopped");
             }
         }));
-        let link = ServiceLink::embedded(socket.clone(), secret.clone(), boot_id.clone());
-        // Binding proves the owner started. Optional Status and Scoreboard share reads must
-        // not hold the public listener's readiness behind their filesystem latency.
-        let ready = tokio::time::timeout(Duration::from_secs(10), async {
-            while !task.is_finished() {
-                if std::fs::symlink_metadata(&socket).is_ok_and(|meta| {
-                    meta.file_type().is_socket()
-                        && meta.uid() == uid
-                        && meta.mode() & 0o777 == 0o600
-                }) {
-                    return true;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            false
-        })
-        .await
-        .is_ok_and(|ready| ready);
-        if !ready {
+        // The embedded service binds its private socket and delivers its in-process router handle
+        // before running optional share scans, so public startup stays prompt and requests cross
+        // in process without a Unix socket hop.
+        let local = tokio::time::timeout(Duration::from_secs(10), ready_rx)
+            .await
+            .ok()
+            .and_then(Result::ok);
+        let socket_ok = std::fs::symlink_metadata(&socket).is_ok_and(|meta| {
+            meta.file_type().is_socket() && meta.uid() == uid && meta.mode() & 0o777 == 0o600
+        });
+        let Some(local) = local.filter(|_| socket_ok) else {
             task.abort();
             let _ = task.await;
             let _ = std::fs::remove_dir(socket.parent()?);
             return None;
-        }
+        };
+        let link = ServiceLink::embedded(socket.clone(), secret.clone(), boot_id.clone(), local);
         if write_descriptor(&descriptor, &ccs, &socket, &secret, &boot_id).is_err() {
             let _ = stop.send(());
             let _ = task.await;
@@ -1164,6 +1280,24 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o777, 0o755);
         assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
     }
+
+    #[tokio::test]
+    async fn embedded_boot_invokes_private_service_in_process() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::tempdir().unwrap();
+        let ccs = scratch.path().join("ccs");
+        std::fs::create_dir(&ccs).unwrap();
+        std::fs::set_permissions(&ccs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let host = OwnerHost::new(ccs, true);
+        host.start_cut(None, false).await.expect("embedded boot");
+        let link = host.published_link().expect("embedded link");
+        assert!(
+            link.is_in_process(),
+            "embedded front door must use the direct in-process LocalService handle"
+        );
+        assert!(link.healthy().await, "in-process health check must succeed");
+        host.stop().await;
+    }
 }
 
 /// M2: the local owner honours the explicit store switch, as the Unix boot does.
@@ -1364,12 +1498,12 @@ mod windows_tests {
         let read: Value = serde_json::from_slice(&reply.body).unwrap();
         assert_eq!(read["checkedAt"], at);
         assert_eq!(read["unmeasured"], 2);
-        let (status, body) = host
-            .analytics("/api/accounts/analytics?tz=UTC", "fixture")
+        let reply = host
+            .analytics("/api/accounts/analytics?tz=UTC", "fixture", &[])
             .await
             .expect("Windows Analytics answer");
-        assert_eq!(status, 200);
-        let analytics: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(reply.status, 200);
+        let analytics: Value = serde_json::from_slice(&reply.body).unwrap();
         assert_eq!(analytics["activity"]["cursorAccount"]["state"], "read");
         assert_eq!(analytics["activity"]["cursorAccount"]["unmeasured"], 2);
         assert_eq!(

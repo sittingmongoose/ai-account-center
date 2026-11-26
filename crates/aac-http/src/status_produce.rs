@@ -1155,15 +1155,16 @@ impl Produce {
         }
     }
 
-    /// One owned Status request (async, singleflight): reads from the last good generation while
-    /// producers recompute outside the lock, and shares one compose across concurrent reads.
-    pub(crate) async fn view_async(
+    /// One owned Status request (async, singleflight) returning pre-compressed gzip or `304`.
+    pub(crate) async fn view_async_encoded(
         self: &Arc<Self>,
         limits: Option<&Limits>,
         now: u64,
         time_zone: &str,
         zone_facts: &ZoneFacts,
-    ) -> Result<(Vec<u8>, String), Decline> {
+        accept_gzip: bool,
+        if_none_match: Option<&str>,
+    ) -> Result<crate::view_reply::EncodedView, Decline> {
         self.touch();
         self.maybe_collect();
         let zone = zone_facts.zone().ok_or(Decline::Locale)?;
@@ -1171,15 +1172,38 @@ impl Produce {
         let (clock, day) = zone.words(now_i64).ok_or(Decline::Locale)?;
         let published = self.published_for_async(now, time_zone, &zone).await?;
         self.compose
-            .answer_generations_async(
+            .answer_generations_encoded(
                 limits,
                 published.generations.clone(),
                 now_i64,
                 clock,
                 day,
                 true,
+                accept_gzip,
+                if_none_match,
             )
             .await
+    }
+
+    /// One owned Status request (async, singleflight): reads from the last good generation while
+    /// producers recompute outside the lock, and shares one compose across concurrent reads.
+    #[cfg(test)]
+    pub(crate) async fn view_async(
+        self: &Arc<Self>,
+        limits: Option<&Limits>,
+        now: u64,
+        time_zone: &str,
+        zone_facts: &ZoneFacts,
+    ) -> Result<(Vec<u8>, String), Decline> {
+        match self
+            .view_async_encoded(limits, now, time_zone, zone_facts, false, None)
+            .await?
+        {
+            crate::view_reply::EncodedView::Payload { bytes, etag, .. } => {
+                Ok((bytes.to_vec(), etag))
+            }
+            crate::view_reply::EncodedView::NotModified { .. } => Err(Decline::Internal),
+        }
     }
 
     /// Synchronous owned Status read: answers from the last good generation without waiting on

@@ -168,11 +168,74 @@ struct AnalyticsCacheKey {
     win_gen: Option<String>,
 }
 
+/// Direct in-process handle to an embedded private service router.
+#[derive(Clone)]
+pub(crate) struct LocalService {
+    router: Router,
+}
+
+impl LocalService {
+    /// Invoke the private service router directly in process (no Unix socket hop, shared `Bytes`).
+    pub(crate) async fn call(&self, request: Request) -> Option<Response> {
+        let service = hyper_util::service::TowerToHyperService::new(self.router.clone());
+        hyper::service::Service::call(&service, request).await.ok()
+    }
+}
+
 struct AnalyticsCacheEntry {
     key: AnalyticsCacheKey,
     at_ms: i64,
     status: u16,
-    bytes: Vec<u8>,
+    body: crate::compress::CachedBody,
+}
+
+fn analytics_reply(
+    status: u16,
+    body: axum::body::Bytes,
+    raw_len: usize,
+    gzip: bool,
+    etag: &str,
+) -> Response {
+    use axum::http::{HeaderName, header};
+    let mut response = (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        body,
+    )
+        .into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    if let Ok(val) = HeaderValue::from_str(etag) {
+        headers.insert(header::ETAG, val);
+    }
+    if gzip {
+        headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        if let Ok(val) = HeaderValue::from_str(&raw_len.to_string()) {
+            headers.insert(
+                HeaderName::from_static(crate::compress::RAW_LENGTH_HEADER),
+                val,
+            );
+        }
+    }
+    if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+        crate::compress::append_vary(headers, "Accept-Encoding");
+    }
+    response
+}
+
+fn analytics_not_modified(etag: &str, raw_len: usize) -> Response {
+    use axum::http::header;
+    let mut response = StatusCode::NOT_MODIFIED.into_response();
+    let headers = response.headers_mut();
+    if let Ok(val) = HeaderValue::from_str(etag) {
+        headers.insert(header::ETAG, val);
+    }
+    if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+        crate::compress::append_vary(headers, "Accept-Encoding");
+    }
+    response
 }
 
 #[derive(Clone)]
@@ -1083,11 +1146,11 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 })
                 .await
             {
-                Ok(answer) => crate::view_reply::respond_bytes(
+                Ok(answer) => crate::view_reply::respond_tagged(
                     aac_views::home::fed::VIEW,
                     aac_views::home::fed::VERSION,
                     answer.bytes,
-                    &answer.identity,
+                    &answer.etag,
                 ),
                 Err(reason) => decline(row.handler, reason),
             }
@@ -1103,6 +1166,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 one_header(req.headers(), "x-aac-now").and_then(|text| text.parse::<u64>().ok());
             let zone = one_header(req.headers(), "x-aac-zone")
                 .and_then(|text| serde_json::from_str::<ZoneHeader>(text).ok());
+            let accept_gzip =
+                one_header(req.headers(), crate::compress::ACCEPT_GZIP_HEADER) == Some("1");
+            let if_none_match = one_header(req.headers(), "if-none-match").map(str::to_owned);
             let query = req.uri().query().is_some();
             let Ok(body) = to_bytes(req.into_body(), 0).await else {
                 return decline(row.handler, Decline::Shape);
@@ -1111,14 +1177,20 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(row.handler, Decline::Shape);
             };
             match produce
-                .view_async(Some(&shared.limits), now, &zone.time_zone, &zone.facts())
+                .view_async_encoded(
+                    Some(&shared.limits),
+                    now,
+                    &zone.time_zone,
+                    &zone.facts(),
+                    accept_gzip,
+                    if_none_match.as_deref(),
+                )
                 .await
             {
-                Ok((bytes, etag)) => crate::view_reply::respond_tagged(
+                Ok(view) => crate::view_reply::respond_encoded(
                     crate::status_fed::VIEW,
                     crate::status_fed::VERSION,
-                    bytes,
-                    &etag,
+                    view,
                 ),
                 Err(reason) => decline(row.handler, reason),
             }
@@ -1127,6 +1199,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
         // Without it, the envelope or snapshot read below.
         Handler::Status if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
             let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let accept_gzip =
+                one_header(req.headers(), crate::compress::ACCEPT_GZIP_HEADER) == Some("1");
+            let if_none_match = one_header(req.headers(), "if-none-match").map(str::to_owned);
             let query = req.uri().query().is_some();
             let Ok(body) = to_bytes(req.into_body(), 0).await else {
                 return decline(row.handler, Decline::Shape);
@@ -1136,14 +1211,19 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             };
             match shared
                 .status_compose
-                .answer_fed(&shared.feeds, &shared.limits, &feed)
+                .answer_fed_encoded(
+                    &shared.feeds,
+                    &shared.limits,
+                    &feed,
+                    accept_gzip,
+                    if_none_match.as_deref(),
+                )
                 .await
             {
-                Ok((bytes, etag)) => crate::view_reply::respond_tagged(
+                Ok(view) => crate::view_reply::respond_encoded(
                     crate::status_fed::VIEW,
                     crate::status_fed::VERSION,
-                    bytes,
-                    &etag,
+                    view,
                 ),
                 Err(reason) => decline(row.handler, reason),
             }
@@ -1163,6 +1243,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(row.handler, Decline::Unsupported);
             };
             let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let accept_gzip =
+                one_header(req.headers(), crate::compress::ACCEPT_GZIP_HEADER) == Some("1");
+            let if_none_match = one_header(req.headers(), "if-none-match").map(str::to_owned);
             let query = req.uri().query().is_some();
             let Ok(body) = to_bytes(req.into_body(), 0).await else {
                 return decline(row.handler, Decline::Shape);
@@ -1173,11 +1256,13 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             // Its own task: a compose that outlives this request's budget still finishes and
             // fills the owner's view cache, so the next request for the filter is a cache hit
             // (today's handler answers this one).
-            let answering = tokio::spawn(async move { owner.answer(&feed).await });
+            let answering = tokio::spawn(async move {
+                owner
+                    .answer_encoded(&feed, accept_gzip, if_none_match.as_deref())
+                    .await
+            });
             match answering.await {
-                Ok(Ok((bytes, etag))) => {
-                    crate::view_reply::respond_tagged("scoreboard", 1, bytes, &etag)
-                }
+                Ok(Ok(view)) => crate::view_reply::respond_encoded("scoreboard", 1, view),
                 Ok(Err(reason)) => decline(row.handler, reason),
                 Err(_) => decline(row.handler, Decline::Internal),
             }
@@ -1438,6 +1523,10 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
         // with no body.
         Handler::Analytics => {
             let query = req.uri().query().map(str::to_owned);
+            let accept_gzip =
+                one_header(req.headers(), crate::compress::ACCEPT_GZIP_HEADER) == Some("1");
+            let if_none_match = one_header(req.headers(), "if-none-match").map(str::to_owned);
+            let no_cache = crate::compress::has_no_cache(req.headers());
             let Ok(body) = to_bytes(req.into_body(), INPUT_CAP).await else {
                 return decline(row.handler, Decline::Shape);
             };
@@ -1483,6 +1572,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let force_refresh =
                 url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
                     .any(|(key, value)| key == "refresh" && value == "true");
+            let reload = force_refresh || no_cache;
             let now_check = aac_store::engine::now_ms() as i64;
             let cache_key = if !force_refresh {
                 store.analytics_engine().map(|engine| AnalyticsCacheKey {
@@ -1495,18 +1585,30 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             } else {
                 None
             };
-            if let Some(key) = &cache_key
-                && let Ok(guard) = shared.analytics_cache.lock()
-                && let Some(hit) = guard
-                    .iter()
-                    .find(|e| e.key == *key && now_check.saturating_sub(e.at_ms) < 30_000)
-            {
-                return (
-                    StatusCode::from_u16(hit.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    hit.bytes.clone(),
-                )
-                    .into_response();
+            if let Some(key) = &cache_key {
+                let hit = shared.analytics_cache.lock().ok().and_then(|guard| {
+                    guard
+                        .iter()
+                        .find(|e| e.key == *key && now_check.saturating_sub(e.at_ms) < 30_000)
+                        .map(|e| (e.status, e.body.clone()))
+                });
+                if let Some((status, cached)) = hit {
+                    if status == 200
+                        && !reload
+                        && crate::compress::not_modified(if_none_match.as_deref(), &cached.etag)
+                    {
+                        return analytics_not_modified(&cached.etag, cached.raw_len());
+                    }
+                    if let Ok((bytes, gzip)) = cached.serve(accept_gzip) {
+                        return analytics_reply(
+                            status,
+                            bytes,
+                            cached.raw_len(),
+                            gzip,
+                            &cached.etag,
+                        );
+                    }
+                }
             }
             let result = shared
                 .limits
@@ -1548,16 +1650,26 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     shared
                         .limits
                         .blocking(row.pool, move || {
-                            crate::analytics_route::encode(answer, encode_query.as_deref())
+                            let (status, bytes) =
+                                crate::analytics_route::encode(answer, encode_query.as_deref())?;
+                            if status == 200 {
+                                let etag = crate::compress::weak_etag_sha1(&bytes);
+                                let (cached, raw_bytes) =
+                                    crate::compress::CachedBody::from_raw_with_identity(
+                                        bytes, etag,
+                                    );
+                                Ok((status, Some((cached, raw_bytes)), Vec::new()))
+                            } else {
+                                Ok((status, None, bytes))
+                            }
                         })
                         .await
                 }
                 Err(reason) => Err(reason),
             };
             match result {
-                Ok((status, bytes)) => {
+                Ok((status, Some((cached, raw_bytes)), _)) => {
                     if let Some(key) = cache_key
-                        && status == 200
                         && let Ok(mut guard) = shared.analytics_cache.lock()
                     {
                         guard.retain(|e| e.key != key);
@@ -1565,19 +1677,31 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                             key,
                             at_ms: now_check,
                             status,
-                            bytes: bytes.clone(),
+                            body: cached.clone(),
                         });
                         while guard.len() > 4 {
                             guard.pop_front();
                         }
                     }
-                    (
-                        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        bytes,
-                    )
-                        .into_response()
+                    if !reload
+                        && crate::compress::not_modified(if_none_match.as_deref(), &cached.etag)
+                    {
+                        return analytics_not_modified(&cached.etag, cached.raw_len());
+                    }
+                    if accept_gzip
+                        && cached.is_gzipped()
+                        && let Ok((gz, true)) = cached.serve(true)
+                    {
+                        return analytics_reply(status, gz, cached.raw_len(), true, &cached.etag);
+                    }
+                    analytics_reply(status, raw_bytes, cached.raw_len(), false, &cached.etag)
                 }
+                Ok((status, None, bytes)) => (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    bytes,
+                )
+                    .into_response(),
                 Err(reason) => decline(row.handler, reason),
             }
         }
@@ -1696,6 +1820,27 @@ pub async fn serve(
         Default::default(),
         None,
         configured_claude_open_package(),
+        None,
+    )
+    .await
+}
+
+/// Start the embedded private service for the public front door and deliver a direct
+/// [`LocalService`] router handle so in-process calls skip the Unix socket hop.
+pub(crate) async fn serve_embedded(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    ready: tokio::sync::oneshot::Sender<LocalService>,
+) -> io::Result<()> {
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        false,
+        Default::default(),
+        None,
+        configured_claude_open_package(),
+        Some(ready),
     )
     .await
 }
@@ -1712,6 +1857,7 @@ pub async fn serve_with_app_update_jobs(
         Some(jobs),
         false,
         Default::default(),
+        None,
         None,
         None,
     )
@@ -1731,6 +1877,7 @@ pub async fn serve_composed(
         Default::default(),
         None,
         configured_claude_open_package(),
+        None,
     )
     .await
 }
@@ -1741,7 +1888,7 @@ pub async fn serve_with_account_usage_cache(
     shutdown: impl Future<Output = ()> + Send + 'static,
     cache: crate::account_usage::AccountUsageCache,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, cache, None, None).await
+    serve_inner(boot, shutdown, None, false, cache, None, None, None).await
 }
 
 /// Native owner callbacks share the dashboard with the public listener, hub and store.
@@ -1778,6 +1925,7 @@ pub async fn serve_with_native_account_usage(
         cache,
         Some(native),
         configured_claude_open_package(),
+        None,
     )
     .await
 }
@@ -1797,6 +1945,7 @@ pub async fn serve_with_claude_open(
         Default::default(),
         None,
         Some(package_root),
+        None,
     )
     .await
 }
@@ -1807,6 +1956,7 @@ fn configured_claude_open_package() -> Option<PathBuf> {
         .flatten()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve_inner(
     boot: Boot,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -1815,6 +1965,7 @@ async fn serve_inner(
     cache: crate::account_usage::AccountUsageCache,
     native: Option<NativeAccountUsage>,
     claude_open_package: Option<PathBuf>,
+    in_process: Option<tokio::sync::oneshot::Sender<LocalService>>,
 ) -> io::Result<()> {
     boot.validate()?;
     let owners = boot.owners()?;
@@ -2014,6 +2165,11 @@ async fn serve_inner(
     let router = router
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state.clone());
+    if let Some(ready) = in_process {
+        let _ = ready.send(LocalService {
+            router: router.clone(),
+        });
+    }
     tracing::info!(target: "aac_http", "private service ready");
     // G20: only a build that is actually serving becomes the one installers must keep.
     let running_build = package_root

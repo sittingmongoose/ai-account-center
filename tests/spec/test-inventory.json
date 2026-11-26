@@ -715,6 +715,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/compress.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/dashboard_observations.rs",
       "kind": "internal",
       "evidence": [],
@@ -1155,6 +1161,12 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "crates/aac-http/tests/one_hop_compression_304.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/tests/profile_reads.rs",

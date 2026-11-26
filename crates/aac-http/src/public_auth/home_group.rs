@@ -139,18 +139,37 @@ impl Home {
         };
         // The page's context is passed through as the front door wrote it; the fed answer decodes
         // and validates it, and an unreadable one leaves the answer without a view.
+        let head = request.method() == Method::HEAD;
+        let accept_gzip = crate::compress::accepts_gzip(request.headers());
+        let no_cache = crate::compress::has_no_cache(request.headers());
+        let reload = refresh || no_cache;
         let page = header(request.headers(), CONTEXT_HEADER).map(str::to_owned);
-        let validators = header(request.headers(), "if-none-match");
+        let validators = (!reload)
+            .then(|| header(request.headers(), "if-none-match"))
+            .flatten();
         let reply = self
-            .read(access, platform, refresh, page.as_deref(), validators)
+            .read(
+                access,
+                platform,
+                refresh,
+                page.as_deref(),
+                validators,
+                accept_gzip,
+                head,
+            )
             .await
             .map(set_no_store)
             .unwrap_or_else(|| set_no_store(super::plain(500, UNREADABLE)));
-        super::revalidate_json(reply, request.headers())
+        if reload {
+            reply
+        } else {
+            super::revalidate_json(reply, request.headers())
+        }
     }
 
     /// The answer: the producer's three generations, the fed view, or the legacy shape with no view.
     /// `None` is an unreadable dashboard (the caller answers the 500).
+    #[allow(clippy::too_many_arguments)]
     async fn read(
         &self,
         access: &DashboardAccess,
@@ -158,6 +177,8 @@ impl Home {
         refresh: bool,
         page: Option<&str>,
         validators: Option<&str>,
+        accept_gzip: bool,
+        head: bool,
     ) -> Option<Reply> {
         let secure = access.secure_transport;
         let host = self.host.upgrade()?;
@@ -190,7 +211,7 @@ impl Home {
         let produced = self.producer.produce(&self.feeds, &inputs).ok();
         if let Some(produced) = produced
             && let Some(feed) = feed_header(platform, secure, now, &updated, &produced)
-            && let Some(answer) = self.fed(&feed, page, validators).await
+            && let Some(answer) = self.fed(&feed, page, validators, accept_gzip, head).await
         {
             return Some(answer);
         }
@@ -227,7 +248,14 @@ impl Home {
         Some((dashboard, updated))
     }
 
-    async fn fed(&self, feed: &str, page: Option<&str>, validators: Option<&str>) -> Option<Reply> {
+    async fn fed(
+        &self,
+        feed: &str,
+        page: Option<&str>,
+        validators: Option<&str>,
+        accept_gzip: bool,
+        head: bool,
+    ) -> Option<Reply> {
         let feeds = self.feeds.clone();
         let root = self.root.clone();
         let feed = feed.to_owned();
@@ -240,16 +268,43 @@ impl Home {
         .ok()?
         .ok()?;
         if !has_context {
-            return Some(super::json_bytes(200, answer.bytes));
+            let raw_len = answer.bytes.len();
+            let etag = crate::compress::weak_etag_sha1(&answer.bytes);
+            if crate::compress::not_modified(validators, &etag) {
+                let mut out = super::empty(304);
+                set_header(&mut out, "etag", &etag);
+                if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+                    set_header(&mut out, "vary", "Accept-Encoding");
+                }
+                return Some(out);
+            }
+            if !head
+                && accept_gzip
+                && let Some(gz) = crate::compress::compress_for_tag(Some(&etag), &answer.bytes)
+            {
+                let mut out = super::json_bytes_tagged(200, gz, raw_len, true, &etag);
+                crate::compress::append_vary(out.headers_mut(), "Accept-Encoding");
+                return Some(out);
+            }
+            let mut out = super::json_bytes_tagged(
+                200,
+                axum::body::Bytes::from(answer.bytes),
+                raw_len,
+                false,
+                &etag,
+            );
+            if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+                crate::compress::append_vary(out.headers_mut(), "Accept-Encoding");
+            }
+            return Some(out);
         }
-        use sha2::{Digest, Sha256};
-        let digest = Sha256::digest(&answer.identity).into();
-        let etag = format!("W/\"{}\"", crate::view_reply::hex_digest(&digest));
         Some(super::native_group::fed_bytes(
             answer.bytes,
-            &etag,
+            &answer.etag,
             "home@3",
             validators,
+            accept_gzip,
+            head,
         ))
     }
 }

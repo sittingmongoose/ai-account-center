@@ -163,6 +163,7 @@ fn media(path: &str) -> Option<(&str, &str)> {
 /// The few request facts the routes read, taken before the request is consumed.
 struct Facts {
     head: bool,
+    accept_gzip: bool,
     origin_present: bool,
     same_origin: bool,
     content_type: Option<String>,
@@ -183,6 +184,7 @@ impl Facts {
         };
         Self {
             head: req.method() == Method::HEAD,
+            accept_gzip: crate::compress::accepts_gzip(req.headers()),
             origin_present: access.origin_present,
             same_origin: access.same_origin,
             content_type: text("content-type"),
@@ -637,10 +639,19 @@ async fn status(
             to: offsets.to,
             offsets: offsets.offsets.clone(),
         };
-        return match produce.view_async(None, now_ms(), &time_zone, &zone).await {
-            Ok((bytes, etag)) => {
-                fed_bytes(bytes, &etag, "status@1", facts.if_none_match.as_deref())
-            }
+        let want_gzip = !facts.head && facts.accept_gzip;
+        return match produce
+            .view_async_encoded(
+                None,
+                now_ms(),
+                &time_zone,
+                &zone,
+                want_gzip,
+                facts.if_none_match.as_deref(),
+            )
+            .await
+        {
+            Ok(view) => fed_encoded(view, "status@1"),
             Err(reason) => {
                 eprintln!("aac-http: local Status view declined ({reason:?})");
                 decline_because("status")
@@ -655,11 +666,17 @@ async fn status(
         "offsets": offsets.offsets,
     })
     .to_string();
-    let headers = [
+    let mut headers: Vec<(&str, &str)> = vec![
         ("x-aac-owned", "1"),
         ("x-aac-now", now.as_str()),
         ("x-aac-zone", zone.as_str()),
     ];
+    if !facts.head && facts.accept_gzip {
+        headers.push((crate::compress::ACCEPT_GZIP_HEADER, "1"));
+    }
+    if let Some(inm) = facts.if_none_match.as_deref() {
+        headers.push(("if-none-match", inm));
+    }
     let Some(principal) = access.service_principal() else {
         return decline_because("principal");
     };
@@ -673,8 +690,8 @@ async fn status(
             .request("GET", "/api/status", &principal, &headers, None)
             .await
         {
-            Some(reply) if reply.status == 200 => {
-                return fed_view(&reply, facts.if_none_match.as_deref());
+            Some(reply) if reply.status == 200 || reply.status == 304 => {
+                return fed_view(reply, facts.if_none_match.as_deref());
             }
             Some(reply) if declined(&reply) => {
                 let reason = decline_reason(&reply).unwrap_or("");
@@ -845,27 +862,30 @@ async fn scoreboard(
         "toMs": to_ms,
     })
     .to_string();
+    let want_gzip = !facts.head && facts.accept_gzip;
+    let mut headers: Vec<(&str, &str)> = vec![("x-aac-feed", feed.as_str())];
+    if want_gzip {
+        headers.push((crate::compress::ACCEPT_GZIP_HEADER, "1"));
+    }
+    if let Some(inm) = facts.if_none_match.as_deref() {
+        headers.push(("if-none-match", inm));
+    }
     for attempt in 0..6 {
         let reason = if let Some(owner) = local.as_deref() {
-            match owner.answer(&feed).await {
-                Ok((bytes, etag)) => {
-                    return fed_bytes(bytes, &etag, "scoreboard@1", facts.if_none_match.as_deref());
-                }
+            match owner
+                .answer_encoded(&feed, want_gzip, facts.if_none_match.as_deref())
+                .await
+            {
+                Ok(view) => return fed_encoded(view, "scoreboard@1"),
                 Err(reason) => Some(reason),
             }
         } else {
             match routes
-                .request(
-                    "GET",
-                    "/api/scoreboard",
-                    &principal,
-                    &[("x-aac-feed", feed.as_str())],
-                    None,
-                )
+                .request("GET", "/api/scoreboard", &principal, &headers, None)
                 .await
             {
-                Some(reply) if reply.status == 200 => {
-                    return fed_view(&reply, facts.if_none_match.as_deref());
+                Some(reply) if reply.status == 200 || reply.status == 304 => {
+                    return fed_view(reply, facts.if_none_match.as_deref());
                 }
                 Some(reply) if declined(&reply) => Decline::ALL
                     .into_iter()
@@ -899,9 +919,83 @@ async fn scoreboard(
     decline_because("answer")
 }
 
-/// One fed view reply: the service's own bytes, ETag and `x-aac-view`, written with the
-/// revalidated-view headers and the `If-None-Match` 304 (`rust-view-reply.ts`).
-fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
+fn valid_fed_meta(view: &str, etag: &str) -> bool {
+    matches!(view, "status@1" | "scoreboard@1" | "home@3" | "dashboard@1")
+        && etag.starts_with("W/\"")
+        && etag.ends_with('"')
+        && etag.len() >= 40
+        && etag[3..etag.len() - 1]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
+}
+
+fn fed_encoded(view: crate::view_reply::EncodedView, view_name: &str) -> Reply {
+    match view {
+        crate::view_reply::EncodedView::NotModified { etag } => {
+            if !valid_fed_meta(view_name, &etag) {
+                eprintln!("aac-http: fed view refused: {view_name} {etag}");
+                return super::decline();
+            }
+            let mut out = super::empty(304);
+            set_header(&mut out, "cache-control", "private, no-cache");
+            set_header(&mut out, "etag", &etag);
+            set_header(&mut out, "x-aac-view", view_name);
+            set_header(&mut out, "vary", "Cookie, Accept-Encoding");
+            out
+        }
+        crate::view_reply::EncodedView::Payload {
+            bytes,
+            raw_len,
+            gzip,
+            etag,
+        } => fed_shared_bytes(bytes, raw_len, gzip, &etag, view_name),
+    }
+}
+
+fn fed_shared_bytes(
+    body: axum::body::Bytes,
+    raw_len: usize,
+    gzip: bool,
+    etag: &str,
+    view: &str,
+) -> Reply {
+    if !valid_fed_meta(view, etag) {
+        eprintln!("aac-http: fed view refused: {view} {etag}");
+        return super::decline();
+    }
+    let body_len = body.len();
+    let mut out = (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response();
+    set_header(&mut out, "content-length", &body_len.to_string());
+    if gzip {
+        set_header(&mut out, "content-encoding", "gzip");
+        set_header(
+            &mut out,
+            crate::compress::RAW_LENGTH_HEADER,
+            &raw_len.to_string(),
+        );
+    }
+    set_header(&mut out, "cache-control", "private, no-cache");
+    set_header(&mut out, "etag", etag);
+    set_header(&mut out, "x-aac-view", view);
+    if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+        set_header(&mut out, "vary", "Cookie, Accept-Encoding");
+    } else {
+        set_header(&mut out, "vary", "Cookie");
+    }
+    out
+}
+
+/// One fed view reply: consumes the service's `ServiceReply` directly with zero body copy,
+/// preserving pre-compressed gzip `Bytes`, ETag, `x-aac-view`, and `304 Not Modified`.
+fn fed_view(reply: ServiceReply, if_none_match: Option<&str>) -> Reply {
     let header = |name: &str| {
         reply
             .headers
@@ -913,48 +1007,62 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
         eprintln!("aac-http: fed view missing its etag or view header");
         return super::decline();
     };
-    fed_bytes(reply.body.clone(), &etag, &view, if_none_match)
+    if !valid_fed_meta(&view, &etag) {
+        eprintln!("aac-http: fed view refused: {view} {etag}");
+        return super::decline();
+    }
+    let gzip = header("content-encoding").is_some_and(|enc| enc.eq_ignore_ascii_case("gzip"));
+    let raw_len = header(crate::compress::RAW_LENGTH_HEADER)
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| reply.body.len());
+    if reply.status == 304 || crate::compress::not_modified(if_none_match, &etag) {
+        let mut out = super::empty(304);
+        set_header(&mut out, "cache-control", "private, no-cache");
+        set_header(&mut out, "etag", &etag);
+        set_header(&mut out, "x-aac-view", &view);
+        if reply.status == 304 || raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+            set_header(&mut out, "vary", "Cookie, Accept-Encoding");
+        } else {
+            set_header(&mut out, "vary", "Cookie");
+        }
+        return out;
+    }
+    fed_shared_bytes(reply.body, raw_len, gzip, &etag, &view)
 }
 
-/// A fed view whose bytes and ETag a local owner wrote.
+/// A fed view whose bytes and ETag a local owner wrote (e.g. Home with page context).
 pub(super) fn fed_bytes(
     body: Vec<u8>,
     etag: &str,
     view: &str,
     if_none_match: Option<&str>,
+    accept_gzip: bool,
+    head: bool,
 ) -> Reply {
-    if !matches!(view, "status@1" | "scoreboard@1" | "home@3" | "dashboard@1")
-        || !etag.starts_with("W/\"")
-        || !etag.ends_with('"')
-        || etag.len() < 40
-        || !etag[3..etag.len() - 1]
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit())
-    {
+    if !valid_fed_meta(view, etag) {
         eprintln!("aac-http: fed view refused: {view} {etag}");
         return super::decline();
     }
-    let mut out = if not_modified(if_none_match, etag) {
-        super::empty(304)
-    } else {
-        super::json_bytes(200, body)
-    };
-    set_header(&mut out, "cache-control", "private, no-cache");
-    set_header(&mut out, "etag", etag);
-    set_header(&mut out, "x-aac-view", view);
-    set_header(&mut out, "vary", "Cookie");
-    out
-}
-
-/// `If-None-Match` against the reply's ETag, with the route's 304 (no body).
-fn not_modified(validators: Option<&str>, etag: &str) -> bool {
-    let Some(validators) = validators else {
-        return false;
-    };
-    validators.split(',').any(|tag| {
-        let value = tag.trim();
-        value == "*" || value.replace("W/", "") == etag.replace("W/", "")
-    })
+    let raw_len = body.len();
+    if crate::compress::not_modified(if_none_match, etag) {
+        let mut out = super::empty(304);
+        set_header(&mut out, "cache-control", "private, no-cache");
+        set_header(&mut out, "etag", etag);
+        set_header(&mut out, "x-aac-view", view);
+        if raw_len >= crate::compress::MIN_COMPRESS_BYTES {
+            set_header(&mut out, "vary", "Cookie, Accept-Encoding");
+        } else {
+            set_header(&mut out, "vary", "Cookie");
+        }
+        return out;
+    }
+    if !head
+        && accept_gzip
+        && let Some(gz) = crate::compress::compress_for_tag(Some(etag), &body)
+    {
+        return fed_shared_bytes(gz, raw_len, true, etag, view);
+    }
+    fed_shared_bytes(axum::body::Bytes::from(body), raw_len, false, etag, view)
 }
 
 /// The reports root the media route reads (`AgentReportsReader`'s rule).

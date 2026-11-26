@@ -319,11 +319,17 @@ impl DashboardAuth {
                     .and_then(|value| value.to_str().ok())
                     == Some("cross-site");
                 let head = request.method() == Method::HEAD;
+                let accept_gzip = crate::compress::accepts_gzip(request.headers());
+                let if_none_match = header(request.headers(), "if-none-match").map(str::to_owned);
+                let no_cache = crate::compress::has_no_cache(request.headers());
                 return analytics_routes::analytics(
                     access,
                     query,
                     head,
                     cross_site,
+                    accept_gzip,
+                    if_none_match,
+                    no_cache,
                     analytics_hop.clone(),
                 )
                 .await;
@@ -552,11 +558,18 @@ pub(crate) async fn run_public_at(
             .filter(|_| cut)
             .map(|host| -> analytics_routes::Hop {
                 let host = std::sync::Arc::clone(host);
-                std::sync::Arc::new(move |uri: String, principal: String| {
-                    let host = std::sync::Arc::clone(&host);
-                    Box::pin(async move { host.analytics(&uri, &principal).await })
-                        as analytics_routes::HopFuture
-                })
+                std::sync::Arc::new(
+                    move |uri: String, principal: String, headers: Vec<(String, String)>| {
+                        let host = std::sync::Arc::clone(&host);
+                        Box::pin(async move {
+                            let refs: Vec<(&str, &str)> = headers
+                                .iter()
+                                .map(|(k, v)| (k.as_str(), v.as_str()))
+                                .collect();
+                            host.analytics(&uri, &principal, &refs).await
+                        }) as analytics_routes::HopFuture
+                    },
+                )
             });
     let (profiles, app_updates) = if let Some(native) = native.as_ref() {
         let (agents, cache) = native.profile_inputs();
@@ -983,12 +996,20 @@ fn response(status: u16, value: Value) -> Reply {
 }
 
 pub(crate) fn json_bytes(status: u16, bytes: Vec<u8>) -> Reply {
+    let raw_len = bytes.len();
+    let etag = crate::compress::weak_etag_sha1(&bytes);
+    json_bytes_tagged(status, Bytes::from(bytes), raw_len, false, &etag)
+}
+
+pub(crate) fn json_bytes_tagged(
+    status: u16,
+    bytes: Bytes,
+    raw_len: usize,
+    gzip: bool,
+    etag: &str,
+) -> Reply {
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
-    use sha1::{Digest, Sha1};
     let length = bytes.len();
-    let digest = STANDARD_NO_PAD.encode(Sha1::digest(&bytes));
-    let etag = format!(r#"W/"{length:x}-{digest}""#);
     let mut reply = (
         status,
         [(
@@ -999,7 +1020,15 @@ pub(crate) fn json_bytes(status: u16, bytes: Vec<u8>) -> Reply {
     )
         .into_response();
     set_header(&mut reply, "content-length", &length.to_string());
-    set_header(&mut reply, "etag", &etag);
+    set_header(&mut reply, "etag", etag);
+    if gzip {
+        set_header(&mut reply, "content-encoding", "gzip");
+        set_header(
+            &mut reply,
+            crate::compress::RAW_LENGTH_HEADER,
+            &raw_len.to_string(),
+        );
+    }
     reply
 }
 
@@ -1019,6 +1048,12 @@ fn revalidate_json(mut reply: Reply, headers: &HeaderMap) -> Reply {
         reply
             .headers_mut()
             .remove(axum::http::header::CONTENT_LENGTH);
+        reply
+            .headers_mut()
+            .remove(axum::http::header::CONTENT_ENCODING);
+        reply
+            .headers_mut()
+            .remove(crate::compress::RAW_LENGTH_HEADER);
         *reply.body_mut() = Body::empty();
     }
     reply
@@ -1475,6 +1510,7 @@ async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: 
     .await
     .unwrap_or_else(|_| Decision::Reply(service_error()));
     let head = parts.method == Method::HEAD;
+    let accept_gzip = crate::compress::accepts_gzip(&parts.headers);
     let mut result = match decision {
         Decision::Reply(reply) => reply,
         Decision::Continue(access, cookie) => {
@@ -1498,7 +1534,9 @@ async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: 
                 })
         }
     };
-    if head {
+    if !upgrade {
+        result = crate::compress::maybe_compress_api_json(result, accept_gzip, head).await;
+    } else if head {
         *result.body_mut() = Body::empty();
     }
     tracing::info!(status = result.status().as_u16(), "request.completed");
