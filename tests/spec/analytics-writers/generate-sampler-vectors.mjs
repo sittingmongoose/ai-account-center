@@ -12,7 +12,13 @@ import { createHash } from 'node:crypto';
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '../../..');
 const out = join(here, 'sampler-vectors.json');
-process.env.AAC_STORE_MODULE = join(repo, 'dist/native/aac-store.win32-x64.node');
+// This computer's native module (the loader's `aac-store.<platform>-<arch>.node` name). The source
+// tree has no `src/native/`, so the loader's dist-relative default cannot resolve from here.
+process.env.AAC_STORE_MODULE = join(
+  repo,
+  'dist/native',
+  `aac-store.${process.platform}-${process.arch}.node`
+);
 process.env.AAC_STORE = 'on';
 
 const { openAacStore, closeAacStore } = await import('../../../src/store/store-service.ts');
@@ -137,15 +143,14 @@ const mainText = `${JSON.stringify(
 )}\n`;
 
 const ccsDir = join(tmpdir(), `aac-g14-ccs-${process.pid}`);
-const storeDir = join(tmpdir(), `aac-g14-store-${process.pid}`);
 mkdirSync(join(ccsDir, 'account-analytics', 'archive', 'nested'), { recursive: true });
-mkdirSync(storeDir, { recursive: true });
 const archiveDir = join(ccsDir, 'account-analytics', 'archive');
 writeFileSync(join(archiveDir, 'a.jsonl'), archiveA);
 writeFileSync(join(archiveDir, 'nested', 'b.json'), archiveB);
 writeFileSync(join(ccsDir, 'account-analytics', 'quota-history-v1.json'), mainText);
 
-const opened = await openAacStore({ dir: storeDir });
+// The fixture CCS root owns the store (`<ccsDir>/store`); there is no `dir` option.
+const opened = await openAacStore({ ccsDir });
 if (!opened.store) throw new Error(`store did not open: ${opened.reason}`);
 const store = opened.store;
 
@@ -183,9 +188,22 @@ const vectors = {
 
 await closeAacStore();
 rmSync(ccsDir, { recursive: true, force: true });
-rmSync(storeDir, { recursive: true, force: true });
 
-const json = `${JSON.stringify(vectors, null, 2)}\n`;
+// Sorted object keys: the native store's record fields arrive in a platform-dependent order,
+// so a plain stringify drifts on regeneration. Arrays keep the Engine's (key-ordered) order.
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalize(value[key])])
+    );
+  }
+  return value;
+}
+
+const json = `${JSON.stringify(canonicalize(vectors), null, 2)}\n`;
 if (process.argv.includes('--check')) {
   if (readFileSync(out, 'utf8') !== json) {
     console.error('sampler-vectors.json is stale; regenerate without --check');
