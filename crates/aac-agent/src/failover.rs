@@ -1,5 +1,6 @@
 //! Read-only failover discovery. Only six reconstructed public fields leave this module.
 //! Unproved stores, grammar and IO outcomes delegate the entire inventory to Python.
+mod console;
 mod core;
 pub(crate) mod dispatch;
 use crate::{files, proof};
@@ -980,6 +981,9 @@ pub(crate) fn run_with_adapter(args: &Value, mut adapter: impl Adapter) -> Value
     runtime.block_on(dispatch::execute(args, &mut adapter, clock.get() as i64))
 }
 pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
+    if matches!(args["provider"].as_str(), Some("muse" | "opencode-wallet")) {
+        return Ok(run_with_adapter(args, console::Console::new()));
+    }
     if args["action"] == "collect" {
         return Ok(core::run(args));
     }
@@ -1093,5 +1097,67 @@ mod inventory_parity_tests {
             3
         );
         assert!(!native.to_string().contains("private-fixture-access"));
+    }
+}
+
+#[cfg(test)]
+mod console_port_tests {
+    use super::*;
+
+    // Inventory honors XDG_CONFIG_HOME independently of an explicit homeDir. Run these
+    // entrypoint tests in children with every supported home selector set to fixture roots.
+    fn isolated(test: &str) -> bool {
+        if std::env::var("AAC_U4_ISOLATED_TEST").as_deref() == Ok(test) {
+            return false;
+        }
+        let home = tempfile::tempdir().expect("isolated child home");
+        let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", test, "--nocapture"])
+            .env("AAC_U4_ISOLATED_TEST", test)
+            .env("HOME", home.path())
+            .env("CCS_HOME", home.path().join(".ccs"))
+            .env("XDG_CONFIG_HOME", home.path().join(".config"))
+            .status()
+            .expect("isolated entrypoint test");
+        assert!(status.success(), "{test}");
+        true
+    }
+    #[test]
+    fn muse_native_inventory_uses_dispatcher_and_strips_private_material() {
+        if isolated(
+            "failover::console_port_tests::muse_native_inventory_uses_dispatcher_and_strips_private_material",
+        ) {
+            return;
+        }
+        let home = tempfile::tempdir().expect("synthetic home");
+        let root = home.path().join(".ccs/muse-homes/1234abcd/muse");
+        fs::create_dir_all(&root).expect("store");
+        fs::write(root.join("auth.json"),r#"{"providers":{"meta":{"access_token":"dca:synthetic-U4-native","user_email":"fixture@example.test"}}}"#).expect("auth");
+        let result = run(&json!({"version":1,"action":"inventory","provider":"muse","homeDir":home.path(),"ccsDir":home.path().join(".ccs")})).expect("inventory");
+        let rows = result["candidates"].as_array().expect("inventory rows");
+        assert_eq!(rows.len(), 1, "{result}");
+        assert_eq!(rows[0]["identity"]["kind"], "muse-native-credential");
+        assert!(!result.to_string().contains("synthetic-U4-native"));
+        assert_eq!(rows[0].as_object().expect("public").len(), 6);
+    }
+    #[test]
+    fn stale_console_candidates_fail_without_python_or_network() {
+        if isolated(
+            "failover::console_port_tests::stale_console_candidates_fail_without_python_or_network",
+        ) {
+            return;
+        }
+        let home = tempfile::tempdir().expect("synthetic home");
+        for (provider, kind) in [
+            ("muse", "muse-native-credential"),
+            ("opencode-wallet", "opencode-workspace"),
+        ] {
+            let candidate = json!({"locator":"a".repeat(64),"identity":{"kind":kind,"key":"b".repeat(64)},"revision":"c".repeat(64),"email":null,"plan":null,"selectors":["discover"]});
+            let result=run(&json!({"version":1,"action":"collect","provider":provider,"candidate":candidate,"homeDir":home.path(),"ccsDir":home.path().join(".ccs")})).expect("collect");
+            assert_eq!(
+                result["failureCode"], "source_changed",
+                "{provider}: {result}"
+            );
+        }
     }
 }
