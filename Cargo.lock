@@ -17,6 +17,8 @@ dependencies = [
  "aac-usage",
  "base64 0.22.1",
  "chrono",
+ "fs2",
+ "futures-util",
  "libc",
  "nix",
  "regex",
@@ -27,6 +29,7 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "unicode-normalization",
  "url",
 ]

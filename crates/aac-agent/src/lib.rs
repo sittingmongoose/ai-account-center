@@ -2,6 +2,8 @@
 mod antigravity;
 mod apps;
 mod claude_host;
+/// In-memory Codex update process runtime.
+pub mod codex_update;
 mod cursor_open;
 mod failover;
 mod files;

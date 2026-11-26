@@ -17,6 +17,9 @@ aac-protocol.workspace = true
 aac-providers.workspace = true
 aac-usage = { path = "../../native/aac-usage" }
 aac-status.workspace = true
+fs2.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio-tungstenite = "0.29"
 tempfile.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -34,7 +37,7 @@ url = "2.5"
 security-framework = "3"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["signal", "process", "term", "poll"] }
+nix = { version = "0.31", features = ["signal", "process", "term", "poll", "user"] }
 
 [dev-dependencies]
 aac-config.workspace = true
