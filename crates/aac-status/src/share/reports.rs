@@ -13,6 +13,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value as Json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// What one scan reads, so the share cannot grow the server without bound.
 #[derive(Clone, Copy)]
@@ -51,7 +52,7 @@ struct Entry {
     kind: &'static str,
     writer: String,
     stat_key: String,
-    good: Option<SeenReport>,
+    good: Option<Arc<SeenReport>>,
     problem: Option<Problem>,
     missing_since: Option<u64>,
 }
@@ -63,9 +64,9 @@ pub struct AgentReportsState {
     pub state: &'static str,
     pub scanned_at: Option<u64>,
     pub complete: bool,
-    pub threads: Vec<SeenReport>,
-    pub tasks: Vec<SeenReport>,
-    pub cards: Vec<SeenReport>,
+    pub threads: Vec<Arc<SeenReport>>,
+    pub tasks: Vec<Arc<SeenReport>>,
+    pub cards: Vec<Arc<SeenReport>>,
     pub problems: Vec<Problem>,
     /// Board files by the path a writer gave: modification time, or null.
     pub boards: Map<String, Json>,
@@ -82,6 +83,7 @@ pub struct AgentReportsReader {
     entries: IndexMap<String, Entry>,
     folder_problems: IndexMap<String, Problem>,
     boards: Map<String, Json>,
+    board_paths: Vec<(String, Option<PathBuf>)>,
     state: &'static str,
     scanned_at: Option<u64>,
     complete: bool,
@@ -107,6 +109,7 @@ impl AgentReportsReader {
             entries: IndexMap::new(),
             folder_problems: IndexMap::new(),
             boards: Map::new(),
+            board_paths: Vec::new(),
             state: "missing",
             scanned_at: None,
             complete: false,
@@ -119,6 +122,15 @@ impl AgentReportsReader {
             kept_writers: HashSet::new(),
             date_cursor: 0,
         }
+    }
+
+    pub fn scanned_at(&self) -> Option<u64> {
+        self.scanned_at
+    }
+
+    /// Whether the last scan covered all entries that could contain an open card.
+    pub fn complete(&self) -> bool {
+        self.complete
     }
 
     pub fn root(&self) -> &Path {
@@ -219,8 +231,8 @@ impl AgentReportsReader {
         }
         // A read error keeps the key empty so the next scan tries again.
         entry.stat_key = stat_key.to_string();
-        if let Some(good) = &mut entry.good {
-            good.problem = entry.problem.clone();
+        if changed && let Some(good) = &mut entry.good {
+            Arc::make_mut(good).problem = entry.problem.clone();
         }
         self.entries.insert(rel.to_string(), entry);
         changed
@@ -268,11 +280,13 @@ impl AgentReportsReader {
         if let Some(good) = &mut entry.good
             && good.sha256 == sha256
         {
-            good.problem = None;
+            if had_problem {
+                Arc::make_mut(good).problem = None;
+            }
             self.entries.insert(rel.to_string(), entry);
             return had_problem;
         }
-        entry.good = Some(SeenReport {
+        entry.good = Some(Arc::new(SeenReport {
             file: rel.to_string(),
             writer: writer.to_string(),
             written_at_ms: aac_num::ecma::parse_instant(written_at).unwrap_or(0),
@@ -280,7 +294,7 @@ impl AgentReportsReader {
             sha256,
             first_seen_at: now,
             problem: None,
-        });
+        }));
         self.entries.insert(rel.to_string(), entry);
         true
     }
@@ -639,25 +653,25 @@ impl AgentReportsReader {
                 now,
             );
         }
-        let keys: Vec<String> = self.entries.keys().cloned().collect();
-        for key in keys {
-            let entry = self.entries.get_mut(&key).expect("listed entry");
-            if seen.contains(&key) {
+        self.entries.retain(|key, entry| {
+            if seen.contains(key) {
                 entry.missing_since = None;
-                continue;
+                return true;
             }
             let missing_since = *entry.missing_since.get_or_insert(now);
-            if now.saturating_sub(missing_since) >= MISSING_GRACE_MS {
-                self.entries.shift_remove(&key);
-                changed = true;
-            }
-        }
+            let retained = now.saturating_sub(missing_since) < MISSING_GRACE_MS;
+            changed |= !retained;
+            retained
+        });
         self.misses.keep_only(&seen);
         self.listing_misses.keep_only(&failed_listings);
         if !same_problems(&self.folder_problems, &folder_problems) {
             changed = true;
         }
         self.folder_problems = folder_problems;
+        if changed {
+            self.refresh_board_paths();
+        }
         if self.stat_boards(fs) {
             changed = true;
         }
@@ -672,22 +686,7 @@ impl AgentReportsReader {
         changed
     }
 
-    fn collect(&self) -> (Vec<SeenReport>, Vec<SeenReport>, Vec<SeenReport>) {
-        let mut threads = Vec::new();
-        let mut tasks = Vec::new();
-        let mut cards = Vec::new();
-        for entry in self.entries.values() {
-            let Some(good) = &entry.good else { continue };
-            match entry.kind {
-                "thread" => threads.push(good.clone()),
-                "tasks" => tasks.push(good.clone()),
-                _ => cards.push(good.clone()),
-            }
-        }
-        (threads, tasks, cards)
-    }
-
-    fn stat_boards(&mut self, fs: &dyn ShareFs) -> bool {
+    fn refresh_board_paths(&mut self) {
         // Read the retained documents in place: collecting them first cloned every
         // thread/tasks document on every scan just to read two fields.
         let mut paths: Vec<String> = Vec::new();
@@ -723,11 +722,22 @@ impl AgentReportsReader {
                 }
             }
         }
+        self.board_paths = paths
+            .into_iter()
+            .map(|given| {
+                let local = share_local_path(&given, &self.root);
+                (given, local)
+            })
+            .collect();
+    }
+
+    fn stat_boards(&mut self, fs: &dyn ShareFs) -> bool {
         let mut next = Map::new();
-        for given in paths {
-            let local = share_local_path(&given, &self.root);
-            let mtime = local.and_then(|local| fs.stat(&local).ok().filter(|stat| stat.file).map(|stat| stat.mtime_ms));
-            next.insert(given, mtime.map(Json::from).unwrap_or(Json::Null));
+        for (given, local) in &self.board_paths {
+            let mtime = local
+                .as_ref()
+                .and_then(|local| fs.stat(local).ok().filter(|stat| stat.file).map(|stat| stat.mtime_ms));
+            next.insert(given.clone(), mtime.map(Json::from).unwrap_or(Json::Null));
         }
         let changed =
             next.len() != self.boards.len() || next.iter().any(|(key, value)| self.boards.get(key) != Some(value));
@@ -743,7 +753,17 @@ impl AgentReportsReader {
             .chain(self.folder_problems.values().cloned())
             .collect();
         problems.sort_by(|a, b| compare(&a.file, &b.file));
-        let (threads, tasks, cards) = self.collect();
+        let mut threads = Vec::new();
+        let mut tasks = Vec::new();
+        let mut cards = Vec::new();
+        for entry in self.entries.values() {
+            let Some(good) = &entry.good else { continue };
+            match entry.kind {
+                "thread" => threads.push(good.clone()),
+                "tasks" => tasks.push(good.clone()),
+                _ => cards.push(good.clone()),
+            }
+        }
         AgentReportsState {
             root: self.root.to_string_lossy().into_owned(),
             state: self.state,
@@ -841,23 +861,24 @@ fn put_folder_problem(
 
 /// The snapshot as the Status envelope's `reports` member: Maps become objects, in order.
 pub fn state_json(state: &AgentReportsState) -> Json {
-    let seen = |rows: &[SeenReport]| {
-        Json::Array(
-            rows.iter()
-                .map(|row| {
-                    let mut out = Map::new();
-                    out.insert("file".to_string(), Json::from(row.file.clone()));
-                    out.insert("writer".to_string(), Json::from(row.writer.clone()));
-                    out.insert("doc".to_string(), (*row.doc).clone());
-                    out.insert("sha256".to_string(), Json::from(row.sha256.clone()));
-                    out.insert("firstSeenAt".to_string(), Json::from(row.first_seen_at));
-                    out.insert("writtenAtMs".to_string(), Json::from(row.written_at_ms));
-                    out.insert("problem".to_string(), problem_json(row.problem.as_ref()));
-                    Json::Object(out)
-                })
-                .collect(),
-        )
-    };
+    let mut out = state_metadata(state);
+    out.insert(
+        "threads".into(),
+        Json::Array(state.threads.iter().map(|row| row_json(row, None)).collect()),
+    );
+    out.insert(
+        "tasks".into(),
+        Json::Array(state.tasks.iter().map(|row| row_json(row, None)).collect()),
+    );
+    out.insert(
+        "cards".into(),
+        Json::Array(state.cards.iter().map(|row| row_json(row, None)).collect()),
+    );
+    append_state_details(state, &mut out);
+    Json::Object(out)
+}
+
+pub(crate) fn state_metadata(state: &AgentReportsState) -> Map<String, Json> {
     let mut out = Map::new();
     out.insert("root".to_string(), Json::from(state.root.clone()));
     out.insert("state".to_string(), Json::from(state.state));
@@ -866,14 +887,30 @@ pub fn state_json(state: &AgentReportsState) -> Json {
         state.scanned_at.map(Json::from).unwrap_or(Json::Null),
     );
     out.insert("complete".to_string(), Json::from(state.complete));
-    out.insert("threads".to_string(), seen(&state.threads));
-    out.insert("tasks".to_string(), seen(&state.tasks));
-    out.insert("cards".to_string(), seen(&state.cards));
+    out
+}
+
+pub(crate) fn append_state_details(state: &AgentReportsState, out: &mut Map<String, Json>) {
     out.insert(
         "problems".to_string(),
         Json::Array(state.problems.iter().map(problem_json_ref).collect()),
     );
     out.insert("boards".to_string(), Json::Object(state.boards.clone()));
+}
+
+pub(crate) fn row_json(row: &SeenReport, blocker: Option<&Json>) -> Json {
+    let mut doc = (*row.doc).clone();
+    if let (Some(blocker), Some(doc)) = (blocker, doc.as_object_mut()) {
+        doc.insert("blockedOn".to_owned(), blocker.clone());
+    }
+    let mut out = Map::new();
+    out.insert("file".to_string(), Json::from(row.file.clone()));
+    out.insert("writer".to_string(), Json::from(row.writer.clone()));
+    out.insert("doc".to_string(), doc);
+    out.insert("sha256".to_string(), Json::from(row.sha256.clone()));
+    out.insert("firstSeenAt".to_string(), Json::from(row.first_seen_at));
+    out.insert("writtenAtMs".to_string(), Json::from(row.written_at_ms));
+    out.insert("problem".to_string(), problem_json(row.problem.as_ref()));
     Json::Object(out)
 }
 

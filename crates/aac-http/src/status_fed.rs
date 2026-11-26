@@ -68,8 +68,12 @@ pub(crate) fn source(name: &str) -> bool {
 }
 
 /// One prepared generation: its data object, and for `status-facts` the presentation facts.
+pub(crate) type ScanClock = (Arc<AtomicU64>, aac_num::intl::Zone);
+
 pub(crate) struct Part {
+    pub(crate) scan: Option<ScanClock>,
     data: Value,
+    reports: Option<Arc<read_status::ReportView>>,
     facts: Option<Arc<Presentation>>,
 }
 
@@ -113,7 +117,21 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
         }
         None
     };
-    Ok(Part { data: value, facts })
+    Ok(Part {
+        data: value,
+        reports: None,
+        facts,
+        scan: None,
+    })
+}
+
+pub(crate) fn prepared_reports(reports: Arc<read_status::ReportView>, scan: ScanClock) -> Part {
+    Part {
+        data: Value::Object(serde_json::Map::new()),
+        reports: Some(reports),
+        scan: Some(scan),
+        facts: None,
+    }
 }
 
 /// `read_status::fed_part`: the data is an object and no key or string in it is exactly an
@@ -172,7 +190,7 @@ pub(crate) fn answer_generations(
     clock: String,
     day: String,
 ) -> Result<(Vec<u8>, String), Decline> {
-    let composed = compose_generations(held, now_ms, clock, day)?;
+    let composed = compose_generations(held, scan_stamps(held), now_ms, clock, day)?;
     Ok((composed.raw.to_vec(), composed.etag))
 }
 
@@ -305,16 +323,42 @@ pub(crate) fn prewarm_generations(
     clock: String,
     day: String,
 ) {
-    let _ = compose_generations(held, now_ms, clock, day);
+    let _ = compose_generations(held, scan_stamps(held), now_ms, clock, day);
+}
+
+fn scan_clock(generation: &Generation) -> Option<&ScanClock> {
+    match &generation.prepared {
+        Prepared::Status(Ok(part)) => part.scan.as_ref(),
+        _ => None,
+    }
+}
+
+const CLOCK_PARTS: [usize; 2] = [0, 3];
+
+fn scan_stamps(held: &[Arc<Generation>; 6]) -> [u64; 2] {
+    CLOCK_PARTS
+        .map(|index| scan_clock(&held[index]).map_or(0, |(clock, _)| clock.load(Ordering::Acquire)))
+}
+
+fn cache_ids(held: &[Arc<Generation>; 6], stamps: [u64; 2]) -> [String; 6] {
+    let mut ids = std::array::from_fn(|i| held[i].id.clone());
+    for (index, stamp) in CLOCK_PARTS.into_iter().zip(stamps) {
+        if stamp != 0 {
+            ids[index].push('/');
+            ids[index].push_str(&stamp.to_string());
+        }
+    }
+    ids
 }
 
 fn compose_generations(
     held: &[Arc<Generation>; 6],
+    stamps: [u64; 2],
     now_ms: i64,
     clock: String,
     day: String,
 ) -> Result<Composed, Decline> {
-    let key_ids: [String; 6] = std::array::from_fn(|i| held[i].id.clone());
+    let key_ids = cache_ids(held, stamps);
     // Named generations only: `current` already refused an id the service does not hold. The date
     // is checked before a hit so a clock `toISOString` cannot write still declines.
     let date = Date::of_now(now_ms, clock.clone(), day.clone()).ok_or(Decline::Date)?;
@@ -335,6 +379,7 @@ fn compose_generations(
     let now = Value::from(now_ms);
     parts.push(("now", &now));
     let mut presentation = None;
+    let mut reports = None;
     for generation in held {
         let Prepared::Status(part) = &generation.prepared else {
             return Err(Decline::Internal);
@@ -342,6 +387,9 @@ fn compose_generations(
         let part = part.as_ref().map_err(|d| *d)?;
         if let Some(facts) = &part.facts {
             presentation = Some(facts.clone());
+        }
+        if let Some(native) = &part.reports {
+            reports = Some(native.as_ref());
         }
         let Some(object) = part.data.as_object() else {
             return Err(Decline::Internal);
@@ -352,11 +400,23 @@ fn compose_generations(
     }
     let presentation = presentation.ok_or(Decline::Internal)?;
     let iso = date.iso_text().to_owned();
-    let (view, traced) = read_status::compose_fed_traced(parts, presentation, (now_ms, date))
-        .map_err(|reason| match reason {
-            Unproven::Facts => Decline::Date,
-            Unproven::Input => Decline::Unsupported,
-        })?;
+    let scan_dates = std::array::from_fn(|slot| {
+        let index = CLOCK_PARTS[slot];
+        let stamp = stamps[slot];
+        if stamp == 0 {
+            return None;
+        }
+        let stamp = i64::try_from(stamp).ok()?;
+        let (_, zone) = scan_clock(&held[index])?;
+        let (clock, day) = zone.words(stamp)?;
+        Some((stamp, Date::of_now(stamp, clock, day)?))
+    });
+    let (view, traced) =
+        read_status::compose_with_reports(parts, reports, presentation, (now_ms, date), scan_dates)
+            .map_err(|reason| match reason {
+                Unproven::Facts => Decline::Date,
+                Unproven::Input => Decline::Unsupported,
+            })?;
     let mut writer = Writer::with_capacity(256 * 1024);
     writer.value(&view);
     let (bytes, identity) = writer.finish();
@@ -522,7 +582,8 @@ impl StatusCompose {
         if_none_match: Option<&str>,
     ) -> Result<EncodedView, Decline> {
         let date = Date::of_now(now_ms, clock.clone(), day.clone()).ok_or(Decline::Date)?;
-        let ids: [String; 6] = std::array::from_fn(|i| held[i].id.clone());
+        let stamps = scan_stamps(&held);
+        let ids = cache_ids(&held, stamps);
         if let Some(hit) = crate::status_cache::hit(&ids, &clock, &day, now_ms) {
             if crate::compress::not_modified(if_none_match, &hit.etag) {
                 return Ok(EncodedView::NotModified { etag: hit.etag });
@@ -588,7 +649,7 @@ impl StatusCompose {
                                     std::thread::sleep(std::time::Duration::from_millis(delay));
                                 }
                             }
-                            compose_generations(&held_clone, now_ms, clock_clone, day_clone)
+                            compose_generations(&held_clone, stamps, now_ms, clock_clone, day_clone)
                         };
                         let outcome = match limits {
                             Some(limits) => limits.blocking_status(work).await,
@@ -653,7 +714,7 @@ impl StatusCompose {
         }
         // Final fallback if a second-boundary race required a fresh compose directly.
         let iso = date.iso_text().to_owned();
-        let work = move || compose_generations(&held, now_ms, clock, day);
+        let work = move || compose_generations(&held, stamps, now_ms, clock, day);
         let composed = match limits {
             Some(limits) => limits.blocking_status(work).await?,
             None => tokio::task::spawn_blocking(work)

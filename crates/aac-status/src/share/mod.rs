@@ -222,20 +222,39 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// compare: numbers as JavaScript writes them (`1.0` is `1`, `-0` is `0`), objects in their
 /// own order. Both sides of a comparison go through this one function.
 pub fn js_text(value: &Json) -> String {
+    let mut out = String::new();
+    write_js_text(&mut out, value);
+    out
+}
+
+pub(crate) fn write_js_text(out: &mut String, value: &Json) {
+    use std::fmt::Write;
     match value {
-        Json::Number(number) => aac_num::ecma::json(number.as_f64().unwrap_or(f64::NAN)),
+        Json::Number(number) => out.push_str(&aac_num::ecma::json(number.as_f64().unwrap_or(f64::NAN))),
         Json::Array(items) => {
-            let parts: Vec<String> = items.iter().map(js_text).collect();
-            format!("[{}]", parts.join(","))
+            out.push('[');
+            for (index, value) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_js_text(out, value);
+            }
+            out.push(']');
         }
         Json::Object(map) => {
-            let parts: Vec<String> = map
-                .iter()
-                .map(|(key, value)| format!("{}:{}", Json::from(key.clone()), js_text(value)))
-                .collect();
-            format!("{{{}}}", parts.join(","))
+            out.push('{');
+            for (index, (key, value)) in map.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                let _ = write!(out, "{}:", Json::from(key.as_str()));
+                write_js_text(out, value);
+            }
+            out.push('}');
         }
-        other => other.to_string(),
+        other => {
+            let _ = write!(out, "{other}");
+        }
     }
 }
 

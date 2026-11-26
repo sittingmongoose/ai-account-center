@@ -71,7 +71,7 @@ fn the_six_generations_are_the_front_doors_bytes() {
     };
     let usage = (!input["usage"].is_null()).then(|| UsageInput::parse(&input["usage"]).unwrap());
     let built = sources::build(&Readings {
-        reports: &input["reports"],
+        reports: sources::Reports::Wire(&input["reports"]),
         quota: &input["quota"],
         pinned: &input["pinned"],
         registry: &input["registry"],

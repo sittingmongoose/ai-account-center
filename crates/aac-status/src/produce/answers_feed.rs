@@ -46,7 +46,7 @@ fn answered_at(entry: &HistoryEntry) -> i64 {
 }
 
 /// The feed's three answer members.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AnswersFeed {
     pub answers: Vec<HistoryEntry>,
     pub sends: Vec<SendRecord>,

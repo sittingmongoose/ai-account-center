@@ -64,28 +64,10 @@ impl Acc {
     /// Traversal walks objects in key order and arrays in order.
     pub fn read(&mut self, value: &Json, rank_all: bool) {
         match value {
-            Json::String(text) => {
-                if rank_all {
-                    self.words.insert(text.clone());
-                    if let Some((_, rest)) = text.split_once('.') {
-                        self.words.insert(rest.to_owned());
-                    }
-                }
-                if ecma::iso_prefixed(text)
-                    && let Some(ms) = ecma::parse_instant(text)
-                {
-                    self.epochs.insert(text.clone(), ms);
-                    self.times.insert(ms);
-                }
-            }
+            Json::String(text) => self.read_text(text, rank_all),
             Json::Number(number) => {
-                if let Some(n) = number.as_f64()
-                    && n.fract() == 0.0
-                    && (100_000_000_000.0..=8_640_000_000_000_000.0).contains(&n)
-                    && n.abs() <= 9_007_199_254_740_991.0
-                {
-                    #[allow(clippy::cast_possible_truncation)]
-                    self.times.insert(n as i64);
+                if let Some(n) = number.as_f64() {
+                    self.read_number(n);
                 }
             }
             Json::Array(items) => {
@@ -99,6 +81,32 @@ impl Acc {
                 }
             }
             Json::Null | Json::Bool(_) => {}
+        }
+    }
+    pub(crate) fn read_text(&mut self, text: &str, rank_all: bool) {
+        if rank_all {
+            if !self.words.contains(text) {
+                self.words.insert(text.to_owned());
+            }
+            if let Some((_, rest)) = text.split_once('.')
+                && !self.words.contains(rest)
+            {
+                self.words.insert(rest.to_owned());
+            }
+        }
+        if ecma::iso_prefixed(text)
+            && !self.epochs.contains_key(text)
+            && let Some(ms) = ecma::parse_instant(text)
+        {
+            self.epochs.insert(text.to_owned(), ms);
+            self.times.insert(ms);
+        }
+    }
+
+    pub(crate) fn read_number(&mut self, n: f64) {
+        if n.fract() == 0.0 && (100_000_000_000.0..=8_640_000_000_000_000.0).contains(&n) {
+            #[allow(clippy::cast_possible_truncation)]
+            self.times.insert(n as i64);
         }
     }
 }
@@ -147,6 +155,10 @@ impl Facts {
             dates.insert(*ms, DateWords { iso, clock, day });
         }
         (dates, acc.epochs.clone())
+    }
+
+    pub(crate) fn into_presentation(self) -> crate::read_context::Presentation {
+        crate::read_context::Presentation::from_facts(self)
     }
 
     /// The facts object (`status-facts`' facts text). Written here, in this order, so the

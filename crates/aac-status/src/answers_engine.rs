@@ -641,7 +641,7 @@ fn step_from(record: &Json, before: &StepState) -> StepState {
 }
 
 /// One record (`AnswerHistoryEntry`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HistoryEntry {
     /// The record id.
     pub id: String,
@@ -683,7 +683,7 @@ impl HistoryEntry {
 }
 
 /// One send (`SendRecord`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SendRecord {
     /// The server's send id.
     pub send_id: String,
@@ -1712,7 +1712,7 @@ impl AnswersEngine {
     }
 
     /// `sharedAnswersFor`: verified share copies for the open card versions given.
-    pub fn shared_answers_for(&self, cards: &[(Json, String)]) -> Vec<HistoryEntry> {
+    pub fn shared_answers_for(&self, cards: &[(&Json, &str)]) -> Vec<HistoryEntry> {
         cards
             .iter()
             .filter(|(doc, _)| str_of(doc, "state") == Some("open"))
@@ -1721,7 +1721,7 @@ impl AnswersEngine {
     }
 
     /// `pruneSharedAnswers`.
-    pub fn prune_shared_answers(&mut self, cards: &[(Json, String)]) {
+    pub fn prune_shared_answers(&mut self, cards: &[(&Json, &str)]) {
         let current: HashSet<String> = cards.iter().map(|(doc, sha)| row_version(doc, sha)).collect();
         self.shared_answers.retain(|version, _| current.contains(version));
     }
@@ -1836,7 +1836,7 @@ impl AnswersEngine {
 
     /// `scanSharedAnswers`: verified share copies for open card versions with no local closing
     /// record, read outside the request path.
-    pub fn scan_shared_answers(&mut self, cards: &[(Json, String)], local_closed: &HashSet<String>) {
+    pub fn scan_shared_answers(&mut self, cards: &[(&Json, &str)], local_closed: &HashSet<String>) {
         let Some(public_key) = self.host.trusted_public_key(&self.store_dir) else {
             return;
         };
@@ -1859,7 +1859,7 @@ impl AnswersEngine {
                         send_id: None,
                         shared_only: true,
                         answer,
-                        card: doc.clone(),
+                        card: (*doc).clone(),
                         share: StepState::with_state("done"),
                         doorbell: StepState::with_state("skipped"),
                     },

@@ -2,10 +2,9 @@
 //! share itself — reports, the quota report, status documents every 10 s, the pm-mail registry
 //! every 30 s — on the bounded blocking pool, single-flight per pass. Report captures go into
 //! the hosted store in process; the readers-check rows are written through the registry's
-//! leased writer when the R4 groups own that row. The front door reads the snapshots through
-//! `GET /internal/status/inputs`, pushes them as the fed Status generations (so the request
-//! path, the composer and its cache stay the proven R2 ones) and answers the facts the
-//! composer needs. A `status-changed` event carries each new generation.
+//! leased writer when the R4 groups own that row. The Status producer shares these snapshots,
+//! and `GET /internal/status/inputs` can project their JSON on demand. Scan clocks can
+//! advance without changing the content generation or sending a `status-changed` event.
 
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
@@ -40,6 +39,7 @@ struct OwnedState {
     quota: Arc<Json>,
     registry: Arc<Json>,
     docs_rows: Option<Arc<StatusDocsState>>,
+    times: ScanTimes,
 }
 
 /// G16c: one pass's snapshots for the producers. The front door's `GET
@@ -55,15 +55,20 @@ pub(crate) struct Scan {
 /// One pass's outcome: the shared typed snapshots the check writer rows and producers read.
 struct Outcome {
     changed: bool,
+    times: ScanTimes,
     reports: Arc<AgentReportsState>,
     docs: Arc<StatusDocsState>,
     quota: Arc<Json>,
     registry: Arc<Json>,
 }
 
-/// Refresh `scannedAt` at most once every 45 s when nothing on disk changed (well inside the
-/// 60 s staleness window of `read_status_cards.rs:262`, cutting idle Status churn by ~5x).
-const QUIET_REFRESH_MS: u64 = 45_000;
+/// Freshness is independent of a content generation. An old published snapshot keeps
+/// its own clock if a later scan observes new rows.
+#[derive(Clone, Default)]
+pub(crate) struct ScanTimes {
+    pub(crate) reports: Arc<AtomicU64>,
+    pub(crate) registry: Arc<AtomicU64>,
+}
 
 pub(crate) struct StatusOwned {
     readers: Mutex<Readers>,
@@ -77,7 +82,6 @@ pub(crate) struct StatusOwned {
     owners: Owners,
     flushing: Arc<AtomicBool>,
     generation_clock: AtomicU64,
-    last_published_at: AtomicU64,
 }
 
 fn now_ms() -> u64 {
@@ -112,13 +116,13 @@ impl StatusOwned {
                 quota: Arc::new(Json::Null),
                 docs_rows: None,
                 generation: 0,
+                times: ScanTimes::default(),
             }),
             accepted: Mutex::new(IndexMap::new()),
             store,
             feeds,
             owners,
             generation_clock: AtomicU64::new(0),
-            last_published_at: AtomicU64::new(0),
         })
     }
 
@@ -138,56 +142,78 @@ impl StatusOwned {
         }
     }
 
-    /// One scan pass on the blocking pool: returns `None` when nothing changed and the last
-    /// publish is still fresh (< 45 s), avoiding cloning all 2,600+ report docs on idle ticks.
+    /// Scan on the blocking pool, replacing each shared snapshot only on content changes.
     fn scan_blocking(&self, now: u64, registry_due: bool) -> Option<Outcome> {
         let fs = NodeFs;
         let mut readers = self.readers.lock().unwrap_or_else(|p| p.into_inner());
-        let mut changed = readers.reports.scan(&fs, now);
-        if readers.quota.scan(&fs, now) {
-            changed = true;
-        }
-        if readers.docs.scan(&fs, now) {
-            changed = true;
-        }
+        let reports_changed = readers.reports.scan(&fs, now);
+        let quota_changed = readers.quota.scan(&fs, now);
+        let docs_changed = readers.docs.scan(&fs, now);
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        let registry = if registry_due {
-            match readers.registry.scan(&fs, now) {
-                Ok(scan) => {
-                    if scan.changed {
-                        changed = true;
+        let first = state.reports_rows.is_none();
+        let reports_changed = reports_changed
+            || state
+                .reports_rows
+                .as_ref()
+                .is_some_and(|held| held.complete != readers.reports.complete());
+
+        let mut registry_changed = false;
+        if registry_due {
+            match readers.registry.scan_changes(&fs, now) {
+                Ok(changed) => {
+                    registry_changed = changed
+                        || !state.registry["error"].is_null()
+                        || state.registry["asOf"].is_null();
+                    if registry_changed {
+                        let scan = readers.registry.snapshot(changed);
+                        state.registry = Arc::new(json!({
+                            "data": scan.threads,
+                            "asOf": now,
+                            "error": null,
+                            "problems": scan.problems.iter().map(|p| json!({"item": p.item, "reason": p.reason, "since": p.since})).collect::<Vec<_>>(),
+                        }));
+                        state.times.registry = Arc::new(AtomicU64::new(now));
+                    } else {
+                        state.times.registry.store(now, Ordering::Release);
                     }
-                    Arc::new(json!({
-                        "data": scan.threads,
-                        "asOf": now,
-                        "error": null,
-                        "problems": scan.problems.iter().map(|p| json!({"item": p.item, "reason": p.reason, "since": p.since})).collect::<Vec<_>>(),
-                    }))
                 }
                 Err(reason) => {
-                    changed = true;
-                    Arc::new(failed_registry(&state.registry, reason, now))
+                    if state.registry["error"]["reason"].as_str() != Some(reason) {
+                        let mut failed = failed_registry(&state.registry, reason, now);
+                        let last_good = state.times.registry.load(Ordering::Acquire);
+                        if last_good != 0 {
+                            failed["asOf"] = json!(last_good);
+                        }
+                        state.registry = Arc::new(failed);
+                        registry_changed = true;
+                    }
                 }
             }
+        }
+        let stamp = readers.reports.scanned_at().unwrap_or(0);
+        if first || reports_changed {
+            state.reports_rows = Some(Arc::new(readers.reports.snapshot()));
+            state.times.reports = Arc::new(AtomicU64::new(stamp));
         } else {
-            state.registry.clone()
-        };
-        state.registry = registry.clone();
-        let has_published = state.generation > 0;
-        drop(state);
-        let last_pub = self.last_published_at.load(Ordering::Relaxed);
-        if has_published && !changed && now.saturating_sub(last_pub) < QUIET_REFRESH_MS {
+            state.times.reports.store(stamp, Ordering::Release);
+        }
+        if first || docs_changed {
+            state.docs_rows = Some(Arc::new(readers.docs.snapshot()));
+        }
+        if first || quota_changed {
+            state.quota = Arc::new(quota::state_json(&readers.quota.snapshot()));
+        }
+        let changed = reports_changed || quota_changed || docs_changed || registry_changed;
+        if !first && !changed {
             return None;
         }
-        let reports = Arc::new(readers.reports.snapshot());
-        let docs = Arc::new(readers.docs.snapshot());
-        let quota = Arc::new(quota::state_json(&readers.quota.snapshot()));
         Some(Outcome {
             changed,
-            reports,
-            docs,
-            quota,
-            registry,
+            times: state.times.clone(),
+            reports: state.reports_rows.clone()?,
+            docs: state.docs_rows.clone()?,
+            quota: state.quota.clone(),
+            registry: state.registry.clone(),
         })
     }
 
@@ -200,15 +226,10 @@ impl StatusOwned {
             .await
             .unwrap_or(None)?;
         let generation = self.next_generation(now);
-        self.last_published_at.store(now, Ordering::Relaxed);
-        {
-            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-            state.generation = generation;
-            state.reports_rows = Some(Arc::clone(&outcome.reports));
-            state.quota = outcome.quota.clone();
-            state.docs_rows = Some(Arc::clone(&outcome.docs));
-            state.registry = outcome.registry.clone();
-        }
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .generation = generation;
         if outcome.changed {
             self.feeds.publish_event(json!({
                 "event": "status-changed",
@@ -230,7 +251,7 @@ impl StatusOwned {
     /// The snapshots the front door forwards (and its fallback composer reads), materialized
     /// lazily from the held shared rows only if this legacy endpoint is called.
     pub(crate) fn inputs(&self) -> Json {
-        let (generation, reports_rows, quota, registry, docs_rows) = {
+        let (generation, reports_rows, quota, registry, docs_rows, times) = {
             let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             (
                 state.generation,
@@ -238,12 +259,22 @@ impl StatusOwned {
                 state.quota.clone(),
                 state.registry.clone(),
                 state.docs_rows.clone(),
+                state.times.clone(),
             )
         };
-        let reports = reports_rows
+        let mut reports = reports_rows
             .as_deref()
             .map(reports::state_json)
             .unwrap_or(Json::Null);
+        if reports.is_object() {
+            let stamp = times.reports.load(Ordering::Acquire);
+            reports["scannedAt"] = if stamp == 0 { Json::Null } else { json!(stamp) };
+        }
+        let mut registry = Json::clone(&registry);
+        let stamp = times.registry.load(Ordering::Acquire);
+        if stamp != 0 {
+            registry["asOf"] = json!(stamp);
+        }
         let docs = docs_rows
             .as_deref()
             .map(status_docs::state_json)
@@ -252,7 +283,7 @@ impl StatusOwned {
             "generation": generation,
             "reports": reports,
             "quota": Json::clone(&quota),
-            "registry": Json::clone(&registry),
+            "registry": registry,
             "docs": docs,
         })
     }
@@ -529,10 +560,8 @@ pub(crate) async fn jobs(
         if stop.load(Ordering::Acquire) {
             return;
         }
-        if let Some((outcome, now)) = owner
-            .scan_pass(tick.is_multiple_of(REGISTRY_EVERY_PASSES))
-            .await
-        {
+        let registry_due = tick.is_multiple_of(REGISTRY_EVERY_PASSES);
+        if let Some((outcome, now)) = owner.scan_pass(registry_due).await {
             let emit_hint = tick == 0 || outcome.changed;
             if let Some(produce) = &produce {
                 produce
@@ -542,12 +571,17 @@ pub(crate) async fn jobs(
                         outcome.quota.clone(),
                         outcome.registry.clone(),
                         emit_hint,
+                        outcome.times.clone(),
                     )
                     .await;
             }
             if tick == 0 || outcome.changed {
                 owner.finish_pass(outcome, now).await;
             }
+        } else if registry_due && let Some(produce) = &produce {
+            // A signed answer can arrive without a report revision. The answer owner
+            // checks it independently and republishes only if the feed actually changes.
+            produce.poll_answers();
         }
         tick = tick.wrapping_add(1);
         tokio::time::sleep(std::time::Duration::from_millis(SCAN_EVERY_MS)).await;
@@ -655,14 +689,23 @@ mod tests {
         let first = owner
             .scan_blocking(1_790_000_000_000, true)
             .expect("first pass");
-        let second = owner
-            .scan_blocking(1_790_000_010_000, false)
-            .expect("quiet pass");
-        assert!(
-            Arc::ptr_eq(&first.registry, &second.registry),
-            "the registry is one shared copy across passes"
-        );
+        assert!(owner.scan_blocking(1_790_000_010_000, true).is_none());
         let state = owner.state.lock().unwrap_or_else(|p| p.into_inner());
-        assert!(Arc::ptr_eq(&state.registry, &second.registry));
+        assert!(Arc::ptr_eq(&state.registry, &first.registry));
+        assert!(Arc::ptr_eq(
+            state
+                .reports_rows
+                .as_ref()
+                .expect("the first scan set the reports snapshot"),
+            &first.reports
+        ));
+        assert_eq!(
+            first.times.reports.load(Ordering::Acquire),
+            1_790_000_010_000
+        );
+        assert_eq!(
+            first.times.registry.load(Ordering::Acquire),
+            1_790_000_010_000
+        );
     }
 }

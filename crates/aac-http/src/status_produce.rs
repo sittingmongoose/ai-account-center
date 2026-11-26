@@ -182,6 +182,7 @@ struct State {
     quota: Arc<Json>,
     registry: Arc<Json>,
     reports_rows: Arc<AgentReportsState>,
+    scan_times: crate::status_owned::ScanTimes,
     docs_rows: Arc<StatusDocsState>,
     machines: BTreeMap<String, Collected<Sample>>,
     browsers: Collected<Vec<BrowserMachine>>,
@@ -209,6 +210,7 @@ struct PublishSnapshot {
     quota: Arc<Json>,
     registry: Arc<Json>,
     reports_rows: Arc<AgentReportsState>,
+    scan_times: crate::status_owned::ScanTimes,
     docs_rows: Arc<StatusDocsState>,
     machines: BTreeMap<String, Collected<Sample>>,
     browsers: Collected<Vec<BrowserMachine>>,
@@ -235,6 +237,7 @@ type ChangedSource = (usize, &'static str, [u8; 32], [u8; 32], Arc<Generation>);
 #[derive(Default)]
 struct PublisherCache {
     held: HashMap<&'static str, HeldSource>,
+    reports: Option<Arc<aac_status::read_status::ReportView>>,
 }
 
 struct CollectingGuard<'a>(&'a AtomicBool);
@@ -259,6 +262,7 @@ impl State {
         let empty = empty_reports();
         Self {
             reports_rows: Arc::new(empty),
+            scan_times: crate::status_owned::ScanTimes::default(),
             quota: Arc::new(Json::Null),
             registry: Arc::new(json!({"data": null, "asOf": null, "error": null})),
             docs_rows: Arc::new(StatusDocsState {
@@ -300,6 +304,7 @@ impl State {
             quota: Arc::clone(&self.quota),
             registry: Arc::clone(&self.registry),
             reports_rows: Arc::clone(&self.reports_rows),
+            scan_times: self.scan_times.clone(),
             docs_rows: Arc::clone(&self.docs_rows),
             machines: self.machines.clone(),
             browsers: self.browsers.clone(),
@@ -493,6 +498,15 @@ impl Produce {
             state.answers_gen = state.answers_gen.wrapping_add(1);
             state.pinned_gen = state.pinned_gen.wrapping_add(1);
             state.sources_gen = state.sources_gen.wrapping_add(1);
+        }
+        self.trigger_publish();
+    }
+
+    pub(crate) fn poll_answers(self: &Arc<Self>) {
+        {
+            let mut state = self.state();
+            state.answers_dirty = true;
+            state.answers_gen = state.answers_gen.wrapping_add(1);
         }
         self.trigger_publish();
     }
@@ -755,6 +769,7 @@ impl Produce {
             Arc::new(scan.quota),
             Arc::new(scan.registry),
             true,
+            crate::status_owned::ScanTimes::default(),
         )
         .await;
     }
@@ -766,27 +781,16 @@ impl Produce {
         quota: Arc<Json>,
         registry: Arc<Json>,
         emit_hint: bool,
+        scan_times: crate::status_owned::ScanTimes,
     ) {
-        let answers = Arc::clone(&self.answers);
-        let reports_for_feed = Arc::clone(&reports);
-        let feed = tokio::task::spawn_blocking(move || {
-            let cards: Vec<(Json, String)> = reports_for_feed
-                .cards
-                .iter()
-                .map(|row| ((*row.doc).clone(), row.sha256.clone()))
-                .collect();
-            answers.feed(&cards)
-        })
-        .await
-        .unwrap_or_else(|_| AnswersFeed::unavailable(Vec::new()));
         {
             let mut state = self.state();
             state.reports_rows = reports;
+            state.scan_times = scan_times;
             state.docs_rows = docs;
             state.quota = quota;
             state.registry = registry;
-            state.answers = Arc::new(feed);
-            state.answers_dirty = false;
+            state.answers_dirty = true;
             state.pinned_dirty = true;
             state.sources_dirty = true;
             state.answers_gen = state.answers_gen.wrapping_add(1);
@@ -865,23 +869,23 @@ impl Produce {
         };
         let mut answers = snap.answers;
         let mut need_sources = snap.sources_dirty;
+        let mut answers_changed = false;
         if snap.answers_dirty {
-            let cards: Vec<(Json, String)> = snap
-                .reports_rows
-                .cards
-                .iter()
-                .map(|row| ((*row.doc).clone(), row.sha256.clone()))
-                .collect();
-            let fresh = Arc::new(self.answers.feed(&cards));
+            let fresh = Arc::new(self.answers.feed(&snap.reports_rows.cards));
+            answers_changed = *fresh != *answers;
             {
                 let mut state = self.state();
                 if state.answers_gen == snap.answers_gen {
-                    state.answers = Arc::clone(&fresh);
+                    if answers_changed {
+                        state.answers = Arc::clone(&fresh);
+                    }
                     state.answers_dirty = false;
                 }
             }
-            answers = fresh;
-            need_sources = true;
+            if answers_changed {
+                answers = fresh;
+                need_sources = true;
+            }
         }
         let Some(zone) = snap.zone else {
             return false;
@@ -895,7 +899,7 @@ impl Produce {
         let offset = zone.zone.offset_minutes(clamp_i64(now)).unwrap_or(0);
         let mut pinned = snap.pinned;
         if snap.pins.collected
-            && (snap.pinned_dirty || snap.pinned_offset != Some(offset))
+            && (answers_changed || snap.pinned_dirty || snap.pinned_offset != Some(offset))
             && let Some(panel) = pinned_panel(
                 &snap.reports_rows,
                 &snap.docs_rows,
@@ -925,10 +929,12 @@ impl Produce {
         if !need_sources && matches_published {
             return false;
         }
-        let reports = resolved_reports(&snap.reports_rows, &answers);
-        if reports.as_object().is_none() {
-            return false;
-        }
+        let reports = Arc::new(aac_status::read_status::ReportView::new(
+            Arc::clone(&snap.reports_rows),
+            &closing_card_versions(&answers.answers),
+            cache.reports.as_deref(),
+        ));
+        cache.reports = Some(Arc::clone(&reports));
         #[cfg(test)]
         {
             let delay = self.publish_delay_ms.load(Ordering::SeqCst);
@@ -938,7 +944,7 @@ impl Produce {
         }
         let machines = machines_json(&snap.machines);
         let built = aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
-            reports: &reports,
+            reports: aac_status::produce::sources::Reports::Native(&reports),
             quota: &snap.quota,
             pinned: &pinned,
             registry: &snap.registry,
@@ -952,7 +958,6 @@ impl Produce {
             offset_minutes: offset,
             zone: &zone.zone,
         });
-        drop(reports);
         drop(machines);
         let sources = match built {
             Ok(sources) => sources,
@@ -976,6 +981,7 @@ impl Produce {
         };
         // The producer ranks every word once, with the total collation (a middle-dot usage
         // label is compared): the facts publish as built, with no completing second sort.
+        let reports_valid = sources.reports_valid;
         let pushed = [
             (REPORTS, sources.reports, None),
             (QUOTA, sources.quota, None),
@@ -994,17 +1000,32 @@ impl Produce {
             if let Some((held_text, held_facts, held_gen)) = cache.held.get(source)
                 && *held_text == text_hash
                 && *held_facts == facts_hash
+                && (matches_published || !matches!(source, REPORTS | COLLECTED))
             {
                 existing[index] = Some(Arc::clone(held_gen));
                 continue;
             }
             let generation_id = self.next_generation(now);
-            let body = format!(
-                "{{\"generation\":\"{generation_id}\",\"data\":{text},\"facts\":{facts_text}}}"
-            );
-            drop(text);
-            drop(facts_text);
-            let prepared = match self.feeds.prepare_generation(source, body.as_bytes()) {
+            let prepared = if source == REPORTS {
+                Feeds::prepare_owned_reports(
+                    generation_id.to_string(),
+                    text,
+                    Arc::clone(&reports),
+                    reports_valid,
+                    (snap.scan_times.reports.clone(), zone.zone.clone()),
+                )
+            } else {
+                let body = format!(
+                    "{{\"generation\":\"{generation_id}\",\"data\":{text},\"facts\":{facts_text}}}"
+                );
+                self.feeds.prepare_generation_with_scan(
+                    source,
+                    body.as_bytes(),
+                    (source == COLLECTED)
+                        .then(|| (snap.scan_times.registry.clone(), zone.zone.clone())),
+                )
+            };
+            let prepared = match prepared {
                 Ok(generation) => generation,
                 Err(reason) => {
                     self.set_published(PublishedState::Declined {
@@ -1259,24 +1280,11 @@ impl Produce {
     pub(crate) fn answers_view(&self, limit: usize) -> Json {
         let (answers, dirty_inputs) = {
             let state = self.state();
-            let dirty = state
-                .answers_dirty
-                .then(|| (Arc::clone(&state.reports_rows), state.answers_gen));
+            let dirty = state.answers_dirty.then(|| Arc::clone(&state.reports_rows));
             (Arc::clone(&state.answers), dirty)
         };
-        let answers = if let Some((reports_rows, answers_gen)) = dirty_inputs {
-            let cards: Vec<(Json, String)> = reports_rows
-                .cards
-                .iter()
-                .map(|row| ((*row.doc).clone(), row.sha256.clone()))
-                .collect();
-            let fresh = Arc::new(self.answers.feed(&cards));
-            let mut state = self.state();
-            if state.answers_gen == answers_gen {
-                state.answers = Arc::clone(&fresh);
-                state.answers_dirty = false;
-            }
-            fresh
+        let answers = if let Some(reports_rows) = dirty_inputs {
+            Arc::new(self.answers.feed(&reports_rows.cards))
         } else {
             answers
         };
@@ -1971,44 +1979,6 @@ fn remote_pins_command(host: HostOs) -> String {
 // ---------------------------------------------------------------------------------------------
 // Feed values
 
-/// `reports::state_json` with each thread's owner wait resolved against closed cards.
-fn resolved_reports(reports: &AgentReportsState, answers: &AnswersFeed) -> Json {
-    let mut value = aac_status::share::reports::state_json(reports);
-    let closed = closing_card_versions(&answers.answers);
-    let cards: Vec<aac_status::produce::answered::CardRow<'_>> = reports
-        .cards
-        .iter()
-        .map(|row| aac_status::produce::answered::CardRow {
-            writer: &row.writer,
-            doc: &row.doc,
-            sha256: &row.sha256,
-        })
-        .collect();
-    let waits = resolved_card_waits(&cards, &closed);
-    let Some(threads) = value.get_mut("threads").and_then(Json::as_array_mut) else {
-        return value;
-    };
-    for thread in threads {
-        let writer = thread
-            .get("writer")
-            .and_then(Json::as_str)
-            .unwrap_or("")
-            .to_owned();
-        let Some(doc) = thread.get_mut("doc").and_then(Json::as_object_mut) else {
-            continue;
-        };
-        // The reference always writes the resolved member: a doc without `blockedOn` gains
-        // `blockedOn: null`, and a resolved owner wait becomes null.
-        let active = aac_status::produce::answered::active_blocker(
-            &waits,
-            &writer,
-            doc.get("blockedOn").cloned(),
-        );
-        doc.insert("blockedOn".to_owned(), active.unwrap_or(Json::Null));
-    }
-    value
-}
-
 /// The `machines` member: one collected wrapper per registered machine, in registry order.
 fn machines_json(machines: &BTreeMap<String, Collected<Sample>>) -> Json {
     let mut out = Map::new();
@@ -2118,7 +2088,7 @@ mod flicker_tests {
         reports.state = "ok";
         reports.scanned_at = Some(now);
         reports.complete = true;
-        reports.threads.push(SeenReport {
+        reports.threads.push(Arc::new(SeenReport {
             file: format!("writers/{writer}/thread.json"),
             writer: writer.to_owned(),
             doc: std::sync::Arc::new(json!({
@@ -2138,7 +2108,7 @@ mod flicker_tests {
             first_seen_at: now,
             written_at_ms: clamp_i64(now),
             problem: None,
-        });
+        }));
         Scan {
             reports,
             docs: StatusDocsState {
@@ -2451,7 +2421,7 @@ mod flicker_tests {
         // An unprovable report containing an exact `Object.prototype` member name declines `shape`
         // once published (never silently masked by the earlier good generation).
         let mut bad_scan = scan_with_thread("vm.bad", now + 1000);
-        std::sync::Arc::make_mut(&mut bad_scan.reports.threads[0].doc)["summary"] =
+        Arc::make_mut(&mut Arc::make_mut(&mut bad_scan.reports.threads[0]).doc)["summary"] =
             json!("constructor");
         produce.after_scan(bad_scan).await;
         assert_eq!(
@@ -2729,6 +2699,7 @@ mod low_tests {
                 Arc::clone(&quota),
                 Arc::clone(&registry),
                 false,
+                crate::status_owned::ScanTimes::default(),
             )
             .await;
         let state = produce.state();
@@ -2736,6 +2707,53 @@ mod low_tests {
         assert!(Arc::ptr_eq(&state.docs_rows, &docs_rows));
         assert!(Arc::ptr_eq(&state.quota, &quota));
         assert!(Arc::ptr_eq(&state.registry, &registry));
+    }
+
+    #[tokio::test]
+    async fn a_quiet_scan_refreshes_the_view_without_replacing_its_generation() {
+        let (_scratch, ccs, reports) = scratch();
+        let produce = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
+        let now = now_ms();
+        let first_stamp = now - 12_000;
+        let second_stamp = now - 2_000;
+        let scan = super::flicker_tests::scan_with_thread("vm.freshness", first_stamp);
+        let times = crate::status_owned::ScanTimes::default();
+        times.reports.store(first_stamp, Ordering::Release);
+        produce
+            .after_scan_shared(
+                Arc::new(scan.reports),
+                Arc::new(scan.docs),
+                Arc::new(scan.quota),
+                Arc::new(scan.registry),
+                false,
+                times.clone(),
+            )
+            .await;
+        let PublishedState::Ready(published) = produce.current_published().expect("publish") else {
+            panic!("expected a ready generation");
+        };
+        let at = clamp_i64(now);
+        let (clock, day) = published.zone.words(at).expect("zone contains now");
+        let read = || {
+            let (body, _) = crate::status_fed::answer_generations(
+                &published.generations,
+                at,
+                clock.clone(),
+                day.clone(),
+            )
+            .expect("compose held generation");
+            serde_json::from_slice::<Json>(&body).expect("Status JSON")
+        };
+        let before = read();
+        times.reports.store(second_stamp, Ordering::Release);
+        let after = read();
+        assert_eq!(before["sources"][0]["ageSeconds"], 12);
+        assert_eq!(after["sources"][0]["ageSeconds"], 2);
+        let PublishedState::Ready(current) = produce.current_published().expect("still published")
+        else {
+            panic!("expected the same ready generation");
+        };
+        assert!(Arc::ptr_eq(&published, &current));
     }
 
     /// A failed compose propagates its named decline to every follower sharing the flight,

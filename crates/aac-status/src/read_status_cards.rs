@@ -2,13 +2,13 @@ use super::*;
 fn closing(e: &V) -> bool {
     ["answer", "note", "done"].contains(&s(&e["answer"]["kind"]))
 }
-pub(super) fn is_open(row: &V, answers: &[V]) -> bool {
-    let doc = &row["doc"];
+pub(super) fn is_open(row: ReportRow<'_>, answers: &[V]) -> bool {
+    let doc = row.doc();
     doc["state"] == "open"
         && !answers.iter().filter(|e| closing(e)).any(|e| {
             e["answer"]["cardId"] == doc["id"]
                 && e["answer"]["cardSeq"] == doc["seq"]
-                && e["answer"]["cardSha256"] == row["sha256"]
+                && row.hash_matches(&e["answer"]["cardSha256"])
         })
 }
 fn delivery(i: &Inputs, entry: &V) -> Option<V> {
@@ -146,13 +146,14 @@ fn sections(writer: &str, items: &V) -> Option<Vec<V>> {
 }
 fn card(i: &Inputs, doc: &V, hash: &V, problem: V, notes: Vec<V>) -> Option<V> {
     let anchored = doc["kind"] == "judgement" && !doc["recommendation"].is_null();
-    let threads = rows(&i.data["reports"]["threads"]);
-    let thread = threads.iter().find(|r| r["writer"] == doc["writer"]);
+    let thread = i
+        .report_rows(ReportKind::Threads)
+        .find(|r| r.writer_matches(&doc["writer"]));
     let asker = if let Some(row) = thread {
         if i.stale_thread(row)? {
             json!("gone")
         } else {
-            row["doc"]["state"].clone()
+            row.doc()["state"].clone()
         }
     } else {
         json!("unknown")
@@ -174,11 +175,11 @@ fn quiet_notice(i: &Inputs, doc: &V) -> Option<String> {
     if !i.after(asked, 3 * DAY_MS) {
         return None;
     }
-    let thread = rows(&i.data["reports"]["threads"])
-        .iter()
-        .find(|row| row["writer"] == doc["writer"] && row["problem"].is_null())?;
+    let thread = i
+        .report_rows(ReportKind::Threads)
+        .find(|row| row.writer_matches(&doc["writer"]) && !row.has_problem())?;
     let last = i.seen(thread)?;
-    let ttl = thread["doc"]["ttlSeconds"].as_i64().unwrap_or(86_400);
+    let ttl = thread.doc()["ttlSeconds"].as_i64().unwrap_or(86_400);
     if !i.after(last, ttl * 1000) {
         return None;
     }
@@ -193,8 +194,8 @@ fn quiet_notice(i: &Inputs, doc: &V) -> Option<String> {
 pub(super) fn compose(i: &Inputs) -> Option<V> {
     let answers = i.data["answers"].as_array()?;
     let mut open = Vec::new();
-    for row in i.data["reports"]["cards"].as_array()? {
-        let doc = &row["doc"];
+    for row in i.report_rows(ReportKind::Cards) {
+        let doc = row.doc();
         if !is_open(row, answers) {
             continue;
         }
@@ -205,14 +206,14 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
             .filter_map(|e| e["answer"]["cardSeq"].as_u64())
             .max()
             .unwrap_or(0);
-        let problem = if !row["problem"].is_null() {
-            row["problem"]["reason"].clone()
+        let problem = if row.has_problem() {
+            row.problem_reason()
         } else if doc["seq"].as_u64()? < highest {
             json!("its seq is lower than one already read, so this copy is ignored")
         } else {
             V::Null
         };
-        let mut c = card(i, doc, &row["sha256"], problem, notes)?;
+        let mut c = card(i, doc, &row.hash(), problem, notes)?;
         if let Some(notice) = quiet_notice(i, doc) {
             c["quietNotice"] = json!(notice);
         }
@@ -255,12 +256,12 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
         let a = &e["answer"];
         history.push(json!({"card":card(i,&e["card"],&a["cardSha256"],V::Null,vec![])?,"answer":{"kind":a["kind"],"choice":a["choice"],"note":a["note"],"via":a["via"],"answeredAt":a["answeredAt"],"device":a["device"],"delivery":delivery(i,e)?}}));
     }
-    let reports = &i.data["reports"];
+    let reports = i.report_metadata();
     let complete = s(&i.data["answerHistoryProblem"]).is_empty()
         && reports["state"] == "ok"
         && reports["complete"] == true
-        && !reports["scannedAt"].is_null()
-        && number(&i.age(i.at(&reports["scannedAt"]))).unwrap_or(0.0) <= 60.0;
+        && (i.scan_stamps[0].is_some() || !reports["scannedAt"].is_null())
+        && number(&i.age(i.report_stamp())).unwrap_or(0.0) <= 60.0;
     Some(
         json!({"source":"agent-reports","open":open,"answerHistoryProblem":i.data["answerHistoryProblem"],"answered":if !history.is_empty() || s(&i.data["answerHistoryProblem"]).is_empty(){json!(history)}else{V::Null},"batches":batches,"complete":complete}),
     )
@@ -288,6 +289,8 @@ mod tests {
         });
         let facts = serde_json::from_value(json!({"dates":{}, "epochs":{}, "order":{}})).unwrap();
         let mut i = Inputs {
+            native_reports: None,
+            scan_stamps: [None, None],
             data: Data::Whole(json!({
                 "answers": [entry], "reports": {"cards": [asked], "threads": []}
             })),
@@ -324,6 +327,8 @@ mod tests {
         let now = aac_num::ecma::parse_instant("2026-11-18T20:00:00Z").unwrap();
         let asked = now - 4 * DAY;
         let fixture = |last| Inputs {
+            native_reports: None,
+            scan_stamps: [None, None],
             data: Data::Whole(json!({"reports":{"threads":[{
                 "writer":"vm.fixture", "writtenAtMs":last, "firstSeenAt":now,
                 "doc":{"state":"waiting","ttlSeconds":null}

@@ -37,6 +37,20 @@ fn snapshots_share_the_retained_documents() {
     for (a, b) in first.cards.iter().zip(&second.cards) {
         assert!(std::sync::Arc::ptr_eq(&a.doc, &b.doc), "{}", a.file);
     }
+    let changed = &first.threads[0];
+    let path = reader.root().join("v1").join(&changed.file);
+    let mut new_doc: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    new_doc["seq"] = Value::from(new_doc["seq"].as_u64().unwrap() + 1);
+    std::fs::write(&path, serde_json::to_vec(&new_doc).unwrap()).unwrap();
+    assert!(reader.scan(&NodeFs, now + 5000));
+    let third = reader.snapshot();
+    assert!(!std::sync::Arc::ptr_eq(changed, &third.threads[0]));
+    for (a, b) in first.threads.iter().skip(1).zip(third.threads.iter().skip(1)) {
+        assert!(std::sync::Arc::ptr_eq(a, b), "quiet writer row must stay shared");
+    }
+    for (a, b) in first.cards.iter().zip(&third.cards) {
+        assert!(std::sync::Arc::ptr_eq(a, b), "quiet card row must stay shared");
+    }
     // The state text is unchanged by the sharing.
     assert_eq!(
         aac_status::share::reports::state_json(&first),

@@ -290,10 +290,20 @@ impl Feeds {
     }
 
     /// Validate and prepare one generation outside `self.held`, with the same rules `put` uses.
+    #[cfg(test)]
     pub(crate) fn prepare_generation(
         &self,
         source: &str,
         body: &[u8],
+    ) -> Result<Arc<Generation>, Decline> {
+        self.prepare_generation_with_scan(source, body, None)
+    }
+
+    pub(crate) fn prepare_generation_with_scan(
+        &self,
+        source: &str,
+        body: &[u8],
+        scan: Option<crate::status_fed::ScanClock>,
     ) -> Result<Arc<Generation>, Decline> {
         if !source_word(source) {
             return Err(Decline::Unsupported);
@@ -308,13 +318,39 @@ impl Feeds {
         {
             return Err(Decline::Shape);
         }
-        let prepared = prepare(source, &put.data, &put.facts);
+        let mut prepared = prepare(source, &put.data, &put.facts);
+        if let Prepared::Status(Ok(part)) = &mut prepared {
+            part.scan = scan;
+        }
         Ok(Arc::new(Generation {
             prepared,
             digest: digest(&put.data, &put.facts),
             id: put.generation,
             data: put.data,
             facts: put.facts,
+        }))
+    }
+
+    pub(crate) fn prepare_owned_reports(
+        id: String,
+        text: String,
+        reports: Arc<aac_status::read_status::ReportView>,
+        valid: bool,
+        scan: crate::status_fed::ScanClock,
+    ) -> Result<Arc<Generation>, Decline> {
+        let data = RawValue::from_string(text).map_err(|_| Decline::Shape)?;
+        let facts = RawValue::from_string("{}".to_owned()).map_err(|_| Decline::Internal)?;
+        let prepared = Prepared::Status(if valid {
+            Ok(crate::status_fed::prepared_reports(reports, scan))
+        } else {
+            Err(Decline::Shape)
+        });
+        Ok(Arc::new(Generation {
+            id,
+            digest: digest(&data, &facts),
+            data,
+            facts,
+            prepared,
         }))
     }
 

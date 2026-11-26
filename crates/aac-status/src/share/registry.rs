@@ -241,6 +241,11 @@ impl PmMailRegistryReader {
 
     /// Resolves the thread rows, or a fixed-word error when the folder cannot be listed.
     pub fn scan(&mut self, fs: &dyn ShareFs, now: u64) -> Result<RegistryScan, &'static str> {
+        let changed = self.scan_changes(fs, now)?;
+        Ok(self.snapshot(changed))
+    }
+
+    pub fn scan_changes(&mut self, fs: &dyn ShareFs, now: u64) -> Result<bool, &'static str> {
         let names = match fs.list(&self.dir) {
             Ok(entries) => entries.into_iter().map(|entry| entry.name).collect::<Vec<_>>(),
             Err(error) => {
@@ -358,6 +363,10 @@ impl PmMailRegistryReader {
             self.failing.shift_remove(&name);
             changed = true;
         }
+        Ok(changed)
+    }
+
+    pub fn snapshot(&self, changed: bool) -> RegistryScan {
         let threads: Vec<Json> = self
             .files
             .values()
@@ -379,10 +388,10 @@ impl PmMailRegistryReader {
             .chain(self.failing.values().cloned())
             .collect();
         problems.sort_by(|a, b| compare(&a.item, &b.item));
-        Ok(RegistryScan {
+        RegistryScan {
             threads,
             problems,
             changed,
-        })
+        }
     }
 }

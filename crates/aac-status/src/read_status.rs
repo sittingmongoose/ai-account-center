@@ -16,6 +16,10 @@ mod strip;
 #[path = "read_status_trace.rs"]
 mod trace;
 pub use trace::FedTrace;
+#[path = "read_status_reports.rs"]
+mod reports;
+pub use reports::ReportView;
+use reports::{ReportKind, ReportRow};
 /// The composer's input object: the presentation envelope's `data` (owned), or R2's fed generations, each a JSON
 /// object of some of its top-level members, borrowed from the generations a request names (no copy per request).
 /// Indexing by a top-level key reads like `Value` indexing: an absent member is `null`.
@@ -39,6 +43,8 @@ impl std::ops::Index<&str> for Data<'_> {
     }
 }
 struct Inputs<'a> {
+    native_reports: Option<&'a ReportView>,
+    scan_stamps: [Option<i64>; 2],
     data: Data<'a>,
     ctx: Context,
     now: i64,
@@ -66,9 +72,20 @@ impl Inputs<'_> {
     fn at(&self, v: &V) -> Option<i64> {
         self.ctx.epoch(v)
     }
-    fn seen(&self, row: &V) -> Option<i64> {
-        let seen = self.at(&row["firstSeenAt"])?;
-        Some(self.at(&row["writtenAtMs"]).map(|t| t.min(seen)).unwrap_or(seen))
+    fn seen(&self, row: ReportRow<'_>) -> Option<i64> {
+        row.seen(&self.ctx)
+    }
+    fn report_rows(&self, kind: ReportKind) -> impl Iterator<Item = ReportRow<'_>> {
+        reports::report_rows(self.native_reports, &self.data["reports"], kind)
+    }
+    fn report_metadata(&self) -> &V {
+        self.native_reports.map_or(&self.data["reports"], ReportView::meta)
+    }
+    fn report_stamp(&self) -> Option<i64> {
+        self.scan_stamps[0].or_else(|| self.at(&self.report_metadata()["scannedAt"]))
+    }
+    fn registry_stamp(&self, reading: &V) -> Option<i64> {
+        self.scan_stamps[1].or_else(|| self.at(&reading["asOf"]))
     }
     fn clock(&self, at: i64) -> String {
         self.trace
@@ -134,45 +151,45 @@ impl Inputs<'_> {
         self.trace.borrow_mut().note_span(full, text.clone());
         text
     }
-    fn stale_thread(&self, row: &V) -> Option<bool> {
-        if !row["problem"].is_null() {
+    fn stale_thread(&self, row: ReportRow<'_>) -> Option<bool> {
+        if row.has_problem() {
             return Some(true);
         }
-        let owner = row["doc"]["blockedOn"]["kind"] == "owner"
+        let owner = row.blocker()["kind"] == "owner"
             || self
                 .owner_cards
                 .get_or_init(|| {
                     let mut found = OwnerCards::default();
-                    for c in rows(&self.data["reports"]["cards"]) {
+                    for c in self.report_rows(ReportKind::Cards) {
                         if cards::is_open(c, rows(&self.data["answers"]))
-                            && ["question", "judgement", "action"].contains(&s(&c["doc"]["kind"]))
+                            && ["question", "judgement", "action"].contains(&s(&c.doc()["kind"]))
                         {
-                            match c["writer"].as_str() {
-                                Some(text) => {
-                                    found.strings.insert(text.to_owned());
+                            match c.writer_value() {
+                                V::String(text) => {
+                                    found.strings.insert(text);
                                 }
-                                None => found.other.push(c["writer"].clone()),
+                                other => found.other.push(other),
                             }
                         }
                     }
                     found
                 })
-                .has(&row["writer"]);
+                .has(&row.writer_value());
         if owner {
             return Some(false);
         }
         let seen = self.seen(row)?;
-        if row["doc"]["ttlSeconds"].is_null() {
-            Some(!["blocked", "waiting"].contains(&s(&row["doc"]["state"])) && self.after(seen, 86_400_000))
+        if row.doc()["ttlSeconds"].is_null() {
+            Some(!["blocked", "waiting"].contains(&s(&row.doc()["state"])) && self.after(seen, 86_400_000))
         } else {
-            Some(self.after(seen, row["doc"]["ttlSeconds"].as_i64()? * 1000))
+            Some(self.after(seen, row.doc()["ttlSeconds"].as_i64()? * 1000))
         }
     }
     fn board(&self, given: &V) -> V {
         if s(given).is_empty() {
             return V::Null;
         }
-        let mtime = &self.data["reports"]["boards"][s(given)];
+        let mtime = &self.report_metadata()["boards"][s(given)];
         // A board time is `fs.Stats.mtimeMs`, fractional on ext4, ZFS, NFS and SMB: age it as
         // status-view-words.ts `ageSeconds` does, in binary64, rather than as "no time".
         let age = match mtime.as_f64() {
@@ -269,7 +286,11 @@ fn part_ref(i: &Inputs, source: &V, collected: &V, part: Option<&V>, absent: &st
     Some(out)
 }
 fn collected_source(i: &Inputs, id: &str, label: &str, c: &V, stale: i64, registry: bool) -> Option<V> {
-    let at = i.at(&c["asOf"]);
+    let at = if registry {
+        i.registry_stamp(c)
+    } else {
+        i.at(&c["asOf"])
+    };
     let mut out = json!({"id":id,"label":label,"asOf":i.iso(at),"ageSeconds":i.age(at),"staleAfterSeconds":stale});
     let (state, detail) = if c["error"].is_object() {
         let shown = at
@@ -328,8 +349,8 @@ fn collected_source(i: &Inputs, id: &str, label: &str, c: &V, stale: i64, regist
     Some(out)
 }
 fn reports_source(i: &Inputs) -> Option<V> {
-    let r = &i.data["reports"];
-    let at = i.at(&r["scannedAt"]);
+    let r = i.report_metadata();
+    let at = i.report_stamp();
     let mut out = json!({"id":"agent-reports","label":"Agent reports","asOf":i.iso(at),"ageSeconds":i.age(at),"staleAfterSeconds":60});
     let (state, detail) = if at.is_none() {
         ("missing", "Waiting for the first scan.".into())
@@ -390,8 +411,8 @@ fn reports_source(i: &Inputs) -> Option<V> {
                 "ok",
                 format!(
                     "{} and {} read {}.{limits}",
-                    plural(rows(&r["threads"]).len(), "thread"),
-                    plural(rows(&r["cards"]).len(), "card"),
+                    plural(i.report_rows(ReportKind::Threads).count(), "thread"),
+                    plural(i.report_rows(ReportKind::Cards).count(), "card"),
                     i.clock(at?)
                 ),
             )
@@ -401,34 +422,26 @@ fn reports_source(i: &Inputs) -> Option<V> {
     out["detail"] = json!(detail);
     Some(out)
 }
-fn thread_name(row: &V) -> String {
-    row["doc"]["agent"]["name"]
+fn thread_name(row: ReportRow<'_>) -> String {
+    row.doc()["agent"]["name"]
         .as_str()
         .map(str::to_owned)
-        .unwrap_or_else(|| {
-            s(&row["writer"])
-                .split_once('.')
-                .map(|(_, s)| s)
-                .unwrap_or("")
-                .to_owned()
-        })
+        .unwrap_or_else(|| row.writer().split_once('.').map(|(_, s)| s).unwrap_or("").to_owned())
 }
 fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
     let mut rows = Vec::new();
     let mut reporting = HashSet::new();
-    for row in crate::read_context::rows(&i.data["reports"]["threads"]) {
+    for row in i.report_rows(ReportKind::Threads) {
         let name = thread_name(row);
         reporting.insert(name.clone());
-        reporting.insert(s(&row["writer"]).split_once('.')?.1.to_owned());
+        reporting.insert(row.writer().split_once('.')?.1.to_owned());
         let at = i.seen(row)?;
-        if i.after(at, 86_400_000) && row["doc"]["state"] != "blocked" {
+        if i.after(at, 86_400_000) && row.doc()["state"] != "blocked" {
             continue;
         }
-        let ahead = (number(&row["writtenAtMs"]).unwrap_or(number(&row["firstSeenAt"])?)
-            - number(&row["firstSeenAt"])?)
-            / 1000.0;
-        let d = &row["doc"];
-        rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
+        let ahead = row.clock_ahead()?;
+        let d = row.doc();
+        rows.push(json!({"name":name,"writer":row.writer_value(),"machine":row.writer().split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":row.blocker(),"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row.problem_reason(),"registrySource":null}));
     }
     let hidden = crate::read_context::rows(&i.data["hiddenThreadNames"]);
     for thread in crate::read_context::rows(&i.data["registry"]["data"]) {
@@ -498,14 +511,14 @@ fn completion(c: &V) -> Option<V> {
 }
 fn projects(i: &Inputs) -> Option<Vec<V>> {
     let mut groups: Vec<(String, V, Vec<V>)> = Vec::new();
-    let mut tasks: Vec<&V> = rows(&i.data["reports"]["tasks"]).iter().collect();
+    let mut tasks: Vec<_> = i.report_rows(ReportKind::Tasks).collect();
     tasks.sort_by(|a, b| {
-        i.seen(b)
-            .cmp(&i.seen(a))
-            .then_with(|| i.ctx.compare(s(&a["writer"]), s(&b["writer"])))
+        i.seen(*b)
+            .cmp(&i.seen(*a))
+            .then_with(|| i.ctx.compare(a.writer(), b.writer()))
     });
     for row in tasks {
-        let d = &row["doc"];
+        let d = row.doc();
         let id = s(&d["project"]);
         let at = groups.iter().position(|(s, _, _)| s == id).unwrap_or_else(|| {
             groups.push((id.to_owned(), V::Null, Vec::new()));
@@ -528,12 +541,12 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
             item["ageSeconds"] = i.age(i.at(&item["updatedAt"]));
         }
         let seen = i.seen(row)?;
-        groups[at].2.push(json!({"id":d["stream"],"label":d.get("streamLabel").filter(|v|!v.is_null()).unwrap_or(&d["stream"]),"owner":d["owner"],"goal":d["goal"],"writer":row["writer"],"board":i.board(&d["board"]),"source":"tasks","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":!row["problem"].is_null()||i.after(seen, 86_400_000),"problem":row["problem"]["reason"],"counts":counts,"completion":completion(&counts)?,"items":items}));
+        groups[at].2.push(json!({"id":d["stream"],"label":d.get("streamLabel").filter(|v|!v.is_null()).unwrap_or(&d["stream"]),"owner":d["owner"],"goal":d["goal"],"writer":row.writer_value(),"board":i.board(&d["board"]),"source":"tasks","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":row.has_problem()||i.after(seen, 86_400_000),"problem":row.problem_reason(),"counts":counts,"completion":completion(&counts)?,"items":items}));
     }
-    let mut threads: Vec<&V> = rows(&i.data["reports"]["threads"]).iter().collect();
-    threads.sort_by_key(|r| std::cmp::Reverse(i.seen(r)));
+    let mut threads: Vec<_> = i.report_rows(ReportKind::Threads).collect();
+    threads.sort_by_key(|r| std::cmp::Reverse(i.seen(*r)));
     for row in threads {
-        let d = &row["doc"];
+        let d = row.doc();
         if s(&d["project"]).is_empty() || s(&d["stream"]).is_empty() {
             continue;
         }
@@ -550,7 +563,7 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
             continue;
         }
         let seen = i.seen(row)?;
-        groups[at].2.push(json!({"id":d["stream"],"label":d["stream"],"owner":thread_name(row),"goal":null,"writer":row["writer"],"board":i.board(&link["path"]),"source":"board-only","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":i.stale_thread(row)?,"problem":row["problem"]["reason"],"counts":null,"completion":null,"items":[]}));
+        groups[at].2.push(json!({"id":d["stream"],"label":d["stream"],"owner":thread_name(row),"goal":null,"writer":row.writer_value(),"board":i.board(&link["path"]),"source":"board-only","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":i.stale_thread(row)?,"problem":row.problem_reason(),"counts":null,"completion":null,"items":[]}));
     }
     let mut out = Vec::new();
     for (id, label, mut streams) in groups {
@@ -572,6 +585,8 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     }
     let now = envelope.data["now"].as_i64()?;
     let i = Inputs {
+        native_reports: None,
+        scan_stamps: [None, None],
         data: Data::Whole(envelope.data),
         ctx: Context::new(envelope.presentation),
         now,
@@ -595,9 +610,40 @@ pub fn spend_by_stream(
     utc_offset_minutes: i64,
     account_order: Vec<String>,
 ) -> Option<V> {
+    spend_by_stream_parts(
+        data.as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.as_str(), v))
+            .collect(),
+        None,
+        facts,
+        now,
+        utc_offset_minutes,
+        account_order,
+    )
+}
+
+pub(crate) fn spend_label_facts(wire: &V, native: Option<&ReportView>, acc: &mut crate::produce::facts::Acc) {
+    for row in reports::report_rows(native, wire, ReportKind::Tasks) {
+        acc.read(&row.doc()["stream"], true);
+        acc.read(&row.doc()["streamLabel"], true);
+    }
+}
+
+pub(crate) fn spend_by_stream_parts(
+    parts: Vec<(&str, &V)>,
+    native_reports: Option<&ReportView>,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+    utc_offset_minutes: i64,
+    account_order: Vec<String>,
+) -> Option<V> {
     let at = now.0;
     let i = Inputs {
-        data: Data::Whole(data.clone()),
+        native_reports,
+        scan_stamps: [None, None],
+        data: Data::Parts(parts),
         ctx: Context::shared(facts, Some(now)),
         now: at,
         owner_cards: std::cell::OnceCell::new(),
@@ -640,10 +686,22 @@ pub fn compose_fed_traced(
     facts: std::sync::Arc<crate::read_context::Presentation>,
     now: (i64, crate::read_context::Date),
 ) -> Result<(V, FedTrace), Unproven> {
+    compose_with_reports(parts, None, facts, now, [None, None])
+}
+
+pub fn compose_with_reports(
+    parts: Vec<(&str, &V)>,
+    native_reports: Option<&ReportView>,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+    scan_dates: [Option<(i64, crate::read_context::Date)>; 2],
+) -> Result<(V, FedTrace), Unproven> {
     let at = now.0;
     let i = Inputs {
+        native_reports,
+        scan_stamps: scan_dates.each_ref().map(|d| d.as_ref().map(|(at, _)| *at)),
         data: Data::Parts(parts),
-        ctx: Context::shared(facts, Some(now)),
+        ctx: Context::shared(facts, Some(now)).with_scan_dates(scan_dates),
         now: at,
         owner_cards: std::cell::OnceCell::new(),
         trace: RefCell::new(trace::Recorder::recording()),
@@ -693,8 +751,10 @@ fn simlock_view(data: &V) -> V {
 }
 
 fn view(i: &Inputs) -> Option<V> {
-    for key in ["threads", "tasks", "cards", "problems"] {
-        i.data["reports"][key].as_array()?;
+    if i.native_reports.is_none() {
+        for key in ["threads", "tasks", "cards", "problems"] {
+            i.data["reports"][key].as_array()?;
+        }
     }
     let registry = collected_source(i, "pm-mail", "pm-mail registry", &i.data["registry"], 120, true)?;
     let browsers = collected_source(
@@ -719,7 +779,7 @@ fn view(i: &Inputs) -> Option<V> {
         quota,
     ];
     let mut view = json!({"version":1,"generatedAt":i.generated_at(),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(i)?});
-    if let Some(problems) = i.data["reports"].get("problems").filter(|p| !array(p).is_empty()) {
+    if let Some(problems) = i.report_metadata().get("problems").filter(|p| !array(p).is_empty()) {
         view["reportProblems"] = problems.clone();
     }
     if let Some(p) = i.data.get("pinned") {

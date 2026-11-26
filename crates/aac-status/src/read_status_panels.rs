@@ -227,6 +227,8 @@ mod tests {
     fn inputs(usage: V) -> Inputs<'static> {
         let facts = serde_json::from_value(json!({"dates": {}, "epochs": {}, "order": {}})).unwrap();
         Inputs {
+            native_reports: None,
+            scan_stamps: [None, None],
             data: Data::Whole(json!({ "usage": usage })),
             ctx: Context::new(facts),
             now: 1_700_000_000_000,

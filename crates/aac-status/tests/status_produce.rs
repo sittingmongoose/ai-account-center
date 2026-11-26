@@ -159,8 +159,8 @@ fn canonical(value: &Json) -> String {
     }
 }
 
-fn seen(value: &Json) -> SeenReport {
-    SeenReport {
+fn seen(value: &Json) -> std::sync::Arc<SeenReport> {
+    std::sync::Arc::new(SeenReport {
         file: value["file"].as_str().unwrap_or("").to_owned(),
         writer: value["writer"].as_str().unwrap_or("").to_owned(),
         doc: std::sync::Arc::new(value["doc"].clone()),
@@ -172,7 +172,7 @@ fn seen(value: &Json) -> SeenReport {
             reason: problem["reason"].as_str().unwrap_or("").to_owned(),
             since: problem["since"].as_u64().unwrap_or(0),
         }),
-    }
+    })
 }
 
 #[test]
@@ -259,8 +259,8 @@ fn the_six_sources_carry_the_same_content_as_the_front_door() {
         problem: input["answerHistoryProblem"].as_str().map(str::to_owned),
     };
     let usage = (!input["usage"].is_null()).then(|| UsageInput::parse(&input["usage"]).unwrap());
-    let built = sources::build(&Readings {
-        reports: &input["reports"],
+    let mut readings = Readings {
+        reports: sources::Reports::Wire(&input["reports"]),
         quota: &input["quota"],
         pinned: &input["pinned"],
         registry: &input["registry"],
@@ -273,8 +273,28 @@ fn the_six_sources_carry_the_same_content_as_the_front_door() {
         now,
         offset_minutes: zone.offset_minutes(now).expect("offset at now"),
         zone: &zone,
-    })
-    .expect("the fixture builds");
+    };
+    let built = sources::build(&readings).expect("the wire fixture builds");
+    let reports = &input["reports"];
+    let state = AgentReportsState {
+        root: reports["root"].as_str().unwrap().to_owned(),
+        state: "ok",
+        scanned_at: reports["scannedAt"].as_u64(),
+        complete: reports["complete"].as_bool().unwrap(),
+        threads: reports["threads"].as_array().unwrap().iter().map(seen).collect(),
+        tasks: reports["tasks"].as_array().unwrap().iter().map(seen).collect(),
+        cards: reports["cards"].as_array().unwrap().iter().map(seen).collect(),
+        problems: Vec::new(),
+        boards: reports["boards"].as_object().unwrap().clone(),
+    };
+    let closed = aac_status::answers_engine::closing_card_versions(&answers.answers);
+    let native_reports = aac_status::read_status::ReportView::new(std::sync::Arc::new(state), &closed, None);
+    readings.reports = sources::Reports::Native(&native_reports);
+    let native = sources::build(&readings).expect("the native fixture builds");
+    assert!(native.reports_valid);
+    assert_eq!(native.reports, built.reports);
+    assert_eq!(native.facts, built.facts);
+    assert_eq!(native.quota, built.quota);
     let recorded = &vectors["sources"];
     for (source, text) in [
         ("status-reports", &built.reports),

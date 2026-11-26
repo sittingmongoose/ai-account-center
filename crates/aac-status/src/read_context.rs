@@ -18,6 +18,27 @@ pub struct Presentation {
     order: HashMap<String, usize>,
 }
 impl Presentation {
+    pub(crate) fn from_facts(facts: crate::produce::facts::Facts) -> Self {
+        Self {
+            dates: facts
+                .dates
+                .into_iter()
+                .map(|(ms, date)| {
+                    (
+                        ms.to_string(),
+                        Date {
+                            iso: date.iso,
+                            clock: Some(date.clock),
+                            day: Some(date.day),
+                        },
+                    )
+                })
+                .collect(),
+            epochs: facts.epochs.into_iter().collect(),
+            order: facts.order.into_iter().collect(),
+        }
+    }
+
     /// No facts. A caller whose timestamps are already canonical ISO words needs none.
     pub fn empty() -> Self {
         Self {
@@ -52,11 +73,14 @@ impl Date {
         &self.iso
     }
 }
+type ScanDates = [Option<(i64, Date)>; 2];
+
 pub struct Context {
     facts: Arc<Presentation>,
     /// R2: the request's `now`, which a fed generation's facts cannot hold.
     now: Option<(i64, Date)>,
     missing: Cell<bool>,
+    scan_dates: Option<Box<ScanDates>>,
     /// R4 owned Scoreboard: an instant with no date fact still has its ISO text, which
     /// `Date#toISOString` writes and aac-num writes exactly; its clock and day words still need
     /// a fact (a read of them refuses the candidate).
@@ -73,6 +97,7 @@ impl Context {
             facts,
             now,
             missing: Cell::new(false),
+            scan_dates: None,
             iso_any: false,
         }
     }
@@ -81,6 +106,13 @@ impl Context {
         self.iso_any = true;
         self
     }
+    pub(crate) fn with_scan_dates(mut self, dates: ScanDates) -> Self {
+        if dates.iter().any(Option::is_some) {
+            self.scan_dates = Some(Box::new(dates));
+        }
+        self
+    }
+
     pub fn valid(&self) -> bool {
         !self.missing.get()
     }
@@ -110,12 +142,7 @@ impl Context {
         None
     }
     fn date(&self, ms: i64) -> Option<&Date> {
-        if let Some((at, date)) = &self.now
-            && *at == ms
-        {
-            return Some(date);
-        }
-        let value = self.facts.dates.get(&ms.to_string());
+        let value = self.lookup(ms);
         if value.is_none() {
             self.missing.set(true);
         }
@@ -143,7 +170,11 @@ impl Context {
         {
             return Some(date);
         }
-        self.facts.dates.get(&ms.to_string())
+        self.scan_dates
+            .as_deref()
+            .and_then(|dates| dates.iter().flatten().find(|(at, _)| *at == ms))
+            .map(|(_, date)| date)
+            .or_else(|| self.facts.dates.get(&ms.to_string()))
     }
     pub fn clock(&self, ms: i64) -> String {
         self.word(ms, |d| d.clock.as_ref())

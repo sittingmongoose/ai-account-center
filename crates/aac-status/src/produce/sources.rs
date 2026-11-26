@@ -13,14 +13,15 @@
 //! is composed here from the same data object the view is built from, with the facts over it.
 
 use super::answers_feed::AnswersFeed;
-use super::facts::Facts;
+use super::facts::{Acc, Facts};
 use super::usage::UsageInput;
+use crate::read_status::ReportView;
 use aac_num::intl::Zone;
 use serde_json::{Map, Value as Json, json};
 
 /// The service's readings for one set of generations.
 pub struct Readings<'a> {
-    pub reports: &'a Json,
+    pub reports: Reports<'a>,
     pub quota: &'a Json,
     pub pinned: &'a Json,
     pub registry: &'a Json,
@@ -37,10 +38,25 @@ pub struct Readings<'a> {
     pub zone: &'a Zone,
 }
 
+pub enum Reports<'a> {
+    Wire(&'a Json),
+    Native(&'a ReportView),
+}
+
+impl Reports<'_> {
+    fn facts(&self, acc: &mut Acc) {
+        match self {
+            Self::Wire(value) => acc.read(value, true),
+            Self::Native(reports) => reports.facts(acc),
+        }
+    }
+}
+
 /// One source's published text and generation content.
 #[derive(Debug, Clone)]
 pub struct Sources {
     pub reports: String,
+    pub reports_valid: bool,
     pub quota: String,
     pub pinned: String,
     pub collected: String,
@@ -63,37 +79,22 @@ pub fn build(readings: &Readings<'_>) -> Result<Sources, &'static str> {
         "usage": readings.usage,
     });
     let answers = readings.answers.to_json();
-    let facts_data = json!({
-        "timeZone": readings.time_zone,
-        "hiddenThreadNames": [crate::answer_delivery::DOORBELL_SENDER],
-        "machineIds": crate::computers::machine_ids(),
-        "machineLabels": Map::from_iter(
-            crate::computers::machine_labels()
-                .into_iter()
-                .map(|(id, label)| (id.to_owned(), Json::from(label))),
-        ),
-    });
-    let partial_facts = Facts::of(
-        &[readings.reports, readings.quota, readings.pinned, &collected, &answers],
-        Some(readings.zone),
-    );
-    let presentation: crate::read_context::Presentation =
-        serde_json::from_value(partial_facts.to_json()).map_err(|_| "facts")?;
-    let now_date = crate::read_context::Date::of_now(
-        readings.now,
-        readings.zone.words(readings.now).ok_or("zone")?.0,
-        readings.zone.words(readings.now).ok_or("zone")?.1,
-    )
-    .ok_or("date")?;
-    let mut data = Map::new();
-    data.insert("reports".into(), readings.reports.clone());
-    data.insert("quota".into(), readings.quota.clone());
-    data.insert("pinned".into(), readings.pinned.clone());
-    data.insert("collected".into(), collected.clone());
-    data.insert("answers".into(), answers.clone());
-    data.insert("facts".into(), facts_data.clone());
-    let panel = crate::read_status::spend_by_stream(
-        &Json::Object(data),
+    let facts_data = facts_data(readings.time_zone);
+    // Only quota and the task stream labels contribute to the spend panel. The other
+    // source trees go through the accumulator once, below.
+    let mut spend_facts = Acc::default();
+    spend_facts.read(readings.quota, true);
+    let (wire_reports, native_reports) = match readings.reports {
+        Reports::Wire(value) => (value, None),
+        Reports::Native(reports) => (&Json::Null, Some(reports)),
+    };
+    crate::read_status::spend_label_facts(wire_reports, native_reports, &mut spend_facts);
+    let presentation = Facts::build(&spend_facts, Some(readings.zone)).into_presentation();
+    let (clock, day) = readings.zone.words(readings.now).ok_or("zone")?;
+    let now_date = crate::read_context::Date::of_now(readings.now, clock, day).ok_or("date")?;
+    let panel = crate::read_status::spend_by_stream_parts(
+        vec![("reports", wire_reports), ("quota", readings.quota)],
+        native_reports,
         std::sync::Arc::new(presentation),
         (readings.now, now_date),
         readings.offset_minutes,
@@ -101,19 +102,19 @@ pub fn build(readings: &Readings<'_>) -> Result<Sources, &'static str> {
     )
     .ok_or("spend")?;
     let quota = json!({"quota": readings.quota, "spendByStream": panel});
-    let facts = Facts::of(
-        &[
-            readings.reports,
-            &quota,
-            readings.pinned,
-            &collected,
-            &answers,
-            &facts_data,
-        ],
-        Some(readings.zone),
-    );
+    let mut acc = Acc::default();
+    readings.reports.facts(&mut acc);
+    for value in [&quota, readings.pinned, &collected, &answers, &facts_data] {
+        acc.read(value, true);
+    }
+    let facts = Facts::build(&acc, Some(readings.zone));
+    let (report_text, reports_valid) = match readings.reports {
+        Reports::Wire(value) => (write(&json!({"reports": value})), true),
+        Reports::Native(reports) => reports.source_text(),
+    };
     Ok(Sources {
-        reports: write(&json!({"reports": readings.reports})),
+        reports: report_text,
+        reports_valid,
         quota: write(&quota),
         pinned: write(&json!({"pinned": readings.pinned})),
         collected: write(&collected),
@@ -174,7 +175,7 @@ mod tests {
             problem: None,
         };
         let sources = build(&Readings {
-            reports: &reports,
+            reports: Reports::Wire(&reports),
             quota: &quota,
             pinned: &pinned,
             registry: &collected["registry"],

@@ -151,7 +151,10 @@ impl AnswersOwned {
     /// G16c: the feed's answer history. The cards' shared copies are scanned into the store first
     /// (`scanSharedAnswers`), then the journal's records and the verified share copies are merged
     /// (`mergeSharedAnswers`), the sends with them and the share map pruned to the open cards.
-    pub(crate) fn feed(&self, cards: &[(Json, String)]) -> AnswersFeed {
+    pub(crate) fn feed(
+        &self,
+        cards: &[Arc<aac_status::share::reports::SeenReport>],
+    ) -> AnswersFeed {
         let mut engine = lock(&self.engine);
         let history = engine.list().map(|entries| entries.to_vec());
         let sends = engine.send_list();
@@ -159,9 +162,13 @@ impl AnswersOwned {
             .as_ref()
             .map(|entries| closing_card_versions(entries))
             .unwrap_or_default();
-        engine.scan_shared_answers(cards, &closed);
-        let shared = engine.shared_answers_for(cards);
-        engine.prune_shared_answers(cards);
+        let versions: Vec<_> = cards
+            .iter()
+            .map(|row| (row.doc.as_ref(), row.sha256.as_str()))
+            .collect();
+        engine.scan_shared_answers(&versions, &closed);
+        let shared = engine.shared_answers_for(&versions);
+        engine.prune_shared_answers(&versions);
         match (history, sends) {
             (Ok(history), Ok(sends)) => AnswersFeed {
                 answers: merge_shared(&history, &shared),
