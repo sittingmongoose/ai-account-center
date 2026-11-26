@@ -2,9 +2,8 @@
 mod adapters;
 mod cli;
 mod packages;
-mod python;
 pub(crate) mod update;
-// Wired into `update.rs` by lane W6; until then only its tests use it.
+// W1's shared helpers serve the W2-W5 updaters; until those lanes land, some are unused.
 #[allow(dead_code)]
 pub(crate) mod updater;
 

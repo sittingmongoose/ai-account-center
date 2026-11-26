@@ -439,11 +439,37 @@ async fn an_unported_app_reports_readiness_unknown() {
         FakeSystem::answering(ok),
         false,
     );
-    let row = attempt(updater("omp").expect("omp"), &cx).await.to_value();
+    let row = attempt(&Unported("omp"), &cx).await.to_value();
     assert_eq!(
         (row["status"].as_str(), row["messageCode"].as_str()),
         (Some("unknown"), Some("readiness_unknown"))
     );
+}
+
+/// W6 red/green: the five CLI updaters are Rust ports, not the `Unported` stub, so an
+/// empty host answers `not_installed` without running anything.
+#[tokio::test]
+async fn the_cli_updaters_are_ported() {
+    for app in [
+        "antigravity-cli",
+        "muse-code",
+        "omp",
+        "codex-cli",
+        "claude-code",
+    ] {
+        let root = tempfile::tempdir().expect("root");
+        let system = FakeSystem::answering(ok);
+        let cx = context(root.path(), Platform::Ubuntu, system.clone(), false);
+        let row = attempt(updater(app).expect("updater"), &cx)
+            .await
+            .to_value();
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("not_installed"), Some("not_installed")),
+            "{app}"
+        );
+        assert!(system.runs.lock().expect("runs").is_empty(), "{app}");
+    }
 }
 
 #[test]

@@ -32,6 +32,11 @@ pub fn console_probe(args: &[std::ffi::OsString]) -> i32 {
     apps::updater::terminal::console_probe(args)
 }
 
+/// `aac-agent --app-update-task`: the Windows interactive-task child (see `apps::updater::windows_task`).
+pub async fn app_update_task() -> i32 {
+    apps::updater::windows_task::child().await
+}
+
 /// Return the exact build identity used by shipping's manifest handshake.
 pub fn handshake() -> Handshake {
     Handshake {

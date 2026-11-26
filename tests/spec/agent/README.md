@@ -30,14 +30,16 @@ checks the journal's single writer and recovery, and verifies that an explicit
 retry can run after recovery. Recovery preserves saved rows, closes missing rows
 as unknown and clears the fixture installer's partial file.
 
-In production the Rust agent holds the host update lease and passes each selected
-app to a bounded Python `--apply --app` subprocess. The D3 adapter is labeled
-`aac-agent apps installer fallback: python` on stderr. App updates have a 31-minute
-agent deadline and a 33-minute service deadline. Cancel sends a job-bound request
-through L5 and reaps the selected worker, marking that app and queued work skipped.
-Ubuntu and Mac admit up to four workers. Windows serializes requests to its one
-registered interactive updater task. The agent never falls back to the full Python
-job after work starts.
+In production the Rust agent holds the host update lease and runs each selected
+app's Rust updater in process (`apps/updater/runner.rs`: the app's own lock and
+stage, a hard deadline, cancel). There is no Python fallback. App updates have a
+31-minute agent deadline and a 33-minute service deadline. Cancel sends a job-bound
+request through L5 and stops the selected app's run, marking that app and queued
+work skipped. Ubuntu and Mac admit up to four apps. Windows serializes requests to
+its one registered interactive task, `CCS App Updates`, which now starts
+`aac-agent --app-update-task` under a headless console host
+(`apps/updater/windows_task.rs`); the agent re-registers the task when its action
+names anything else.
 
 The Rust service API uses the same rollback and expanded job files as the guarded
 TS routes. Its unit cases cover TS row bytes and the abandoned-job display.

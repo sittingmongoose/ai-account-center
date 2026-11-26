@@ -16,7 +16,8 @@
 //! | `t3.rs` | W5 | t3-code (and the T3 RPC client W4 calls) | `app_update_t3.py`, `app_update_t3_rpc.py` |
 //! | `cli.rs` | W6 | antigravity-cli, muse-code, omp, codex-cli, claude-code | `app_updates.py` (detect_cli, update_cli, claude_current, Muse/OMP) |
 //!
-//! W6 also wires [`updater`] into `update.rs` in place of `Installer::Python`.
+//! W6 wired [`updater`] into `update.rs` through `runner.rs` (one app's lock, stage,
+//! cancel and deadline) and `windows_task.rs` (the interactive task on Windows).
 //!
 //! Rules every implementation follows (they are the Python behavior):
 //! - Rows are the same JSON the Python worker printed: [`AppRow::to_value`] is the wire.
@@ -33,8 +34,10 @@ mod os_mac;
 #[cfg(windows)]
 mod os_windows;
 pub(crate) mod processes;
+pub(crate) mod runner;
 pub(crate) mod shared;
 pub(crate) mod terminal;
+pub(crate) mod windows_task;
 
 mod antigravity;
 mod cli;
@@ -373,6 +376,8 @@ pub(crate) struct AppRow {
     pub restart_targets: Option<Vec<Value>>,
     pub parts: Option<Value>,
     pub strays: Option<Vec<Value>>,
+    /// Muse's own printed reset time for a used-up quota, verbatim (`quotaReset`).
+    pub quota_reset: Option<String>,
     /// Set by [`attempt`] from the row's [`Diagnostics`] unless the updater set it.
     pub diagnostics: Option<Value>,
 }
@@ -395,6 +400,7 @@ impl AppRow {
             restart_targets: None,
             parts: None,
             strays: None,
+            quota_reset: None,
             diagnostics: None,
         }
     }
@@ -451,6 +457,7 @@ impl AppRow {
         );
         put("parts", self.parts.clone());
         put("strays", self.strays.clone().map(Value::Array));
+        put("quotaReset", self.quota_reset.clone().map(Value::from));
         put("diagnostics", self.diagnostics.clone());
         value
     }
