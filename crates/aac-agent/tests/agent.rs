@@ -257,3 +257,293 @@ async fn scan_uses_the_shared_library_without_changing_its_reply_bytes() {
         )
     );
 }
+
+#[test]
+fn aac_agent_runs_on_tuned_mimalloc() {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_aac-agent"));
+    command
+        .arg("--version")
+        .env_clear()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("CCS_HOME", home.path().join(".ccs"))
+        .env("MIMALLOC_VERBOSE", "1");
+    for kept in ["PATH", "SystemRoot"] {
+        if let Some(value) = std::env::var_os(kept) {
+            command.env(kept, value);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mimalloc: process init: 0x"),
+        "aac-agent did not start on mimalloc:\n{stderr}"
+    );
+    let mut options = std::collections::BTreeMap::new();
+    for line in stderr.lines() {
+        let Some(rest) = line.trim().strip_prefix("option '") else {
+            continue;
+        };
+        let Some((name, tail)) = rest.split_once("':") else {
+            continue;
+        };
+        let Some(token) = tail.split_whitespace().next() else {
+            continue;
+        };
+        if let Ok(value) = token.parse::<i64>() {
+            options.insert(name.to_owned(), value);
+        }
+    }
+    assert_eq!(
+        options.get("arena_eager_commit").copied(),
+        Some(0),
+        "{stderr}"
+    );
+    assert_eq!(options.get("purge_decommits").copied(), Some(1), "{stderr}");
+    assert_eq!(options.get("purge_delay").copied(), Some(0), "{stderr}");
+    let eager = options
+        .get("deprecated_eager_commit")
+        .or_else(|| options.get("eager_commit"))
+        .copied();
+    assert_eq!(eager, Some(0), "{stderr}");
+}
+
+#[cfg(target_os = "linux")]
+fn run_and_measure_max_rss_kib(
+    binary: &std::path::Path,
+    home: &std::path::Path,
+    frame: &[u8],
+) -> (bool, Vec<u8>, Vec<u8>, u64) {
+    use std::io::{Read, Write};
+
+    // Linux `wait4` inherits the parent's `mm->hiwater_rss` across `fork()+execve()`, so if an
+    // earlier parallel test in this harness read the 34 MiB debug binary into memory, a direct
+    // `Command::spawn` + `wait4` reports the parent harness's RSS instead of `aac-agent`'s own
+    // `VmHWM`. Launching through a fresh tiny wrapper (`/usr/bin/time` ~1.5 MiB or `python3`
+    // `os.wait4` ~12 MiB) gives a clean `fork` origin and measures `aac-agent`'s exact `VmHWM`.
+    let metric_file = home.join("agent-maxrss.txt");
+    let mut cmd = if std::path::Path::new("/usr/bin/time").is_file() {
+        let mut c = std::process::Command::new("/usr/bin/time");
+        c.arg("-o")
+            .arg(&metric_file)
+            .arg("-f")
+            .arg("%M")
+            .arg("--")
+            .arg(binary);
+        c
+    } else {
+        let mut c = std::process::Command::new("python3");
+        c.arg("-c")
+            .arg(
+                "import os,sys
+                 p=os.fork()
+                 if p==0: os.execv(sys.argv[2],[sys.argv[2]])
+                 _,st,ru=os.wait4(p,0)
+                 open(sys.argv[1],'w').write(str(ru.ru_maxrss))
+                 sys.exit(os.waitstatus_to_exitcode(st))",
+            )
+            .arg(&metric_file)
+            .arg(binary);
+        c
+    };
+    let mut child = cmd
+        .env_clear()
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("CCS_HOME", home.join(".ccs"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let payload = frame.to_vec();
+    let write_thread = std::thread::spawn(move || {
+        stdin.write_all(&payload).unwrap();
+    });
+    let mut stdout = Vec::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut stdout)
+        .unwrap();
+    let mut stderr = Vec::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_end(&mut stderr)
+        .unwrap();
+    write_thread.join().unwrap();
+    let status = child.wait().unwrap();
+    let max_rss_kib = std::fs::read_to_string(&metric_file)
+        .expect("max RSS metric file")
+        .trim()
+        .parse::<u64>()
+        .expect("valid max RSS KiB");
+    (status.success(), stdout, stderr, max_rss_kib)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn scan_usage_live_shaped_settled_packed_stays_under_50_mib_vmhwm() {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::MetadataExt;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let home = tempfile::tempdir().unwrap();
+    let codex_dir = home.path().join(".codex/sessions/2026/11/14");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    let settled_file =
+        codex_dir.join("rollout-2026-11-14T12-00-00-3e43c7f5-744b-4790-9d0b-06042ecf0a20.jsonl");
+    let settled_body = concat!(
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"settled-sess\",\"model_provider\":\"openai\"}}\n",
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-6.1-sol\"}}\n",
+        "{\"timestamp\":\"2026-11-14T12:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"output_tokens\":10}}}}\n"
+    );
+    std::fs::write(&settled_file, settled_body).unwrap();
+    let old_ms: i64 = 1_794_657_600_000;
+    std::fs::File::options()
+        .write(true)
+        .open(&settled_file)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_millis(old_ms as u64))
+        .unwrap();
+    let meta = std::fs::metadata(&settled_file).unwrap();
+    let settled_path_key = aac_usage::util::filekey("codex", &settled_file);
+    let settled_key = aac_usage::util::filekey_text("codex", "settled-sess");
+    let settled_fp = aac_usage::util::fingerprint(&settled_file).unwrap();
+
+    // Stream-generate a live-shaped ~38.6 MiB uncompressed settledPacked JSON payload (45,001
+    // prints) without inflating the parent test process's RSS before spawning `aac-agent`.
+    struct SettledJsonGen {
+        first: String,
+        idx: u32,
+        total: u32,
+        old_ms: i64,
+        buf: Vec<u8>,
+        pos: usize,
+        done: bool,
+    }
+    impl Read for SettledJsonGen {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            while self.pos >= self.buf.len() {
+                if self.done {
+                    return Ok(0);
+                }
+                self.buf.clear();
+                self.pos = 0;
+                if !self.first.is_empty() {
+                    self.buf.extend_from_slice(self.first.as_bytes());
+                    self.first.clear();
+                } else if self.idx < self.total {
+                    let i = self.idx;
+                    self.idx += 1;
+                    let mix = |mut x: u64| -> u64 {
+                        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                        x ^ (x >> 31)
+                    };
+                    let b = u64::from(i).wrapping_mul(16);
+                    let (k0, k1, k2, k3) = (mix(b), mix(b + 1), mix(b + 2), mix(b + 3));
+                    let (h0, h1, h2, h3) = (mix(b + 4), mix(b + 5), mix(b + 6), mix(b + 7));
+                    let (t0, t1, t2, t3) = (mix(b + 8), mix(b + 9), mix(b + 10), mix(b + 11));
+                    let (p0, p1, p2, p3) = (mix(b + 12), mix(b + 13), mix(b + 14), mix(b + 15));
+                    let _ = write!(
+                        self.buf,
+                        ",\"{k0:016x}{k1:016x}{k2:016x}{k3:016x}\":{{\"newestUsageMs\":{ms},\"size\":{sz},\"mtimeMs\":{ms},\"head\":\"{h0:016x}{h1:016x}{h2:016x}{h3:016x}\",\"tail\":\"{t0:016x}{t1:016x}{t2:016x}{t3:016x}\",\"pathKey\":\"{p0:016x}{p1:016x}{p2:016x}{p3:016x}\",\"fileIdentity\":\"fd00:{i:x}\",\"settledCheckedSlot\":2991000,\"appendState\":{{\"head\":\"{h0:016x}{h1:016x}{h2:016x}{h3:016x}\",\"tail\":\"{t0:016x}{t1:016x}{t2:016x}{t3:016x}\",\"parser\":{{\"model\":\"gpt-6.1-sol\",\"provider\":\"openai\",\"previous\":[{inp}.0,{out}.0,{cr}.0,0.0],\"sessionDigest\":\"{k0:016x}\"}}}}}}",
+                        ms = self.old_ms,
+                        sz = 4096u64 + u64::from(i),
+                        inp = 10_000 + (i % 50_000),
+                        out = 500 + (i % 4_000),
+                        cr = 4_000 + (i % 20_000),
+                    );
+                } else {
+                    self.buf.push(b'}');
+                    self.done = true;
+                }
+            }
+            let n = out.len().min(self.buf.len() - self.pos);
+            out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    let first_entry = format!(
+        "{{\"{settled_key}\":{{\"newestUsageMs\":{old_ms},\"size\":{size},\"mtimeMs\":{mtime},\"head\":\"{head}\",\"tail\":\"{tail}\",\"pathKey\":\"{settled_path_key}\",\"fileIdentity\":\"{dev:x}:{ino:x}\",\"settledCheckedSlot\":2991000,\"appendState\":{{\"head\":\"{head}\",\"tail\":\"{tail}\",\"parser\":{{\"model\":\"gpt-6.1-sol\",\"provider\":\"openai\",\"previous\":[100.0,10.0,0.0,0.0],\"sessionDigest\":\"0123456789abcdef\"}}}}}}}}",
+        size = meta.len(),
+        mtime = aac_usage::util::mtime_ms(&meta),
+        head = settled_fp.head,
+        tail = settled_fp.tail,
+        dev = meta.dev(),
+        ino = meta.ino(),
+    );
+    // Drop the trailing `}` so subsequent generated entries append cleanly.
+    let first_prefix = first_entry[..first_entry.len() - 1].to_owned();
+    let packed = aac_usage::protocol::pack_settled_from_reader(SettledJsonGen {
+        first: first_prefix,
+        idx: 0,
+        total: 35_000,
+        old_ms,
+        buf: Vec::with_capacity(1024),
+        pos: 0,
+        done: false,
+    })
+    .expect("pack settled fixture");
+
+    let frame = json!({
+        "protocol": 1,
+        "verb": "scan-usage",
+        "id": "r4-vmhwm-fixture",
+        "deadlineMs": 30_000,
+        "args": {
+            "kinds": ["codex"],
+            "minDateMs": 0,
+            "cwd": false,
+            "fingerprints": {
+                "_store": {
+                    "settledBefore": {"codex": old_ms + 86_400_000},
+                    "settledSlot": 2_991_000u64,
+                    "settledPacked": {"codex": packed}
+                },
+                "codex": {}
+            }
+        }
+    })
+    .to_string()
+        + "\n";
+    drop(packed);
+
+    let frame_mib = frame.len() as f64 / (1024.0 * 1024.0);
+    let binary = std::env::var_os("AAC_AGENT_BENCH_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_BIN_EXE_aac-agent")));
+    let (ok, stdout, stderr, max_rss_kib) =
+        run_and_measure_max_rss_kib(&binary, home.path(), frame.as_bytes());
+    assert!(
+        ok,
+        "aac-agent failed (frame={frame_mib:.2} MiB) stderr={}",
+        String::from_utf8_lossy(&stderr)
+    );
+    let event: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(event["type"], "result");
+    assert_eq!(event["value"]["kinds"]["codex"]["state"], "ok");
+    assert_eq!(event["value"]["kinds"]["codex"]["settledPacked"], true);
+    assert_eq!(
+        event["value"]["kinds"]["codex"]["fingerprints"][&settled_key]["settledConfirmed"],
+        true
+    );
+    let max_rss_mib = max_rss_kib as f64 / 1024.0;
+    eprintln!(
+        "aac-agent live-shaped settledPacked VmHWM: {max_rss_mib:.2} MiB ({max_rss_kib} KiB), wire frame: {frame_mib:.2} MiB"
+    );
+    assert!(
+        max_rss_kib <= 50 * 1024,
+        "aac-agent VmHWM exceeded 50 MiB budget: {max_rss_mib:.2} MiB ({max_rss_kib} KiB)"
+    );
+}

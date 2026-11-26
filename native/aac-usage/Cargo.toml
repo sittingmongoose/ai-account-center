@@ -20,7 +20,7 @@ base64 = "0.22"
 rusqlite = { version = "0.37", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: costs parse to the exact double the server reads.
-serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = "0.11"
 zstd = "0.14"
 

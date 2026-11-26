@@ -570,7 +570,11 @@ mod tests {
         assert_eq!(args["fingerprints"]["codex"], json!({}));
         let request = aac_usage::protocol::parse_request(args.to_string().as_bytes())
             .expect("decode the split scanner frame");
-        assert_eq!(request.fingerprints["codex"]["settled"], print);
+        assert!(request.fingerprints.is_empty());
+        assert_eq!(
+            request.prior_print_json("codex", "settled").as_ref(),
+            Some(&print)
+        );
 
         let mut cache = Cache {
             fingerprints,

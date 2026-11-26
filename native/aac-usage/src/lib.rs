@@ -6,6 +6,7 @@
 pub mod collector;
 pub mod discover;
 pub mod fsx;
+pub mod prior;
 pub mod protocol;
 pub mod read;
 mod scan_index;

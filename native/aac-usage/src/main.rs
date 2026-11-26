@@ -26,6 +26,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    drop(raw);
     aac_usage::lower_priority();
     // Windows names variables in any case (`Path`): keys are upper-cased there, and every lookup
     // uses upper case (FIX-ROUND-BIG 12).
@@ -40,6 +41,6 @@ fn main() {
     // that dies mid-scan), the watchdog answers for the scan, every kind "pending", so the server
     // keeps what it had and names the stall, and the process ends without waiting for it.
     aac_usage::protocol::watchdog(&request);
-    let response = aac_usage::protocol::scan_persistent(&request, &home, &env);
-    aac_usage::protocol::answer(&response);
+    let response = aac_usage::protocol::scan_persistent_owned_bytes(request, &home, &env);
+    aac_usage::protocol::answer_bytes(&response);
 }

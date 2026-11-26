@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 
 const UNAVAILABLE: &str = "inventory-unavailable";
-/// The saved Z.ai key's write authorization awaits the supervised first claim.
-pub const CLAIM_PROVEN: bool = false;
+/// Jared approved enabling Z.ai reset claims with all existing claim guards intact.
+pub const CLAIM_PROVEN: bool = true;
 pub const METHOD: &str = "zai.customer-package-reset.use";
 
 fn code(data: &Value) -> bool {

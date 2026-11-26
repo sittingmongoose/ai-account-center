@@ -341,7 +341,7 @@ pub fn collect(collector: &mut Collector, home: &Path) -> &'static str {
     }
     let before: HashSet<String> = collector
         .prior_kind("cursor")
-        .map(|prints| prints.keys().cloned().collect())
+        .map(|prints| prints.keys().map(|k| k.to_hex_string()).collect())
         .unwrap_or_default();
     if !changed && before == keys {
         for key in keys {

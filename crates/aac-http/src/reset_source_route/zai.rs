@@ -537,9 +537,8 @@ mod tests {
         assert_eq!(result["outcome"], "not-sent");
         assert_eq!(result["reason"], "identity-changed");
         assert!(server.join().unwrap().is_empty());
-        assert_eq!(
-            send(&f.ctx, &f.path, ACCOUNT, &write)["reason"],
-            "claim-unproven"
-        );
+        let top = send(&f.ctx, &f.path, ACCOUNT, &write);
+        assert_eq!(top["outcome"], "not-sent");
+        assert_eq!(top["reason"], "identity-changed");
     }
 }

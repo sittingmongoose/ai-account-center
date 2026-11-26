@@ -356,37 +356,49 @@ fn append_from(collector: &Collector, kind: &str, path: &Path, key: &str, line: 
     {
         return 0;
     }
-    let Some(prior) = collector.prior_print(kind, key) else {
+    let Some(prior_map) = collector.prior_kind(kind) else {
+        return 0;
+    };
+    let Some(prior) = prior_map.get_str(key) else {
         return 0;
     };
     let Some(current) = collector.pending.get(kind).and_then(|files| files.get(key)) else {
         return 0;
     };
-    let (Some(size), Some(identity), Some(state)) = (
-        prior["size"].as_u64(),
-        prior["fileIdentity"].as_str(),
-        prior.get("appendState"),
-    ) else {
+    let Some(size) = prior.size() else {
         return 0;
     };
-    if size == 0
+    if !prior_map.has_append_state(prior) {
+        return 0;
+    }
+    if !prior.has_file_identity()
+        || size == 0
         || size >= current.size
-        || current.file_identity.as_deref() != Some(identity)
-        || prior["pathKey"].as_str() != current.path_key.as_deref()
+        || !current
+            .file_identity
+            .as_deref()
+            .is_some_and(|identity| prior.file_identity_eq_str(identity))
+        || !current
+            .path_key
+            .as_deref()
+            .is_some_and(|path_key| prior.path_key_eq(path_key))
     {
         return 0;
     }
-    let (Some(head), Some(tail)) = (state["head"].as_str(), state["tail"].as_str()) else {
+    if !prior_map.append_state_has_ends(prior) {
         return 0;
-    };
+    }
     let Ok(mut file) = fsx::open_regular(path) else {
         return 0;
     };
-    if end_hashes(&mut file, size).is_none_or(|(h, t)| h != head || t != tail) {
+    if end_hashes(&mut file, size).is_none_or(|(h, t)| !prior_map.append_state_head_tail_match(prior, &h, &t)) {
         return 0;
     }
-    line.restore_codex(&state["parser"]);
-    line.claude_previous = state["parser"]["claudeLast"].as_str().map(str::to_owned);
+    let Some(parser) = prior_map.append_state_parser_value(prior) else {
+        return 0;
+    };
+    line.restore_codex(&parser);
+    line.claude_previous = parser["claudeLast"].as_str().map(str::to_owned);
     line.through = size;
     size
 }
@@ -483,9 +495,9 @@ pub fn read_into(
     }
     let expected = if append {
         collector
-            .prior_print(kind, filekey)
-            .and_then(|p| p["appendState"]["parser"]["sessionDigest"].as_str())
-            .map(str::to_owned)
+            .prior_kind(kind)
+            .and_then(|m| m.get_str(filekey).and_then(|p| m.append_state_parser_value(p)))
+            .and_then(|parser| parser["sessionDigest"].as_str().map(str::to_owned))
     } else {
         collector
             .resume
@@ -934,7 +946,10 @@ fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse,
             collector.truncated = true;
             return true;
         }
-        if let Some(key) = collector.settled_key("codex", path).cloned() {
+        if let Some(key) = collector
+            .settled_key("codex", path)
+            .map(crate::prior::CompactHash::to_hex_string)
+        {
             if !groups.contains_key(&key) {
                 order.push(key.clone());
             }

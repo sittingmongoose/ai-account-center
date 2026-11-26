@@ -5,9 +5,9 @@
 //! zcode's: size and mtime of the file and of its `-wal`.
 
 use crate::collector::Collector;
+use crate::prior::PriorPrint;
 use crate::util::{self, Print};
 use rusqlite::{Connection, OpenFlags};
-use serde_json::Value;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -24,16 +24,15 @@ pub fn print_of(db: &Path) -> Option<Print> {
     Some(print)
 }
 
-pub fn same(prior: Option<&Value>, current: &Print) -> bool {
-    let Some(Value::Object(prior)) = prior else {
+pub fn same(prior: Option<&PriorPrint>, current: &Print) -> bool {
+    let Some(prior) = prior else {
         return false;
     };
-    let get = |k: &str| prior.get(k).and_then(Value::as_i64).unwrap_or(0);
-    get("size") == current.size as i64
-        && prior.contains_key("newestUsageMs")
-        && get("mtimeMs") == current.mtime_ms
-        && get("walSize") == current.wal_size.unwrap_or(0) as i64
-        && get("walMtimeMs") == current.wal_mtime_ms.unwrap_or(0)
+    prior.size().unwrap_or(0) == current.size
+        && prior.has_newest_usage_key()
+        && prior.mtime_ms().unwrap_or(0) == current.mtime_ms
+        && prior.wal_size().unwrap_or(0) == current.wal_size.unwrap_or(0)
+        && prior.wal_mtime_ms().unwrap_or(0) == current.wal_mtime_ms.unwrap_or(0)
 }
 
 /// The one SQLite URI every reader opens (FIX-ROUND-BIG 11 and 13): `%`, `?` and `#` in the path are
@@ -113,16 +112,14 @@ pub fn tables(connection: &Connection) -> rusqlite::Result<Vec<String>> {
 /// log may be visible now, and its rows must be counted.
 pub fn note_db(collector: &mut Collector, kind: &str, filekey: &str, mut current: Print) -> bool {
     let prior = collector.prior_print(kind, filekey);
-    let waited = prior.is_some_and(|p| p.get("walUnread").and_then(Value::as_bool) == Some(true));
+    let waited = prior.is_some_and(PriorPrint::wal_unread);
     let cutoff = collector.min_date_ms;
     let covers_window = prior.is_some_and(|print| {
-        print["sqliteMinDateMs"]
-            .as_i64()
-            .is_some_and(|previous| previous <= cutoff)
-            && (print["unreadableRecords"].as_u64().unwrap_or(0) == 0
+        print.sqlite_min_date_ms().is_some_and(|previous| previous <= cutoff)
+            && (print.unreadable_records().unwrap_or(0) == 0
                 || print
-                    .get("oldestUnreadableMs")
-                    .is_some_and(|at| at.is_null() || at.as_i64().is_some_and(|ms| ms >= cutoff)))
+                    .oldest_unreadable_ms_entry()
+                    .is_some_and(|at| at.is_none_or(|ms| ms >= cutoff)))
     });
     let unchanged = !waited && covers_window && same(prior, &current);
     current.sqlite_min_date_ms = Some(cutoff);
@@ -185,8 +182,8 @@ pub fn replay(collector: &mut Collector, kind: &str, key: &str) {
         return;
     };
     Unreadable {
-        count: prior["unreadableRecords"].as_u64().unwrap_or(0),
-        oldest_ms: prior["oldestUnreadableMs"].as_i64(),
+        count: prior.unreadable_records().unwrap_or(0),
+        oldest_ms: prior.oldest_unreadable_ms_entry().flatten(),
     }
     .publish(collector, kind, key);
 }

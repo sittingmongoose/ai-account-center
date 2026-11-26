@@ -920,7 +920,7 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     // Each log once: a file that failed is counted as failed, not also as found pending.
     let failed = collector.read_failures.get(kind);
     // Settled files are found and read like unchanged ones, from their prints (FINAL-NEON H1).
-    let settled: Vec<&Value> = settled_prints(collector, kind).collect();
+    let settled: Vec<&crate::prior::PriorPrint> = settled_prints(collector, kind).collect();
     let found = collector.pending.get(kind).map_or(0, |m| {
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
     }) + failed.map_or(0, |s| s.len())
@@ -935,7 +935,7 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         .get(kind)
         .into_iter()
         .flat_map(|prints| prints.values().filter_map(|p| p.newest_usage_ms))
-        .chain(settled.iter().filter_map(|p| p["newestUsageMs"].as_i64()))
+        .chain(settled.iter().filter_map(|p| p.newest_usage_ms()))
         .max();
     let activity = newest_data;
     // Coverage is the usage read's own completeness, not a file listing: a chat store the bounded
@@ -991,22 +991,35 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
 }
 
 /// Prints of this kind's settled files, confirmed unread this scan, that no read replaced.
-fn settled_prints<'a>(collector: &'a Collector, kind: &'a str) -> impl Iterator<Item = &'a Value> + 'a {
+fn settled_prints<'a>(
+    collector: &'a Collector,
+    kind: &'a str,
+) -> impl Iterator<Item = &'a crate::prior::PriorPrint> + 'a {
+    let pending = collector.pending.get(kind);
+    let failed = collector.read_failures.get(kind);
+    let has_overlays = pending.is_some_and(|p| !p.is_empty()) || failed.is_some_and(|f| !f.is_empty());
     collector
         .settled
         .get(kind)
         .into_iter()
-        .flat_map(|prints| prints.iter())
-        .filter(move |(key, _)| {
-            !collector.pending.get(kind).is_some_and(|p| p.contains_key(*key))
-                && !collector.read_failures.get(kind).is_some_and(|f| f.contains(*key))
+        .flat_map(|prints| prints.keys())
+        .filter(move |key| {
+            if !has_overlays {
+                return true;
+            }
+            let text = key.to_hex_string();
+            !pending.is_some_and(|p| p.contains_key(&text)) && !failed.is_some_and(|f| f.contains(&text))
         })
-        .map(|(_, print)| print)
+        .filter_map(move |key| collector.prior_print_hash(kind, key))
 }
 
 /// Whether a settled file of this kind carries a disclosure flag (`unreadUsage`, `estimatedClock`).
 pub fn settled_flag(collector: &Collector, kind: &str, flag: &str) -> bool {
-    settled_prints(collector, kind).any(|print| print[flag] == true)
+    settled_prints(collector, kind).any(|print| match flag {
+        "unreadUsage" => print.unread_usage(),
+        "estimatedClock" => print.estimated_clock(),
+        _ => false,
+    })
 }
 
 pub const EXPERIMENT_MAX_DEPTH: usize = 4;

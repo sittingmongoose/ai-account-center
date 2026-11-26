@@ -138,3 +138,123 @@ fn check_settled(home: &Path, path: &Path) {
     assert_eq!(replaced["rows"][0]["i"], 300);
     assert!(print(&replaced).get("readFrom").is_none());
 }
+
+#[test]
+fn settled_packed_parses_into_typed_prior_without_value_map_and_keeps_scan_parity() {
+    let home = tempfile::tempdir().unwrap();
+    let path = fixture(home.path());
+    let body = rollout(2, 120);
+    fs::write(&path, &body).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_millis((AT - 10_000) as u64))
+        .unwrap();
+
+    let first = scan(home.path(), None, AT + 10_000);
+    let first_prints = first["kinds"]["codex"]["fingerprints"].as_object().unwrap();
+    let packed = protocol::pack_settled(first_prints).expect("pack settled");
+    let wire = json!({
+        "kinds": ["codex"],
+        "minDateMs": 0,
+        "cwd": false,
+        "fingerprints": {
+            "_store": {
+                "settledBefore": {"codex": AT + 10_000},
+                "settledSlot": 1,
+                "settledPacked": {"codex": packed}
+            },
+            "codex": {}
+        }
+    });
+    let request = protocol::parse_request(wire.to_string().as_bytes()).expect("parse packed request");
+    assert!(
+        request.fingerprints.is_empty(),
+        "settledPacked must parse into typed PriorPrint structs instead of Value maps"
+    );
+    let key = first_prints.keys().next().unwrap();
+    assert_eq!(request.prior_print_json("codex", key).as_ref(), first_prints.get(key));
+
+    let env = Env::from([
+        ("HOME".into(), home.path().to_string_lossy().into_owned()),
+        ("PATH".into(), String::new()),
+    ]);
+    let via_value = protocol::scan(&request, home.path(), &env);
+    let via_bytes: Value = serde_json::from_slice(&protocol::scan_owned_bytes(request, home.path(), &env)).unwrap();
+    assert_eq!(via_value, via_bytes);
+    assert_eq!(via_bytes["kinds"]["codex"]["settledPacked"], true);
+    assert_eq!(
+        via_bytes["kinds"]["codex"]["fingerprints"][key]["settledConfirmed"],
+        true
+    );
+}
+
+#[test]
+fn collector_drop_kind_releases_finished_kind_and_settled_packed_append_resumes() {
+    let home = tempfile::tempdir().unwrap();
+    let path = fixture(home.path());
+    let body = rollout(2, 120);
+    fs::write(&path, &body).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_millis((AT - 10_000) as u64))
+        .unwrap();
+
+    let first = scan(home.path(), None, AT + 10_000);
+    let first_prints = first["kinds"]["codex"]["fingerprints"].as_object().unwrap();
+    let key = first_prints.keys().next().unwrap().clone();
+    let packed = protocol::pack_settled(first_prints).expect("pack settled");
+    let wire = json!({
+        "kinds": ["codex", "claude"],
+        "minDateMs": 0,
+        "cwd": false,
+        "fingerprints": {
+            "_store": {
+                "settledBefore": {"codex": AT + 10_000},
+                "settledSlot": 1,
+                "settledPacked": {"codex": packed}
+            },
+            "codex": {},
+            "claude": {"keep": {"size": 1, "mtimeMs": 1, "head": "h", "tail": "t"}}
+        }
+    });
+    let request = protocol::parse_request(wire.to_string().as_bytes()).expect("parse request");
+
+    // Verify Collector::drop_kind releases codex state without touching claude.
+    let mut collector = aac_usage::collector::Collector::with_prior(0, 20.0, request.prior.clone());
+    assert!(collector.prior_kind("codex").is_some_and(|m| !m.is_empty()));
+    assert!(collector.prior_kind("claude").is_some_and(|m| !m.is_empty()));
+    collector.drop_kind("codex");
+    assert!(collector.prior_kind("codex").is_none());
+    assert!(!collector.settled.contains_key("codex"));
+    assert!(!collector.fresh.contains_key("codex"));
+    assert!(
+        collector
+            .prior_kind("claude")
+            .is_some_and(|m| m.get_str("keep").is_some())
+    );
+
+    // Grow the settledPacked file and advance settledSlot so revalidation sees the growth and
+    // resumes via the block-compressed AppendBlobStore appendState.
+    let grown = rollout(3, 120);
+    fs::write(&path, &grown).unwrap();
+    let mut grown_wire = wire.clone();
+    grown_wire["fingerprints"]["_store"]["settledSlot"] = json!(2);
+    let grown_req = protocol::parse_request(grown_wire.to_string().as_bytes()).expect("parse grown request");
+    let env = Env::from([
+        ("HOME".into(), home.path().to_string_lossy().into_owned()),
+        ("PATH".into(), String::new()),
+    ]);
+    let after = protocol::scan(&grown_req, home.path(), &env);
+    assert_eq!(
+        after["rows"][0]["i"], 120,
+        "expected append-only read of grown settledPacked file: {after}"
+    );
+    assert_eq!(
+        after["kinds"]["codex"]["fingerprints"][&key]["readFrom"].as_u64(),
+        Some(body.len() as u64)
+    );
+}

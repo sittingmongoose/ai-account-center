@@ -828,7 +828,7 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
     }
     let storekey = util::filekey("antigravity", home);
     let current = store_print(&state.files);
-    let unchanged = util::same_print(collector.prior_print("antigravity", &storekey), &current);
+    let unchanged = util::same_prior_print(collector.prior_print("antigravity", &storekey), &current);
     collector
         .pending
         .entry("antigravity".into())

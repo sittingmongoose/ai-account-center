@@ -406,6 +406,92 @@ fn read_up_to(handle: &mut fs::File, buffer: &mut [u8]) -> std::io::Result<usize
     Ok(total)
 }
 
+impl serde::Serialize for Print {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        if self.usage_clock {
+            map.serialize_entry("newestUsageMs", &self.newest_usage_ms)?;
+        }
+        map.serialize_entry("size", &self.size)?;
+        map.serialize_entry("mtimeMs", &self.mtime_ms)?;
+        if !self.head.is_empty() || self.wal_size.is_none() {
+            map.serialize_entry("head", &self.head)?;
+            map.serialize_entry("tail", &self.tail)?;
+        }
+        if let Some(name) = &self.claude_name {
+            map.serialize_entry("claudeName", name)?;
+        }
+        if let Some(mirror) = self.claude_mirror {
+            map.serialize_entry("claudeMirror", &mirror)?;
+        }
+        if let Some(group) = &self.claude_group {
+            map.serialize_entry("claudeGroup", group)?;
+        }
+        if let Some(skipped) = self.usage_skipped {
+            map.serialize_entry("usageSkipped", &skipped)?;
+        }
+        if let Some(size) = self.wal_size {
+            map.serialize_entry("walSize", &size)?;
+        }
+        if let Some(mtime) = self.wal_mtime_ms {
+            map.serialize_entry("walMtimeMs", &mtime)?;
+        }
+        if let Some(offset) = self.msg_through {
+            map.serialize_entry("msgThrough", &offset)?;
+        }
+        if let Some(head) = &self.msg_head {
+            map.serialize_entry("msgHead", head)?;
+        }
+        if let Some(count) = self.unreadable_records {
+            map.serialize_entry("unreadableRecords", &count)?;
+            map.serialize_entry("oldestUnreadableMs", &self.oldest_unreadable_ms)?;
+        }
+        if let Some(cutoff) = self.sqlite_min_date_ms {
+            map.serialize_entry("sqliteMinDateMs", &cutoff)?;
+        }
+        if let Some(wal) = self.wal_unread {
+            map.serialize_entry("walUnread", &wal)?;
+        }
+        if let Some(key) = &self.path_key {
+            map.serialize_entry("pathKey", key)?;
+        }
+        if let Some(identity) = &self.file_identity {
+            map.serialize_entry("fileIdentity", identity)?;
+        }
+        if let Some(state) = &self.append_state {
+            map.serialize_entry("appendState", state)?;
+        }
+        if let Some(optional) = self.optional_root {
+            map.serialize_entry("optionalRoot", &optional)?;
+        }
+        if let Some(unread) = self.unread_usage {
+            map.serialize_entry("unreadUsage", &unread)?;
+        }
+        if let Some(estimated) = self.estimated_clock {
+            map.serialize_entry("estimatedClock", &estimated)?;
+        }
+        if let Some(progress) = &self.progress {
+            if let Some(through) = progress.through {
+                map.serialize_entry("readThrough", &through)?;
+            }
+            if let Some(from) = progress.from {
+                map.serialize_entry("readFrom", &from)?;
+            }
+            if let Some(state) = &progress.state {
+                map.serialize_entry("readState", state)?;
+            }
+            if let Some(name) = &progress.name {
+                map.serialize_entry("readName", name)?;
+            }
+            if let Some(decoded) = progress.decoded {
+                map.serialize_entry("decodedSize", &decoded)?;
+            }
+        }
+        map.end()
+    }
+}
+
 /// Python's `_same_fingerprint` against a prior print sent in the request.
 pub fn same_print(prior: Option<&Value>, current: &Print) -> bool {
     let Some(Value::Object(prior)) = prior else {
@@ -415,6 +501,17 @@ pub fn same_print(prior: Option<&Value>, current: &Print) -> bool {
         && prior.get("mtimeMs").and_then(Value::as_i64) == Some(current.mtime_ms)
         && prior.get("head").and_then(Value::as_str) == Some(current.head.as_str())
         && prior.get("tail").and_then(Value::as_str) == Some(current.tail.as_str())
+}
+
+/// Typed equivalent of [`same_print`] against a compact [`crate::prior::PriorPrint`].
+pub fn same_prior_print(prior: Option<&crate::prior::PriorPrint>, current: &Print) -> bool {
+    let Some(prior) = prior else {
+        return false;
+    };
+    prior.size() == Some(current.size)
+        && prior.mtime_ms() == Some(current.mtime_ms)
+        && prior.head_eq(&current.head)
+        && prior.tail_eq(&current.tail)
 }
 
 fn has_control(text: &str) -> bool {

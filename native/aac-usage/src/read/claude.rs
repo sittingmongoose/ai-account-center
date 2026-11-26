@@ -300,15 +300,18 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
         }
         index
     }
-    let prior: serde_json::Map<String, Value> = collector.prior_kind("claude").cloned().unwrap_or_default();
     let mut prior_groups: HashMap<String, BTreeSet<String>> = HashMap::new();
-    for (key, stamp) in &prior {
-        if let Some(group) = stamp
-            .get("claudeGroup")
-            .and_then(Value::as_str)
-            .filter(|g| !g.is_empty())
-        {
-            prior_groups.entry(group.to_string()).or_default().insert(key.clone());
+    let mut prior_group_of: HashMap<crate::prior::CompactHash, String> = HashMap::new();
+    if let Some(prior) = collector.prior_kind("claude") {
+        for (key, stamp) in prior.iter() {
+            if let Some(group) = stamp.claude_group() {
+                let group_str = group.to_hex_string();
+                prior_groups
+                    .entry(group_str.clone())
+                    .or_default()
+                    .insert(key.to_hex_string());
+                prior_group_of.insert(key, group_str);
+            }
         }
     }
     // Settled files (FINAL-NEON M1) are grouped unread: by name and earlier group, and by bytes
@@ -333,7 +336,7 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
         }
         if collector
             .settled_print_of("claude", path)
-            .and_then(|print| print["size"].as_u64())
+            .and_then(crate::prior::PriorPrint::size)
             .is_some_and(|size| unsettled_sizes.contains(&size))
         {
             stamps[index] = util::fingerprint(path);
@@ -347,13 +350,10 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let mut keys = vec![GroupKey::Name(mirror, name)];
-        if let Some(previous) = prior
-            .get(&util::filekey("claude", path))
-            .and_then(|p| p.get("claudeGroup"))
-            .and_then(Value::as_str)
-            .filter(|g| !g.is_empty())
+        if let Some(previous) =
+            prior_group_of.get(&crate::prior::CompactHash::from_text(&util::filekey("claude", path)))
         {
-            keys.push(GroupKey::Prior(mirror, previous.to_string()));
+            keys.push(GroupKey::Prior(mirror, previous.clone()));
         }
         if let Some(stamp) = stamps[index].take() {
             keys.push(GroupKey::Bytes(mirror, stamp.size, stamp.head, stamp.tail));
@@ -410,14 +410,8 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
         let members: BTreeSet<String> = group.iter().map(|p| util::filekey("claude", p)).collect();
         let previous: BTreeSet<String> = members
             .iter()
-            .filter_map(|key| {
-                prior
-                    .get(key)
-                    .and_then(|p| p.get("claudeGroup"))
-                    .and_then(Value::as_str)
-            })
-            .filter(|g| !g.is_empty())
-            .map(str::to_string)
+            .filter_map(|key| prior_group_of.get(&crate::prior::CompactHash::from_text(key)))
+            .cloned()
             .collect();
         let identity = members.iter().chain(previous.iter()).min().cloned().unwrap_or_default();
         let mut changed = false;

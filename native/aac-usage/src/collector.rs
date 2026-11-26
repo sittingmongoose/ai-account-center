@@ -1,6 +1,7 @@
 //! One scan's state: fingerprints read and confirmed, hourly rows, session rows, caps and the
 //! deadline. The Python helper's `Collector`, field for field.
 
+use crate::prior::{CompactHash, CompactShaIndex, PriorKindMap, PriorPrint, PriorState, decode_sha256_hex};
 use crate::util::{self, Print, ReadProgress};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -74,7 +75,7 @@ pub struct Collector {
     deadline: Instant,
     pub budget: f64,
     pub now_ms: i64,
-    pub prior: Map<String, Value>,
+    pub prior: PriorState,
     pub fresh: BTreeMap<String, BTreeMap<String, Print>>,
     pub pending: BTreeMap<String, BTreeMap<String, Print>>,
     rows: HashMap<RowKey, usize>,
@@ -147,14 +148,42 @@ pub struct Collector {
     /// Per kind, the folders only the optional experiment walk found this scan (each with its
     /// real path): files read under them are marked `optionalRoot` on their print.
     pub optional_roots: HashMap<String, Vec<(PathBuf, PathBuf)>>,
-    settled_paths: HashMap<(String, String), String>,
+    settled_paths: HashMap<String, SettledPathIndex>,
     settled_slot: u64,
-    /// Prints of settled files this scan confirmed without reading them, per kind. They stay
-    /// here through discovery, which counts and dates them like unchanged files (FINAL-NEON H1).
-    pub settled: BTreeMap<String, Map<String, Value>>,
+    /// Keys of settled files this scan confirmed without reading them, per kind, mapped to their
+    /// checked slot. The underlying `PriorPrint` stays in `self.prior` without cloning (R4).
+    pub settled: BTreeMap<String, BTreeMap<CompactHash, u64>>,
     /// Settled paths of copy-grouped kinds (Codex, Claude, Muse) the walk found: their copy groups
-    /// are ranked with them before they stay settled (FINAL-NEON M1). (kind, path) -> print key.
-    settled_hits: HashMap<(String, PathBuf), String>,
+    /// are ranked with them before they stay settled (FINAL-NEON M1). kind -> (path -> print key).
+    settled_hits: HashMap<String, HashMap<PathBuf, CompactHash>>,
+}
+
+#[derive(Default)]
+struct SettledPathIndex {
+    sha: CompactShaIndex,
+    other: HashMap<Box<str>, u32>,
+}
+
+impl SettledPathIndex {
+    fn is_empty(&self) -> bool {
+        self.sha.is_empty() && self.other.is_empty()
+    }
+    fn get_str(&self, key: &str, prints: &PriorKindMap) -> Option<u32> {
+        match decode_sha256_hex(key) {
+            Some(bytes) => self.sha.get(&bytes, |idx| prints.path_key_sha_at(idx)),
+            None => self.other.get(key).copied(),
+        }
+    }
+    fn remove_str(&mut self, key: &str, prints: &PriorKindMap) {
+        match decode_sha256_hex(key) {
+            Some(bytes) => {
+                self.sha.remove(&bytes, |idx| prints.path_key_sha_at(idx));
+            }
+            None => {
+                self.other.remove(key);
+            }
+        }
+    }
 }
 
 /// The owner and all readers use one ten-minute cadence.
@@ -184,33 +213,43 @@ pub fn resumable(kind: &str) -> bool {
 
 impl Collector {
     pub fn new(min_date_ms: i64, budget_seconds: f64, prior: Map<String, Value>) -> Collector {
-        let store_incremental = prior.contains_key("_store");
-        let mut settled_paths = HashMap::new();
-        if let Some(before) = prior
-            .get("_store")
-            .and_then(|settings| settings["settledBefore"].as_object())
-        {
-            for (kind, cutoff) in before {
-                let (Some(cutoff), Some(prints)) = (cutoff.as_i64(), prior.get(kind).and_then(Value::as_object)) else {
-                    continue;
-                };
-                for (key, print) in prints {
-                    if settled_print(print, cutoff)
-                        && let Some(path_key) = print["pathKey"].as_str()
-                    {
-                        settled_paths.insert((kind.clone(), path_key.to_owned()), key.clone());
+        Self::with_prior(min_date_ms, budget_seconds, PriorState::from_map(&prior))
+    }
+
+    pub fn with_prior(min_date_ms: i64, budget_seconds: f64, prior: PriorState) -> Collector {
+        let store_incremental = prior.store_incremental;
+        let mut settled_paths: HashMap<String, SettledPathIndex> = HashMap::new();
+        for (kind, cutoff) in &prior.settled_before {
+            let Some(prints) = prior.kinds.get(kind) else {
+                continue;
+            };
+            let mut by_path = SettledPathIndex {
+                sha: CompactShaIndex::with_capacity(prints.len()),
+                other: HashMap::new(),
+            };
+            for (idx, print) in prints.iter_indexed_prints() {
+                if print.is_settled(*cutoff)
+                    && let Some(path_key) = print.path_key_hash()
+                {
+                    match path_key {
+                        CompactHash::Sha256(bytes) => {
+                            by_path.sha.insert(&bytes, idx, |slot| prints.path_key_sha_at(slot));
+                        }
+                        CompactHash::Other(text) => {
+                            by_path.other.insert(text, idx);
+                        }
                     }
                 }
+            }
+            if !by_path.is_empty() {
+                settled_paths.insert(kind.clone(), by_path);
             }
         }
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let settled_slot = prior
-            .get("_store")
-            .and_then(|settings| settings["settledSlot"].as_u64())
-            .unwrap_or(now_ms as u64 / SETTLED_CHECK_MS);
+        let settled_slot = prior.settled_slot.unwrap_or(now_ms as u64 / SETTLED_CHECK_MS);
         Collector {
             min_date_ms,
             deadline: Instant::now() + std::time::Duration::from_secs_f64(budget_seconds.max(0.0)),
@@ -282,12 +321,16 @@ impl Collector {
         self.deadline
     }
 
-    pub fn prior_print(&self, kind: &str, key: &str) -> Option<&Value> {
-        self.prior.get(kind)?.as_object()?.get(key)
+    pub fn prior_print(&self, kind: &str, key: &str) -> Option<&PriorPrint> {
+        self.prior.get(kind, key)
     }
 
-    pub fn prior_kind(&self, kind: &str) -> Option<&Map<String, Value>> {
-        self.prior.get(kind)?.as_object()
+    pub fn prior_print_hash(&self, kind: &str, key: &CompactHash) -> Option<&PriorPrint> {
+        self.prior.get_hash(kind, key)
+    }
+
+    pub fn prior_kind(&self, kind: &str) -> Option<&PriorKindMap> {
+        self.prior.kinds.get(kind)
     }
 
     /// The owner already read this path through EOF and settled every measured hour.
@@ -295,30 +338,33 @@ impl Collector {
         if self.messages_wanted || self.settled_paths.is_empty() {
             return false;
         }
-        let lookup = (kind.to_owned(), util::filekey(kind, path));
-        let Some(key) = self.settled_paths.get(&lookup) else {
+        let lookup = util::filekey(kind, path);
+        let Some(prints) = self.prior.kinds.get(kind) else {
             return false;
         };
-        let Some(mut print) = self.prior_print(kind, key).cloned() else {
+        let Some(idx) = self.settled_paths.get(kind).and_then(|m| m.get_str(&lookup, prints)) else {
             return false;
         };
-        if print["settledCheckedSlot"].as_u64() != Some(self.settled_slot) && !settled_metadata_matches(path, &print) {
-            self.settled_paths.remove(&lookup);
+        let Some((key, print)) = prints.get_index(idx) else {
+            return false;
+        };
+        if print.settled_checked_slot() != Some(self.settled_slot) && !settled_metadata_matches(path, print) {
+            if let Some(map) = self.settled_paths.get_mut(kind) {
+                map.remove_str(&lookup, prints);
+            }
             return false;
         }
-        if let Some(print) = print.as_object_mut() {
-            print.remove("readFrom");
-            print.insert("settledCheckedSlot".into(), self.settled_slot.into());
-        }
-        let mtime = print["mtimeMs"].as_i64().unwrap_or(0);
+        let mtime = print.mtime_ms().unwrap_or(0);
         if copy_grouped(kind) {
             self.settled_hits
-                .insert((kind.to_owned(), path.to_owned()), key.clone());
+                .entry(kind.to_owned())
+                .or_default()
+                .insert(path.to_owned(), key.clone());
         }
         self.settled
             .entry(kind.to_owned())
             .or_default()
-            .insert(key.clone(), print);
+            .insert(key, self.settled_slot);
         let count = self.root_counts.entry((kind.to_owned(), root.to_owned())).or_default();
         count.0 += 1;
         count.1 = count.1.max(mtime);
@@ -326,28 +372,22 @@ impl Collector {
     }
 
     /// The print key of a settled path this scan skipped, for copy-group ranking.
-    pub fn settled_key(&self, kind: &str, path: &Path) -> Option<&String> {
-        self.settled_hits.get(&(kind.to_owned(), path.to_owned()))
+    pub fn settled_key(&self, kind: &str, path: &Path) -> Option<&CompactHash> {
+        self.settled_hits.get(kind)?.get(path)
     }
 
     /// The settled print of a path this scan skipped.
-    pub fn settled_print_of(&self, kind: &str, path: &Path) -> Option<&Value> {
+    pub fn settled_print_of(&self, kind: &str, path: &Path) -> Option<&PriorPrint> {
         let key = self.settled_key(kind, path)?;
-        self.settled.get(kind)?.get(key)
+        self.settled.get(kind)?.get(key)?;
+        self.prior.get_hash(kind, key)
     }
 
     /// A settled path's (device, inode) from its print, without touching the file; others by stat.
     pub fn known_identity(&self, kind: &str, path: &Path) -> Option<(u64, u64)> {
         if let Some(identity) = self
             .settled_print_of(kind, path)
-            .and_then(|print| print["fileIdentity"].as_str())
-            .and_then(|text| text.split_once(':'))
-            .and_then(|(device, inode)| {
-                Some((
-                    u64::from_str_radix(device, 16).ok()?,
-                    u64::from_str_radix(inode, 16).ok()?,
-                ))
-            })
+            .and_then(PriorPrint::file_identity_pair)
         {
             return Some(identity);
         }
@@ -357,13 +397,15 @@ impl Collector {
     /// A settled path whose copy group must be read again (another copy outranks it, or its group
     /// holds an unsettled member): it leaves the settled set and is read like any other file.
     pub fn unsettle(&mut self, kind: &str, path: &Path) {
-        let Some(key) = self.settled_hits.remove(&(kind.to_owned(), path.to_owned())) else {
+        let Some(key) = self.settled_hits.get_mut(kind).and_then(|m| m.remove(path)) else {
             return;
         };
         if let Some(prints) = self.settled.get_mut(kind) {
             prints.remove(&key);
         }
-        self.settled_paths.remove(&(kind.to_owned(), util::filekey(kind, path)));
+        if let (Some(paths), Some(prints)) = (self.settled_paths.get_mut(kind), self.prior.kinds.get(kind)) {
+            paths.remove_str(&util::filekey(kind, path), prints);
+        }
     }
 
     pub fn note_root(&mut self, kind: &str, path: &Path, origin: &str) {
@@ -485,42 +527,48 @@ impl Collector {
             current.tail = util::sha256_hex(format!("{}\n{}", current.tail, deps).as_bytes());
         }
         let prior = self.prior_print(kind, &key);
-        let same = util::same_print(prior, &current)
-            && prior
-                .and_then(|p| p["fileIdentity"].as_str())
-                .is_none_or(|identity| current.file_identity.as_deref() == Some(identity));
+        let same = util::same_prior_print(prior, &current)
+            && prior.is_none_or(|p| {
+                !p.has_file_identity()
+                    || current
+                        .file_identity
+                        .as_deref()
+                        .is_some_and(|identity| p.file_identity_eq_str(identity))
+            });
         if same {
-            current.append_state = prior.and_then(|p| p.get("appendState")).cloned();
+            current.append_state = self
+                .prior
+                .kinds
+                .get(kind)
+                .and_then(|m| prior.and_then(|p| m.append_state_json(p)));
         }
         // Old fingerprints carry no usage clock. Read them once to establish one; keeping an
         // unchanged old print forever would keep both its usage and freshness unverified.
-        let clock_known = self
-            .prior_print(kind, &key)
-            .is_some_and(|p| p.get("newestUsageMs").is_some());
+        let clock_known = prior.is_some_and(PriorPrint::has_newest_usage_key);
         // An unchanged file an earlier call left part-read is read on from where it stopped.
         let resume = if same && resumable(kind) {
-            self.prior_print(kind, &key).and_then(|prior| {
-                let through = prior.get("readThrough").and_then(Value::as_u64)?;
-                let state = prior.get("readState").cloned().unwrap_or(Value::Null);
+            prior.and_then(|prior| {
+                let through = prior.read_through()?;
+                let state = prior.read_state_json();
                 Some((through, state))
             })
         } else {
             None
         };
-        let needs_checkpoint = current.path_key.is_some() && prior.is_some_and(|p| p.get("pathKey").is_none());
+        let needs_checkpoint = current.path_key.is_some() && prior.is_some_and(|p| !p.has_path_key());
         let resuming = resume.is_some();
         if let Some(point) = resume {
             self.resume.insert((kind.to_string(), key.clone()), point);
         }
         // Messages already sent stay sent while the file only grew: its first sent bytes unchanged.
         if let Some(prior) = self.prior_print(kind, &key)
-            && let Some(through) = prior.get("msgThrough").and_then(Value::as_u64)
-            && let Some(head) = prior.get("msgHead").and_then(Value::as_str)
+            && let Some(through) = prior.msg_through()
+            && let Some(head) = prior.msg_head()
             && through <= current.size
-            && util::head_digest(path, through).as_deref() == Some(head)
+            && util::head_digest(path, through).is_some_and(|digest| head.eq_str(&digest))
         {
             current.msg_through = Some(through);
-            current.msg_head = Some(head.to_string());
+            current.msg_head = Some(head.to_hex_string());
         }
         // A file whose messages were not all sent yet (a cut answer, or prints from before messages
         // were asked for) is read again, even when it did not change.
@@ -602,15 +650,15 @@ impl Collector {
             return;
         };
         if let Some(prior) = self.prior_print(kind, key)
-            && util::same_print(Some(prior), &pending)
+            && util::same_prior_print(Some(prior), &pending)
         {
-            if prior.get("usageSkipped").and_then(Value::as_bool) == Some(true) {
+            if prior.usage_skipped() {
                 pending.usage_skipped = Some(true);
             }
-            if prior.get("unreadUsage").and_then(Value::as_bool) == Some(true) {
+            if prior.unread_usage() {
                 pending.unread_usage = Some(true);
             }
-            if prior.get("estimatedClock").and_then(Value::as_bool) == Some(true) {
+            if prior.estimated_clock() {
                 pending.estimated_clock = Some(true);
             }
         }
@@ -672,7 +720,7 @@ impl Collector {
         let index = match self.rows.get(&key) {
             Some(index) => *index,
             None => {
-                if self.rows.len() >= MAX_ROWS {
+                if self.row_list.len() >= MAX_ROWS {
                     self.truncated = true;
                     self.row_cap = true;
                     return;
@@ -722,7 +770,7 @@ impl Collector {
         let index = match self.rows.get(&key) {
             Some(index) => *index,
             None => {
-                if self.rows.len() >= MAX_ROWS {
+                if self.row_list.len() >= MAX_ROWS {
                     self.truncated = true;
                     self.row_cap = true;
                     return false;
@@ -865,7 +913,7 @@ impl Collector {
         let index = match self.srows.get(&key) {
             Some(index) => *index,
             None => {
-                if self.srows.len() >= MAX_SROWS {
+                if self.srow_list.len() >= MAX_SROWS {
                     self.truncated = true;
                     return false;
                 }
@@ -946,6 +994,62 @@ impl Collector {
             .filter(|key| !confirmed.contains(key))
             .collect();
         self.drop_file_rows(&unconfirmed);
+    }
+
+    /// Keep only rows of confirmed files for `kind` (called before dropping `kind`'s state).
+    pub fn keep_confirmed_kind(&mut self, kind: &str) {
+        let confirmed = self.fresh.get(kind);
+        let unconfirmed: HashSet<String> = self
+            .row_list
+            .iter()
+            .filter(|r| r.kind == kind)
+            .map(|r| r.filekey.clone())
+            .chain(
+                self.srow_list
+                    .iter()
+                    .filter(|r| r.kind == kind)
+                    .map(|r| r.filekey.clone()),
+            )
+            .filter(|key| !confirmed.is_some_and(|prints| prints.contains_key(key)))
+            .collect();
+        if !unconfirmed.is_empty() {
+            self.drop_file_rows(&unconfirmed);
+        }
+    }
+
+    /// Release all per-kind collector state once `kind`'s response section and discovery are finalized (R4).
+    pub fn drop_kind(&mut self, kind: &str) {
+        self.prior.kinds.remove(kind);
+        self.settled.remove(kind);
+        self.fresh.remove(kind);
+        self.pending.remove(kind);
+        self.settled_paths.remove(kind);
+        self.settled_hits.remove(kind);
+        self.optional_roots.remove(kind);
+        self.root_origins.remove(kind);
+        self.root_counts.retain(|(k, _), _| k != kind);
+        self.root_failures.retain(|(k, _), _| k != kind);
+        self.absent_roots.retain(|(k, _)| k != kind);
+        self.read_failures.remove(kind);
+        self.unreadable_folders.remove(kind);
+        self.unreadable_records.remove(kind);
+        self.search_limits.remove(kind);
+        self.verified_clocks.retain(|(k, _), _| k != kind);
+        self.estimated_files.retain(|(k, _)| k != kind);
+        self.unread_usage.retain(|(k, _)| k != kind);
+        self.resume.retain(|(k, _), _| k != kind);
+        self.rows.clear();
+        self.rows.shrink_to_fit();
+        self.srows.clear();
+        self.srows.shrink_to_fit();
+        if kind == "claude" {
+            self.replaced_files.clear();
+        }
+        if kind == "codex" {
+            self.codex_compressed_unread.clear();
+            self.unreadable_logs.clear();
+            self.no_session_logs.clear();
+        }
     }
 
     /// Record a session's identity evidence (full hash, cwd with home as ~).
@@ -1075,15 +1179,15 @@ impl Collector {
     }
 }
 
-fn settled_metadata_matches(path: &Path, print: &Value) -> bool {
+fn settled_metadata_matches(path: &Path, print: &PriorPrint) -> bool {
     let Ok(metadata) = crate::fsx::metadata(path) else {
         return false;
     };
     metadata.is_file()
-        && print["size"].as_u64() == Some(metadata.len())
-        && print["mtimeMs"].as_i64() == Some(util::mtime_ms(&metadata))
+        && print.size() == Some(metadata.len())
+        && print.mtime_ms() == Some(util::mtime_ms(&metadata))
         && crate::fsx::metadata_identity(path, &metadata)
-            .is_some_and(|(device, inode)| print["fileIdentity"].as_str() == Some(&format!("{device:x}:{inode:x}")))
+            .is_some_and(|(device, inode)| print.file_identity_eq_pair(device, inode))
 }
 
 /// A compressed log's decoded size when its first frame header states it (Codex's do); for a plain

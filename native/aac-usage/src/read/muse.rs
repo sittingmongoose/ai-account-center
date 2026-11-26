@@ -266,14 +266,8 @@ fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<Path
         // This file is the published owner only when that print is its own (RECHECK-ROUND3 M1).
         let path_key = util::filekey("muse", path);
         let published = collector
-            .prior
-            .get("muse")
-            .and_then(|prints| prints.get(file_key(path)))
-            .is_some_and(|prior| {
-                prior.is_object()
-                    && prior["readThrough"].is_null()
-                    && prior["pathKey"].as_str() == Some(path_key.as_str())
-            });
+            .prior_print("muse", &file_key(path))
+            .is_some_and(|prior| prior.read_through().is_none() && prior.path_key_eq(&path_key));
         (!settled.contains(path), !published, path_text(path))
     });
     let mut identities: HashSet<(u64, u64)> = HashSet::new();
@@ -294,7 +288,7 @@ fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<Path
     for path in unique {
         let size = match collector
             .settled_print_of("muse", &path)
-            .and_then(|print| print["size"].as_u64())
+            .and_then(crate::prior::PriorPrint::size)
         {
             Some(size) => Ok(size),
             None => std::fs::metadata(&path).map(|meta| meta.len()),

@@ -22,17 +22,16 @@ fn print_of(db: &Path) -> Option<Print> {
     Some(print)
 }
 
-fn same(prior: Option<&Value>, current: &Print) -> bool {
-    let Some(Value::Object(prior)) = prior else {
+fn same(prior: Option<&crate::prior::PriorPrint>, current: &Print) -> bool {
+    let Some(prior) = prior else {
         return false;
     };
-    let get = |k: &str| prior.get(k).and_then(Value::as_i64).unwrap_or(0);
-    get("size") == current.size as i64
-        && prior.contains_key("newestUsageMs")
-        && prior.get("walUnread").and_then(Value::as_bool).unwrap_or(false) == current.wal_unread.unwrap_or(false)
-        && get("mtimeMs") == current.mtime_ms
-        && get("walSize") == current.wal_size.unwrap_or(0) as i64
-        && get("walMtimeMs") == current.wal_mtime_ms.unwrap_or(0)
+    prior.size().unwrap_or(0) == current.size
+        && prior.has_newest_usage_key()
+        && prior.wal_unread() == current.wal_unread.unwrap_or(false)
+        && prior.mtime_ms().unwrap_or(0) == current.mtime_ms
+        && prior.wal_size().unwrap_or(0) == current.wal_size.unwrap_or(0)
+        && prior.wal_mtime_ms().unwrap_or(0) == current.wal_mtime_ms.unwrap_or(0)
 }
 
 fn open(db: &Path, immutable: bool) -> rusqlite::Result<Connection> {

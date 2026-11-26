@@ -84,9 +84,27 @@ fn rules_preserve_numeric_id_and_confirm_with_exact_spend_and_weekly_drop() {
         json!({"targetType":"PERSONAL","resetType":"WEEK","recordId":9007199254740993u64,
         "grantType":"GLOBAL","requestId":"01234567-89ab-4def-8123-456789abcdef"})
     );
-    assert_eq!(rule.blocked(&before, g), Some("claim-unproven"));
+    assert_eq!(rule.blocked(&before, g), None);
     let zero = snapshot(&list(), 0.);
     assert_eq!(rule.blocked(&zero, &zero.grants[0]), Some("no-weekly-usage"));
+    let mut no_window = before.clone();
+    no_window.windows.remove("seven_day");
+    assert_eq!(
+        rule.blocked(&no_window, &no_window.grants[0]),
+        Some("refill-windows-unconfirmed")
+    );
+    let mut no_variant = before.clone();
+    no_variant.grants[0].variant = None;
+    assert_eq!(
+        rule.blocked(&no_variant, &no_variant.grants[0]),
+        Some("exact-grant-unavailable")
+    );
+    let mut bad_id = before.clone();
+    bad_id.grants[0].id = Some("not-a-number".into());
+    assert_eq!(
+        rule.blocked(&bad_id, &bad_id.grants[0]),
+        Some("exact-grant-unavailable")
+    );
     let mut gone = list();
     gone["data"]["weekResets"] = json!([]);
     assert!(rule.verify(&before, g, &snapshot(&gone, 0.), false));
@@ -121,36 +139,40 @@ fn capture(store: &mut aac_status::reset::Store, at: i64, mut snap: Snapshot) ->
     snap
 }
 
-fn fixture_attempt(store: &mut aac_status::reset::Store, db: &std::path::Path) -> (Snapshot, String, String) {
+fn fixture_attempt(store: &mut aac_status::reset::Store) -> (Snapshot, String, String) {
     let before = capture(store, NOW, snapshot(&list(), 97.));
     let inv = store.inventory(ROUTE, &before, NOW, &"a".repeat(64)).unwrap();
-    let key = inv["grants"][0]["grantKey"].as_str().unwrap();
-    assert_eq!(inv["grants"][0]["claimBlockedReason"], "claim-unproven");
+    assert_eq!(inv["grants"][0]["claimable"], true);
+    assert!(inv["grants"][0]["claimBlockedReason"].is_null());
+    // 5-hour packs remain read-only ("unknown" kind) even after CLAIM_PROVEN is enabled.
+    assert_eq!(inv["grants"][1]["claimable"], false);
+    // Remote Z.ai accounts and zero-usage snapshots stay blocked by their guards.
+    let mut remote = capture(store, NOW, snapshot(&list(), 97.));
+    remote.executor_ready = false;
+    let remote_inv = store.inventory(ROUTE, &remote, NOW, &"e".repeat(64)).unwrap();
+    assert_eq!(remote_inv["grants"][0]["claimable"], false);
     assert_eq!(
-        store.prepare(ROUTE, key, "local", &before, NOW, &"a".repeat(64)),
-        Err("claim-unproven")
+        remote_inv["grants"][0]["claimBlockedReason"],
+        "credential-host-unavailable"
     );
-    let g = &before.grants[0];
+    let before = capture(store, NOW, snapshot(&list(), 97.));
+    let inv = store.inventory(ROUTE, &before, NOW, &"f".repeat(64)).unwrap();
+    let key = inv["grants"][0]["grantKey"].as_str().unwrap();
+    let token = "b".repeat(64);
+    let prepared = store.prepare(ROUTE, key, "local", &before, NOW, &token).unwrap();
+    assert_eq!(prepared["confirmationToken"], token);
     let attempt = "c".repeat(64);
-    // Seed a reserved attempt directly. The production gate is closed, including in this test.
-    rusqlite::Connection::open(db)
-        .unwrap()
-        .execute(
-            "INSERT INTO attempts VALUES(?,?,?,?,?,'claimed-unconfirmed',1,?,?,0)",
-            rusqlite::params![
-                attempt,
-                ROUTE,
-                key,
-                serde_json::to_string(&before).unwrap(),
-                serde_json::to_string(g).unwrap(),
-                NOW,
-                inv["canonicalAccountKey"].as_str().unwrap()
-            ],
-        )
+    let reserved = store
+        .begin(ROUTE, key, "local", &token, &before, NOW, &attempt)
         .unwrap();
-    let (method, body) = rules("zai").unwrap().write(&before, g, &attempt).unwrap();
-    let write = json!({"method":method,"body":body,"attemptKey":attempt,"routeAccount":ROUTE,
-        "identity":before.identity,"sourceBinding":before.source_binding});
+    let write = json!({
+        "method": reserved.method,
+        "body": reserved.body,
+        "attemptKey": attempt,
+        "routeAccount": ROUTE,
+        "identity": reserved.identity,
+        "sourceBinding": reserved.source_binding,
+    });
     let mut wrong = write.clone();
     wrong["body"]["grantType"] = json!("OTHER");
     assert_eq!(store.mark_zai_send(&wrong, SENT), Err("grant-changed"));
@@ -165,7 +187,7 @@ fn applying_a_lost_answer_unlock_requires_a_current_same_key_read_started_two_mi
     let root = private_root();
     let db = root.path().join("claims.sqlite");
     let mut store = Store::open(&db).unwrap();
-    let (before, key, attempt) = fixture_attempt(&mut store, &db);
+    let (before, key, attempt) = fixture_attempt(&mut store);
     let route2 = "zai:acct:00000002";
     let mut alias = before.clone();
     alias.identity.profile = "slot2".into();
@@ -220,7 +242,7 @@ fn settle_requires_new_ticket_same_customer_and_key_and_weekly_drop() {
     let root = private_root();
     let db = root.path().join("claims.sqlite");
     let mut store = Store::open(&db).unwrap();
-    let (before, _, attempt) = fixture_attempt(&mut store, &db);
+    let (before, _, attempt) = fixture_attempt(&mut store);
     let mut gone = list();
     gone["data"]["weekResets"] = json!([]);
     let mut drop = snapshot(&gone, 0.);
@@ -259,7 +281,7 @@ fn provider_admission_matches_the_table() {
     for (i, (provider, kind, claimable)) in [
         ("claude", "weekly", true),
         ("codex", "banked", true),
-        ("zai", "weekly", false),
+        ("zai", "weekly", true),
         ("qwen", "weekly", false),
         ("antigravity", "weekly", false),
     ]
@@ -297,7 +319,7 @@ fn provider_answers_keep_their_holds_and_success() {
         let root = private_root();
         let db = root.path().join("claims.sqlite");
         let mut store = Store::open(&db).unwrap();
-        let (before, key, attempt) = fixture_attempt(&mut store, &db);
+        let (before, key, attempt) = fixture_attempt(&mut store);
         let result = store
             .finish(ROUTE, &attempt, outcome, None, SENT + 1, Some(18_000))
             .unwrap();
