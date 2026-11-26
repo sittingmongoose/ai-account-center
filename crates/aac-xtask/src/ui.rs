@@ -770,20 +770,9 @@ pub fn validate_stamps(root: &Path) -> Result<Value> {
 }
 /// UI validation entry point, retaining the release lane's oracle until its port lands.
 pub fn run(root: &Path, _args: &[String]) -> Result<()> {
-    validate_with(root, |dir| {
-        execute(
-            Command::new("node")
-                .args([
-                    "-e",
-                    "require('./scripts/verify-bundle.js').verifyBundle(process.argv[1])",
-                ])
-                .arg(dir)
-                .current_dir(root),
-        )
-    })
+    validate_with(root, |dir| crate::bundle::verify(dir).map(|_| ()))
 }
-/// Validate the UI with the release lane's complete bundle verifier.
-/// X2 can wire this entry point directly to its Rust verifier without changing these checks.
+/// Validate source stamps together with the complete release verifier.
 pub fn validate_with(root: &Path, verify_bundle: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     let crate_dir = root.join("web-dashboard/leptos");
     assert_pins(&crate_dir)?;

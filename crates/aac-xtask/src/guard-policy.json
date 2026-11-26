@@ -1,0 +1,205 @@
+{
+  "words": [
+    "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08",
+    "237e1cae99b6c84038bd60299fc641a6859e603f3a7f7729042a8a5786d5bfe7",
+    "27d300fe53b3b94f115cfd63be02d868bcb8f755e56893709418084c1bfab1cd",
+    "8137bce2aa40deb8ef397346bb798ac40b16f98138b1e9a0205860653e7980ba",
+    "49449cc1bb8fdaff47febe7ad8762087e7feaccbc5321935f39204ba1c496db8"
+  ],
+  "ipv4": [
+    "4946358a3a79887b1390685855327cd17e56a9eab6979d852830aa1b678e8439"
+  ],
+  "allowed": {
+    "crates/aac-agent/src/history.rs": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 3
+    },
+    "crates/aac-http/src/claude_open/sync.rs": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 2
+    },
+    "scripts/claude-history/history-index-sync.cjs": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 3
+    },
+    "scripts/claude-history/history_index_node_bridge_v2.cjs": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 1
+    },
+    "scripts/claude-history/history_index_remote_v2.py": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 5
+    },
+    "web-dashboard/public/computers.json": {
+      "27d300fe53b3b94f115cfd63be02d868bcb8f755e56893709418084c1bfab1cd": 2
+    }
+  },
+  "removed": [
+    "docs/ccs-bar.md",
+    "docs/cursor-integration.md",
+    "docs/dashboard-auth-cli.md",
+    "docs/session-sharing-technical-analysis.md",
+    "docs/browser-automation.md",
+    "docs/openai-compatible-providers.md",
+    "docs/image-analysis.md",
+    "docs/websearch.md",
+    "docs/system-architecture/target-adapters.md"
+  ],
+  "retained": [
+    "LICENSE",
+    "docs/README.md",
+    "docs/codebase-summary.md",
+    "docs/code-standards.md",
+    "docs/project-overview-pdr.md",
+    "docs/project-roadmap.md",
+    "docs/release-process.md",
+    "docs/codex-auth.md",
+    "docs/logging-contract.md",
+    "docs/activate-in-place.md",
+    "docs/system-architecture/index.md",
+    "docs/system-architecture/provider-flows.md",
+    "web-dashboard/leptos/Cargo.toml",
+    "web-dashboard/leptos/Cargo.lock",
+    "web-dashboard/leptos/src/frame.rs",
+    "web-dashboard/public/frame-dashboard.mjs",
+    "macos-bar/Package.swift",
+    "macos-bar/Scripts/package_app.sh",
+    "macos-bar/Scripts/install_user.sh",
+    "windows-bar/CCSBar/CCSBar.csproj",
+    "windows-bar/scripts/Build.ps1",
+    "windows-bar/scripts/Install.ps1",
+    "docker/Dockerfile",
+    "docker/compose.yaml",
+    "docker/entrypoint.sh",
+    "crates/aac-http/src/cli.rs",
+    "crates/aac-http/src/lib.rs",
+    "crates/aac-http/src/public_auth/mod.rs",
+    "crates/aac-http/src/cli/config_write.rs",
+    "crates/aac-http/src/cli/codex_auth.rs"
+  ],
+  "requirements": [
+    [
+      "LICENSE",
+      "Copyright (c) 2025 CCS Contributors"
+    ],
+    [
+      "docs/README.md",
+      "../web-dashboard/README.md"
+    ],
+    [
+      "docs/release-process.md",
+      ".github/workflows/bar-release.yml"
+    ],
+    [
+      "docs/system-architecture/index.md",
+      "web-dashboard/public/frame-dashboard.mjs"
+    ],
+    [
+      "web-dashboard/README.md",
+      "=0.9.0-rc1"
+    ],
+    [
+      "web-dashboard/README.md",
+      "THIRD-PARTY-NOTICES.txt"
+    ],
+    [
+      "web-dashboard/README.md",
+      "dist/ui/"
+    ],
+    [
+      "macos-bar/README.md",
+      "./Scripts/package_app.sh"
+    ],
+    [
+      "macos-bar/README.md",
+      "./Scripts/install_user.sh"
+    ],
+    [
+      "macos-bar/README.md",
+      "~/.ccs/bar"
+    ],
+    [
+      "windows-bar/README.md",
+      "./scripts/Build.ps1"
+    ],
+    [
+      "windows-bar/README.md",
+      "connection.dpapi"
+    ],
+    [
+      "docker/README.md",
+      "ai-account-center:local"
+    ],
+    [
+      "docker/README.md",
+      "127.0.0.1"
+    ],
+    [
+      "docker/README.md",
+      "/home/node/.ccs"
+    ],
+    [
+      "docker/README.md",
+      "CCS_SESSION_SECRET"
+    ],
+    [
+      ".github/ISSUE_TEMPLATE/documentation.yml",
+      "docs/README.md"
+    ],
+    [
+      ".github/ISSUE_TEMPLATE/config.yml",
+      "sittingmongoose/ai-account-center"
+    ],
+    [
+      "docs/README.md",
+      "config-migration.md"
+    ],
+    [
+      "docs/config-migration.md",
+      "C:fixture"
+    ],
+    [
+      "docs/config-migration.md",
+      "drive's own current directory"
+    ],
+    [
+      "docs/config-migration.md",
+      "relative root requires an absolute base"
+    ],
+    [
+      "docs/config-migration.md",
+      "store root must be absolute"
+    ],
+    [
+      "README.md",
+      "AI Account Center"
+    ],
+    [
+      "README.md",
+      "sittingmongoose/ai-account-center"
+    ],
+    [
+      "README.md",
+      "ai-account-center dashboard"
+    ],
+    [
+      "README.md",
+      "ccs config"
+    ],
+    [
+      "README.md",
+      "~/.ccs/"
+    ],
+    [
+      "README.md",
+      "CCS_HOME"
+    ],
+    [
+      "README.md",
+      "session aliases"
+    ],
+    [
+      "README.md",
+      "Tam Nhu Tran"
+    ],
+    [
+      "README.md",
+      "Copyright (c) 2025 CCS Contributors"
+    ]
+  ]
+}

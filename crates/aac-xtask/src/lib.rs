@@ -1,7 +1,12 @@
 //! AI Account Center development, build, release, and performance tasks.
 
 pub mod build;
+pub mod bundle;
+pub mod file_policy;
+pub mod guards;
+pub mod lineage;
 pub mod perf;
+pub mod release;
 pub mod ui;
 
 use std::error::Error;
@@ -65,12 +70,14 @@ pub fn dispatch(root: &Path, args: &[String]) -> Result<(), Box<dyn Error>> {
         "build" => build::run(root, rest),
         "ui-validate" => ui::run(root, rest),
         "perf" => perf::run(root, rest),
+        "release" => release::run(root, rest),
+        "check" => guards::run(root, rest),
         other => Err(format!("Unknown xtask command: {other}").into()),
     }
 }
 
 fn print_usage() {
     println!(
-        "Usage: aac-xtask <command> [args...]\n\nCommands:\n  build         Build dashboard UI and native artifacts\n  ui-validate   Validate built Leptos UI artifacts\n  perf          Run memory budget benchmark or generate synthetic fixture"
+        "Usage: aac-xtask <command> [args...]\n\nCommands:\n  build         Build dashboard UI and native artifacts\n  ui-validate   Validate built Leptos UI artifacts\n  release       Verify, stage, and rehearse release packages\n  check         Check personal details, line endings, docs, and inventory\n  perf          Run memory budget benchmark or generate synthetic fixture"
     );
 }
