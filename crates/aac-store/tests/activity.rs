@@ -319,7 +319,7 @@ fn mixed_reads_without_cells_or_stored_usage_are_read_failures() {
     assert_eq!(receipt["put"], 0, "an identical replay adds nothing");
     let mut carried = report("ubuntu", read + 2 * H, "partial", false, None, vec![]);
     carried["counts"] = json!({"unreadableRecords": 1});
-    carried["sameDays"] = json!([(hour / D) as u64]);
+    carried["sameDays"] = json!([hour / D]);
     let receipt = ingest(&engine, vec![carried]);
     assert_eq!(receipt["put"], 0);
     let sources = call(
