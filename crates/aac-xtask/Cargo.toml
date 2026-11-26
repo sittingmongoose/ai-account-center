@@ -19,7 +19,8 @@ base64 = "0.22"
 brotli-decompressor = "4"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
-flate2 = "1"
+flate2 = { version = "1", features = ["zlib"] }
+brotlic = "0.8.4"
 fs2.workspace = true
 indexmap = "2.14.2"
 pem-rfc7468 = { version = "0.7", features = ["alloc"] }
