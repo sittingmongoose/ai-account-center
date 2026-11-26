@@ -822,57 +822,32 @@ describe('memory-budget tool-batch-1126 fixes', () => {
   });
 
   it('summarize and threshold reject PSS limits without valid PSS coverage', () => {
-    // Samples with unavailable PSS (fallback path).
-    const mem = summarizeSamples(
-      [
-        {
-          tSec: 0,
-          serverRssKiB: 1000,
-          serverPssKiB: null,
-          serverAnonKiB: null,
-          serverFileKiB: null,
-          serverSwapKiB: 0,
-          pssAvailable: false,
-          threads: 1,
-          childrenCount: 0,
-          childrenRssKiB: 0,
-          childrenPssKiB: null,
-          totalRssKiB: 1000,
-          totalPssKiB: null,
-        },
-        {
-          tSec: 130,
-          serverRssKiB: 1000,
-          serverPssKiB: null,
-          serverAnonKiB: null,
-          serverFileKiB: null,
-          serverSwapKiB: 0,
-          pssAvailable: false,
-          threads: 1,
-          childrenCount: 0,
-          childrenRssKiB: 0,
-          childrenPssKiB: null,
-          totalRssKiB: 1000,
-          totalPssKiB: null,
-        },
-      ],
-      120
-    );
+    const sample = {
+      tSec: 130,
+      serverRssKiB: 1000,
+      serverPssKiB: null,
+      threads: 1,
+      childrenCount: 1,
+      childrenRssKiB: 200,
+      childrenPssKiB: null,
+      totalRssKiB: 1200,
+      totalPssKiB: null,
+    };
+    const mem = summarizeSamples([sample], 120);
+    const rssLimits = { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100 };
+    const rssConfig = { schemaVersion: 1, limits: rssLimits };
+    const serverConfig = { schemaVersion: 1, limits: { ...rssLimits, steadyPssMiB: 50 } };
+    const totalConfig = { schemaVersion: 1, limits: { ...rssLimits, totalPeakPssMiB: 50 } };
     expect(mem.pssAvailable).toBe(false);
     expect(mem.steadyMedianPssKiB).toBeNull();
-    expect(mem.samplingNote).toMatch(/short-lived|between samples/i);
-    // A PSS limit with unavailable PSS must fail, not pass with RSS-as-PSS.
-    const cfg = {
-      schemaVersion: 1,
-      limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100, steadyPssMiB: 50 },
-    };
-    expect(() => evaluateThresholds(mem, cfg as never)).toThrow(/PSS coverage/);
-    // Without a PSS limit, RSS-only still passes.
-    const rssCfg = {
-      schemaVersion: 1,
-      limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100 },
-    };
-    expect(evaluateThresholds(mem, rssCfg as never).ok).toBe(true);
+    expect(() => evaluateThresholds(mem, serverConfig)).toThrow(/PSS coverage/);
+    expect(evaluateThresholds(mem, rssConfig).ok).toBe(true);
+
+    // A fallback in the child invalidates the total while the measured server PSS is usable.
+    const serverMeasured = summarizeSamples([{ ...sample, serverPssKiB: 900 }], 120);
+    expect(serverMeasured.pssAvailable).toBe(false);
+    expect(evaluateThresholds(serverMeasured, serverConfig).ok).toBe(true);
+    expect(() => evaluateThresholds(serverMeasured, totalConfig)).toThrow(/PSS coverage/);
   });
 
   it('rejects sub-200 ms sample intervals consistently', () => {

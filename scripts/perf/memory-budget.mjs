@@ -508,31 +508,22 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
   }
   const steadySource = steadyWindow.length > 0 ? steadyWindow : samples;
 
-  const peakServerRssKiB = Math.max(...samples.map((s) => s.serverRssKiB));
-  const pssSamples = samples.filter((s) => s.pssAvailable !== false && s.serverPssKiB != null);
-  const pssAvailable = pssSamples.length === samples.length && samples.length > 0;
-  const peakServerPssKiB = pssAvailable ? Math.max(...samples.map((s) => s.serverPssKiB)) : null;
-  const childrenPeakRssKiB = Math.max(...samples.map((s) => s.childrenRssKiB));
-  const childPssSamples = samples.filter((s) => s.childrenPssKiB != null);
-  const childrenPssAvailable = childPssSamples.length === samples.length && samples.length > 0;
-  const childrenPeakPssKiB = childrenPssAvailable
-    ? Math.max(...samples.map((s) => s.childrenPssKiB))
-    : null;
-  const totalPeakRssKiB = Math.max(...samples.map((s) => s.totalRssKiB));
-  const totalPssSamples = samples.filter((s) => s.totalPssKiB != null);
-  const totalPssAvailableFlag = totalPssSamples.length === samples.length && samples.length > 0;
-  const totalPeakPssKiB = totalPssAvailableFlag
-    ? Math.max(...samples.map((s) => s.totalPssKiB))
-    : null;
+  const completePss = (source, key, reduce) => {
+    const values = source.map((sample) => sample[key]);
+    return values.every(Number.isFinite) ? reduce(values) : null;
+  };
+  const peak = (values) => Math.max(...values);
+  const peakServerRssKiB = peak(samples.map((s) => s.serverRssKiB));
+  const peakServerPssKiB = completePss(samples, 'serverPssKiB', peak);
+  const childrenPeakRssKiB = peak(samples.map((s) => s.childrenRssKiB));
+  const childrenPeakPssKiB = completePss(samples, 'childrenPssKiB', peak);
+  const totalPeakRssKiB = peak(samples.map((s) => s.totalRssKiB));
+  const totalPeakPssKiB = completePss(samples, 'totalPssKiB', peak);
 
   const steadyMedianRssKiB = median(steadySource.map((s) => s.serverRssKiB));
-  const steadyPssSource = steadySource.filter((s) => s.serverPssKiB != null);
-  const steadyMedianPssKiB =
-    steadyPssSource.length > 0 ? median(steadyPssSource.map((s) => s.serverPssKiB)) : null;
+  const steadyMedianPssKiB = completePss(steadySource, 'serverPssKiB', median);
   const steadyMedianTotalRssKiB = median(steadySource.map((s) => s.totalRssKiB));
-  const steadyTotalPssSource = steadySource.filter((s) => s.totalPssKiB != null);
-  const steadyMedianTotalPssKiB =
-    steadyTotalPssSource.length > 0 ? median(steadyTotalPssSource.map((s) => s.totalPssKiB)) : null;
+  const steadyMedianTotalPssKiB = completePss(steadySource, 'totalPssKiB', median);
 
   const lastSample = samples[samples.length - 1];
 
@@ -543,7 +534,7 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
     steadySampleCount: steadyWindow.length,
     steadyUsedFallback: steadyWindow.length === 0,
     lastSampleSec: lastSample.tSec,
-    pssAvailable,
+    pssAvailable: totalPeakPssKiB !== null,
     steadyMedianRssKiB,
     steadyMedianPssKiB,
     peakRssKiB: peakServerRssKiB,
@@ -571,7 +562,7 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
     maxThreads: Math.max(...samples.map((s) => s.threads)),
     maxChildren: Math.max(...samples.map((s) => s.childrenCount)),
     samplingNote:
-      'childrenPeak is sampled from /proc at the sample interval; a helper that starts and exits between samples may be missed. For strict short-lived enforcement, use a cgroup peak or a shorter interval.',
+      'Child memory peaks are based on /proc samples. A helper that starts and exits between samples may be missed.',
   };
 }
 
@@ -621,20 +612,8 @@ export function evaluateThresholds(memorySummary, config) {
   const limits = config.limits;
   const violations = [];
   const results = [];
-  const pssLimitKeys = new Set([
-    'steadyPssMiB',
-    'peakPssMiB',
-    'childrenPeakPssMiB',
-    'totalSteadyPssMiB',
-    'totalPeakPssMiB',
-  ]);
   for (const [limitKey, kibKey, mibKey] of THRESHOLD_CHECKS) {
     if (!Object.hasOwn(limits, limitKey)) continue;
-    if (pssLimitKeys.has(limitKey) && memorySummary.pssAvailable === false) {
-      throw new Error(
-        `Memory summary lacks valid PSS coverage for PSS limit "${limitKey}" (smaps_rollup unreadable; RSS is not PSS).`
-      );
-    }
     const limit = limits[limitKey];
     const limitKiB = limit * KIB_PER_MIB;
     let measuredKiB;
@@ -649,6 +628,9 @@ export function evaluateThresholds(memorySummary, config) {
       exactMeasuredMiB = memorySummary[mibKey];
       measuredKiB = exactMeasuredMiB * KIB_PER_MIB;
     } else {
+      if (limitKey.includes('Pss')) {
+        throw new Error(`Memory summary lacks valid PSS coverage for limit "${limitKey}".`);
+      }
       throw new Error(
         `Memory summary is missing a finite value for "${limitKey}" (${kibKey}/${mibKey}).`
       );
