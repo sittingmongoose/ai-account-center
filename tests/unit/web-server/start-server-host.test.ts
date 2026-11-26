@@ -198,6 +198,17 @@ describe('optional Rust startup', () => {
           { mode: 0o755 }
         );
       }
+      // Same-run control: how late a 50 ms timer fires with no startup in flight. A loaded
+      // machine delays every timer (Nas1 saw 751 ms against the 500 ms bound), so the
+      // startup window below must not add blocking beyond that baseline, not a fixed 500 ms.
+      const controlBegan = performance.now();
+      let controlMs = Infinity;
+      await new Promise<void>((resolve) =>
+        setTimeout(() => {
+          controlMs = performance.now() - controlBegan;
+          resolve();
+        }, 50)
+      );
       let timerMs = Infinity;
       const began = performance.now();
       const timer = setTimeout(() => {
@@ -216,7 +227,7 @@ describe('optional Rust startup', () => {
         expect(reply.status).toBe(200);
         expect(performance.now() - began).toBeLessThan(1500);
         await new Promise((r) => setTimeout(r, 75));
-        expect(timerMs).toBeLessThan(500);
+        expect(timerMs).toBeLessThan(controlMs + 450);
       } finally {
         clearTimeout(timer);
         unblock?.kill();
