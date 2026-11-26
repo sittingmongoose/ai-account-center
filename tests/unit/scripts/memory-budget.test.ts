@@ -837,7 +837,7 @@ describe('memory-budget tool-batch-1126 fixes', () => {
     const rssLimits = { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100 };
     const rssConfig = { schemaVersion: 1, limits: rssLimits };
     const serverConfig = { schemaVersion: 1, limits: { ...rssLimits, steadyPssMiB: 50 } };
-    const totalConfig = { schemaVersion: 1, limits: { ...rssLimits, totalPeakPssMiB: 50 } };
+    const childConfig = { schemaVersion: 1, limits: { ...rssLimits, childrenPeakPssMiB: 50 } };
     expect(mem.pssAvailable).toBe(false);
     expect(mem.steadyMedianPssKiB).toBeNull();
     expect(() => evaluateThresholds(mem, serverConfig)).toThrow(/PSS coverage/);
@@ -847,7 +847,8 @@ describe('memory-budget tool-batch-1126 fixes', () => {
     const serverMeasured = summarizeSamples([{ ...sample, serverPssKiB: 900 }], 120);
     expect(serverMeasured.pssAvailable).toBe(false);
     expect(evaluateThresholds(serverMeasured, serverConfig).ok).toBe(true);
-    expect(() => evaluateThresholds(serverMeasured, totalConfig)).toThrow(/PSS coverage/);
+    expect(serverMeasured.totalPeakPssKiB).toBeNull();
+    expect(() => evaluateThresholds(serverMeasured, childConfig)).toThrow(/PSS coverage/);
   });
 
   it('rejects sub-200 ms sample intervals consistently', () => {
