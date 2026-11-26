@@ -851,16 +851,6 @@ fn ssh_argv(
     Ok(argv)
 }
 
-/// Build one command with the dashboard's legacy SSH trust and isolation policy.
-pub(crate) fn claude_host_ssh(ctx: &SourceContext, alias: &str, command: &str) -> Res<Command> {
-    let args = ssh_argv(ctx, alias, command, 1)?;
-    let executable = ssh_launch(ctx, &args)?;
-    let mut command = Command::new(executable);
-    command.args(args);
-    ssh_environment(&mut command, &ctx.path);
-    Ok(command)
-}
-
 /// `usageHelperCommand('windows')`.
 pub(crate) fn windows_helper_command() -> String {
     use base64::Engine;

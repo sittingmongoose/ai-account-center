@@ -9,6 +9,27 @@ The publisher is in `crates/aac-snapshot/`, with its compatibility sample
 adapter in `src/web-server/agent-usage/`. The reader and folder guide live in
 `scripts/agent-usage/`.
 
+## Native offline reader
+
+`aac-snapshot` also provides the native `aac-usage` executable:
+
+```sh
+cargo build --locked -p aac-snapshot --bin aac-usage
+./target/debug/aac-usage --dir /path/to/snapshot
+./target/debug/aac-usage history --dir /path/to/snapshot --provider codex --hours 24
+./target/debug/aac-usage signins --dir /path/to/snapshot
+```
+
+The reader supports provider aliases, account filters, hidden accounts (`--all`), JSON,
+history window filters, `rules`, and `install-rules`. Directory precedence is `--dir`,
+`AAC_USAGE_DIR`, then `usage.json` beside the executable. It reads only published files;
+it does not refresh providers. Its text and JSON remove burn paces when the reading is
+stale or predates a reset that has passed. Rules installation is explicit and preserves
+existing line endings and hard links.
+
+The publisher still distributes the Python reader until native binaries for every shared-folder
+consumer are packaged. Building this executable alone does not change that distribution.
+
 ## Snapshot configuration
 
 The existing folder is saved in `~/.ccs/agent-usage-snapshot.json` (0600).
