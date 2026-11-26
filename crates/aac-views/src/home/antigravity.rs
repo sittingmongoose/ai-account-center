@@ -12,10 +12,6 @@ pub struct Bound {
     pub id: String,
     /// Profile id.
     pub profile: String,
-    /// The live login.
-    pub selected: bool,
-    /// The runtime confirmed it.
-    pub runtime_verified: bool,
     /// Status words.
     pub status: String,
     /// Note words.
@@ -220,8 +216,6 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
         bound.push(Bound {
             id: text(account.get("id")).into(),
             profile: id.into(),
-            selected,
-            runtime_verified: verified,
             status: format!("{lead}{tail}"),
             note,
         });

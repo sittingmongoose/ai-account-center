@@ -86,8 +86,8 @@ test('full Codex account leaves missing canonical five-hour usage empty while re
   assert.equal(view.codex[0].five.amount, 'Usage unavailable');
   assert.equal(view.codex[0].five.reset, '');
   assert.equal(view.codex[0].weekly.amount, '24% used');
-  assert.equal(view.codex[0].active, true);
-  assert.equal(view.activeCodexEmail, account.email);
+  assert.equal('active' in view.codex[0], false);
+  assert.equal('activeCodexEmail' in view, false);
   assert.deepEqual(allDetailWindows(data, account.id).map(window => window.label), ['Weekly usage', 'Additional rate limit']);
   assert.equal(allDetailWindows(data, account.id)[1].amount, '92.13% used');
   assert.equal(allDetailWindows(data, account.id)[1].reset, timeLabel(account.windows[1].resetAt, 'Resets'));
@@ -144,12 +144,12 @@ test('signed balances and adjustment counters retain their actual sign', () => {
   assert.equal(debt.amount, '-2.5 credits remaining'); assert.equal(debt.hasPercent, false);
   assert.equal(usageView({ kind: 'spend', used: -1, limit: 50, unit: 'USD' }).amount, '-1 / 50 USD used');
 });
-test('Lex active state is explicit and uses reported primary percentages', () => {
-  const data = { accounts: [{ id: 'codex:lex', provider: 'codex', email: 'lime@example.com', plan: 'Plus', isActive: true, capabilities: { codexProfile: 'lime' }, windows: [{ key: 'five_hour', label: '5-hour', usedPercent: 5 }, { key: 'seven_day', label: 'Weekly', usedPercent: 9 }] }] };
+test('Lex status is the plain live word and uses reported primary percentages', () => {
+  const data = { accounts: [{ id: 'codex:lex', provider: 'codex', email: 'lime@example.com', plan: 'Plus', status: 'ok', isActive: true, capabilities: { codexProfile: 'lime' }, windows: [{ key: 'five_hour', label: '5-hour', usedPercent: 5 }, { key: 'seven_day', label: 'Weekly', usedPercent: 9 }] }] };
   const view = dashboardView(data);
-  assert.equal(view.activeCodexEmail, 'lime@example.com');
-  assert.equal(view.codex[0].active, true);
-  assert.equal(view.codex[0].status, '✓ Active on Ubuntu');
+  assert.equal('activeCodexEmail' in view, false);
+  assert.equal('active' in view.codex[0], false);
+  assert.equal(view.codex[0].status, 'Live');
   assert.equal(view.codex[0].five.amount, '5% used');
   assert.equal(view.codex[0].weekly.amount, '9% used');
 });

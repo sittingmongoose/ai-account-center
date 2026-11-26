@@ -76,7 +76,6 @@ fn QuotaRow(r: QRow, quota: Memo<Quota>) -> impl IntoView {
             <span class="qh-acct">
                 <ProviderMark provider=r.provider.clone() size=18/>
                 <span class="qh-label">{r.label.clone()}</span>
-                {r.active.then(|| view! { <span class="w-good qh-active">"Active"</span> })}
                 {(!r.plan.is_empty()).then(|| view! { <span class="q3 qh-plan">{r.plan.clone()}</span> })}
                 {(!r.win.is_empty()).then(|| view! { <span class="q3">{r.win.clone()}</span> })}
             </span>
@@ -191,12 +190,8 @@ fn FocusPanel(f: Focus) -> impl IntoView {
             <div class="focus-top">
                 <span class="lgd-row tight">
                     {legend.into_iter().map(|l| {
-                        let sample = if l.kind == "active" {
-                            view! { <span class="sw act"></span> }.into_any()
-                        } else {
-                            let stroke = match l.kind.as_str() { "proj" => "var(--ink-3)".to_string(), "thr" => "var(--ink)".to_string(), _ => series_color(&provider, l.shade) };
-                            view! { <svg class="fl-s" viewBox="0 0 22 10" aria-hidden="true"><path d=legend_path(&l.kind, l.dash) stroke=stroke stroke-width=l.width fill="none" stroke-linecap=if l.kind == "proj" { "round" } else { "butt" }/></svg> }.into_any()
-                        };
+                        let stroke = match l.kind.as_str() { "proj" => "var(--ink-3)".to_string(), "thr" => "var(--ink)".to_string(), _ => series_color(&provider, l.shade) };
+                        let sample = view! { <svg class="fl-s" viewBox="0 0 22 10" aria-hidden="true"><path d=legend_path(&l.kind, l.dash) stroke=stroke stroke-width=l.width fill="none" stroke-linecap=if l.kind == "proj" { "round" } else { "butt" }/></svg> }.into_any();
                         view! { <span class="lgd">{sample}<span class="lgd-l">{l.name}</span></span> }
                     }).collect_view()}
                 </span>

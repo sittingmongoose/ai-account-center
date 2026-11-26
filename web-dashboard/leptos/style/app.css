@@ -881,12 +881,6 @@ textarea.note::placeholder { color: var(--ink-4); }
 .spin-arc { stroke: currentColor; stroke-linecap: round; }
 @keyframes ac-turn { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
-.sw-slot { display: inline-flex; align-items: center; min-height: 28px; }
-.active-mark { display: inline-flex; align-items: center; gap: 6px; color: var(--accent-text); white-space: nowrap; }
-.active-mark .ic { width: 16px; height: 16px; flex: none; }
-.am-text { display: grid; line-height: 1.15; }
-.am-text b { font-size: 12.5px; font-weight: 640; font-variation-settings: 'wght' 640; color: var(--accent-text); }
-.am-where { font-size: 11px; color: var(--ink-3); }
 .check { display: inline-flex; align-items: flex-start; gap: 8px; font-size: var(--fs-small); color: var(--ink); cursor: pointer; }
 .check input { width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--accent); flex: none; }
 .check.off { opacity: .5; cursor: default; }
@@ -932,11 +926,8 @@ textarea.note::placeholder { color: var(--ink-4); }
 .acc-row > .acc-acts { order: 4; margin-left: auto; }
 .acc-row:hover { background: var(--row-hover); }
 .acc-item.sel .acc-row { background: var(--row-sel); }
-/* The live login of Codex or Antigravity on Ubuntu: the selected-row highlight. */
-.acc-item.active .acc-row { background: var(--sel-fill); box-shadow: inset 0 0 0 1px var(--sel-line); border-radius: 10px; margin: 4px 6px; padding-left: 6px; padding-right: 6px; }
 .acc-id { grid-area: id; min-width: 0; }
 .acc-email { display: block; font-weight: 560; font-variation-settings: 'wght' 560; color: var(--ink); overflow-wrap: break-word; line-height: 1.3; }
-.acc-item.active .acc-email { font-weight: 640; font-variation-settings: 'wght' 640; }
 .acc-id.dim, .acc-id.dim + .acc-info { opacity: .55; }
 .acc-info { grid-area: info; min-width: 0; font-size: var(--fs-small); color: var(--ink-3); line-height: 1.4; }
 .acc-info > span, .acc-state > span, .acc-src > span { display: inline; }
@@ -964,7 +955,6 @@ textarea.note::placeholder { color: var(--ink-4); }
   .acc-state > span + span::before, .acc-src > span + span::before { content: none; }
   .acc-src-b { color: var(--ink-3); }
   .acc-sw { display: grid; gap: 3px; justify-items: start; }
-  .acc-item.active .acc-row { margin: 4px 8px; padding-left: 8px; padding-right: 8px; }
 }
 .trash { border-top: 1px solid var(--rule-2); }
 .trash-head { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px 2px; font-size: var(--fs-small); flex-wrap: wrap; }
@@ -1628,7 +1618,6 @@ body { min-height: 100dvh; }
 .sw-half { position: relative; width: 10px; background: none !important; }
 .sw-half i { position: absolute; top: 0; width: 6px; height: 10px; border-radius: 2px; }
 .sw-half i:first-child { left: 0; } .sw-half i:last-child { left: 4px; }
-.sw.act { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .lgd { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: 12.5px; color: var(--ink-2); }
 .lgd-n { color: var(--ink-3); font-size: 12px; }
 .lgd-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; padding: 0 20px 6px; }
@@ -2044,7 +2033,7 @@ button.qh-row { width: 100%; padding: 7px 20px 7px 48px; min-height: 40px; borde
 button.qh-row:hover, button.qh-row.open { background: var(--row-hover); }
 .qh-acct { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .qh-label { min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 560; font-variation-settings: 'wght' 560; }
-.qh-active, .qh-plan { font-size: 12px; white-space: nowrap; }
+.qh-plan { font-size: 12px; white-space: nowrap; }
 .qh-spark { display: block; height: 24px; min-width: 0; }
 .qh-spark svg { width: 100%; height: 24px; display: block; overflow: visible; }
 .qh-line { stroke-width: 1.6px; }
@@ -2501,16 +2490,12 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .hrow:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
 @media (hover: hover) {
   .hrow:hover { z-index: 2; background: var(--row-hover); }
-  .hrow.active:hover { background: transparent; }
 }
 .hrow:active:not(:has(button:active)) { background: var(--pressed); }
-.hrow.active { background: transparent; }
-.hrow.active, .hrow:has(+ .hrow.active) { border-bottom-color: transparent; }
 .hid { grid-area: id; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .hid-t { display: grid; min-width: 0; }
 .hdom { white-space: nowrap; }
 .hemail { font-size: var(--fs-body); font-weight: 600; font-variation-settings: 'wght' 600; color: var(--ink); overflow-wrap: break-word; line-height: 1.35; }
-.hrow.active .hemail { font-weight: 640; font-variation-settings: 'wght' 640; }
 .hmeta, .hamts { font-size: var(--fs-small); color: var(--ink-3); line-height: 1.4; }
 .hamts b { color: var(--ink-2); font-weight: 560; font-variation-settings: 'wght' 560; }
 .hrow.setup .pmark { opacity: .45; }
@@ -2536,21 +2521,6 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .hopen .glyph svg { width: 100%; height: 100%; display: block; }
 .hbtn { gap: 6px; }
 .hbtn .ic { width: 15px; height: 15px; }
-/* The Active mark's cell. */
-.hswap { display: grid; align-items: center; justify-items: start; }
-.hswap > * { grid-area: 1 / 1; }
-.hmark { display: flex; align-items: center; gap: 7px; padding-left: 12px; opacity: 0; pointer-events: none; transition: opacity 220ms cubic-bezier(.65, 0, .35, 1); }
-.hmark.on { opacity: 1; }
-.hcheck { width: 16px; height: 16px; flex: none; overflow: visible; }
-.hcheck circle { fill: var(--accent); transform-origin: 12px 12px; }
-.hcheck path { fill: none; stroke: var(--paper); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 14; }
-.home.motion .hmark.on .hcheck circle { animation: hdisc 260ms var(--ease-out) both; }
-.home.motion .hmark.on .hcheck path { animation: hdraw 380ms var(--ease-out) 120ms both; }
-@keyframes hdisc { from { transform: scale(.6); } }
-@keyframes hdraw { from { stroke-dashoffset: 14; } }
-.hmark-t { display: grid; line-height: 1.2; white-space: nowrap; }
-.hmark-t b { color: var(--accent-text); font-size: 13px; font-weight: 600; font-variation-settings: 'wght' 600; }
-.hmark-t span { color: var(--ink-3); font-size: var(--fs-small); }
 .home [aria-disabled='true'] { opacity: .45; cursor: default; }
 .hreason { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 7px; font-size: var(--fs-small); color: var(--ink-2); cursor: default; }
 .hreason .ic { width: 15px; height: 15px; color: var(--ink-3); flex: none; margin-top: 1px; }

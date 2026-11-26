@@ -242,7 +242,7 @@ function rowActions(provider, account, homeRow, ctx) {
       // The live login signs in again like any other: the server renews ~/.codex in place.
       const again = !g.live ? gated(fields, g)
         : reg && reg.actions?.signInAgain === false ? action({ ...fields, enabled: false, tip: 'A sign-in is not possible for this account now.' })
-          : action({ ...fields, enabled: true, tip: homeRow?.active
+          : action({ ...fields, enabled: true, tip: account.isActive === true
             ? 'Run the device-code login for this profile again; the live login on Ubuntu is renewed too, and its history stays.'
             : 'Run the device-code login for this profile again; its history stays.' });
       return [again, removeControl(provider, account, reg, entry)];
@@ -250,8 +250,8 @@ function rowActions(provider, account, homeRow, ctx) {
     case 'cli': {
       const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
       // The live login signs in again like any other: the server renews the live Antigravity
-      // login on Ubuntu in place (the registry's refusal or the row's live flag names it).
-      const isLive = homeRow?.active === true || reg?.removeRefusal === 'account_active';
+      // login on Ubuntu in place (the registry's refusal names it).
+      const isLive = reg?.removeRefusal === 'account_active';
       const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
         : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
           : action({ ...signinFields, enabled: true, tip: isLive
@@ -1095,7 +1095,7 @@ export function accountsViewModel(data, ctx = {}) {
       const line = c.lines?.[account.id];
       return {
         id: account.id, provider: entry.id, email, meta, srcInline: src, status, sampled, sampledTip, src, srcSub,
-        active: !!homeRow?.active, activeLabel: homeRow?.activeLabel || '', profile: homeRow?.profile || '',
+        profile: homeRow?.profile || '',
         actions: rowActions(entry.id, account, homeRow, c),
         line: lineView(account.id, email, line),
         gone: line?.kind === 'removing',

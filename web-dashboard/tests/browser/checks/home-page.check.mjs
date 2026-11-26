@@ -2,7 +2,7 @@
 // reads the dashboard and builds view model v3 with view-model.mjs; the page draws it and sends the dashboard's own
 // action kinds back (dash.rs). No Slint dashboard is loaded. Real test server and sign-in (the kit's temporary home); the
 // dashboard's readings and every Open request are answered in the page (made-up data, home-fixture.mjs), so nothing
-// real is opened. Account switching was removed (2026-11-14): Home marks the live login and offers no switch.
+// real is opened. Account switching was removed (2026-11-14) and the live-login mark was removed (2026-11-25).
 import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 
 const ROW = (id) => `.hrow[data-row="${id}"]`;
@@ -245,7 +245,7 @@ export const tests = {
 		await openHome(t);
 		await t.count('.hsec', 3);
 		await t.text('.hsec[data-sec="claude"] .plate-meta', /4\s*accounts/);
-		await t.text('.hsec[data-sec="codex"] .plate-meta', /codex\.primary\.workspace/);
+		await t.text('.hsec[data-sec="codex"] .plate-meta', /3\s*accounts/);
 		await t.check('Home loads no Slint dashboard: no iframe, no bridge.js, no dashboard wasm', async () => t.page.evaluate(() => !document.querySelector('iframe.slint-frame') && !performance.getEntriesByType('resource').some((e) => /\/bridge\.js|ccs_account_dashboard/.test(e.name))));
 		const meters = await t.page.evaluate(() => [...document.querySelectorAll(`.hrow .um`)].map((m) => ({ sev: m.dataset.sev, num: m.querySelector('.um-num')?.textContent || '', na: m.querySelector('.um-na')?.textContent || '' })));
 		await t.check('every reading shows its number, settled (no count-up left over)', meters.filter((m) => m.sev !== 'na').every((m) => /^\d+(\.\d+)?%$/.test(m.num)), JSON.stringify(meters.slice(0, 6)));
@@ -262,29 +262,26 @@ export const tests = {
 		await t.check('no switch control, switch point or approval is drawn', await t.page.evaluate(() =>
 			!document.querySelector('.um-notch, .hauto, .hauto-off, .hconfirm, .hact, .hglide, .adialog')));
 		await t.check('a Pro account leaves its Fable cell empty', await t.page.evaluate(() => document.querySelectorAll('.hrow[data-row="claude:pro-a"] .hcell')[2]?.classList.contains('empty')));
-		await t.check('the live Codex login says where it is active, and only that row does', await t.page.evaluate(() => {
-			const row = document.querySelector('.hrow[data-row="codex:primary"]');
-			return row.classList.contains('active') && row.querySelector('.hmark.on')?.textContent.includes('Active')
-				&& document.querySelectorAll('.hsec[data-sec="codex"] .hmark.on').length === 1;
-		}));
+		await t.check('no Home row carries an Active mark', await t.page.evaluate(() =>
+			!document.querySelector('.hmark, .hmark-t, .hcheck, .active-mark') && !document.querySelector('.hrow.active')));
 		await t.text('.hrow[data-row="codex:primary"] .hamts', /62\.5K\s*credits/);
 		await t.check('Codex has no auto-switch footer', await t.page.evaluate(() => !document.querySelector('.hsec[data-sec="codex"] .hfoot')));
 		await t.count('.hcard', 6);
 		await t.text('.hcard', /\$12\.40/);
 		await t.audit('home 1440');
 
-		// A refresh with a new reading moves the meter but rebuilds nothing else: the Active mark is the same element (no
+		// A refresh with a new reading moves the meter but rebuilds nothing else: the row is the same element (no
 		// replayed draw-on).
 		await t.page.evaluate(() => {
-			document.querySelector('.hrow[data-row="codex:primary"] .hmark').__kit = 1;
+			document.querySelector('.hrow[data-row="codex:primary"]').__kit = 1;
 		});
 		const next = homeAccounts();
 		next.accounts.find((a) => a.id === 'codex:primary').windows[0].usedPercent = 61;
 		await t.app.stub('/api/accounts/dashboard', next);
 		await t.page.click('.chrome button[aria-label="Refresh"]');
 		await t.until('the new reading lands', () => /^61%$/.test(document.querySelector('.hrow[data-row="codex:primary"] .um-num')?.textContent || ''), null, { timeout: 15000 });
-		await t.check('the Active mark is kept through a refresh', await t.page.evaluate(() =>
-			document.querySelector('.hrow[data-row="codex:primary"] .hmark').__kit === 1));
+		await t.check('the row is the same element through a refresh and no Active mark appears', await t.page.evaluate(() =>
+			document.querySelector('.hrow[data-row="codex:primary"]').__kit === 1 && !document.querySelector('.hmark, .active-mark')));
 		await t.noConsoleErrors('console: clean');
 	},
 

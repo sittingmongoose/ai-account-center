@@ -26,8 +26,6 @@ export const QUOTA_PROVIDERS = [
   ['muse', 'Muse Code'], ['kimi-code', 'Kimi Code'], ['qwen', 'Qwen Token Plan'], ['zai', 'Z.ai Coding Plan'],
   ['opencode-go', 'OpenCode Go'],
 ];
-/** Providers whose live login on Ubuntu is known (the dashboard's isActive). */
-const LIVE_LOGIN = ['codex', 'antigravity'];
 export const sev = v => !finite(v) ? 'na' : v > 100 ? 'over' : v >= 95 ? 'crit' : v >= 80 ? 'warn' : 'calm';
 const SEV_INT = { na: -1, calm: 0, warn: 1, crit: 2, over: 3 };
 const unitAmount = (value, unit) => {
@@ -66,7 +64,7 @@ export function bindingWeekly(account) {
 }
 /**
  * One merged history per account and window key, from every analytics series with that key (a renamed label is
- * the same window): { t, v, reset, active }. Unavailable samples stay null; duplicates keep the real reading.
+ * the same window): { t, v, reset }. Unavailable samples stay null; duplicates keep the real reading.
  */
 export function historyOf(analyticsAccount, key) {
   const map = new Map();
@@ -77,10 +75,10 @@ export function historyOf(analyticsAccount, key) {
       if (!finite(t)) continue;
       const ok = ['ok', 'cached'].includes(point.status);
       const v = ok ? usedPercent(point) : null;
-      const rec = { t, v, reset: validDate(point.resetAt) ? Date.parse(point.resetAt) : null, active: point.isActive === true };
+      const rec = { t, v, reset: validDate(point.resetAt) ? Date.parse(point.resetAt) : null };
       const cur = map.get(t);
       if (!cur) map.set(t, rec);
-      else { if (cur.v === null && v !== null) { cur.v = v; cur.reset = rec.reset; } cur.active = cur.active || rec.active; }
+      else if (cur.v === null && v !== null) { cur.v = v; cur.reset = rec.reset; }
     }
   }
   return [...map.values()].sort((a, b) => a.t - b.t);
@@ -119,7 +117,7 @@ export function quotaAccounts(payload, ctx = {}) {
     }));
     return {
       id: a.id, provider: a.provider, email: text(a.email) || text(a.label) || 'Identity unavailable', label: text(a.label), plan: text(a.plan),
-      active: LIVE_LOGIN.includes(a.provider) && a.isActive === true, windows, analytics,
+      windows, analytics,
     };
   });
 }
@@ -244,7 +242,7 @@ export function focusChart(acc, payload, ctx) {
   if (cmp && prim) {
     series = peers.map((a, i) => {
       const w = a.windows.find(x => x.key === prim.key && x.meter) || (!['cursor', 'antigravity'].includes(acc.provider) && meters(a).find(x => !x.scoped && x.period === prim.period));
-      return w ? { acc: a, w, shade: shadeOf(i), dash: i % 3, width: a.id === acc.id ? 2.4 : 1.9, name: tagOf(a) + (a.active ? ' (active)' : ''), tag: tagOf(a) } : null;
+      return w ? { acc: a, w, shade: shadeOf(i), dash: i % 3, width: a.id === acc.id ? 2.4 : 1.9, name: tagOf(a), tag: tagOf(a) } : null;
     }).filter(Boolean);
   } else {
     series = focusWindows(acc).map((w, i) => ({ acc, w, shade: shadeOf(i), dash: i % 3, width: w === prim ? 2.4 : 1.9, name: acc.provider === 'antigravity' || w.raw?.label ? fullName(acc.provider, w) : w.short, tag: w.short }));
@@ -310,18 +308,6 @@ export function focusChart(acc, payload, ctx) {
   }
   shape(`M${pad.l} ${pt(Y(80))}H${pt(pad.l + plotW)}`, 'warn', { op: 0.45 });
   shape(`M${pad.l} ${pt(Y(95))}H${pt(pad.l + plotW)}`, 'crit', { op: 0.45 });
-  const hA = historyFor(acc, (prim || series[0].w).key);
-  let start = null;
-  const bands = [];
-  hA.forEach((p, i) => {
-    if (p.t < t0) return;
-    if (p.active && start === null) start = p.t;
-    const nextT = i + 1 < hA.length ? hA[i + 1].t : now;
-    if (p.active && (i + 1 >= hA.length || !hA[i + 1].active)) { bands.push([start, nextT]); start = null; }
-  });
-  let bandD = '';
-  for (const [a, b] of bands) bandD += `M${pt(xo(a))} ${pad.t}H${pt(xo(a) + Math.max(2, xo(Math.min(b, now)) - xo(a)))}V${pt(pad.t + plotH)}H${pt(xo(a))}Z`;
-  fillShape(bandD, 'accent', { op: 0.08 });
   // x axis: hour ticks in the observed part, day ticks in the forecast; a tick label that would touch its neighbour is dropped
   const span = t1 - t0;
   const stepH = span > 5 * D ? 24 : span > 2 * D ? 12 : span > 20 * H ? 4 : span > 8 * H ? 2 : 1;
@@ -436,13 +422,7 @@ export function focusChart(acc, payload, ctx) {
     const txt = `RESET ${clockTxt(r.t).toUpperCase()}`;
     put(txt, [{ x: r.x + 5, y: PLOT.y1 - 5 }, { x: r.x - 5, y: PLOT.y1 - 5, a: 'end' }, { x: r.x + 5, y: PLOT.y0 + 13 }, { x: r.x - 5, y: PLOT.y0 + 13, a: 'end' }], 'ink-3', OBS);
   }
-  for (const [a, b] of bands) {
-    const x0 = xo(a), x1 = Math.min(xo(Math.min(b, now)), obsEnd - 2);
-    const txt = `ACTIVE${cmp ? ` · ${tagOf(acc).toUpperCase()}` : ''}`;
-    put(txt, [{ x: x0 + 6, y: PLOT.y0 + 13 }, { x: x0 + 6, y: PLOT.y1 - 5 }, { x: x0 + 6, y: PLOT.y0 + 27 }], 'accent-text', { ...OBS, x0: Math.max(OBS.x0, x0), x1: Math.min(OBS.x1, x1) });
-  }
   legend.push({ name: 'Projection', kind: 'proj', shade: 0, dash: 0, width: 1.75 });
-  if (bands.length) legend.push({ name: 'Active', kind: 'active', shade: 0, dash: 0, width: 0 });
 
   // ---- hover stops: every observed sample time and "now", then the forecast an hour at a time ----
   const valueAt = (s, t, inF) => {
@@ -509,7 +489,7 @@ function fullName(provider, w) {
 // ---------------------------------------------------------------- the quota history
 /**
  * The compact quota history: one row per account, grouped by provider in the registry order, rows by identity
- * (active state never selects or reorders a row). ctx: { now, dashboard, hidden, open: Set, compare: Set,
+ * (account state never selects or reorders a row). ctx: { now, dashboard, hidden, open: Set, compare: Set,
  * collapsed: Set, focusWidth }.
  */
 export function quotaView(payload, ctx = {}) {
@@ -531,7 +511,7 @@ export function quotaView(payload, ctx = {}) {
       const spark = sparkRuns(acc, w, axis.t0, now, payload?.range);
       if (open.has(acc.id)) focus.push(focusChart(acc, payload, { now, width: ctx.focusWidth, height: ctx.focusHeight, compare: compare.has(acc.id), accounts }));
       return {
-        id: acc.id, provider, label: acc.email, active: acc.active, plan: planLabel(acc.plan, provider),
+        id: acc.id, provider, label: acc.email, plan: planLabel(acc.plan, provider),
         win: w && w.short !== common ? w.short : '',
         hasValue: finite(v), value: finite(v) ? v : 0, valueText: finite(v) ? valueText(v) : '', sev: SEV_INT[sev(v)],
         next: nextR ? untilTxt(nextR.resetAt, now) : '', nextTip: nextR ? `${nextR.short} resets ${timeTxt(nextR.resetAt)}` : '',

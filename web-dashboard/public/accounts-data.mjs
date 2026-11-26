@@ -115,7 +115,6 @@ function primaryWindow(windows, weekly, provider) {
   );
 }
 export function statusLabel(account) {
-  if (account.isActive && account.provider === 'codex') return '✓ Active on Ubuntu';
   return (
     {
       ok: 'Live',
@@ -144,7 +143,6 @@ export function accountView(account, inventory = [], clientPlatform = 'mac') {
     email: account.email || account.label || 'Account identity unavailable',
     plan: account.provider === 'cursor' ? cursorPlanLabel(account.plan) : account.plan || '',
     status: statusLabel(account),
-    active: account.isActive === true,
     canMac: !!launcher?.mac?.canOpen,
     canWindows:
       launcher?.windows?.canOpen === true ||
@@ -222,12 +220,6 @@ export function dashboardView(data, inventory = [], clientPlatform = 'mac') {
       .filter((account) => account.provider === 'codex')
       .map((account) => accountView(account, inventory, clientPlatform)),
     providers,
-    activeCodexEmail:
-      accounts.find((account) => account.provider === 'codex' && account.isActive === true)
-        ?.email ||
-      accounts.find((account) => account.provider === 'codex' && account.isActive === true)
-        ?.label ||
-      'Active account unavailable',
     updated: timeLabel(data?.updatedAt, 'Updated') || 'Account data unavailable',
   };
 }

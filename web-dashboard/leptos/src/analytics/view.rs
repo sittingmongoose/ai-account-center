@@ -849,7 +849,6 @@ pub struct QRow {
     pub provider: String,
     #[serde(deserialize_with = "nullable")]
     pub label: String,
-    pub active: bool,
     #[serde(deserialize_with = "nullable")]
     pub plan: String,
     #[serde(deserialize_with = "nullable")]

@@ -247,7 +247,7 @@ test('a surface-scoped Fable window never replaces the global Fable quota, in ei
   assert.equal(onlyRow.cells[2].naText, 'Not reported yet');
 });
 
-test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, the live login is marked', () => {
+test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, the live login carries no mark', () => {
   const chat = window({ key: 'extra_additional_1', label: 'Chat pass · weekly', usedPercent: 50 });
   const active = account({
     id: 'codex:a',
@@ -278,11 +278,12 @@ test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, th
   assert.equal(codex.kind, 'accounts');
   assert.equal(JSON.stringify(codex).includes('Chat pass'), false);
   assert.equal(codex.rows[0].cells[0].valueText, '92.13');
-  assert.equal(codex.activeId, 'codex:a');
-  assert.equal(codex.rows[0].active, true);
-  assert.equal(codex.rows[0].activeLabel, 'on Ubuntu');
-  assert.equal(codex.rows[1].active, false);
+  assert.equal('activeId' in codex, false);
+  assert.equal('active' in codex.rows[0], false);
+  assert.equal('activeLabel' in codex.rows[0], false);
+  assert.equal('active' in codex.rows[1], false);
   assert.equal(codex.rows[1].profile, 'b');
+  assert.equal(codex.meta, '2 accounts');
   // Account switching was removed: no switch controls, point or auto-switch view.
   for (const key of ['switchable', 'canSwitch', 'auto']) assert.equal(key in codex, false, key);
   for (const key of ['canActivate', 'activateKind', 'activateHint', 'confirm', 'confirmRuns'])
@@ -314,7 +315,7 @@ test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, th
   assert.equal(codex.rows[1].cells[0].valueText, '0');
 });
 
-test('Antigravity is the same kind of section, with no live login until the native inventory names one', () => {
+test('Antigravity is the same kind of section, with no live-login mark', () => {
   const windows = [
     window({ key: 'cli-gemini-weekly', label: 'Gemini Models · Weekly', usedPercent: 0.0886 }),
     window({
@@ -348,7 +349,8 @@ test('Antigravity is the same kind of section, with no live login until the nati
     ['Gemini 5-hour, in T3 (Antigravity CLI)', 'Gemini weekly, in T3 (Antigravity CLI)', 'Claude and GPT 5-hour, in T3 (Antigravity CLI)', 'Claude and GPT weekly, in T3 (Antigravity CLI)']
   );
   assert.equal(ag.rows[0].cells[1].valueText, '0.09');
-  assert.equal(ag.rows[0].active, false);
+  assert.equal('active' in ag.rows[0], false);
+  assert.equal('activeId' in ag, false);
   assert.equal('canActivate' in ag.rows[0], false);
   assert.equal('auto' in ag, false);
 });
@@ -815,8 +817,8 @@ test('Home headers, amounts and the Antigravity warnings read the data truthfull
   });
   const vm = dashboardViewModel(data([a, b, c, claude('m', 'max', [window()])]), { now });
   const codex = section(vm, 'codex');
-  assert.equal(runs(codex.metaRuns), '*3* accounts · *a* active');
-  assert.equal(codex.metaRuns.find((r) => r.text === 'a').tone, 'good');
+  assert.equal(runs(codex.metaRuns), '*3* accounts');
+  assert.equal(codex.meta, '3 accounts');
   assert.equal(runs(section(vm, 'claude').metaRuns), '*1* account · desktop profiles');
   // Account switching was removed: Codex has no footer of its own.
   assert.deepEqual(codex.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
@@ -1032,7 +1034,7 @@ test('provider cards carry the concept footer, plan note and shared pack expiry 
   assert.equal(k.flag, 'Sign-in needed');
 });
 
-test('Details carries the row\'s live-login mark and platform (W2)', () => {
+test('Details carries the row\'s plain status with no live-login mark (W2)', () => {
   const a = account({
     id: 'codex:a',
     email: 'a@example.test',
@@ -1047,14 +1049,14 @@ test('Details carries the row\'s live-login mark and platform (W2)', () => {
     capabilities: { codexProfile: 'b' },
   });
   const details = detailsViewModel(data([a, b]), 'codex:b', { now });
-  assert.equal(details.platform, 'Ubuntu');
   assert.equal(details.subLead, 'Codex · Pro');
-  assert.equal(details.active, false);
-  for (const key of ['switchable', 'canSwitch', 'canActivate', 'activateKind', 'confirm', 'confirmRuns'])
+  assert.equal(details.state, 'Live');
+  assert.equal(details.sub, 'Codex · Pro · Live');
+  for (const key of ['active', 'activeLabel', 'platform', 'switchable', 'canSwitch', 'canActivate', 'activateKind', 'confirm', 'confirmRuns'])
     assert.equal(key in details, false, key);
-  const active = detailsViewModel(data([a, b]), 'codex:a', { now });
-  assert.equal(active.active, true);
-  assert.equal(active.activeLabel, 'on Ubuntu');
+  const live = detailsViewModel(data([a, b]), 'codex:a', { now });
+  assert.equal(live.state, 'Live');
+  assert.equal('active' in live, false);
 });
 
 test('F6: a reading sampled before a reset that has passed shows "Reset at … · new reading pending", never the old percent or 0%', async () => {
@@ -1291,14 +1293,14 @@ test('hidden server rows stay in the inclusive model and Details without changin
   const before = structuredClone(dto);
   assert.equal(section(dashboardViewModel(dto, { now }), 'codex'), undefined);
   const inclusive = section(dashboardViewModel(dto, { now, includeHidden: true }), 'codex');
-  assert.equal(inclusive.rows[0].active, true);
-  assert.equal(inclusive.rows[1].id, other.id);
-  assert.equal(detailsViewModel(dto, active.id, { now }).active, true);
-  assert.equal(detailsViewModel(dto, other.id, { now }).active, false);
+  assert.deepEqual(inclusive.rows.map((row) => row.id), [active.id, other.id]);
+  assert.equal('active' in inclusive.rows[0], false);
+  assert.equal('active' in detailsViewModel(dto, active.id, { now }), false);
+  assert.equal('active' in detailsViewModel(dto, other.id, { now }), false);
   assert.deepEqual(dto, before);
 });
 
-test('Codex Home names a hidden live account in its header', () => {
+test('Codex Home lists only the shown rows and names no live account', () => {
   const active = account({ isActive: true, hidden: true, windows: [window({ usedPercent: 98 })] });
   const next = account({ id: 'codex:next', email: 'next@example.test', hidden: true,
     capabilities: { codexProfile: 'next' }, windows: [window({ usedPercent: 12 })] });
@@ -1307,22 +1309,24 @@ test('Codex Home names a hidden live account in its header', () => {
   const dto = data([active, next, visible]);
   const home = section(dashboardViewModel(dto, { now }), 'codex');
   assert.deepEqual(home.rows.map(row => row.id), [visible.id]);
-  assert.equal(home.activeId, active.id);
-  assert.match(home.meta, /one \(hidden\) active/);
-  assert.match(home.activeLabel, /one@example.test \(hidden\)/);
+  assert.equal(home.meta, '1 account');
+  assert.equal('activeId' in home, false);
+  assert.equal('activeLabel' in home, false);
+  assert.doesNotMatch(home.meta, /active/i);
   assert.equal(home.foot.shown, false);
 });
 
-test('the live Codex login is named on Ubuntu even with fallback readings', () => {
+test('Home rows and Details carry the computer label with no live-login mark', () => {
   for (const host of ['mac', 'nas1']) {
     const active = account({ isActive: true, platform: 'mac', host });
     const legacy = account({ id: 'codex:legacy', capabilities: { codexProfile: 'legacy' } });
     const dto = data([active, legacy]);
     const rows = section(dashboardViewModel(dto, { now }), 'codex').rows;
-    assert.equal(rows[0].activeLabel, 'on Ubuntu');
-    assert.equal(detailsViewModel(dto, active.id, { now }).state, 'Active on Ubuntu');
     assert.equal(rows[0].platform, host === 'mac' ? 'Mac' : 'Nas1');
-    assert.equal(rows[1].active, false);
+    assert.equal('activeLabel' in rows[0], false);
+    assert.equal('active' in rows[0], false);
+    assert.equal('active' in rows[1], false);
+    assert.equal(detailsViewModel(dto, active.id, { now }).state, 'Live');
   }
 });
 
@@ -1494,4 +1498,46 @@ test('reset grants append refill targets from clears; session_reset_allowance is
   const details = detailsViewModel(data([{ ...acct, windows: [...acct.windows, allowance] }]), acct.id, { now });
   assert.equal(details.meters.some((m) => m.key === `${acct.id}|session_reset_allowance`), false);
   assert.equal(details.amounts.some((a) => a.key === `${acct.id}|session_reset_allowance`), true);
+});
+
+test('the switching-era Active mark is gone: no live-login field or Active word survives', () => {
+  const liveCodex = account({ isActive: true, windows: [window({ usedPercent: 9 })] });
+  const liveAntigravity = account({
+    id: 'antigravity:profile:main',
+    provider: 'antigravity',
+    email: 'main@example.test',
+    platform: 'ubuntu',
+    windows: [window({ key: 'cli-gemini-weekly', label: 'Gemini Models · Weekly', usedPercent: 7 })],
+    capabilities: { antigravityProfileId: 'main' },
+  });
+  const inventory = {
+    schemaVersion: 1,
+    hostId: 'ubuntu',
+    profiles: [{
+      id: 'main', email: 'main@example.test', plan: 'Google AI Pro', hostId: 'ubuntu',
+      available: true, selected: true, runtimeVerified: true, verifiedAt: at(-1),
+    }],
+  };
+  const dto = data([liveCodex, liveAntigravity, claude('max', 'max', [window({ usedPercent: 20 })])]);
+  const vm = dashboardViewModel(dto, { now, antigravityInventory: inventory });
+  assert.deepEqual(vm.sections.map((s) => s.id), ['claude', 'codex', 'antigravity']);
+  for (const section of vm.sections) {
+    assert.equal('activeId' in section, false, section.id);
+    assert.equal('activeLabel' in section, false, section.id);
+    assert.doesNotMatch(section.meta, /active/i, section.id);
+    assert.doesNotMatch(JSON.stringify(section.metaRuns), /active/i, section.id);
+    for (const row of section.rows) {
+      assert.equal('active' in row, false, `${section.id} ${row.id}`);
+      assert.equal('activeLabel' in row, false, `${section.id} ${row.id}`);
+    }
+  }
+  assert.equal(section(vm, 'codex').meta, '1 account');
+  for (const id of [liveCodex.id, liveAntigravity.id]) {
+    const details = detailsViewModel(dto, id, { now });
+    assert.equal('active' in details, false, id);
+    assert.equal('activeLabel' in details, false, id);
+    assert.equal('platform' in details, false, id);
+    assert.doesNotMatch(details.state, /Active/, id);
+    assert.equal(details.state, 'Live', id);
+  }
 });

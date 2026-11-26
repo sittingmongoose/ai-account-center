@@ -202,11 +202,6 @@ pub struct RowView {
     /// Computer label.
     #[serde(deserialize_with = "nullable")]
     pub platform: String,
-    /// The live login on Ubuntu (a fact, not a control).
-    pub active: bool,
-    /// Where it is live.
-    #[serde(deserialize_with = "nullable")]
-    pub active_label: String,
     /// Retired; always false.
     pub setup: bool,
     /// Claude can open on the Mac.
@@ -254,12 +249,6 @@ pub struct SectionView {
     pub meta_words: Vec<Run>,
     /// Footer line.
     pub foot: FootView,
-    /// The live account's id, or empty.
-    #[serde(deserialize_with = "nullable")]
-    pub active_id: String,
-    /// The live account's name, or empty.
-    #[serde(deserialize_with = "nullable")]
-    pub active_label: String,
     /// Words for no accounts.
     #[serde(deserialize_with = "nullable")]
     pub empty: String,

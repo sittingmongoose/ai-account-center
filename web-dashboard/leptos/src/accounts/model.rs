@@ -121,9 +121,6 @@ pub struct Row {
     pub src: String,
     #[serde(deserialize_with = "nullable")]
     pub src_sub: String,
-    pub active: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub active_label: String,
     #[serde(deserialize_with = "nullable")]
     pub profile: String,
     #[serde(deserialize_with = "nullable")]

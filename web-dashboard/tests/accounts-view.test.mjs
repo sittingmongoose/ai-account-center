@@ -254,7 +254,8 @@ test('Codex rows: Sign in again and Remove are live from the server; the live lo
     );
   const active = row(vm, 'codex:one'),
     other = row(vm, 'codex:two');
-  assert.equal(active.active, true);
+  assert.equal('active' in active, false);
+  assert.equal('activeLabel' in active, false);
   assert.deepEqual(
     other.actions.map((a) => [a.act, a.enabled, a.coming, a.refused]),
     [
@@ -2476,15 +2477,15 @@ test('accountsViewModel: the install field ships hidden until the PWA wiring fee
 });
 
 
-test('server hidden flags preserve the Accounts live-login mark and independent dashboard and tray choices', () => {
+test('server hidden flags preserve rows and independent dashboard and tray choices', () => {
   const active = account({ isActive: true, hidden: true });
   const other = account({ id: 'codex:two', hidden: true, capabilities: { codexProfile: 'two' } });
   const dto = data([active, other], { settings: { hiddenProviders: ['codex'], hiddenAccountIds: [active.id, other.id],
     trayHiddenProviders: [], trayHiddenAccountIds: [other.id] } });
   const before = structuredClone(dto);
   const vm = accountsViewModel(dto, { now });
-  assert.equal(row(vm, active.id).active, true);
-  assert.equal(row(vm, other.id).active, false);
+  assert.equal('active' in row(vm, active.id), false);
+  assert.equal('active' in row(vm, other.id), false);
   assert.deepEqual(dto, before);
 });
 

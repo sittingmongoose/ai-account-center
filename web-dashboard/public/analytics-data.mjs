@@ -117,7 +117,6 @@ export function buildQuotaPlot(metric, range, now = Date.now(), percentMaximum =
       timestamp(point.observedAt) !== timestamp(point.sampledAt) ? dateLabel(point.observedAt, 'Recorded ') : '',
       dateLabel(point.resetAt, 'Resets '), dateLabel(point.expiresAt, 'Expires '),
       text(point.source), text(point.platform), point.status === 'cached' ? 'Cached observation' : '',
-      point.isActive === true ? 'Active Codex account' : '',
     ].filter(Boolean);
     return { x: (time - from) / (to - from), percent: Math.max(0, Math.min(100, (value - minimum) / span * 100)), label: `${dateLabel(point.sampledAt, 'Sampled ')} · ${valueLabel(value)}${extra.length ? ` · ${extra.join(' · ')}` : ''}` };
   });
@@ -213,12 +212,12 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
   const accounts = array(payload?.accounts).filter(account => account && text(account.id) && ANALYTICS_PROVIDERS.some(row => row[0] === account.provider) && (providerId === 'all' || account.provider === providerId) && (accountId === 'all' || account.id === accountId)).map(account => ({ ...account, windows: historicalWindows(account, payload?.range) })).sort((a, b) => (providerOrder.get(a.provider) ?? 99) - (providerOrder.get(b.provider) ?? 99) || (text(a.email) || text(a.label)).localeCompare(text(b.email) || text(b.label)) || text(a.id).localeCompare(text(b.id)));
   const choices = options(payload, catalog);
   // Changed labels, units and kinds are distinct reported historical series.
-  // Qualify the selector with only validated scalar metadata; active status never selects a default.
+  // Qualify the selector with only validated scalar metadata; no account state selects a default.
   const histories = accounts.flatMap(account => array(account.windows).toSorted((a, b) => compareHistories(account, a, b)).map(window => ({ account, window, key: JSON.stringify(historyIdentity(account, window)), plot: buildQuotaPlot(window, payload?.range, now) }))).filter(row => row.plot.chartHasPoints);
   const percentMaximum = Math.max(100, ...histories.filter(row => row.plot.metricPercent).map(row => row.plot.axisMaximum));
   const allCharts = histories.map(({ account, window, key, plot: initial }) => {
     const plot = initial.metricPercent ? { ...initial, chartTop: `${axisNumber(percentMaximum)}%`, chartMiddle: `${axisNumber(percentMaximum / 2)}%`, points: initial.points.map(point => ({ ...point, percent: point.percent * initial.axisMaximum / percentMaximum })) } : initial;
-    return { key, title: `${text(account.email) || text(account.label) || 'Account'} · ${account.provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage'}`, subtitle: [text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1], text(window.unit), account.provider === 'codex' && account.isActive ? 'Active Codex' : '', metricValueKind(window) === 'percent' ? 'Percent used' : metricValueKind(window) === 'remaining' ? 'Remaining balance' : 'Reported usage'].filter(Boolean).join(' · '), note: [status(account.status), text(account.platform), text(account.source), plot.chartNote].filter(Boolean).join(' · '), top: plot.chartTop, middle: plot.chartMiddle, bottom: plot.chartBottom, start: plot.chartStart, end: plot.chartEnd, points: plot.points };
+    return { key, title: `${text(account.email) || text(account.label) || 'Account'} · ${account.provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage'}`, subtitle: [text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1], text(window.unit), metricValueKind(window) === 'percent' ? 'Percent used' : metricValueKind(window) === 'remaining' ? 'Remaining balance' : 'Reported usage'].filter(Boolean).join(' · '), note: [status(account.status), text(account.platform), text(account.source), plot.chartNote].filter(Boolean).join(' · '), top: plot.chartTop, middle: plot.chartMiddle, bottom: plot.chartBottom, start: plot.chartStart, end: plot.chartEnd, points: plot.points };
   });
   choices.metrics = [{ id: 'all', label: 'All histories' }, ...allCharts.map(row => {
     const [, key, , unit, kind] = JSON.parse(row.key);
@@ -246,7 +245,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
       if (outside) return { id, label, accounts: '—', availability: 'Outside filter', sample: 'Select to view this provider' };
       return { id, label, accounts: `${Number.isInteger(provider?.accountCount) ? provider.accountCount : accounts.filter(account => account.provider === id).length} accounts`, availability: `${Number.isInteger(provider?.availableAccounts) ? provider.availableAccounts : accounts.filter(account => account.provider === id && ['ok', 'cached'].includes(account.status)).length} available`, sample: dateLabel(provider?.latestSampleAt) || 'No observations' };
     }),
-    accounts: accounts.map(account => ({ id: text(account.id), label: text(account.email) || text(account.label) || 'Account identity unavailable', provider: text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider', status: status(account.status), platform: text(account.platform), source: text(account.source), plan: account.provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), active: account.provider === 'codex' && account.isActive === true, samples: `${Number.isInteger(account.sampleCount) ? account.sampleCount : 0} observations` })),
+    accounts: accounts.map(account => ({ id: text(account.id), label: text(account.email) || text(account.label) || 'Account identity unavailable', provider: text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider', status: status(account.status), platform: text(account.platform), source: text(account.source), plan: account.provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), samples: `${Number.isInteger(account.sampleCount) ? account.sampleCount : 0} observations` })),
     quotaCharts,
     // Legacy single-chart bindings are empty; all histories are rendered by quotaCharts.
     metrics: [], points: [], chartTitle: 'Account histories', chartNote: '', chartHasPoints: false,
@@ -273,7 +272,7 @@ function relativeReset(value, now) {
 export function sparklinePath(points) {
   return array(points).map((point, index) => `${index ? 'L' : 'M'}${(point.x * 100).toFixed(2)} ${(100 - point.percent).toFixed(2)}`).join(' ');
 }
-/** Quota history rows: every account once, grouped by provider; active state never selects or reorders a row. */
+/** Quota history rows: every account once, grouped by provider; account state never selects or reorders a row. */
 export function quotaHistory(accounts, histories, range, now = Date.now()) {
   const groups = [];
   for (const [provider, label] of ANALYTICS_PROVIDERS) {
@@ -289,7 +288,6 @@ export function quotaHistory(accounts, histories, range, now = Date.now()) {
         windowLabel: window ? (provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage') : 'No quota reported',
         hasValue: current !== null, value: current ?? 0, valueText: current === null ? '' : number(current),
         reset: window ? relativeReset(window.resetAt, now) : '',
-        active: provider === 'codex' && account.isActive === true,
         spark: plot?.metricPercent ? sparklinePath(plot.points) : '', sparkPoints: plot?.metricPercent ? plot.points.length : 0,
       };
     });

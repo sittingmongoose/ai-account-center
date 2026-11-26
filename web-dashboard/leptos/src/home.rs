@@ -2,8 +2,7 @@
 //! from the dashboard's view model v3 (`public/view-model.mjs` `dashboardViewModel`), which the dashboard controller
 //! (`public/frame-dashboard.mjs`) builds and sends (`dash.rs`). Every number, word and "unavailable" decision is in
 //! that view; this page lays it out and animates it. Intent goes back as the dashboard's own action kinds, so every
-//! server call stays in the controller. The Codex and Antigravity rows mark the live login on Ubuntu; AI Account
-//! Center no longer switches accounts (2026-11-14).
+//! server call stays in the controller.
 //!
 //! Layout follows the space the page has (container queries, `style/app.css` "Home"): each section is a table (the
 //! account, one column per window, the action slot) once it is wide enough for its columns, and a stacked row (the
@@ -413,8 +412,8 @@ fn Row(id: String, sec: Memo<SectionView>, delay: u32) -> impl IntoView {
             })
             .collect_view()
     };
-    // The action slot: Claude's Open buttons, Finish setup for a profile still signing in, or the Active mark on the
-    // live login. Rebuilt only when its kind changes, so a reading's refresh never replays the mark's draw-on.
+    // The action slot: Claude's Open buttons, or Finish setup for a profile still signing in. Rebuilt only when its
+    // kind changes, so a reading's refresh never replays the slot's draw-on.
     let slot_kind = Memo::new(move |_| {
         if is_claude {
             0
@@ -424,24 +423,6 @@ fn Row(id: String, sec: Memo<SectionView>, delay: u32) -> impl IntoView {
             2
         }
     });
-    let is_active = Memo::new(move |_| row.with(|r| r.active));
-    let where_ = Memo::new(move |_| {
-        row.with(|r| {
-            if r.active_label.is_empty() {
-                format!("on {}", r.platform)
-            } else {
-                r.active_label.clone()
-            }
-        })
-    });
-    let mark = move || {
-        view! {
-            <span class="hmark" class:on=move || is_active.get() aria-hidden=move || (!is_active.get()).to_string()>
-                <svg class="hcheck" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m7.6 12.4 3.1 3.1 5.7-6.2"/></svg>
-                <span class="hmark-t"><b>"Active"</b><span>{move || where_.get()}</span></span>
-            </span>
-        }
-    };
     let slot = move || match slot_kind.get() {
         0 => view! { <OpenButtons row=row reason=reason/> }.into_any(),
         1 => view! {
@@ -451,11 +432,10 @@ fn Row(id: String, sec: Memo<SectionView>, delay: u32) -> impl IntoView {
             }><Icon name="terminal"/>"Finish setup"</button>
         }
         .into_any(),
-        _ => view! { <span class="hswap">{mark()}</span> }.into_any(),
+        _ => view! { "" }.into_any(),
     };
     view! {
-        <div class="hrow" class:active=move || row.with(|r| r.active)
-            class:setup=move || row.with(|r| r.setup) data-row=id.clone()
+        <div class="hrow" class:setup=move || row.with(|r| r.setup) data-row=id.clone()
             role="button" tabindex="0" aria-label=move || row.with(|r| format!("{} details", r.email))
             on:click=on_click on:keydown=on_key>
             <div class="hid">
@@ -745,7 +725,7 @@ mod tests {
         let json = r#"{"version":3,"sections":[{"id":"codex","kind":"accounts","label":"Codex",
             "metaRuns":[{"text":"3","strong":true,"tone":""}],"foot":{"shown":false,"warn":false,"runs":[],"when":null},
             "columns":[{"key":"five","label":"5-hour"}],
-            "rows":[{"id":"codex:a","provider":"codex","profile":"a","email":"a@example.invalid","active":true,
+            "rows":[{"id":"codex:a","provider":"codex","profile":"a","email":"a@example.invalid",
             "cells":[{"key":"codex:a|five_hour","hasValue":false,"value":null,"naText":"Unavailable"}]}]}],
             "cards":[],"chrome":{"statusLead":"Updated"}}"#;
         let HomeState::Ready(view) = parse(json) else {
@@ -753,7 +733,7 @@ mod tests {
         };
         let s = &view.sections[0];
         assert_eq!(s.kind, "accounts");
-        assert!(s.rows[0].active);
+        assert_eq!(s.rows[0].id, "codex:a");
         assert_eq!(s.rows[0].cells[0].value, None);
     }
 }

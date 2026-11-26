@@ -540,8 +540,6 @@ fn claude_section(
             },
             note: text(account.get("message")).into(),
             platform: text(account.get("platform")).into(),
-            active: false,
-            active_label: String::new(),
             setup: false,
             can_mac: truthy(get(mac, "canOpen")),
             can_windows: is_true(get(win, "canOpen"))
@@ -581,25 +579,10 @@ fn claude_section(
         meta_words: words_of(&meta_runs),
         meta_runs,
         foot: no_foot(),
-        active_id: String::new(),
-        active_label: String::new(),
         empty: "No Claude accounts are reported yet.".into(),
         columns,
         rows,
     })
-}
-
-fn short_identity(account: Acc) -> String {
-    let id = identity(account, "Account");
-    match id.find('@') {
-        None => id,
-        Some(at) => {
-            // `/@.*/`: from the first @ up to a line terminator
-            let rest = &id[at..];
-            let stop = rest.find(is_line_terminator).unwrap_or(rest.len());
-            format!("{}{}", &id[..at], &rest[stop..])
-        }
-    }
 }
 
 /// view-model.mjs `codexAmountsRuns`.
@@ -674,13 +657,7 @@ fn codex_amounts(cx: &Ctx, account: Acc) -> R<Vec<Run>> {
     Ok(out)
 }
 
-fn codex_section(cx: &Ctx, accounts: &[Acc], all: &[Acc]) -> R<SectionView> {
-    let hidden: Vec<&str> = all
-        .iter()
-        .copied()
-        .filter(|a: &Acc| !accounts.iter().any(|b| std::ptr::eq(*a, *b)))
-        .map(|a| text(a.get("id")))
-        .collect();
+fn codex_section(cx: &Ctx, accounts: &[Acc]) -> R<SectionView> {
     let mut has_five = false;
     for a in accounts {
         has_five |= windows::visible(Some("codex"), a)?
@@ -700,12 +677,6 @@ fn codex_section(cx: &Ctx, accounts: &[Acc], all: &[Acc]) -> R<SectionView> {
         label: "Weekly".into(),
         short_label: String::new(),
     });
-    let active = all.iter().find(|a| is_true(a.get("isActive"))).copied();
-    let active_hidden = active.is_some_and(|a| hidden.contains(&text(a.get("id"))));
-    let suffix = if active_hidden { " (hidden)" } else { "" };
-    let active_name = active
-        .map(|a| format!("{}{suffix}", short_identity(a)))
-        .unwrap_or_default();
     let mut rows = Vec::new();
     for account in accounts {
         let ws = windows::visible(Some("codex"), account)?;
@@ -745,8 +716,6 @@ fn codex_section(cx: &Ctx, accounts: &[Acc], all: &[Acc]) -> R<SectionView> {
             platform: kept_account(cx, account, memo::AccountPart::Platform, || {
                 cx.host_label(account)
             })?,
-            active: is_true(account.get("isActive")),
-            active_label: "on Ubuntu".into(),
             setup: false,
             can_mac: false,
             can_windows: false,
@@ -757,47 +726,19 @@ fn codex_section(cx: &Ctx, accounts: &[Acc], all: &[Acc]) -> R<SectionView> {
         });
     }
     let n = rows.len();
-    let mut meta_runs = vec![
+    let meta_runs = vec![
         run(n.to_string(), true, ""),
-        plain(format!(" {} · ", plural(n))),
+        plain(format!(" {}", plural(n))),
     ];
-    if active.is_some() {
-        meta_runs.push(run(active_name.clone(), true, "good"));
-        meta_runs.push(plain(" active"));
-    } else {
-        meta_runs.push(plain("none active"));
-    }
     Ok(SectionView {
         id: "codex".into(),
         kind: "accounts".into(),
         label: "Codex".into(),
         long_label: "Codex".into(),
-        meta: format!(
-            "{n} {}{}",
-            plural(n),
-            if active.is_some() {
-                format!(" · {active_name} active")
-            } else {
-                String::new()
-            }
-        ),
+        meta: format!("{n} {}", plural(n)),
         meta_words: words_of(&meta_runs),
         meta_runs,
         foot: no_foot(),
-        active_id: active
-            .map(|a| text(a.get("id")).to_string())
-            .unwrap_or_default(),
-        active_label: active
-            .map(|a| {
-                let email = text(a.get("email"));
-                let name = if email.is_empty() {
-                    text(a.get("label"))
-                } else {
-                    email
-                };
-                format!("{name}{suffix}")
-            })
-            .unwrap_or_default(),
         empty: "No Codex accounts are reported yet.".into(),
         columns,
         rows,
@@ -869,7 +810,6 @@ fn antigravity_section(
     for (account, own) in accounts.iter().zip(&meters) {
         let id = text(account.get("id"));
         let bound = native.accounts.iter().rev().find(|b| b.id == id);
-        let active = bound.is_some_and(|b| b.selected);
         let no_quota = if antigravity::no_quota(account) {
             "No Antigravity quota on this plan"
         } else {
@@ -934,12 +874,6 @@ fn antigravity_section(
             platform: kept_account(cx, account, memo::AccountPart::Platform, || {
                 cx.host_label(account)
             })?,
-            active,
-            active_label: match bound {
-                Some(b) if active && b.runtime_verified => "on Ubuntu".into(),
-                Some(_) if active => "on Ubuntu, running unverified".into(),
-                _ => String::new(),
-            },
             setup: false,
             can_mac: false,
             can_windows: false,
@@ -950,7 +884,6 @@ fn antigravity_section(
         });
     }
     let n = rows.len();
-    let active_row = rows.iter().find(|r| r.active);
     let meta_runs = vec![
         plain("Google Antigravity CLI · "),
         run(n.to_string(), true, ""),
@@ -978,8 +911,6 @@ fn antigravity_section(
             }
             None => no_foot(),
         },
-        active_id: active_row.map(|r| r.id.clone()).unwrap_or_default(),
-        active_label: active_row.map(|r| r.email.clone()).unwrap_or_default(),
         empty: "No Antigravity accounts are reported yet.".into(),
         columns,
         rows,
@@ -1441,12 +1372,7 @@ fn view(
         sections.push(claude_section(cx, data, &of("claude"), profiles, platform)?);
     }
     if !hidden.contains(&"codex") {
-        let all: Vec<Acc> = every
-            .iter()
-            .filter(|a| is_str(a.get("provider"), "codex"))
-            .copied()
-            .collect();
-        sections.push(codex_section(cx, &of("codex"), &all)?);
+        sections.push(codex_section(cx, &of("codex"))?);
     }
     let antigravity_rows = of("antigravity");
     if !hidden.contains(&"antigravity") && !antigravity_rows.is_empty() {

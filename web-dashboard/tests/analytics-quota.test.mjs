@@ -38,9 +38,9 @@ test('quota history: one row per account by identity, the main window never Fabl
   const view = quotaView(analytics, { now, dashboard });
   assert.deepEqual(view.groups.map(g => g.provider), ['claude', 'codex', 'kimi-code']);
   const codex = view.groups.find(g => g.provider === 'codex');
-  // ordered by identity: the active account is not moved first
+  // ordered by identity: the live account is not moved first
   assert.deepEqual(codex.rows.map(r => r.id), ['codex:a', 'codex:b']);
-  assert.equal(codex.rows[1].active, true);
+  assert.equal('active' in codex.rows[1], false);
   assert.equal(codex.meta, '2 accounts · weekly window');
   const claude = view.groups.find(g => g.provider === 'claude').rows[0];
   assert.equal(claude.valueText, '20');
@@ -159,8 +159,9 @@ test('focus charts: no switch threshold, compare overlays without adding, Fable 
   const one = focusChart(codexB, analytics, { now, width: 900, height: 270, compare: false, accounts });
   // Account switching was removed: no chart marks an auto-switch point.
   assert.equal(one.labels.some(l => l.text.startsWith('AUTO-SWITCH')), false);
+  assert.equal(one.labels.some(l => l.text.startsWith('ACTIVE')), false);
   assert.equal(one.legend.some(l => l.kind === 'thr'), false);
-  assert.ok(one.legend.some(l => l.kind === 'active'));
+  assert.equal(one.legend.some(l => l.kind === 'active'), false);
   const cmp = focusChart(codexB, analytics, { now, width: 900, height: 270, compare: true, accounts });
   assert.equal(cmp.legend.filter(l => l.kind === 'series').length, 2);
   assert.match(cmp.foot, /never added together/);

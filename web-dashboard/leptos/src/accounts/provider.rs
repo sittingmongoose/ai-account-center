@@ -180,13 +180,12 @@ pub fn ProviderCard(page: Page, id: String) -> impl IntoView {
 }
 
 /// One account row with its lines: the remove / restore / refusal line, and the reason a tap on an off control
-/// opened. The live login on its computer carries the Active mark.
+/// opened.
 #[component]
 fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
     let reason = RwSignal::new(String::new());
     let get = move || row.get().unwrap_or_default();
     let id = Memo::new(move |_| row.with(|r| r.as_ref().map(|r| r.id.clone()).unwrap_or_default()));
-    let active = Memo::new(move |_| row.with(|r| r.as_ref().is_some_and(|r| r.active)));
     let line = Signal::derive(move || {
         row.with(|r| r.as_ref().map(|r| r.line.clone()).unwrap_or_default())
     });
@@ -196,7 +195,7 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
     });
     let set_reason = Callback::new(move |r: String| reason.set(r));
     view! {
-        <div class="acc-item" class:active=move || active.get() class:sel=move || selected.get()
+        <div class="acc-item" class:sel=move || selected.get()
             class:gone=move || row.with(|r| r.as_ref().is_some_and(|r| r.gone))
             data-row=move || id.get()>
             <div class="acc-row" role="button" tabindex="0"
@@ -235,10 +234,6 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
                         on_reason=Callback::new(move |_| { let tip = row.with(|r| r.as_ref().map(|r| r.tray_acct_tip.clone()).unwrap_or_default()); if !tip.is_empty() { reason.set(tip); } })/>
                 </div>
                 <div class="acc-acts">
-                    {move || {
-                        let r = get();
-                        r.active.then(|| view! { <ActiveMark label=r.active_label.clone() platform="Ubuntu"/> })
-                    }}
                     {move || {
                         let r = get();
                         let n = r.actions.len();

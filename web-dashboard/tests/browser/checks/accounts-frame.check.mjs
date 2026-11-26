@@ -218,8 +218,9 @@ export const tests = {
 		await t.check('Update apps spans the page above the columns', await t.page.evaluate(() => document.querySelector('.ac-page .ac-card')?.dataset.probe === 'update-card' && !!document.querySelector('.ac-top [data-probe="update-card"]')));
 		await t.check('three columns at 1440', await t.page.evaluate(() => document.querySelectorAll('.ac-col').length === 3));
 		await t.text(`${row('codex:one')} .acc-email`, 'codex.active@example.invalid');
-		await t.visible(`${row('codex:one')} .active-mark`, 'the active Codex account says Active');
-		await t.check('no account offers Activate any more', await t.page.evaluate(() => !document.querySelector('[data-probe^="activate:"]') && !document.querySelector(`.acc-item[data-row="codex:two"] .active-mark`)));
+		await t.check('the live Codex account carries no Active mark', await t.page.evaluate(() =>
+			!document.querySelector('.acc-item[data-row="codex:one"] .active-mark, .acc-item[data-row="codex:one"].active')));
+		await t.check('no account offers Activate any more', await t.page.evaluate(() => !document.querySelector('[data-probe^="activate:"]') && !document.querySelector('.active-mark')));
 		await t.audit('accounts 1440');
 	},
 

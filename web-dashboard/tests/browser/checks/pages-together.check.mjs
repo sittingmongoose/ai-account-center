@@ -10,7 +10,7 @@ const slintHidden = () =>
 	!document.querySelector('iframe.slint-frame') && !performance.getEntriesByType('resource').some((e) => /\/bridge\.js|ccs_account_dashboard/.test(e.name));
 
 export const tests = {
-	async 'pages: a Home row opens Details, which marks the live login and offers no switch'(t) {
+	async 'pages: a Home row opens Details, which carries no live-login mark and offers no switch'(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 		await t.app.signIn();
 		await t.app.stub('/api/accounts/dashboard', homeAccounts());
@@ -25,7 +25,9 @@ export const tests = {
 		await t.page.click('.hrow[data-row="claude:pro-a"] .hemail');
 		await t.until('another row swaps it in place', () => (document.querySelector('.details .dt-title')?.textContent || '').length > 0 && document.querySelector('.details .dt-title')?.textContent !== 'codex.second@example.invalid', null, { timeout: 10000 });
 		await t.page.click('.hrow[data-row="codex:primary"] .hemail');
-		await t.until('the live login\'s Details says it is active', () => /Active/.test(document.querySelector('.details .dt-acts .active-mark')?.textContent || ''), null, { timeout: 10000 });
+		await t.until('the live login\'s Details opens', () => document.querySelector('.details .dt-title')?.textContent === 'codex.primary.workspace@example.invalid', null, { timeout: 10000 });
+		await t.check('the live login\'s Details carries no Active mark', await t.page.evaluate(() =>
+			!document.querySelector('.details .active-mark') && !/Active on Ubuntu/.test(document.querySelector('.details .dt-sub')?.textContent || '')));
 		await t.noConsoleErrors('console: clean');
 	},
 

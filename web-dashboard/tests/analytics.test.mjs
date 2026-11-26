@@ -35,7 +35,7 @@ test('quota history lists every account once by provider, summarises its main wi
   // the sparkline is the window's own history: two real observations, no invented points
   assert.equal(rows.active.sparkPoints, 2); assert.match(rows.active.spark, /^M\S+ \S+ L\S+ \S+$/);
   assert.equal(rows.active.reset, 'resets in 1d 0h');
-  assert.equal(rows.active.active, true); assert.equal(rows.other.active, false);
+  assert.equal('active' in rows.active, false); assert.equal('active' in rows.other, false);
   // the Slint seam carries the same groups
   const slint = analyticsSlintModel(view);
   assert.equal(slint.version, 7); assert.deepEqual(slint.quotaGroups, view.quotaHistory); assert.equal(slint.head.range, '7d');
@@ -107,9 +107,10 @@ test('signed balances retain their own units, scale and actual zero while percen
   assert.match(usd.points[0].label, /0 USD remaining/);
   assert.doesNotMatch(credits.points[0].label, /%/);
 });
-test('observations retain reset, expiry, cache, source, platform and active provenance', () => {
+test('observations retain reset, expiry, cache, source and platform provenance', () => {
   const view = buildQuotaPlot(metric({ points: [sample({ status: 'cached', expiresAt: '2026-10-03T00:00:00Z', isActive: true })] }), range, now);
-  for (const value of ['Resets', 'Expires', 'Native subscription', 'ubuntu', 'Cached observation', 'Active Codex account']) assert.ok(view.points[0].label.includes(value));
+  for (const value of ['Resets', 'Expires', 'Native subscription', 'ubuntu', 'Cached observation']) assert.ok(view.points[0].label.includes(value));
+  assert.doesNotMatch(view.points[0].label, /Active/);
   assert.match(view.chartNote, /15 minutes old/);
 });
 test('all nine providers use one overview without fabricated native metrics for other providers', () => {
@@ -117,7 +118,7 @@ test('all nine providers use one overview without fabricated native metrics for 
   assert.deepEqual(view.providers.map(provider => provider.id), ANALYTICS_PROVIDERS.map(provider => provider[0]));
   assert.equal(view.activityHasData, false);
   assert.equal(view.activitySummaries.length, 0);
-  assert.equal(view.accounts[0].active, true);
+  assert.equal('active' in view.accounts[0], false);
   assert.match(view.historyNote, /not additive token or cost totals/);
   assert.match(view.overviewNote, /1 accounts.*1 observations/);
 });

@@ -135,11 +135,6 @@ pub struct DetailsView {
     pub sub_lead: String,
     #[serde(deserialize_with = "nullable")]
     pub state: String,
-    pub active: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub active_label: String,
-    #[serde(deserialize_with = "nullable")]
-    pub platform: String,
     #[serde(deserialize_with = "nullable")]
     pub profile: String,
     pub can_mac: bool,
@@ -401,7 +396,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                                 <h2 class="dt-title">{d.title.clone()}</h2>
                                 <p class="dt-sub q3">
                                     {d.sub_lead.clone()}
-                                    {(!d.state.is_empty()).then(|| view! { " · "<span class:w-acc=d.active>{d.state.clone()}</span> })}
+                                    {(!d.state.is_empty()).then(|| view! { " · "<span>{d.state.clone()}</span> })}
                                 </p>
                             </div>
                             <button type="button" class="icon-btn bare" aria-label="Close details" data-probe="details-close"
@@ -409,7 +404,6 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                         </header>
                         <div class="dt-body">
                             <div class="dt-acts">
-                                {d.active.then(|| view! { <ActiveMark label=d.active_label.clone() platform=d.platform.clone()/> })}
                                 {(d.provider == "claude").then(|| {
                                     let mac = format!("{}:mac", d.profile);
                                     let win = format!("{}:windows", d.profile);

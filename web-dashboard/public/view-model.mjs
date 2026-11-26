@@ -644,9 +644,6 @@ const visibleMeters = (account) =>
   visibleUsageWindows(account.provider, account.windows).filter(isMeterWindow);
 const visibleAmounts = (account) =>
   visibleUsageWindows(account.provider, account.windows).filter((w) => !isMeterWindow(w));
-const shortIdentity = (account) =>
-  (text(account.email) || text(account.label) || 'Account').replace(/@.*/, '');
-
 /** Hidden providers when the backend sends them (`settings.hiddenProviders`, see the W1 contract notes). */
 export function hiddenProviders(data) {
   const hidden = data?.settings?.hiddenProviders;
@@ -743,8 +740,6 @@ function claudeSection(accounts, profiles, platform, now, openProgress, data = n
       status: signIn ? `Sign-in needed on ${signIn}` : statusWord(account),
       note: text(account.message),
       platform: text(account.platform),
-      active: false,
-      activeLabel: '',
       setup: false,
       canMac: !!launcher?.mac?.canOpen,
       canWindows:
@@ -773,20 +768,13 @@ function claudeSection(accounts, profiles, platform, now, openProgress, data = n
     metaRuns,
     metaWords: wordsOf(metaRuns),
     foot: noFoot(),
-    activeId: '',
-    activeLabel: '',
     empty: 'No Claude accounts are reported yet.',
     columns,
     rows,
   };
 }
 
-// `allAccounts` includes the ones hidden from the dashboard too: the live account is named even when its row is
-// hidden.
-function codexSection(accounts, now, allAccounts = accounts) {
-  const hiddenIds = new Set(
-    allAccounts.filter((account) => !accounts.includes(account)).map((account) => account.id)
-  );
+function codexSection(accounts, now) {
   // Only the canonical keys identify the columns; additional quotas with the same duration stay in Details.
   const hasFive = accounts.some((account) =>
     visibleUsageWindows('codex', account.windows).some(
@@ -797,10 +785,6 @@ function codexSection(accounts, now, allAccounts = accounts) {
     ...(hasFive ? [{ key: 'five', label: '5-hour' }] : []),
     { key: 'weekly', label: 'Weekly' },
   ];
-  const active = allAccounts.find((account) => account.isActive === true);
-  const activeName = active
-    ? `${shortIdentity(active)}${hiddenIds.has(active.id) ? ' (hidden)' : ''}`
-    : '';
   const rows = accounts.map((account) => {
     const windows = visibleUsageWindows('codex', account.windows);
     const five = windows.find((w) => w.key === 'five_hour');
@@ -834,9 +818,6 @@ function codexSection(accounts, now, allAccounts = accounts) {
       status: statusWord(account),
       note: text(account.message),
       platform: hostLabel(account),
-      // The live ~/.codex login on Ubuntu: a fact, not a control.
-      active: account.isActive === true,
-      activeLabel: 'on Ubuntu',
       setup: false,
       canMac: false,
       canWindows: false,
@@ -846,24 +827,16 @@ function codexSection(accounts, now, allAccounts = accounts) {
       cells,
     };
   });
-  const metaRuns = [
-    run(rows.length, true),
-    run(` ${rows.length === 1 ? 'account' : 'accounts'} · `),
-    ...(active ? [run(activeName, true, 'good'), run(' active')] : [run('none active')]),
-  ];
+  const metaRuns = [run(rows.length, true), run(` ${rows.length === 1 ? 'account' : 'accounts'}`)];
   return {
     id: 'codex',
     kind: 'accounts',
     label: 'Codex',
     longLabel: 'Codex',
-    meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}${active ? ` · ${activeName} active` : ''}`,
+    meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}`,
     metaRuns,
     metaWords: wordsOf(metaRuns),
     foot: noFoot(),
-    activeId: active?.id || '',
-    activeLabel: active
-      ? `${text(active.email) || text(active.label)}${hiddenIds.has(active.id) ? ' (hidden)' : ''}`
-      : '',
     empty: 'No Codex accounts are reported yet.',
     columns,
     rows,
@@ -890,8 +863,6 @@ function antigravitySection(accounts, data, inventory, now) {
   }));
   const rows = accounts.map((account) => {
     const nativeRow = bound.get(account.id);
-    // The live Antigravity login on Ubuntu: a fact, not a control.
-    const active = nativeRow?.selected === true;
     const noQuota = antigravityNoQuota(account) ? 'No Antigravity quota on this plan' : '';
     const cells = noQuota
       ? columns.map(({ key }) => emptyCell(account, key))
@@ -923,12 +894,6 @@ function antigravitySection(accounts, data, inventory, now) {
       status: nativeRow?.status || statusWord(account),
       note: nativeRow?.note || text(account.message),
       platform: hostLabel(account),
-      active,
-      activeLabel: active
-        ? nativeRow.runtimeVerified
-          ? 'on Ubuntu'
-          : 'on Ubuntu, running unverified'
-        : '',
       setup: false,
       canMac: false,
       canWindows: false,
@@ -938,7 +903,6 @@ function antigravitySection(accounts, data, inventory, now) {
       cells,
     };
   });
-  const activeRow = rows.find((row) => row.active);
   const metaRuns = [
     run('Google Antigravity CLI · '),
     run(rows.length, true),
@@ -957,8 +921,6 @@ function antigravitySection(accounts, data, inventory, now) {
     foot: problem
       ? { shown: true, warn: true, runs: [run(problem)], words: wordsOf([run(problem)]), when: '' }
       : noFoot(),
-    activeId: activeRow?.id || '',
-    activeLabel: activeRow?.email || '',
     empty: 'No Antigravity accounts are reported yet.',
     columns,
     rows,
@@ -1095,14 +1057,7 @@ export function dashboardViewModel(data, ctx = {}) {
     sections.push(
       claudeSection(of('claude'), ctx.profiles, ctx.platform || 'mac', now, ctx.openProgress, data)
     );
-  if (!hidden.has('codex'))
-    sections.push(
-      codexSection(
-        of('codex'),
-        now,
-        everyAccount.filter((account) => account.provider === 'codex')
-      )
-    );
+  if (!hidden.has('codex')) sections.push(codexSection(of('codex'), now));
   if (!hidden.has('antigravity') && of('antigravity').length)
     sections.push(
       antigravitySection(of('antigravity'), data, ctx.antigravityInventory, now)
@@ -1136,7 +1091,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     meterView(account, w, { now, label: fullWindowLabel(account.provider, w) })
   );
   const provider = PROVIDER_REGISTRY.find((p) => p.id === account.provider);
-  const state = row?.active ? `Active ${row.activeLabel}` : statusWord(account);
+  const state = statusWord(account);
   const profile =
     account.capabilities?.claudeProfileId ||
     account.capabilities?.codexProfile ||
@@ -1189,9 +1144,6 @@ export function detailsViewModel(data, id, ctx = {}) {
       .filter(Boolean)
       .join(' · '),
     state,
-    active: !!row?.active,
-    activeLabel: row?.activeLabel || '',
-    platform: hostLabel(account),
     profile: row?.profile || profile,
     canMac: !!row?.canMac,
     canWindows: !!row?.canWindows,

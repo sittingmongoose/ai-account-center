@@ -1,7 +1,6 @@
-//! Small controls from the Slint component library: the toggle, the waiting spinner, a check line, the "coming" word
-//! and the plain Active mark. Shared by Accounts & Settings, Details and Home.
+//! Small controls from the Slint component library: the toggle, the waiting spinner, a check line and the "coming" word.
+//! Shared by Accounts & Settings, Details and Home.
 
-use super::icons::Icon;
 use leptos::prelude::*;
 
 /// A switch. It flips at once when pressed (as Slint's Toggle does) and follows the saved value again whenever that
@@ -85,21 +84,5 @@ pub fn CheckLine(
                 on:change=move |e| checked.set(event_target_checked(&e))/>
             <span class="check-text">{text}{sub.map(|s| view! { <span class="check-sub">{move || s.get()}</span> })}</span>
         </label>
-    }
-}
-
-/// The plain Active mark for the account that is the live login on its computer ("on Ubuntu"; empty falls back to
-/// "on <platform>"). A fact only: AI Account Center no longer switches accounts.
-#[component]
-pub fn ActiveMark(#[prop(into)] label: String, #[prop(into)] platform: String) -> impl IntoView {
-    let at = if label.is_empty() {
-        format!("on {platform}")
-    } else {
-        label
-    };
-    view! {
-        <span class="sw-slot">
-            <span class="active-mark"><Icon name="check-circle"/><span class="am-text"><b>"Active"</b><span class="am-where">{at}</span></span></span>
-        </span>
     }
 }
