@@ -569,3 +569,44 @@ async fn large_history_frames_do_not_loosen_other_verb_limits() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_failover_frame_that_fails_the_strict_input_check_is_refused_honestly() {
+    // Non-ASCII text, a non-canonical number spelling and a duplicate key each fail the raw
+    // check. The answer keeps the action's shape and names the reason; it never asks Python.
+    for (action, args) in [
+        (
+            "collect",
+            r#"{"version":1,"action":"collect","provider":"claude","homeDir":"/home/café"}"#,
+        ),
+        (
+            "inventory",
+            r#"{"version":1.0,"action":"inventory","provider":"codex"}"#,
+        ),
+        (
+            "inventory",
+            r#"{"version":1,"action":"inventory","provider":"claude","provider":"claude"}"#,
+        ),
+    ] {
+        let payload = format!(
+            r#"{{"protocol":1,"verb":"failover-inventory","id":"strict","deadlineMs":5000,"args":{args}}}"#
+        ) + "\n";
+        let mut output = Vec::new();
+        let code = aac_agent::run(tokio::io::BufReader::new(payload.as_bytes()), &mut output)
+            .await
+            .unwrap();
+        assert_eq!(code, 0);
+        let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let value = &event["value"];
+        assert_ne!(value, &json!({"fallback":"python"}), "{args}");
+        assert_eq!(value["action"], action, "{value}");
+        assert_eq!(value["reason"], "request-not-proven", "{value}");
+        if action == "collect" {
+            assert_eq!(value["failureCode"], "unavailable");
+            assert_eq!(value["sample"], serde_json::Value::Null);
+        } else {
+            assert_eq!(value["failed"], true);
+            assert_eq!(value["candidates"], json!([]));
+        }
+    }
+}

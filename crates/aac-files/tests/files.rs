@@ -241,6 +241,8 @@ fn private_modes_and_symlink_refusal() {
     );
 }
 
+// Only the Unix takeover tests below use it (clippy -D warnings on Windows).
+#[cfg(unix)]
 fn private_file(path: &Path, bytes: &[u8]) {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -252,6 +254,8 @@ fn private_file(path: &Path, bytes: &[u8]) {
     std::io::Write::write_all(&mut options.open(path).unwrap(), bytes).unwrap();
 }
 
+// Only the Unix takeover tests below use it (clippy -D warnings on Windows).
+#[cfg(unix)]
 fn private_dir(path: &Path) {
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
@@ -262,6 +266,8 @@ fn private_dir(path: &Path) {
     builder.create(path).unwrap();
 }
 
+// Only the Unix takeover tests below use it (clippy -D warnings on Windows).
+#[cfg(unix)]
 fn age(path: &Path, seconds: u64) {
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds);
     std::fs::File::options()
@@ -272,6 +278,8 @@ fn age(path: &Path, seconds: u64) {
         .unwrap();
 }
 
+// Only the Unix takeover tests below use it (clippy -D warnings on Windows).
+#[cfg(unix)]
 fn dead_pid() -> u32 {
     let mut child = std::process::Command::new("true").spawn().unwrap();
     let pid = child.id();

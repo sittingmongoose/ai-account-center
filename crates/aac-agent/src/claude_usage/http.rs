@@ -1,12 +1,24 @@
 //! The fixed Anthropic OAuth routes: no redirects, an aggregate deadline, bounded bodies, and
 //! no provider body text past this boundary (`claude_usage.Client`, `failover_core.Client`).
+//!
+//! The claude.ai web extras need no browser session here. Claude Code's own OAuth API serves
+//! both: `at_wall=1` adds the weekly session reset (`juniper_tide`) to the same usage answer,
+//! and the organization's prepaid balance has an OAuth route (Claude Code 2.1.332 reads it
+//! with the sign-in's token and `x-organization-uuid`). claude.ai itself answers any non-Chrome
+//! TLS client with a Cloudflare challenge, so it is never called.
 use super::desktop::MAX_BYTES;
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
 const ORIGIN: &str = "https://api.anthropic.com";
 pub(crate) const PROFILE: &str = "/api/oauth/profile";
-pub(crate) const USAGE: &str = "/api/oauth/usage?cedar_ember=1";
+pub(crate) const USAGE: &str = "/api/oauth/usage?cedar_ember=1&at_wall=1";
+
+/// The organization's prepaid balance route, for a canonical organization UUID only.
+pub(crate) fn prepaid_route(organization: &str) -> Option<String> {
+    super::desktop::is_uuid(organization)
+        .then(|| format!("/api/oauth/organizations/{organization}/prepaid/credits"))
+}
 
 /// Why a request produced no JSON object: an HTTP status, or none for transport errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,20 +116,44 @@ impl Client {
     }
     /// GET one allowed route with the read-only OAuth headers.
     pub(crate) async fn get(&self, route: &str, token: &str) -> Result<Value, HttpError> {
-        let Some(remaining) = self.remaining().filter(|_| Self::allowed(route)) else {
+        if !Self::allowed(route) {
+            return Err(HttpError::transport());
+        }
+        self.send(route, token, None).await
+    }
+    /// GET the organization's prepaid balance with the same read-only OAuth headers, scoped to
+    /// that organization the way Claude Code scopes it.
+    pub(crate) async fn prepaid(
+        &self,
+        organization: &str,
+        token: &str,
+    ) -> Result<Value, HttpError> {
+        let Some(route) = prepaid_route(organization) else {
             return Err(HttpError::transport());
         };
-        let response = self
+        self.send(&route, token, Some(organization)).await
+    }
+    async fn send(
+        &self,
+        route: &str,
+        token: &str,
+        organization: Option<&str>,
+    ) -> Result<Value, HttpError> {
+        let Some(remaining) = self.remaining() else {
+            return Err(HttpError::transport());
+        };
+        let mut request = self
             .client
             .get(format!("{}{route}", self.origin))
             .timeout(remaining.min(self.per_request))
             .header("Authorization", format!("Bearer {token}"))
             .header("anthropic-beta", "oauth-2025-04-20")
             .header("User-Agent", "CCS-ReadOnly-Usage/1.0")
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .map_err(|_| HttpError::transport())?;
+            .header("Accept", "application/json");
+        if let Some(organization) = organization {
+            request = request.header("x-organization-uuid", organization);
+        }
+        let response = request.send().await.map_err(|_| HttpError::transport())?;
         let status = response.status().as_u16();
         let retry = retry_after(
             response
@@ -197,6 +233,22 @@ impl Client {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn prepaid_route_takes_only_a_canonical_organization() {
+        assert_eq!(
+            prepaid_route("33333333-3333-3333-3333-333333333333").as_deref(),
+            Some("/api/oauth/organizations/33333333-3333-3333-3333-333333333333/prepaid/credits")
+        );
+        for bad in [
+            "",
+            "../profile",
+            "33333333-3333-3333-3333-33333333333g",
+            "x/../y",
+        ] {
+            assert_eq!(prepaid_route(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn retry_after_is_bounded() {

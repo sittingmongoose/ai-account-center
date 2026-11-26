@@ -767,8 +767,7 @@ pub(crate) fn normalize_session_reset_allowance(value: &Value) -> Vec<Value> {
     vec![window]
 }
 
-/// `normalize_prepaid`: kept for the claude.ai web extras, which this port does not read yet.
-#[cfg_attr(not(test), allow(dead_code))]
+/// `normalize_prepaid`: the organization's prepaid balance (OAuth `prepaid/credits`).
 pub(crate) fn normalize_prepaid(value: &Value) -> Vec<Value> {
     let Some(obj) = value.as_object() else {
         return vec![];

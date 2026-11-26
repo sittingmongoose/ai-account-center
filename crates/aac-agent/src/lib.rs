@@ -170,12 +170,14 @@ pub async fn run(
                     }
                     let unproven_failover =
                         envelope.verb == "failover-inventory" && !failover::request_proven(&bytes);
+                    let args: serde_json::Value = serde_json::from_str(envelope.args.get())
+                        .map_err(|_| Failure::new(Cause::Damaged, "invalid agent request JSON"))?;
+                    // Judge raw spellings/caps before serde can erase their distinction. Only the
+                    // action survives, so the refusal answers in that action's shape.
                     let args = if unproven_failover {
-                        serde_json::json!({"unprovenRawRequest": true})
+                        failover::unproven_args(&args)
                     } else {
-                        serde_json::from_str(envelope.args.get()).map_err(|_| {
-                            Failure::new(Cause::Damaged, "invalid agent request JSON")
-                        })?
+                        args
                     };
                     Ok((
                         None,
