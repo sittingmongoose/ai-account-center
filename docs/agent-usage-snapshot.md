@@ -58,8 +58,9 @@ percentage, amount or reset stays missing.
 Pace comes from the quota history (every changed reading of the last hour, 5-minute buckets to a
 day, hourly beyond) plus the one-minute readings the dashboard saw in the last hour, kept in
 memory, so a burst is measured within a few minutes. A rate needs two real readings of the same
-window in the same reset period: a fall in use or a moved reset time starts a new period, and
-nothing is extrapolated across a reset. `pace` is the shortest span with enough readings.
+window in the same reset period. A reset-sized fall in use or a moved reset time starts a new
+period, even when intervening readings omit the reset time. `pace` is the shortest span with
+enough readings.
 
 One write runs at a time. On a hard network mount, if the file server stalls, one write waits and
 later samples are skipped; the dashboard itself is never blocked. A failed write is

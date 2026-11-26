@@ -404,10 +404,27 @@ fn upcoming(reading: &Reading) -> bool {
 /// `currentPeriod`: the readings since the last reset.
 fn current_period(readings: &[Reading], extra_boundaries: &[i64]) -> Vec<Reading> {
     let mut boundaries: Vec<i64> = Vec::new();
+    let mut previous_reset: Option<(i64, i64)> = None;
+    let mut period_start = i64::MIN;
     for reading in readings {
-        if let Some(reset) = reading.reset_at
-            && !boundaries.contains(&reset)
+        let Some(reset) = reading.reset_at else {
+            continue;
+        };
+        // A missing reset timestamp must not hide a transition between announcements.
+        // If the old reset was still ahead when last reported, its known boundary can
+        // retain intervening post-reset readings. Otherwise only the new announcement
+        // establishes the start of the new series.
+        if let Some((earlier_at, earlier_reset)) = previous_reset
+            && (reset - earlier_reset).abs() > RESET_SHIFT_MS
         {
+            period_start = if earlier_at < earlier_reset && earlier_reset <= reading.at {
+                earlier_reset
+            } else {
+                reading.at
+            };
+        }
+        previous_reset = Some((reading.at, reset));
+        if !boundaries.contains(&reset) {
             boundaries.push(reset);
         }
     }
@@ -418,7 +435,7 @@ fn current_period(readings: &[Reading], extra_boundaries: &[i64]) -> Vec<Reading
     }
     let usable: Vec<&Reading> = readings
         .iter()
-        .filter(|reading| reading.used.is_some())
+        .filter(|reading| reading.at >= period_start && reading.used.is_some())
         .collect();
     if usable.is_empty() {
         return Vec::new();
@@ -430,13 +447,6 @@ fn current_period(readings: &[Reading], extra_boundaries: &[i64]) -> Vec<Reading
         if boundaries
             .iter()
             .any(|reset| earlier.at < *reset && *reset <= later.at)
-        {
-            break;
-        }
-        // A reset time that differs names another period, even when the earlier one already
-        // passed: a reading that still names the old period after a restart is never burn.
-        if let (Some(earlier_reset), Some(later_reset)) = (earlier.reset_at, later.reset_at)
-            && (earlier_reset - later_reset).abs() > RESET_SHIFT_MS
         {
             break;
         }
@@ -748,6 +758,29 @@ mod tests {
         assert_eq!(burn.last5_minutes, Some(60.0));
         assert_eq!(burn.pace, Some(60.0));
         assert_eq!(burn.pace_minutes, Some(5));
+    }
+
+    #[test]
+    fn a_reset_only_reading_keeps_the_old_period_out_of_the_pace() {
+        let new_reset = NOW + 60 * MINUTE;
+        let readings = [
+            reading(4, 0.0, Some(NOW - 5 * MINUTE)),
+            Reading {
+                used: None,
+                ..reading(3, 0.0, Some(new_reset))
+            },
+            reading(2, 39.0, None),
+            reading(0, 41.0, Some(new_reset)),
+        ];
+        let first = burn_rate(&readings[..3], None, &[]);
+        assert_eq!(first.period_started_at, js::iso_of(NOW - 2 * MINUTE));
+        assert_eq!(first.last5_minutes, None);
+        assert_eq!(first.pace, None);
+        assert_eq!(first.projected_full_at, None);
+
+        let second = burn_rate(&readings, None, &[]);
+        assert_eq!(second.period_started_at, first.period_started_at);
+        assert_eq!(second.pace, Some(60.0));
     }
 
     #[test]

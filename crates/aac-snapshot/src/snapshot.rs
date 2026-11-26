@@ -304,6 +304,53 @@ mod tests {
     }
 
     #[test]
+    fn restarted_weekly_window_publishes_no_pace_across_an_omitted_reset_time() {
+        let weekly = |id: &str, sampled_at: &str, used: f64, reset: Option<&str>| {
+            json!({
+                "id": id, "provider": "opencode-go", "providerLabel": "OpenCode Go", "label": id,
+                "status": "ok", "platform": "ubuntu", "sampledAt": sampled_at,
+                "windows": [{"key": "weekly", "label": "Weekly", "kind": "rate_limit",
+                             "usedPercent": used, "resetAt": reset}]
+            })
+        };
+        let original = "opencode-go:original";
+        let t32 = "2026-11-19T21:32:00.000Z";
+        let t33 = "2026-11-19T21:33:00.000Z";
+        let t35 = "2026-11-19T21:35:00.000Z";
+        let next_reset = "2026-11-26T21:31:00.000Z";
+        let mut older = weekly(original, t32, 0.0, Some("2026-11-19T21:31:00.000Z"));
+        older["identity"] = json!(crate::js::account_identity(&older));
+        let mut recent = crate::history::RecentReadings::new();
+        recent.add(
+            &[weekly(original, t33, 0.0, None)],
+            js::date_parse_str(t33).expect("intermediate sample time"),
+        );
+        let event = SampleEvent {
+            accounts: vec![
+                weekly("opencode-go:new-2", t35, 52.0, Some(next_reset)),
+                weekly(original, t35, 39.0, Some(next_reset)),
+                weekly("opencode-go:new-1", t35, 12.0, Some(next_reset)),
+            ],
+            history: Some(json!({"records": [older]})),
+            sampled_at: js::date_parse_str(t35).expect("latest sample time"),
+            long_burn: None,
+        };
+        let (snapshot, _) = build_snapshot_files(&event, 60.0, Some(&recent), &[], None);
+        let accounts = snapshot["accounts"].as_array().expect("published accounts");
+        assert_eq!(accounts.len(), 3);
+        for account in accounts {
+            let burn = &account["windows"][0]["burn"];
+            assert_eq!(burn["pace"], Value::Null, "{}", account["id"]);
+            assert_eq!(burn["last5Minutes"], Value::Null);
+            assert_eq!(burn["projectedFullAt"], Value::Null);
+            assert_eq!(burn["periodStartedAt"], t35);
+        }
+        let words = crate::markdown::render_snapshot_markdown(&snapshot, event.sampled_at);
+        assert!(words.contains("39% used"));
+        assert!(!words.contains("full in"));
+    }
+
+    #[test]
     fn no_burn_for_passed_reset_or_sign_in_needed() {
         let mut passed = row();
         passed["sampledAt"] = json!("2026-10-15T09:00:00.000Z");
