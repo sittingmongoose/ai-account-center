@@ -82,6 +82,13 @@ function fixture(): string {
     path.join(__dirname, '../../../web-dashboard/public/bridge.js'),
     path.join(crate, 'public', 'bridge.js')
   );
+  // The first-load shell files the frame head links and runtime init awaits, as shipped.
+  for (const name of ['status-bar.css', 'frame-session.mjs']) {
+    fs.copyFileSync(
+      path.join(__dirname, '../../../web-dashboard/public', name),
+      path.join(crate, 'public', name)
+    );
+  }
   fs.writeFileSync(path.join(crate, 'public', 'sw-route.js'), '// routing fixture\n');
   fs.writeFileSync(path.join(crate, 'public', 'view-model.mjs'), 'export const rows = [];\n');
   fs.writeFileSync(
@@ -568,6 +575,10 @@ describe('the Leptos dashboard build', () => {
         'large.mjs.gz',
         'bridge.js.br',
         'bridge.js.gz',
+        'frame-session.mjs.br',
+        'frame-session.mjs.gz',
+        'status-bar.css.br',
+        'status-bar.css.gz',
         'app/index.html.br',
         'app/index.html.gz',
         'app/app.css.br',
@@ -817,6 +828,44 @@ describe('the Leptos dashboard build', () => {
     expect(zlib.gzipSync(fs.readFileSync(page)).length).toBeGreaterThan(64 * 1024);
     expect(gzipped(output)).toBeLessThan(4 * 1024 * 1024);
     expect(() => verifyBundle(output)).toThrow('Bundle entry too large: app/index.html');
+  });
+
+  it('refuses a first-load shell entry that exceeds its gzip cap while the total stays under', () => {
+    for (const [relative, cap] of [
+      ['status-bar.css', 32 * 1024],
+      ['frame-session.mjs', 64 * 1024],
+    ] as const) {
+      // The fixture ships the real shell files (the frame head links the stylesheet and runtime
+      // init awaits the session module), so the caps guard today's sizes with headroom.
+      const root = fixture();
+      build({ repoRoot: root, run: runner([]) });
+      const output = path.join(root, 'dist', 'ui');
+      expect(() => verifyBundle(output)).not.toThrow();
+      const page = path.join(output, relative);
+      fs.appendFileSync(page, crypto.randomBytes(80 * 1024));
+      for (const suffix of ['.br', '.gz']) {
+        const variant = `${page}${suffix}`;
+        if (fs.existsSync(variant)) fs.rmSync(variant);
+      }
+      const manifestPath = path.join(output, 'ui-build-manifest.json');
+      const listed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      listed.precompressed = listed.precompressed.filter(
+        (entry: { path: string }) => entry.path !== relative
+      );
+      fs.writeFileSync(manifestPath, `${JSON.stringify(listed)}\n`);
+      fs.chmodSync(manifestPath, 0o644);
+      fs.chmodSync(page, 0o644);
+      const gzipped = (dir: string): number =>
+        fs.readdirSync(dir, { withFileTypes: true }).reduce((total, file) => {
+          const filePath = path.join(dir, file.name);
+          if (file.isDirectory()) return total + gzipped(filePath);
+          if (file.name.endsWith('.br') || file.name.endsWith('.gz')) return total;
+          return total + zlib.gzipSync(fs.readFileSync(filePath)).length;
+        }, 0);
+      expect(zlib.gzipSync(fs.readFileSync(page)).length).toBeGreaterThan(cap);
+      expect(gzipped(output)).toBeLessThan(4 * 1024 * 1024);
+      expect(() => verifyBundle(output)).toThrow(`Bundle entry too large: ${relative}`);
+    }
   });
 });
 

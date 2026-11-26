@@ -19,6 +19,13 @@ const FIRST_LOAD_MAX = Object.freeze({
   js: 512 * 1024,
   wasm: 3 * 1024 * 1024,
 });
+/** Gzipped caps for first-load shell files outside app/ and pkg/, today's sizes with headroom. */
+const FIRST_LOAD_SHELL_MAX = Object.freeze({
+  // Linked in the frame head (web-dashboard/leptos/index.html).
+  'status-bar.css': 32 * 1024,
+  // Awaited before runtime init (web-dashboard/leptos/index.html).
+  'frame-session.mjs': 64 * 1024,
+});
 const LEPTOS_NAME = 'aac_web';
 const LEPTOS_VERSION = '0.9.0-rc1';
 const APP_ENTRY = 'app/index.html';
@@ -73,6 +80,7 @@ function firstLoadEntries(manifest) {
     ['app/MartianMono.ttf', FIRST_LOAD_MAX.font],
     [`pkg/${manifest.buildId}/${LEPTOS_NAME}.js`, FIRST_LOAD_MAX.js],
     [manifest.wasm.path, FIRST_LOAD_MAX.wasm],
+    ...Object.entries(FIRST_LOAD_SHELL_MAX),
   ];
 }
 
