@@ -1169,7 +1169,7 @@ mod tests {
             "/tmp/aac-local-gate-test",
         )));
         let local = Selector::usage("ubuntu", None);
-        let remote = Selector::usage("mac", Some("jared-mac"));
+        let remote = Selector::usage("mac", Some("mac-ssh"));
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
 
         let first = agents

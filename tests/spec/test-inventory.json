@@ -514,6 +514,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers/claude_owners.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/analytics_writers/experiment_roots.rs",
       "kind": "internal",
       "evidence": [],
@@ -1458,6 +1464,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-snapshot/tests/rollup_golden.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/src/answer_delivery.rs",
       "kind": "helper",
       "evidence": [
@@ -1813,6 +1825,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-store/src/collect_value_oracle.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-store/src/contract.rs",
       "kind": "internal",
       "evidence": [],
@@ -1845,6 +1863,12 @@
     },
     {
       "file": "crates/aac-store/src/run_schema.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/scan_row.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1907,6 +1931,12 @@
       "evidence": [
         "table"
       ]
+    },
+    {
+      "file": "crates/aac-store/tests/scan_memory.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-store/tests/store_boot.rs",
