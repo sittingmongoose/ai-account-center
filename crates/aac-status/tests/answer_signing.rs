@@ -139,4 +139,3 @@ fn a_pkcs8_v2_key_from_an_earlier_build_still_loads() {
     assert_eq!(from_v2.key_id, from_v1.key_id);
     assert_eq!(from_v2.public_key_pem, from_v1.public_key_pem);
 }
-

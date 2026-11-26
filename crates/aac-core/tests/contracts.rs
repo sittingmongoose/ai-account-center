@@ -100,7 +100,10 @@ fn every_generated_wire_word_roundtrips_and_keeps_provenance() {
             let path = source.split_once(':').unwrap().0;
             // The TypeScript server (src/) was retired; its provenance rows stay as history and
             // the table is frozen for those words.
-            if RETIRED_SOURCE_ROOTS.iter().any(|root| path.starts_with(root)) {
+            if RETIRED_SOURCE_ROOTS
+                .iter()
+                .any(|root| path.starts_with(root))
+            {
                 continue;
             }
             assert!(

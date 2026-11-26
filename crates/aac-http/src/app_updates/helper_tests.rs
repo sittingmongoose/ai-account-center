@@ -118,8 +118,11 @@ fn payload_carries_the_script_manifest_and_files_in_order() {
 
     assert!(!HELPER_FILES.contains(&"app_update_codex_runtime.cjs"));
     assert!(!dir.path().join("package/dist").exists());
-    std::fs::remove_file(dir.path().join("package/scripts/app-updates/app_update_codex.cjs"))
-        .expect("drop a helper");
+    std::fs::remove_file(
+        dir.path()
+            .join("package/scripts/app-updates/app_update_codex.cjs"),
+    )
+    .expect("drop a helper");
     assert_eq!(
         HelperSet::load(&dir.path().join("package")).err(),
         Some(failed("helper_set_missing"))

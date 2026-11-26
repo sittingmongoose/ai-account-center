@@ -456,8 +456,7 @@ fn native_helper_accepts_real_pinned_ssh_argv_and_keeps_a_bound() {
     let root = dir.path();
     // The real pinned argv, recorded from the retired TypeScript SSH builder for this fixture
     // computer (127.0.0.1:2222, user fixture, key and known_hosts under the test root).
-    let recorded: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/pinned-ssh-argv.json")).unwrap();
+    let recorded: serde_json::Value = serde_json::from_str(include_str!("fixtures/pinned-ssh-argv.json")).unwrap();
     let root_text = root.to_str().unwrap();
     command.args = recorded["args"]
         .as_array()
