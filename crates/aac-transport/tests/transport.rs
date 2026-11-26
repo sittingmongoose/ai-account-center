@@ -247,11 +247,8 @@ async fn ssh_policy_matches_the_design_for_short_and_scan_calls() {
             "-o",
             "ServerAliveInterval=5",
             "-o",
-            if scan {
-                "ServerAliveCountMax=6"
-            } else {
-                "ServerAliveCountMax=2"
-            },
+            // R5a (S3): unified to 6 for both scan and non-scan -> one mux per host
+            "ServerAliveCountMax=6",
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
@@ -855,4 +852,87 @@ async fn a_client_replaced_while_a_call_waits_for_a_channel_is_refused_not_launc
     let refused = waiting.await.unwrap().err().unwrap();
     assert_eq!(refused.cause, Cause::Refused);
     assert!(!fixture.root.path().join("replacement-ran").exists());
+}
+
+/// S3 R5a: scan and non-scan must hash to one ControlPath per host (was two).
+#[tokio::test]
+async fn s3_scan_and_short_share_one_mux_per_host() {
+    let policy = SshPolicy::new("/fixture/kh".into(), "/fixture/run".into());
+    let make = |policy: SshPolicy, scan: bool| async move {
+        let args: Vec<String> = policy
+            .argv(Path::new("/fixture/key"), scan)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect();
+        let cp = args
+            .iter()
+            .find(|s| s.starts_with("ControlPath="))
+            .unwrap()
+            .clone();
+        let keepalive = args
+            .iter()
+            .find(|s| s.starts_with("ServerAliveCountMax="))
+            .unwrap()
+            .clone();
+        (cp, keepalive, args)
+    };
+    let (cp_scan, ka_scan, args_scan) = make(policy.clone(), true).await;
+    let (cp_short, ka_short, args_short) = make(policy, false).await;
+    assert_eq!(ka_scan, "ServerAliveCountMax=6");
+    assert_eq!(ka_short, "ServerAliveCountMax=6");
+    assert_eq!(cp_scan, cp_short, "one mux per host, not two");
+    for args in [&args_scan, &args_short] {
+        assert!(args.iter().any(|a| a == "ControlPersist=120"));
+        assert!(args.iter().any(|a| a == "ControlMaster=auto"));
+    }
+}
+
+/// S3 ssh-mux-orphans: stale cm-* removed, live kept, non-cm* untouched.
+#[tokio::test]
+async fn s3_stale_cm_sockets_are_purged_and_live_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    // Live master: keep listener alive.
+    let live_path = dir.path().join("cm-live-aaaa-%C");
+    let _live = std::os::unix::net::UnixListener::bind(&live_path).unwrap();
+
+    // Stale: bind then drop listener -> file remains but connect refuses.
+    // Age it past the 2 s guard so cleanup may purge it.
+    let stale_path = dir.path().join("cm-stale-bbbb-%C");
+    {
+        let l = std::os::unix::net::UnixListener::bind(&stale_path).unwrap();
+        drop(l);
+    }
+    // Ensure the file still exists and connect fails (dead master).
+    assert!(stale_path.exists());
+    assert!(std::os::unix::net::UnixStream::connect(&stale_path).is_err());
+    // Age the stale file past the 2 s mid-creation guard.
+    tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+
+    // Fresh stale (should survive because of the 2 s guard).
+    let fresh_path = dir.path().join("cm-fresh-cccc-%C");
+    {
+        let l = std::os::unix::net::UnixListener::bind(&fresh_path).unwrap();
+        drop(l);
+    }
+    assert!(fresh_path.exists());
+    // Fresh file's mtime is now (<2 s), so it must survive.
+
+    // Unrelated file must survive.
+    let other = dir.path().join("not-a-mux");
+    std::fs::write(&other, b"x").unwrap();
+
+    SshPolicy::cleanup_stale_sockets(dir.path());
+
+    assert!(live_path.exists(), "live master socket was purged");
+    assert!(
+        !stale_path.exists(),
+        "stale cm-* socket survived startup purge"
+    );
+    assert!(
+        fresh_path.exists(),
+        "fresh cm-* (mid-creation) must survive the 2 s guard"
+    );
+    assert!(other.exists());
 }

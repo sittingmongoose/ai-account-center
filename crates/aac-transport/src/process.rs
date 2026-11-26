@@ -185,8 +185,54 @@ impl SshPolicy {
 
     fn prepare_control_directory(&self) -> Result<(), Failure> {
         Self::prepare_directory(&self.run_dir)?;
-        Self::prepare_directory(&self.control_directory())
+        Self::prepare_directory(&self.control_directory())?;
+        // S3 ssh-mux-orphans: purge stale cm-* sockets that outlived their master
+        // (SIGKILL under KillMode=control-group leaves the file behind). Called on
+        // every launch, so the first call after a dashboard restart is the
+        // startup cleanup the lane asks for; later calls are cheap (few files).
+        Self::cleanup_stale_sockets(&self.control_directory());
+        Ok(())
     }
+
+    /// Remove cm-* control sockets whose master is gone. A live master accepts a
+    /// local connect instantly; a dead one's file refuses. Safe to call while
+    /// other handles share the directory: only stale files are removed and fresh
+    /// files (<2 s old, possibly mid-creation) are left alone. Best effort.
+    /// Public for the startup cleanup and for tests; production calls it from
+    /// `prepare_control_directory` on every launch.
+    #[cfg(unix)]
+    pub fn cleanup_stale_sockets(directory: &Path) {
+        use std::os::unix::fs::FileTypeExt;
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("cm-") {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !metadata.file_type().is_socket() {
+                continue;
+            }
+            if let Ok(modified) = metadata.modified()
+                && modified.elapsed().is_ok_and(|d| d < Duration::from_secs(2))
+            {
+                continue;
+            }
+            if std::os::unix::net::UnixStream::connect(&path).is_ok() {
+                continue;
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub fn cleanup_stale_sockets(_directory: &Path) {}
 
     fn prepare_directory(directory: &Path) -> Result<(), Failure> {
         if !directory.exists() {
@@ -226,9 +272,14 @@ impl SshPolicy {
         Ok(())
     }
 
-    /// Exact target-design 5.1 options, in stable order. Scan keepalive is six, short is two.
-    /// The separate identity argv accepts spaces. OpenSSH -o paths accept only literal ASCII
-    /// letters/digits and `/._-:`; unsupported quoting, whitespace and expansion are refused.
+    /// Exact target-design 5.1 options, in stable order. Keepalive is unified to six
+    /// (R5a, S3): scan vs non-scan previously hashed different ServerAliveCountMax
+    /// into ControlPath, doubling 6 hosts into 12 muxes (51 MiB). One mux per host.
+    /// The separate identity argv accepts spaces. OpenSSH -o paths accept only literal
+    /// ASCII letters/digits and `/._-:`; unsupported quoting, whitespace and expansion
+    /// are refused. ControlPersist=120 is the bound (not `yes`): masters exit 120 s
+    /// after last use; the dashboard's KillMode=control-group also kills them with
+    /// the service, and stale cm-* files are purged on the next launch.
     pub async fn argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
         Ok(self.invocation(key, scan).await?.argv)
     }
@@ -312,7 +363,7 @@ impl SshPolicy {
             .collect())
     }
 
-    fn base_argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
+    fn base_argv(&self, key: &Path, _scan: bool) -> Result<Vec<OsString>, Failure> {
         if !key.is_absolute()
             || !self.known_hosts.is_absolute()
             || !self.run_dir.is_absolute()
@@ -333,11 +384,11 @@ impl SshPolicy {
             "ConnectTimeout=5",
             "ConnectionAttempts=1",
             "ServerAliveInterval=5",
-            if scan {
-                "ServerAliveCountMax=6"
-            } else {
-                "ServerAliveCountMax=2"
-            },
+            // R5a (S3): always 6 so scan and non-scan share one mux per host.
+            // The `scan` parameter is kept for call-site compatibility; both now
+            // use the same keepalive, so policy_hash yields one ControlPath per
+            // host instead of two.
+            "ServerAliveCountMax=6",
             "StrictHostKeyChecking=yes",
             "VerifyHostKeyDNS=no",
             "UpdateHostKeys=no",
