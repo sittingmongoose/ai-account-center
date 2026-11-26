@@ -49,15 +49,25 @@ export const tests = {
 		await open(t, 'scoreboard');
 		// Its first read is done (the header shows its time): a Refresh during a read is not a second read.
 		await t.until('the Scoreboard has read once', () => !!document.querySelector('.chrome .status-line b')?.textContent, null, { timeout: 30000, hard: true });
-		// Arm the 401 listener before ending the session: an in-flight poll that was
-		// already sent would otherwise 401 before we listen (in-shard flake: the
-		// Refresh click is then ignored while a read is in flight and no new 401
-		// follows, timing the check out). Listening first catches either the poll
-		// or the Refresh.
-		const refused = t.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/scoreboard' && r.status() === 401, { timeout: 15000 });
-		await endOnServer(t);
-		await t.page.click('.chrome button[aria-label="Refresh"]');
-		await refused;
+		// Hold the next read before it reaches the server, then let the real server refuse it.
+		// A poll may claim this read before Refresh does.
+		const scoreboard = (url) => new URL(url).pathname === '/api/scoreboard';
+		let releaseRead;
+		const sessionEnded = new Promise((resolve) => { releaseRead = resolve; });
+		await t.page.route(scoreboard, async (route) => {
+			await sessionEnded;
+			await route.continue();
+		});
+		try {
+			await endOnServer(t);
+			await Promise.all([
+				t.page.waitForResponse((r) => scoreboard(r.url()) && r.status() === 401, { timeout: 15000 }),
+				t.page.click('.chrome button[aria-label="Refresh"]').then(releaseRead),
+			]);
+		} finally {
+			releaseRead();
+			await t.page.unroute(scoreboard);
+		}
 		const state = await eventually(t, () => frameState(t), (s) => s.signedIn === false && s.form, 5000);
 		await t.check('the frame signs out and shows its sign-in, with the reason', state.signedIn === false && state.form && /^Your session ended|^Signed out after/.test(state.banner), JSON.stringify(state));
 		await t.noConsoleErrors('console: only the refused read', { allow: [/status of 401/] });

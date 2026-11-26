@@ -184,26 +184,15 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     async () => {
       const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
       const store = await openStore(path.join(dir, 'store'));
-      // Anchor the fixture to the wall clock but compute the burn expectation from
-      // the server's own 'at' (same clock as the 90d window). A run that crosses an
-      // hour boundary would otherwise shift the window by one hour and flake 89.
-      const end = (Math.floor(Date.now() / HOUR) + 1) * HOUR;
-      const start = end - 90 * 24 * HOUR;
-      const expectedConsumedFor = (serverNow: number) => {
-        const windowStart = serverNow - 90 * 24 * HOUR;
-        const windowEnd = serverNow;
-        // Data points are hourly from start to end (exclusive). The burn counts
-        // the last used minus the first used among points in [windowStart, windowEnd).
-        const firstInWindow = Math.max(start, Math.ceil(windowStart / HOUR) * HOUR);
-        const lastInWindow = Math.min(end - HOUR, Math.floor((windowEnd - 1) / HOUR) * HOUR);
-        if (lastInWindow < firstInWindow) return 0;
-        const usedAt = (t: number) => Math.floor((t - start) / (24 * HOUR));
-        return usedAt(lastInWindow) - usedAt(firstInWindow);
-      };
+      // Keep the first observation well inside the route's rolling 90-day window.
+      // Anchor the end one hour back to exercise a rollover even on a fast run.
+      const end = (Math.floor(Date.now() / HOUR) - 1) * HOUR;
+      const hours = 90 * 24 - 12;
+      const start = end - hours * HOUR;
       const resetAt = new Date(end).toISOString();
       let server: Awaited<ReturnType<typeof startNativeStoreServer>> | undefined;
       try {
-        // Keep 23,760 hourly points across 11 series to cross the 20,000-point cap.
+        // Keep more than 20,000 hourly points across 11 series to cross the 20,000-point cap.
         // Usage changes daily. Hourly sightings between changes still produce rollups
         // without projecting a changed quota reading every hour.
         const [first] = accountsAt(START);
@@ -238,8 +227,8 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
         expect(capped.series.length).toBeLessThan(11);
         const exports = await buildRollupExports(store, [], [], end - 1);
         expect(exports.hourly.series).toHaveLength(11);
-        expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(23_760);
-        expect(exports.hourly.series.every((s) => s.points.length === 2160)).toBe(true);
+        expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(11 * hours);
+        expect(exports.hourly.series.every((s) => s.points.length === hours)).toBe(true);
         if (!haveNativeStoreServer) {
           console.warn('[SKIP] burn HTTP replay requires a built native dashboard launcher');
           return;
@@ -251,26 +240,17 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
         });
         expect(response.status).toBe(200);
         const body = (await response.json()) as {
-          at?: string;
+          at: string;
           series: Array<{ accountId: string; spans: Array<{ span: string; consumed: number }> }>;
         };
         expect(body.series.map((s) => s.accountId).sort()).toEqual(
           Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
         );
-        // Derive the expectation from the server's 'at' (its window clock), not
-        // from the fixture's initial Date.now() which may be an hour stale after
-        // a slow generation that crossed a boundary.
-        const serverNow = body.at ? Date.parse(body.at) : Date.now();
-        const expected = expectedConsumedFor(serverNow);
-        // The fixture always spans 90d with a daily step, so a window fully inside it
-        // expects 89; an edge where the window starts after the first point still
-        // expects 89 for a 1h shift, but a larger shift (or a narrow window) must
-        // be computed, not hardcoded.
-        expect(expected).toBe(89);
+        const serverNow = Date.parse(body.at);
+        expect(serverNow).toBeGreaterThan(end);
+        expect(serverNow - 90 * 24 * HOUR).toBeLessThanOrEqual(start);
         for (const series of body.series) {
-          expect(series.spans).toEqual([
-            expect.objectContaining({ span: '90d', consumed: expected }),
-          ]);
+          expect(series.spans).toEqual([expect.objectContaining({ span: '90d', consumed: 89 })]);
         }
       } finally {
         await server?.stop();

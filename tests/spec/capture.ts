@@ -761,19 +761,14 @@ try {
     assert.equal(direct.status, 404, 'private fallback refuses requests without the boot proof');
     await direct.arrayBuffer();
   }
-  // Wait for the fixture Rust service before replay so the first preferences
-  // requests do not arrive before boot and get correctly served by the TS
-  // fallback (goldens still match, but the served counter reads 25 instead of 27
-  // about one run in three on Nas1 under load, row 56). Production startup stays
-  // asynchronous; only the fixture harness waits.
   if (!composed && rustMode !== 'off') {
-    for (
-      let waited = 0;
-      waited < 500 && (instance.rustService as { diagnostics?: () => any }).diagnostics?.().service?.state !== 'ready';
-      waited++
-    ) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    // The first preferences read must reach Rust even when the async boot is slow.
+    const serviceState = () =>
+      (instance.rustService.diagnostics().service as { state: string }).state;
+    const deadline = performance.now() + 10_000;
+    while (serviceState() === 'down' && performance.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(serviceState(), 'ready', 'fixture Rust service must be ready before replay');
   }
   for (const [index, route] of inventory.entries()) {
     const moved = MOVED_TO_RUST.has(`${route.method} ${route.path}`);

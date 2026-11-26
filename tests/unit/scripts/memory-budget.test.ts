@@ -13,6 +13,7 @@ import {
 import {
   POLL_PLAN,
   assertNoSymlinks,
+  assertResolvedInside,
   buildIsolatedEnv,
   collectDescendants,
   evaluateRouteFailures,
@@ -317,7 +318,11 @@ describe('memory budget sampler and threshold evaluator', () => {
 
   it('rejects misspelled, missing, non-finite, and unknown limit keys before fixture generation', () => {
     const summary = summarizeSamples(
-      [makeSample(0, 700 * 1024), makeSample(120, 700 * 1024), makeSample(240, 900 * 1024, 80 * 1024)],
+      [
+        makeSample(0, 700 * 1024),
+        makeSample(120, 700 * 1024),
+        makeSample(240, 900 * 1024, 80 * 1024),
+      ],
       120
     );
 
@@ -444,7 +449,9 @@ describe('memory budget sampler and threshold evaluator', () => {
       steadyAfterSec: 120,
       sampleIntervalSec: 2,
     });
-    expect(shortFailures.some((msg) => msg.includes('Insufficient steady-window samples'))).toBe(true);
+    expect(shortFailures.some((msg) => msg.includes('Insufficient steady-window samples'))).toBe(
+      true
+    );
     expect(shortFailures.some((msg) => msg.includes('ended too early'))).toBe(true);
   });
 
@@ -453,7 +460,12 @@ describe('memory budget sampler and threshold evaluator', () => {
       validateRunOptions({ durationSec: 0, steadyAfterSec: 120, sampleIntervalSec: 2, check: true })
     ).toThrow(/durationSec/i);
     expect(() =>
-      validateRunOptions({ durationSec: 0, steadyAfterSec: 120, sampleIntervalSec: 2, check: false })
+      validateRunOptions({
+        durationSec: 0,
+        steadyAfterSec: 120,
+        sampleIntervalSec: 2,
+        check: false,
+      })
     ).toThrow(/durationSec/i);
     expect(() =>
       validateRunOptions({
@@ -813,8 +825,36 @@ describe('memory-budget tool-batch-1126 fixes', () => {
     // Samples with unavailable PSS (fallback path).
     const mem = summarizeSamples(
       [
-        { tSec: 0, serverRssKiB: 1000, serverPssKiB: null, serverAnonKiB: null, serverFileKiB: null, serverSwapKiB: 0, pssAvailable: false, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: null, totalRssKiB: 1000, totalPssKiB: null },
-        { tSec: 130, serverRssKiB: 1000, serverPssKiB: null, serverAnonKiB: null, serverFileKiB: null, serverSwapKiB: 0, pssAvailable: false, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: null, totalRssKiB: 1000, totalPssKiB: null },
+        {
+          tSec: 0,
+          serverRssKiB: 1000,
+          serverPssKiB: null,
+          serverAnonKiB: null,
+          serverFileKiB: null,
+          serverSwapKiB: 0,
+          pssAvailable: false,
+          threads: 1,
+          childrenCount: 0,
+          childrenRssKiB: 0,
+          childrenPssKiB: null,
+          totalRssKiB: 1000,
+          totalPssKiB: null,
+        },
+        {
+          tSec: 130,
+          serverRssKiB: 1000,
+          serverPssKiB: null,
+          serverAnonKiB: null,
+          serverFileKiB: null,
+          serverSwapKiB: 0,
+          pssAvailable: false,
+          threads: 1,
+          childrenCount: 0,
+          childrenRssKiB: 0,
+          childrenPssKiB: null,
+          totalRssKiB: 1000,
+          totalPssKiB: null,
+        },
       ],
       120
     );
@@ -822,48 +862,83 @@ describe('memory-budget tool-batch-1126 fixes', () => {
     expect(mem.steadyMedianPssKiB).toBeNull();
     expect(mem.samplingNote).toMatch(/short-lived|between samples/i);
     // A PSS limit with unavailable PSS must fail, not pass with RSS-as-PSS.
-    const cfg = { schemaVersion: 1, limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100, steadyPssMiB: 50 } };
+    const cfg = {
+      schemaVersion: 1,
+      limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100, steadyPssMiB: 50 },
+    };
     expect(() => evaluateThresholds(mem, cfg as never)).toThrow(/PSS coverage/);
     // Without a PSS limit, RSS-only still passes.
-    const rssCfg = { schemaVersion: 1, limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100 } };
+    const rssCfg = {
+      schemaVersion: 1,
+      limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100 },
+    };
     expect(evaluateThresholds(mem, rssCfg as never).ok).toBe(true);
   });
 
   it('rejects sub-200 ms sample intervals consistently', () => {
     expect(() =>
-      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.05, check: true })
+      validateRunOptions({
+        durationSec: 10,
+        steadyAfterSec: 5,
+        sampleIntervalSec: 0.05,
+        check: true,
+      })
     ).toThrow(/>= 0.2/);
     expect(() =>
-      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.19, check: true })
+      validateRunOptions({
+        durationSec: 10,
+        steadyAfterSec: 5,
+        sampleIntervalSec: 0.19,
+        check: true,
+      })
     ).toThrow(/>= 0.2/);
     // 0.2 is the supported minimum and passes when the window is sufficient.
     expect(() =>
-      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.2, check: true })
+      validateRunOptions({
+        durationSec: 10,
+        steadyAfterSec: 5,
+        sampleIntervalSec: 0.2,
+        check: true,
+      })
     ).not.toThrow();
     // Also rejects in measure-only mode (the timer clamp applies either way).
     expect(() =>
-      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.05, check: false })
+      validateRunOptions({
+        durationSec: 10,
+        steadyAfterSec: 5,
+        sampleIntervalSec: 0.05,
+        check: false,
+      })
     ).toThrow(/>= 0.2/);
   });
 
-  it('refuses symlinked fixture inputs and verifies resolved roots', () => {
+  it('refuses symlinked fixture inputs before starting a child', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-link-'));
     try {
-      const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-out-'));
-      fs.writeFileSync(path.join(outside, 'secret.json'), '{}');
-      const linkedDir = path.join(root, 'home', '.ccs');
-      fs.mkdirSync(linkedDir, { recursive: true });
-      fs.symlinkSync(path.join(outside, 'secret.json'), path.join(linkedDir, 'link.json'));
-      expect(() => assertNoSymlinks(root)).toThrow(/symlink/);
-      // A clean tree passes.
-      const clean = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-clean-'));
-      try {
-        fs.mkdirSync(path.join(clean, 'home', '.ccs'), { recursive: true });
-        fs.writeFileSync(path.join(clean, 'home', '.ccs', 'config.yaml'), 'a: b\n');
-        expect(() => assertNoSymlinks(clean)).not.toThrow();
-      } finally {
-        fs.rmSync(clean, { recursive: true, force: true });
-      }
+      const fixture = path.join(root, 'fixture');
+      const outside = path.join(root, 'outside');
+      const home = path.join(fixture, 'home');
+      fs.mkdirSync(home, { recursive: true });
+      fs.mkdirSync(outside);
+      const linked = path.join(home, '.ccs');
+      fs.symlinkSync(outside, linked, 'dir');
+      expect(() => assertNoSymlinks(fixture)).toThrow(/symlink/);
+      expect(() => assertResolvedInside(fixture, linked)).toThrow(/escapes the fixture/);
+      expect(() => assertResolvedInside(fixture, home)).not.toThrow();
+      await expect(generateMemoryFixture(linked)).rejects.toThrow(/symlink/);
+      await expect(
+        runMemoryBudget({
+          durationSec: 1,
+          steadyAfterSec: 0,
+          sampleIntervalSec: 0.2,
+          check: false,
+          fixtureDir: fixture,
+          launcherPath: process.execPath,
+          launcherArgs: () => {
+            throw new Error('the launcher must not start');
+          },
+        })
+      ).rejects.toThrow(/symlink/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -872,12 +947,33 @@ describe('memory-budget tool-batch-1126 fixes', () => {
   it('documents the short-lived helper sampling limit in the summary', () => {
     const mem = summarizeSamples(
       [
-        { tSec: 0, serverRssKiB: 100, serverPssKiB: 90, pssAvailable: true, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: 0, totalRssKiB: 100, totalPssKiB: 90 },
-        { tSec: 130, serverRssKiB: 100, serverPssKiB: 90, pssAvailable: true, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: 0, totalRssKiB: 100, totalPssKiB: 90 },
+        {
+          tSec: 0,
+          serverRssKiB: 100,
+          serverPssKiB: 90,
+          pssAvailable: true,
+          threads: 1,
+          childrenCount: 0,
+          childrenRssKiB: 0,
+          childrenPssKiB: 0,
+          totalRssKiB: 100,
+          totalPssKiB: 90,
+        },
+        {
+          tSec: 130,
+          serverRssKiB: 100,
+          serverPssKiB: 90,
+          pssAvailable: true,
+          threads: 1,
+          childrenCount: 0,
+          childrenRssKiB: 0,
+          childrenPssKiB: 0,
+          totalRssKiB: 100,
+          totalPssKiB: 90,
+        },
       ],
       120
     );
     expect(mem.samplingNote).toMatch(/missed|between samples/i);
   });
 });
-

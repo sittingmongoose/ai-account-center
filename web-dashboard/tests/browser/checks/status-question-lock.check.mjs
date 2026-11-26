@@ -1,5 +1,6 @@
 // The real report reader and Status composer feed an isolated browser fixture. Each rollback
 // leaves the composed card identical while moving its reason into or out of Report problems.
+import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -59,11 +60,13 @@ async function statusFixture(t, name) {
     });
   }
   await scan(2);
+  const reports = reader.snapshot();
+  assert.equal(reports.cards.length, 1, `the fixture reader did not load its card: ${JSON.stringify(reports.problems)}`);
   return { scan, view };
 }
 
 async function openStatus(t, read) {
-  await t.viewport(1440, 900);
+  await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
   await t.app.signIn();
   await t.page.route((url) => new URL(url).pathname === '/api/status', (route) =>
     route.fulfill({ json: read() })

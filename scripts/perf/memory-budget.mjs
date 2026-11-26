@@ -128,7 +128,7 @@ export function assertNoSymlinks(root) {
 /** Verify `target` resolves inside `root` (no .. escape or symlink escape). */
 export function isPathInside(root, target) {
   const rel = path.relative(root, target);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 export function assertResolvedInside(root, file) {
@@ -162,7 +162,14 @@ export function getChildExitStatus(child) {
 
 /** Parse /proc/<pid>/smaps_rollup text into KiB counters. */
 export function parseSmapsRollup(text) {
-  const out = { rssKiB: 0, pssKiB: 0, pssAnonKiB: 0, pssFileKiB: 0, swapKiB: 0, pssAvailable: true };
+  const out = {
+    rssKiB: 0,
+    pssKiB: 0,
+    pssAnonKiB: 0,
+    pssFileKiB: 0,
+    swapKiB: 0,
+    pssAvailable: true,
+  };
   for (const line of text.split('\n')) {
     const colon = line.indexOf(':');
     if (colon < 0) continue;
@@ -390,7 +397,7 @@ export function validateRunOptions(opts, pollPlan = POLL_PLAN) {
   }
   if (sampleIntervalSec < MIN_SAMPLE_INTERVAL_SEC) {
     throw new Error(
-      `Invalid sampleIntervalSec (${sampleIntervalSec}): must be >= ${MIN_SAMPLE_INTERVAL_SEC} (the sampler clamps to 200 ms).`
+      `Invalid sampleIntervalSec (${sampleIntervalSec}): must be >= ${MIN_SAMPLE_INTERVAL_SEC} (minimum supported sample interval).`
     );
   }
   if (opts.seed !== undefined && (typeof opts.seed !== 'number' || !Number.isFinite(opts.seed))) {
@@ -504,9 +511,7 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
   const peakServerRssKiB = Math.max(...samples.map((s) => s.serverRssKiB));
   const pssSamples = samples.filter((s) => s.pssAvailable !== false && s.serverPssKiB != null);
   const pssAvailable = pssSamples.length === samples.length && samples.length > 0;
-  const peakServerPssKiB = pssAvailable
-    ? Math.max(...samples.map((s) => s.serverPssKiB))
-    : null;
+  const peakServerPssKiB = pssAvailable ? Math.max(...samples.map((s) => s.serverPssKiB)) : null;
   const childrenPeakRssKiB = Math.max(...samples.map((s) => s.childrenRssKiB));
   const childPssSamples = samples.filter((s) => s.childrenPssKiB != null);
   const childrenPssAvailable = childPssSamples.length === samples.length && samples.length > 0;
@@ -522,10 +527,12 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
 
   const steadyMedianRssKiB = median(steadySource.map((s) => s.serverRssKiB));
   const steadyPssSource = steadySource.filter((s) => s.serverPssKiB != null);
-  const steadyMedianPssKiB = steadyPssSource.length > 0 ? median(steadyPssSource.map((s) => s.serverPssKiB)) : null;
+  const steadyMedianPssKiB =
+    steadyPssSource.length > 0 ? median(steadyPssSource.map((s) => s.serverPssKiB)) : null;
   const steadyMedianTotalRssKiB = median(steadySource.map((s) => s.totalRssKiB));
   const steadyTotalPssSource = steadySource.filter((s) => s.totalPssKiB != null);
-  const steadyMedianTotalPssKiB = steadyTotalPssSource.length > 0 ? median(steadyTotalPssSource.map((s) => s.totalPssKiB)) : null;
+  const steadyMedianTotalPssKiB =
+    steadyTotalPssSource.length > 0 ? median(steadyTotalPssSource.map((s) => s.totalPssKiB)) : null;
 
   const lastSample = samples[samples.length - 1];
 
@@ -563,7 +570,8 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
     endPssMiB: toMiBOrNull(lastSample.serverPssKiB ?? null),
     maxThreads: Math.max(...samples.map((s) => s.threads)),
     maxChildren: Math.max(...samples.map((s) => s.childrenCount)),
-    samplingNote: 'childrenPeak is sampled from /proc at the sample interval; a helper that starts and exits between samples may be missed. For strict short-lived enforcement, use a cgroup peak or a shorter interval.',
+    samplingNote:
+      'childrenPeak is sampled from /proc at the sample interval; a helper that starts and exits between samples may be missed. For strict short-lived enforcement, use a cgroup peak or a shorter interval.',
   };
 }
 
@@ -613,7 +621,13 @@ export function evaluateThresholds(memorySummary, config) {
   const limits = config.limits;
   const violations = [];
   const results = [];
-  const pssLimitKeys = new Set(['steadyPssMiB', 'peakPssMiB', 'childrenPeakPssMiB', 'totalSteadyPssMiB', 'totalPeakPssMiB']);
+  const pssLimitKeys = new Set([
+    'steadyPssMiB',
+    'peakPssMiB',
+    'childrenPeakPssMiB',
+    'totalSteadyPssMiB',
+    'totalPeakPssMiB',
+  ]);
   for (const [limitKey, kibKey, mibKey] of THRESHOLD_CHECKS) {
     if (!Object.hasOwn(limits, limitKey)) continue;
     if (pssLimitKeys.has(limitKey) && memorySummary.pssAvailable === false) {
@@ -1250,15 +1264,16 @@ export async function runMemoryBudget(opts) {
     const stubsDir = path.join(runRoot, 'stubs');
     const xdgRuntimeDir = path.join(runRoot, 'xdg');
     const logsDir = path.join(runRoot, 'logs');
-    // Verify resolved roots stay inside the ephemeral fixture copy.
-    const expectedRoot = fs.realpathSync(path.join(runRoot, 'fixture'));
-    for (const candidate of [fixture.home, fixture.ccsDir, fixture.reportsDir, fixture.registryDir]) {
-      if (!candidate) continue;
-      // Only verify candidates that exist; the generator always creates them.
-      if (fs.existsSync(candidate)) assertResolvedInside(expectedRoot, candidate);
-      else if (candidate !== path.join(expectedRoot, 'home', '.ccs') && candidate !== path.join(expectedRoot, 'home')) {
-        // Non-existent paths should still resolve inside the fixture.
-        assertResolvedInside(expectedRoot, candidate);
+    const fixtureRoot = path.join(runRoot, 'fixture');
+    for (const candidate of [
+      fixture.home,
+      fixture.ccsDir,
+      fixture.reportsDir,
+      fixture.registryDir,
+    ]) {
+      assertResolvedInside(fixtureRoot, candidate);
+      if (!fs.lstatSync(candidate).isDirectory()) {
+        throw new Error(`Fixture root must be a directory: ${candidate}`);
       }
     }
     writeStubs(stubsDir);
@@ -1336,7 +1351,7 @@ export async function runMemoryBudget(opts) {
       if (sample) samples.push(sample);
     };
     takeSample();
-    samplerTimer = setInterval(takeSample, Math.max(200, opts.sampleIntervalSec * 1000));
+    samplerTimer = setInterval(takeSample, opts.sampleIntervalSec * 1000);
 
     try {
       await waitForHealth(port, childAbort.signal);

@@ -135,11 +135,14 @@ describe('package-owned computer registry', () => {
     const invocation = await appUpdateInvocation('1070ti', '');
     expect(invocation.args.at(-2)).toBe('1070ti');
     expect(invocation.args.at(-1)).toContain('--platform ubuntu');
-    expect(await configuredUsageHosts()).toContainEqual({
-      host: '1070ti',
-      platform: 'ubuntu',
-      sshHost: '1070ti',
-    });
+    const hosts = await configuredUsageHosts();
+    expect(hosts.filter(({ host }) => host === '1070ti')).toEqual([
+      {
+        host: '1070ti',
+        platform: 'ubuntu',
+        sshHost: localComputer() === '1070ti' ? null : '1070ti',
+      },
+    ]);
     expect(sourceHost({ platform: 'ubuntu', sshHost: '1070ti' })).toBe('1070ti');
     expect(analyticsRemoteTargets('1070ti')).toHaveLength(analyticsRemoteTargets('nas1').length);
     expect((await resolveAnalyticsRemoteHosts())['1070ti']).toBe('1070ti');
