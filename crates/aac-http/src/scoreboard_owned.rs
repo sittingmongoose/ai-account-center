@@ -720,6 +720,8 @@ impl CachedScoreboardBody {
 
 struct CachedView {
     at: u64,
+    /// The snapshot generation these final bytes belong to.
+    generation: u64,
     /// The held-snapshot sequence this view was composed from: a newer snapshot makes
     /// the view stale however young it is.
     seq: u64,
@@ -734,6 +736,7 @@ struct CachedView {
 impl CachedView {
     fn from_raw(
         at: u64,
+        generation: u64,
         seq: u64,
         raw: Vec<u8>,
         age_value_offset: Option<usize>,
@@ -743,6 +746,7 @@ impl CachedView {
         (
             Self {
                 at,
+                generation,
                 seq,
                 body,
                 age_value_offset,
@@ -759,6 +763,7 @@ impl CachedView {
     #[cfg(test)]
     fn from_uncompressed(
         at: u64,
+        generation: u64,
         seq: u64,
         raw: Vec<u8>,
         age_value_offset: Option<usize>,
@@ -766,6 +771,7 @@ impl CachedView {
     ) -> Self {
         Self {
             at,
+            generation,
             seq,
             body: CachedScoreboardBody::Whole(CachedBody::from_uncompressed(raw, etag.clone())),
             age_value_offset,
@@ -923,35 +929,61 @@ fn cached_bytes(cached: &CachedView, now: u64, stale: bool) -> (Vec<u8>, String)
     }
 }
 
-/// Trim one view-cache map to its bounds: at most [`CACHE_ENTRIES`] views, and at most
-/// [`CACHE_BYTES`] of their bytes. The oldest go first; the newest view always survives, even
-/// when it alone is over the byte cap (an empty cache would only recompose it at once).
-fn trim_view_cache(map: &mut IndexMap<String, Arc<CachedView>>) {
-    while map.len() > CACHE_ENTRIES {
-        map.shift_remove_index(0);
+/// Unique bytes held by both cache maps; an `Arc` present in each map counts once.
+fn view_cache_bytes(
+    views: &IndexMap<String, Arc<CachedView>>,
+    good: &IndexMap<String, Arc<CachedView>>,
+) -> usize {
+    let sizes: HashMap<*const CachedView, usize> = views
+        .values()
+        .chain(good.values())
+        .map(|view| (Arc::as_ptr(view), view.stored_len()))
+        .collect();
+    sizes.values().sum()
+}
+
+/// Trim both view-cache maps to their shared entry and byte bounds. The oldest go first;
+/// the newest view always survives, even when it alone is over the byte cap.
+fn trim_view_caches(
+    views: &mut IndexMap<String, Arc<CachedView>>,
+    good: &mut IndexMap<String, Arc<CachedView>>,
+) {
+    while views.len() > CACHE_ENTRIES {
+        views.shift_remove_index(0);
     }
-    let mut bytes: usize = map.values().map(|view| view.stored_len()).sum();
-    while bytes > CACHE_BYTES && map.len() > 1 {
-        if let Some((_, evicted)) = map.shift_remove_index(0) {
-            bytes -= evicted.stored_len();
+    while good.len() > CACHE_ENTRIES {
+        good.shift_remove_index(0);
+    }
+    while view_cache_bytes(views, good) > CACHE_BYTES {
+        if views.len() > 1 {
+            views.shift_remove_index(0);
+        } else if good.len() > 1 {
+            good.shift_remove_index(0);
+        } else {
+            break;
         }
     }
 }
 
 impl ScoreboardOwned {
-    /// Keep one composed view under its cache key and its filter's last-good key, trimmed to
-    /// the entry and byte bounds.
+    /// Keep one composed view under its cache key and its filter's last-good key. A new
+    /// generation drops both maps before insertion; the shared byte cap counts each `Arc` once.
     fn keep_view(&self, cache_key: String, filter_key: String, cached: Arc<CachedView>) {
-        {
-            let mut views = self.views.lock().unwrap_or_else(|p| p.into_inner());
-            views.shift_remove(&cache_key);
-            views.insert(cache_key, Arc::clone(&cached));
-            trim_view_cache(&mut views);
-        }
+        let mut views = self.views.lock().unwrap_or_else(|p| p.into_inner());
         let mut good = self.last_good.lock().unwrap_or_else(|p| p.into_inner());
+        if views
+            .values()
+            .chain(good.values())
+            .any(|view| view.generation != cached.generation)
+        {
+            views.clear();
+            good.clear();
+        }
+        views.shift_remove(&cache_key);
+        views.insert(cache_key, Arc::clone(&cached));
         good.shift_remove(&filter_key);
         good.insert(filter_key, cached);
-        trim_view_cache(&mut good);
+        trim_view_caches(&mut views, &mut good);
     }
 }
 
@@ -1087,6 +1119,9 @@ pub(crate) struct ScoreboardOwned {
     flushing: Arc<AtomicBool>,
     /// Number of store-backed aggregate composes run by this owner (no timer recomputes).
     compose_count: AtomicU64,
+    /// Test-only count of full Scoreboard encodes; warm hits must not advance it.
+    #[cfg(test)]
+    encode_count: AtomicU64,
     /// Test-only one-shot barrier paused right after admission and before `store.scoreboard_read`.
     #[cfg(test)]
     before_store_read: Mutex<
@@ -1140,6 +1175,8 @@ impl ScoreboardOwned {
             owners,
             flushing,
             compose_count: AtomicU64::new(0),
+            #[cfg(test)]
+            encode_count: AtomicU64::new(0),
             #[cfg(test)]
             before_store_read: Mutex::new(None),
         });
@@ -2678,13 +2715,15 @@ impl ScoreboardOwned {
         writer.value(&view);
         drop(view);
         let (bytes, identity_bytes) = writer.finish();
+        #[cfg(test)]
+        self.encode_count.fetch_add(1, Ordering::Relaxed);
         let digest = Sha256::digest(&identity_bytes);
         drop(identity_bytes);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let etag = format!("W/\"{hex}\"");
         let age_value_offset = find_age_zero_offset(&bytes);
         let (cached_view, raw_bytes) =
-            CachedView::from_raw(now, seq, bytes, age_value_offset, etag.clone());
+            CachedView::from_raw(now, generation, seq, bytes, age_value_offset, etag.clone());
         let cached = Arc::new(cached_view);
         self.keep_view(cache_key, filter_key, Arc::clone(&cached));
         if crate::compress::not_modified(if_none_match, &etag) {
@@ -3021,6 +3060,7 @@ impl ScoreboardOwned {
             raw_bytes: Bytes,
             problems: Vec<Json>,
         }
+        let gen_for_cache = read_gen;
 
         let composed = tokio::task::spawn_blocking(move || -> Result<ComposedBytes, Decline> {
             let input = crate::scoreboard_compose::ComposeInput {
@@ -3051,8 +3091,14 @@ impl ScoreboardOwned {
             let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
             let etag = format!("W/\"{hex}\"");
             let age_value_offset = find_age_zero_offset(&bytes);
-            let (cached, raw_bytes) =
-                CachedView::from_raw(now, read_write_seq, bytes, age_value_offset, etag);
+            let (cached, raw_bytes) = CachedView::from_raw(
+                now,
+                gen_for_cache,
+                read_write_seq,
+                bytes,
+                age_value_offset,
+                etag,
+            );
             Ok(ComposedBytes {
                 cached,
                 raw_bytes,
@@ -3070,6 +3116,9 @@ impl ScoreboardOwned {
             Ok(Err(decline)) => return Some(Err(decline)),
             Err(_) => return Some(Err(Decline::Internal)),
         };
+
+        #[cfg(test)]
+        self.encode_count.fetch_add(1, Ordering::Relaxed);
 
         self.record_check_store(Arc::clone(store), problems, read_gen);
         let etag = cached.etag.clone();
@@ -5029,7 +5078,7 @@ mod tests {
         let bytes = serde_json::to_vec(&view).expect("view bytes");
         let age_offset = super::find_age_zero_offset(&bytes);
         let (cached, _) =
-            super::CachedView::from_raw(1_000_000, 1, bytes, age_offset, "W/\"x\"".to_string());
+            super::CachedView::from_raw(1_000_000, 1, 1, bytes, age_offset, "W/\"x\"".to_string());
         let (bytes, _) = super::cached_bytes(&cached, 1_300_000, true);
         let served: serde_json::Value = serde_json::from_slice(&bytes).expect("view");
         assert!(
@@ -5719,17 +5768,17 @@ mod tests {
         );
     }
 
-    /// The view cache is bounded in bytes, not only entries: oversized views evict the oldest
-    /// until the kept bytes fit the cap, the newest view always survives, and a single view
-    /// bigger than the cap is still kept (an empty cache would only recompose it at once).
+    /// The view cache drops older generations and bounds the unique bytes shared by `views`
+    /// and `last_good`; the newest oversized view still survives.
     #[test]
-    fn the_view_cache_is_bounded_in_bytes() {
+    fn the_view_cache_drops_old_generations_and_bounds_unique_bytes() {
         let root = tempfile::tempdir().expect("reports");
         let owner = owner(root.path().to_path_buf(), None);
         let big = 5 * 1024 * 1024;
         for i in 0..4u64 {
             let cached = Arc::new(CachedView::from_uncompressed(
                 1_790_000_000_000 + i * 1_000,
+                1,
                 1,
                 vec![b'x'; big],
                 None,
@@ -5739,28 +5788,47 @@ mod tests {
         }
         {
             let views = owner.views.lock().unwrap_or_else(|p| p.into_inner());
-            let total: usize = views.values().map(|view| view.stored_len()).sum();
+            let good = owner.last_good.lock().unwrap_or_else(|p| p.into_inner());
             assert!(
-                total <= CACHE_BYTES,
-                "views held {total} bytes over the {CACHE_BYTES} cap"
+                super::view_cache_bytes(&views, &good) <= CACHE_BYTES,
+                "shared cache exceeded its byte cap"
             );
             assert!(views.contains_key("cache-3"), "the newest view survives");
             assert!(
                 views.len() < CACHE_ENTRIES,
-                "oversized views evict by bytes, not only by count"
+                "bytes evict before the entry cap"
             );
         }
+        owner.keep_view(
+            "cache-4".into(),
+            "filter-4".into(),
+            Arc::new(CachedView::from_uncompressed(
+                1_790_000_100_000,
+                2,
+                2,
+                vec![b'n'; 1024],
+                None,
+                "W/\"new-generation\"".into(),
+            )),
+        );
         {
+            let views = owner.views.lock().unwrap_or_else(|p| p.into_inner());
             let good = owner.last_good.lock().unwrap_or_else(|p| p.into_inner());
-            let total: usize = good.values().map(|view| view.stored_len()).sum();
-            assert!(total <= CACHE_BYTES, "last good held {total} bytes");
-            assert!(good.contains_key("filter-3"));
+            assert_eq!(views.len(), 1, "a generation change drops older keys");
+            assert_eq!(
+                good.len(),
+                1,
+                "a generation change drops older last-good views"
+            );
+            assert!(views.contains_key("cache-4"));
+            assert!(good.contains_key("filter-4"));
         }
         owner.keep_view(
             "solo".into(),
             "solo-filter".into(),
             Arc::new(CachedView::from_uncompressed(
                 1_790_000_100_000,
+                2,
                 2,
                 vec![b'y'; CACHE_BYTES + 1],
                 None,
@@ -6264,6 +6332,18 @@ mod tests {
                 .answer(&feed_text)
                 .await
                 .unwrap_or_else(|e| panic!("aggregate answer failed for {label}: {e:?}"));
+            let encodes_before = owner.encode_count.load(Ordering::Relaxed);
+            let (warm_bytes, warm_etag) = owner
+                .answer(&feed_text)
+                .await
+                .unwrap_or_else(|e| panic!("warm aggregate answer failed for {label}: {e:?}"));
+            assert_eq!(warm_bytes, agg_bytes, "warm bytes changed for case {label}");
+            assert_eq!(warm_etag, agg_etag, "warm ETag changed for case {label}");
+            assert_eq!(
+                owner.encode_count.load(Ordering::Relaxed),
+                encodes_before,
+                "warm answer re-encoded case {label}"
+            );
             let (legacy_bytes, legacy_etag) = answer_legacy_for_parity(&owner, &feed_text).await;
             assert_eq!(
                 String::from_utf8_lossy(&agg_bytes),
@@ -6299,6 +6379,7 @@ mod tests {
             .await
             .expect("first answer");
         assert_eq!(owner.compose_count.load(Ordering::Relaxed), 1);
+        let encodes_before = owner.encode_count.load(Ordering::Relaxed);
 
         // Catalog ticks every 30 s with unchanged content, and polls arrive well past 60 s.
         owner.catalog_pass(now + 30_000);
@@ -6310,6 +6391,11 @@ mod tests {
             owner.compose_count.load(Ordering::Relaxed),
             1,
             "65s poll on unchanged data must NOT recompose"
+        );
+        assert_eq!(
+            owner.encode_count.load(Ordering::Relaxed),
+            encodes_before,
+            "65s warm poll must not encode the view again"
         );
         assert_eq!(etag1, etag0);
         let view1: Json = serde_json::from_slice(&bytes1).expect("view1");
@@ -6325,6 +6411,11 @@ mod tests {
             owner.compose_count.load(Ordering::Relaxed),
             1,
             "200s poll on unchanged data must NOT recompose"
+        );
+        assert_eq!(
+            owner.encode_count.load(Ordering::Relaxed),
+            encodes_before,
+            "200s warm poll must not encode the view again"
         );
         assert_eq!(etag2, etag0);
         let view2: Json = serde_json::from_slice(&bytes2).expect("view2");
@@ -6346,6 +6437,11 @@ mod tests {
             owner.compose_count.load(Ordering::Relaxed),
             2,
             "a new run must trigger exactly one recompose"
+        );
+        assert_eq!(
+            owner.encode_count.load(Ordering::Relaxed),
+            encodes_before + 1,
+            "a new generation encodes exactly one fresh view"
         );
         assert_ne!(etag3, etag0);
         assert!(
