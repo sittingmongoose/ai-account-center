@@ -4,6 +4,8 @@ mod antigravity;
 mod apps;
 mod claude_host;
 mod claude_usage;
+/// In-memory Codex update process runtime.
+pub mod codex_update;
 mod cursor_open;
 /// Standalone desktop usage collectors and shared helpers (`desktop_helpers.py`, `desktop_usage.py`, `cursor_usage.py`).
 pub mod desktop_usage;
@@ -68,6 +70,27 @@ pub async fn claude_reset_stdio() -> i32 {
 /// The macOS GUI-session child of [`claude_reset_stdio`] (launchd `gui/<uid>`).
 pub async fn claude_reset_gui(reply: &std::path::Path) -> i32 {
     claude_usage::keychain_bridge::child(reply).await
+}
+
+/// `aac-agent --terminal-child ...`: the app-update relaunch child (see `apps::updater::terminal`).
+pub fn terminal_child(args: &[std::ffi::OsString]) -> i32 {
+    apps::updater::terminal::terminal_child(args)
+}
+
+/// `aac-agent --console-probe ...`: the Windows console-window probe (see `apps::updater::terminal`).
+pub fn console_probe(args: &[std::ffi::OsString]) -> i32 {
+    apps::updater::terminal::console_probe(args)
+}
+
+/// `aac-agent --t3-restart ...` / `--t3-issuer ...`: T3 helper subcommands
+/// (see `apps::updater::t3`); `None` when `flag` is neither.
+pub fn app_update_subcommand(flag: &std::ffi::OsStr, args: &[std::ffi::OsString]) -> Option<i32> {
+    apps::updater::subcommand(flag.to_str()?, args)
+}
+
+/// `aac-agent --app-update-task`: the Windows interactive-task child (see `apps::updater::windows_task`).
+pub async fn app_update_task() -> i32 {
+    apps::updater::windows_task::child().await
 }
 
 /// Return the exact build identity used by shipping's manifest handshake.

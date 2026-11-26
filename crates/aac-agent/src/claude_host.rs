@@ -61,7 +61,8 @@ pub(crate) struct HostRequest {
     pub token: Option<String>,
     pub home: Option<PathBuf>,
     pub now_ms: Option<u64>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    // Read only by the parity-fixture seam in `mac.rs` (any platform).
+    #[cfg_attr(not(feature = "parity-fixtures"), allow(dead_code))]
     pub ps_output: Option<String>,
 }
 

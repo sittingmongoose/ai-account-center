@@ -1,10 +1,22 @@
-//! Host update coordinator with durable results and a fixed one-app installer adapter.
-use super::{python::Python, *};
+//! Host update coordinator with durable results. Each app runs through its Rust
+//! `AppUpdater` (`updater::runner`); Windows apps run in the interactive task.
+use super::{
+    updater::{
+        Shared,
+        runner::{self, Cancelled, Job, Outcome, Phases},
+        windows_task,
+    },
+    *,
+};
 use aac_files::{BackupClass, Class, OwnedStore, Registry, StoreSpec};
 use aac_protocol::{Event, Request};
 use aac_providers::APP_INVENTORY;
 use serde::{Deserialize, Serialize};
-use std::{io::ErrorKind, sync::LazyLock, time::Duration};
+use std::{
+    io::ErrorKind,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 use tokio::{io::AsyncWrite, sync::mpsc, task::JoinSet, time::Instant};
 
 const MAX_JOURNAL: usize = 64 * 1024;
@@ -18,7 +30,7 @@ const OLD_VERSION: &str = "26.1101.9.0";
 
 #[derive(Clone)]
 enum Installer {
-    Python(Python),
+    Native(Arc<Host>),
     #[cfg(feature = "parity-fixtures")]
     Fixture,
 }
@@ -55,8 +67,14 @@ pub(crate) async fn run(
     {
         return Err(refused());
     }
+    // No helper fallback: a request for another platform is refused (Python's
+    // "the selected platform must match this computer"), a host without a home fails.
     let Some(worker) = Worker::open(platform) else {
-        return Ok(crate::proof::fallback());
+        return Err(if Platform::native() == Some(platform) {
+            Failure::new(Cause::Damaged, "app update host has no home folder")
+        } else {
+            refused()
+        });
     };
     match request.args["action"].as_str() {
         Some("update") => {
@@ -113,7 +131,7 @@ impl Worker {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| helper_lock_root.clone());
-        let installer = Installer::Python(Python::resolve(&host)?);
+        let installer = Installer::Native(Arc::new(host));
         Some(Self {
             root,
             helper_lock_root,
@@ -123,7 +141,7 @@ impl Worker {
 
     fn fixture(&self) -> bool {
         match self.installer {
-            Installer::Python(_) => false,
+            Installer::Native(_) => false,
             #[cfg(feature = "parity-fixtures")]
             Installer::Fixture => true,
         }
@@ -144,8 +162,8 @@ impl Worker {
         job: &str,
         scope: Option<&[&'static str]>,
     ) -> Result<Value, Failure> {
-        // The same kernel lease as the old helper covers all Python children
-        // and the deferred T3 restarter. The journal has its own writer lease.
+        // The same kernel lease as the old helper covers every app run and the
+        // deferred T3 restarter. The journal has its own writer lease.
         let _host_lease = claim(&self.helper_lock_root, "helper-update")?;
         let journal_store = claim(&self.root, &self.name("journal.json"))?;
         let saved = self.journal()?;
@@ -181,15 +199,6 @@ impl Worker {
             return Ok(journal.payload(platform));
         }
 
-        if let Installer::Python(python) = &self.installer
-            && !python.compatible(platform).await
-        {
-            return Ok(crate::proof::fallback());
-        }
-
-        if !self.fixture() {
-            eprintln!("aac-agent apps installer fallback: python");
-        }
         let mut journal = Journal {
             job: job.into(),
             platform: platform.name().into(),
@@ -206,8 +215,8 @@ impl Worker {
         };
         progress.app(None, "checking").await?;
         let all_installed = !self.fixture() || self.root.join("fixture-install-all").is_file();
-        // Leave time for a timed-out Python supervisor to stop a tree, flush
-        // its terminal row and settle the host journal before the wire deadline.
+        // Leave time for a timed-out app run to stop its commands, flush its
+        // terminal row and settle the host journal before the wire deadline.
         let deadline = Instant::now()
             + Duration::from_millis(
                 request
@@ -215,7 +224,12 @@ impl Worker {
                     .saturating_sub((request.deadline_ms / 10).min(12_000))
                     .min(1_800_000),
             );
-        let (phase_tx, mut phases) = mpsc::channel(24);
+        let (phase_tx, mut phases) = mpsc::unbounded_channel();
+        // One run's cross-app state (Python module globals such as UBUNTU_RUN).
+        let shared = Arc::new(Shared {
+            agent_job: Some(job.to_owned()),
+            ..Shared::default()
+        });
         let mut pending = expected;
         let mut workers = JoinSet::new();
         while !pending.is_empty() || !workers.is_empty() {
@@ -281,13 +295,11 @@ impl Worker {
                 let installer = self.clone();
                 let phases = phase_tx.clone();
                 let job = job.to_owned();
-                let pending_restart = journal
-                    .results
-                    .get("t3-code")
-                    .is_some_and(|row| row["messageCode"] == "t3_restart_scheduled");
+                let t3_row = journal.results.get("t3-code").cloned();
+                let shared = shared.clone();
                 workers.spawn(async move {
                     let update = installer
-                        .run_app(app, platform, &job, deadline, pending_restart, phases)
+                        .run_app(app, platform, &job, deadline, t3_row, shared, phases)
                         .await;
                     let row = match update {
                         Ok(row) => row,
@@ -359,22 +371,46 @@ impl Worker {
                 return Err(refused());
             };
             let version = follow_up_version(t3);
-            let budget = Duration::from_millis(deadline_ms.saturating_sub(12_000));
+            let budget = Duration::from_millis(deadline_ms.saturating_sub(12_000))
+                .min(Duration::from_millis(
+                    aac_protocol::ACP_FOLLOW_UP_DEADLINE_MS,
+                ))
+                .max(Duration::from_secs(1));
             let outcome = match &self.installer {
-                Installer::Python(python) => {
-                    python
-                        .follow_up(&self.root, version, budget, || self.cancelled(job))
-                        .await
+                Installer::Native(host) => {
+                    let expected = (version != "any").then_some(version);
+                    runner::follow_up(
+                        Job {
+                            host: host.clone(),
+                            state: &self.root,
+                            platform,
+                            shared: Arc::new(Shared::default()),
+                            deadline: Instant::now() + budget,
+                            t3_row: Some(t3.clone()),
+                            cancelled: self.cancel_check(job),
+                        },
+                        expected,
+                    )
+                    .await
                 }
                 #[cfg(feature = "parity-fixtures")]
                 Installer::Fixture => return Err(refused()),
             };
             match outcome {
-                Ok(row) if row["messageCode"] != "t3_restart_pending" => row,
-                Err(failure) if failure.cause == Cause::Timeout => {
+                Outcome::Row(row)
+                    if row["appId"] == ACP
+                        && row["platform"] == platform.name()
+                        && row["status"].is_string()
+                        && row["messageCode"] != "t3_restart_pending" =>
+                {
+                    row
+                }
+                Outcome::TimedOut => {
                     result(platform, ACP, "unknown", "host_timeout", None, None, None)
                 }
-                _ => result(platform, ACP, "failed", "helper_invalid", None, None, None),
+                Outcome::Row(_) => {
+                    result(platform, ACP, "failed", "helper_invalid", None, None, None)
+                }
             }
         };
         journal.finish(ACP, row.clone());
@@ -392,40 +428,69 @@ impl Worker {
         }
     }
 
+    /// The job's cancel file as a check the runner polls. An unreadable marker
+    /// counts as cancelled: stopping is the safe answer for an installer.
+    fn cancel_check(&self, job: &str) -> Cancelled {
+        let worker = self.clone();
+        let job = job.to_owned();
+        Arc::new(move || worker.cancelled(&job).unwrap_or(true))
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one app run carries its job, deadline, dependency row and progress"
+    )]
     async fn run_app(
         &self,
         app: &'static str,
         platform: Platform,
         job: &str,
         deadline: Instant,
-        pending_restart: bool,
-        phases: mpsc::Sender<(&'static str, &'static str)>,
+        t3_row: Option<Value>,
+        shared: Arc<Shared>,
+        phases: Phases,
     ) -> Result<Value, Failure> {
         match &self.installer {
-            Installer::Python(python) => {
-                python
-                    .install(
+            Installer::Native(host) => {
+                let cancelled = self.cancel_check(job);
+                let outcome = if platform == Platform::Windows {
+                    let agent = std::env::current_exe()
+                        .map_err(|_| Failure::new(Cause::Bug, "agent path unknown"))?;
+                    windows_task::coordinate(
+                        host,
+                        &agent,
                         app,
-                        platform,
-                        &self.root,
-                        job,
                         deadline.saturating_duration_since(Instant::now()),
-                        pending_restart,
-                        || self.cancelled(job),
-                        move |phase| {
-                            let phases = phases.clone();
-                            async move {
-                                let phase = match phase.as_str() {
-                                    "checking" => "checking",
-                                    "updating" => "updating",
-                                    "downloading" => "downloading",
-                                    _ => return,
-                                };
-                                let _ = phases.send((app, phase)).await;
-                            }
-                        },
+                        cancelled,
+                        phases,
+                        &windows_task::PowerShell(updater::shared::powershell_path(host)),
                     )
                     .await
+                } else {
+                    let job = Job {
+                        host: host.clone(),
+                        state: &self.root,
+                        platform,
+                        shared,
+                        deadline,
+                        t3_row,
+                        cancelled,
+                    };
+                    runner::run_app(app, job, phases).await
+                };
+                match outcome {
+                    Outcome::Row(row)
+                        if row["appId"] == app
+                            && row["platform"] == platform.name()
+                            && row["status"].is_string() =>
+                    {
+                        Ok(row)
+                    }
+                    Outcome::Row(_) => Err(Failure::new(Cause::Damaged, "invalid app row")),
+                    Outcome::TimedOut => {
+                        Err(Failure::new(Cause::Timeout, "app installer deadline"))
+                    }
+                }
             }
             #[cfg(feature = "parity-fixtures")]
             Installer::Fixture => {
@@ -794,6 +859,29 @@ mod tests {
             running: Vec::new(),
             apps: apps.map(|apps| apps.iter().map(|app| (*app).to_owned()).collect()),
         }
+    }
+
+    /// W6: no helper fallback answer is left: another computer's platform is refused.
+    #[tokio::test]
+    async fn a_foreign_platform_is_refused_never_a_helper_fallback() {
+        let foreign = match Platform::native() {
+            Some(Platform::Ubuntu) => "mac",
+            _ => "ubuntu",
+        };
+        let request = Request {
+            protocol: aac_protocol::PROTOCOL_VERSION,
+            verb: "apps".into(),
+            id: "w6".into(),
+            deadline_ms: 60_000,
+            args: json!({"action": "update", "platform": foreign, "jobId": "0123456789abcdef0123456789abcdef"}),
+        };
+        let mut sink = Vec::new();
+        let answer = run(&request, &mut sink).await;
+        assert!(
+            matches!(answer, Err(ref failure) if failure.cause == Cause::Refused),
+            "{answer:?}"
+        );
+        assert!(sink.is_empty());
     }
 
     #[test]

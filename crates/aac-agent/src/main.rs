@@ -23,26 +23,41 @@ fn main() {
             Err(_) => 1,
         }
     } else if args.len() == 1 && args[0] == "--claude-reset" {
-        aac_agent::claude_reset_stdio().await
+        block_on(aac_agent::claude_reset_stdio())
     } else if args.len() == 2 && args[0] == "--claude-reset-gui" {
-        aac_agent::claude_reset_gui(std::path::Path::new(&args[1])).await
+        block_on(aac_agent::claude_reset_gui(std::path::Path::new(&args[1])))
+    } else if args.first().is_some_and(|arg| arg == "--console-probe") {
+        aac_agent::console_probe(&args[1..])
+    } else if let Some(code) = args
+        .first()
+        .and_then(|flag| aac_agent::app_update_subcommand(flag, &args[1..]))
+    {
+        code
+    } else if args.len() == 1 && args[0] == "--app-update-task" {
+        block_on(aac_agent::app_update_task())
+    } else if args.first().is_some_and(|arg| arg == "--terminal-child") {
+        aac_agent::terminal_child(&args[1..])
     } else if args.is_empty() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .max_blocking_threads(8)
-            .enable_all()
-            .build();
-        match runtime {
-            Ok(runtime) => runtime
-                .block_on(aac_agent::run(
-                    BufReader::new(tokio::io::stdin()),
-                    tokio::io::stdout(),
-                ))
-                .unwrap_or(1),
-            Err(_) => 1,
-        }
+        block_on(async {
+            aac_agent::run(BufReader::new(tokio::io::stdin()), tokio::io::stdout())
+                .await
+                .unwrap_or(1)
+        })
     } else {
         2
     };
     std::process::exit(code);
+}
+
+/// One bounded runtime per process (two workers, eight blocking threads); exit 1 if it can't start.
+fn block_on(future: impl std::future::Future<Output = i32>) -> i32 {
+    match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(8)
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(future),
+        Err(_) => 1,
+    }
 }

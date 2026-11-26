@@ -2,8 +2,15 @@
 mod adapters;
 mod cli;
 mod packages;
-mod python;
 pub(crate) mod update;
+// Every updater is wired (W6). What stays unused is contract surface or per-OS code:
+// on Linux (checked at integration) Status::Held, FailureCause::{None, InUse},
+// Installed::command, Context::clamp, Unported (tests only), CommandSpec::visible and
+// capture_limit, LINEAGE_LIMIT, desktop::confirmed (its only caller was the retired TS
+// activation runtime), t3 READY_SECONDS, Bearer::retire_with and Session::refresh; on
+// Mac and Windows also the Linux-only Codex bridge, T3 restart worker and relay pieces.
+#[allow(dead_code)]
+pub(crate) mod updater;
 
 use aac_core::{Cause, Failure};
 use aac_files::read::{self, Read, ReadPolicy};
@@ -18,8 +25,8 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Platform {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Platform {
     Ubuntu,
     Mac,
     Windows,
@@ -44,7 +51,7 @@ impl Platform {
     }
 }
 
-struct Host {
+pub(crate) struct Host {
     platform: Platform,
     home: PathBuf,
     local: PathBuf,

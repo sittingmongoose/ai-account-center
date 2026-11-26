@@ -6,6 +6,10 @@
 //! CLI's own session, SIGKILL one second later. The child is the leader of a new process
 //! group (`detached: true` / `process_group(0)`), and `kill` signals the whole group: SIGTERM,
 //! then SIGKILL after the two-second grace.
+//!
+//! The relay, its decoder and the command fields exist for the unix spawn only; on
+//! Windows `spawn` refuses before any child starts, so those pieces are unused there.
+#![cfg_attr(not(unix), allow(dead_code))]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
