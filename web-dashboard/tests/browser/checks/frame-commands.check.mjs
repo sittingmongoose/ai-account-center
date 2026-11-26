@@ -49,8 +49,13 @@ export const tests = {
 		await open(t, 'scoreboard');
 		// Its first read is done (the header shows its time): a Refresh during a read is not a second read.
 		await t.until('the Scoreboard has read once', () => !!document.querySelector('.chrome .status-line b')?.textContent, null, { timeout: 30000, hard: true });
-		await endOnServer(t);
+		// Arm the 401 listener before ending the session: an in-flight poll that was
+		// already sent would otherwise 401 before we listen (in-shard flake: the
+		// Refresh click is then ignored while a read is in flight and no new 401
+		// follows, timing the check out). Listening first catches either the poll
+		// or the Refresh.
 		const refused = t.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/scoreboard' && r.status() === 401, { timeout: 15000 });
+		await endOnServer(t);
 		await t.page.click('.chrome button[aria-label="Refresh"]');
 		await refused;
 		const state = await eventually(t, () => frameState(t), (s) => s.signedIn === false && s.form, 5000);

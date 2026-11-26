@@ -12,6 +12,7 @@ import {
 } from '../../../scripts/perf/memory-fixture.mjs';
 import {
   POLL_PLAN,
+  assertNoSymlinks,
   buildIsolatedEnv,
   collectDescendants,
   evaluateRouteFailures,
@@ -20,6 +21,7 @@ import {
   getChildExitStatus,
   loadThresholdConfig,
   parseProcStat,
+  parseProcStatusRss,
   parseSmapsRollup,
   runMemoryBudget,
   summarizeRoutes,
@@ -264,6 +266,7 @@ describe('memory budget sampler and threshold evaluator', () => {
       pssAnonKiB: 220160,
       pssFileKiB: 25600,
       swapKiB: 1024,
+      pssAvailable: true,
     });
 
     const stat = parseProcStat(
@@ -795,3 +798,86 @@ runMemoryBudget({
     expect(config.limits.childrenPeakRssMiB).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('memory-budget tool-batch-1126 fixes', () => {
+  it('RSS fallback marks PSS unavailable instead of reporting RSS as PSS', () => {
+    const fallback = parseProcStatusRss('VmRSS: 78156 kB\nVmSwap: 0 kB\n');
+    expect(fallback.rssKiB).toBe(78156);
+    expect(fallback.pssAvailable).toBe(false);
+    expect(fallback.pssKiB).toBeNull();
+    // RSS must not be copied into PSS.
+    expect(fallback.pssKiB).not.toBe(78156);
+  });
+
+  it('summarize and threshold reject PSS limits without valid PSS coverage', () => {
+    // Samples with unavailable PSS (fallback path).
+    const mem = summarizeSamples(
+      [
+        { tSec: 0, serverRssKiB: 1000, serverPssKiB: null, serverAnonKiB: null, serverFileKiB: null, serverSwapKiB: 0, pssAvailable: false, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: null, totalRssKiB: 1000, totalPssKiB: null },
+        { tSec: 130, serverRssKiB: 1000, serverPssKiB: null, serverAnonKiB: null, serverFileKiB: null, serverSwapKiB: 0, pssAvailable: false, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: null, totalRssKiB: 1000, totalPssKiB: null },
+      ],
+      120
+    );
+    expect(mem.pssAvailable).toBe(false);
+    expect(mem.steadyMedianPssKiB).toBeNull();
+    expect(mem.samplingNote).toMatch(/short-lived|between samples/i);
+    // A PSS limit with unavailable PSS must fail, not pass with RSS-as-PSS.
+    const cfg = { schemaVersion: 1, limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100, steadyPssMiB: 50 } };
+    expect(() => evaluateThresholds(mem, cfg as never)).toThrow(/PSS coverage/);
+    // Without a PSS limit, RSS-only still passes.
+    const rssCfg = { schemaVersion: 1, limits: { steadyRssMiB: 100, peakRssMiB: 100, childrenPeakRssMiB: 100 } };
+    expect(evaluateThresholds(mem, rssCfg as never).ok).toBe(true);
+  });
+
+  it('rejects sub-200 ms sample intervals consistently', () => {
+    expect(() =>
+      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.05, check: true })
+    ).toThrow(/>= 0.2/);
+    expect(() =>
+      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.19, check: true })
+    ).toThrow(/>= 0.2/);
+    // 0.2 is the supported minimum and passes when the window is sufficient.
+    expect(() =>
+      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.2, check: true })
+    ).not.toThrow();
+    // Also rejects in measure-only mode (the timer clamp applies either way).
+    expect(() =>
+      validateRunOptions({ durationSec: 10, steadyAfterSec: 5, sampleIntervalSec: 0.05, check: false })
+    ).toThrow(/>= 0.2/);
+  });
+
+  it('refuses symlinked fixture inputs and verifies resolved roots', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-link-'));
+    try {
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-out-'));
+      fs.writeFileSync(path.join(outside, 'secret.json'), '{}');
+      const linkedDir = path.join(root, 'home', '.ccs');
+      fs.mkdirSync(linkedDir, { recursive: true });
+      fs.symlinkSync(path.join(outside, 'secret.json'), path.join(linkedDir, 'link.json'));
+      expect(() => assertNoSymlinks(root)).toThrow(/symlink/);
+      // A clean tree passes.
+      const clean = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-clean-'));
+      try {
+        fs.mkdirSync(path.join(clean, 'home', '.ccs'), { recursive: true });
+        fs.writeFileSync(path.join(clean, 'home', '.ccs', 'config.yaml'), 'a: b\n');
+        expect(() => assertNoSymlinks(clean)).not.toThrow();
+      } finally {
+        fs.rmSync(clean, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('documents the short-lived helper sampling limit in the summary', () => {
+    const mem = summarizeSamples(
+      [
+        { tSec: 0, serverRssKiB: 100, serverPssKiB: 90, pssAvailable: true, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: 0, totalRssKiB: 100, totalPssKiB: 90 },
+        { tSec: 130, serverRssKiB: 100, serverPssKiB: 90, pssAvailable: true, threads: 1, childrenCount: 0, childrenRssKiB: 0, childrenPssKiB: 0, totalRssKiB: 100, totalPssKiB: 90 },
+      ],
+      120
+    );
+    expect(mem.samplingNote).toMatch(/missed|between samples/i);
+  });
+});
+

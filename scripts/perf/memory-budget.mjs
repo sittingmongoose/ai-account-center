@@ -37,6 +37,7 @@ const ANALYTICS_DECODERS = new Map([
   ['gzip', promisify(gunzip)],
   ['deflate', promisify(inflate)],
 ]);
+const MIN_SAMPLE_INTERVAL_SEC = 0.2;
 
 /** Required budget ceilings in config/memory-budget.json for check mode. */
 export const REQUIRED_LIMIT_KEYS = Object.freeze([
@@ -104,6 +105,45 @@ function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Refuse symlinks and unexpected file types in fixture inputs before traversing them. */
+export function assertNoSymlinks(root) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Fixture input contains a symlink: ${current}`);
+    }
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(current)) {
+        stack.push(path.join(current, entry));
+      }
+      continue;
+    }
+    if (stat.isFile()) continue;
+    throw new Error(`Fixture input contains an unexpected file type: ${current}`);
+  }
+}
+
+/** Verify `target` resolves inside `root` (no .. escape or symlink escape). */
+export function isPathInside(root, target) {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+export function assertResolvedInside(root, file) {
+  const realRoot = fs.realpathSync(root);
+  let realFile;
+  try {
+    realFile = fs.realpathSync(file);
+  } catch {
+    throw new Error(`Fixture root does not exist: ${file}`);
+  }
+  if (!isPathInside(realRoot, realFile)) {
+    throw new Error(`Fixture root escapes the fixture: ${file} -> ${realFile}`);
+  }
+}
+
 /** Return exit details when a child has exited or been terminated by a signal, else null. */
 export function getChildExitStatus(child) {
   if (!child) return null;
@@ -122,7 +162,7 @@ export function getChildExitStatus(child) {
 
 /** Parse /proc/<pid>/smaps_rollup text into KiB counters. */
 export function parseSmapsRollup(text) {
-  const out = { rssKiB: 0, pssKiB: 0, pssAnonKiB: 0, pssFileKiB: 0, swapKiB: 0 };
+  const out = { rssKiB: 0, pssKiB: 0, pssAnonKiB: 0, pssFileKiB: 0, swapKiB: 0, pssAvailable: true };
   for (const line of text.split('\n')) {
     const colon = line.indexOf(':');
     if (colon < 0) continue;
@@ -146,7 +186,9 @@ export function parseProcStatusRss(text) {
     if (line.startsWith('VmRSS:')) rssKiB = Number.parseInt(line.slice(6).trim(), 10) || 0;
     else if (line.startsWith('VmSwap:')) swapKiB = Number.parseInt(line.slice(7).trim(), 10) || 0;
   }
-  return { rssKiB, pssKiB: rssKiB, pssAnonKiB: 0, pssFileKiB: 0, swapKiB };
+  // PSS apportions shared mappings; VmRSS is not PSS. Mark unavailable rather than
+  // reporting RSS as PSS (would fail a valid PSS budget).
+  return { rssKiB, pssKiB: null, pssAnonKiB: null, pssFileKiB: null, swapKiB, pssAvailable: false };
 }
 
 function readProcStatState(text) {
@@ -257,25 +299,34 @@ export function sampleProcessTree(rootPid, elapsedSec) {
   const kids = collectDescendants(rootPid, parentByPid);
   let childrenRssKiB = 0;
   let childrenPssKiB = 0;
+  let childrenPssAvailable = true;
   for (const kid of kids) {
     const mem = readProcMemory(kid);
     if (!mem) continue;
     childrenRssKiB += mem.rssKiB;
-    childrenPssKiB += mem.pssKiB;
+    if (mem.pssAvailable === false || mem.pssKiB == null) {
+      childrenPssAvailable = false;
+    } else {
+      childrenPssKiB += mem.pssKiB;
+    }
   }
+  const serverPssAvailable = server.pssAvailable !== false && server.pssKiB != null;
+  const totalPssAvailable = serverPssAvailable && childrenPssAvailable;
   return {
     tSec: +elapsedSec.toFixed(2),
     serverRssKiB: server.rssKiB,
-    serverPssKiB: server.pssKiB,
-    serverAnonKiB: server.pssAnonKiB,
-    serverFileKiB: server.pssFileKiB,
+    serverPssKiB: serverPssAvailable ? server.pssKiB : null,
+    serverAnonKiB: serverPssAvailable ? server.pssAnonKiB : null,
+    serverFileKiB: serverPssAvailable ? server.pssFileKiB : null,
     serverSwapKiB: server.swapKiB,
+    pssAvailable: totalPssAvailable,
+    serverPssAvailable,
     threads: rootStat?.threads ?? 1,
     childrenCount: kids.length,
     childrenRssKiB,
-    childrenPssKiB,
+    childrenPssKiB: childrenPssAvailable ? childrenPssKiB : null,
     totalRssKiB: server.rssKiB + childrenRssKiB,
-    totalPssKiB: server.pssKiB + childrenPssKiB,
+    totalPssKiB: totalPssAvailable ? server.pssKiB + childrenPssKiB : null,
   };
 }
 
@@ -335,6 +386,11 @@ export function validateRunOptions(opts, pollPlan = POLL_PLAN) {
   ) {
     throw new Error(
       `Invalid sampleIntervalSec (${sampleIntervalSec}): must be a finite number > 0.`
+    );
+  }
+  if (sampleIntervalSec < MIN_SAMPLE_INTERVAL_SEC) {
+    throw new Error(
+      `Invalid sampleIntervalSec (${sampleIntervalSec}): must be >= ${MIN_SAMPLE_INTERVAL_SEC} (the sampler clamps to 200 ms).`
     );
   }
   if (opts.seed !== undefined && (typeof opts.seed !== 'number' || !Number.isFinite(opts.seed))) {
@@ -446,25 +502,41 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
   const steadySource = steadyWindow.length > 0 ? steadyWindow : samples;
 
   const peakServerRssKiB = Math.max(...samples.map((s) => s.serverRssKiB));
-  const peakServerPssKiB = Math.max(...samples.map((s) => s.serverPssKiB));
+  const pssSamples = samples.filter((s) => s.pssAvailable !== false && s.serverPssKiB != null);
+  const pssAvailable = pssSamples.length === samples.length && samples.length > 0;
+  const peakServerPssKiB = pssAvailable
+    ? Math.max(...samples.map((s) => s.serverPssKiB))
+    : null;
   const childrenPeakRssKiB = Math.max(...samples.map((s) => s.childrenRssKiB));
-  const childrenPeakPssKiB = Math.max(...samples.map((s) => s.childrenPssKiB));
+  const childPssSamples = samples.filter((s) => s.childrenPssKiB != null);
+  const childrenPssAvailable = childPssSamples.length === samples.length && samples.length > 0;
+  const childrenPeakPssKiB = childrenPssAvailable
+    ? Math.max(...samples.map((s) => s.childrenPssKiB))
+    : null;
   const totalPeakRssKiB = Math.max(...samples.map((s) => s.totalRssKiB));
-  const totalPeakPssKiB = Math.max(...samples.map((s) => s.totalPssKiB));
+  const totalPssSamples = samples.filter((s) => s.totalPssKiB != null);
+  const totalPssAvailableFlag = totalPssSamples.length === samples.length && samples.length > 0;
+  const totalPeakPssKiB = totalPssAvailableFlag
+    ? Math.max(...samples.map((s) => s.totalPssKiB))
+    : null;
 
   const steadyMedianRssKiB = median(steadySource.map((s) => s.serverRssKiB));
-  const steadyMedianPssKiB = median(steadySource.map((s) => s.serverPssKiB));
+  const steadyPssSource = steadySource.filter((s) => s.serverPssKiB != null);
+  const steadyMedianPssKiB = steadyPssSource.length > 0 ? median(steadyPssSource.map((s) => s.serverPssKiB)) : null;
   const steadyMedianTotalRssKiB = median(steadySource.map((s) => s.totalRssKiB));
-  const steadyMedianTotalPssKiB = median(steadySource.map((s) => s.totalPssKiB));
+  const steadyTotalPssSource = steadySource.filter((s) => s.totalPssKiB != null);
+  const steadyMedianTotalPssKiB = steadyTotalPssSource.length > 0 ? median(steadyTotalPssSource.map((s) => s.totalPssKiB)) : null;
 
   const lastSample = samples[samples.length - 1];
 
+  const toMiBOrNull = (kib) => (kib == null ? null : toMiB(kib));
   return {
     sampleCount: samples.length,
     steadyAfterSec,
     steadySampleCount: steadyWindow.length,
     steadyUsedFallback: steadyWindow.length === 0,
     lastSampleSec: lastSample.tSec,
+    pssAvailable,
     steadyMedianRssKiB,
     steadyMedianPssKiB,
     peakRssKiB: peakServerRssKiB,
@@ -476,21 +548,22 @@ export function summarizeSamples(samples, steadyAfterSec = 120, options = {}) {
     totalPeakRssKiB,
     totalPeakPssKiB,
     endRssKiB: lastSample.serverRssKiB,
-    endPssKiB: lastSample.serverPssKiB,
+    endPssKiB: lastSample.serverPssKiB ?? null,
     steadyMedianRssMiB: toMiB(steadyMedianRssKiB),
-    steadyMedianPssMiB: toMiB(steadyMedianPssKiB),
+    steadyMedianPssMiB: toMiBOrNull(steadyMedianPssKiB),
     peakRssMiB: toMiB(peakServerRssKiB),
-    peakPssMiB: toMiB(peakServerPssKiB),
+    peakPssMiB: toMiBOrNull(peakServerPssKiB),
     childrenPeakRssMiB: toMiB(childrenPeakRssKiB),
-    childrenPeakPssMiB: toMiB(childrenPeakPssKiB),
+    childrenPeakPssMiB: toMiBOrNull(childrenPeakPssKiB),
     totalSteadyMedianRssMiB: toMiB(steadyMedianTotalRssKiB),
-    totalSteadyMedianPssMiB: toMiB(steadyMedianTotalPssKiB),
+    totalSteadyMedianPssMiB: toMiBOrNull(steadyMedianTotalPssKiB),
     totalPeakRssMiB: toMiB(totalPeakRssKiB),
-    totalPeakPssMiB: toMiB(totalPeakPssKiB),
+    totalPeakPssMiB: toMiBOrNull(totalPeakPssKiB),
     endRssMiB: toMiB(lastSample.serverRssKiB),
-    endPssMiB: toMiB(lastSample.serverPssKiB),
+    endPssMiB: toMiBOrNull(lastSample.serverPssKiB ?? null),
     maxThreads: Math.max(...samples.map((s) => s.threads)),
     maxChildren: Math.max(...samples.map((s) => s.childrenCount)),
+    samplingNote: 'childrenPeak is sampled from /proc at the sample interval; a helper that starts and exits between samples may be missed. For strict short-lived enforcement, use a cgroup peak or a shorter interval.',
   };
 }
 
@@ -540,8 +613,14 @@ export function evaluateThresholds(memorySummary, config) {
   const limits = config.limits;
   const violations = [];
   const results = [];
+  const pssLimitKeys = new Set(['steadyPssMiB', 'peakPssMiB', 'childrenPeakPssMiB', 'totalSteadyPssMiB', 'totalPeakPssMiB']);
   for (const [limitKey, kibKey, mibKey] of THRESHOLD_CHECKS) {
     if (!Object.hasOwn(limits, limitKey)) continue;
+    if (pssLimitKeys.has(limitKey) && memorySummary.pssAvailable === false) {
+      throw new Error(
+        `Memory summary lacks valid PSS coverage for PSS limit "${limitKey}" (smaps_rollup unreadable; RSS is not PSS).`
+      );
+    }
     const limit = limits[limitKey];
     const limitKiB = limit * KIB_PER_MIB;
     let measuredKiB;
@@ -1118,7 +1197,9 @@ export async function runMemoryBudget(opts) {
     const fixtureStart = Date.now();
     if (opts.fixtureDir) {
       const copied = path.join(runRoot, 'fixture');
-      fs.cpSync(opts.fixtureDir, copied, { recursive: true });
+      assertNoSymlinks(opts.fixtureDir);
+      fs.cpSync(opts.fixtureDir, copied, { recursive: true, dereference: false });
+      assertNoSymlinks(copied);
       const manifest = JSON.parse(
         fs.readFileSync(path.join(copied, 'fixture-manifest.json'), 'utf8')
       );
@@ -1161,12 +1242,25 @@ export async function runMemoryBudget(opts) {
         seed: opts.seed,
         storeModule: artifacts.storeMod,
       });
+      // The generator requires a new directory; verify it stays inside runRoot.
+      assertResolvedInside(runRoot, fixture.root);
     }
     const fixtureMs = Date.now() - fixtureStart;
 
     const stubsDir = path.join(runRoot, 'stubs');
     const xdgRuntimeDir = path.join(runRoot, 'xdg');
     const logsDir = path.join(runRoot, 'logs');
+    // Verify resolved roots stay inside the ephemeral fixture copy.
+    const expectedRoot = fs.realpathSync(path.join(runRoot, 'fixture'));
+    for (const candidate of [fixture.home, fixture.ccsDir, fixture.reportsDir, fixture.registryDir]) {
+      if (!candidate) continue;
+      // Only verify candidates that exist; the generator always creates them.
+      if (fs.existsSync(candidate)) assertResolvedInside(expectedRoot, candidate);
+      else if (candidate !== path.join(expectedRoot, 'home', '.ccs') && candidate !== path.join(expectedRoot, 'home')) {
+        // Non-existent paths should still resolve inside the fixture.
+        assertResolvedInside(expectedRoot, candidate);
+      }
+    }
     writeStubs(stubsDir);
     fs.mkdirSync(xdgRuntimeDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(logsDir, { recursive: true });

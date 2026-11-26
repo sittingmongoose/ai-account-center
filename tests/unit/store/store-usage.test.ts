@@ -184,8 +184,22 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     async () => {
       const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
       const store = await openStore(path.join(dir, 'store'));
+      // Anchor the fixture to the wall clock but compute the burn expectation from
+      // the server's own 'at' (same clock as the 90d window). A run that crosses an
+      // hour boundary would otherwise shift the window by one hour and flake 89.
       const end = (Math.floor(Date.now() / HOUR) + 1) * HOUR;
       const start = end - 90 * 24 * HOUR;
+      const expectedConsumedFor = (serverNow: number) => {
+        const windowStart = serverNow - 90 * 24 * HOUR;
+        const windowEnd = serverNow;
+        // Data points are hourly from start to end (exclusive). The burn counts
+        // the last used minus the first used among points in [windowStart, windowEnd).
+        const firstInWindow = Math.max(start, Math.ceil(windowStart / HOUR) * HOUR);
+        const lastInWindow = Math.min(end - HOUR, Math.floor((windowEnd - 1) / HOUR) * HOUR);
+        if (lastInWindow < firstInWindow) return 0;
+        const usedAt = (t: number) => Math.floor((t - start) / (24 * HOUR));
+        return usedAt(lastInWindow) - usedAt(firstInWindow);
+      };
       const resetAt = new Date(end).toISOString();
       let server: Awaited<ReturnType<typeof startNativeStoreServer>> | undefined;
       try {
@@ -237,13 +251,26 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
         });
         expect(response.status).toBe(200);
         const body = (await response.json()) as {
+          at?: string;
           series: Array<{ accountId: string; spans: Array<{ span: string; consumed: number }> }>;
         };
         expect(body.series.map((s) => s.accountId).sort()).toEqual(
           Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
         );
+        // Derive the expectation from the server's 'at' (its window clock), not
+        // from the fixture's initial Date.now() which may be an hour stale after
+        // a slow generation that crossed a boundary.
+        const serverNow = body.at ? Date.parse(body.at) : Date.now();
+        const expected = expectedConsumedFor(serverNow);
+        // The fixture always spans 90d with a daily step, so a window fully inside it
+        // expects 89; an edge where the window starts after the first point still
+        // expects 89 for a 1h shift, but a larger shift (or a narrow window) must
+        // be computed, not hardcoded.
+        expect(expected).toBe(89);
         for (const series of body.series) {
-          expect(series.spans).toEqual([expect.objectContaining({ span: '90d', consumed: 89 })]);
+          expect(series.spans).toEqual([
+            expect.objectContaining({ span: '90d', consumed: expected }),
+          ]);
         }
       } finally {
         await server?.stop();

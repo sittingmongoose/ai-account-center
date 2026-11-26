@@ -1463,6 +1463,18 @@ export async function generateMemoryFixture(outDir, userOptions = {}) {
   const registryDir = path.join(reportsDir, 'pm-mail-registry');
   const usageLogsDir = path.join(root, 'usage-logs');
 
+  if (fs.existsSync(root)) {
+    // The generator requires a new directory or a verified empty destination.
+    // A symlink at the destination is refused outright.
+    const rootStat = fs.lstatSync(root);
+    if (rootStat.isSymbolicLink()) {
+      throw new Error(`Fixture output is a symlink: ${root}`);
+    }
+    if (fs.readdirSync(root).length > 0) {
+      // Reuse the runner's stricter check: any pre-existing tree is refused.
+      throw new Error(`${root} already contains a generated fixture; pass an empty directory.`);
+    }
+  }
   if (fs.existsSync(path.join(reportsDir, 'v1', 'writers'))) {
     throw new Error(`${root} already contains a generated fixture; pass an empty directory.`);
   }
