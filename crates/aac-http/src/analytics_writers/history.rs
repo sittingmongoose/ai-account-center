@@ -421,6 +421,12 @@ pub(super) fn commit_report(store: &Engine, value: Value) -> Result<()> {
                 part.state = "partial".into();
                 part.complete = false;
                 part.cover_from = None;
+                // A scan's unreadable-record evidence is scan-wide: every batch is ingested on
+                // its own, and each incomplete part would log its own `activity.read` to the
+                // append-only Ledger, duplicating the scan. Only the final batch publishes it.
+                if let Some(counts) = part.counts.as_mut() {
+                    counts.unreadable_records = None;
+                }
             }
             let imported = activity::ingest(store, &[part])?;
             if imported.accepted != 1 || !imported.refused.is_empty() {
@@ -1259,5 +1265,104 @@ mod tests {
             .expect("Devin historical source");
         assert_eq!(history["state"], "failed");
         assert_eq!(history["unreadableRecords"], 2);
+    }
+
+    /// A historical scan split into several session batches (over 20,000 sessions) must publish
+    /// its scan-wide unreadable evidence once: the append-only Ledger keeps one `activity.read`
+    /// per logged ingest, so every part carrying the count would duplicate the scan. The
+    /// production writer (`commit_report`) with 20,001 sessions and `unreadableRecords: 2`
+    /// logs the count on the final batch only; usage and the stored read stay intact.
+    #[test]
+    fn split_backfill_logs_unreadable_evidence_once() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let now = aac_store::engine::now_ms() as i64;
+        let old = now - 40 * super::super::DAY;
+        let hour = |at: i64| {
+            aac_num::ecma::to_iso_string(at.div_euclid(3_600_000) * 3_600_000).expect("hour")
+        };
+        let stamp = aac_num::ecma::to_iso_string(old).expect("session time");
+        let sessions: Vec<Value> = (0..20_001u32)
+            .map(|i| {
+                json!({
+                    "sessionKey": format!("{i:016x}"),
+                    "first": stamp,
+                    "last": stamp,
+                    "parts": [{
+                        "route": "",
+                        "modelRaw": "devin-model",
+                        "inputTokens": 1,
+                        "outputTokens": 1,
+                        "cacheCreationTokens": 0,
+                        "cacheReadTokens": 0,
+                    }],
+                })
+            })
+            .collect();
+        let report = json!({
+            "schema": "aac.usage-report.v1",
+            "computer": "ubuntu",
+            "tool": "devin",
+            "kind": "backfill",
+            "readAt": aac_num::ecma::to_iso_string(now).expect("read time"),
+            "state": "partial",
+            "complete": false,
+            "coverFrom": Value::Null,
+            "cause": Value::Null,
+            "counts": {"unreadableRecords": 2},
+            "cells": [{"hour": hour(old), "route": "", "modelRaw": "devin-model",
+                "inputTokens": 100, "outputTokens": 10, "cacheCreationTokens": 0,
+                "cacheReadTokens": 0, "costUsd": 0.0, "fallbackCostUsd": 0.0, "events": 1}],
+            "sessions": sessions,
+        });
+        let engine = aac_store::ops::open_engine(
+            home.path().join("store").to_str().expect("fixture path"),
+            None,
+            None,
+        )
+        .expect("open activity store");
+        commit_report(&engine, report).expect("split backfill commit");
+        let mut evidence = 0;
+        engine
+            .lock_logs()
+            .ledger
+            .read_after(None, |event| {
+                if event.event_type == "activity.read" {
+                    let reads = aac_store::msgpack::to_json(&event.payload)["reads"].clone();
+                    for read in reads.as_array().expect("scan reads").iter() {
+                        if read["counts"]["unreadable_records"].as_u64() == Some(2) {
+                            evidence += 1;
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .expect("scan history");
+        assert_eq!(
+            evidence, 1,
+            "the scan's unreadable count is logged once, not once per batch"
+        );
+        let sources = aac_store::ops::call(
+            &engine,
+            "activitySources",
+            &json!({"fromMs": now - 50 * super::super::DAY, "toMs": now}).to_string(),
+        )
+        .expect("activity sources");
+        assert_eq!(
+            sources["sources"][0]["backfillRead"]["unreadableRecords"], 2
+        );
+        let range = aac_store::ops::call(
+            &engine,
+            "activityRange",
+            &json!({"fromMs": old - 86_400_000, "toMs": old + 86_400_000}).to_string(),
+        )
+        .expect("stored activity range");
+        let tokens: u64 = range["rows"]
+            .as_array()
+            .expect("range rows")
+            .iter()
+            .map(|row| row[5].as_u64().expect("input tokens"))
+            .sum();
+        assert_eq!(tokens, 100, "the split backfill's usage is intact: {range}");
+        assert_eq!(range["sessions"]["total"], 20_001);
     }
 }
