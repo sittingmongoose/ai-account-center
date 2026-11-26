@@ -1,0 +1,1168 @@
+[
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {}
+  },
+  {
+    "expected": [
+      {
+        "key": "seven_day",
+        "kind": "rate_limit",
+        "label": "Weekly usage",
+        "limit": null,
+        "remainingPercent": 100.0,
+        "resetAt": "2026-11-27T17:20:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 0.0,
+        "windowMinutes": 10080.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "limit_window_seconds": 604800,
+          "reset_at": 1795800000,
+          "used_percent": 0
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "enabled": false,
+        "key": "credits_balance",
+        "kind": "balance",
+        "label": "Extra usage credits",
+        "limit": null,
+        "remaining": 0.0,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "credits",
+        "unlimited": false,
+        "used": null,
+        "usedPercent": null,
+        "windowMinutes": null
+      },
+      {
+        "key": "banked_resets",
+        "kind": "balance",
+        "label": "Banked resets",
+        "limit": null,
+        "remaining": 0.0,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "resets",
+        "used": null,
+        "usedPercent": null,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "credits": {
+        "balance": "0",
+        "has_credits": false,
+        "unlimited": false
+      },
+      "rate_limit_reset_credits": {
+        "available_count": 0
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "primary_window",
+        "kind": "rate_limit",
+        "label": "Usage",
+        "limit": null,
+        "remainingPercent": 0,
+        "resetAt": "2026-11-26T18:00:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 150.0,
+        "windowMinutes": 2.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rateLimit": {
+        "primaryWindow": {
+          "limitWindowSeconds": 120,
+          "resetAfterSeconds": 0,
+          "usedPercent": 150
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": null
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": null
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": null
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": false
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": false
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": false
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": -1
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": -1
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": -1
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 100.0,
+        "resetAt": "2026-11-26T18:01:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 0.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": 0
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 100.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 0.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": 0
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 100.0,
+        "resetAt": "2026-11-27T17:20:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 0.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": 0
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 87.8765,
+        "resetAt": "2026-11-26T18:01:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 12.1235,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": 12.12345
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 87.8765,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 12.1235,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": 12.12345
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 87.8765,
+        "resetAt": "2026-11-27T17:20:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 12.1235,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": 12.12345
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 0,
+        "resetAt": "2026-11-26T18:01:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 100.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": 100
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 100.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": 100
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 0,
+        "resetAt": "2026-11-27T17:20:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 100.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": 100
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 0,
+        "resetAt": "2026-11-26T18:01:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 150.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": 150
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 150.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": 150
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "five_hour",
+        "kind": "rate_limit",
+        "label": "5-hour usage",
+        "limit": null,
+        "remainingPercent": 0,
+        "resetAt": "2026-11-27T17:20:00Z",
+        "unit": null,
+        "used": null,
+        "usedPercent": 150.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": 150
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": null,
+          "used_percent": "10"
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 0,
+          "used_percent": "10"
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "rate_limit": {
+        "primary_window": {
+          "reset_after_seconds": 60,
+          "reset_at": 1795800000,
+          "used_percent": "10"
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "credits_balance",
+        "kind": "balance",
+        "label": "Extra usage credits",
+        "limit": null,
+        "remaining": null,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "credits",
+        "unlimited": false,
+        "used": null,
+        "usedPercent": null,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "credits": {
+        "balance": -1,
+        "unlimited": false
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "credits_balance",
+        "kind": "balance",
+        "label": "Extra usage credits",
+        "limit": null,
+        "remaining": 12.5,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "credits",
+        "used": null,
+        "usedPercent": null,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "credits": {
+        "balance": "12.50"
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "credits": {
+        "balance": true
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "credits_balance",
+        "kind": "balance",
+        "label": "Extra usage credits",
+        "limit": null,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "credits",
+        "unlimited": true,
+        "used": null,
+        "usedPercent": null,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "credits": {
+        "unlimited": true
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "enabled": false,
+        "key": "credits_balance",
+        "kind": "balance",
+        "label": "Extra usage credits",
+        "limit": null,
+        "remaining": 0.0,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "credits",
+        "used": null,
+        "usedPercent": null,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "credits": {
+        "balance": 0,
+        "has_credits": false
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "monthly_credit_limit",
+        "kind": "spend",
+        "label": "Monthly credit limit",
+        "limit": 10.0,
+        "remaining": 10.0,
+        "remainingPercent": 100.0,
+        "resetAt": "2026-11-27T17:20:00Z",
+        "unit": "credits",
+        "used": 0.0,
+        "usedPercent": 0,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "spend_control": {
+        "individual_limit": {
+          "limit": 10,
+          "remaining_percent": 100,
+          "reset_at": 1795800000,
+          "used": 0
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "monthly_credit_limit",
+        "kind": "spend",
+        "label": "Monthly credit limit",
+        "limit": null,
+        "remainingPercent": 0.0,
+        "resetAt": null,
+        "unit": "credits",
+        "used": null,
+        "usedPercent": 100.0,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "spend_control": {
+        "individual_limit": {
+          "remaining_percent": 0
+        }
+      }
+    }
+  },
+  {
+    "expected": [],
+    "now": 1795716000,
+    "payload": {
+      "spend_control": {
+        "individual_limit": {
+          "remaining_percent": 101
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "monthly_credit_limit",
+        "kind": "spend",
+        "label": "Monthly credit limit",
+        "limit": null,
+        "remaining": 0.0,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "credits",
+        "used": null,
+        "usedPercent": null,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "spend_control": {
+        "individual_limit": {
+          "limit": -3,
+          "used": -1
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "monthly_credit_limit",
+        "kind": "spend",
+        "label": "Monthly credit limit",
+        "limit": 10.0,
+        "remaining": 0.0,
+        "remainingPercent": null,
+        "resetAt": null,
+        "unit": "credits",
+        "used": 20.0,
+        "usedPercent": null,
+        "windowMinutes": null
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "spend_control": {
+        "individual_limit": {
+          "limit": 10,
+          "used": 20
+        }
+      }
+    }
+  },
+  {
+    "expected": [
+      {
+        "key": "code_review_seven_day",
+        "kind": "rate_limit",
+        "label": "Code review - Weekly usage",
+        "limit": null,
+        "remainingPercent": 100.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 0.0,
+        "windowMinutes": 10080.0
+      },
+      {
+        "key": "additional_0_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_1_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_2_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_3_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_4_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_5_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_6_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_7_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_8_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_9_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_10_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_11_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_12_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_13_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_14_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      },
+      {
+        "key": "additional_15_five_hour",
+        "kind": "rate_limit",
+        "label": "Extra - 5-hour usage",
+        "limit": null,
+        "remainingPercent": 95.0,
+        "resetAt": null,
+        "unit": null,
+        "used": null,
+        "usedPercent": 5.0,
+        "windowMinutes": 300.0
+      }
+    ],
+    "now": 1795716000,
+    "payload": {
+      "additional_rate_limits": [
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        },
+        {
+          "limit_name": "Extra",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 5
+            }
+          }
+        }
+      ],
+      "code_review_rate_limit": {
+        "secondary_window": {
+          "used_percent": 0
+        }
+      }
+    }
+  }
+]
