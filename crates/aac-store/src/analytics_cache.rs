@@ -42,6 +42,8 @@ pub fn answer_generation(engine: &Engine) -> Result<String> {
                     | "last_backup_ms"
                     | "last_share_backup_ms"
                     | "backup_readings_seq"
+                    | crate::engine::STATS_META
+                    | crate::engine::VERIFIED_GENERATION_META
             ) {
                 continue;
             }

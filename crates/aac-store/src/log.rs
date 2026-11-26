@@ -265,6 +265,30 @@ fn zst_name(start: u64, end: u64) -> String {
     format!("{}.zst", sealed_name(start, end))
 }
 
+/// A file's size, modified and changed times and identity, as one comparable string.
+fn file_stamp(meta: &fs::Metadata) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(format!(
+            "{}:{}.{}:{}.{}:{}:{}",
+            meta.len(),
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec(),
+            meta.dev(),
+            meta.ino()
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+        let created = meta.created().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(format!("{}:{}:{}", meta.len(), modified.as_nanos(), created.as_nanos()))
+    }
+}
+
 /// (start, end, kind) of a segment file name.
 fn parse_name(name: &str) -> Option<(u64, Option<u64>, &'static str)> {
     let rest = name.strip_prefix("seg-")?;
@@ -1004,6 +1028,51 @@ impl Log {
             self.write_manifest()?;
         }
         Ok(findings)
+    }
+
+    /// A digest naming exactly what this log holds, for the clean-shutdown fast path: every
+    /// segment (bounds, frames, sizes, hash, compression, state), the retirement and its chain,
+    /// and each segment file's on-disk stamp (size, modified and changed times, inode). Any write
+    /// to a segment file changes its changed time, which no user tool can set back, so a file
+    /// touched while the store was closed never matches. `None` when the log has an active
+    /// segment, an unknown retirement chain, a segment that is not plainly sealed or a file that
+    /// cannot be read, so a log carrying disclosed loss is always checked in full.
+    pub fn verified_fingerprint(&self) -> Option<String> {
+        if self.active.is_some()
+            || self.manifest.active.is_some()
+            || self.base_digest().is_none()
+            || self
+                .manifest
+                .segments
+                .iter()
+                .any(|s| s.state != "sealed" || s.loss.is_some())
+        {
+            return None;
+        }
+        let mut stamps = Vec::with_capacity(self.manifest.segments.len());
+        for s in &self.manifest.segments {
+            let (name, bytes) = if s.compressed {
+                (zst_name(s.start_seq, s.end_seq), s.zst_bytes)
+            } else {
+                (sealed_name(s.start_seq, s.end_seq), s.raw_bytes)
+            };
+            let meta = fs::symlink_metadata(self.dir.join(&name)).ok()?;
+            if !meta.is_file() || meta.len() != bytes {
+                return None;
+            }
+            stamps.push(file_stamp(&meta)?);
+        }
+        let named = (
+            &self.manifest.log,
+            self.manifest.generation,
+            &self.manifest.segments,
+            self.manifest.retired_below,
+            &self.manifest.retired_digest,
+            stamps,
+        );
+        crate::msgpack::to_bytes(&named)
+            .ok()
+            .map(|bytes| fsx::sha256_hex(&bytes))
     }
 
     /// Calls `visit` for every event with a sequence above `after`, in order: sealed segments

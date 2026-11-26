@@ -38,6 +38,9 @@ const MAINTAIN_EVERY_MS: u64 = 15 * MINUTE_MS;
 const BACKUP_EVERY_MS: u64 = DAY_MS;
 const REDB_BACKUP_EVERY_MS: u64 = 7 * DAY_MS;
 const VERIFY_EVERY_MS: u64 = 7 * DAY_MS;
+/// How long a read waits for the boot open before it answers busy instead of parking one of
+/// the store's few threads for the whole open.
+const READY_WAIT: Duration = Duration::from_secs(2);
 
 /// The boot's store config, resolved once by TS at start: the open arguments it would have
 /// given the NAPI module, plus the backup job's share inputs. Absent in the boot JSON, the
@@ -350,11 +353,12 @@ impl StoreHost {
     /// store) is kept and named by `hostJobs`; the service still serves its other routes,
     /// and TS's `open` retries the dispatch and gets the same code.
     pub(crate) fn open_at_boot(self: &Arc<Self>) {
+        // The engine only: the boot never reads its status (that answer was discarded).
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            ops::dispatch(&self.slot, "open", &self.boot.open_args())
+            ops::open_slot(&self.slot, &self.boot.open_args())
         }));
         let error = match outcome {
-            Ok(Ok(_)) => None,
+            Ok(Ok(())) => None,
             Ok(Err(error)) => Some(error.to_string()),
             Err(_) => Some("panic: the store stopped this call".to_string()),
         };
@@ -400,6 +404,25 @@ impl StoreHost {
                 .ready_changed
                 .wait(state)
                 .unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    /// True once the boot open finished, waiting at most `wait` for it.
+    fn ready_within(&self, wait: Duration) -> bool {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let (state, _) = self
+            .ready_changed
+            .wait_timeout_while(state, wait, |state| !state.ready)
+            .unwrap_or_else(|p| p.into_inner());
+        state.ready
+    }
+
+    /// A read's bounded wait for the boot open: busy, never a parked store thread.
+    fn read_ready(&self) -> Result<(), String> {
+        if self.ready_within(READY_WAIT) {
+            Ok(())
+        } else {
+            Err("busy: the store is still opening".to_string())
         }
     }
 
@@ -481,7 +504,7 @@ impl StoreHost {
         &self,
     ) -> Result<(u64, Arc<aac_store::runs::ResolvedHistory>), String> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.wait_ready();
+            self.read_ready()?;
             let engine = self
                 .engine()
                 .ok_or_else(|| "stale_engine: the store host is closed".to_string())?;
@@ -564,7 +587,7 @@ impl StoreHost {
         safe_paths: &std::collections::HashMap<String, String>,
     ) -> Result<aac_store::scoreboard_agg::ScoreboardRead, String> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.wait_ready();
+            self.read_ready()?;
             let engine = self
                 .engine()
                 .ok_or_else(|| "service_down: the store host is closed".to_string())?;
@@ -597,7 +620,7 @@ impl StoreHost {
         &self,
     ) -> Result<(u64, u64, Vec<aac_store::runs::AcceptedReceipt>), String> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.wait_ready();
+            self.read_ready()?;
             let engine = self
                 .engine()
                 .ok_or_else(|| "service_down: the store host is closed".to_string())?;
@@ -773,7 +796,9 @@ impl StoreHost {
     /// `/api/store/status` from the Engine in process (R3): the writer's own `status`,
     /// admitted by the same shape check the snapshot path uses. No engine, no answer.
     pub(crate) fn status_value(&self) -> Result<Value, Decline> {
-        self.wait_ready();
+        if !self.ready_within(READY_WAIT) {
+            return Err(Decline::Busy);
+        }
         let Some(engine) = self.engine() else {
             let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             let error = state.boot_error.as_deref().ok_or(Decline::Unsupported)?;
@@ -781,6 +806,21 @@ impl StoreHost {
             return Ok(json!({"state": "unavailable", "reason": reason}));
         };
         let status = ops::call(&engine, "status", "{}").map_err(|_| Decline::Internal)?;
+        // Byte statistics walk the whole file: measured on their own thread when due, so this
+        // read and the next never wait for them (the answer names when they were measured).
+        if engine.stats_due(aac_store::engine::now_ms()) {
+            let measuring = Arc::clone(&engine);
+            let spawned = std::thread::Builder::new()
+                .name("aac-store-stats".to_string())
+                .spawn(move || {
+                    if let Err(error) = measuring.refresh_stats() {
+                        tracing::warn!(target: "aac_http", code = error.code, "store stats not measured");
+                    }
+                });
+            if spawned.is_err() {
+                tracing::warn!(target: "aac_http", "store stats thread could not start");
+            }
+        }
         aac_store::read_status::from_writer(&status).ok_or(Decline::Unsupported)
     }
 
@@ -960,8 +1000,11 @@ impl StoreHost {
     /// A clean close when the service ends, whatever TS managed to ask first: producers may
     /// still be stopping, but the logs seal and the shutdown is marked clean (dispatch's
     /// `close` on an empty slot is already a no-op).
+    /// The boot open no longer holds the slot while it runs, so a close that arrives during it
+    /// first lets it finish (bounded), then closes the engine it opened.
     pub(crate) fn close_engine(&self) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = self.ready_within(Duration::from_secs(60));
             let engine = self.slot.lock().unwrap_or_else(|p| p.into_inner()).take();
             if let Some(engine) = engine {
                 let _ = engine.close();
@@ -1119,6 +1162,126 @@ mod tests {
         let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["passes"], json!(1), "{jobs}");
         assert_eq!(jobs["jobs"]["lastErrorMs"], Value::Null, "{jobs}");
+    /// N3: while the boot open runs, reads answer busy within the bounded wait instead of
+    /// parking one of the store's few threads; once it opens they answer as before.
+    #[test]
+    fn reads_answer_busy_while_the_boot_open_runs() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(root.path().join("store")));
+        let (done, answers) = std::sync::mpsc::channel();
+        let reader = Arc::clone(&host);
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let status = reader.status_value();
+            let runs = reader.runs_history_blocking().map(|_| ());
+            let _ = done.send((started.elapsed(), status.err(), runs.err()));
+        });
+        let (took, status, runs) = answers
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|_| "a read parked until the boot open finished".to_string())?;
+        assert!(took < Duration::from_secs(8), "{took:?}");
+        assert_eq!(status, Some(Decline::Busy));
+        assert!(
+            matches!(&runs, Some(e) if e.starts_with("busy:")),
+            "{runs:?}"
+        );
+        host.open_at_boot();
+        assert!(host.status_value().is_ok());
+        assert!(host.runs_history_blocking().is_ok());
+        host.close_engine();
+        Ok(())
+    }
+
+    /// N3: the boot open does not hold the slot while it runs: asking for the engine answers
+    /// "not open yet" at once, so Analytics can decline busy instead of waiting out the open.
+    #[test]
+    fn asking_for_the_engine_never_waits_behind_the_boot_open() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dir = root.path().join("store");
+        {
+            // Enough history that rebuilding the projections from the logs takes a while.
+            let engine =
+                ops::open_engine(&dir.to_string_lossy(), None, None).map_err(|e| e.to_string())?;
+            for batch in 0..24u64 {
+                engine
+                    .commit(aac_store::engine::LogId::Ledger, |events| {
+                        for i in 0..4000u64 {
+                            let payload =
+                                aac_store::msgpack::from_json(&json!({ "n": batch * 4000 + i }))?;
+                            let mut event = aac_store::event::Event::new(
+                                "test.boot",
+                                1_794_564_000_000 + i,
+                                payload,
+                            );
+                            event.idempotency_key = None;
+                            events.push(event)?;
+                        }
+                        Ok(())
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
+            engine.close().map_err(|e| e.to_string())?;
+        }
+        // Without its redb the next open rebuilds every projection from the logs.
+        std::fs::remove_file(dir.join("aac.redb")).map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(dir));
+        let opener = Arc::clone(&host);
+        let started = std::time::Instant::now();
+        let open = std::thread::spawn(move || opener.open_at_boot());
+        let mut slowest = Duration::ZERO;
+        let mut asked_while_opening = 0;
+        while !open.is_finished() {
+            let asked = std::time::Instant::now();
+            let engine = host.analytics_engine();
+            slowest = slowest.max(asked.elapsed());
+            if engine.is_none() && !open.is_finished() {
+                asked_while_opening += 1;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        open.join().map_err(|_| "the open panicked".to_string())?;
+        let opened_in = started.elapsed();
+        assert!(
+            asked_while_opening > 0,
+            "the open finished before any read ({opened_in:?})"
+        );
+        assert!(
+            opened_in > Duration::from_millis(300),
+            "the open was too quick to show a wait ({opened_in:?})"
+        );
+        assert!(
+            slowest < Duration::from_millis(100),
+            "a read waited {slowest:?} of a {opened_in:?} open"
+        );
+        assert!(host.analytics_engine().is_some());
+        host.close_engine();
+        Ok(())
+    }
+
+    /// N3: a Store status read starts the byte-statistics measurement on its own thread; the
+    /// read itself answers with the not-yet-measured mark, and a later read has the numbers.
+    #[test]
+    fn a_status_read_measures_byte_statistics_off_the_read() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(root.path().join("store")));
+        host.open_at_boot();
+        let first = host.status_value().map_err(|e| format!("{e:?}"))?;
+        assert!(first["redbStats"]["measuredAt"].is_null(), "{first}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let measured = loop {
+            let status = host.status_value().map_err(|e| format!("{e:?}"))?;
+            if status["redbStats"]["measuredAt"].is_u64() {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("the measurement never landed".to_string());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(
+            measured["redbStats"]["allocatedPages"].as_u64() > Some(0),
+            "{measured}"
+        );
         host.close_engine();
         Ok(())
     }

@@ -61,6 +61,11 @@ fn report_revisions_are_permanent_idempotent_compressed_and_replayable() {
     assert_eq!(before["revisions"][0]["ids"]["t3ThreadId"], "thread:example");
     let health = capture::health(&engine).unwrap();
     assert_eq!(health["revisions"], 3);
+    // Stored bytes need a walk: none until the engine measures them, off the read path.
+    assert!(health["contentBytes"].is_null() && health["bytesMeasuredAt"].is_null());
+    engine.refresh_stats().unwrap();
+    let health = capture::health(&engine).unwrap();
+    assert!(health["bytesMeasuredAt"].as_u64().is_some());
     assert!(health["contentBytes"].as_u64().unwrap() < serde_json::to_vec(&a.doc).unwrap().len() as u64 * 3);
     let mut bad = report(4, "done");
     bad.doc["access_token"] = json!("must-not-persist");

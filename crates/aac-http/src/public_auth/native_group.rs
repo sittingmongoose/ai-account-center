@@ -407,6 +407,12 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
     }
 }
 
+/// The service declined busy: the store is still opening. That is a retryable failure, never
+/// "unavailable/missing", which would say there is no store.
+fn store_still_opening(reply: &ServiceReply) -> bool {
+    declined(reply) && decline_reason(reply) == Some("busy")
+}
+
 /// `GET /api/store/status`: the hosted store's writer status, or the fallback's honest
 /// "unavailable" (never an invented one).
 async fn store_status(routes: &Routes, access: &DashboardAccess) -> Reply {
@@ -430,10 +436,13 @@ async fn store_status(routes: &Routes, access: &DashboardAccess) -> Reply {
     if !routes.hosted().await {
         return unavailable();
     }
-    match routes
+    let reply = routes
         .request("GET", "/api/store/status", &principal, &[], None)
-        .await
-    {
+        .await;
+    if reply.as_ref().is_some_and(store_still_opening) {
+        return store_failed();
+    }
+    match reply {
         Some(reply) if declined(&reply) => unavailable(),
         Some(reply) if reply.status == 200 => match json_of(&reply) {
             Some(value)
@@ -1316,6 +1325,25 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn a_store_still_opening_is_a_retryable_failure_not_a_missing_store() {
+        let reply = |reason: &'static str| {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                "x-aac-decline",
+                axum::http::HeaderValue::from_static(reason),
+            );
+            ServiceReply {
+                status: 503,
+                headers,
+                body: axum::body::Bytes::new(),
+            }
+        };
+        assert!(store_still_opening(&reply("busy")));
+        assert!(!store_still_opening(&reply("unsupported")));
+        assert_eq!(store_failed().status(), 503);
     }
 
     #[test]

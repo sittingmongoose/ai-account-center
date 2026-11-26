@@ -97,18 +97,36 @@ pub fn open_engine_with(
     )
 }
 
+/// Dispatch's `open` without its status answer: a boot open that only needs the engine.
+///
+/// The slot is not held while the engine opens (a replay or rebuild can take a long time):
+/// every reader that asks the slot for its engine gets "not open yet" at once instead of
+/// waiting behind the open. The store's own lock still refuses a second concurrent open.
+pub fn open_slot(slot: &Slot, args: &str) -> Result<()> {
+    let a: OpenArgs = parse(args)?;
+    if slot.lock().unwrap_or_else(|p| p.into_inner()).is_some() {
+        fail!("already_open", "the store is already open");
+    }
+    let engine = open_engine_with(&a.dir, a.cache_bytes, a.retention_days, a.activity_retention_days)?;
+    let mut guard = slot.lock().unwrap_or_else(|p| p.into_inner());
+    if guard.is_some() {
+        drop(guard);
+        let _ = engine.close();
+        fail!("already_open", "the store is already open");
+    }
+    *guard = Some(Arc::new(engine));
+    Ok(())
+}
+
 pub fn dispatch(slot: &Slot, method: &str, args: &str) -> Result<String> {
     let answer = match method {
         "open" => {
-            let a: OpenArgs = parse(args)?;
-            let mut guard = slot.lock().unwrap_or_else(|p| p.into_inner());
-            if guard.is_some() {
-                fail!("already_open", "the store is already open");
+            open_slot(slot, args)?;
+            let engine = slot.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(Arc::clone);
+            match engine {
+                Some(engine) => engine.status()?,
+                None => fail!("closed", "the store is not open"),
             }
-            let engine = open_engine_with(&a.dir, a.cache_bytes, a.retention_days, a.activity_retention_days)?;
-            let status = engine.status()?;
-            *guard = Some(Arc::new(engine));
-            status
         }
         "close" => {
             let engine = slot.lock().unwrap_or_else(|p| p.into_inner()).take();

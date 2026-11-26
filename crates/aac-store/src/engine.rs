@@ -27,6 +27,27 @@ const UNRELEASED: &str =
     "This store was written by an unreleased test build; move it aside and AAC will start a new one.";
 const RESTORE_INTENT: &str = "restore.intent.json";
 const RESTORE_STAGING_PREFIX: &str = "restore-";
+/// The last measured redb and capture byte statistics, kept so a restart never walks the file.
+pub const STATS_META: &str = "redb_stats_v1";
+/// Measured byte statistics stay current this long; a status read after that starts one refresh.
+pub const STATS_REFRESH_MS: u64 = 6 * 60 * 60 * 1000;
+/// Written by a clean close in the same transaction as `clean_shutdown = true`, and removed by
+/// the next open in the same transaction that sets it back to `false`: what each plainly sealed
+/// log held and the checkpoints built from it when the store closed cleanly.
+pub const VERIFIED_GENERATION_META: &str = "verified_generation_v1";
+
+/// A digest of every checkpoint row (name and bytes), in key order.
+fn checkpoint_digest<T: ReadableTable<&'static str, &'static [u8]>>(table: &T) -> Result<String> {
+    let mut bytes = Vec::new();
+    for row in table.iter()? {
+        let (key, value) = row?;
+        for part in [key.value().as_bytes(), value.value()] {
+            bytes.extend_from_slice(&(part.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(part);
+        }
+    }
+    Ok(fsx::sha256_hex(&bytes))
+}
 
 fn path_present(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
@@ -192,8 +213,9 @@ pub struct Engine {
     pub(crate) runs_history: Mutex<crate::runs::HistoryCache>,
     pub(crate) write_seq: std::sync::atomic::AtomicU64,
     pub(crate) runs_file_rev: std::sync::atomic::AtomicU64,
-    pub(crate) db_stats_cache: Mutex<Option<(u64, Json)>>,
-    pub(crate) capture_health_cache: Mutex<Option<(u64, Json)>>,
+    /// The last measured byte statistics (`STATS_META`): `status` reads them, never measures.
+    measured_stats: Mutex<Option<Json>>,
+    stats_refreshing: std::sync::atomic::AtomicBool,
     has_test_hooks: std::sync::atomic::AtomicBool,
     after_sb_begin_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     before_query_meta_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -402,6 +424,7 @@ impl Engine {
         let checked = size < config.integrity_max_bytes;
         let integrity = json!({ "checkedAt": if checked { Some(now_ms()) } else { None }, "ok": if checked { Some(true) } else { None }, "bytes": size });
         let instance_id;
+        let verified: Option<Json>;
         {
             let txn = begin(&database)?;
             db::create_tables(&txn)?;
@@ -432,6 +455,15 @@ impl Engine {
                 }
             };
             let clean = db::get_meta(&txn, "clean_shutdown")?;
+            // One use: removed in the transaction that marks this run unclean, so a later
+            // crash can never reuse it.
+            let recorded = txn
+                .open_table(db::META)?
+                .remove(VERIFIED_GENERATION_META)?
+                .map(|v| v.value().to_vec());
+            verified = recorded
+                .filter(|_| clean.as_deref() == Some("true"))
+                .and_then(|bytes| serde_json::from_slice::<Json>(&bytes).ok());
             if clean.as_deref() == Some("false") {
                 findings.push(finding(
                     "",
@@ -463,14 +495,19 @@ impl Engine {
             runs_history: Mutex::new(crate::runs::HistoryCache::default()),
             write_seq: std::sync::atomic::AtomicU64::new(1),
             runs_file_rev: std::sync::atomic::AtomicU64::new(0),
-            db_stats_cache: Mutex::new(None),
-            capture_health_cache: Mutex::new(None),
+            measured_stats: Mutex::new(None),
+            stats_refreshing: std::sync::atomic::AtomicBool::new(false),
             has_test_hooks: std::sync::atomic::AtomicBool::new(false),
             after_sb_begin_read_hook: Mutex::new(None),
             before_query_meta_read_hook: Mutex::new(None),
             _lock: lock,
         };
-        let replay_findings = engine.replay(&findings)?;
+        if let Some(text) = engine.get_meta(STATS_META)?
+            && let Ok(record @ Json::Object(_)) = serde_json::from_str::<Json>(&text)
+        {
+            *engine.measured_stats.lock().unwrap_or_else(|p| p.into_inner()) = Some(record);
+        }
+        let replay_findings = engine.replay(&findings, verified.as_ref())?;
         let initial_file_rev = crate::runs::read_file_rev(&engine)?;
         engine.note_runs_file_rev(initial_file_rev);
         merge_findings(&mut findings, replay_findings);
@@ -545,10 +582,45 @@ impl Engine {
     /// Checks every checkpoint against the events each log still holds (docs/store.md 2.6): a
     /// projection built from events the log has lost, or whose chain cannot be checked, is stale.
     /// Returns the stale projectors and the findings, the logs' own included.
-    fn check_checkpoints(&self, logs: &mut Logs, db: &Database) -> Result<(Vec<usize>, Vec<Finding>)> {
+    ///
+    /// The clean-shutdown fast path: a log whose contents and segment files still match what the
+    /// last clean close recorded (`VERIFIED_GENERATION_META`), with the same checkpoints and no
+    /// finding from this open, is not re-read (`integrity.openCheck` names which path ran). Its checkpoints were
+    /// checked by the open that started that run and only advanced with this log's own writes
+    /// since. Anything else, or any doubt, is the full check. The weekly verify still re-hashes
+    /// every sealed segment.
+    fn check_checkpoints(
+        &self,
+        logs: &mut Logs,
+        db: &Database,
+        open_findings: &[Finding],
+        verified: Option<&Json>,
+    ) -> Result<(Vec<usize>, Vec<Finding>)> {
         let mut stale = Vec::new();
         let mut findings = Vec::new();
+        let checkpoints_now = match verified {
+            Some(_) => {
+                let read = db.begin_read()?;
+                Some(checkpoint_digest(&read.open_table(db::CHECKPOINT)?)?)
+            }
+            None => None,
+        };
         for log_id in LogId::ALL {
+            let trusted = verified.is_some_and(|v| {
+                let log = logs.peek(log_id);
+                checkpoints_now
+                    .as_deref()
+                    .is_some_and(|now| v["checkpoints"].as_str() == Some(now))
+                    && log
+                        .verified_fingerprint()
+                        .is_some_and(|fp| v["logs"][log_id.name()].as_str() == Some(fp.as_str()))
+                    && !open_findings.iter().any(|f| f.log == log_id.name())
+            });
+            self.integrity.lock().unwrap_or_else(|p| p.into_inner())["openCheck"][log_id.name()] =
+                json!(if trusted { "clean_close" } else { "full" });
+            if trusted {
+                continue;
+            }
             let mut checkpoints: Vec<(usize, Checkpoint)> = Vec::new();
             {
                 let read = db.begin_read()?;
@@ -651,10 +723,10 @@ impl Engine {
 
     /// Brings every projector up to the end of both logs, rebuilding any whose version changed or
     /// whose checkpoint does not match the surviving events.
-    fn replay(&self, open_findings: &[Finding]) -> Result<Vec<Finding>> {
+    fn replay(&self, open_findings: &[Finding], verified: Option<&Json>) -> Result<Vec<Finding>> {
         let mut logs = self.lock_logs();
         self.with_db(|db| {
-            let (lost, mut findings) = self.check_checkpoints(&mut logs, db)?;
+            let (lost, mut findings) = self.check_checkpoints(&mut logs, db, open_findings, verified)?;
             let readings = if findings
                 .iter()
                 .chain(open_findings)
@@ -842,33 +914,15 @@ impl Engine {
             .any(|log| log.manifest().segments.iter().any(|s| s.state != "sealed"));
         drop(logs);
         let db_bytes = fs::metadata(self.dir.join(REDB_FILE)).map(|m| m.len()).unwrap_or(0);
-        let seq = self.write_seq();
-        let cached_stats = self
-            .db_stats_cache
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .filter(|(cached_seq, _)| *cached_seq == seq)
-            .map(|(_, val)| val.clone());
-        let db_stats = match cached_stats {
-            Some(stats) => stats,
-            None => {
-                let fresh = self.with_db(|db| {
-                    let txn = db.begin_write()?;
-                    let stats = txn.stats()?;
-                    let out = json!({
-                        "allocatedPages": stats.allocated_pages(),
-                        "pageSize": stats.page_size(),
-                        "storedBytes": stats.stored_bytes(),
-                        "metadataBytes": stats.metadata_bytes(),
-                        "fragmentedBytes": stats.fragmented_bytes(),
-                    });
-                    txn.abort()?;
-                    Ok(out)
-                })?;
-                *self.db_stats_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((seq, fresh.clone()));
-                fresh
+        // Measured off the read path (`refresh_stats`): a status read never opens a write
+        // transaction or walks the file, so it cannot queue behind a writer.
+        let db_stats = match self.measured_stats() {
+            Some(m) => {
+                let mut redb = m["redb"].clone();
+                redb["measuredAt"] = m["measuredAt"].clone();
+                redb
             }
+            None => json!({ "measuredAt": null }),
         };
         let (checkpoints, meta) = self.with_db(|db| {
             let read = db.begin_read()?;
@@ -925,6 +979,63 @@ impl Engine {
             "meta": meta,
             "findings": findings,
         }))
+    }
+
+    /// The last measured byte statistics: `{redb: {...}, capture: {...}, measuredAt}`, or
+    /// `None` before the first measurement of this store.
+    pub fn measured_stats(&self) -> Option<Json> {
+        self.measured_stats.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// True when no measurement exists or the last one is older than `STATS_REFRESH_MS`, and
+    /// no refresh is running.
+    pub fn stats_due(&self, now: u64) -> bool {
+        if self.stats_refreshing.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        match self.measured_stats() {
+            Some(m) => now.saturating_sub(m["measuredAt"].as_u64().unwrap_or(0)) >= STATS_REFRESH_MS,
+            None => true,
+        }
+    }
+
+    /// Measures redb's page statistics and the capture tables' stored bytes (a walk of the whole
+    /// file) and keeps them in memory and in `STATS_META`. One refresh at a time; a second
+    /// caller returns at once. Runs on a caller's own thread, never inside a status read.
+    pub fn refresh_stats(&self) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        if self.stats_refreshing.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let measured = self.with_db(|db| {
+            let txn = begin(db)?;
+            let stats = txn.stats()?;
+            let (revision_bytes, content_bytes) = {
+                use redb::ReadableTableMetadata;
+                let revisions = txn.open_table(crate::capture::REVISION)?;
+                let contents = txn.open_table(crate::capture::CONTENT)?;
+                (revisions.stats()?.stored_bytes(), contents.stats()?.stored_bytes())
+            };
+            let record = json!({
+                "redb": {
+                    "allocatedPages": stats.allocated_pages(),
+                    "pageSize": stats.page_size(),
+                    "storedBytes": stats.stored_bytes(),
+                    "metadataBytes": stats.metadata_bytes(),
+                    "fragmentedBytes": stats.fragmented_bytes(),
+                },
+                "capture": { "revisionBytes": revision_bytes, "contentBytes": content_bytes },
+                "measuredAt": now_ms(),
+            });
+            db::set_meta(&txn, STATS_META, &record.to_string())?;
+            txn.commit()?;
+            Ok(record)
+        });
+        if let Ok(record) = &measured {
+            *self.measured_stats.lock().unwrap_or_else(|p| p.into_inner()) = Some(record.clone());
+        }
+        self.stats_refreshing.store(false, Ordering::Release);
+        measured.map(|_| ())
     }
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
@@ -1100,6 +1211,17 @@ impl Engine {
         if let Some(db) = guard.as_ref() {
             let txn = begin(db)?;
             db::set_meta(&txn, "clean_shutdown", "true")?;
+            // Each log that is plainly sealed records what it holds; a log with a degraded or
+            // missing segment records nothing, so the next open checks it in full again.
+            let checkpoints = checkpoint_digest(&txn.open_table(db::CHECKPOINT)?)?;
+            let mut recorded = serde_json::Map::new();
+            for id in LogId::ALL {
+                if let Some(fingerprint) = logs.peek(id).verified_fingerprint() {
+                    recorded.insert(id.name().to_string(), Json::String(fingerprint));
+                }
+            }
+            let record = json!({ "logs": recorded, "checkpoints": checkpoints, "closedAt": now_ms() });
+            db::set_meta(&txn, VERIFIED_GENERATION_META, &record.to_string())?;
             txn.commit()?;
         }
         *guard = None;

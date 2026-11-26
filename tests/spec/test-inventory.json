@@ -1909,6 +1909,12 @@
       ]
     },
     {
+      "file": "crates/aac-store/tests/store_boot.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-store/tests/store_capture.rs",
       "kind": "table",
       "evidence": [
