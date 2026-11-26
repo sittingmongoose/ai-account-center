@@ -1,0 +1,8 @@
+# AI account usage
+
+AI Account Center publishes how much quota is left on every AI account the dashboard tracks (Claude, Codex, Antigravity, Muse, Cursor, Kimi Code, Qwen, Z.ai/GLM, OpenCode), refreshed every minute, in a shared folder__LOCATIONS__. Run it here as `__COMMAND__; below, `aac-usage` means that command.
+
+- `aac-usage` lists every account (provider, label, email, AAC profile, computer, plan, ACTIVE flag) with each window's used %, reset time, burn rate (%/h over the last 5 and 15 minutes, 1, 6 and 24 hours) and when it will run out at the current pace. `--provider codex` or `--account <email or label>` narrows it; `--json` prints usage.json with every rate (`burn.last5Minutes` ... `last24Hours`, `pace`, `projectedFullAt`); `aac-usage history --provider claude` shows the 7-day readings. `usage.md` in that folder is the same summary in words.
+- Check it before a long or parallel run on a quota-limited account, when a provider starts refusing requests, and when choosing between providers or accounts. Find your own login by its email (T3 names provider instances after their account email).
+- A window marked `full in ... BEFORE the reset` will run out at the current pace, sometimes within minutes: slow down, finish the current step, or tell the user rather than running the account dry. One marked `at its limit until the reset` is already used up: use another account or provider.
+- A snapshot past its stale limit means the dashboard stopped updating it: say so instead of trusting old numbers. It is read-only; switching accounts, sign-in and refresh stay in the AI Account Center dashboard.
