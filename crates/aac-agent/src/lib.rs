@@ -3,6 +3,10 @@ mod apps;
 mod claude_host;
 mod cursor_open;
 mod failover;
+/// Own-host additional-provider failover discovery and collection.
+pub mod failover_additional;
+/// Own-host special-provider failover discovery and collection.
+pub mod failover_special;
 mod files;
 mod history;
 mod inventory;

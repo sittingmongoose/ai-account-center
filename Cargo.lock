@@ -21,6 +21,7 @@ dependencies = [
  "nix",
  "regex",
  "reqwest",
+ "rusqlite",
  "security-framework",
  "serde",
  "serde_json",
