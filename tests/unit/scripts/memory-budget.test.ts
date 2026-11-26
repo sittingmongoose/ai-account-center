@@ -887,37 +887,43 @@ describe('memory-budget tool-batch-1126 fixes', () => {
     ).toThrow(/>= 0.2/);
   });
 
-  it('refuses symlinked fixture inputs before starting a child', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-link-'));
-    try {
-      const fixture = path.join(root, 'fixture');
-      const outside = path.join(root, 'outside');
-      const home = path.join(fixture, 'home');
-      fs.mkdirSync(home, { recursive: true });
-      fs.mkdirSync(outside);
-      const linked = path.join(home, '.ccs');
-      fs.symlinkSync(outside, linked, 'dir');
-      expect(() => assertNoSymlinks(fixture)).toThrow(/symlink/);
-      expect(() => assertResolvedInside(fixture, linked)).toThrow(/escapes the fixture/);
-      expect(() => assertResolvedInside(fixture, home)).not.toThrow();
-      await expect(generateMemoryFixture(linked)).rejects.toThrow(/symlink/);
-      await expect(
-        runMemoryBudget({
-          durationSec: 1,
-          steadyAfterSec: 0,
-          sampleIntervalSec: 0.2,
-          check: false,
-          fixtureDir: fixture,
-          launcherPath: process.execPath,
-          launcherArgs: () => {
-            throw new Error('the launcher must not start');
-          },
-        })
-      ).rejects.toThrow(/symlink/);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+  it.skipIf(process.platform !== 'linux')(
+    'refuses unsafe fixture inputs before starting a child',
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-link-'));
+      try {
+        const fixture = path.join(root, 'fixture');
+        const outside = path.join(root, 'outside');
+        const home = path.join(fixture, 'home');
+        fs.mkdirSync(home, { recursive: true });
+        fs.mkdirSync(outside);
+        const special = path.join(root, 'pipe');
+        expect(spawnSync('mkfifo', [special]).status).toBe(0);
+        expect(() => assertNoSymlinks(special)).toThrow(/unexpected file type/);
+        const linked = path.join(home, '.ccs');
+        fs.symlinkSync(outside, linked, 'dir');
+        expect(() => assertNoSymlinks(fixture)).toThrow(/symlink/);
+        expect(() => assertResolvedInside(fixture, linked)).toThrow(/escapes the fixture/);
+        expect(() => assertResolvedInside(fixture, home)).not.toThrow();
+        await expect(generateMemoryFixture(linked)).rejects.toThrow(/symlink/);
+        await expect(
+          runMemoryBudget({
+            durationSec: 1,
+            steadyAfterSec: 0,
+            sampleIntervalSec: 0.2,
+            check: false,
+            fixtureDir: fixture,
+            launcherPath: process.execPath,
+            launcherArgs: () => {
+              throw new Error('the launcher must not start');
+            },
+          })
+        ).rejects.toThrow(/symlink/);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
     }
-  });
+  );
 
   it('documents the short-lived helper sampling limit in the summary', () => {
     const mem = summarizeSamples(
