@@ -13,10 +13,7 @@ use crate::snapshot::{
     SampleEvent, build_snapshot_files, downgrade_crossed_sign_in_rows,
     sign_in_collection_failed_row,
 };
-use crate::{
-    SNAPSHOT_HISTORY, SNAPSHOT_HISTORY_DAILY, SNAPSHOT_HISTORY_HOURLY, SNAPSHOT_JSON,
-    SNAPSHOT_LOCATIONS, SNAPSHOT_MARKDOWN,
-};
+use crate::{SNAPSHOT_HISTORY, SNAPSHOT_JSON, SNAPSHOT_LOCATIONS, SNAPSHOT_MARKDOWN};
 use serde_json::Value;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -31,7 +28,7 @@ const SIGNIN_FETCH_LIMIT_MS: u64 = 60_000;
 type SerialWrite = dyn Fn(&str, &str, &str) -> io::Result<()> + Send + Sync;
 type DirectoryCheck = dyn Fn(&str) -> io::Result<bool> + Send + Sync;
 type ClientSync = dyn Fn(&str) -> io::Result<()> + Send + Sync;
-type RollupRead = dyn Fn(&SampleEvent) -> Result<Option<(Value, Value)>, ()> + Send + Sync;
+type RollupWrite = dyn Fn(&SampleEvent, &str, &Arc<SerialWrite>) -> Result<(), ()> + Send + Sync;
 type LogWarning = dyn Fn(&str, &str) + Send + Sync;
 
 /// The publisher's injectable effects, the TypeScript `SnapshotPublisherDeps` one for one.
@@ -53,8 +50,10 @@ pub struct Deps {
     pub sign_in: Arc<dyn Fn() -> Result<Vec<Value>, ()> + Send + Sync>,
     /// The renewal runner's summary, best effort.
     pub sign_in_renewal: Arc<dyn Fn() -> Option<Value> + Send + Sync>,
-    /// The store's hourly and daily rollup files: Ok(None) without the store, Err retries next sample.
-    pub rollup_exports: Arc<RollupRead>,
+    /// Write the store's hourly and daily rollup files for one sample, streaming each file's
+    /// JSON text straight to the share writer (no full `Value` tree is held). Called only when
+    /// the hourly write is due. Ok(()) wrote both (or there is no store); Err retries next sample.
+    pub rollup_write: Arc<RollupWrite>,
     /// The wall clock (`Date.now`).
     pub now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// The machine name a failed collection row names (`os.hostname`).
@@ -258,33 +257,9 @@ impl SnapshotPublisher {
             crate::exports::export_hour(event.sampled_at)
         );
         if inner.rollups_written.as_deref() != Some(hour_key.as_str())
-            && let Ok(files) = (deps.rollup_exports)(event)
+            && (deps.rollup_write)(event, directory, &deps.write).is_ok()
         {
-            let mut landed = true;
-            if let Some((hourly, daily)) = files {
-                if (deps.write)(
-                    directory,
-                    SNAPSHOT_HISTORY_HOURLY,
-                    &format!("{}\n", stringify(&hourly)),
-                )
-                .is_err()
-                {
-                    landed = false;
-                }
-                if landed
-                    && (deps.write)(
-                        directory,
-                        SNAPSHOT_HISTORY_DAILY,
-                        &format!("{}\n", stringify(&daily)),
-                    )
-                    .is_err()
-                {
-                    landed = false;
-                }
-            }
-            if landed {
-                inner.rollups_written = Some(hour_key);
-            }
+            inner.rollups_written = Some(hour_key);
         }
         // The setting can change without a restart, so this follows it; unchanged, it is not rewritten.
         let locations = render_snapshot_locations(&chosen.locations);
@@ -363,6 +338,7 @@ fn fetch_sign_in(
 mod tests {
     use super::*;
     use crate::js::{self, member};
+    use crate::{SNAPSHOT_HISTORY_DAILY, SNAPSHOT_HISTORY_HOURLY};
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
 
@@ -405,7 +381,7 @@ mod tests {
             sync_client: Arc::new(|_| Ok(())),
             sign_in: Arc::new(|| Ok(vec![])),
             sign_in_renewal: Arc::new(|| None),
-            rollup_exports: Arc::new(|_| Ok(None)),
+            rollup_write: Arc::new(|_, _, _| Ok(())),
             now_ms: Arc::new(|| NOW),
             hostname: Arc::new(|| "fixture".into()),
             log: Arc::new(|_, _| {}),
@@ -568,11 +544,20 @@ mod tests {
     fn rollups_write_once_an_hour() {
         let writes = Arc::new(Mutex::new(Vec::new()));
         let mut d = deps(Arc::clone(&writes));
-        d.rollup_exports = Arc::new(|_| {
-            Ok(Some((
-                json!({"version": 1, "resolution": "hour"}),
-                json!({"version": 1, "resolution": "day"}),
-            )))
+        d.rollup_write = Arc::new(|_event, directory, write| {
+            write(
+                directory,
+                SNAPSHOT_HISTORY_HOURLY,
+                "{\"version\":1,\"resolution\":\"hour\"}\n",
+            )
+            .map_err(|_| ())?;
+            write(
+                directory,
+                SNAPSHOT_HISTORY_DAILY,
+                "{\"version\":1,\"resolution\":\"day\"}\n",
+            )
+            .map_err(|_| ())?;
+            Ok(())
         });
         let publisher = SnapshotPublisher::new(d);
         assert!(publisher.publish(&event()));
@@ -600,5 +585,37 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    /// R2: the rollup build/write callback runs only when the hourly write is due, never on
+    /// the samples between hours. The base built the rollups on every sample (the pre-fetch
+    /// ran before this gate) and discarded them 59/60 times; this pins that the expensive
+    /// callback is invoked exactly once per hour, not once per sample.
+    #[test]
+    fn the_rollup_callback_runs_only_when_the_hourly_write_is_due() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let mut d = deps(Arc::new(Mutex::new(Vec::new())));
+        d.rollup_write = Arc::new(move |_event, _directory, _write| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        let publisher = SnapshotPublisher::new(d);
+        // Ten samples across one hour: the callback runs once (the first, due sample).
+        for step in 0..10 {
+            let mut sample = event();
+            sample.sampled_at = NOW + step * 60_000;
+            assert!(publisher.publish(&sample));
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "one build per hour, not per sample"
+        );
+        // The next hour is due again: exactly one more build.
+        let mut next_hour = event();
+        next_hour.sampled_at = NOW + 3_600_000;
+        assert!(publisher.publish(&next_hour));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

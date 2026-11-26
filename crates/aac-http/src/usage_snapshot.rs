@@ -20,18 +20,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// The sample payload cap: the quota history alone is bounded at 32 MiB, plus accounts and facts.
 pub(crate) const USAGE_SAMPLE_CAP: usize = 40 * 1024 * 1024;
 
-/// The pre-fetched facts one sample carries, read by the publisher's injectable deps.
+/// The pre-fetched sign-in facts one sample carries, read by the publisher's injectable deps.
+/// The rollups are not pre-fetched: R2 builds and writes them only when the hourly write is
+/// due, through the publisher's `rollup_write` callback (the per-pass rollup slot below).
 struct Facts {
     sign_in_rows: Vec<Value>,
     sign_in_failed: bool,
     renewal: Option<Value>,
-    rollups: Result<Option<(Value, Value)>, ()>,
+}
+
+/// One sample's rollup source, set only while its publish pass runs: the hosted store for an
+/// active native sample, the payload's own rollup values for a pushed sample, or neither.
+enum RollupSource {
+    Store(Arc<crate::store_host::StoreHost>),
+    Pushed(Value, Value),
 }
 
 /// The service's snapshot publisher and the per-pass facts slot.
 pub(crate) struct UsageSnapshot {
     publisher: Arc<SnapshotPublisher>,
     facts: Arc<Mutex<Option<Facts>>>,
+    /// The per-pass rollup source, read by the publisher's `rollup_write` callback when the
+    /// hourly write is due (R2). Set only while a publish pass runs.
+    rollup_slot: Arc<Mutex<Option<RollupSource>>>,
     /// The boot root, for the saved snapshot setting (the active-sample guard).
     ccs_dir: PathBuf,
     /// The hosted store, whose own reads answer the history, long burn and rollups.
@@ -68,7 +79,8 @@ impl UsageSnapshot {
         let client_root = crate::agent_transport::package_root().unwrap_or_else(|| ccs_dir.clone());
         let sign_in_facts = Arc::clone(&facts);
         let renewal_facts = Arc::clone(&facts);
-        let rollup_facts = Arc::clone(&facts);
+        let rollup_slot: Arc<Mutex<Option<RollupSource>>> = Arc::new(Mutex::new(None));
+        let rollup_source = Arc::clone(&rollup_slot);
         let deps = Deps {
             settings: Arc::new(move || read_settings(&settings_root)),
             write: Arc::new(|directory, name, body| {
@@ -98,12 +110,58 @@ impl UsageSnapshot {
                 let guard = renewal_facts.lock().unwrap_or_else(|e| e.into_inner());
                 guard.as_ref().and_then(|facts| facts.renewal.clone())
             }),
-            rollup_exports: Arc::new(move |_event| {
-                let guard = rollup_facts.lock().unwrap_or_else(|e| e.into_inner());
-                guard
-                    .as_ref()
-                    .map(|facts| facts.rollups.clone())
-                    .unwrap_or(Ok(None))
+            rollup_write: Arc::new(move |event, directory, write| {
+                // R2: the publisher calls this only when the hourly write is due. Build the
+                // rollups now (not on every sample) and stream each file straight to the share
+                // writer. A pushed sample writes its own values; an active native sample reads
+                // the hosted store; neither is a no-op that still marks the hour written.
+                let source = rollup_source
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+                match source {
+                    Some(RollupSource::Store(host)) => {
+                        let Some(engine) = host.analytics_engine() else {
+                            return Ok(());
+                        };
+                        let projected = aac_snapshot::project_agent_usage(
+                            &event.accounts,
+                            event.sampled_at,
+                            None,
+                            true,
+                        );
+                        aac_snapshot::exports::write_rollup_exports(
+                            &engine,
+                            &event.accounts,
+                            &projected,
+                            event.sampled_at,
+                            |resolution, body| {
+                                let name = if resolution == "hour" {
+                                    aac_snapshot::SNAPSHOT_HISTORY_HOURLY
+                                } else {
+                                    aac_snapshot::SNAPSHOT_HISTORY_DAILY
+                                };
+                                write(directory, name, &format!("{body}\n")).map_err(|_| ())
+                            },
+                        )
+                        .map_err(|_| ())
+                    }
+                    Some(RollupSource::Pushed(hourly, daily)) => {
+                        write(
+                            directory,
+                            aac_snapshot::SNAPSHOT_HISTORY_HOURLY,
+                            &format!("{}\n", aac_snapshot::js::stringify(&hourly)),
+                        )
+                        .map_err(|_| ())?;
+                        write(
+                            directory,
+                            aac_snapshot::SNAPSHOT_HISTORY_DAILY,
+                            &format!("{}\n", aac_snapshot::js::stringify(&daily)),
+                        )
+                        .map_err(|_| ())
+                    }
+                    None => Ok(()),
+                }
             }),
             now_ms: Arc::new(now_ms),
             hostname: Arc::new(hostname),
@@ -119,6 +177,7 @@ impl UsageSnapshot {
         Self {
             publisher: Arc::new(SnapshotPublisher::new(deps)),
             facts,
+            rollup_slot,
             ccs_dir: boot_root,
             store: store.map(OnceLock::from).unwrap_or_default(),
         }
@@ -147,6 +206,7 @@ impl UsageSnapshot {
     fn queue(&self, payload: impl FnOnce() -> Result<Value, ()> + Send + 'static) {
         let publisher = Arc::clone(&self.publisher);
         let facts_slot = Arc::clone(&self.facts);
+        let rollup_slot = Arc::clone(&self.rollup_slot);
         let store = self.store.get().cloned();
         let boot_root = self.ccs_dir.clone();
         tokio::task::spawn_blocking(move || {
@@ -178,18 +238,32 @@ impl UsageSnapshot {
                 } else {
                     Some(payload["signInRenewal"].clone())
                 },
-                rollups: if active {
-                    rollups(store.as_deref(), &event)
-                } else {
-                    parse_rollups(&payload["rollups"])
-                },
+            };
+            // R2: the rollups are not built here. An active native sample reads the hosted
+            // store when the hourly write is due; a pushed sample carries its own values. A
+            // failed pushed pre-fetch retries next sample, exactly as the TS dep did.
+            let rollup_source = if active {
+                store
+                    .as_ref()
+                    .map(|host| RollupSource::Store(Arc::clone(host)))
+            } else {
+                match parse_rollups(&payload["rollups"]) {
+                    Ok(Some((hourly, daily))) => Some(RollupSource::Pushed(hourly, daily)),
+                    Ok(None) => None,
+                    Err(()) => {
+                        publisher.note(&event);
+                        return;
+                    }
+                }
             };
             // Every sample's readings count, even one whose write is skipped.
             publisher.note(&event);
             if let Some(mut inner) = publisher.try_begin() {
                 *facts_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(facts);
+                *rollup_slot.lock().unwrap_or_else(|e| e.into_inner()) = rollup_source;
                 publisher.pass_since(&mut inner, &event, sign_in_since);
                 *facts_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *rollup_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
         });
     }
@@ -281,28 +355,6 @@ fn enrich(store: Option<&crate::store_host::StoreHost>, event: &mut SampleEvent)
             aac_snapshot::exports::long_burn_for(&engine, &event.accounts, event.sampled_at)
     {
         event.long_burn = Some(burns);
-    }
-}
-
-/// The hourly and daily rollup files for one sample, or the retry signal (`Err`) the publisher
-/// treats as a failed pre-fetch.
-fn rollups(
-    store: Option<&crate::store_host::StoreHost>,
-    event: &SampleEvent,
-) -> Result<Option<(Value, Value)>, ()> {
-    let Some(engine) = store.and_then(|host| host.analytics_engine()) else {
-        return Ok(None);
-    };
-    let projected =
-        aac_snapshot::project_agent_usage(&event.accounts, event.sampled_at, None, true);
-    match aac_snapshot::exports::build_rollup_exports(
-        &engine,
-        &event.accounts,
-        &projected,
-        event.sampled_at,
-    ) {
-        Ok((hourly, daily)) => Ok(Some((hourly, daily))),
-        Err(_) => Err(()),
     }
 }
 

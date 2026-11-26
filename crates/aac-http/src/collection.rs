@@ -45,7 +45,11 @@ impl Default for Collection {
         Self {
             pending: Mutex::default(),
             timers: Semaphore::new(4),
-            helpers: Semaphore::new(3),
+            // R5b: one python3 failover helper at a time. Three concurrent interpreters
+            // stacked ~100 MiB of helper RSS on the main process; the deadline-bounded
+            // acquire below keeps the wait honest (a helper that cannot start in time is
+            // "busy", never a stalled pass).
+            helpers: Semaphore::new(1),
             stop: CancellationToken::new(),
         }
     }
@@ -284,6 +288,11 @@ async fn read_agent(
     cap: usize,
 ) -> Reply {
     let _permit = agents.permit().ok_or("busy")?;
+    // R5b: a local quota/sign-in agent waits for the one-at-a-time gate within its deadline.
+    let _local_permit = agents
+        .local_agent_permit(&computer, deadline)
+        .await
+        .map_err(|_| "busy")?;
     let client = agents
         .client(&computer, deadline)
         .await

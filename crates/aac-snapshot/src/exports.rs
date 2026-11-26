@@ -26,26 +26,38 @@ pub fn export_hour(now_ms: i64) -> i64 {
 #[derive(Debug)]
 pub struct ExportError;
 
-/// `buildRollupExports`: the hourly and daily files for one sample.
-pub fn build_rollup_exports(
+/// Write the hourly and daily rollup files for one sample, streaming each file's JSON text
+/// straight to `write` (the share writer). R2: the base built two full `serde_json::Value`
+/// trees per sample (`complete` + `to_file`) and the publisher discarded them 59/60 times;
+/// this is called only when the hourly write is due and holds one series' points at a time,
+/// never the whole 90-day tree. The bytes are `JSON.stringify` of the same file value the
+/// base produced (the golden test pins them). The hourly file is written before the daily
+/// is built, so a daily failure leaves the hourly landed, exactly as the base publisher did.
+pub fn write_rollup_exports(
     engine: &Engine,
     rows: &[Value],
     projected: &[ProjectedAccount],
     now: i64,
-) -> Result<(Value, Value), ExportError> {
-    let hourly = complete(engine, "hour", HOURLY_DAYS, rows, projected, now)?;
-    let daily = complete(engine, "day", DAILY_DAYS, rows, projected, now)?;
-    Ok((hourly, daily))
+    mut write: impl FnMut(&str, &str) -> Result<(), ()>,
+) -> Result<(), ExportError> {
+    let hourly = complete_text(engine, "hour", HOURLY_DAYS, rows, projected, now)?;
+    write("hour", &hourly).map_err(|_| ExportError)?;
+    let daily = complete_text(engine, "day", DAILY_DAYS, rows, projected, now)?;
+    write("day", &daily).map_err(|_| ExportError)?;
+    Ok(())
 }
 
-fn complete(
+/// One rollup file's `JSON.stringify` text, streamed series by series. Each series' points
+/// are read page by page and written immediately, so only one page of points is held at a
+/// time; the file's envelope and each series' metadata are written around them.
+fn complete_text(
     engine: &Engine,
     resolution: &str,
     days: i64,
     rows: &[Value],
     projected: &[ProjectedAccount],
     now: i64,
-) -> Result<Value, ExportError> {
+) -> Result<String, ExportError> {
     let step = if resolution == "hour" {
         HOUR_MS
     } else {
@@ -66,7 +78,17 @@ fn complete(
     )
     .map_err(|_| ExportError)?;
     let metas = list.as_array().ok_or(ExportError)?;
-    let mut series_out: Vec<Value> = Vec::new();
+    let by_identity = identity_map(rows, projected);
+    let mut out = aac_views::js_json::Writer::plain(4096);
+    // The file envelope, written as raw `JSON.stringify` bytes (the keys are fixed words and
+    // the columns a fixed array, so no object-member ordering applies). The series array is
+    // streamed below; only the closing bracket follows the loop.
+    out.raw(b"{\"version\":1,\"generatedAt\":");
+    out.string(&crate::js::iso_of(now).unwrap_or_default());
+    out.raw(b",\"resolution\":");
+    out.string(resolution);
+    out.raw(b",\"columns\":[\"start\",\"consumed\",\"lastUsed\",\"maxUsed\",\"coveredMinutes\",\"readings\",\"resets\",\"creditsSpent\",\"creditsAdded\"],\"series\":[");
+    let mut emitted = false;
     for meta in metas {
         let identity = member(meta, "identity")
             .as_str()
@@ -80,11 +102,14 @@ fn complete(
             .as_str()
             .ok_or(ExportError)?
             .to_owned();
-        let mut points: Vec<Value> = Vec::new();
-        // Pages contain at most 1,000 buckets for the selected account/window.
+        // Pages contain at most 1,000 buckets for the selected account/window. The first
+        // non-empty page opens the series; later pages append. A series with no points is
+        // absent, exactly as the base's `if !points.is_empty()` guard.
+        let mut opened = false;
         let mut from = from_ms;
         while from <= now {
             let to = now.min(from + 1000 * step - 1);
+            let mut points: Vec<Value> = Vec::new();
             page(
                 engine,
                 resolution,
@@ -96,15 +121,27 @@ fn complete(
                 step,
                 &mut points,
             )?;
+            if !points.is_empty() {
+                if !opened {
+                    if emitted {
+                        out.raw(b",");
+                    }
+                    emitted = true;
+                    opened = true;
+                    write_series_head(&mut out, meta, by_identity.get(&identity).copied());
+                } else {
+                    out.raw(b",");
+                }
+                write_points(&mut out, &points);
+            }
             from += 1000 * step;
         }
-        if !points.is_empty() {
-            let mut entry = meta.clone();
-            entry["points"] = Value::Array(points);
-            series_out.push(entry);
+        if opened {
+            out.raw(b"]}");
         }
     }
-    Ok(to_file(resolution, &series_out, rows, projected, now))
+    out.raw(b"]}");
+    Ok(String::from_utf8(out.into_bytes()).unwrap_or_default())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -178,13 +215,12 @@ fn page(
     Ok(())
 }
 
-fn to_file(
-    resolution: &str,
-    series: &[Value],
+/// The projected account per history identity, exactly as the base `to_file` built it: a row
+/// joins the projection by its dashboard id, keyed by the row's analytics identity.
+fn identity_map<'a>(
     rows: &[Value],
-    projected: &[ProjectedAccount],
-    now: i64,
-) -> Value {
+    projected: &'a [ProjectedAccount],
+) -> HashMap<String, &'a ProjectedAccount> {
     let mut by_identity: HashMap<String, &ProjectedAccount> = HashMap::new();
     for row in rows {
         let id = member(row, "id").as_str().unwrap_or("");
@@ -192,51 +228,72 @@ fn to_file(
             by_identity.insert(account_identity(row), account);
         }
     }
-    let series_out: Vec<Value> = series
-        .iter()
-        .map(|entry| {
-            let account = by_identity.get(member(entry, "identity").as_str().unwrap_or(""));
-            let window = member(entry, "window");
-            let points: Vec<Value> = member(entry, "points")
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|point| {
-                            let mut out = Vec::new();
-                            let start = point.as_array().and_then(|parts| parts.first()).and_then(Value::as_f64);
-                            out.push(json!(start.and_then(|ms| crate::js::iso_of(ms as i64)).unwrap_or_default()));
-                            if let Some(parts) = point.as_array() {
-                                out.extend(parts.iter().skip(1).cloned());
-                            }
-                            Value::Array(out)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            json!({
-                "accountId": member(entry, "accountId"),
-                "provider": member(entry, "provider"),
-                "label": account.map(|a| json!(a.label)).unwrap_or(Value::Null),
-                "email": account.and_then(|a| a.email.as_ref().map(|e| json!(e))).unwrap_or(Value::Null),
-                "profile": account.and_then(|a| a.profile.as_ref().map(|p| json!(p))).unwrap_or(Value::Null),
-                "hidden": account.map(|a| a.hidden).unwrap_or(false),
-                "window": member(window, "key"),
-                "windowLabel": member(window, "label"),
-                "pool": member(window, "poolLabel"),
-                "kind": member(window, "kind"),
-                "unit": member(window, "unit"),
-                "points": points,
-            })
-        })
-        .collect();
-    json!({
-        "version": 1,
-        "generatedAt": crate::js::iso_of(now).unwrap_or_default(),
-        "resolution": resolution,
-        "columns": ["start", "consumed", "lastUsed", "maxUsed", "coveredMinutes", "readings", "resets", "creditsSpent", "creditsAdded"],
-        "series": series_out,
-    })
+    by_identity
+}
+
+/// One series' fixed members and the opening of its `points` array. The point values follow
+/// through [`write_points`]; the caller closes the array and the object. Field order and
+/// values are the base `to_file`'s, so the bytes are identical.
+fn write_series_head(
+    w: &mut aac_views::js_json::Writer,
+    meta: &Value,
+    account: Option<&ProjectedAccount>,
+) {
+    let window = member(meta, "window");
+    let mut series = w.object();
+    series.member("accountId", |w| w.value(member(meta, "accountId")));
+    series.member("provider", |w| w.value(member(meta, "provider")));
+    series.member("label", |w| {
+        w.value(&account.map(|a| json!(a.label)).unwrap_or(Value::Null));
+    });
+    series.member("email", |w| {
+        w.value(
+            &account
+                .and_then(|a| a.email.as_ref().map(|e| json!(e)))
+                .unwrap_or(Value::Null),
+        );
+    });
+    series.member("profile", |w| {
+        w.value(
+            &account
+                .and_then(|a| a.profile.as_ref().map(|p| json!(p)))
+                .unwrap_or(Value::Null),
+        );
+    });
+    series.member("hidden", |w| {
+        w.value(&json!(account.map(|a| a.hidden).unwrap_or(false)));
+    });
+    series.member("window", |w| w.value(member(window, "key")));
+    series.member("windowLabel", |w| w.value(member(window, "label")));
+    series.member("pool", |w| w.value(member(window, "poolLabel")));
+    series.member("kind", |w| w.value(member(window, "kind")));
+    series.member("unit", |w| w.value(member(window, "unit")));
+    series.member("points", |w| w.raw(b"["));
+}
+
+/// A page of points, each written as `[isoStart, ...rest]` — the base `to_file`'s point
+/// transform (the first element becomes its ISO string; the rest are copied verbatim).
+fn write_points(w: &mut aac_views::js_json::Writer, points: &[Value]) {
+    for (index, point) in points.iter().enumerate() {
+        if index > 0 {
+            w.raw(b",");
+        }
+        w.raw(b"[");
+        let parts = point.as_array();
+        let start = parts.and_then(|p| p.first()).and_then(Value::as_f64);
+        w.string(
+            &start
+                .and_then(|ms| crate::js::iso_of(ms as i64))
+                .unwrap_or_default(),
+        );
+        if let Some(parts) = parts {
+            for part in parts.iter().skip(1) {
+                w.raw(b",");
+                w.value(part);
+            }
+        }
+        w.raw(b"]");
+    }
 }
 
 /// `longBurnFor`: 7- and 30-day burn for every live percent window, from the store's hourly

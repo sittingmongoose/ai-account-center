@@ -413,7 +413,8 @@ impl Producer {
                     note.as_ref(),
                 )
             })
-            .buffered(3)
+            // R5b: one profile read at a time; the helper/agent gates serialize the children.
+            .buffered(1)
             .collect()
             .await
     }

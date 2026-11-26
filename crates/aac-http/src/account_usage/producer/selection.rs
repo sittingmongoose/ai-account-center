@@ -151,7 +151,8 @@ impl Producer {
                 };
                 (source, pin, row)
             })
-            .buffered(3)
+            // R5b: one source read at a time; the helper/agent gates serialize the children.
+            .buffered(1)
             .collect()
             .await;
         let mut result = if problem.is_none() {

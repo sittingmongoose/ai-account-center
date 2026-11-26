@@ -245,9 +245,9 @@ pub(crate) struct StoreHost {
     ready_changed: Condvar,
 }
 
-fn meta_ms(status: &Value, key: &str) -> i64 {
-    status["meta"][key]
-        .as_str()
+fn meta_ms(value: Option<String>) -> i64 {
+    value
+        .as_deref()
         .and_then(|text| text.parse::<i64>().ok())
         .unwrap_or(0)
 }
@@ -907,15 +907,25 @@ impl StoreHost {
             return Ok(false);
         };
         let at = now as i64;
-        let status = ops::call(&engine, "status", "{}").map_err(|e| e.to_string())?;
-        let weekly = at - meta_ms(&status, "last_verify_ms") >= VERIFY_EVERY_MS as i64;
+        // R3: read only the two meta keys this pass decides on. The old `status` call walked
+        // the whole database (`redb::WriteTransaction::stats()`) just to reach `meta`; on a
+        // 1.2 GB store that was a ~259 MiB spike every 15 minutes. `get_meta` is a bounded
+        // point read. Both keys are read before `maintain`, exactly the one snapshot the old
+        // `status` gave, so the verify/backup decisions are unchanged.
+        let last_verify = engine
+            .get_meta("last_verify_ms")
+            .map_err(|e| e.to_string())?;
+        let last_backup = engine
+            .get_meta("last_backup_ms")
+            .map_err(|e| e.to_string())?;
+        let weekly = at - meta_ms(last_verify) >= VERIFY_EVERY_MS as i64;
         ops::call(
             &engine,
             "maintain",
             &json!({ "nowMs": now, "verify": weekly, "compact": weekly }).to_string(),
         )
         .map_err(|e| e.to_string())?;
-        if at - meta_ms(&status, "last_backup_ms") < BACKUP_EVERY_MS as i64 {
+        if at - meta_ms(last_backup) < BACKUP_EVERY_MS as i64 {
             return Ok(false);
         }
         let last_redb: i64 = engine
@@ -1054,6 +1064,62 @@ mod tests {
         assert!(host.status_value().is_err());
         // The lock went with the engine: the same folder opens again.
         assert!(ops::open_engine(&dir.to_string_lossy(), None, None).is_ok());
+        Ok(())
+    }
+
+    /// R3: the 15-minute maintenance pass reads only the two meta keys it decides on, never
+    /// the whole database. The old `ops::call("status")` walked every B-tree page through
+    /// `redb::WriteTransaction::stats()` just to reach `meta` — a ~259 MiB spike on a 1.2 GB
+    /// store. This pins the fix with the pass's own I/O: on a store holding a 64 MiB scanner
+    /// checkpoint, a pass that is not due for backup must read far less than that checkpoint.
+    /// The base (full `status`) reads the whole checkpoint and fails; `get_meta` point reads
+    /// pass. The decisions themselves are covered by the stamp tests below.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_maintenance_pass_reads_only_meta_not_the_whole_store() -> Result<(), String> {
+        fn thread_rchar() -> Option<u64> {
+            let text = std::fs::read_to_string("/proc/thread-self/io").ok()?;
+            text.lines()
+                .find_map(|line| line.strip_prefix("rchar: "))?
+                .trim()
+                .parse()
+                .ok()
+        }
+
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dir = root.path().join("store");
+        let host = StoreHost::new(boot(dir.clone()));
+        host.open_at_boot();
+        let engine = host.engine().ok_or("engine")?;
+        let now = aac_store::engine::now_ms();
+        // A live-shaped scanner checkpoint: 64 MiB the full-database stats walk would read.
+        let blob = vec![0x5au8; 64 * 1024 * 1024];
+        aac_store::analytics_cache::put(&engine, "live/scanner/ubuntu", &blob)
+            .map_err(|e| e.to_string())?;
+        drop(blob);
+        // Both intervals recently satisfied: the pass runs `maintain` and skips the backup,
+        // so its only reads are the meta point reads (and `maintain`'s own bounded work).
+        engine
+            .set_meta("last_verify_ms", &now.to_string())
+            .map_err(|e| e.to_string())?;
+        engine
+            .set_meta("last_backup_ms", &now.to_string())
+            .map_err(|e| e.to_string())?;
+        drop(engine);
+
+        let before = thread_rchar().ok_or("rchar before")?;
+        host.job_pass(now);
+        let after = thread_rchar().ok_or("rchar after")?;
+        let read = after.saturating_sub(before);
+        // The base reads the 64 MiB checkpoint (stats walk); the fix reads a few MiB at most.
+        assert!(
+            read < 32 * 1024 * 1024,
+            "maintenance pass read {read} bytes; it must not walk the 64 MiB store"
+        );
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["passes"], json!(1), "{jobs}");
+        assert_eq!(jobs["jobs"]["lastErrorMs"], Value::Null, "{jobs}");
+        host.close_engine();
         Ok(())
     }
 

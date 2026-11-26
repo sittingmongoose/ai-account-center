@@ -256,7 +256,8 @@ impl FailoverCoordinator {
             inventories: Mutex::new(HashMap::new()),
             sign_in_selectors: Mutex::new(HashMap::new()),
             unread_selectors: Mutex::new(HashMap::new()),
-            slots: tokio::sync::Semaphore::new(3),
+            // R5b: one coordinator read at a time, so failover reads do not stack helpers.
+            slots: tokio::sync::Semaphore::new(1),
         }
     }
 

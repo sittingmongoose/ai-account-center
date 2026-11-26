@@ -92,6 +92,9 @@ pub(crate) struct Agents {
     clients: watch::Sender<Option<Arc<Result<AgentClients, Failure>>>>,
     loading: AtomicBool,
     slots: Arc<Semaphore>,
+    /// R5b: one local `aac-agent` child at a time, across every verb path (scan, collect,
+    /// sign-in, app calls). Remote agents run on their own computers and are not gated here.
+    local_agent: Arc<Semaphore>,
     active: Mutex<BTreeMap<String, Active>>,
 }
 
@@ -431,6 +434,25 @@ impl Agents {
         self.slots.clone().try_acquire_owned().ok()
     }
 
+    /// R5b: the one-at-a-time gate for a local `aac-agent` child. A local selector waits for
+    /// the gate within its own deadline (a wait that expires is the caller's timeout, never a
+    /// stalled pass); a remote selector is not gated. The returned permit is held until the
+    /// child's terminal frame and exit, so two local agents never overlap.
+    pub(crate) async fn local_agent_permit(
+        &self,
+        computer: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, Cause> {
+        if computer.ssh_host.is_some() {
+            return Ok(None);
+        }
+        let permit = tokio::time::timeout_at(deadline, self.local_agent.clone().acquire_owned())
+            .await
+            .map_err(|_| Cause::Timeout)?
+            .map_err(|_| Cause::Busy)?;
+        Ok(Some(permit))
+    }
+
     pub(crate) fn new(root: PathBuf) -> Self {
         Self::with_default(root, false)
     }
@@ -443,6 +465,7 @@ impl Agents {
             clients: watch::channel(None).0,
             loading: AtomicBool::new(false),
             slots: Arc::new(Semaphore::new(16)),
+            local_agent: Arc::new(Semaphore::new(1)),
             active: Mutex::new(BTreeMap::new()),
         }
     }
@@ -552,6 +575,11 @@ impl Agents {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Failure::new(Cause::Busy, "agent transport saturated"))?;
+        // R5b: a local app-update agent waits for the one-at-a-time gate.
+        let _local_permit = self
+            .local_agent_permit(&selector, deadline)
+            .await
+            .map_err(|cause| Failure::new(cause, "local agent gate"))?;
         let client = tokio::select! {
             biased;
             _ = options.cancel.cancelled() => return Err(Failure::new(Cause::Cancelled, "app call cancelled before dispatch")),
@@ -639,6 +667,11 @@ impl Agents {
             return unavailable(&call.call_id, "busy");
         };
         let deadline = started + Duration::from_millis(budget);
+        // R5b: a local agent waits for the one-at-a-time gate within its deadline.
+        let local_permit = match self.local_agent_permit(&call.computer, deadline).await {
+            Ok(permit) => permit,
+            Err(_) => return unavailable(&call.call_id, "busy"),
+        };
         let client = self.client(&call.computer, deadline).await;
         let Some(client) = client else {
             return unavailable(&call.call_id, "unavailable");
@@ -679,6 +712,7 @@ impl Agents {
         let agents = self.clone();
         tokio::spawn(async move {
             let _permit = permit;
+            let _local_permit = local_permit;
             let (progress, mut events) = mpsc::channel(4);
             let result = {
                 let work = client.call_controlled_encoded(
@@ -794,6 +828,8 @@ impl Agents {
             .filter(|ms| *ms > 0)?;
         let permit = self.slots.clone().try_acquire_owned().ok()?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(budget);
+        // R5b: a local in-process verb call waits for the one-at-a-time gate.
+        let _local_permit = self.local_agent_permit(&computer, deadline).await.ok()?;
         let client = self.client(&computer, deadline).await?;
         let call_id = random_call_id()?;
         let args_text = serde_json::to_string(&args).ok()?;
@@ -882,6 +918,8 @@ impl Agents {
             .try_acquire_owned()
             .map_err(|_| Cause::Busy)?;
         let deadline = started + Duration::from_millis(budget);
+        // R5b: the activity scheduler's local scan waits for the one-at-a-time gate.
+        let _local_permit = self.local_agent_permit(&selector, deadline).await?;
         let client = self
             .checked_client(&selector, deadline)
             .await
@@ -1114,5 +1152,52 @@ mod tests {
         let (control, frame) = control_line(b"{\"cancel\":\ntrue}").expect("control");
         assert!(matches!(control, Control::Cancel { cancel: true }));
         assert_eq!(frame, b"{\"cancel\":true}\n");
+    }
+
+    /// R5b: the local-agent gate admits one local child at a time and never gates a remote
+    /// one. A second local acquire waits until the first permit drops; a remote acquire is
+    /// immediate even while a local permit is held.
+    #[tokio::test(start_paused = true)]
+    async fn the_local_agent_gate_serializes_local_children_only() {
+        use super::{Agents, Selector};
+        use aac_core::Cause;
+        let agents = std::sync::Arc::new(Agents::new(std::path::PathBuf::from(
+            "/tmp/aac-local-gate-test",
+        )));
+        let local = Selector::usage("ubuntu", None);
+        let remote = Selector::usage("mac", Some("jared-mac"));
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        let first = agents
+            .local_agent_permit(&local, deadline)
+            .await
+            .expect("first local permit");
+        assert!(first.is_some(), "a local child is gated");
+
+        // A remote child is not gated, even while the local permit is held.
+        let remote_permit = agents
+            .local_agent_permit(&remote, deadline)
+            .await
+            .expect("remote permit");
+        assert!(remote_permit.is_none(), "a remote child is not gated");
+
+        // A second local child cannot take the gate while the first holds it: the wait
+        // expires at its own deadline (paused clock advances past it), never a stall.
+        let short = tokio::time::Instant::now() + std::time::Duration::from_millis(20);
+        let blocked = tokio::spawn({
+            let agents = std::sync::Arc::clone(&agents);
+            let local = local.clone();
+            async move { agents.local_agent_permit(&local, short).await }
+        });
+        tokio::time::advance(std::time::Duration::from_millis(30)).await;
+        assert!(matches!(blocked.await.expect("join"), Err(Cause::Timeout)));
+
+        // Releasing the first admits the next local child.
+        drop(first);
+        let second = agents
+            .local_agent_permit(&local, deadline)
+            .await
+            .expect("second local permit");
+        assert!(second.is_some());
     }
 }
