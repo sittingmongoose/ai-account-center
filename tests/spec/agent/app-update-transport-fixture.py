@@ -134,7 +134,7 @@ def helper_sync(host, warm):
     script = base64.b64decode(stream.readline())
     header = json.loads(stream.readline())
     assert b"aac-helpers-previous" in script and header["platform"] == HOSTS[host][0], header
-    assert len(header["files"]) == 18 and header["files"][0]["name"] == "app_updates.py"
+    assert len(header["files"]) == 17 and header["files"][0]["name"] == "app_updates.py"
     for entry in header["files"]:
         assert hashlib.sha256(stream.read(entry["size"])).hexdigest() == entry["sha256"], entry
     assert not stream.read(1)
