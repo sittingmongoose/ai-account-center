@@ -454,25 +454,16 @@ fn native_helper_accepts_real_pinned_ssh_argv_and_keeps_a_bound() {
     use std::os::unix::fs::PermissionsExt;
     let (dir, mut command) = setup();
     let root = dir.path();
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    std::fs::write(root.join("config.yaml"), serde_json::to_vec(&json!({
-        "version":10,
-        "computers":{"fixture":{"transport":{"host":"127.0.0.1","user":"fixture","port":2222,"key":root.join("key")}}},
-        "agentTransportSsh":{"knownHostsFile":root.join("known_hosts")}
-    })).unwrap()).unwrap();
-    let module =
-        serde_json::to_string(&source_root.join("src/web-server/services/usage-failover-transport.ts")).unwrap();
-    let script = format!(
-        "import {{privateUsageInvocation}} from {module}; const value=await privateUsageInvocation({{host:'fixture',platform:'mac',sshHost:'fixture'}},{{version:1,action:'inventory',provider:'claude'}},'fixture-source'); console.log(JSON.stringify(value.args));"
-    );
-    let output = std::process::Command::new("bun")
-        .args(["-e", &script])
-        .env("CCS_HOME", root)
-        .env("CCS_DIR", root)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "real SSH argv builder failed");
-    command.args = serde_json::from_slice(&output.stdout).unwrap();
+    // The real pinned argv, recorded from the retired TypeScript SSH builder for this fixture
+    // computer (127.0.0.1:2222, user fixture, key and known_hosts under the test root).
+    let recorded: serde_json::Value = serde_json::from_str(include_str!("fixtures/pinned-ssh-argv.json")).unwrap();
+    let root_text = root.to_str().unwrap();
+    command.args = recorded["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap().replace("{ROOT}", root_text))
+        .collect();
     // 50 is today's longest policy (explicit endpoint/key, DNS trust override and keepalive).
     // 64 admits that policy plus 14 slots of margin, while bounding future callers.
     assert_eq!(command.args.len(), 50);

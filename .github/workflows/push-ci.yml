@@ -19,9 +19,8 @@ jobs:
       fail-fast: false
       matrix:
         check:
-          - { name: typecheck, cmd: 'bun run typecheck' }
-          - { name: lint, cmd: 'bun run lint' }
-          - { name: format, cmd: 'bun run format:check' }
+          - { name: personal-details, cmd: 'node scripts/personal-detail-guard.js' }
+          - { name: test-inventory, cmd: 'node tests/spec/inventory.mjs' }
     name: ${{ matrix.check.name }}
 
     steps:

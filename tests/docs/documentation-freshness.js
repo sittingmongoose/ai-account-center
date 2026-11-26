@@ -45,6 +45,9 @@ const removedGuides = [
   'docs/system-architecture/target-adapters.md',
 ];
 
+// The TypeScript server tree (src/) was deleted; its retired paths must not come back.
+if (fs.existsSync(path.join(root, 'src'))) failures.push('src/ is retired; the product is Rust, Leptos and the native bars');
+
 for (const relativePath of removedGuides) {
   if (fs.existsSync(path.join(root, relativePath))) {
     failures.push(`${relativePath} is retired; maintain the current product guides instead`);
@@ -64,11 +67,9 @@ const retainedPaths = [
   'docs/activate-in-place.md',
   'docs/system-architecture/index.md',
   'docs/system-architecture/provider-flows.md',
-  'src/commands/command-catalog.ts',
-  'src/web-server/index.ts',
-  'src/web-server/middleware/auth-middleware.ts',
-  'src/utils/config-manager.ts',
-  'src/codex-auth/codex-auth-help.ts',
+  'crates/aac-http/src/cli.rs',
+  'crates/aac-http/src/public_auth/mod.rs',
+  'config/rust-service-routes.json',
   'web-dashboard/leptos/Cargo.toml',
   'web-dashboard/leptos/Cargo.lock',
   'web-dashboard/leptos/src/frame.rs',
@@ -105,8 +106,7 @@ for (const expected of [
 requireText('LICENSE', 'Copyright (c) 2025 CCS Contributors');
 requireText('docs/README.md', '../web-dashboard/README.md');
 requireText('docs/release-process.md', '.github/workflows/bar-release.yml');
-requireText('docs/codex-auth.md', 'src/codex-auth/codex-auth-help.ts');
-requireText('docs/system-architecture/index.md', 'src/utils/config-manager.ts');
+requireText('docs/system-architecture/index.md', 'CCS_HOME');
 requireText('docs/system-architecture/index.md', 'web-dashboard/public/frame-dashboard.mjs');
 requireText('web-dashboard/README.md', '=0.9.0-rc1');
 requireText('web-dashboard/README.md', 'THIRD-PARTY-NOTICES.txt');

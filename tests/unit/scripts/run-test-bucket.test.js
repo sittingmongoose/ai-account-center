@@ -31,10 +31,10 @@ describe('run-test-bucket', () => {
     }
   });
 
-  test('keeps web-server integration tests that bind ports in the slow bucket', () => {
+  test('keeps declared slow tests that read the repository root in the slow bucket', () => {
     const slowSet = bucket.getSlowSet();
 
-    expect(slowSet.has('tests/integration/computer-registry.test.ts')).toBe(true);
+    expect(slowSet.has('tests/unit/foundation/npm-rust-files.test.ts')).toBe(true);
   });
 
   test('builds the slow bucket without a missing explicit file', () => {
@@ -45,22 +45,23 @@ describe('run-test-bucket', () => {
     expect(bucket.shouldForceSlow('tests/npm/cli.test.js')).toBe(true);
   });
 
-  test('discovers colocated backend tests under src', () => {
+  test('discovers tests only under tests/ now that src/ is gone', () => {
     const discovered = bucket.getDiscoveredTests();
 
-    expect(discovered).toContain('src/config/__tests__/retired-sections.test.ts');
+    expect(discovered).toContain('tests/unit/scripts/run-test-bucket.test.js');
+    expect(discovered.every((file) => file.startsWith('tests/'))).toBe(true);
   });
 
   test('passes selected tests to Bun as explicit relative paths', () => {
     const args = bucket.getBunArgs('fast', [
       'tests/unit/example.test.ts',
-      'src/cliproxy/types/__tests__/types-backward-compat.test.ts',
+      'tests/integration/example.test.ts',
     ]);
 
     expect(args).toEqual([
       'test',
       './tests/unit/example.test.ts',
-      './src/cliproxy/types/__tests__/types-backward-compat.test.ts',
+      './tests/integration/example.test.ts',
     ]);
   });
 
@@ -68,41 +69,6 @@ describe('run-test-bucket', () => {
     const args = bucket.getBunArgs('slow', ['tests/integration/example.test.ts']);
 
     expect(args).toEqual(['test', '--max-concurrency=1', './tests/integration/example.test.ts']);
-  });
-
-  test('isolates src tests while keeping already-covered tests in a shared run', () => {
-    const runs = bucket.getBunRuns('fast', [
-      'tests/unit/scripts/run-test-bucket.test.js',
-      'src/cliproxy/types/__tests__/types-backward-compat.test.ts',
-      'src/errors/__tests__/error-types.test.ts',
-    ]);
-
-    expect(runs.map((run) => run.label)).toEqual([
-      'shared',
-      'src/cliproxy/types/__tests__/types-backward-compat.test.ts',
-      'src/errors/__tests__/error-types.test.ts',
-    ]);
-    expect(runs[0].selected).toEqual(['tests/unit/scripts/run-test-bucket.test.js']);
-    expect(runs[0].bunArgs).toEqual(['test', './tests/unit/scripts/run-test-bucket.test.js']);
-    expect(runs[1].bunArgs).toEqual([
-      'test',
-      './src/cliproxy/types/__tests__/types-backward-compat.test.ts',
-    ]);
-    expect(runs[1].quietOnPass).toBe(true);
-  });
-
-  test('isolates known sticky mock suites outside src', () => {
-    const runs = bucket.getBunRuns('fast', [
-      'tests/unit/scripts/run-test-bucket.test.js',
-      'tests/unit/utils/fetch-proxy-setup.test.ts',
-      'tests/unit/commands/bar-command.test.ts',
-    ]);
-
-    expect(runs.map((run) => run.label)).toEqual([
-      'shared',
-      'tests/unit/utils/fetch-proxy-setup.test.ts',
-      'tests/unit/commands/bar-command.test.ts',
-    ]);
   });
 
   test('isolates standalone validation scripts that are not Bun test suites', () => {
@@ -147,7 +113,7 @@ describe('run-test-bucket', () => {
   });
 
   test('still forces dist-dependent tests into the slow bucket', () => {
-    expect(bucket.shouldForceSlow('tests/unit/config-dir-override.test.js')).toBe(true);
+    expect(bucket.shouldForceSlow('tests/unit/scripts/build-agent.test.ts')).toBe(true);
   });
 
   // GitHub Actions gives the runner pipes, not a terminal. Node writes to a pipe

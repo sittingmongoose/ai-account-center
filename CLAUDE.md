@@ -13,7 +13,7 @@ switch accounts: account switching (Codex activation and auto-switch,
 Antigravity activation and auto-switch) was removed on 2026-11-14, because the
 agents pick their own accounts. Rust owns the public dashboard listener, CLI, collection,
 Status, history Store and Analytics. The installed dashboard starts its native owners directly.
-The remote Codex update runtime and build tooling retain Node.
+The TypeScript server (`src/`) was deleted on 2026-11-27; build tooling and some tests retain Node.
 The web UI is Leptos **0.9** compiled to WebAssembly. Native bars remain Swift and WPF.
 
 The primary command is `ai-account-center dashboard`; `ccs config` is compatible.
@@ -46,7 +46,6 @@ or API routing product.
 | Area | Inputs |
 | --- | --- |
 | Dashboard listener, CLI and native owners | `crates/`, `config/` |
-| Historical HTTP reference and remote Codex update runtime | `src/web-server/index.ts`, `src/codex-auth/codex-update-runtime-entry.ts` |
 | Dashboard | `web-dashboard/leptos/`, `web-dashboard/public/` |
 | Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
 | Native clients | `macos-bar/`, `windows-bar/` |
@@ -63,11 +62,9 @@ module filenames may retain CCS names.
 Use checks relevant to the change, without live provider refresh:
 
 ```bash
-bun run typecheck
-bun run lint
-bun run format:check
 bun run test:fast
 node --test web-dashboard/tests/*.test.mjs
+cargo test -p <touched crate>
 ```
 
 Authorized dashboard changes need `bun run build` and `bun run ui:validate` to

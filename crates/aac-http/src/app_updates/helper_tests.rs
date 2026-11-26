@@ -11,21 +11,19 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// A package with the checkout's helpers and a stand-in for the generated Codex runtime.
+/// A package with the checkout's helpers only: the TypeScript build that generated the Codex
+/// runtime into `dist/app-updates` was retired, so the package has no `dist/app-updates`.
 fn package(root: &Path) -> PathBuf {
     let package = root.join("package");
     let scripts = package.join("scripts/app-updates");
-    let dist = package.join("dist/app-updates");
     std::fs::create_dir_all(&scripts).expect("package helpers");
-    std::fs::create_dir_all(&dist).expect("package runtime");
-    for name in HELPER_FILES.iter().filter(|name| **name != RUNTIME) {
+    for name in HELPER_FILES {
         std::fs::copy(
             repo().join("scripts/app-updates").join(name),
             scripts.join(name),
         )
         .expect("copy helper");
     }
-    std::fs::write(dist.join(RUNTIME), "'use strict';\n// fixture runtime\n").expect("runtime");
     package
 }
 
@@ -118,8 +116,13 @@ fn payload_carries_the_script_manifest_and_files_in_order() {
     }
     assert!(body.is_empty());
 
-    std::fs::remove_file(dir.path().join("package/dist/app-updates").join(RUNTIME))
-        .expect("drop runtime");
+    assert!(!HELPER_FILES.contains(&"app_update_codex_runtime.cjs"));
+    assert!(!dir.path().join("package/dist").exists());
+    std::fs::remove_file(
+        dir.path()
+            .join("package/scripts/app-updates/app_update_codex.cjs"),
+    )
+    .expect("drop a helper");
     assert_eq!(
         HelperSet::load(&dir.path().join("package")).err(),
         Some(failed("helper_set_missing"))

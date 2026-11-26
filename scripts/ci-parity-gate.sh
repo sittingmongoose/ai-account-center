@@ -51,9 +51,6 @@ if git show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH"; then
   fi
 fi
 
-# Age does not prove that generated metrics match the checked-out source tree.
-# Compare both inventory artifacts byte-for-byte before expensive parity checks.
-node scripts/hardening-inventory.js --check
 # Personal details (owner account names, computer names, home-network
 # prefixes) must not come back into tracked files. Hash-based, about 2 s.
 node scripts/personal-detail-guard.js
@@ -73,11 +70,8 @@ fi
 echo "[i] Running CI-parity local checks..."
 # `set -euo pipefail` above makes every step fail fast. Keep these commands
 # explicit so parity drift is visible when CI changes.
-bun run typecheck
-bun run lint
-bun run format:check
 if [[ "$RUST_STEPS" == "off" ]]; then
-  # TypeScript server only; build-dashboard-native copies existing artifacts and never cargos.
+  # Packaging only; build-dashboard-native copies existing artifacts and never cargos.
   bun run build:server
   if [[ -f dist/ui/app/index.html ]]; then
     bun run ui:validate

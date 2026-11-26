@@ -203,26 +203,6 @@ fn there_is_exactly_one_secret_filter_and_it_is_the_rust_one() {
     // The parse after it does not filter a second time.
     assert_eq!(parse(&doc).unwrap().doc.summary, "Working.");
     assert!(aac_status::validate::json_from_bytes(&bytes, 64 * 1024).is_ok());
-    // And TypeScript holds no second implementation: its entry points call the native filter.
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let policy = std::fs::read_to_string(root.join("src/shared/secret-policy.ts")).unwrap();
-    let typed = std::fs::read_to_string(root.join("src/web-server/status/typed-secrets.ts")).unwrap();
-    for (file, text) in [("secret-policy.ts", &policy), ("typed-secrets.ts", &typed)] {
-        for implementation in [
-            "new RegExp",
-            "SECRET_PATTERNS",
-            "NAMED_VALUE",
-            "secretValue(",
-            "embeddedJson(",
-        ] {
-            assert!(
-                !text.contains(implementation),
-                "{file} holds a second filter ({implementation})"
-            );
-        }
-    }
-    assert!(policy.contains("native.findSecret(text)") && policy.contains("native.findSecretIn("));
-    assert!(typed.contains("native.findTypedSecret(text)"));
 }
 
 #[test]

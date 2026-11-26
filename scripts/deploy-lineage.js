@@ -29,7 +29,6 @@ const MAX_LINEAGE = 100000;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 // Inputs that compile into or ship with the package; other untracked files do not.
 const PACKAGE_INPUTS = [
-  'src',
   'scripts',
   'lib',
   'config',
@@ -43,7 +42,6 @@ const PACKAGE_INPUTS = [
   'windows-bar',
   'package.json',
   'bun.lock',
-  'tsconfig.json',
 ];
 
 function git(repoRoot, args) {

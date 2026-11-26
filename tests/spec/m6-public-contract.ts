@@ -15,7 +15,6 @@ import os from 'node:os';
 import path from 'node:path';
 import bcrypt from 'bcrypt';
 import { WebSocket } from 'ws';
-import { createEmptyUnifiedConfig } from '../../src/config/unified-config-types';
 import { fixtureEnvironment, startRustFixture } from './m6-rust-fixture';
 
 type Contract = {
@@ -57,6 +56,46 @@ const registryOutput = process.argv
   .find((argument) => argument.startsWith('--record-windows-registry='))
   ?.slice('--record-windows-registry='.length);
 const registryRecords: Record<string, Contract> = {};
+/** The empty config.yaml the retired TypeScript loader wrote (createEmptyUnifiedConfig, schema 14). */
+const EMPTY_CONFIG = {
+  version: 14,
+  accounts: {},
+  profiles: {},
+  logging: {
+    enabled: true,
+    level: 'info',
+    rotate_mb: 10,
+    retain_days: 7,
+    redact: true,
+    live_buffer_size: 250,
+  },
+  preferences: { theme: 'system', telemetry: false, auto_update: true },
+  quota_management: {
+    mode: 'hybrid',
+    auto: {
+      preflight_check: true,
+      exhaustion_threshold: 5,
+      tier_priority: ['ultra', 'pro', 'free'],
+      cooldown_minutes: 5,
+    },
+    manual: { paused_accounts: [], forced_default: null, tier_lock: null },
+    runtime_monitor: {
+      enabled: true,
+      normal_interval_seconds: 300,
+      critical_interval_seconds: 60,
+      warn_threshold: 20,
+      exhaustion_threshold: 5,
+      cooldown_minutes: 5,
+    },
+  },
+  dashboard_auth: {
+    enabled: false,
+    username: '',
+    password_hash: '',
+    session_timeout_hours: 24,
+    session_lifetime_days: 7,
+  },
+};
 if (registryOutput !== undefined) {
   assert.equal(process.platform, 'win32', 'record the registry on native Windows');
   assert.equal(mode, 'cut-rust-only', 'record the native registry without the worker');
@@ -328,7 +367,7 @@ try {
   await fs.writeFile(
     path.join(root, 'config.yaml'),
     JSON.stringify({
-      ...createEmptyUnifiedConfig(),
+      ...EMPTY_CONFIG,
       dashboard_auth: {
         enabled: true,
         username,
@@ -471,12 +510,9 @@ try {
       console.log('Native Analytics composed reads with the owner-host switch off: 4/4.');
     }
     let windowsPreflightReason: string | undefined;
-    if (registryOutput !== undefined) {
-      const { antigravitySignInPreflight } = await import('../../src/antigravity/signin-sandbox');
-      const result = antigravitySignInPreflight(root);
-      assert(!result.ok, 'the TypeScript preflight refuses the Windows fixture');
-      windowsPreflightReason = result.reason;
-    }
+    // Recording runs on native Windows only, where the retired TypeScript sign-in preflight
+    // answered preflight_failed (Antigravity sign-in runs on Ubuntu).
+    if (registryOutput !== undefined) windowsPreflightReason = 'preflight_failed';
     for (const [index, route] of selectedRoutes) {
       const name = route.method + ' ' + route.path;
       const ownsReset = nativeReset(route.method, route.path);

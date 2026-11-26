@@ -59,8 +59,7 @@ test('every stored Home case is what view-model.mjs builds today, byte for byte'
 });
 
 test('every case carries the M3 envelope facts; only decline/facts lacks the clock and day words', () => {
-  // That they are exactly what the front door computes (homeReadInput) is checked under Bun, where the TS modules
-  // load: tests/unit/web-server/home-view-routes.test.ts.
+  // The facts were recorded from the retired TS front door (homeReadInput) and are frozen since src/ was deleted.
   for (const c of cases) {
     const p = c.presentation;
     assert.ok(p && typeof p === 'object', c.name);

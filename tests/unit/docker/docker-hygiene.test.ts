@@ -4,7 +4,7 @@
  * trees, and the image build fails loudly when a native module is missing.
  * No image is built here; these are the file-level contracts.
  */
-import { readdirSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'bun:test';
 
@@ -26,11 +26,18 @@ describe('the healthcheck targets the public /api/health endpoint', () => {
     expect(block![0]).not.toMatch(ROOT_PROBE);
   });
 
-  it('which stays a public, unauthenticated route', () => {
-    const guard = readFileSync('src/web-server/middleware/api-request-guard.ts', 'utf8');
-    const routes = readFileSync('src/web-server/routes/index.ts', 'utf8');
-    expect(guard).toContain("['GET', '/health']");
-    expect(routes).toContain("apiRoutes.get('/health'");
+  it('which stays a public, unauthenticated route in the native route table', () => {
+    const routes = JSON.parse(readFileSync('config/rust-service-routes.json', 'utf8')) as Array<{
+      method: string;
+      path: string;
+      owner: string;
+      roles: string[];
+    }>;
+    const health = routes.filter((route) => route.path === '/api/health');
+    expect(health).toHaveLength(1);
+    expect(health[0].method).toBe('GET');
+    expect(health[0].owner).toBe('rust');
+    expect(health[0].roles).toContain('public');
   });
 
   it('in the integrated image by inheritance, never a retired override', () => {
@@ -115,65 +122,14 @@ function ignoredByContext(file: string): boolean {
   return ignored;
 }
 
-/** Package paths the compiled server resolves outside dist/ (`path.resolve(__dirname, '...')`, `require('../x.json')`). */
-function runtimeReads(): string[] {
-  const reads = new Set<string>();
-  const call =
-    /path\.(?:resolve|join)\(\s*__dirname\s*((?:,\s*(?:'[^'\n]*'|"[^"\n]*"|`[^`$\n]*`)\s*)*)/g;
-  const literal = /'([^'\n]*)'|"([^"\n]*)"|`([^`$\n]*)`/g;
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const file = path.posix.join(dir, entry.name);
-      if (entry.isDirectory()) walk(file);
-      else if (/\.ts$/.test(file) && !/\.(test|d)\.ts$/.test(file)) {
-        const source = readFileSync(file, 'utf8');
-        const out = path.posix.join('dist', path.posix.dirname(file.slice('src/'.length)));
-        const targets = [...source.matchAll(call)].map((m) =>
-          path.posix.join(out, ...[...m[1].matchAll(literal)].map((l) => l[1] ?? l[2] ?? l[3]))
-        );
-        for (const m of source.matchAll(/require\(\s*'(\.\.?\/[^']+\.json)'\s*\)/g))
-          targets.push(path.posix.join(out, m[1]));
-        for (const target of targets)
-          if (target !== '.' && target !== 'dist' && !target.startsWith('dist/')) reads.add(target);
-      }
-    }
-  };
-  walk('src');
-  return [...reads].sort();
-}
-
-/** Where each runtime-stage `COPY --from=build /app/<from> <to>` lands, relative to /app. */
-function runtimeCopies(): string[] {
-  const stage = dockerfile.slice(dockerfile.indexOf(' AS runtime'));
-  return [...stage.matchAll(/^COPY --from=build \/app\/(\S+) (\S+)$/gm)].map(([, from, to]) => {
-    const dest = to.replace(/^\.\/?/, '');
-    return dest === '' || to.endsWith('/')
-      ? path.posix.join(dest, path.posix.basename(from))
-      : dest;
-  });
-}
-
-describe('the image carries every file the server and its native build read', () => {
+describe('the build context carries every file the native build reads', () => {
   it('reads .dockerignore as Docker does', () => {
     expect(ignoredByContext('tests/unit/docker/docker-hygiene.test.ts')).toBe(true);
     expect(ignoredByContext('docs/README.md')).toBe(true);
     expect(ignoredByContext('crates/aac-status/target/release/x')).toBe(true);
-    expect(ignoredByContext('src/web-server/__tests__/x.ts')).toBe(true);
-    expect(ignoredByContext('src/web-server/index.ts')).toBe(false);
+    expect(ignoredByContext('crates/aac-http/src/__tests__/x.rs')).toBe(true);
+    expect(ignoredByContext('crates/aac-http/src/lib.rs')).toBe(false);
     expect(ignoredByContext('README.md')).toBe(false);
-  });
-
-  it('copies every package file the compiled server resolves outside dist/ into the runtime stage', () => {
-    const reads = runtimeReads();
-    // The scan sees the forms the server uses, including a call split over lines.
-    for (const known of ['web-dashboard/public/computers.json', 'config/tables', 'package.json'])
-      expect(reads).toContain(known);
-    const copies = runtimeCopies();
-    const missing = reads.filter(
-      (file) => !copies.some((copy) => file === copy || file.startsWith(`${copy}/`))
-    );
-    expect(missing).toEqual([]);
-    expect(reads.filter(ignoredByContext)).toEqual([]);
   });
 
   it('keeps every status-module build input in the build context', () => {

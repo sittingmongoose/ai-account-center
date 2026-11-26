@@ -58,11 +58,6 @@ RUN test -x dist/native/ai-account-center \
   && node scripts/verify-bundle.js \
   && node scripts/stage-dashboard-package.js /tmp/aac-package
 
-# Build runtime deps from the committed bun.lock to keep Docker installs pinned.
-# --ignore-scripts avoids user-home side effects from postinstall during image build.
-RUN --mount=type=cache,target=/root/.bun \
-    bun install --frozen-lockfile --production --ignore-scripts
-
 # =============================================================================
 # Runtime stage: dashboard server and collector prerequisites, without Bun
 # =============================================================================
@@ -78,9 +73,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Copy pinned production dependencies resolved from the committed bun.lock.
+# The package has no runtime npm dependencies since the TypeScript server was deleted.
 COPY --from=build /app/package.json ./
-COPY --from=build /app/node_modules ./node_modules
 
 COPY docker/entrypoint.sh /usr/local/bin/ai-account-center-entrypoint
 RUN chmod +x /usr/local/bin/ai-account-center-entrypoint
@@ -92,8 +86,8 @@ COPY --from=build /app/config/private-files.json ./config/private-files.json
 COPY --from=build /app/config/agent-artifacts.json ./config/agent-artifacts.json
 COPY --from=build /app/config/rust-service-routes.json ./config/rust-service-routes.json
 COPY --from=build /app/config/secret-policy.json ./config/secret-policy.json
-# Package files the server resolves next to dist/ at runtime (tests/unit/docker/docker-hygiene.test.ts
-# derives this list from src/): the computer table and the agent-report schemas and catalog.
+# Package files the server resolves next to dist/ at runtime: the computer table and the
+# agent-report schemas and catalog.
 COPY --from=build /app/web-dashboard/public/computers.json ./web-dashboard/public/computers.json
 COPY --from=build /app/docs/agent-reports/schemas ./docs/agent-reports/schemas
 COPY --from=build /app/docs/agent-reports/catalog ./docs/agent-reports/catalog

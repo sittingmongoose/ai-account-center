@@ -1,5 +1,9 @@
 # Agent verb parity
 
+The TypeScript references these sections compare against (`*.ts` harnesses here, `src/` and the
+`tests/unit/web-server` suites) were deleted with `src/` on 2026-11-27. Their recorded tables and
+goldens stay as data for the Rust tests; commands below that name a deleted `.ts` file are history.
+
 ## App inventory and update fixtures (M4d)
 
 The host agent accepts `apps` with `{"action":"inventory","platform":"ubuntu"}`.

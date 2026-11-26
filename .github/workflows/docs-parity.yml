@@ -18,10 +18,6 @@ on:
       - 'macos-bar/README.md'
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
-      - 'src/**'
-      - 'scripts/hardening-inventory.js'
-      - 'scripts/maintainability-metrics.js'
-      - 'scripts/runtime-source-classifier.js'
       - 'tests/docs/quickstart-parity.sh'
       - 'tests/docs/documentation-freshness.js'
       - '.github/workflows/docs-parity.yml'
@@ -42,10 +38,6 @@ on:
       - 'macos-bar/README.md'
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
-      - 'src/**'
-      - 'scripts/hardening-inventory.js'
-      - 'scripts/maintainability-metrics.js'
-      - 'scripts/runtime-source-classifier.js'
       - 'tests/docs/quickstart-parity.sh'
       - 'tests/docs/documentation-freshness.js'
       - '.github/workflows/docs-parity.yml'
@@ -71,6 +63,3 @@ jobs:
 
       - name: Validate documentation pointers and relative links
         run: node tests/docs/documentation-freshness.js
-
-      - name: Validate generated hardening inventory
-        run: node scripts/hardening-inventory.js --check

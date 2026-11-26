@@ -27,9 +27,12 @@ describe('push ci workflow', () => {
     expect(workflow).not.toContain('ui/bun.lock');
     expect(workflow).not.toContain('restore-keys:');
     expect(workflow).toContain('name: ${{ matrix.check.name }}');
-    expect(workflow).toContain("cmd: 'bun run typecheck'");
-    expect(workflow).toContain("cmd: 'bun run lint'");
-    expect(workflow).toContain("cmd: 'bun run format:check'");
+    // No TypeScript production source remains, so no typecheck, lint or format step.
+    expect(workflow).not.toContain('bun run typecheck');
+    expect(workflow).not.toContain('bun run lint');
+    expect(workflow).not.toContain('bun run format:check');
+    expect(workflow).toContain("cmd: 'node scripts/personal-detail-guard.js'");
+    expect(workflow).toContain("cmd: 'node tests/spec/inventory.mjs'");
     expect(workflow).toContain('run: bun run build:all');
     expect(workflow).toContain("FAST_TEST_BUDGET_SECONDS: '90'");
     expect(workflow).toContain('name: Test fast bucket with perf budget');

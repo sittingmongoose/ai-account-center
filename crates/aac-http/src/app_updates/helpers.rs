@@ -11,9 +11,10 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{ffi::OsString, path::Path, time::Duration};
 
-/// Every file the agent's helper imports or starts. The Codex runtime is generated into
-/// `dist/app-updates` by the package build; the rest are the package's source helpers.
-pub(super) const HELPER_FILES: [&str; 17] = [
+/// Every file the agent's helper imports or starts, all from the package's source helpers. The
+/// generated Codex runtime (`dist/app-updates`) was retired with the TypeScript build; the agent's
+/// Rust updaters own the Codex stop and start.
+pub(super) const HELPER_FILES: [&str; 16] = [
     "app_updates.py",
     "app_update_common.py",
     "app_update_desktop.py",
@@ -30,9 +31,7 @@ pub(super) const HELPER_FILES: [&str; 17] = [
     "app_update_confirmed_codex.py",
     "app_update_zcode.py",
     "app_update_codex.cjs",
-    RUNTIME,
 ];
-const RUNTIME: &str = "app_update_codex_runtime.cjs";
 const SCRIPT: &str = include_str!("helper_sync.py");
 /// No quote characters: Windows PowerShell strips embedded double quotes from native arguments.
 const BOOTSTRAP: &str = "import sys,base64;exec(base64.b64decode(sys.stdin.buffer.readline()))";
@@ -73,11 +72,7 @@ impl HelperSet {
         let files = HELPER_FILES
             .iter()
             .map(|&name| {
-                let folder = if name == RUNTIME {
-                    package.join("dist/app-updates")
-                } else {
-                    package.join("scripts/app-updates")
-                };
+                let folder = package.join("scripts/app-updates");
                 let bytes = aac_files::read_bounded(&folder.join(name), MAX_FILE)
                     .map_err(|_| failed("helper_set_missing"))?;
                 let hash = aac_core::sha256_hex(&bytes);

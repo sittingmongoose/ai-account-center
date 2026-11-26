@@ -108,8 +108,7 @@ fn fixture_transport_and_service_api() {
     }
 }
 
-/// The installed package's parts the service reads: the computer table and the helper set,
-/// with a stand-in for the Codex runtime that the package build generates.
+/// The installed package's parts the service reads: the computer table and the helper set.
 fn package(root: &Path) -> PathBuf {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let package = root.join("package");
@@ -130,12 +129,6 @@ fn package(root: &Path) -> PathBuf {
             .expect("copy helper");
         }
     }
-    fs::create_dir_all(package.join("dist/app-updates")).expect("package runtime");
-    fs::write(
-        package.join("dist/app-updates/app_update_codex_runtime.cjs"),
-        "// fixture runtime\n",
-    )
-    .expect("runtime stand-in");
     package
 }
 

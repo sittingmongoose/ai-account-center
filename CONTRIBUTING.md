@@ -10,8 +10,7 @@ authorship, copyright, license and repository history are retained.
 Use Node.js 22.13 or newer, including 26 (CI installs 26; Node 22 stays
 supported), Bun 1.4.4, Rust 1.99.1 with
 `wasm32-unknown-unknown`, and wasm-pack **0.15.1**. Leptos is pinned to
-**0.9.0-rc1** in the dashboard crate's manifest and lockfile (`web-dashboard/leptos`). TypeScript stays at **6.0.3**:
-the newest typescript-eslint supports TypeScript < 6.1 only.
+**0.9.0-rc1** in the dashboard crate's manifest and lockfile (`web-dashboard/leptos`).
 Install the build tool with `cargo install wasm-pack --version 0.15.1 --locked`.
 The dashboard crate's target-specific Cargo configuration keeps SIMD and tail calls off
 (WebKit bug 325447 on iOS 27).
@@ -53,7 +52,7 @@ Oct 20 Muse fallback).
 
 | Area | Paths |
 | --- | --- |
-| CLI/account/backend | `src/` |
+| CLI, dashboard listener and backend | `crates/` (`aac-http` CLI and listener, native owners) |
 | Leptos browser dashboard | `web-dashboard/` (`leptos/` app, `public/` data layer) |
 | Native bars | `macos-bar/`, `windows-bar/` |
 | Usage collectors | `scripts/account-usage/`, `browser-bridge/` |
@@ -62,10 +61,8 @@ Oct 20 Muse fallback).
 | Maintainer guides | [docs/README.md](docs/README.md) |
 
 The root builder produces the dashboard at `dist/ui/`. There is no React/Vite
-workspace to install or run. The TypeScript server stays. Every new server
-piece is written in Rust as a native module like `crates/aac-store`. Existing
-TypeScript modules are not ported unless the owner asks. Native clients
-retain their platform toolchains.
+workspace to install or run. The TypeScript server was deleted on 2026-11-27; every server
+piece is Rust. Native clients retain their platform toolchains.
 
 ## Preserve account state
 
@@ -85,10 +82,8 @@ account management.
 ## Validation
 
 ```bash
-bun run typecheck
-bun run lint
-bun run format:check
 bun run test:fast
+node --test web-dashboard/tests/*.test.mjs
 ```
 
 Dashboard changes also need the actual WASM build and its verification:
@@ -99,8 +94,8 @@ bun run ui:validate
 ```
 
 The UI gate verifies the Leptos and wasm-bindgen pins, Rust formatting, the
-dashboard's node tests, the source and shell fingerprints and the packaged WASM. `build:server` compiles
-TypeScript and bundles the Codex update runtime into `dist/app-updates/`; it does
+dashboard's node tests, the source and shell fingerprints and the packaged WASM. `build:server` stages the
+native binaries and modules into `dist/native/` and records the build lineage; it does
 not refresh dashboard assets.
 
 The shipped native binaries build with the release profile in
@@ -129,7 +124,7 @@ Use a focused task branch from `feat/activate-in-place`, conventional commit
 messages and a PR against this fork. Describe behavior, validation and
 compatibility effects. Coordinate overlapping files and preserve others' edits.
 
-CI checks the TypeScript backend and pinned Leptos inputs. Retired upstream
+CI checks the package scripts, the Rust crates and the pinned Leptos inputs. Retired upstream
 npm/container/Cloudflare lanes are not AI Account Center publication instructions.
 Local packaging is supported; package, release or image publication requires
 separate authorization. Do not restore upstream targets or add automation grants.
