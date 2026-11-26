@@ -173,6 +173,12 @@ export const ALLOWLIST = [
       'parity bin and fixtures write fake-credential sandboxes in temp roots. Follow-up ' +
       'l2-renewal-readers: move the bounded reads onto aac_files::read.',
   },
+  {
+    path: 'crates/aac-xtask/src/',
+    reason:
+      'Dev, build, and performance test harness tasks (never linked into the dashboard service or ' +
+      'agent closure): reads /proc, writes synthetic fixtures in temp directories, and manages build outputs.',
+  },
 ];
 
 const OWNER = 'crates/aac-files/src/';

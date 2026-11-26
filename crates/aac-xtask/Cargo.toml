@@ -1,0 +1,38 @@
+[package]
+name = "aac-xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "AI Account Center development, build, release, and performance tasks"
+
+[lints]
+workspace = true
+
+[dependencies]
+aac-core.workspace = true
+aac-num.workspace = true
+aac-store.workspace = true
+base64 = "0.22"
+brotli-decompressor = "4"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+flate2 = "1"
+fs2.workspace = true
+indexmap = "2.14.2"
+pem-rfc7468 = { version = "0.7", features = ["alloc"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+regex.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order", "float_roundtrip"] }
+sha2.workspace = true
+spki = { version = "0.7", features = ["pem"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "signal"] }
+toml = "0.8"
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["signal", "process", "hostname"] }
