@@ -463,6 +463,59 @@ export const tests = {
 		await t.check('no made-up $0.00', !/\$0\.00/.test(bar), bar);
 	},
 
+	// AAC-FOLLOWUPS compare-chart-label-overlap (hotfix 28 device check): Compare weekly across four Claude accounts,
+	// three at the same 20% and one long address at 93%. On the iPhone the stacked end labels sat under 1 px apart and
+	// the long address's label was dropped. Every line is named at its end, clear of every other chart label.
+	async 'analytics compare: every line is named at its end, clear of the other labels, on phones and desktop'(t) {
+		const cmpAccounts = [
+			account('claude-one', 'claude', 'one.claude@example.invalid', 'max', [quota('seven_day', 'Weekly usage', 20, 10080, 3000)]),
+			account('claude-alpha', 'claude', 'sam@alpha.example', 'max', [quota('seven_day', 'Weekly usage', 20, 10080, 3000)]),
+			account('claude-beta', 'claude', 'sam@beta.example', 'max', [quota('seven_day', 'Weekly usage', 20, 10080, 3000)]),
+			account('claude-long', 'claude', 'a.very.long.example.name@example.invalid', 'pro', [quota('seven_day', 'Weekly usage', 93, 10080, 3500)]),
+		];
+		for (const f of FORMATS.filter((x) => ['iphone', 'duo-folded', 'desktop-1440'].includes(x.name))) {
+			await t.step(f.name, async () => {
+				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, serviceWorkers: 'block' });
+				await t.app.signIn();
+				await t.app.stub('/api/accounts/dashboard', { ...DASHBOARD, accounts: cmpAccounts });
+				await t.page.route((u) => new URL(u).pathname === '/api/accounts/analytics', (r) => r.fulfill({ json: analyticsFixture({ range: new URL(r.request().url()).searchParams.get('range') || '7d', accounts: cmpAccounts }) }));
+				await openAnalytics(t, f.safe);
+				await t.page.locator('button.qh-row[data-probe="qrow:claude-one"]').click();
+				await t.until('focus chart drawn', () => !!document.querySelector('.focus-box svg path'), null, { timeout: 15000 });
+				await t.page.locator('.focus .switch').click();
+				await t.until('compare is on', () => document.querySelector('.focus .switch')?.getAttribute('aria-checked') === 'true', null, { timeout: 10000 });
+				// laid out for its box: the labels stop moving (TOOL-ISSUES 39), checked over three polls in a row
+				await t.until('compare labels settled', () => {
+					const now = JSON.stringify([...document.querySelectorAll('.focus-box svg text')].map((el) => [el.textContent, el.getAttribute('x'), el.getAttribute('y')]));
+					const s = (window.__cmpSettle ||= { last: '', same: 0 });
+					s.same = now === s.last && now.length > 2 ? s.same + 1 : 0;
+					s.last = now;
+					return s.same >= 3;
+				}, null, { timeout: 15000 });
+				const got = await t.page.evaluate(() => {
+					const boxes = [...document.querySelectorAll('.focus-box svg text')].map((el) => {
+						const range = document.createRange();
+						range.selectNodeContents(el);
+						return { text: el.textContent.trim(), r: range.getBoundingClientRect() };
+					}).filter((b) => b.text && b.r.width > 0);
+					const ends = boxes.filter((b) => /^\S.* \d+%$/.test(b.text));
+					const near = [];
+					for (const e of ends) for (const o of boxes) {
+						if (o === e) continue;
+						const gx = Math.max(o.r.left - e.r.right, e.r.left - o.r.right), gy = Math.max(o.r.top - e.r.bottom, e.r.top - o.r.bottom);
+						if (gx < 1.5 && gy < 1.5) near.push(`"${e.text}" / "${o.text}" (gap ${Math.max(gx, gy).toFixed(1)} px)`);
+					}
+					return { ends: ends.map((b) => b.text), near };
+				});
+				await t.equal(`${f.name}: one end label per compared account`, got.ends.length, 4);
+				await t.check(`${f.name}: the 93% line is named`, got.ends.some((x) => /^a\.very\.long\S* 93%$/.test(x)), got.ends.join(' | '));
+				await t.equal(`${f.name}: every end label is clear of the other chart labels`, got.near, []);
+				await t.page.locator('.focus-box').scrollIntoViewIfNeeded();
+				await t.crop(`analytics-compare-${f.name}`, await t.page.evaluate(() => { const r = document.querySelector('.focus').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 10), width: innerWidth, height: Math.min(innerHeight - Math.max(0, r.y - 10), r.height + 20) }; }), `${f.name}: Compare weekly across four Claude accounts, end labels`);
+			});
+		}
+	},
+
 	async 'analytics: each format lays the page out with nothing sideways and no overlapping labels'(t) {
 		for (const f of FORMATS) {
 			await t.step(f.name, async () => {

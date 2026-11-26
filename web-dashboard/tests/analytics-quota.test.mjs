@@ -244,6 +244,47 @@ test('phone focus charts (350x180, 600x220): labels never overlap and the lookup
   }
 });
 
+// AAC-FOLLOWUPS compare-chart-label-overlap (hotfix 28 device check, iPhone portrait): Compare weekly across four
+// Claude accounts, three of them at the same 20% and one with a long address at 93%. The three end labels sat on a
+// 14 px pitch, under 1 px apart at Martian Mono's real extent (ascent 11 px, descent 2.2 px at 11 px), and the long
+// address's label did not fit the observed half of a phone chart and was dropped, leaving its line unnamed.
+test('Compare end labels on a phone: one per account, clear of every other label, long names shortened', () => {
+  const ASC = 11, DESC = 2.2, GAP = 2;
+  const climb = (from, to) => [point(now - 30 * H, from), point(now - 12 * H, (from + to) / 2), point(now - 1 * H, to)];
+  const weekly = (used, from) => [{ ...win('seven_day', 'Weekly usage', used, { resetAt: iso(now + 50 * H) }), points: climb(from, used) }];
+  const four = {
+    history: { oldestSampleAt: iso(now - 40 * H) },
+    accounts: [
+      account('claude:one', 'claude', 'one.claude@example.invalid', weekly(20, 12)),
+      account('claude:twin-alpha', 'claude', 'sam@alpha.example', weekly(20, 12)),
+      account('claude:twin-beta', 'claude', 'sam@beta.example', weekly(20, 12)),
+      account('claude:two', 'claude', 'a.very.long.example.name@example.invalid', weekly(93, 60)),
+    ],
+  };
+  const board = { accounts: four.accounts.map(({ id, provider, email, windows }) => account(id, provider, email, windows.map(({ points, ...w }) => w))) };
+  const accounts = quotaAccounts(four, { now, dashboard: board });
+  const text = l => ({ x0: l.x, x1: l.x + l.w, y0: l.y - ASC, y1: l.y + DESC });
+  const apart = (a, b) => a.x1 + GAP <= b.x0 || b.x1 + GAP <= a.x0 || a.y1 + GAP <= b.y0 || b.y1 + GAP <= a.y0;
+  for (const [width, height] of [[340, 180], [358, 180], [442, 220], [466, 220]]) {
+    const f = focusChart(accounts.find(a => a.id === 'claude:one'), four, { now, width, height, compare: true, accounts });
+    const names = f.legend.filter(l => l.kind === 'series').map(l => l.name);
+    assert.equal(names.length, 4);
+    const ends = f.labels.filter(l => l.color === 'series-ink');
+    // every line is named at its end: the full name, or its start ending in an ellipsis, then the value
+    for (const name of names) {
+      const own = ends.filter(l => { const m = l.text.match(/^(.*) (\d+)%$/); return m && (m[1] === name || (m[1].endsWith('…') && m[1].length > 4 && name.startsWith(m[1].slice(0, -1)))); });
+      assert.equal(own.length, 1, `${width}x${height}: one end label for ${name}: ${ends.map(l => l.text).join(' | ')}`);
+    }
+    assert.ok(ends.some(l => l.text.endsWith(' 93%')), `${width}x${height}: the 93% line is named`);
+    // an end label's drawn text stays clear of every other label's drawn text
+    for (const e of ends) for (const o of f.labels) {
+      if (o === e) continue;
+      assert.ok(apart(text(e), text(o)), `${width}x${height}: "${e.text}" at ${e.y} is too close to "${o.text}" at ${o.y}`);
+    }
+    for (const l of ends) assert.ok(l.px >= -0.5 && l.px + l.pw <= f.w + 0.5 && l.py >= -0.5 && l.py + l.ph <= f.h + 0.5, `${l.text} inside ${width}x${height}`);
+  }
+});
+
 test('scoped weeklies: model names in rows and agenda, binding considers aggregate plus scoped', async () => {
   const { bindingWeekly } = await import('../public/analytics-quota.mjs');
   const scopedDash = { accounts: [account('claude:scoped', 'claude', 's@example.test', [

@@ -295,7 +295,9 @@ export function focusChart(acc, payload, ctx) {
     const bs = cands.map(c => ({ c, b: lbox(c.x, c.y, w, c.a) })).filter(o => inside(o.b, region));
     const pick = bs.find(o => !hits(o.b, placed) && !hits(o.b, obst)) || bs.find(o => !hits(o.b, placed));
     if (!pick) return null;
-    placed.push(pick.b);
+    // extra.clear keeps later labels that many px further off (the box itself and its plate stay exact)
+    const k = extra.clear || 0;
+    placed.push(k ? { x0: pick.b.x0 - k, x1: pick.b.x1 + k, y0: pick.b.y0 - k, y1: pick.b.y1 + k } : pick.b);
     const x0 = pick.c.a === 'end' ? pick.c.x - w : pick.c.a === 'middle' ? pick.c.x - w / 2 : pick.c.x;
     labels.push({ x: pt(x0), y: pt(pick.c.y), w: pt(w), text: txt, color: color || 'ink-3', shade: extra.shade ?? 0, plate, px: pt(pick.b.x0), py: pt(pick.b.y0), pw: pt(pick.b.x1 - pick.b.x0), ph: pt(pick.b.y1 - pick.b.y0) });
     return pick.b;
@@ -402,7 +404,17 @@ export function focusChart(acc, payload, ctx) {
   put(`NOW ${clockTxt(now).toUpperCase()}`, [{ x: obsEnd - 4, y: pad.t - 10, a: 'end' }], 'ink-2', TOP);
   put('FORECAST TO RESET', [{ x: fStart + 6, y: pad.t - 10 }], 'ink-3', { ...TOP, x0: fStart }) || put('FORECAST', [{ x: fStart + 6, y: pad.t - 10 }], 'ink-3', { ...TOP, x0: fStart });
   if (series.length > 1 && ends.length) {
-    const LH = 14;
+    // End labels, one per line (compare-chart-label-overlap, 2026-11-26). Martian Mono at 11 px draws 11 px above the
+    // baseline and 2.2 px below, so a 16 px pitch leaves 2.8 px between stacked labels (14 px left 0.8 px, which read
+    // as one label on top of another on a phone), and each label keeps every later one 2.5 px off. A name too long for
+    // the observed half keeps its start and an ellipsis instead of being dropped; the legend and readout keep it whole.
+    const LH = 16, CLEAR = 2.5;
+    const room = OBS.x1 - OBS.x0 - 11.5;
+    const fit = (name, value) => {
+      if (TW(name + value) <= room) return name + value;
+      const keep = Math.floor(room / MONO_ADVANCE) - value.length - 1;
+      return keep >= 4 ? `${name.slice(0, keep)}…${value}` : name + value;
+    };
     ends.sort((a, b) => a.y - b.y);
     const ys = ends.map(e => e.y - 5);
     const lo = PLOT.y1 - 3, hi = PLOT.y0 + 10;
@@ -411,8 +423,8 @@ export function focusChart(acc, payload, ctx) {
     ys[ys.length - 1] = Math.min(ys[ys.length - 1], lo);
     for (let n = ys.length - 2; n >= 0; n--) ys[n] = Math.min(ys[n], ys[n + 1] - LH);
     ends.forEach((e, n) => {
-      const txt = `${e.s.tag} ${valueText(e.cur)}%`;
-      put(txt, [{ x: obsEnd - 10, y: ys[n], a: 'end' }, { x: obsEnd - 10, y: ys[n] + LH, a: 'end' }, { x: obsEnd - 10, y: ys[n] - LH, a: 'end' }], 'series-ink', OBS, { shade: e.s.shade });
+      const txt = fit(e.s.tag, ` ${valueText(e.cur)}%`);
+      put(txt, [{ x: obsEnd - 10, y: ys[n], a: 'end' }, { x: obsEnd - 10, y: ys[n] + LH, a: 'end' }, { x: obsEnd - 10, y: ys[n] - LH, a: 'end' }], 'series-ink', OBS, { shade: e.s.shade, clear: CLEAR });
     });
   }
   for (const r of runouts) {
