@@ -68,6 +68,15 @@ export const ALLOWLIST = [
       "reached through the walker's admission. Follow-up l2-usage-readers.",
   },
   {
+    path: 'native/aac-usage/src/scan_index.rs',
+    reason:
+      "The scanner's persistent discovery index (CCS_HOME/analytics-scan-index-v1): directory " +
+      'names and traversal progress only, never log contents or credentials. aac-usage is a ' +
+      'native crate with its own lock and no aac-files dependency; it writes 0600 with ' +
+      'O_NOFOLLOW under its lock, fsyncs and renames, and a busy or damaged index falls back to ' +
+      'the bounded walk. Follow-up l2-usage-readers.',
+  },
+  {
     path: 'native/aac-usage/src/collector.rs',
     reason:
       "Scanner collector reading a tool database file named by the walker (another tool's " +

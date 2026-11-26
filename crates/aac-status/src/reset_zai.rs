@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 
 const UNAVAILABLE: &str = "inventory-unavailable";
-/// Jared approved enabling Z.ai reset claims with all existing claim guards intact.
+/// Z.ai reset claims are enabled (owner-approved), with every existing claim guard intact.
 pub const CLAIM_PROVEN: bool = true;
 pub const METHOD: &str = "zai.customer-package-reset.use";
 
