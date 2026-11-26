@@ -22,6 +22,8 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { brotliDecompress, gunzip, inflate } from 'node:zlib';
 import { DEFAULT_OPTIONS, generateMemoryFixture } from './memory-fixture.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +31,12 @@ const REPO_ROOT = path.resolve(HERE, '..', '..');
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, 'config', 'memory-budget.json');
 const KIB_PER_MIB = 1024;
 const MIN_STEADY_SAMPLES_FLOOR = 3;
+const POLL_DISPATCH_GRACE_MS = 250;
+const ANALYTICS_DECODERS = new Map([
+  ['br', promisify(brotliDecompress)],
+  ['gzip', promisify(gunzip)],
+  ['deflate', promisify(inflate)],
+]);
 
 /** Required budget ceilings in config/memory-budget.json for check mode. */
 export const REQUIRED_LIMIT_KEYS = Object.freeze([
@@ -679,36 +687,49 @@ function httpRequest({
         method,
         headers,
         agent,
-        timeout: timeoutMs,
       },
       (res) => {
         const chunks = [];
+        const onIncomplete = () =>
+          fail(new Error(`HTTP response closed before completion (${method} ${reqPath})`));
         res.on('data', (chunk) => chunks.push(chunk));
+        res.on('aborted', onIncomplete);
+        res.on('error', fail);
+        res.on('close', () => {
+          if (!res.complete) onIncomplete();
+        });
         res.on('end', () => {
-          cleanupAbort();
-          const buf = Buffer.concat(chunks);
+          if (!res.complete) {
+            onIncomplete();
+            return;
+          }
+          cleanup();
           resolve({
             status: res.statusCode ?? 0,
             headers: res.headers,
-            body: buf,
+            body: Buffer.concat(chunks),
           });
         });
       }
     );
-    const onAbort = () => {
-      req.destroy(new Error(`HTTP request aborted (${method} ${reqPath})`));
+    const fail = (error) => {
+      cleanup();
+      reject(error);
     };
-    const cleanupAbort = () => {
-      if (signal) signal.removeEventListener('abort', onAbort);
+    const cancel = (error) => {
+      fail(error);
+      req.destroy(error);
     };
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    req.on('timeout', () => {
-      req.destroy(new Error(`HTTP timeout after ${timeoutMs} ms (${method} ${reqPath})`));
-    });
-    req.on('error', (err) => {
-      cleanupAbort();
-      reject(err);
-    });
+    const onAbort = () => cancel(new Error(`HTTP request aborted (${method} ${reqPath})`));
+    const deadline = setTimeout(() => {
+      cancel(new Error(`HTTP deadline exceeded after ${timeoutMs} ms (${method} ${reqPath})`));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(deadline);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    req.on('error', fail);
     if (body !== null) req.write(body);
     req.end();
   });
@@ -729,35 +750,38 @@ function sleep(ms, signal = null) {
   });
 }
 
-async function waitForHealth(port, child, timeoutMs = 60_000, getSpawnError = () => null) {
+async function waitForHealth(port, signal, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const err = getSpawnError();
-    if (err) {
-      throw new Error(`Dashboard server failed to start: ${err.message}`);
-    }
-    const exited = getChildExitStatus(child);
-    if (exited) {
-      throw new Error(`Dashboard server exited before listening (${exited.reason}).`);
-    }
+  while (!signal.aborted && Date.now() < deadline) {
     try {
-      const res = await httpRequest({ port, reqPath: '/api/health', timeoutMs: 2000 });
+      const res = await httpRequest({
+        port,
+        reqPath: '/api/health',
+        timeoutMs: Math.min(2000, deadline - Date.now()),
+        signal,
+      });
       if (res.status === 200) return;
     } catch {
       // Not listening yet.
     }
-    await sleep(200);
+    await sleep(Math.min(200, deadline - Date.now()), signal);
   }
+  if (signal.aborted) throw new Error('Dashboard health check aborted.');
   throw new Error(`Dashboard server did not answer /api/health within ${timeoutMs} ms.`);
 }
 
-async function signInLoopback(port) {
+async function signInLoopback(port, signal) {
   const baseHeaders = {
     Origin: `http://127.0.0.1:${port}`,
     Host: `127.0.0.1:${port}`,
     Accept: 'application/json',
   };
-  const setupCheck = await httpRequest({ port, reqPath: '/api/auth/setup', headers: baseHeaders });
+  const setupCheck = await httpRequest({
+    port,
+    reqPath: '/api/auth/setup',
+    headers: baseHeaders,
+    signal,
+  });
   if (setupCheck.status !== 200) {
     throw new Error(`GET /api/auth/setup answered ${setupCheck.status}`);
   }
@@ -778,6 +802,7 @@ async function signInLoopback(port) {
       'Content-Length': Buffer.byteLength(payload),
     },
     body: payload,
+    signal,
   });
   const setCookies = reply.headers['set-cookie'] ?? [];
   const cookie = (Array.isArray(setCookies) ? setCookies : [setCookies])
@@ -792,19 +817,40 @@ async function signInLoopback(port) {
   return cookie;
 }
 
-async function runPollLoop(route, port, cookie, startedMs, durationMs, records, abortSignal) {
+async function verifyAnalyticsReply(url, body, encoding) {
+  const decode = ANALYTICS_DECODERS.get(encoding);
+  if (encoding && encoding !== 'identity' && !decode) {
+    throw new Error(`Unsupported Analytics content encoding: ${encoding}`);
+  }
+  const payload = JSON.parse((decode ? await decode(body) : body).toString('utf8'));
+  if (payload?.stale === true || payload?.history?.status !== 'ok') {
+    throw new Error('Analytics quota history is unavailable.');
+  }
+  if (!['ok', 'cached'].includes(payload?.activity?.status)) {
+    throw new Error('Analytics activity is unavailable.');
+  }
+  if (
+    payload.range?.preset !== url.searchParams.get('range') ||
+    !Number.isFinite(payload.history.sampleCount) ||
+    payload.history.sampleCount <= 0 ||
+    !Array.isArray(payload.activity.byDay) ||
+    payload.activity.byDay.length === 0
+  ) {
+    throw new Error('Analytics reply is missing quota or activity data for the requested range.');
+  }
+}
+
+async function runPollLoop(route, port, cookie, startedMs, durationSec, records, abortSignal) {
   const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
-  let due = startedMs + route.offsetSec * 1000;
+  const url = new URL(route.path, 'http://127.0.0.1');
+  const scheduled = expectedRouteCalls(route, durationSec);
+  const dispatchDeadline = startedMs + durationSec * 1000 + POLL_DISPATCH_GRACE_MS;
   try {
-    while (!abortSignal?.aborted) {
-      const now = Date.now();
-      if (now - startedMs >= durationMs) break;
-      if (now < due) {
-        await sleep(Math.min(due - now, 250), abortSignal);
-        continue;
-      }
-      due += route.periodSec * 1000;
+    for (let slot = 0; slot < scheduled; slot += 1) {
+      const due = startedMs + (route.offsetSec + slot * route.periodSec) * 1000;
+      await sleep(Math.ceil(due - Date.now()), abortSignal);
       const callStart = Date.now();
+      if (abortSignal.aborted || callStart >= dispatchDeadline) break;
       let status = 0;
       let bytes = 0;
       let encoding = '';
@@ -827,9 +873,12 @@ async function runPollLoop(route, port, cookie, startedMs, durationMs, records, 
         status = res.status;
         bytes = res.body.length;
         encoding = String(res.headers['content-encoding'] ?? '');
+        if (status === 200 && url.pathname === '/api/accounts/analytics') {
+          await verifyAnalyticsReply(url, res.body, encoding.trim().toLowerCase());
+        }
       } catch (err) {
-        if (abortSignal?.aborted) break;
-        status = -1;
+        if (abortSignal.aborted) break;
+        if (status === 0) status = -1;
         error = err instanceof Error ? err.message : String(err);
       }
       const ms = Date.now() - callStart;
@@ -857,13 +906,15 @@ export function summarizeRoutes(records, pollPlan = POLL_PLAN) {
   const summary = {};
   for (const route of pollPlan) {
     const list = byRoute.get(route.name) ?? [];
-    const ok = list.filter((r) => r.status === 200);
+    const ok = list.filter((r) => r.status === 200 && !r.error);
+    const firstError = list.find((r) => r.error)?.error;
     const msList = list.map((r) => r.ms);
     const warmMs = msList.length > 1 ? msList.slice(1) : msList;
     summary[route.name] = {
       calls: list.length,
       ok: ok.length,
       failed: list.length - ok.length,
+      ...(firstError ? { firstError } : {}),
       medianBytes: Math.round(median(ok.map((r) => r.bytes))),
       firstMs: msList[0] ?? 0,
       p50Ms: +median(warmMs).toFixed(1),
@@ -903,15 +954,11 @@ export function evaluateRouteFailures(
   for (const route of pollPlan) {
     const row = routes?.[route.name];
     const scheduled = expectedRouteCalls(route, durationSec);
-    const minRequired = check
-      ? Math.max(1, scheduled <= 1 ? scheduled : scheduled - 1)
-      : scheduled <= 1
-        ? scheduled
-        : scheduled - 1;
+    const minRequired = check ? Math.max(1, scheduled) : scheduled;
 
     if (!row || row.calls === 0) {
       if (minRequired > 0) {
-        failures.push(`${route.name}: 0 HTTP 200 calls (expected >= ${minRequired})`);
+        failures.push(`${route.name}: 0 polls completed (expected >= ${minRequired})`);
       }
       continue;
     }
@@ -922,7 +969,8 @@ export function evaluateRouteFailures(
         : Math.max(0, row.calls - row.ok);
     if (failedCount > 0 || row.ok < row.calls) {
       failures.push(
-        `${route.name}: ${failedCount}/${row.calls} polls failed (${row.ok}/${row.calls} HTTP 200)`
+        `${route.name}: ${failedCount}/${row.calls} polls failed (${row.ok}/${row.calls} successful)` +
+          (row.firstError ? `: ${row.firstError}` : '')
       );
       continue;
     }
@@ -1074,11 +1122,19 @@ export async function runMemoryBudget(opts) {
       const manifest = JSON.parse(
         fs.readFileSync(path.join(copied, 'fixture-manifest.json'), 'utf8')
       );
+      const ccsDir = path.join(copied, 'home', '.ccs');
+      const storePath = path.join(ccsDir, 'store', 'aac.redb');
+      if (
+        opts.check &&
+        (!manifest.store || !fs.statSync(storePath, { throwIfNoEntry: false })?.isFile())
+      ) {
+        throw new Error('Check mode requires a migrated store in --fixture-dir.');
+      }
       fixture = {
         ...manifest,
         root: copied,
         home: path.join(copied, 'home'),
-        ccsDir: path.join(copied, 'home', '.ccs'),
+        ccsDir,
         reportsDir: path.join(copied, 'agent-reports'),
         registryDir: path.join(copied, 'agent-reports', 'pm-mail-registry'),
       };
@@ -1150,7 +1206,7 @@ export async function runMemoryBudget(opts) {
 
     let unexpectedExit = null;
     let spawnError = null;
-    const pollAbort = new AbortController();
+    const childAbort = new AbortController();
     child.once('exit', (code, signal) => {
       if (stoppingChild || unexpectedExit) return;
       unexpectedExit = {
@@ -1158,12 +1214,12 @@ export async function runMemoryBudget(opts) {
         signalCode: signal ?? null,
         reason: signal ? `signal=${signal}` : `code=${code}`,
       };
-      pollAbort.abort();
+      childAbort.abort();
     });
     child.once('error', (err) => {
       if (stoppingChild) return;
       spawnError = err;
-      pollAbort.abort();
+      childAbort.abort();
     });
 
     const assertChildRunning = (phase) => {
@@ -1176,32 +1232,50 @@ export async function runMemoryBudget(opts) {
       }
     };
 
-    await waitForHealth(port, child, 60_000, () => spawnError);
+    const samples = [];
+    let pollStart = null;
+    const takeSample = () => {
+      if (!child?.pid || unexpectedExit || getChildExitStatus(child)) return;
+      // Startup samples count toward peaks but precede even a steady window starting at t=0.
+      const elapsedSec = pollStart === null ? -1 : (Date.now() - pollStart) / 1000;
+      const sample = sampleProcessTree(child.pid, elapsedSec);
+      if (sample) samples.push(sample);
+    };
+    takeSample();
+    samplerTimer = setInterval(takeSample, Math.max(200, opts.sampleIntervalSec * 1000));
+
+    try {
+      await waitForHealth(port, childAbort.signal);
+    } catch (error) {
+      assertChildRunning('during the health check');
+      throw error;
+    }
+    assertChildRunning('during the health check');
     const bootMs = Date.now() - bootStart;
-    const cookie = await signInLoopback(port);
+    let cookie;
+    try {
+      cookie = await signInLoopback(port, childAbort.signal);
+    } catch (error) {
+      assertChildRunning('during loopback sign-in');
+      throw error;
+    }
     assertChildRunning('during loopback sign-in');
 
     if (typeof opts.onServerReady === 'function') {
       await opts.onServerReady({ child, port, cookie });
     }
 
-    const pollStart = Date.now();
+    pollStart = Date.now();
     const durationMs = opts.durationSec * 1000;
-    const samples = [];
-    const takeSample = () => {
-      if (!child?.pid || unexpectedExit || getChildExitStatus(child)) return;
-      const sample = sampleProcessTree(child.pid, (Date.now() - pollStart) / 1000);
-      if (sample) samples.push(sample);
-    };
     takeSample();
-    samplerTimer = setInterval(takeSample, Math.max(200, opts.sampleIntervalSec * 1000));
 
     const routeRecords = [];
-    await Promise.all(
-      pollPlan.map((route) =>
-        runPollLoop(route, port, cookie, pollStart, durationMs, routeRecords, pollAbort.signal)
-      )
-    );
+    await Promise.all([
+      ...pollPlan.map((route) =>
+        runPollLoop(route, port, cookie, pollStart, opts.durationSec, routeRecords, childAbort.signal)
+      ),
+      sleep(pollStart + durationMs - Date.now(), childAbort.signal),
+    ]);
     takeSample();
     clearInterval(samplerTimer);
     samplerTimer = null;

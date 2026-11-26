@@ -31,6 +31,7 @@ const { scanText } = require('../../../scripts/personal-detail-guard.js');
 const REPO_ROOT = path.resolve(import.meta.dir, '../../..');
 const RUNNER_PATH = path.join(REPO_ROOT, 'scripts', 'perf', 'memory-budget.mjs');
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, 'config', 'memory-budget.json');
+const NODE_EXECUTABLE = Bun.which('node') ?? 'node';
 
 function walkFiles(dir: string, base = dir, out: string[] = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -64,19 +65,27 @@ function makeSample(
 function writeFakeDashboardScript(
   dir: string,
   filename: string,
-  { failAfterFirst = false } = {}
+  { failAfterFirst = false, truncatePath = '', startupMemory = false, analytics = 'ok' } = {}
 ) {
   const scriptPath = path.join(dir, filename);
   fs.writeFileSync(
     scriptPath,
     `import http from 'node:http';
+import { gzipSync } from 'node:zlib';
 const args = process.argv.slice(2);
 const portIdx = args.indexOf('--port');
 const port = portIdx >= 0 ? Number(args[portIdx + 1]) : 0;
 const failAfterFirst = ${JSON.stringify(failAfterFirst)};
+const truncatePath = ${JSON.stringify(truncatePath)};
+const analytics = ${JSON.stringify(analytics)};
 const hits = new Map();
 const server = http.createServer((req, res) => {
   const url = req.url || '/';
+  if (url === truncatePath) {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '1024' });
+    res.write('{', () => setTimeout(() => process.exit(17), 50));
+    return;
+  }
   if (url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end('{"ok":true}');
@@ -102,10 +111,35 @@ const server = http.createServer((req, res) => {
     res.end('{"error":"simulated_late_failure"}');
     return;
   }
+  if (url.startsWith('/api/accounts/analytics?')) {
+    const preset = new URL(url, 'http://localhost').searchParams.get('range');
+    const body = gzipSync(JSON.stringify({
+      stale: analytics === 'unavailable',
+      range: { preset },
+      history: { status: analytics, sampleCount: analytics === 'ok' ? 19 : 0 },
+      activity: { status: 'ok', byDay: [{ date: '2026-11-25' }] },
+    }));
+    res.writeHead(analytics === 'http-error' ? 503 : 200, {
+      'Content-Type': 'application/json',
+      'Content-Encoding': 'gzip',
+    });
+    res.end(body);
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end('{"ok":true,"hit":' + count + '}');
 });
-server.listen(port, '127.0.0.1');
+if (${JSON.stringify(startupMemory)}) {
+  let allocation = Buffer.alloc(160 * 1024 * 1024, 1);
+  setTimeout(() => {
+    if (allocation[0] !== 1) process.exit(18);
+    allocation = null;
+    global.gc();
+    server.listen(port, '127.0.0.1');
+  }, 800);
+} else {
+  server.listen(port, '127.0.0.1');
+}
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
 `
   );
@@ -485,6 +519,130 @@ describe('memory budget sampler and threshold evaluator', () => {
       reason: 'signal=SIGKILL',
     });
   });
+
+  it('requires the last scheduled successful poll for every route', () => {
+    for (const missingRoute of POLL_PLAN) {
+      const durationSec = 600;
+      const records = POLL_PLAN.flatMap((route) => {
+        const polls = [];
+        for (let t = route.offsetSec; t < durationSec; t += route.periodSec) {
+          polls.push({ route: route.name, status: 200, bytes: 1024, ms: 5 });
+        }
+        if (route === missingRoute) polls.pop();
+        return polls;
+      });
+      expect(evaluateRouteFailures(summarizeRoutes(records), durationSec)).toEqual([
+        expect.stringContaining(`${missingRoute.name}: only `),
+      ]);
+    }
+  });
+
+  it.skipIf(process.platform !== 'linux')(
+    'exits 1 when the dashboard exits after sending partial sign-in headers and body',
+    () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-truncated-'));
+      try {
+        const script = writeFakeDashboardScript(tmpDir, 'dashboard.mjs', {
+          truncatePath: '/api/auth/setup',
+        });
+        // Use the same promise-to-exit-code handling as the CLI, with a fake launcher.
+        const result = spawnSync(
+          NODE_EXECUTABLE,
+          [
+            '--input-type=module',
+            '--eval',
+            `import { runMemoryBudget } from ${JSON.stringify(RUNNER_PATH)};
+runMemoryBudget({
+  durationSec: 1, steadyAfterSec: 0, sampleIntervalSec: 0.2, check: false,
+  launcherPath: process.execPath,
+  launcherArgs: ({ port }) => [${JSON.stringify(script)}, '--port', String(port)],
+}).then((summary) => {
+  process.exitCode = summary.ok ? 0 : 1;
+}).catch((error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});`,
+          ],
+          { encoding: 'utf8', timeout: 4000, env: { ...process.env, TMPDIR: tmpDir } }
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/\/api\/auth\/setup|during loopback sign-in/);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.skipIf(process.platform !== 'linux')(
+    'includes a released startup allocation in peak RSS and excludes it from steady RSS',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-startup-'));
+      try {
+        const script = writeFakeDashboardScript(tmpDir, 'dashboard.mjs', { startupMemory: true });
+        const configPath = path.join(tmpDir, 'budget.json');
+        fs.writeFileSync(
+          configPath,
+          JSON.stringify({
+            schemaVersion: 1,
+            limits: { steadyRssMiB: 128, peakRssMiB: 128, childrenPeakRssMiB: 16 },
+          })
+        );
+        const summary = await runMemoryBudget({
+          durationSec: 1,
+          steadyAfterSec: 0,
+          sampleIntervalSec: 0.2,
+          check: true,
+          configPath,
+          pollPlan: [{ name: 'status', path: '/api/status', periodSec: 2, offsetSec: 0 }],
+          launcherPath: NODE_EXECUTABLE,
+          launcherArgs: ({ port }) => ['--expose-gc', script, '--port', String(port)],
+        });
+
+        expect(summary.memory.steadyMedianRssMiB).toBeLessThan(128);
+        expect(summary.memory.peakRssMiB).toBeGreaterThan(160);
+        expect(summary.threshold?.violations.map((v) => v.metric)).toEqual(['peakRssMiB']);
+        expect(summary.ok).toBe(false);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.skipIf(process.platform !== 'linux')(
+    'requires available Analytics data even when the HTTP response is 200 and compressed',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mem-analytics-'));
+      const route = POLL_PLAN.find((item) => item.name === 'analytics30d')!;
+      try {
+        for (const [analytics, expectedOk] of [
+          ['ok', true],
+          ['http-error', false],
+          ['unavailable', false],
+        ] as const) {
+          const script = writeFakeDashboardScript(tmpDir, `${analytics}.mjs`, { analytics });
+          const summary = await runMemoryBudget({
+            durationSec: 0.3,
+            steadyAfterSec: 0,
+            sampleIntervalSec: 0.2,
+            check: false,
+            pollPlan: [{ ...route, offsetSec: 0 }],
+            launcherPath: process.execPath,
+            launcherArgs: ({ port }) => [script, '--port', String(port)],
+          });
+
+          expect(summary.ok).toBe(expectedOk);
+          expect(summary.routes.analytics30d).toMatchObject({
+            calls: 1,
+            ok: Number(expectedOk),
+            failed: Number(!expectedOk),
+          });
+        }
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }
+  );
 
   it.skipIf(process.platform !== 'linux')(
     'fails runMemoryBudget on a SIGKILLed child, fails on later poll errors, and passes a healthy run',
