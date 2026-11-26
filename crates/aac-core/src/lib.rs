@@ -14,7 +14,7 @@ mod wire;
 #[path = "../../../native/shared/secret_policy.rs"]
 mod secret_policy;
 
-pub use failure::{Cause, Failure, Reading, Retry, Scrubbed, UtcMs, scrub};
+pub use failure::{Cause, Failure, Reading, Retry, Scrubbed, UtcMs, scrub, scrub_usage_email};
 pub use ids::{
     AccountKey, ComputerId, EventId, ProviderId, SessionHash, SessionKey, ToolId, sha256_hex,
 };

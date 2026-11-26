@@ -31,6 +31,10 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 unicode-normalization = "0.1"
 url = "2.5"
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

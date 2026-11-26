@@ -152,6 +152,20 @@ pub fn scrub(text: &str) -> Scrubbed {
     Scrubbed(normalized)
 }
 
+/// Account usage DTOs retain account email identities. Apply every credential
+/// rule, allowing only the policy's email match (the same exception as Store).
+/// Callers must still validate the address and restrict this to identity fields.
+pub fn scrub_usage_email(text: &str) -> Scrubbed {
+    if text.len() <= 254
+        && !text.chars().any(char::is_control)
+        && secret_policy::find_secret(text).is_none_or(|kind| kind == "an email address")
+    {
+        Scrubbed(text.to_owned())
+    } else {
+        scrub(text)
+    }
+}
+
 /// A scrubbed failure with explicit retry intent and an optional known observation time.
 /// Clock failures leave `at` absent; no fabricated epoch is recorded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

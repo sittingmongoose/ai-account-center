@@ -48,10 +48,19 @@ impl Http for Client {
         } else {
             self.client.get(destination)
         };
-        let mut request = request
-            .timeout(remaining.min(Duration::from_secs(4)))
-            .header("Accept", "application/json")
-            .header("User-Agent", "CCS-Accounts/1.0");
+        let mut request = request.timeout(remaining.min(Duration::from_secs(4)));
+        if !headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("accept"))
+        {
+            request = request.header("Accept", "application/json");
+        }
+        if !headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("user-agent"))
+        {
+            request = request.header("User-Agent", "CCS-Accounts/1.0");
+        }
         if self.endpoint.is_some() {
             request = request.header("x-aac-fixture-url", url);
         }
@@ -83,6 +92,13 @@ impl Http for Client {
         })
     }
 }
+fn bounded_json(bytes: &[u8], cap: usize) -> Option<Value> {
+    (bytes.len() <= cap)
+        .then(|| serde_json::from_slice::<Value>(bytes).ok())
+        .flatten()
+}
+/// Python's load_json: parse errors/absence mean no record; Unicode and fractional values are data,
+/// not poison, because credentials and provider payloads are validated before publication.
 /// A plan credential document below `home`, through the shared hardened read. Absent reads as
 /// absent; a link (final or below the home), FIFO, other non-file, oversized or failed read is
 /// unproved and delegates, so Python's own reader decides what that store holds.
@@ -90,7 +106,7 @@ fn load(home: &Path, path: &Path) -> Option<Value> {
     let policy = ReadPolicy::capped(CAP as u64).ancestors(Ancestors::NoLinkBelow(home));
     match files::read_with(path, &policy) {
         files::Regular::Missing => None,
-        files::Regular::Read(bytes, _) => proof::json(&bytes, CAP, false),
+        files::Regular::Read(bytes, _) => bounded_json(&bytes, CAP),
         _ => {
             proof::reject();
             None
@@ -129,7 +145,7 @@ fn key_credential(provider: &str, home: &Path, selector: &Value) -> Value {
         let files::Regular::Read(bytes, _) = files::read_with(&path, &private) else {
             return Value::Null;
         };
-        let Some(record) = proof::json(&bytes, 4096, false) else {
+        let Some(record) = bounded_json(&bytes, 4096) else {
             return Value::Null;
         };
         if record["version"].is_boolean() {
@@ -169,38 +185,479 @@ fn key_credential(provider: &str, home: &Path, selector: &Value) -> Value {
         json!({"secret":secret,"source":"Dashboard key"})
     }
 }
+fn email_address(value: Option<&str>) -> Option<&str> {
+    value.filter(|s| {
+        if s.len() > 254 || s.matches('@').count() != 1 {
+            return false;
+        }
+        let mut parts = s.split('@');
+        let local = parts.next().unwrap_or("");
+        let domain = parts.next().unwrap_or("");
+        let clean = |x: &str| {
+            !x.is_empty()
+                && !x
+                    .bytes()
+                    .any(|b| b.is_ascii_whitespace() || b < 0x20 || b == b'@')
+        };
+        clean(local) && clean(domain) && domain.contains('.')
+    })
+}
+fn omp_credentials(provider: &str, home: &Path, out: &mut Vec<Value>) {
+    let db = home.join(".omp/agent/agent.db");
+    if !db.is_file() {
+        return;
+    }
+    let omp_provider = if provider == "qwen" {
+        "alibaba-token-plan"
+    } else {
+        provider
+    };
+    let Ok(connection) = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) else {
+        proof::reject();
+        return;
+    };
+    let _ = connection.execute_batch("PRAGMA query_only=ON");
+    let mut statement = match connection.prepare("SELECT credential_type,data FROM auth_credentials WHERE provider=? AND disabled_cause IS NULL ORDER BY id DESC LIMIT 20") {
+        Ok(statement) => statement, Err(_) => { proof::reject(); return; }
+    };
+    let rows = statement.query_map([omp_provider], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    let Ok(rows) = rows else {
+        proof::reject();
+        return;
+    };
+    for row in rows.take(20) {
+        let Ok((kind, contents)) = row else {
+            proof::reject();
+            continue;
+        };
+        if contents.len() > CAP {
+            continue;
+        }
+        let data = serde_json::from_str::<Value>(&contents).unwrap_or(Value::Null);
+        if !data.is_object() {
+            proof::reject();
+            continue;
+        }
+        let secret = data["key"]
+            .as_str()
+            .filter(|s| valid_secret(s))
+            .or_else(|| data["access"].as_str().filter(|s| valid_secret(s)));
+        if let Some(secret) = secret {
+            let email = email_address(data["email"].as_str());
+            let expires = if provider == "kimi-code" && kind == "oauth" {
+                match &data["expires"] {
+                    Value::Number(n) => n.as_f64(),
+                    Value::String(s) => s.trim().parse::<f64>().ok(),
+                    _ => None,
+                }
+                .filter(|n| n.is_finite() && *n >= 0.)
+            } else {
+                None
+            };
+            out.push(json!({"secret":secret,"source":"OMP","email":email,"expires":expires}));
+        }
+    }
+}
+fn read_binary_capped(path: &Path, cap: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > cap as u64 {
+        proof::reject();
+        return None;
+    }
+    let mut bytes = Vec::new();
+    if file
+        .by_ref()
+        .take(cap as u64 + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() > cap
+    {
+        proof::reject();
+        return None;
+    }
+    Some(bytes)
+}
+#[derive(Clone)]
+struct SafariCookie {
+    name: String,
+    value: String,
+    domain: String,
+    path: String,
+    expiry: f64,
+    host_only: bool,
+}
+fn safari_string(record: &[u8], at: usize) -> Result<String, ()> {
+    let start = u32::from_le_bytes(
+        record
+            .get(at..at + 4)
+            .ok_or(())?
+            .try_into()
+            .map_err(|_| ())?,
+    ) as usize;
+    if start < 56 || start >= record.len() {
+        return Err(());
+    }
+    let end = record[start..]
+        .iter()
+        .position(|b| *b == 0)
+        .map(|n| start + n)
+        .ok_or(())?;
+    if end - start > 8192 {
+        return Err(());
+    }
+    String::from_utf8(record[start..end].to_vec()).map_err(|_| ())
+}
+fn four(bytes: &[u8]) -> Option<[u8; 4]> {
+    bytes.try_into().ok()
+}
+fn safari_cookies(contents: &[u8], allowed: &[&str], now: f64) -> Vec<SafariCookie> {
+    if contents.len() > 16 * CAP || contents.len() < 8 || &contents[..4] != b"cook" {
+        return vec![];
+    }
+    let pages = u32::from_be_bytes(four(&contents[4..8]).unwrap_or_default()) as usize;
+    if pages > 4096 || 8 + pages * 4 > contents.len() {
+        return vec![];
+    }
+    let mut pos = 8 + pages * 4;
+    let mut result = vec![];
+    let mut total = 0usize;
+    for page_index in 0..pages {
+        let size = u32::from_be_bytes(
+            four(&contents[8 + page_index * 4..12 + page_index * 4]).unwrap_or_default(),
+        ) as usize;
+        if size < 12 || pos + size > contents.len() {
+            return vec![];
+        }
+        let page = &contents[pos..pos + size];
+        pos += size;
+        if page[..4] != [0, 0, 1, 0] {
+            return vec![];
+        }
+        let count = u32::from_le_bytes(four(&page[4..8]).unwrap_or_default()) as usize;
+        total += count;
+        let header_end = 12 + count * 4;
+        if count > 10000
+            || total > 20000
+            || header_end > page.len()
+            || page[header_end - 4..header_end] != [0, 0, 0, 0]
+        {
+            return vec![];
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for index in 0..count {
+            let offset =
+                u32::from_le_bytes(four(&page[8 + index * 4..12 + index * 4]).unwrap_or_default())
+                    as usize;
+            if !seen.insert(offset) || offset < header_end || offset + 56 > page.len() {
+                return vec![];
+            }
+            let record_size =
+                u32::from_le_bytes(four(&page[offset..offset + 4]).unwrap_or_default()) as usize;
+            if record_size < 56 || offset + record_size > page.len() {
+                return vec![];
+            }
+            let record = &page[offset..offset + record_size];
+            let parsed = (|| {
+                let raw = safari_string(record, 16)
+                    .map_err(|_| true)?
+                    .to_ascii_lowercase();
+                let domain = raw.trim_start_matches('.').to_owned();
+                if !allowed.contains(&domain.as_str()) {
+                    return Err(false);
+                }
+                let expiry = f64::from_le_bytes(
+                    record
+                        .get(40..48)
+                        .ok_or(true)?
+                        .try_into()
+                        .map_err(|_| true)?,
+                );
+                if !expiry.is_finite()
+                    || expiry < 0.
+                    || (expiry != 0. && expiry + 978307200. <= now)
+                {
+                    return Err(false);
+                }
+                let name = safari_string(record, 20).map_err(|_| true)?;
+                let path = safari_string(record, 24).map_err(|_| true)?;
+                let value = safari_string(record, 28).map_err(|_| true)?;
+                let valid_name = !name.is_empty()
+                    && name.len() <= 256
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+                if !valid_name
+                    || value.is_empty()
+                    || value.bytes().any(|b| matches!(b, b';' | b'\r' | b'\n' | 0))
+                {
+                    return Err(false);
+                }
+                if !path.starts_with('/')
+                    || !["/tool/user/info.json", "/data/api.json", "/cn-beijing"]
+                        .iter()
+                        .any(|r| {
+                            *r == path
+                                || r.starts_with(&(path.trim_end_matches('/').to_owned() + "/"))
+                        })
+                {
+                    return Err(false);
+                }
+                Ok(SafariCookie {
+                    name,
+                    value,
+                    domain,
+                    path,
+                    expiry,
+                    host_only: !raw.starts_with('.'),
+                })
+            })();
+            match parsed {
+                Ok(cookie) => result.push(cookie),
+                // Python rejects the complete file on malformed offsets/UTF-8,
+                // while well-formed cookies outside the scope are skipped.
+                Err(true) => return vec![],
+                Err(false) => {}
+            }
+        }
+    }
+    result
+}
+fn safari_qwen(home: &Path, out: &mut Vec<Value>) {
+    let path =
+        home.join("Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies");
+    let Some(contents) = read_binary_capped(&path, 16 * CAP) else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.);
+    for (region, allowed) in [
+        (
+            "intl",
+            vec![
+                "qwencloud.com",
+                "home.qwencloud.com",
+                "cs-data.qwencloud.com",
+            ],
+        ),
+        (
+            "cn",
+            vec![
+                "aliyun.com",
+                "console.aliyun.com",
+                "bailian.console.aliyun.com",
+                "bailian-cs.console.aliyun.com",
+            ],
+        ),
+    ] {
+        let mut cookies = safari_cookies(&contents, &allowed, now);
+        cookies.sort_by(|a, b| {
+            b.domain
+                .len()
+                .cmp(&a.domain.len())
+                .then(b.path.len().cmp(&a.path.len()))
+                .then(b.expiry.total_cmp(&a.expiry))
+        });
+        let header_for = |host: &str, request: &str| {
+            let mut selected: Vec<(String, String)> = Vec::new();
+            let mut names = std::collections::HashSet::new();
+            for c in &cookies {
+                let domain =
+                    host == c.domain || (!c.host_only && host.ends_with(&format!(".{}", c.domain)));
+                let path = request == c.path
+                    || request.starts_with(&(c.path.trim_end_matches('/').to_owned() + "/"));
+                if domain && path && names.insert(c.name.clone()) {
+                    selected.push((c.name.clone(), c.value.clone()));
+                }
+            }
+            selected
+                .into_iter()
+                .map(|(n, v)| format!("{n}={v}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let (console, gateway, request) = if region == "intl" {
+            (
+                "home.qwencloud.com",
+                "cs-data.qwencloud.com",
+                "/tool/user/info.json",
+            )
+        } else {
+            (
+                "bailian.console.aliyun.com",
+                "bailian-cs.console.aliyun.com",
+                "/cn-beijing",
+            )
+        };
+        let header = header_for(console, request);
+        let gateway_header = header_for(gateway, "/data/api.json");
+        if header.is_empty() || header.len() > 32768 || gateway_header.len() > 32768 {
+            continue;
+        }
+        let base = if region == "intl" {
+            "ap-southeast-1"
+        } else {
+            "cn-beijing"
+        };
+        out.push(json!({"secret":json!({"cookie":header,"gatewayCookie":gateway_header,"baseUrl":format!("https://token-plan.{base}.maas.aliyuncs.com/compatible-mode/v1")}).to_string(),"source":"Safari console","email":null,"expires":null}));
+    }
+}
 fn valid_secret(s: &str) -> bool {
     !s.is_empty() && s.len() <= 32768 && !s.contains('\0')
 }
-fn credential(provider: &str, home: &Path, selector: &Value, isolated: bool) -> Value {
-    if selector["kind"] == "aac-key" {
-        return key_credential(provider, home, selector);
+#[cfg(windows)]
+fn windows_unprotect(ciphertext: &[u8]) -> Option<String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData};
+    #[allow(unsafe_code)]
+    unsafe {
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: ciphertext.len() as u32,
+            pbData: ciphertext.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        if CryptUnprotectData(
+            &input,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            1,
+            &mut output,
+        ) == 0
+        {
+            return None;
+        }
+        if output.cbData > 131072 || output.pbData.is_null() {
+            LocalFree(output.pbData as _);
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        LocalFree(output.pbData as _);
+        String::from_utf8(bytes).ok()
     }
-    // These stores need native decryption/SQLite/safari grammar proof. Delegate before
-    // reading an alternative store, so selection can never silently change identity.
+}
+#[cfg(not(windows))]
+fn windows_unprotect(_ciphertext: &[u8]) -> Option<String> {
+    None
+}
+fn qwen_capsule(home: &Path, selector: &Value) -> Option<(String, String, Option<String>)> {
+    let id = selector["capsuleId"].as_str().unwrap_or("default");
+    if !(id == "default"
+        || (id.len() == 8
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))))
+    {
+        return None;
+    }
+    let name = if id == "default" {
+        "qwen-console-session.json".into()
+    } else {
+        format!("qwen-console-session-{id}.json")
+    };
+    let path = home.join(".ccs/account-usage").join(name);
+    let capsule = load(home, &path)?;
+    if !capsule.is_object() || !matches!(capsule["region"].as_str(), Some("intl" | "cn")) {
+        proof::reject();
+        return None;
+    }
+    let v2 = capsule["version"] == 2;
+    let encoded = capsule[if v2 { "cookiesDPAPI" } else { "cookieDPAPI" }].as_str()?;
+    if encoded.is_empty() || encoded.len() > if v2 { 196608 } else { 65536 } {
+        proof::reject();
+        return None;
+    }
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let decrypted = windows_unprotect(&bytes);
+    if decrypted.is_none() {
+        proof::reject();
+        return None;
+    }
+    let decrypted = decrypted?;
+    let (cookie, gateway) = if v2 {
+        let packed = serde_json::from_str::<Value>(&decrypted).ok()?;
+        if !packed.is_object() || packed["gatewayCookie"].as_str().is_none() {
+            proof::reject();
+            return None;
+        }
+        (
+            packed["consoleCookie"].as_str().map(str::to_owned),
+            Some(
+                packed["gatewayCookie"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ),
+        )
+    } else {
+        (Some(decrypted), None)
+    };
+    let cookie = cookie?;
+    let bad = |s: &str| s.len() > 32768 || s.bytes().any(|b| matches!(b, b'\r' | b'\n' | 0));
+    if cookie.is_empty() || bad(&cookie) || gateway.as_deref().is_some_and(bad) {
+        proof::reject();
+        return None;
+    }
+    Some((
+        cookie,
+        capsule["region"].as_str().unwrap_or_default().to_owned(),
+        gateway,
+    ))
+}
+fn credential_candidates(
+    provider: &str,
+    home: &Path,
+    selector: &Value,
+    isolated: bool,
+) -> Vec<Value> {
+    if selector["kind"] == "aac-key" {
+        let one = key_credential(provider, home, selector);
+        return if one.is_null() { vec![] } else { vec![one] };
+    }
     if selector
         .get("kind")
         .and_then(Value::as_str)
         .is_some_and(|k| k != "discover")
-        || home.join(".omp/agent/agent.db").exists()
-        || (provider == "qwen"
-            && (home
-                .join(".ccs/account-usage/qwen-console-session.json")
-                .exists()
-                || cfg!(target_os = "macos")))
     {
-        return proof::fallback();
+        if selector["kind"] == "browser-capsule"
+            && provider == "qwen"
+            && let Some((cookie, region, gateway)) = qwen_capsule(home, selector)
+        {
+            let base = if region == "intl" {
+                "ap-southeast-1"
+            } else {
+                "cn-beijing"
+            };
+            let mut packed = json!({"cookie":cookie,"baseUrl":format!("https://token-plan.{base}.maas.aliyuncs.com/compatible-mode/v1")});
+            if let Some(gateway) = gateway {
+                packed["gatewayCookie"] = json!(gateway);
+            }
+            return vec![
+                json!({"secret":packed.to_string(),"source":"Brave console","email":null,"expires":null}),
+            ];
+        }
+        return vec![];
+    }
+    let mut candidates = Vec::new();
+    if provider == "qwen" {
+        safari_qwen(home, &mut candidates);
     }
     let auth = load(home, &home.join(".local/share/opencode/auth.json"));
-    if provider == "qwen"
-        && (home.join(".qwen/settings.json").exists()
-            || (!isolated && std::env::var("BAILIAN_TOKEN_PLAN_API_KEY").is_ok()))
-        && auth
-            .as_ref()
-            .is_some_and(|v| v.get("alibaba-token-plan").is_some())
-    {
-        return proof::fallback();
-    }
     let aliases: &[&str] = match provider {
         "kimi-code" => &["kimi-for-coding", "kimi-code"],
         "zai" => &["zai", "zai-coding-plan"],
@@ -209,12 +666,11 @@ fn credential(provider: &str, home: &Path, selector: &Value, isolated: bool) -> 
     };
     for alias in aliases {
         let item = &auth.as_ref().unwrap_or(&Value::Null)[alias];
-        if item["type"] == "api"
-            && let Some(secret) = item["key"].as_str().filter(|s| valid_secret(s))
-        {
-            return json!({"secret":secret,"source":"OpenCode"});
+        if item["type"] == "api" && item["key"].as_str().is_some_and(valid_secret) {
+            candidates.push(json!({"secret":item["key"].as_str().unwrap_or_default(),"source":"OpenCode","email":null,"expires":null}));
         }
     }
+    omp_credentials(provider, home, &mut candidates);
     if provider == "qwen" {
         let settings = load(home, &home.join(".qwen/settings.json"));
         if let Some(secret) = settings
@@ -222,7 +678,8 @@ fn credential(provider: &str, home: &Path, selector: &Value, isolated: bool) -> 
             .and_then(|v| v["env"]["BAILIAN_TOKEN_PLAN_API_KEY"].as_str())
             .filter(|s| valid_secret(s))
         {
-            return json!({"secret":secret,"source":"Qwen Code"});
+            candidates
+                .push(json!({"secret":secret,"source":"Qwen Code","email":null,"expires":null}));
         }
     }
     if !isolated {
@@ -236,11 +693,38 @@ fn credential(provider: &str, home: &Path, selector: &Value, isolated: bool) -> 
             if let Ok(s) = std::env::var(name)
                 && valid_secret(&s)
             {
-                return json!({"secret":s,"source":"User environment"});
+                candidates.push(
+                    json!({"secret":s,"source":"User environment","email":null,"expires":null}),
+                );
             }
         }
     }
-    Value::Null
+    if provider == "qwen"
+        && let Some((cookie, region, gateway)) = qwen_capsule(home, &json!({"capsuleId":"default"}))
+    {
+        let base = if region == "intl" {
+            "ap-southeast-1"
+        } else {
+            "cn-beijing"
+        };
+        let mut token = None;
+        if let Some(first) = candidates.first().and_then(|c| c["secret"].as_str()) {
+            if let Ok(packed) = serde_json::from_str::<Value>(first) {
+                token = packed["token"].as_str().map(str::to_owned);
+            } else {
+                token = Some(first.to_owned());
+            }
+        }
+        let mut packed = json!({"cookie":cookie,"baseUrl":format!("https://token-plan.{base}.maas.aliyuncs.com/compatible-mode/v1")});
+        if let Some(token) = token.filter(|t| valid_secret(t)) {
+            packed["token"] = json!(token);
+        }
+        if let Some(gateway) = gateway {
+            packed["gatewayCookie"] = json!(gateway);
+        }
+        candidates.insert(0,json!({"secret":packed.to_string(),"source":"Brave console","email":null,"expires":null}));
+    }
+    candidates
 }
 fn error(status: &str, message: &str) -> Value {
     json!({"status":status,"message":aac_core::scrub(message)})
@@ -253,13 +737,9 @@ fn retry(value: Option<&str>, now: f64) -> f64 {
             if s.len() <= 12 && !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()) {
                 s.parse::<f64>().ok()
             } else {
-                match chrono::DateTime::parse_from_rfc2822(s) {
-                    Ok(d) => Some(d.timestamp() as f64 - now),
-                    Err(_) => {
-                        proof::reject();
-                        None
-                    }
-                }
+                chrono::DateTime::parse_from_rfc2822(s)
+                    .ok()
+                    .map(|d| d.timestamp() as f64 - now)
             }
         })
         .unwrap_or(PLAN_RETRY_AFTER.default_s as f64);
@@ -284,10 +764,12 @@ async fn fetch_body(
     body: Option<&[u8]>,
 ) -> Result<Value, Value> {
     // A request/body/deadline failure cannot establish Python's socket-timeout result.
-    let response = client
-        .get(url, headers, body)
-        .await
-        .map_err(|_| proof::fallback())?;
+    let response = client.get(url, headers, body).await.map_err(|_| {
+        error(
+            "error",
+            "The usage service is unavailable or returned an invalid response.",
+        )
+    })?;
     match response.status {
         401 => {
             return Err(error(
@@ -337,10 +819,7 @@ async fn fetch_body(
             "The usage service returned an oversized response.",
         ));
     }
-    let v = proof::scope(|| proof::json(&response.body, CAP, false).unwrap_or(Value::Null));
-    if v == proof::fallback() {
-        return Err(v);
-    }
+    let v = bounded_json(&response.body, CAP).unwrap_or(Value::Null);
     if !v.is_object() {
         return Err(error(
             "error",
@@ -369,7 +848,19 @@ fn publish(mut value: Value) -> Value {
             _ => {}
         }
     }
+    let email = value["email"]
+        .as_str()
+        .and_then(|email| email_address(Some(email)))
+        .filter(|email| aac_core::scrub_usage_email(email).as_str() == *email)
+        .map(str::to_owned);
+    let label_is_email = email.as_ref().is_some_and(|email| value["label"] == *email);
     check(&mut value);
+    if let Some(email) = email {
+        value["email"] = json!(email);
+        if label_is_email {
+            value["label"] = json!(email);
+        }
+    }
     value
 }
 pub(crate) async fn run(args: &Value) -> Result<Value, Failure> {
@@ -478,7 +969,12 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
         );
         crate::blocking(move || {
             Ok(proof::scope(|| {
-                credential(&provider, Path::new(&home), &selector, isolated)
+                json!(credential_candidates(
+                    &provider,
+                    Path::new(&home),
+                    &selector,
+                    isolated
+                ))
             }))
         })
         .await?
@@ -503,7 +999,8 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
         }
         result["id"] = json!(id);
     }
-    let Some(secret) = selected["secret"].as_str() else {
+    let candidates = selected.as_array().cloned().unwrap_or_default();
+    if candidates.is_empty() {
         result["message"] = json!(if args["credential"]
             .get("kind")
             .and_then(Value::as_str)
@@ -514,11 +1011,76 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
             "No saved credential was found in this computer's existing account stores."
         });
         return Ok(result);
+    }
+    let selected = if provider == "qwen" {
+        candidates
+            .iter()
+            .find(|item| {
+                item["secret"]
+                    .as_str()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                    .is_some_and(|p| p["cookie"].as_str().is_some_and(|c| !c.trim().is_empty()))
+            })
+            .unwrap_or(&candidates[0])
+            .clone()
+    } else if provider == "kimi-code" {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64() * 1000.)
+            .unwrap_or(0.);
+        candidates
+            .iter()
+            .find(|item| {
+                item["expires"]
+                    .as_f64()
+                    .is_none_or(|e| (if e > 100000000000. { e } else { e * 1000. }) > now_ms)
+            })
+            .unwrap_or(&candidates[0])
+            .clone()
+    } else {
+        candidates[0].clone()
     };
+    let Some(secret) = selected["secret"].as_str() else {
+        return Ok(proof::fallback());
+    };
+    if let Some(expires) = selected["expires"].as_f64() {
+        let seconds = if expires > 100000000000. {
+            expires / 1000.
+        } else {
+            expires
+        };
+        let current = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.);
+        if seconds <= current {
+            result["source"] = json!(format!(
+                "{} on {place}",
+                selected["source"].as_str().unwrap_or("")
+            ));
+            result["email"] = selected["email"].clone();
+            result["label"] = selected["email"]
+                .as_str()
+                .map_or(result["providerLabel"].clone(), |s| json!(s));
+            result["status"] = json!("needs_sign_in");
+            result["message"] = json!(
+                "The saved Kimi Code sign-in has expired; its owning application must renew it."
+            );
+            result["fetchedAt"] = json!(
+                chrono::DateTime::from_timestamp(now, 0)
+                    .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            );
+            return Ok(result);
+        }
+    }
     result["source"] = json!(format!(
         "{} on {place}",
         selected["source"].as_str().unwrap_or("")
     ));
+    result["email"] = selected["email"].clone();
+    if let Some(email) = selected["email"].as_str() {
+        result["label"] = json!(email);
+    }
     let client = Client {
         client: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -618,27 +1180,77 @@ fn form(pairs: &[(&str, String)]) -> String {
     }
     url.query().unwrap_or("").to_owned()
 }
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = |b: u8| (b as char).to_digit(16);
+            if let (Some(a), Some(b)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((a * 16 + b) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+async fn fetch_text(
+    client: &impl Http,
+    url: &str,
+    headers: &[(&str, &str)],
+    _now: i64,
+) -> Result<String, Value> {
+    let response = client
+        .get(url, headers, None)
+        .await
+        .map_err(|_| proof::fallback())?;
+    match response.status {
+        401 => {
+            return Err(error(
+                "needs_sign_in",
+                "The saved credential was rejected by the usage service.",
+            ));
+        }
+        403 => {
+            return Err(error(
+                "needs_sign_in",
+                "The saved account cannot access this plan's usage.",
+            ));
+        }
+        429 => {
+            return Err(error(
+                "error",
+                "The usage service asked to slow down; try again later.",
+            ));
+        }
+        300..=u16::MAX => {
+            return Err(error(
+                "error",
+                "The usage service could not complete the request.",
+            ));
+        }
+        _ => {}
+    }
+    if response.body.len() > CAP {
+        return Err(error(
+            "error",
+            "The usage service returned an oversized response.",
+        ));
+    }
+    String::from_utf8(response.body).map_err(|_| {
+        error(
+            "error",
+            "The usage service is unavailable or returned an invalid response.",
+        )
+    })
+}
 async fn qwen(client: &impl Http, secret: &str, now: i64) -> Value {
     let packed: Value = serde_json::from_str(secret).unwrap_or(Value::Null);
-    if proof::scope(|| {
-        if !proof::proven(&packed) {
-            proof::reject();
-        }
-        Value::Null
-    }) == proof::fallback()
-    {
-        return proof::fallback();
-    }
-    if packed.get("baseUrl").is_some_and(|v| !v.is_string()) {
-        return error(
-            "unavailable",
-            "The saved Qwen token-plan region is unsupported.",
-        );
-    }
-    let Some(cookie) = packed["cookie"]
-        .as_str()
-        .filter(|s| !s.trim_matches(proof::space).is_empty())
-    else {
+    let Some(cookie) = packed["cookie"].as_str().filter(|s| !s.trim().is_empty()) else {
         return error(
             "unavailable",
             "The saved Qwen API key has no console session; live token-plan usage requires its existing console cookie.",
@@ -652,71 +1264,153 @@ async fn qwen(client: &impl Http, secret: &str, now: i64) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1")
         .trim_end_matches('/');
-    if base == "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" {
-        return proof::fallback();
-    }
-    if base != "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" {
-        return error(
-            "unavailable",
-            "The saved Qwen token-plan region is unsupported.",
-        );
-    }
-    let gateway_cookie = packed.get("gatewayCookie").unwrap_or(&packed["cookie"]);
-    let Some(gateway_cookie) = gateway_cookie
+    let region = match base {
+        "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" => "intl",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" => "cn",
+        _ => {
+            return error(
+                "unavailable",
+                "The saved Qwen token-plan region is unsupported.",
+            );
+        }
+    };
+    let gateway_value = if packed.get("gatewayCookie").is_some() {
+        &packed["gatewayCookie"]
+    } else {
+        &packed["cookie"]
+    };
+    let Some(gateway_cookie) = gateway_value
         .as_str()
         .filter(|s| s.len() <= 32768 && !s.bytes().any(|c| matches!(c, 0 | 10 | 13)))
     else {
         return error("unavailable", "The saved Qwen gateway session is invalid.");
     };
-    // Percent-decoding of CSRF is a separate grammar boundary; do not silently omit it.
-    if gateway_cookie.split(';').any(|s| {
-        s.trim_matches(proof::space).starts_with("csrf=")
-            || s.trim_matches(proof::space)
-                .starts_with("login_aliyunid_csrf=")
-    }) {
-        return proof::fallback();
-    }
-    let info = match fetch(
-        client,
-        "https://home.qwencloud.com/tool/user/info.json",
-        &[("Cookie", cookie)],
-        now,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => return e,
+    let (origin, referer, action, gateway, cloud_region, cornerstone, token) = if region == "intl" {
+        let info = match fetch(
+            client,
+            "https://home.qwencloud.com/tool/user/info.json",
+            &[("Cookie", cookie)],
+            now,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let Some(token) = info["data"]["secToken"].as_str().map(str::to_owned) else {
+            return error(
+                "needs_sign_in",
+                "The saved Qwen console session has expired or is incomplete.",
+            );
+        };
+        (
+            "https://home.qwencloud.com",
+            "https://home.qwencloud.com/analytics/token-plan/individual",
+            "IntlBroadScopeAspnGateway",
+            "https://cs-data.qwencloud.com/data/api.json",
+            "ap-southeast-1",
+            json!({"domain":"home.qwencloud.com","consoleSite":"QWENCLOUD","console":"ONE_CONSOLE","xsp_lang":"en-US","protocol":"V2","productCode":"p_efm"}),
+            token,
+        )
+    } else {
+        let referer = "https://bailian.console.aliyun.com/cn-beijing?tab=plan";
+        let page = match fetch_text(
+            client,
+            referer,
+            &[("Cookie", cookie), ("Accept", "text/html")],
+            now,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let token = page.find("SEC_TOKEN:").and_then(|at| {
+            let rest = page[at + 10..].trim_start_matches([' ', '\t', '\r', '\n']);
+            rest.strip_prefix('"')
+                .and_then(|rest| rest.find('"').map(|end| rest[..end].to_owned()))
+        });
+        let Some(token) = token else {
+            return error(
+                "needs_sign_in",
+                "The saved Qwen console session has expired or is incomplete.",
+            );
+        };
+        let trace = format!(
+            "{:x}",
+            aac_core::sha256_hex(format!("{now}:{page}").as_bytes())
+                .as_bytes()
+                .iter()
+                .take(16)
+                .fold(0u128, |a, b| a << 8 | *b as u128)
+        );
+        let trace = format!(
+            "{}-{}-{}-{}-{}",
+            &trace[0..8],
+            &trace[8..12],
+            &trace[12..16],
+            &trace[16..20],
+            &trace[20..32]
+        );
+        (
+            "https://bailian.console.aliyun.com",
+            referer,
+            "BroadScopeAspnGateway",
+            "https://bailian-cs.console.aliyun.com/data/api.json",
+            "cn-beijing",
+            json!({"feTraceId":trace,"feURL":format!("{referer}#/efm/subscription/token-plan/personal"),"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"domain":"bailian.console.aliyun.com","consoleSite":"BAILIAN_ALIYUN","userNickName":"","userPrincipalName":"","xsp_lang":"zh-CN"}),
+            token,
+        )
     };
-    let Some(token) = info["data"]["secToken"]
-        .as_str()
-        .filter(|s| !s.is_empty() && s.len() <= 16384)
-    else {
+    if token.is_empty() || token.len() > 16384 {
         return error(
             "needs_sign_in",
             "The saved Qwen console session has expired or is incomplete.",
         );
-    };
+    }
     let mut headers = vec![
         ("Content-Type", "application/x-www-form-urlencoded"),
-        ("Origin", "https://home.qwencloud.com"),
-        (
-            "Referer",
-            "https://home.qwencloud.com/analytics/token-plan/individual",
-        ),
+        ("Origin", origin),
+        ("Referer", referer),
         ("X-Requested-With", "XMLHttpRequest"),
     ];
     if !gateway_cookie.is_empty() {
         headers.push(("Cookie", gateway_cookie));
     }
+    let mut csrf = None;
+    for part in gateway_cookie.split(';') {
+        let mut pieces = part.trim().splitn(2, '=');
+        let name = pieces.next().unwrap_or("");
+        let value = pieces.next().unwrap_or("");
+        if matches!(name, "login_aliyunid_csrf" | "csrf")
+            && !value.bytes().any(|b| matches!(b, b'\r' | b'\n'))
+        {
+            let decoded = percent_decode(value);
+            if decoded.bytes().any(|b| matches!(b, b'\r' | b'\n' | 0)) {
+                return error("unavailable", "The saved Qwen console session is invalid.");
+            }
+            csrf = Some(decoded);
+            break;
+        }
+    }
+    let csrf_text;
+    if let Some(value) = csrf {
+        csrf_text = value;
+        headers.push(("x-xsrf-token", &csrf_text));
+        headers.push(("x-csrf-token", &csrf_text));
+    }
     let mut payloads = Vec::new();
     for suffix in ["usage", "addon/list", "subscription", "quota-config"] {
         let endpoint = format!("zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/{suffix}");
-        let mut data = json!({"cornerstoneParam":{"domain":"home.qwencloud.com","consoleSite":"QWENCLOUD","console":"ONE_CONSOLE","xsp_lang":"en-US","protocol":"V2","productCode":"p_efm"}});
-        if suffix == "subscription" {
+        let mut data = json!({"cornerstoneParam":cornerstone});
+        if suffix == "subscription" && region == "intl" {
             data["commodityCode"] = json!("sfm_tokenplansolo_public_intl");
         }
         if suffix == "addon/list" {
-            data["commodityCode"] = json!("sfm_tokenplansoloaddon_public_intl");
+            data["commodityCode"] = json!(format!(
+                "sfm_tokenplansoloaddon_public_{}",
+                if region == "intl" { "intl" } else { "cn" }
+            ));
             data["status"] = json!(["ACTIVE"]);
             data["pageNum"] = json!(1);
             data["pageSize"] = json!(10);
@@ -724,17 +1418,17 @@ async fn qwen(client: &impl Http, secret: &str, now: i64) -> Value {
         let params = json!({"Api":endpoint,"Data":data,"V":"1.0"});
         let query = form(&[
             ("product", "sfm_bailian".into()),
-            ("action", "IntlBroadScopeAspnGateway".into()),
+            ("action", action.into()),
             ("api", endpoint),
         ]);
         let body = form(&[
             ("product", "sfm_bailian".into()),
-            ("action", "IntlBroadScopeAspnGateway".into()),
-            ("region", "ap-southeast-1".into()),
-            ("sec_token", token.into()),
+            ("action", action.into()),
+            ("region", cloud_region.into()),
+            ("sec_token", token.clone()),
             ("params", params.to_string()),
         ]);
-        let url = format!("https://cs-data.qwencloud.com/data/api.json?{query}");
+        let url = format!("{gateway}?{query}");
         match fetch_body(client, &url, &headers, now, Some(body.as_bytes())).await {
             Ok(v) => payloads.push(v),
             Err(e) if suffix == "usage" || e == proof::fallback() => return e,
@@ -783,6 +1477,19 @@ mod table_tests {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
+    #[test]
+    fn account_email_keeps_identity_without_exempting_credentials_or_other_fields() {
+        let email = "reader@example.test";
+        let safe = publish(json!({"email":email,"label":email,"message":email}));
+        assert_eq!(safe["email"], email);
+        assert_eq!(safe["label"], email);
+        assert_eq!(safe["message"], "error");
+        let secret_address = format!("sk-ant-{}@example.test", "a".repeat(32));
+        let refused = publish(json!({"email":secret_address,"label":secret_address}));
+        assert_eq!(refused["email"], "error");
+        assert_eq!(refused["label"], "error");
+    }
+
     #[test]
     fn every_text_field_passes_the_shared_scrub_and_uncheckable_text_is_dropped() {
         let raw = json!({"message":"{\"access_token\":\"fixture-dummy-token\"}","windows":[{"label":"x".repeat(4097)}],"source":"[redacted]","status":"error"});

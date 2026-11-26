@@ -533,3 +533,34 @@ comparison outcomes at the collector and scan boundaries with fake closures only
 Limits unchanged: no native Mac/Windows execution is proven by the Linux fixture runs; the
 Mac and Windows catalog entries land only after their own builds and native checks; the
 install scripts are lead-run, and no live computer is touched by this lane.
+
+## Plan quota reader parity
+
+Use separate production and fixture binaries: `quota.py --production` must run
+against a binary built **without** `parity-fixtures`. A fixture binary deliberately
+accepts loopback endpoint/time injection and therefore fails that production gate.
+
+```sh
+cargo build --locked -p aac-agent -j2
+python3 tests/spec/agent/quota.py target/debug/aac-agent --production
+cargo build --locked -p aac-agent --features parity-fixtures -j2
+python3 tests/spec/agent/quota.py target/debug/aac-agent
+python3 tests/spec/agent/quota_readers.py target/debug/aac-agent
+```
+
+`quota_readers.py` compares OMP SQLite discovery and Safari binarycookies against
+the Python oracle, including replies, selected authentication, request sequence,
+forms, region/domain/path scope, expiry, malformed input and unchanged source
+files. It accepts no fallback. Its fixture homes are retained under `~/aac-lanes`
+for the lane lead to clean up.
+
+On the Windows seat, run the CurrentUser DPAPI runtime check as the owning user:
+
+```powershell
+cargo build --locked -p aac-agent -j2
+py -3 tests/spec/agent/key_store_windows.py target/debug/aac-agent.exe
+```
+
+This checks three providers' key-store replies, decrypted byte parity with
+Python, rejection of wrong entropy, and absence of a plaintext JSON key file.
+It retains its printed fixture directory. It does not contact providers.
