@@ -2835,20 +2835,6 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/reset-source-adapter.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/rust-slow-filesystem.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
       "file": "tests/unit/web-server/spec-run-captured.test.ts",
       "kind": "helper",
       "evidence": [

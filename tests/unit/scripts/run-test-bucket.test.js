@@ -71,20 +71,6 @@ describe('run-test-bucket', () => {
     expect(args).toEqual(['test', '--max-concurrency=1', './tests/integration/example.test.ts']);
   });
 
-  test('isolates known sticky suites while keeping the rest in a shared run', () => {
-    const runs = bucket.getBunRuns('fast', [
-      'tests/unit/scripts/run-test-bucket.test.js',
-      'tests/unit/web-server/rust-slow-filesystem.test.ts',
-    ]);
-
-    expect(runs.map((run) => run.label)).toEqual([
-      'shared',
-      'tests/unit/web-server/rust-slow-filesystem.test.ts',
-    ]);
-    expect(runs[0].selected).toEqual(['tests/unit/scripts/run-test-bucket.test.js']);
-    expect(runs[1].quietOnPass).toBe(true);
-  });
-
   test('isolates standalone validation scripts that are not Bun test suites', () => {
     withValidationFixtures(({ suite, standalone }) => {
       const runs = bucket.getBunRuns('slow', [suite, standalone]);

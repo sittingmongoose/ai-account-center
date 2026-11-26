@@ -19,8 +19,6 @@ const candidateRoots = ['tests/unit', 'tests/integration', 'tests/npm'];
 // (catches deletion drift) but CANNOT detect new undeclared slow tests.
 // Automated perf-budget enforcement tracked in issue #1071.
 const slowTests = [
-  'tests/unit/web-server/rust-slow-filesystem.test.ts',
-  'tests/unit/web-server/reset-source-adapter.test.ts',
   'tests/unit/docker/dockerfile-lifecycle-scripts.test.ts',
   'tests/unit/docker/docker-hygiene.test.ts',
   // Reads package.json at the repo root.
@@ -31,9 +29,8 @@ const slowTests = [
 // proven stable in the mixed fast bucket.
 const fastJsTests = new Set(['tests/unit/flag-parsing-simple.test.js']);
 
-const isolatedTests = new Set([
-  'tests/unit/web-server/rust-slow-filesystem.test.ts',
-]);
+// Suites with sticky global mocks or strict wall-clock fixtures run alone; none remain today.
+const isolatedTests = new Set([]);
 
 const filePattern = /(\.test\.(c|m)?[jt]s|\.spec\.(c|m)?[jt]s|-test\.(c|m)?[jt]s)$/;
 
