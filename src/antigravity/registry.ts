@@ -820,7 +820,7 @@ export class AntigravityProfileRegistry {
 
   private publish(state: RegistryState): void {
     if (!this.lockHeld) throw new PrivateStorageError('unsafe');
-    const next = { ...state, revision: state.revision + 1 };
+    const next = { ...state, revision: state.revision + 1, transaction: null };
     const name = `registry-${String(next.revision).padStart(12, '0')}.json`;
     validateState(next);
     this.publishLifecycleFile(
@@ -1108,9 +1108,9 @@ export class AntigravityProfileRegistry {
     const state = this.readState();
     if (!state.profiles.some((profile) => profile.id === profileId))
       throw new PrivateStorageError('missing');
-    if (state.transaction) throw new PrivateStorageError('recovery-required');
     if (state.active?.profileId === profileId) throw new PrivateStorageError('unsafe');
     state.profiles = state.profiles.filter((profile) => profile.id !== profileId);
+    state.transaction = null;
     this.publish(state);
     if (this.options.lifecycleWrites && this.heldDirectory) {
       try {

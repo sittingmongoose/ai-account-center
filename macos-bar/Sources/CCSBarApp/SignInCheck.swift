@@ -462,8 +462,7 @@ actor CheckDashboardTransport: BarHTTPTransport {
     }
     guard let (status, object) = fake.handle(request) else {
       let dashboard = """
-      {"schemaVersion":1,"updatedAt":"2026-10-02T15:00:00.000Z","accounts":[],"codexAutoSwitch":{"enabled":false,
-      "thresholdPercent":10,"pollIntervalSeconds":60,"outcome":"idle","message":"Idle","activationInProgress":false},
+      {"schemaVersion":1,"updatedAt":"2026-10-02T15:00:00.000Z","accounts":[],
       "settings":{"refreshIntervalSeconds":60}}
       """
       return (Data(dashboard.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)

@@ -406,6 +406,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/account_usage/dashboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/account_usage/failover.rs",
       "kind": "internal",
       "evidence": [],
@@ -570,10 +576,9 @@
     },
     {
       "file": "crates/aac-http/src/antigravity_probes.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/antigravity_quota.rs",
@@ -684,10 +689,9 @@
     },
     {
       "file": "crates/aac-http/src/cli/antigravity.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/cli/bar.rs",
@@ -874,6 +878,14 @@
       "kind": "safety",
       "evidence": [
         "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_antigravity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
       ]
     },
     {
@@ -2312,18 +2324,6 @@
       ]
     },
     {
-      "file": "src/config/schemas/__tests__/cliproxy-retry.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/config/schemas/__tests__/cliproxy-user-routing.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "src/config/schemas/__tests__/schemas-reexport.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -2578,39 +2578,13 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/antigravity/composition.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/antigravity/dashboard-composition.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/antigravity/managed-native-update.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/antigravity/managed-paused-update.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
       "file": "tests/unit/antigravity/native-credential-cache.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/antigravity/native-version.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2620,75 +2594,6 @@
       "kind": "table",
       "evidence": [
         "table"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production-composition.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production-native-pin.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production-phase.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/antigravity/production-readiness.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production-usage-only.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/antigravity/production_adoption_boundary_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_adoption_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_broker_phase_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_guard_exit_race_test.py",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_installation_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
       ]
     },
     {
@@ -2707,28 +2612,7 @@
       ]
     },
     {
-      "file": "tests/unit/antigravity/production_omitted_counter_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
       "file": "tests/unit/antigravity/production_quota_pool_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_rebuild_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_resident_socket_test.py",
       "kind": "helper",
       "evidence": [
         "helper"
@@ -2738,36 +2622,6 @@
       "file": "tests/unit/antigravity/production_runtime_health_test.py",
       "kind": "helper",
       "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_stale_socket_test.py",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_status_census_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_status_resident_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_status_service_test.py",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
         "helper"
       ]
     },
@@ -2805,34 +2659,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/antigravity/release-status.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/runtime-bundle-parity.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/runtime-health.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/runtime-refresh.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/antigravity/signin-driver.test.ts",
       "kind": "helper",
       "evidence": [
@@ -2846,12 +2672,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/antigravity/terminal-refresh.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/antigravity/terminal-signin-pickup.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -2859,18 +2679,6 @@
     },
     {
       "file": "tests/unit/antigravity/terminal-signin.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/antigravity/transaction.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/antigravity/usage-cooldown.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

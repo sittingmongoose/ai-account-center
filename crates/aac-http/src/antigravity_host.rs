@@ -1,67 +1,17 @@
-//! G6: the installed Antigravity runtime as the service uses it — the live login proof, the quota
-//! worker, the two read-only probes and the registry reads, behind one host. `profile_reads.rs`
-//! answers `/api/antigravity/profiles(/quotas)` from here when a caller sends no TS input; a host
-//! that cannot resolve its trusted paths declines, so the TS fallback stays in charge.
+//! Antigravity profile host: the live login proof, the quota worker and the registry reads,
+//! behind one host. `profile_reads.rs` answers `/api/antigravity/profiles(/quotas)` from here.
 //!
-//! Fixture tests use invented homes, fake worker scripts and a fake probe runner; nothing here
-//! spawns the real CLI, reads a real credential or reaches a provider.
+//! Fixture tests use invented homes and fake worker scripts; nothing here spawns the real CLI,
+//! reads a real credential or reaches a provider.
 
-use crate::antigravity_probes::{ProblemReader, SocketState, bounded_run, diagnose, socket_state};
 use crate::antigravity_quota::{Cooldowns, QuotaRequest, QuotaService, Worker, public_quotas};
 use crate::antigravity_runtime::{
-    LiveIdentity, RegistryRead, empty_inventory, hash_word, inventory_from_state,
-    inventory_probe_fields, read_registry, sha256_hex,
+    LiveIdentity, RegistryRead, empty_inventory, inventory_from_state, read_registry, sha256_hex,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-
-/// The installed native runtime, from `<ccs>/antigravity-switching/runtime-installation.json`.
-struct Installed {
-    pub bundle_directory: PathBuf,
-    pub socket_path: PathBuf,
-}
-
-/// `readInstalledAntigravityRuntime`: the private installation record, or none.
-fn read_installed(ccs: &Path, home: &Path) -> Option<Installed> {
-    let file = ccs
-        .join("antigravity-switching")
-        .join("runtime-installation.json");
-    let bytes = match aac_files::read::read(
-        &file,
-        &aac_files::read::ReadPolicy::capped(8192)
-            .leaf(aac_files::read::Leaf::Refuse)
-            .owner(aac_files::read::Owner::Mine)
-            .mode(aac_files::read::Mode::Private),
-    ) {
-        aac_files::read::Read::Bytes(bytes, _) => bytes,
-        _ => return None,
-    };
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    let runtime_root = home.join(".local/share/ai-account-center/antigravity-runtime/bundles");
-    let bundle = value.get("bundleDirectory")?.as_str()?;
-    let bundle = PathBuf::from(bundle);
-    if value.get("schemaVersion").and_then(Value::as_u64) != Some(1)
-        || bundle.parent() != Some(runtime_root.as_path())
-        || !bundle
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(hash_word)
-        || value.get("socketPath").and_then(Value::as_str)
-            != Some(
-                ccs.join("antigravity-runtime/control.sock")
-                    .to_string_lossy()
-                    .as_ref(),
-            )
-    {
-        return None;
-    }
-    Some(Installed {
-        bundle_directory: bundle,
-        socket_path: ccs.join("antigravity-runtime/control.sock"),
-    })
-}
 
 /// One identity read's cache: the four stored paths' identity tuple keys a two-second reuse.
 struct IdentityCache {
@@ -73,13 +23,10 @@ struct IdentityCache {
 /// The process's mutable Antigravity state.
 struct State {
     identity: Option<IdentityCache>,
-    problem: Option<ProblemReader>,
     service: QuotaService,
     cooldowns: Cooldowns,
 }
 
-/// The probe runner and version reader: production uses the bounded command runner; fixtures pass
-/// fakes so no real `systemctl` or CLI ever runs.
 /// The trusted installed paths one host reads and runs.
 pub(crate) struct Paths<'a> {
     /// The CCS scope (`<ccs>`).
@@ -94,12 +41,7 @@ pub(crate) struct Paths<'a> {
     pub native: &'a Path,
     /// `scripts/account-usage`.
     pub collectors: &'a Path,
-    /// `scripts/antigravity/runtime_health.py`.
-    pub health: &'a Path,
 }
-
-type HealthRun = dyn Fn(&str, &[&str], u64) -> Option<String> + Send + Sync;
-type HealthRunner = Box<HealthRun>;
 
 /// The process's one Antigravity host per CCS root (Accounts and Profiles share it).
 fn hosts() -> &'static Mutex<HashMap<PathBuf, Arc<Host>>> {
@@ -111,36 +53,27 @@ fn host_key(ccs: &Path) -> PathBuf {
     ccs.canonicalize().unwrap_or_else(|_| ccs.to_path_buf())
 }
 
-/// The installed runtime host for one CCS scope.
+/// The Antigravity profile host for one CCS scope.
 pub struct Host {
     ccs: PathBuf,
     home: PathBuf,
     quota: Worker,
     native: Worker,
-    health_script: PathBuf,
-    installed: Option<Installed>,
-    runner: HealthRunner,
     state: Mutex<State>,
 }
 
 impl Host {
     /// A host over explicit trusted paths. Construction reads no credential and spawns nothing.
-    pub(crate) fn new(paths: &Paths<'_>, runner: HealthRunner) -> Option<Self> {
+    pub(crate) fn new(paths: &Paths<'_>) -> Option<Self> {
         let quota = Worker::new(paths.python, paths.quota, paths.collectors)?;
         let native = Worker::new(paths.python, paths.native, paths.collectors)?;
-        let installed = read_installed(paths.ccs, paths.home);
-        let _ = &native;
         Some(Self {
             ccs: paths.ccs.to_path_buf(),
             home: paths.home.to_path_buf(),
             quota,
             native,
-            health_script: paths.health.to_path_buf(),
-            installed,
-            runner,
             state: Mutex::new(State {
                 identity: None,
-                problem: None,
                 service: QuotaService::default(),
                 cooldowns: Cooldowns::default(),
             }),
@@ -197,18 +130,14 @@ impl Host {
         let python = std::env::var_os("AAC_ANTIGRAVITY_PYTHON")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/usr/bin/python3"));
-        Self::new(
-            &Paths {
-                ccs,
-                home: &home,
-                python: &python,
-                quota: &scripts.join("antigravity/quota_worker.py"),
-                native: &scripts.join("antigravity/native_credential_worker.py"),
-                collectors: &scripts.join("account-usage"),
-                health: &scripts.join("antigravity/runtime_health.py"),
-            },
-            Box::new(bounded_run),
-        )
+        Self::new(&Paths {
+            ccs,
+            home: &home,
+            python: &python,
+            quota: &scripts.join("antigravity/quota_worker.py"),
+            native: &scripts.join("antigravity/native_credential_worker.py"),
+            collectors: &scripts.join("account-usage"),
+        })
     }
 
     /// `readInventoryIdentity`: the live login's own identity, cached by the four stored paths'
@@ -276,7 +205,7 @@ impl Host {
             })
     }
 
-    /// The public inventory, with the runtime-service diagnostic.
+    /// The public inventory for this CCS scope.
     pub fn inventory(&self, now: i64) -> Option<Value> {
         let state = match read_registry(&self.ccs) {
             RegistryRead::Absent => return Some(empty_inventory()),
@@ -284,9 +213,7 @@ impl Host {
             RegistryRead::Unreadable => return None,
         };
         let live = self.live_identity(now);
-        let inventory = inventory_from_state(&self.ccs, &state, live.as_ref(), now)?;
-        let problem = self.problem(now);
-        Some(inventory_probe_fields(inventory, problem.as_ref()))
+        inventory_from_state(&self.ccs, &state, live.as_ref(), now)
     }
 
     /// The public quotas answer from the runtime's own accounts.
@@ -333,33 +260,6 @@ impl Host {
                 .service
                 .get_accounts(&read, &mut collect, &mut guard.cooldowns, refresh),
         )
-    }
-
-    fn problem(&self, now: i64) -> Option<Value> {
-        let installed = self.installed.as_ref()?;
-        let mut guard = self.state.lock().ok()?;
-        guard.problem.get_or_insert_with(|| {
-            ProblemReader::new(&installed.bundle_directory, &installed.socket_path)
-        });
-        let runner: &HealthRun = &*self.runner;
-        let problem = guard.problem.as_mut()?;
-        let mut diagnose = |bundle: &Path| {
-            diagnose(
-                bundle,
-                crate::antigravity_probes::SERVICE_PYTHON,
-                &self.health_script,
-                &*runner,
-            )
-        };
-        problem.problem(now, &mut diagnose)
-    }
-
-    /// `probeRuntimeSocket` for the installed control socket.
-    pub fn socket_state(&self, timeout_ms: u64) -> SocketState {
-        match &self.installed {
-            Some(installed) => socket_state(&installed.socket_path, timeout_ms),
-            None => SocketState::Stopped,
-        }
     }
 }
 
@@ -614,23 +514,16 @@ print(json.dumps({{"format":"antigravity-consumer-json",
             "quota.py",
             &identity_script("gmail@example.com", "fixture-authoritative-subject-gmail"),
         );
-        let health = script(temp.path(), "health.py", "");
         let collectors = temp.path().join("collectors");
         std::fs::create_dir_all(&collectors).unwrap();
-        let host = Host::new(
-            &Paths {
-                ccs: &ccs,
-                home: &home,
-                python: &python,
-                quota: &quota,
-                native: &native,
-                collectors: &collectors,
-                health: &health,
-            },
-            Box::new(|file, _args, _timeout| {
-                (file != "systemctl").then(|| r#"{"ok":true}"#.to_owned())
-            }),
-        )
+        let host = Host::new(&Paths {
+            ccs: &ccs,
+            home: &home,
+            python: &python,
+            quota: &quota,
+            native: &native,
+            collectors: &collectors,
+        })
         .unwrap();
         let now = crate::antigravity_runtime::js_date("2026-10-01T17:00:00.000Z").unwrap();
         let inventory = host.inventory(now).unwrap();
@@ -767,24 +660,17 @@ print(json.dumps({{"format":"antigravity-consumer-json",
             "quota.py",
             &counting_quota_script("gmail@example.com", "fixture-authoritative-subject-gmail"),
         );
-        let health = script(temp.path(), "health.py", "");
         let collectors = temp.path().join("collectors");
         std::fs::create_dir_all(&collectors).unwrap();
         let host = std::sync::Arc::new(
-            Host::new(
-                &Paths {
-                    ccs: &ccs,
-                    home: &home,
-                    python: &python,
-                    quota: &quota,
-                    native: &native,
-                    collectors: &collectors,
-                    health: &health,
-                },
-                Box::new(|file, _args, _timeout| {
-                    (file != "systemctl").then(|| r#"{"ok":true}"#.to_owned())
-                }),
-            )
+            Host::new(&Paths {
+                ccs: &ccs,
+                home: &home,
+                python: &python,
+                quota: &quota,
+                native: &native,
+                collectors: &collectors,
+            })
             .unwrap(),
         );
         Host::install_shared(&ccs, std::sync::Arc::clone(&host));

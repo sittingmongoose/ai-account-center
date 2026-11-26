@@ -338,15 +338,6 @@ async function fixture(
         updatedAt: new Date(now).toISOString(),
         providers: buildDashboardProviders(accounts, [], [], facts(context)),
         accounts,
-        codexAutoSwitch: {
-          enabled: false,
-          thresholdPercent: 5,
-          thresholdUsedPercent: 95,
-          pollIntervalSeconds: 60,
-          outcome: 'disabled',
-          message: '',
-          activationInProgress: false,
-        },
       };
     },
     probe: async (source) => {

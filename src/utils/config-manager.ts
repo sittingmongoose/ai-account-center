@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { isConfig, isSettings } from '../types';
-import type { Config, Settings, CLIProxyVariantsConfig, CLIProxyVariantConfig } from '../types';
+import type { Config, Settings } from '../types';
 import { expandPath, error } from './helpers';
 import { info } from './ui';
 import { isUnifiedMode, loadOrCreateUnifiedConfig } from '../config/unified-config-loader';
@@ -246,33 +246,8 @@ export function loadConfigSafe(): Config {
       }
     }
 
-    // Convert unified cliproxy variants to legacy format
-    let cliproxy: CLIProxyVariantsConfig | undefined;
-    if (unifiedConfig.cliproxy?.variants) {
-      cliproxy = {};
-      for (const [name, variant] of Object.entries(unifiedConfig.cliproxy.variants)) {
-        if ('type' in variant && variant.type === 'composite') {
-          // Composite variants: use default tier's provider
-          cliproxy[name] = {
-            provider: variant.tiers[variant.default_tier].provider,
-            settings: variant.settings,
-            port: variant.port,
-          };
-        } else {
-          const single = variant as CLIProxyVariantConfig;
-          cliproxy[name] = {
-            provider: single.provider,
-            settings: single.settings,
-            account: single.account,
-            port: single.port,
-          };
-        }
-      }
-    }
-
     return {
       profiles,
-      cliproxy,
     };
   }
 

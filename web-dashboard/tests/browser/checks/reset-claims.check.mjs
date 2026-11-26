@@ -32,7 +32,6 @@ const DASHBOARD = {
 	schemaVersion: 1, updatedAt: at(-1), accounts: [CLAUDE, ZAI, QWEN],
 	providers: ['claude', 'codex', 'antigravity', 'cursor', 'muse', 'kimi-code', 'qwen', 'zai', 'opencode-go'].map((id) => ({ id, accountCount: id === 'claude' || id === 'zai' || id === 'qwen' ? 1 : 0, signIn: { available: true }, capabilities: {} })),
 	settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [], trayHiddenAccountIds: [] },
-	codexAutoSwitch: { enabled: false, thresholdPercent: 5 },
 };
 
 const KEY = (c) => c.repeat(64);

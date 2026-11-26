@@ -187,7 +187,7 @@ pub(super) fn install(
     let lease = AntigravityMaintenanceLease::claim(root, holder.as_bytes())
         .map_err(|_| ErrorCode::WriteFailed)?;
     let (previous, parsed) = current(root)?;
-    if !previous["transaction"].is_null() || stopped() {
+    if stopped() {
         return Err(ErrorCode::WriteFailed);
     }
     let profiles = parsed
@@ -332,13 +332,10 @@ fn exists(path: &Path) -> Result<bool, RemoveError> {
 
 fn guard(
     native: &NativeOwners,
-    document: &Value,
+    _document: &Value,
     state: &RegistryState,
     name: &str,
 ) -> Result<(), RemoveError> {
-    if !document["transaction"].is_null() {
-        return Err(RemoveError::Busy);
-    }
     if state.active_for(name).is_some() {
         return Err(RemoveError::Active);
     }
@@ -399,6 +396,7 @@ pub(super) fn remove(native: &NativeOwners, name: &str, reviewed: &str) -> Resul
 fn publish(root: &Path, lease: &AntigravityMaintenanceLease, mut document: Value) -> Option<()> {
     let generation = document["revision"].as_i64()?.checked_add(1)?;
     document["revision"] = json!(generation);
+    document["transaction"] = Value::Null;
     runtime::validate_state(&document)?;
     lease
         .writer()
@@ -408,4 +406,142 @@ fn publish(root: &Path, lease: &AntigravityMaintenanceLease, mut document: Value
             &aac_views::js_json::write(&document),
         )
         .ok()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::public_auth::{DashboardEvents, HubCache, native_owners::Groups};
+    use std::fs;
+    use std::sync::Weak;
+
+    fn set_mode(path: &Path, mode: u32) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = (path, mode);
+    }
+
+    fn write_private(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+            set_mode(parent, 0o700);
+        }
+        fs::write(path, bytes).unwrap();
+        set_mode(path, 0o600);
+    }
+
+    #[test]
+    fn legacy_stuck_transaction_does_not_block_remove_and_is_cleared_while_lock_still_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        set_mode(&root, 0o700);
+        let cred_a = b"fixture-credential-a";
+        let cred_b = b"fixture-credential-b";
+        let fp_a = runtime::sha256_hex(cred_a);
+        let fp_b = runtime::sha256_hex(cred_b);
+        let id_a = json!({
+            "email": "alpha@example.com",
+            "subject": "sub-alpha",
+            "plan": "Google AI Pro",
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "source": "provider-userinfo"
+        });
+        let id_b = json!({
+            "email": "beta@example.com",
+            "subject": "sub-beta",
+            "plan": "Google AI Pro",
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "source": "provider-userinfo"
+        });
+        let key_a = LiveIdentity::from_value(&id_a).unwrap().identity_key();
+        let key_b = LiveIdentity::from_value(&id_b).unwrap().identity_key();
+        let registry = json!({
+            "version": 1,
+            "revision": 1,
+            "profiles": [
+                {
+                    "id": "alpha",
+                    "email": "alpha@example.com",
+                    "identityKey": key_a,
+                    "plan": "Google AI Pro",
+                    "credential": {
+                        "fingerprint": fp_a,
+                        "format": FORMAT,
+                        "identity": id_a,
+                        "savedAt": "2026-10-01T16:40:00.000Z"
+                    }
+                },
+                {
+                    "id": "beta",
+                    "email": "beta@example.com",
+                    "identityKey": key_b,
+                    "plan": "Google AI Pro",
+                    "credential": {
+                        "fingerprint": fp_b,
+                        "format": FORMAT,
+                        "identity": id_b,
+                        "savedAt": "2026-10-01T16:40:00.000Z"
+                    }
+                }
+            ],
+            "active": {"profileId": "alpha", "verifiedAt": "2026-10-01T16:40:00.000Z"},
+            "transaction": {
+                "id": "0123456789abcdef0123456789abcdef",
+                "state": "recovery-required",
+                "previousId": "alpha",
+                "targetId": "beta",
+                "startedAt": "2026-10-01T16:45:00.000Z"
+            }
+        });
+        write_private(
+            &root.join("antigravity-profiles/registry-000000000001.json"),
+            registry.to_string().as_bytes(),
+        );
+        write_private(
+            &root.join(format!(
+                "antigravity-instances/alpha/ubuntu/credential-{fp_a}.bin"
+            )),
+            cred_a,
+        );
+        write_private(
+            &root.join(format!(
+                "antigravity-instances/beta/ubuntu/credential-{fp_b}.bin"
+            )),
+            cred_b,
+        );
+        let (tx, _rx) = tokio::sync::broadcast::channel(1);
+        let (native, _jobs) = NativeOwners::start(
+            root.clone(),
+            Groups::default(),
+            HubCache::default(),
+            DashboardEvents(tx),
+            Weak::new(),
+        )
+        .unwrap();
+
+        // Real .transaction-lock still refuses review as Busy.
+        let lock = root.join("antigravity-profiles/.transaction-lock");
+        fs::create_dir(&lock).unwrap();
+        set_mode(&lock, 0o700);
+        assert!(matches!(review(&native, "beta"), Err(RemoveError::Busy)));
+        fs::remove_dir(&lock).unwrap();
+
+        // Legacy stuck transaction does not block review/remove and is cleared to null on publish.
+        let reviewed =
+            review(&native, "beta").expect("stuck legacy transaction must not block review");
+        remove(&native, "beta", &reviewed).expect("stuck legacy transaction must not block remove");
+        let (next, parsed, rev) = runtime::read_document(&root).expect("updated registry");
+        assert_eq!(rev, 2);
+        assert!(
+            next["transaction"].is_null(),
+            "transaction must clear to null on write: {next}"
+        );
+        assert!(parsed.profile("beta").is_none());
+        assert!(parsed.profile("alpha").is_some());
+    }
 }

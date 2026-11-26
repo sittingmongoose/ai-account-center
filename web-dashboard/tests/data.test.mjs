@@ -62,7 +62,7 @@ test('Codex core displays percent only while details preserve every actual windo
     { key: 'five_hour', label: '5-hour', usedPercent: 92, used: 32, limit: 50, resetAt: '2026-10-01T12:00:00Z' },
     { key: 'seven_day', label: 'Weekly', usedPercent: 24 }, { key: 'balance', label: 'Credits', kind: 'balance', remaining: 62500, unit: 'credits' },
   ] };
-  const data = { accounts: [account], codexAutoSwitch: { enabled: true, thresholdPercent: 5, pollIntervalSeconds: 60 } };
+  const data = { accounts: [account] };
   const view = dashboardView(data); assert.equal(view.codex[0].five.amount, '92% used');
   assert.equal(allDetailWindows(data, account.id).length, 3);
 });
@@ -78,8 +78,7 @@ test('full Codex account leaves missing canonical five-hour usage empty while re
     capabilities: { codexProfile: 'party', claudeProfileId: null, claudePlatforms: [] },
   };
   const raw = structuredClone(account);
-  const data = { schemaVersion: 1, updatedAt: '2026-10-01T15:15:19Z', settings: { refreshIntervalSeconds: 60 }, accounts: [account],
-    codexAutoSwitch: { enabled: true, thresholdPercent: 5, pollIntervalSeconds: 60, outcome: 'healthy', message: 'Configured account switching is enabled.', activationInProgress: false } };
+  const data = { schemaVersion: 1, updatedAt: '2026-10-01T15:15:19Z', settings: { refreshIntervalSeconds: 60 }, accounts: [account] };
   assert.equal(account.windows.some(window => window.key === 'five_hour'), false);
   const view = dashboardView(data);
   assert.equal(view.codex[0].five.hasPercent, false);

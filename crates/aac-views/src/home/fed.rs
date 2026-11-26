@@ -191,16 +191,7 @@ pub fn prepare_antigravity(data: &[u8]) -> Result<Value, Decline> {
         .as_object()
         .map(|m| m.keys().map(String::as_str).collect())
         .unwrap_or_default();
-    let shaped = [
-        &["schemaVersion", "hostId", "profiles"][..],
-        &[
-            "schemaVersion",
-            "hostId",
-            "runtimeServiceProblem",
-            "profiles",
-        ],
-    ]
-    .contains(&keys.as_slice());
+    let shaped = keys.as_slice() == ["schemaVersion", "hostId", "profiles"];
     if shaped && composed.get("profiles").is_some_and(Value::is_array) {
         Ok(composed)
     } else {

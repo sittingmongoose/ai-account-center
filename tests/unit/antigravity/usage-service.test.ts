@@ -21,7 +21,6 @@ function profile(id: string, selected = false): AntigravityUsageProfile {
     identityVerified: true,
     available: true,
     selected,
-    runtimeVerified: false,
     verifiedAt: SAMPLE_TIME,
   };
 }

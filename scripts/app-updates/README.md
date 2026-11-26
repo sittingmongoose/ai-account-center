@@ -550,19 +550,14 @@ select the previous generation again, run
 as the account that runs the agent.
 
 **Antigravity CLI after switching retirement (2026-11-13).** Update all runs the
-ordinary native `agy update` on every computer, including a VM with a leftover
-`antigravity-switching/runtime-installation.json`. It does not read that marker,
-probe switching sockets, fetch a switching-review manifest, or invoke
-`managed-update-command.js`. The old `--agy-reviewed` option and Windows task
-field remain accepted for compatibility; they do not gate updates or change
-result messages. Older saved jobs and helpers can still contain switching-era
-`held`, `updated_unreviewed` and `runtime_unavailable` rows.
+ordinary native `agy update` on every computer, ignoring any leftover
+`antigravity-switching/runtime-installation.json` marker or managed launcher.
+It does not probe switching sockets or fetch a switching-review manifest. The
+old `--agy-reviewed` option and Windows task field remain accepted for
+compatibility; they do not gate updates or change result messages.
 
-On Ubuntu, discovery excludes the old managed PATH launcher and selects the
-native `~/.local/bin/agy`. After a native hash change, that launcher's existing
-hash fallback also runs the native CLI directly. Its startup still needs the
-managed marker, so removing the marker requires retiring the launcher's PATH
-entries first; do not delete the marker alone.
+On Ubuntu, discovery excludes any leftover managed PATH launcher path and
+selects the native `~/.local/bin/agy`.
 
 The ordinary CLI process and terminal checks apply. An executed updater that
 fails reports `failed` with `updateAttempted: true`; an unchanged successful

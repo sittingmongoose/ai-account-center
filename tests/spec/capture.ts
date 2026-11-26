@@ -260,9 +260,6 @@ await stub('src/web-server/services/account-lifecycle-runtime.ts', {
   startAccountLifecycleMaintenance: noop,
   stopAccountLifecycleMaintenance: noop,
 });
-await stub('src/antigravity/production-runtime.ts', {
-  getInstalledAntigravityRuntimeFactory: () => null,
-});
 await stub('src/store/store-service.ts', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),
   getAacStore: () => null,

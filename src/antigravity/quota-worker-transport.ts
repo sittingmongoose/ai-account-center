@@ -4,8 +4,24 @@ import { createHash } from 'crypto';
 import { runManagedCommand } from '../utils/managed-process';
 import { checkedIdentity, credentialFingerprint, identityKey } from './registry';
 import type { NativeCredential, VerifiedIdentity } from './types';
-import type { SavedQuotaRequest, SavedQuotaSnapshot } from './runtime-composition';
+import type { AntigravityUsageSample } from './usage-contract';
 import { record, safeId } from './usage-normalization';
+
+/** Private worker request; bytes, subjects, identity keys and revisions never leave adapters. */
+export interface SavedQuotaRequest {
+  profileId: string;
+  email: string;
+  identityKey: string;
+  credentialRevision: string;
+  credential: NativeCredential;
+  identity: VerifiedIdentity;
+}
+
+export interface SavedQuotaSnapshot extends AntigravityUsageSample {
+  source: 'native-consumer';
+  identityVerified: boolean;
+  identityValidation: 'verified' | 'mismatch' | 'needs_sign_in' | 'unavailable';
+}
 
 const MAX_BYTES = 65_536;
 const MAX_CREDENTIAL_BYTES = 16_384;

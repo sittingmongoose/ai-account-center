@@ -674,7 +674,7 @@ fn read_auth_json_safe(source: &Path) -> Result<Value, String> {
                 && matches!(kind, "codex" | "anthropic" | "gemini")
             {
                 return Err(format!(
-                    "CLIPROXY_FORMAT: Source is a CLIProxy auth file (type=\"{kind}\"); use `ccs cliproxy ...` instead."
+                    "CLIPROXY_FORMAT: Source is a CLIProxy auth file (type=\"{kind}\"); import a native Codex auth.json instead."
                 ));
             }
             if let Some(id_token) = parsed
@@ -1084,7 +1084,7 @@ fn import_default(args: &[String], ccs: &Path) -> i32 {
     out(&format!("  History : {history_status}\n"));
     out(&format!("  Sessions: {sessions_status}\n"));
     out(&format!(
-        "  Next    : ai-account-center codex-auth activate {name}\n"
+        "  Next    : ai-account-center codex-auth show {name}\n"
     ));
     0
 }
@@ -1341,8 +1341,14 @@ mod tests {
             })
             .collect();
         assert_eq!(backups.len(), 1);
-        // CLIProxy format refuses without retry.
+        // CLIProxy format refuses without retry, and never points to retired `ccs cliproxy`.
         fs::write(legacy.join("auth.json"), r#"{"type":"codex"}"#).unwrap();
+        let cliproxy_err = read_auth_json_safe(&legacy.join("auth.json")).unwrap_err();
+        assert!(cliproxy_err.starts_with("CLIPROXY_FORMAT:"));
+        assert!(
+            !cliproxy_err.contains("ccs cliproxy"),
+            "rejection must not suggest retired ccs cliproxy: {cliproxy_err}"
+        );
         assert_eq!(
             import_default(&["other".into(), "--force-while-running".into()], &ccs),
             7

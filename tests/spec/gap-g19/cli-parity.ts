@@ -1068,15 +1068,18 @@ for (const testCase of IMPORT_CASES) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. antigravity: help, status, the dropped recover, runtime refresh refusals.
+// 5. antigravity: help, retired activate, signin validation and retired runtime refusals.
 // ---------------------------------------------------------------------------
 const ANTIGRAVITY_PARITY: string[][] = [
   ['antigravity'],
   ['antigravity', 'help'],
+  ['antigravity', 'status'],
   ['antigravity', 'status', 'extra'],
+  ['antigravity', 'recover'],
   ['antigravity', 'activate'],
   ['antigravity', 'runtime'],
   ['antigravity', 'runtime', 'help'],
+  ['antigravity', 'runtime', 'refresh'],
   ['antigravity', 'runtime', 'bogus'],
   ['antigravity', 'signin'],
   ['antigravity', 'signin', '-x'],
@@ -1093,38 +1096,6 @@ for (const args of ANTIGRAVITY_PARITY) {
   );
   fs.rmSync(homeA, { recursive: true, force: true });
   fs.rmSync(homeB, { recursive: true, force: true });
-}
-{
-  // status on an empty fixture: both read the packaged release and the same empty state.
-  const homeA = freshHome();
-  const homeB = freshHome();
-  equalRuns(
-    'antigravity status empty',
-    runCli('ts', homeA, ['antigravity', 'status']),
-    runCli('rust', homeB, ['antigravity', 'status']),
-    [homeA, homeB]
-  );
-  // runtime refresh with no installation: the same refusal.
-  equalRuns(
-    'antigravity runtime refresh empty',
-    runCli('ts', homeA, ['antigravity', 'runtime', 'refresh']),
-    runCli('rust', homeB, ['antigravity', 'runtime', 'refresh']),
-    [homeA, homeB]
-  );
-  fs.rmSync(homeA, { recursive: true, force: true });
-  fs.rmSync(homeB, { recursive: true, force: true });
-}
-{
-  const home = freshHome();
-  const rust = runCli('rust', home, ['antigravity', 'recover']);
-  check(
-    'drop antigravity recover',
-    rust.status === 1 &&
-      rust.stdout === '' &&
-      rust.stderr.includes('"antigravity recover" is managed in the dashboard'),
-    JSON.stringify(rust)
-  );
-  fs.rmSync(home, { recursive: true, force: true });
 }
 {
   // signin delegates to the labelled TS CLI while prepare/complete stay in TS (M5).

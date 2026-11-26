@@ -4,9 +4,6 @@
  * Covers:
  * - AccountConfig: isolated Claude instances via CLAUDE_CONFIG_DIR
  * - ProfileConfig: API-based profiles (env var injection)
- * - OAuthAccounts: CLIProxy nickname-to-email mapping
- * - CLIProxyAuthConfig: API key and management secret customization
- * - TokenRefreshSettings: background token refresh worker config
  * - DashboardAuthConfig: dashboard login protection
  */
 
@@ -47,40 +44,6 @@ export interface ProfileConfig {
   settings: string;
   /** Target CLI to use for this profile (default: 'claude') */
   target?: TargetType;
-}
-
-/**
- * CLIProxy OAuth account nickname mapping.
- * Maps user-friendly nicknames to email addresses.
- */
-export type OAuthAccounts = Record<string, string>;
-
-/**
- * CLIProxy authentication configuration.
- * Allows customization of API key and management secret for CLIProxyAPI.
- */
-export interface CLIProxyAuthConfig {
-  /** API key for CCS-managed requests (default: 'ccs-internal-managed') */
-  api_key?: string;
-  /** Management secret for Control Panel login (default: 'ccs') */
-  management_secret?: string;
-}
-
-/**
- * Token refresh configuration.
- * Manages background token refresh worker settings.
- */
-export interface TokenRefreshSettings {
-  /** Enable background token refresh (default: false) */
-  enabled?: boolean;
-  /** Refresh check interval in minutes (default: 30) */
-  interval_minutes?: number;
-  /** Preemptive refresh time in minutes (default: 45) */
-  preemptive_minutes?: number;
-  /** Maximum retry attempts per token (default: 3) */
-  max_retries?: number;
-  /** Enable verbose logging (default: false) */
-  verbose?: boolean;
 }
 
 /**

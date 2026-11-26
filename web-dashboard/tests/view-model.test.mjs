@@ -68,14 +68,6 @@ const data = (accounts, extra = {}) => ({
   updatedAt: at(0),
   settings: { refreshIntervalSeconds: 60 },
   accounts,
-  codexAutoSwitch: {
-    enabled: true,
-    thresholdPercent: 5,
-    pollIntervalSeconds: 60,
-    outcome: 'healthy',
-    message: 'Healthy',
-    activationInProgress: false,
-  },
   ...extra,
 });
 const section = (vm, id) => vm.sections.find((row) => row.id === id);
@@ -857,9 +849,9 @@ test('Home headers, amounts and the Antigravity warnings read the data truthfull
     ),
     'antigravity'
   );
-  // Account switching is retired: an old paused-update marker shows no footer.
+  // Account switching and its managed runtime are retired: leftover markers show no footer.
   assert.deepEqual(leftover.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
-  const failed = section(
+  const retiredRuntime = section(
     dashboardViewModel(
       data([
         account({
@@ -886,12 +878,7 @@ test('Home headers, amounts and the Antigravity warnings read the data truthfull
     ),
     'antigravity'
   );
-  assert.equal(failed.foot.shown, true);
-  assert.equal(failed.foot.warn, true);
-  assert.equal(
-    runs(failed.foot.runs),
-    'Runtime service failed: missing Python module pyte (Python 3.14; runtime built for 3.13); managed updates wait until the runtime bundle is rebuilt'
-  );
+  assert.deepEqual(retiredRuntime.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
 });
 
 test('hiding one of two accounts from the dashboard leaves only its row (Codex and Antigravity)', () => {
@@ -1515,7 +1502,7 @@ test('the switching-era Active mark is gone: no live-login field or Active word 
     hostId: 'ubuntu',
     profiles: [{
       id: 'main', email: 'main@example.test', plan: 'Google AI Pro', hostId: 'ubuntu',
-      available: true, selected: true, runtimeVerified: true, verifiedAt: at(-1),
+      available: true, selected: true, verifiedAt: at(-1),
     }],
   };
   const dto = data([liveCodex, liveAntigravity, claude('max', 'max', [window({ usedPercent: 20 })])]);

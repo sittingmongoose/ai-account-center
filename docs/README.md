@@ -18,7 +18,6 @@ Do not restore retired features to satisfy outdated prose.
 | Exact-grant reset backend, confirmation and audit | [Reset claims](reset-claims.md) |
 | Existing provider collectors | [Provider flows](system-architecture/provider-flows.md) |
 | Codex saved logins and renewal | [Codex account contract](codex-auth.md); [activation (retired)](activate-in-place.md) |
-| Antigravity profiles, sign-in and the managed runtime | [Antigravity on Ubuntu](antigravity-runtime.md) |
 | An agent setting AAC up for someone, start to finish | [Agent setup guide](agent-setup.md) |
 | Quota bars in T3 Code (read-only CLIProxyAPI-compatible hub) | [T3 usage hub](t3-usage-hub.md) |
 | Account usage, pace and history for any agent (shared folder) | [Agent usage snapshot](agent-usage-snapshot.md) |

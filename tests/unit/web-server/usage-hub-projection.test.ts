@@ -105,15 +105,6 @@ function dashboard(accounts: DashboardAccount[]): AccountDashboard {
     schemaVersion: 1,
     updatedAt: '2026-10-06T12:00:00.000Z',
     accounts,
-    codexAutoSwitch: {
-      enabled: false,
-      thresholdPercent: 5,
-      thresholdUsedPercent: 95,
-      pollIntervalSeconds: 60,
-      outcome: 'idle',
-      message: 'Idle',
-      activationInProgress: false,
-    },
   };
 }
 

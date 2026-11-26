@@ -353,6 +353,32 @@ fn saved_acp_deferral_restores_with_current_words() {
 }
 
 #[test]
+fn retired_switching_runtime_codes_are_rejected() {
+    let ubuntu = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    for (code, attempted) in [
+        ("runtime_unavailable", false),
+        ("runtime_paused", true),
+        ("runtime_paused_blocked", false),
+    ] {
+        let row = rows::normalize(
+            ubuntu,
+            "antigravity-cli",
+            &json!({
+                "appId": "antigravity-cli",
+                "platform": ubuntu.os,
+                "status": "failed",
+                "messageCode": code,
+                "updateAttempted": attempted,
+            }),
+        );
+        assert!(
+            row.is_none(),
+            "retired switching runtime code {code} must not normalize"
+        );
+    }
+}
+
+#[test]
 fn a_retry_scope_is_exactly_the_failed_and_unknown_rows() {
     let ubuntu = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
     let mac = hosts().find(|host| host.id == "mac").expect("Mac");

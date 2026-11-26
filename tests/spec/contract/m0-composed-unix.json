@@ -448,15 +448,6 @@
               "windows": []
             }
           ],
-          "codexAutoSwitch": {
-            "activationInProgress": false,
-            "enabled": false,
-            "message": "Account switching was removed. AI Account Center shows usage only.",
-            "outcome": "disabled",
-            "pollIntervalSeconds": 60,
-            "thresholdPercent": 5,
-            "thresholdUsedPercent": 95
-          },
           "providers": [
             {
               "accountCount": 0,
@@ -981,15 +972,6 @@
               "windows": []
             }
           ],
-          "codexAutoSwitch": {
-            "activationInProgress": false,
-            "enabled": false,
-            "message": "Account switching was removed. AI Account Center shows usage only.",
-            "outcome": "disabled",
-            "pollIntervalSeconds": 60,
-            "thresholdPercent": 5,
-            "thresholdUsedPercent": 95
-          },
           "providers": [
             {
               "accountCount": 0,
@@ -2351,15 +2333,6 @@
               "trayHidden": false
             }
           ],
-          "codexAutoSwitch": {
-            "enabled": false,
-            "thresholdPercent": 5,
-            "thresholdUsedPercent": 95,
-            "pollIntervalSeconds": 60,
-            "outcome": "disabled",
-            "message": "Account switching was removed. AI Account Center shows usage only.",
-            "activationInProgress": false
-          },
           "server": {
             "version": "8.10.0",
             "commit": "<build-commit>",
@@ -2902,15 +2875,6 @@
               "trayHidden": false
             }
           ],
-          "codexAutoSwitch": {
-            "enabled": false,
-            "thresholdPercent": 5,
-            "thresholdUsedPercent": 95,
-            "pollIntervalSeconds": 60,
-            "outcome": "disabled",
-            "message": "Account switching was removed. AI Account Center shows usage only.",
-            "activationInProgress": false
-          },
           "server": {
             "version": "8.10.0",
             "commit": "<build-commit>",

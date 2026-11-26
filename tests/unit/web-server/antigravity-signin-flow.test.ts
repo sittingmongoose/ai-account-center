@@ -103,7 +103,6 @@ describe('antigravityJobFlow', () => {
   it('hands the runner the fixed driver argv and claims the marker and staging', async () => {
     const flow = antigravityJobFlow(lifecycle(), ccsDir, home, 'party', 'add', {
       preflight: () => OK_PREFLIGHT,
-      refreshDescriptor: async () => ({ status: 'no-installation' }),
     });
     const command = await flow.prepare('job_0000000000000001');
     if (nativeMode) expect(nativeWrites).toBe(2);
@@ -148,15 +147,10 @@ describe('antigravityJobFlow', () => {
     held?.release();
   });
 
-  it('imports the credential, refreshes the descriptor and returns the account', async () => {
+  it('imports the credential and returns the account', async () => {
     const agy = lifecycle();
-    const refreshed: Array<{ ccsDir: string; home: string }> = [];
     const flow = antigravityJobFlow(agy, ccsDir, home, 'party', 'add', {
       preflight: () => OK_PREFLIGHT,
-      refreshDescriptor: async (request) => {
-        refreshed.push(request);
-        return { status: 'no-installation' };
-      },
     });
     const command = await flow.prepare('job_0000000000000003');
     writeToken(command.args[2]);
@@ -168,14 +162,12 @@ describe('antigravityJobFlow', () => {
     });
     if (nativeMode) expect(nativeWrites).toBeGreaterThan(0);
     expect(agy.hasProfile('party')).toBe(true);
-    expect(refreshed).toEqual([{ ccsDir, home }]);
   });
 
   it('never commits when the job was cancelled during the provider check', async () => {
     const agy = lifecycle();
     const flow = antigravityJobFlow(agy, ccsDir, home, 'party', 'add', {
       preflight: () => OK_PREFLIGHT,
-      refreshDescriptor: async () => ({ status: 'no-installation' }),
     });
     const command = await flow.prepare('job_0000000000000004');
     writeToken(command.args[2]);
@@ -203,7 +195,6 @@ describe('antigravityJobFlow', () => {
     });
     const flow = antigravityJobFlow(agy, ccsDir, home, 'second', 'add', {
       preflight: () => OK_PREFLIGHT,
-      refreshDescriptor: async () => ({ status: 'no-installation' }),
     });
     const command = await flow.prepare('job_0000000000000005');
     writeToken(command.args[2], 'party');
@@ -253,7 +244,6 @@ describe('antigravityJobFlow on the live login (switching is gone)', () => {
     await seedLive(agy);
     const flow = antigravityJobFlow(agy, ccsDir, home, 'party', 'signin-again', {
       preflight: () => OK_PREFLIGHT,
-      refreshDescriptor: async () => ({ status: 'no-installation' }),
     });
     const command = await flow.prepare('job_0000000000000007');
     writeToken(command.args[2], 'party');
@@ -280,7 +270,6 @@ describe('antigravityJobFlow on the live login (switching is gone)', () => {
     await seedLive(agy);
     const flow = antigravityJobFlow(agy, ccsDir, home, 'party', 'signin-again', {
       preflight: () => OK_PREFLIGHT,
-      refreshDescriptor: async () => ({ status: 'no-installation' }),
     });
     const command = await flow.prepare('job_0000000000000008');
     writeToken(command.args[2], 'party');

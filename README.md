@@ -341,7 +341,6 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | `ai-account-center dashboard cursor-key` | Manage the Cursor account key |
 | `ai-account-center codex-auth show` | List saved Codex logins (`create`, `login`, `import-default`, `remove`) |
 | `ai-account-center antigravity signin <profile>` | Add or re-sign an Antigravity profile on Ubuntu |
-| `ai-account-center antigravity status` | Read-only check of what the Antigravity runtime needs |
 | `ai-account-center bar` | Mac: open the paired menu-bar app |
 
 `ai-account-center help <command>` has every option. The older `ccs` command runs the same commands, and **`ccs config` still opens the dashboard**.
@@ -359,7 +358,6 @@ above manage usage hub keys, snapshot destinations and Cursor keys.
 | [Agent setup guide](docs/agent-setup.md) | For an agent installing AAC for someone: build, the human sign-in steps, usage for agents, the T3 Code usage hub |
 | [Agent usage snapshot](docs/agent-usage-snapshot.md) | The shared-folder format and reader |
 | [Codex saved logins](docs/codex-auth.md) | Saved logins, renewal and removal |
-| [Antigravity on Ubuntu](docs/antigravity-runtime.md) | Profiles, sign-in and the managed runtime |
 | [System architecture](docs/system-architecture/index.md) | Data, credential and host boundaries |
 | [Dashboard (Leptos)](web-dashboard/README.md) | The WebAssembly UI and its licensing |
 | [All maintainer docs](docs/README.md) | Everything else |

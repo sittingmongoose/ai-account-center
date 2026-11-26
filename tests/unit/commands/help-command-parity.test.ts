@@ -132,67 +132,30 @@ describe('retained help surface', () => {
     }
   });
 
-  test('antigravity help prints the sign-in command without starting anything', async () => {
+  test('antigravity help prints the sign-in command and rejects retired runtime verbs', async () => {
     const lines: string[] = [];
     await handleHelpRoute(['antigravity'], (line) => lines.push(line));
-    expect(lines.join('\n')).toContain('ai-account-center antigravity signin <profile>');
+    const helpText = lines.join('\n');
+    expect(helpText).toContain('ai-account-center antigravity signin <profile>');
+    expect(helpText).not.toContain('antigravity status');
+    expect(helpText).not.toContain('antigravity recover');
+    expect(helpText).not.toContain('antigravity runtime');
     expect(await antigravityCommand.handleAntigravityCommand(['help'], () => {})).toBe(0);
     const errors: string[] = [];
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['login'], (l) => errors.push(l))
-    ).toBe(1);
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['signin'], (l) => errors.push(l))
-    ).toBe(1);
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['signin', '--force'], (l) =>
-        errors.push(l)
-      )
-    ).toBe(1);
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['status', 'extra'], (l) => errors.push(l))
-    ).toBe(1);
-    expect(errors.length).toBe(4);
-    expect(lines.join('\n')).toContain('ai-account-center antigravity status');
-  });
-
-  test('antigravity recover reports each proof-driven outcome without touching the live login', async () => {
-    const lines: string[] = [];
-    await handleHelpRoute(['antigravity'], (line) => lines.push(line));
-    expect(lines.join('\n')).toContain('Managed in the dashboard');
-    expect(lines.join('\n')).toContain('recover            Finish or undo a stuck switch');
-    const errors: string[] = [];
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['recover', 'extra'], (l) => errors.push(l))
-    ).toBe(1);
-    expect(errors).toHaveLength(1);
-    const run = (
-      runtime: () => {
-        recover(): Promise<{ status: string; profileId?: string; email?: string }>;
-      } | null
-    ) => {
-      const out: string[] = [];
-      return antigravityCommand
-        .handleAntigravityCommand(['recover'], (l) => out.push(l), runtime)
-        .then((code) => ({ code, out }));
-    };
-    for (const [status, profileId, email, code, headline] of [
-      ['completed', 'party', 'party@example.com', 0, 'completed the stuck switch'],
-      ['aborted', 'gmail', 'gmail@example.com', 0, 'undid the stuck switch'],
-      ['restored-previous', 'gmail', 'gmail@example.com', 0, 'restored the previous login'],
-      ['no-recovery-pending', undefined, undefined, 0, 'No Antigravity switch needs recovery'],
-      ['recovery-required', undefined, undefined, 1, 'could not prove the live Ubuntu login'],
-    ] as const) {
-      const { code: actual, out } = await run(() => ({
-        recover: async () => ({ status, profileId, email }),
-      }));
-      expect(actual).toBe(code);
-      expect(out.join('\n')).toContain(headline);
-      if (profileId) expect(out.join('\n')).toContain(profileId);
+    for (const args of [
+      ['login'],
+      ['signin'],
+      ['signin', '--force'],
+      ['status'],
+      ['recover'],
+      ['runtime'],
+      ['runtime', 'refresh'],
+    ]) {
+      expect(await antigravityCommand.handleAntigravityCommand(args, (l) => errors.push(l))).toBe(
+        1
+      );
     }
-    const none = await run(() => null);
-    expect(none.code).toBe(1);
-    expect(none.out.join('\n')).toContain('No Antigravity profiles');
+    expect(errors.length).toBe(7);
   });
 
   test('antigravity activate is retired and starts nothing', async () => {
@@ -206,28 +169,6 @@ describe('retained help surface', () => {
       )
     ).toBe(1);
     expect(errors.join('\n')).toContain('antigravity activate is retired');
-  });
-
-  test('antigravity runtime routes help and refresh usage without touching the descriptor', async () => {
-    const lines: string[] = [];
-    await handleHelpRoute(['antigravity'], (line) => lines.push(line));
-    expect(lines.join('\n')).toContain('ai-account-center antigravity runtime refresh');
-    const help: string[] = [];
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['runtime'], (l) => help.push(l))
-    ).toBe(0);
-    expect(help.join('\n')).toContain('ai-account-center antigravity runtime refresh');
-    const errors: string[] = [];
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['runtime', 'prune'], (l) => errors.push(l))
-    ).toBe(1);
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['runtime', 'refresh', 'extra'], (l) =>
-        errors.push(l)
-      )
-    ).toBe(1);
-    expect(errors).toHaveLength(2);
-    expect(errors.join('\n')).toContain('antigravity runtime refresh');
   });
 
   test('bar help delegates to menu bar help without launching it', async () => {

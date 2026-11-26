@@ -4,7 +4,6 @@
  * both: crates/aac-views/src/antigravity.rs.
  */
 import { AntigravityError } from './errors';
-import { publicRuntimeServiceProblem } from './runtime-health';
 import type { AntigravityDashboardAccount, AntigravityInventory } from './usage-contract';
 import {
   displayText,
@@ -15,11 +14,6 @@ import {
 } from './usage-normalization';
 import { markPassedResets } from '../web-server/services/account-window-reset';
 
-function runtimeServiceProblemField(value: unknown): Partial<AntigravityInventory> {
-  const problem = publicRuntimeServiceProblem(value);
-  return problem ? { runtimeServiceProblem: problem } : {};
-}
-
 /** All public returns are rebuilt so adapter-private fields cannot leak accidentally. */
 export function publicInventory(value: AntigravityInventory): AntigravityInventory {
   if (value.hostId !== 'ubuntu' || !Array.isArray(value.profiles) || value.profiles.length > 16)
@@ -28,7 +22,6 @@ export function publicInventory(value: AntigravityInventory): AntigravityInvento
   return {
     schemaVersion: 1,
     hostId: 'ubuntu',
-    ...runtimeServiceProblemField(value.runtimeServiceProblem),
     profiles: value.profiles.map((profile) => {
       if (
         !safeId(profile.id) ||
@@ -45,7 +38,6 @@ export function publicInventory(value: AntigravityInventory): AntigravityInvento
         hostId: 'ubuntu',
         available: profile.available === true,
         selected: profile.selected === true,
-        runtimeVerified: profile.runtimeVerified === true,
         verifiedAt: timestamp(profile.verifiedAt),
       };
     }),

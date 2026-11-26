@@ -157,7 +157,6 @@ export function publicProfile(profile: AntigravityUsageProfile): AntigravityPubl
     plan: antigravityPlanDisplay(displayText(profile.plan, 80), profile.verifiedAt).plan,
     available: profile.identityVerified === true && profile.available === true,
     selected: profile.identityVerified === true && profile.selected === true,
-    runtimeVerified: profile.identityVerified === true && profile.runtimeVerified === true,
     verifiedAt: timestamp(profile.verifiedAt),
     hostId: 'ubuntu',
   };

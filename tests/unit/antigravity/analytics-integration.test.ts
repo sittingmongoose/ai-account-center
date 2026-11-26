@@ -58,7 +58,6 @@ function account(id: string, email = `${id}@example.com`): DashboardAccount {
       claudePlatforms: [],
       antigravityProfileId: id,
       antigravityHostIds: ['ubuntu'],
-      antigravityCanActivate: false,
     },
   };
 }
@@ -82,14 +81,6 @@ function dashboard(accounts: DashboardAccount[]): AccountDashboard {
     updatedAt: new Date(NOW).toISOString(),
     settings: { refreshIntervalSeconds: 60 },
     accounts,
-    codexAutoSwitch: {
-      enabled: false,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'disabled',
-      message: 'Fixture disabled.',
-      activationInProgress: false,
-    },
   };
 }
 

@@ -3,7 +3,6 @@
  * Source: ~/.ccs/config.json
  */
 
-import type { CLIProxyProvider } from '../config/schemas/cliproxy';
 import type { TargetType } from '../targets/target-adapter';
 
 /**
@@ -15,45 +14,6 @@ export interface ProfilesConfig {
 }
 
 /**
- * CLIProxy variant configuration
- * Allows user-defined CLIProxy profile variants with custom settings
- * Example: "flash" → gemini provider with gemini-2.5-flash model
- */
-export interface CLIProxyVariantConfig {
-  /** CLIProxy provider to use */
-  provider: CLIProxyProvider;
-  /** Path to settings.json with custom model configuration (optional) */
-  settings?: string;
-  /** Account identifier for multi-account support (optional, defaults to 'default') */
-  account?: string;
-  /** Unique port for variant isolation (8318-8417) */
-  port?: number;
-  /** Target CLI to use for this variant (default: claude) */
-  target?: TargetType;
-}
-
-/**
- * CLIProxy variants section in config.json
- * Maps custom profile names to CLIProxy provider + settings
- */
-export interface CLIProxyVariantsConfig {
-  [profileName: string]: CLIProxyVariantConfig;
-}
-
-export interface OpenAICompatProxyRoutingConfig {
-  default?: string;
-  background?: string;
-  think?: string;
-  longContext?: string;
-  webSearch?: string;
-  longContextThreshold?: number;
-}
-
-export interface OpenAICompatProxyConfig {
-  routing?: OpenAICompatProxyRoutingConfig;
-}
-
-/**
  * Main CCS configuration
  * Located at: ~/.ccs/config.json
  */
@@ -62,10 +22,6 @@ export interface Config {
   profiles: ProfilesConfig;
   /** Per-profile CLI target overrides (legacy mode) */
   profile_targets?: Record<string, TargetType>;
-  /** User-defined CLIProxy profile variants (optional) */
-  cliproxy?: CLIProxyVariantsConfig;
-  /** OpenAI-compatible local proxy configuration (optional) */
-  proxy?: OpenAICompatProxyConfig;
   /** Legacy continuity inheritance mapping (profile -> source account) */
   continuity_inherit_from_account?: Record<string, string>;
 }

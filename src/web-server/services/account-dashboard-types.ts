@@ -222,20 +222,6 @@ export interface AccountDashboardSettings {
   visibilityAvailable?: boolean;
 }
 
-/**
- * Retired with account switching (2026-11-14): always "off". Sent only because the trays installed before the
- * removal refuse a dashboard without it. Remove once every tray in use is built from a release without switching.
- */
-export interface CodexAutoSwitchDashboardStatus {
-  enabled: false;
-  thresholdPercent: number;
-  thresholdUsedPercent: number;
-  pollIntervalSeconds: number;
-  outcome: 'disabled';
-  message: string;
-  activationInProgress: false;
-}
-
 /** The running server: package version and the build's commit. No paths or hosts. */
 export interface DashboardServerInfo {
   version: string;
@@ -251,8 +237,6 @@ export interface AccountDashboard {
   /** Every supported provider in display order, even at 0 accounts. Always set by the service. */
   providers?: DashboardProviderEntry[];
   accounts: DashboardAccount[];
-  /** Retired; see CodexAutoSwitchDashboardStatus. */
-  codexAutoSwitch: CodexAutoSwitchDashboardStatus;
   server?: DashboardServerInfo;
   /**
    * Claude Code sign-in renewal (scripts/claude-signin), when a runner publishes into the usage

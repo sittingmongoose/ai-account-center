@@ -16,7 +16,6 @@ const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
 const HOTPATH_PATTERNS = [
   /^src\/web-server\//,
   /^src\/commands\//,
-  /^src\/cliproxy\//,
   /^src\/management\//,
   /^src\/auth\//,
   /^src\/delegation\//,

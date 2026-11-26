@@ -112,12 +112,9 @@ export class AntigravityUsageService {
         typeof profile.credentialRevision !== 'string' ||
         !profile.credentialRevision ||
         profile.credentialRevision.length > 128 ||
-        [
-          profile.identityVerified,
-          profile.available,
-          profile.selected,
-          profile.runtimeVerified,
-        ].some((value) => typeof value !== 'boolean') ||
+        [profile.identityVerified, profile.available, profile.selected].some(
+          (value) => typeof value !== 'boolean'
+        ) ||
         (profile.identityVerified && identities.has(profile.identityKey))
       )
         throw new AntigravityError('Ambiguous Antigravity inventory.');

@@ -5,9 +5,6 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { createUbuntuNativeCredentialStore } from '../../../src/antigravity/native-credential-transport';
 import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
-import type { AntigravitySwitchDriver } from '../../../src/antigravity/types';
-import type { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
-import { AntigravitySwitchService } from '../../../src/antigravity/switch-service';
 import { stopProcessBroker } from '../../../src/utils/managed-process';
 
 const roots: string[] = [];
@@ -121,21 +118,6 @@ describe.skipIf(process.platform === 'win32')('inventory credential identity cac
       fs.writeFileSync(release, 'release');
       expect((await plain).bytes.toString()).toBe('account-A');
     }
-  });
-  it('reads no native credential when there are no saved profiles to mark selected', async () => {
-    let reads = 0;
-    const service = new AntigravitySwitchService({
-      registry: { listProfiles: () => [] } as unknown as AntigravityProfileRegistry,
-      driver: {
-        hostId: 'ubuntu',
-        readCurrentCredential: async () => {
-          reads++;
-          throw new Error('unused');
-        },
-      } as unknown as AntigravitySwitchDriver,
-    });
-    expect(await service.readInventory()).toEqual([]);
-    expect(reads).toBe(0);
   });
   it('coalesces identical reads, retains only identity, expires and leaves guarded reads fresh', async () => {
     const f = fixture();

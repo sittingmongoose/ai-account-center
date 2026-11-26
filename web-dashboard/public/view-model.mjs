@@ -888,8 +888,6 @@ function antigravitySection(accounts, data, inventory, now) {
         account.status === 'ok' || account.status === 'cached'
           ? relative(account.sampledAt || account.fetchedAt, now)
           : statusWord(account),
-        // The live login whose runtime is not verified says so (deep review 2026-11-26: the Active mark carried it).
-        nativeRow?.selected && !nativeRow.runtimeVerified ? 'runtime unverified' : '',
       ]
         .filter(Boolean)
         .join(' · '),
@@ -910,7 +908,6 @@ function antigravitySection(accounts, data, inventory, now) {
     run(rows.length, true),
     run(` ${rows.length === 1 ? 'account' : 'accounts'}`),
   ];
-  const problem = native.antigravityServiceProblem;
   return {
     id: 'antigravity',
     kind: 'accounts',
@@ -919,10 +916,7 @@ function antigravitySection(accounts, data, inventory, now) {
     meta: `Google Antigravity CLI · ${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}`,
     metaRuns,
     metaWords: wordsOf(metaRuns),
-    // A runtime service that cannot start outranks a paused update.
-    foot: problem
-      ? { shown: true, warn: true, runs: [run(problem)], words: wordsOf([run(problem)]), when: '' }
-      : noFoot(),
+    foot: noFoot(),
     empty: 'No Antigravity accounts are reported yet.',
     columns,
     rows,
@@ -1099,17 +1093,9 @@ export function detailsViewModel(data, id, ctx = {}) {
     account.capabilities?.codexProfile ||
     account.capabilities?.antigravityProfileId ||
     '';
-  // The selected Antigravity login whose runtime is not verified: a fact of its own, beside its quota reading's status
-  // (deep review 2026-11-26: Details read "Live" for a verified and an unverified runtime alike).
-  const unverified =
-    account.provider === 'antigravity' &&
-    antigravityView(data, ctx.antigravityInventory).antigravityAccounts.some(
-      (row) => row.id === account.id && row.selected && !row.runtimeVerified
-    );
   const facts = [
     ...antigravityPlanFacts(account),
     { label: 'Status', value: statusWord(account), mono: false },
-    ...(unverified ? [{ label: 'Runtime', value: 'Unverified on Ubuntu', mono: false }] : []),
     ...antigravityServiceFacts(account),
     {
       label: 'Sampled',

@@ -97,13 +97,5 @@
         ]
       }
     }
-  ],
-  "codexAutoSwitch": {
-    "enabled": true,
-    "thresholdPercent": 5,
-    "pollIntervalSeconds": 60,
-    "outcome": "healthy",
-    "message": "The active Codex account has more than 5% remaining.",
-    "activationInProgress": false
-  }
+  ]
 }

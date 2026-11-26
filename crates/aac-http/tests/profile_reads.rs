@@ -335,7 +335,7 @@ fn profile_compositions_answer_valid_inputs_and_refuse_the_rest() -> Result<()> 
     assert_eq!(status, 200, "{body}");
     assert_eq!(
         body,
-        r#"{"schemaVersion":1,"hostId":"ubuntu","profiles":[{"id":"a","email":"a@example.com","plan":null,"hostId":"ubuntu","available":true,"selected":false,"runtimeVerified":false,"verifiedAt":"2026-11-15T08:00:00.000Z"}]}"#
+        r#"{"schemaVersion":1,"hostId":"ubuntu","profiles":[{"id":"a","email":"a@example.com","plan":null,"hostId":"ubuntu","available":true,"selected":false,"verifiedAt":"2026-11-15T08:00:00.000Z"}]}"#
     );
     let mut missing = inventory.clone();
     missing["presentation"]["dates"] = json!({});

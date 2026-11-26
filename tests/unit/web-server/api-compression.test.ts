@@ -283,16 +283,25 @@ beforeEach(async () => {
   spyOn(accountDashboard, 'getAccountDashboard').mockResolvedValue({
     schemaVersion: 1,
     updatedAt: '2026-11-01T00:00:00.000Z',
-    accounts: [],
-    codexAutoSwitch: {
-      enabled: false,
-      thresholdPercent: 5,
-      thresholdUsedPercent: 95,
-      pollIntervalSeconds: 60,
-      outcome: 'disabled',
-      message: 'Fixture account usage. '.repeat(200),
-      activationInProgress: false,
-    },
+    accounts: [
+      {
+        id: 'codex:fixture',
+        provider: 'codex',
+        providerLabel: 'Codex',
+        label: 'fixture',
+        email: 'fixture@example.com',
+        plan: 'Pro',
+        platform: 'ubuntu',
+        source: 'fixture',
+        status: 'ok',
+        message: 'Fixture account usage. '.repeat(200),
+        fetchedAt: '2026-11-01T00:00:00.000Z',
+        sampledAt: '2026-11-01T00:00:00.000Z',
+        isActive: false,
+        windows: [],
+        capabilities: { codexProfile: 'fixture', claudeProfileId: null, claudePlatforms: [] },
+      },
+    ],
   });
   instance = await startServer({ port: 0, host: '127.0.0.1', staticDir });
   port = (instance.server.address() as AddressInfo).port;

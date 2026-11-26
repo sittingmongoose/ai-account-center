@@ -27,7 +27,6 @@ public struct AccountDashboard: Decodable, Sendable {
     schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
     updatedAt = try container.decode(String.self, forKey: .updatedAt)
     accounts = try container.decode([DashboardAccount].self, forKey: .accounts)
-    // `codexAutoSwitch` (retired with account switching, 2026-11-14) is no longer read.
     settings = try container.decodeIfPresent(AccountRefreshSettings.self, forKey: .settings)
     let topLevel = (try? container.decodeIfPresent([String].self, forKey: .hiddenProviders)) ?? nil
     hiddenProviders = Set((topLevel ?? []) + (settings?.hiddenProviders ?? []))

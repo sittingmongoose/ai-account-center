@@ -245,11 +245,7 @@ pub fn build(desktop: Desktop, secure: bool, input: Input<'_>) -> Result<Dashboa
     }
     settings["visibilityAvailable"] = json!(input.visibility_available);
     let mut dashboard = json!({
-        "schemaVersion":1,"updatedAt":"","settings":settings,"providers":providers,"accounts":accounts,
-        "codexAutoSwitch":{"enabled":false,"thresholdPercent":5,"thresholdUsedPercent":95,
-            "pollIntervalSeconds":60,"outcome":"disabled",
-            "message":"Account switching was removed. AI Account Center shows usage only.",
-            "activationInProgress":false}
+        "schemaVersion":1,"updatedAt":"","settings":settings,"providers":providers,"accounts":accounts
     });
     if let Some(server) = input.server {
         dashboard["server"] = server.clone();
@@ -263,4 +259,34 @@ pub fn build(desktop: Desktop, secure: bool, input: Input<'_>) -> Result<Dashboa
         dashboard,
         facts,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashboard_omits_retired_codex_auto_switch() {
+        let visibility = empty_visibility();
+        let lifecycle = Lifecycle::default();
+        let sample = build(
+            Desktop::Mac,
+            true,
+            Input {
+                rows: Vec::new(),
+                visibility: &visibility,
+                visibility_available: true,
+                refresh_seconds: 60,
+                lifecycle: &lifecycle,
+                signins: None,
+                server: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            sample.dashboard.get("codexAutoSwitch").is_none(),
+            "retired codexAutoSwitch wire block must be absent"
+        );
+    }
 }

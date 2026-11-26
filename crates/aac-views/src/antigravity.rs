@@ -668,15 +668,9 @@ pub fn public_profile(input: &Value) -> Option<Value> {
         "plan": public_plan(input.get("plan")),
         "available": verified && flag("available"),
         "selected": verified && flag("selected"),
-        "runtimeVerified": verified && flag("runtimeVerified"),
         "verifiedAt": canonical_timestamp(input.get("verifiedAt")).map_or(Value::Null, Value::String),
         "hostId": "ubuntu",
     }))
-}
-
-/// `publicRuntimeServiceProblem(value)` for the runtime layer: the probe's bounded row, or none.
-pub fn runtime_problem_value(value: Option<&Value>) -> Option<Value> {
-    runtime_problem(value)
 }
 
 /// `displayText(value, maximum)` for the runtime layer.
@@ -897,60 +891,6 @@ pub fn quotas_words(accounts: &[Value], now: f64, clock: f64) -> Option<Value> {
     Some(json!({ "schemaVersion": 1, "hostId": "ubuntu", "accounts": rows }))
 }
 
-fn pattern_text(value: Option<&Value>, ok: fn(&str) -> bool) -> Value {
-    value
-        .and_then(Value::as_str)
-        .filter(|text| ok(text))
-        .map_or(Value::Null, |text| json!(text))
-}
-
-/// `/^\d{1,2}\.\d{1,3}$/`.
-fn minor(text: &str) -> bool {
-    text.split_once('.').is_some_and(|(major, minor)| {
-        (1..=2).contains(&major.len())
-            && (1..=3).contains(&minor.len())
-            && major
-                .bytes()
-                .chain(minor.bytes())
-                .all(|b| b.is_ascii_digit())
-    })
-}
-
-/// `publicRuntimeServiceProblem(value)`.
-fn runtime_problem(value: Option<&Value>) -> Option<Value> {
-    let problem = value?.as_object()?;
-    let reason = problem.get("reason")?.as_str()?;
-    if ![
-        "missing-python-module",
-        "parser-mismatch",
-        "parser-import-failed",
-        "service-failed",
-    ]
-    .contains(&reason)
-    {
-        return None;
-    }
-    let module = |text: &str| {
-        ascii_word(
-            text,
-            |b| b.is_ascii_alphabetic() || b == b'_',
-            |b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.',
-            63,
-        )
-    };
-    let exit = problem.get("exitStatus").filter(|v| {
-        v.as_f64()
-            .is_some_and(|n| n.fract() == 0.0 && (0.0..=255.0).contains(&n))
-    });
-    Some(json!({
-        "reason": reason,
-        "module": pattern_text(problem.get("module"), module),
-        "python": pattern_text(problem.get("python"), minor),
-        "builtFor": pattern_text(problem.get("builtFor"), minor),
-        "exitStatus": or_null(exit),
-    }))
-}
-
 /// The public inventory from the runtime's inventory in the presentation envelope.
 pub fn inventory(envelope: Envelope) -> Admit<Value> {
     let ctx = Context::new(envelope.presentation);
@@ -962,9 +902,6 @@ pub fn inventory(envelope: Envelope) -> Admit<Value> {
     let mut out = Object::new();
     out.insert("schemaVersion".into(), json!(1));
     out.insert("hostId".into(), json!("ubuntu"));
-    if let Some(problem) = runtime_problem(input.get("runtimeServiceProblem")) {
-        out.insert("runtimeServiceProblem".into(), problem);
-    }
     let mut ids: Vec<&str> = Vec::new();
     let mut profiles = Vec::new();
     for row in rows {
@@ -983,7 +920,6 @@ pub fn inventory(envelope: Envelope) -> Admit<Value> {
             "hostId": "ubuntu",
             "available": is_true(row.get("available")),
             "selected": is_true(row.get("selected")),
-            "runtimeVerified": is_true(row.get("runtimeVerified")),
             "verifiedAt": time_value(verified.as_ref()),
         }));
     }
@@ -1033,7 +969,6 @@ mod tests {
         ] {
             assert_eq!(timestamp_shape(text), shaped, "{text}");
         }
-        assert!(minor("3.12") && !minor("3.") && !minor("123.1"));
     }
 
     #[test]
@@ -1148,7 +1083,7 @@ mod fact_tests {
     fn an_iso_word_without_its_fact_is_refused_by_the_inventory() {
         let data = json!({"schemaVersion":1,"hostId":"ubuntu","profiles":[{
             "id":"a","email":"a@example.com","plan":null,"hostId":"ubuntu",
-            "available":true,"selected":false,"runtimeVerified":false,
+            "available":true,"selected":false,
             "verifiedAt":"2026-11-15T13:30:00+05:30"}]});
         // The epoch fact is present but its ISO word is not: the context marks the read invalid.
         let only_epoch: Presentation = serde_json::from_value(json!({

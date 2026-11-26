@@ -2,8 +2,18 @@ import fs from 'fs';
 import { runManagedCommand } from '../utils/managed-process';
 import path from 'path';
 import { credentialFingerprint } from './registry';
-import type { UbuntuNativeCredentialStore } from './ubuntu-driver';
 import type { InstallReceipt, NativeCredential, VerifiedIdentity } from './types';
+
+/** Credential bytes and rollback handles are private application dependencies. */
+export interface UbuntuNativeCredentialStore {
+  read(): Promise<NativeCredential>;
+  /** Short-lived, file-identity-bound display cache; never used for activation guards. */
+  readInventoryIdentity?(
+    validate: (credential: NativeCredential) => Promise<VerifiedIdentity>
+  ): Promise<VerifiedIdentity>;
+  install(credential: NativeCredential, expectedFingerprint: string): Promise<InstallReceipt>;
+  rollback(receipt: InstallReceipt, previous: NativeCredential): Promise<boolean>;
+}
 
 const MAX_BYTES = 65_536;
 const FORMAT = 'antigravity-consumer-json';

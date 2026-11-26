@@ -16,16 +16,12 @@ pub struct Bound {
     pub status: String,
     /// Note words.
     pub note: String,
-    /// The live (selected) login whose runtime is not verified.
-    pub unverified: bool,
 }
 
 /// `antigravityView(data, inventory)` for Home.
 pub struct Native {
     /// Bound profiles.
     pub accounts: Vec<Bound>,
-    /// Why the runtime service is not running.
-    pub service_problem: Option<String>,
 }
 
 fn profile_id(v: Option<&Value>) -> Option<&str> {
@@ -40,74 +36,6 @@ fn profile_id(v: Option<&Value>) -> Option<&str> {
         && b.iter()
             .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-'))
     .then_some(s)
-}
-
-fn module_name(v: Option<&Value>) -> Option<&str> {
-    let s = match v {
-        Some(Value::String(s)) => s.as_str(),
-        _ => return None,
-    };
-    let b = s.as_bytes();
-    (!b.is_empty()
-        && b.len() <= 64
-        && (b[0].is_ascii_alphabetic() || b[0] == b'_')
-        && b.iter()
-            .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'.'))
-    .then_some(s)
-}
-
-fn minor(v: Option<&Value>) -> Option<&str> {
-    let s = match v {
-        Some(Value::String(s)) => s.as_str(),
-        _ => return None,
-    };
-    let (a, b) = s.split_once('.')?;
-    let digits = |p: &str, max: usize| {
-        !p.is_empty() && p.len() <= max && p.bytes().all(|c| c.is_ascii_digit())
-    };
-    (digits(a, 2) && digits(b, 3)).then_some(s)
-}
-
-/// antigravity-data.mjs `antigravityServiceProblem`.
-fn service_problem(inventory: Option<&Value>) -> Option<String> {
-    let problem = get(inventory, "runtimeServiceProblem");
-    if !truthy(problem) || !matches!(problem, Some(Value::Object(_) | Value::Array(_))) {
-        return None;
-    }
-    let name = module_name(get(problem, "module")).unwrap_or("unknown");
-    let python = minor(get(problem, "python"));
-    let built = minor(get(problem, "builtFor"));
-    let moved = match (python, built) {
-        (Some(p), Some(b)) if p != b => format!(" (Python {p}; runtime built for {b})"),
-        _ => String::new(),
-    };
-    let rebuild = "; managed updates wait until the runtime bundle is rebuilt";
-    let reason = get(problem, "reason");
-    if is_str(reason, "missing-python-module") {
-        return Some(format!(
-            "Runtime service failed: missing Python module {name}{moved}{rebuild}"
-        ));
-    }
-    if is_str(reason, "parser-mismatch") {
-        return Some(format!(
-            "Runtime service failed: Python module {name} is not the pinned version{moved}{rebuild}"
-        ));
-    }
-    if is_str(reason, "parser-import-failed") {
-        return Some(format!(
-            "Runtime service failed: Python module {name} does not load{moved}{rebuild}"
-        ));
-    }
-    if is_str(reason, "service-failed") {
-        let exit = finite(get(problem, "exitStatus"))
-            .filter(|x| x.fract() == 0.0 && (1.0..=255.0).contains(x));
-        return Some(format!(
-            "Runtime service failed{}; managed updates wait until its cause is fixed",
-            exit.map(|x| format!(" (exit status {x})"))
-                .unwrap_or_default()
-        ));
-    }
-    None
 }
 
 /// accounts-data.mjs `timeLabel(value, 'Sampled')`.
@@ -151,7 +79,6 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
             || !is_str(get(p, "hostId"), "ubuntu")
             || !flag("available")
             || !flag("selected")
-            || !flag("runtimeVerified")
         {
             continue;
         }
@@ -177,14 +104,9 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
             continue;
         };
         let selected = is_true(get(p, "selected"));
-        let verified = is_true(get(p, "runtimeVerified"));
         let status_field = str_field(account.get("status"))?;
         let lead = if selected {
-            if verified {
-                "Selected · running verified"
-            } else {
-                "Selected · runtime unverified"
-            }
+            "Selected"
         } else if status_field == Some("needs_sign_in") {
             "Sign-in needed"
         } else if is_true(get(p, "available")) {
@@ -220,13 +142,9 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
             profile: id.into(),
             status: format!("{lead}{tail}"),
             note,
-            unverified: selected && !verified,
         });
     }
-    Ok(Native {
-        accounts: bound,
-        service_problem: service_problem(inventory),
-    })
+    Ok(Native { accounts: bound })
 }
 
 /// antigravity-data.mjs `antigravityMissingWindow`.

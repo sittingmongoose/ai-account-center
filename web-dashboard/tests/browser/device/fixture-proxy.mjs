@@ -7,7 +7,7 @@
 // entry, paired trays, an Update apps run, and the sign-in and remove flows), for Accounts & Settings device checks.
 // With AAC_FIXTURE_ACCOUNTS=deep (rich plus the deep-review states, see /mnt/Cursor/share/ai-account-center/device-fixture/),
 // the Update apps run is the committed contract run (updateJob({ restartFailed: true, contract: true })) plus one plain
-// unknown row, the Antigravity login is selected but its runtime unverified, and two Claude accounts share the name
+// unknown row, the Antigravity login is selected, and two Claude accounts share the name
 // before the @ (sam@alpha.example, sam@beta.example) so Compare keeps their full addresses.
 // D7: with AAC_FIXTURE_RUST_HOME=<aac-http binary> (the dashboard's Rust Home switch on), the dashboard answer offers
 // the server's Home view and GET /api/views/home is answered from the same fixtures, the view built by the proxy's own
@@ -130,8 +130,8 @@ function deepDashboard() {
 	}
 	return d;
 }
-const deepAntigravity = () => ({ schemaVersion: 1, hostId: 'ubuntu', activationSupported: false,
-	profiles: [{ id: 'a1', email: 'agy.workspace@example.invalid', plan: 'pro', hostId: 'ubuntu', available: true, selected: true, runtimeVerified: false, verifiedAt: new Date().toISOString() }] });
+const deepAntigravity = () => ({ schemaVersion: 1, hostId: 'ubuntu',
+	profiles: [{ id: 'a1', email: 'agy.workspace@example.invalid', plan: 'pro', hostId: 'ubuntu', available: true, selected: true, verifiedAt: new Date().toISOString() }] });
 function deepRegistry() {
 	const r = richJson('GET', '/api/accounts/registry');
 	for (const a of r.accounts) if (a.id === 'antigravity:a1') a.id = 'antigravity:profile:a1';

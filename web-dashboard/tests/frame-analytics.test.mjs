@@ -35,7 +35,6 @@ const dashboard = (extra = {}) => ({
     },
   ],
   settings: { refreshIntervalSeconds: 120, hiddenProviders: [], hiddenAccountIds: [] },
-  codexAutoSwitch: { enabled: true, thresholdPercent: 10 },
   ...extra,
 });
 

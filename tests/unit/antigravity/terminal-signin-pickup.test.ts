@@ -9,11 +9,11 @@ import os from 'os';
 import path from 'path';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
-import {
-  createAntigravityRuntime,
-  type SavedQuotaRequest,
-  type SavedQuotaSnapshot,
-} from '../../../src/antigravity/runtime-composition';
+import type {
+  SavedQuotaRequest,
+  SavedQuotaSnapshot,
+} from '../../../src/antigravity/quota-worker-transport';
+import { AntigravityUsageService } from '../../../src/antigravity/usage-service';
 import { runAntigravityTerminalSignIn } from '../../../src/antigravity/terminal-signin';
 import type {
   NativeCredential,
@@ -90,45 +90,61 @@ describe('terminal sign-in pickup', () => {
     );
     const revisionBefore = registry.readCredential('party', 'ubuntu').credentialRevision;
 
-    const runtime = createAntigravityRuntime({
-      registry,
-      driver: {
-        hostId: 'ubuntu',
-        canProveRuntimeIdentity: async () => false,
-        readCurrentCredential: async () => {
-          throw new Error('no live login in this fixture');
-        },
-        validateCredential: async (value) => identityOf(value, NOW),
-        inspectProcesses: async () => {
-          throw new Error('unused');
-        },
-        stopProcesses: async () => {
-          throw new Error('unused');
-        },
-        installCredential: async () => {
-          throw new Error('unused');
-        },
-        readStoredIdentity: async () => {
-          throw new Error('unused');
-        },
-        restartProcesses: async () => {
-          throw new Error('unused');
-        },
-        proveRuntimeIdentity: async () => {
-          throw new Error('unused');
-        },
-        rollbackCredential: async () => {
-          throw new Error('unused');
-        },
-        stopOwnedRestarts: async () => {
-          throw new Error('unused');
-        },
+    const readProfiles = () =>
+      registry.listProfiles().map((profile) => {
+        const credential = registry.readCredential(profile.id, 'ubuntu');
+        return {
+          id: profile.id,
+          email: profile.email,
+          plan: profile.plan,
+          identityKey: profile.identityKey,
+          credentialRevision: credential.credentialRevision,
+          identityVerified: true,
+          available: true,
+          selected: false,
+          verifiedAt: profile.verifiedAt,
+        };
+      });
+    const usageService = new AntigravityUsageService({
+      readProfiles: async () => readProfiles(),
+      collectQuota: async (profileId) => {
+        const profile = registry.listProfiles().find((item) => item.id === profileId)!;
+        const credential = registry.readCredential(profileId, 'ubuntu');
+        const snapshot = quotaSnapshot({
+          profileId: profile.id,
+          identityKey: profile.identityKey,
+          credentialRevision: credential.credentialRevision,
+          email: profile.email,
+          plan: profile.plan,
+          credential,
+        });
+        return {
+          profileId: snapshot.profileId,
+          identityKey: snapshot.identityKey,
+          credentialRevision: snapshot.credentialRevision,
+          status: 'ok',
+          email: snapshot.email,
+          plan: snapshot.plan,
+          fetchedAt: snapshot.fetchedAt,
+          sampledAt: snapshot.sampledAt,
+          windows: snapshot.windows.map((window) => ({
+            key: window.key,
+            label: window.label,
+            usedPercent: 100 - (window.remainingPercent ?? 0),
+            remainingPercent: window.remainingPercent,
+            resetAt: window.resetAt,
+            windowMinutes: null,
+            used: null,
+            limit: null,
+            unit: null,
+            kind: 'rate_limit' as const,
+          })),
+        };
       },
       now: () => NOW,
-      collectQuota: async (request) => quotaSnapshot(request),
     });
     try {
-      expect((await runtime.getAccounts({ refresh: true }))[0].status).toBe('ok');
+      expect((await usageService.getAccounts({ refresh: true }))[0].status).toBe('ok');
 
       // The terminal command runs with a fake CLI that signs in as v2.
       let polls = 0;
@@ -194,10 +210,10 @@ describe('terminal sign-in pickup', () => {
       // The import is visible: a new revision, and the dashboard serves it.
       const revisionAfter = registry.readCredential('party', 'ubuntu').credentialRevision;
       expect(revisionAfter).not.toBe(revisionBefore);
-      const refreshed = await runtime.getAccounts({ refresh: true });
+      const refreshed = await usageService.getAccounts({ refresh: true });
       expect(refreshed[0].status).toBe('ok');
       expect(refreshed[0].windows.length).toBe(1);
-      const cached = runtime.cachedAccounts();
+      const cached = usageService.cachedAccounts(readProfiles());
       expect(cached[0].status).toBe('ok');
       expect(cached[0].email).toBe('party@example.com');
     } finally {

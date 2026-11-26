@@ -1,13 +1,5 @@
 [
   {
-    "word": "aborted",
-    "cause": "cancelled",
-    "sources": [
-      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/commands/antigravity-command.ts:result.status"
-    ]
-  },
-  {
     "word": "absent",
     "cause": "not_installed",
     "sources": [
@@ -60,7 +52,6 @@
     "sources": [
       "scripts/app-updates/app_update_antigravity.py:status",
       "scripts/app-updates/app_updates.py:status",
-      "src/antigravity/managed-update-command.ts:status",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:row.status",
@@ -108,24 +99,10 @@
     ]
   },
   {
-    "word": "adopted",
-    "cause": null,
-    "sources": [
-      "src/antigravity/release-status.ts:status.adoption"
-    ]
-  },
-  {
     "word": "after_handoff",
     "cause": null,
     "sources": [
       "scripts/app-updates/app_update_t3_rpc.py:reason"
-    ]
-  },
-  {
-    "word": "agent_state",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_attestor.py:agentState"
     ]
   },
   {
@@ -178,7 +155,6 @@
     "cause": "provider_error",
     "sources": [
       "scripts/antigravity/native_credential_worker.py:ValueError",
-      "scripts/antigravity/runtime/native_credential_worker.py:ValueError",
       "src/antigravity/native-credential-transport.ts:failure"
     ]
   },
@@ -237,8 +213,7 @@
     "word": "before",
     "cause": null,
     "sources": [
-      "scripts/antigravity/native_credential_worker.py:rollbackState",
-      "scripts/antigravity/runtime/native_credential_worker.py:rollbackState"
+      "scripts/antigravity/native_credential_worker.py:rollbackState"
     ]
   },
   {
@@ -279,16 +254,6 @@
     "sources": [
       "src/web-server/services/analytics-remote-transport.ts:cause",
       "src/web-server/services/usage-scan-binary.ts:cause"
-    ]
-  },
-  {
-    "word": "binding",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningContexts']",
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningNativeKeys']",
-      "scripts/antigravity/runtime/resident_broker.py:set(state.get('runningContexts', {}))",
-      "scripts/antigravity/runtime/resident_broker.py:state['restartContexts']"
     ]
   },
   {
@@ -343,19 +308,9 @@
       "scripts/app-updates/app_updates.py:UpdateFailure",
       "scripts/app-updates/app_updates.py:error.code",
       "src/antigravity/account-lifecycle.ts:error.code",
-      "src/antigravity/switch-service.ts:error.code",
       "src/antigravity/types.ts:ActivationStatus",
       "src/codex-auth/codex-activation-runtime.ts:error.code",
-      "src/commands/antigravity-command.ts:error.code",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
-    ]
-  },
-  {
-    "word": "busy-or-unproven-idle",
-    "cause": "busy",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
     ]
   },
   {
@@ -497,17 +452,9 @@
     ]
   },
   {
-    "word": "census-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "changed",
     "cause": null,
     "sources": [
-      "src/antigravity/release-status.ts:status.nativeCli",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason"
     ]
   },
@@ -573,104 +520,6 @@
     ]
   },
   {
-    "word": "cleanup-current-pin-conflict",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-file-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-file-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-hook-mismatch",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-hook-span-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-json-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-original-hook-present",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-parent-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-postcommit-conflict",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-proposal-unrelated-change",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-read-failed",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-unrelated-change",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-write-committed-sync-failed",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
-    "word": "cleanup-write-failed",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
-    ]
-  },
-  {
     "word": "closed",
     "cause": null,
     "sources": [
@@ -697,8 +546,6 @@
     "word": "committed",
     "cause": null,
     "sources": [
-      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError",
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']",
       "src/codex-auth/codex-profile-registry.ts:native?.status",
       "src/shared/private-file-lease.ts:answer.status",
       "src/shared/private-file-lease.ts:status"
@@ -717,8 +564,6 @@
     "cause": null,
     "sources": [
       "scripts/app-updates/app_update_t3.py:job.get('state')",
-      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/commands/antigravity-command.ts:result.status",
       "src/web-server/services/app-update-contract.ts:state"
     ]
   },
@@ -749,16 +594,6 @@
     "cause": "refused",
     "sources": [
       "scripts/app-updates/app_update_t3_rpc.py:reason"
-    ]
-  },
-  {
-    "word": "contexts",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningContexts']",
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningNativeKeys']",
-      "scripts/antigravity/runtime/resident_broker.py:set(state.get('runningContexts', {}))",
-      "scripts/antigravity/runtime/resident_broker.py:state['restartContexts']"
     ]
   },
   {
@@ -801,15 +636,9 @@
     "word": "current",
     "cause": null,
     "sources": [
-      "scripts/antigravity/rebuild_bundle.py:result['status']",
-      "scripts/antigravity/rebuild_bundle.py:status",
       "scripts/app-updates/app_update_antigravity.py:t3_row.get('status')",
       "scripts/app-updates/app_update_common.py:status",
       "scripts/app-updates/app_updates.py:payload.get('status')",
-      "src/antigravity/managed-updater.ts:status",
-      "src/antigravity/production-runtime.ts:result.status",
-      "src/antigravity/runtime-refresh.ts:status",
-      "src/antigravity/terminal-refresh.ts:result.status",
       "src/web-server/agent-usage/agent-usage-markdown.ts:STATUS_WORDS",
       "src/web-server/services/analytics-remote-sources.ts:clock.state",
       "src/web-server/services/analytics-remote-sources.ts:state",
@@ -1132,14 +961,6 @@
     ]
   },
   {
-    "word": "exact-conversation-required",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "exact-grant-unavailable",
     "cause": "provider_error",
     "sources": [
@@ -1174,14 +995,6 @@
     ]
   },
   {
-    "word": "expired-checkpoint",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "extension_update_required",
     "cause": null,
     "sources": [
@@ -1201,11 +1014,6 @@
       "scripts/app-updates/app_update_zcode.py:state",
       "scripts/app-updates/app_update_zcode.py:status",
       "scripts/app-updates/app_updates.py:row['status']",
-      "src/antigravity/managed-update-command.ts:status",
-      "src/antigravity/managed-update-command.ts:value.status",
-      "src/antigravity/managed-updater.ts:status",
-      "src/antigravity/runtime-health.ts:fields.get('ActiveState')",
-      "src/antigravity/runtime-refresh.ts:status",
       "src/codex-auth/codex-login-family.ts:state",
       "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason",
       "src/codex-auth/codex-profile-renewal.ts:attempt.state",
@@ -1289,84 +1097,6 @@
     ]
   },
   {
-    "word": "foreground",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:state"
-    ]
-  },
-  {
-    "word": "foreground-already-attached",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-attach-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-context-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-input-budget",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError",
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-input-incomplete",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-input-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-not-attached",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-not-ready",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreground-terminal-required",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "foreign-owner",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/linux_process_guard.py:GuardError"
-    ]
-  },
-  {
     "word": "foreign-replacement",
     "cause": null,
     "sources": [
@@ -1378,7 +1108,6 @@
     "cause": null,
     "sources": [
       "scripts/antigravity/quota_adapter.py:status",
-      "src/antigravity/runtime-composition.ts:snapshot.status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-service.ts:sample.status",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
@@ -1394,13 +1123,6 @@
     ]
   },
   {
-    "word": "frozen-terminal-observer-binding-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_header_graphics.py:RuntimeError"
-    ]
-  },
-  {
     "word": "fulfilled",
     "cause": null,
     "sources": [
@@ -1413,14 +1135,6 @@
     "cause": null,
     "sources": [
       "src/status-native/native-loader.ts:typeof loaded?.NativeStatus"
-    ]
-  },
-  {
-    "word": "gate-closed",
-    "cause": null,
-    "sources": [
-      "src/antigravity/runtime-refresh.ts:status",
-      "src/antigravity/terminal-refresh.ts:result.status"
     ]
   },
   {
@@ -1604,10 +1318,6 @@
     "word": "idle",
     "cause": null,
     "sources": [
-      "scripts/antigravity/runtime/native_status_attestor.py:STATES",
-      "scripts/antigravity/runtime/native_status_attestor.py:value['agent_state']",
-      "scripts/antigravity/runtime/native_status_omitted_counters.py:frame['agent_state']",
-      "scripts/antigravity/runtime/native_status_service.py:value['agent_state']",
       "src/web-server/status/report-schema.ts:THREAD_STATES"
     ]
   },
@@ -1618,9 +1328,6 @@
       "scripts/app-updates/app_update_common.py:CAUSES",
       "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
       "scripts/app-updates/app_update_zcode.py:UpdateFailure",
-      "src/antigravity/managed-update-command.ts:status",
-      "src/antigravity/managed-update-command.ts:value.status",
-      "src/antigravity/managed-updater.ts:status",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
       "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
@@ -1655,14 +1362,6 @@
     ]
   },
   {
-    "word": "incomplete-stop",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "inflight",
     "cause": null,
     "sources": [
@@ -1670,17 +1369,9 @@
     ]
   },
   {
-    "word": "initializing",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_attestor.py:STATES"
-    ]
-  },
-  {
     "word": "input",
     "cause": null,
     "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:state",
       "src/web-server/rust-service.ts:reason"
     ]
   },
@@ -1688,8 +1379,7 @@
     "word": "installed",
     "cause": null,
     "sources": [
-      "scripts/antigravity/native_credential_worker.py:rollbackState",
-      "scripts/antigravity/runtime/native_credential_worker.py:rollbackState"
+      "scripts/antigravity/native_credential_worker.py:rollbackState"
     ]
   },
   {
@@ -1805,24 +1495,10 @@
     ]
   },
   {
-    "word": "invalid-conversation",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "invalid-profile",
     "cause": "damaged",
     "sources": [
       "src/antigravity/types.ts:ActivationStatus"
-    ]
-  },
-  {
-    "word": "invalid-request",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/linux_process_guard.py:GuardError"
     ]
   },
   {
@@ -1832,76 +1508,6 @@
       "src/web-server/services/analytics-remote-sources.ts:causes",
       "src/web-server/services/analytics-remote-transport.ts:AnalyticsRootCause",
       "src/web-server/services/analytics-remote-transport.ts:ROOT_CAUSES"
-    ]
-  },
-  {
-    "word": "ipc-already-exists",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-directory-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-endpoint-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-frame-too-large",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-invalid-json",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-invalid-request",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-method-unsupported",
-    "cause": "refused",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-output-budget",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-peer-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "ipc-request-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
     ]
   },
   {
@@ -1989,13 +1595,6 @@
       "src/store/usage-report.ts:state",
       "src/web-server/services/analytics-remote-transport.ts:item.state",
       "src/web-server/services/analytics-remote-transport.ts:state"
-    ]
-  },
-  {
-    "word": "listening",
-    "cause": null,
-    "sources": [
-      "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState"
     ]
   },
   {
@@ -2118,18 +1717,10 @@
     ]
   },
   {
-    "word": "managed-runtime-request-failed",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
-    ]
-  },
-  {
     "word": "missing",
     "cause": "not_installed",
     "sources": [
       "src/antigravity/account-lifecycle.ts:error.code",
-      "src/antigravity/release-status.ts:status.nativeCli",
       "src/codex-auth/codex-renewal-planner.ts:profile.state",
       "src/codex-auth/codex-renewal-planner.ts:state",
       "src/codex-auth/commands/show-detail-view.ts:authState",
@@ -2177,10 +1768,7 @@
     "cause": "not_installed",
     "sources": [
       "scripts/antigravity/runtime_health.py:reason",
-      "scripts/antigravity/runtime_health.py:result.get('reason')",
-      "src/antigravity/runtime-health.ts:PARSER_REASONS",
-      "src/antigravity/runtime-health.ts:problem.reason",
-      "src/antigravity/usage-contract.ts:reason"
+      "scripts/antigravity/runtime_health.py:result.get('reason')"
     ]
   },
   {
@@ -2208,53 +1796,10 @@
     ]
   },
   {
-    "word": "native",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:reason"
-    ]
-  },
-  {
-    "word": "native-account-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "native-output-budget-exceeded",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_header.py:ValueError"
-    ]
-  },
-  {
-    "word": "native-plan-unbound",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
     "word": "native-profile-unavailable",
     "cause": "provider_error",
     "sources": [
-      "scripts/antigravity/native_status_userinfo.py:ValueError",
-      "scripts/antigravity/runtime/native_status_userinfo.py:ValueError"
-    ]
-  },
-  {
-    "word": "native-publisher-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_publisher.py:ValueError"
-    ]
-  },
-  {
-    "word": "native-publisher-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/native_status_publisher.py:ValueError"
+      "scripts/antigravity/native_status_userinfo.py:ValueError"
     ]
   },
   {
@@ -2297,8 +1842,6 @@
       "scripts/antigravity/auth_platforms.py:getattr(error, 'status', None)",
       "scripts/antigravity/quota_adapter.py:base['status']",
       "scripts/antigravity/quota_adapter.py:status",
-      "scripts/antigravity/runtime/auth_platforms.py:getattr(error, 'status', None)",
-      "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-normalization.ts:status",
       "src/antigravity/usage-service.ts:result.status",
@@ -2584,14 +2127,6 @@
     ]
   },
   {
-    "word": "no-installation",
-    "cause": null,
-    "sources": [
-      "src/antigravity/runtime-refresh.ts:status",
-      "src/antigravity/terminal-refresh.ts:result.status"
-    ]
-  },
-  {
     "word": "no-matching-code-login",
     "cause": "signin_needed",
     "sources": [
@@ -2605,14 +2140,6 @@
     "sources": [
       "src/web-server/scoreboard/scoreboard-view-types.ts:UnscoredReason",
       "src/web-server/scoreboard/scoreboard-view.ts:reason"
-    ]
-  },
-  {
-    "word": "no-recovery-pending",
-    "cause": null,
-    "sources": [
-      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/commands/antigravity-command.ts:result.status"
     ]
   },
   {
@@ -2643,7 +2170,6 @@
     "sources": [
       "scripts/app-updates/app_update_common.py:CAUSES",
       "scripts/app-updates/app_update_common.py:cause",
-      "src/antigravity/release-status.ts:status.adoption",
       "src/codex-auth/codex-login-family.ts:state",
       "src/codex-auth/codex-renewal-dry-run.ts:state",
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
@@ -2761,13 +2287,6 @@
     ]
   },
   {
-    "word": "not-stopped",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "now",
     "cause": null,
     "sources": [
@@ -2824,7 +2343,6 @@
       "scripts/account-usage/plan_usage.py:status",
       "scripts/antigravity/quota_adapter.py:service['status']",
       "scripts/claude-signin/claude_signin.py:row['state']",
-      "src/antigravity/runtime-composition.ts:snapshot.status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-normalization.ts:status",
       "src/antigravity/usage-service.ts:result.status",
@@ -3027,21 +2545,6 @@
     ]
   },
   {
-    "word": "output",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:state"
-    ]
-  },
-  {
-    "word": "owned-cleanup-incomplete",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "owner",
     "cause": null,
     "sources": [
@@ -3063,22 +2566,11 @@
     ]
   },
   {
-    "word": "parser",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:info.get('reason')",
-      "scripts/antigravity/rebuild_bundle.py:reason"
-    ]
-  },
-  {
     "word": "parser-import-failed",
     "cause": "damaged",
     "sources": [
       "scripts/antigravity/runtime_health.py:reason",
-      "scripts/antigravity/runtime_health.py:result.get('reason')",
-      "src/antigravity/runtime-health.ts:PARSER_REASONS",
-      "src/antigravity/runtime-health.ts:problem.reason",
-      "src/antigravity/usage-contract.ts:reason"
+      "scripts/antigravity/runtime_health.py:result.get('reason')"
     ]
   },
   {
@@ -3086,10 +2578,7 @@
     "cause": "damaged",
     "sources": [
       "scripts/antigravity/runtime_health.py:reason",
-      "scripts/antigravity/runtime_health.py:result.get('reason')",
-      "src/antigravity/runtime-health.ts:PARSER_REASONS",
-      "src/antigravity/runtime-health.ts:problem.reason",
-      "src/antigravity/usage-contract.ts:reason"
+      "scripts/antigravity/runtime_health.py:result.get('reason')"
     ]
   },
   {
@@ -3166,27 +2655,6 @@
     "cause": null,
     "sources": [
       "scripts/app-updates/app_update_antigravity.py:UpdateFailure"
-    ]
-  },
-  {
-    "word": "pid",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:state"
-    ]
-  },
-  {
-    "word": "pidfd-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/linux_process_guard.py:GuardError"
-    ]
-  },
-  {
-    "word": "pinned",
-    "cause": null,
-    "sources": [
-      "src/antigravity/release-status.ts:status.nativeCli"
     ]
   },
   {
@@ -3288,13 +2756,6 @@
     "sources": [
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
       "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
-    ]
-  },
-  {
-    "word": "process-exited",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
     ]
   },
   {
@@ -3440,8 +2901,6 @@
       "scripts/account-usage/plan_common.py:failure_code",
       "scripts/antigravity/quota_adapter.py:base['status']",
       "scripts/antigravity/quota_adapter.py:status",
-      "src/antigravity/runtime-composition.ts:snapshot.status",
-      "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-normalization.ts:cacheReason",
       "src/antigravity/usage-normalization.ts:value.cacheReason",
@@ -3535,7 +2994,6 @@
     "sources": [
       "scripts/account-usage/claude_usage.py:reason",
       "scripts/antigravity/runtime_health.py:reason",
-      "src/antigravity/runtime-health.ts:reason",
       "src/web-server/status/card-schema.ts:reason"
     ]
   },
@@ -3548,87 +3006,13 @@
     ]
   },
   {
-    "word": "rebuilt",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:status"
-    ]
-  },
-  {
-    "word": "recovered",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:status"
-    ]
-  },
-  {
-    "word": "recovery-busy",
-    "cause": "busy",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "recovery-context-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "recovery-replay",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
     "word": "recovery-required",
     "cause": null,
     "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']",
       "src/antigravity/account-lifecycle.ts:error.code",
       "src/antigravity/registry.ts:state",
       "src/antigravity/registry.ts:state.transaction.state",
-      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
       "src/antigravity/types.ts:ActivationStatus"
-    ]
-  },
-  {
-    "word": "recovery-running",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
-    ]
-  },
-  {
-    "word": "recovery-stop-incomplete",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "recovery-stop-unproved",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "recovery-stopped",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
-    ]
-  },
-  {
-    "word": "recovery-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
     ]
   },
   {
@@ -3655,15 +3039,6 @@
       "src/web-server/services/account-dashboard-service.ts:cacheReason",
       "src/web-server/services/account-dashboard-types.ts:UsageCacheReason",
       "src/web-server/services/usage-failover-service.ts:cacheReason"
-    ]
-  },
-  {
-    "word": "refreshed",
-    "cause": null,
-    "sources": [
-      "src/antigravity/production-runtime.ts:result.status",
-      "src/antigravity/runtime-refresh.ts:status",
-      "src/antigravity/terminal-refresh.ts:result.status"
     ]
   },
   {
@@ -3771,13 +3146,6 @@
     ]
   },
   {
-    "word": "resident-broker-disconnected",
-    "cause": "ssh_unreachable",
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
-    ]
-  },
-  {
     "word": "restart_context",
     "cause": null,
     "sources": [
@@ -3806,33 +3174,9 @@
       "scripts/app-updates/app_updates.py:row['status']",
       "scripts/app-updates/app_updates.py:status",
       "scripts/app-updates/app_updates.py:value['status']",
-      "src/antigravity/managed-updater.ts:status",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:row.status"
-    ]
-  },
-  {
-    "word": "restart-context-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "restored-previous",
-    "cause": null,
-    "sources": [
-      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/commands/antigravity-command.ts:result.status"
-    ]
-  },
-  {
-    "word": "resumed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:message.get('switchState')",
-      "scripts/antigravity/runtime/resident_broker.py:switchState"
     ]
   },
   {
@@ -3864,13 +3208,6 @@
     "cause": null,
     "sources": [
       "src/web-server/status/report-schema.ts:ITEM_STATES"
-    ]
-  },
-  {
-    "word": "reviewed",
-    "cause": null,
-    "sources": [
-      "src/antigravity/managed-updater.ts:NativeReviewState"
     ]
   },
   {
@@ -3928,465 +3265,11 @@
     ]
   },
   {
-    "word": "runtime_paused",
-    "cause": "held",
-    "sources": [
-      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
-    ]
-  },
-  {
-    "word": "runtime_paused_blocked",
-    "cause": "refused",
-    "sources": [
-      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
-    ]
-  },
-  {
     "word": "runtime_record_invalid",
     "cause": "damaged",
     "sources": [
       "scripts/app-updates/app_update_antigravity.py:probe_reason",
       "scripts/app-updates/app_update_antigravity.py:reason"
-    ]
-  },
-  {
-    "word": "runtime_unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
-    ]
-  },
-  {
-    "word": "runtime-adoption-already-present",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-checkpoint-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-checkpoint-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError",
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-checkpoint-size",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-file-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-file-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-parent-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-post-write-conflict",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-restore-conflict",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-adoption-write-conflict",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-backup-divergent",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-bundle-already-present",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-bundle-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-bundle-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-bundle-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-descriptor-stale",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-endpoint-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime_control.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-endpoint-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime_control.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-installation-already-present",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-installation-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime_installation.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-installation-foreign",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-installation-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError",
-      "scripts/antigravity/runtime_installation.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-installation-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime_installation.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-method-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime_control.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-native-binary-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError",
-      "scripts/antigravity/runtime_installation.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-native-binary-unsafe",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError",
-      "scripts/antigravity/runtime_installation.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-native-gate-pending",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError",
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-native-unreviewed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-native-writer-present",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-not-adopted",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-original-command-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-package-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-package-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError",
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-parser-check-failed",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-parser-package-mismatch",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime/resident_main.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "runtime-parser-unusable",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-preparation-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-preparation-recovery-refused",
-    "cause": "refused",
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-preparation-recovery-required",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-private-directory-required",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-proof-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/native_status_service.py:ContinuityError",
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError",
-      "scripts/antigravity/runtime/ubuntu_runtime_factory.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "runtime-readiness-provider-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError",
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-rebuild-diverged",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-rebuild-journal-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-rebuild-journal-size",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-rebuild-nothing-to-recover",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-rebuild-recovery-required",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-registry-unreadable",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-request-size",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime_control.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-response-incomplete",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime_control.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-response-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/runtime_control.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-response-size",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime_control.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-service-already-present",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-service-readiness-failed",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError",
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-service-restore-conflict",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-shell-profile-conflict",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/install_runtime.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-startup-not-ready",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "runtime-transaction-active",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-ubuntu-only",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError",
-      "scripts/antigravity/install_runtime.py:InstallationError",
-      "scripts/antigravity/rebuild_bundle.py:InstallationError"
-    ]
-  },
-  {
-    "word": "runtime-unit-path-invalid",
-    "cause": "damaged",
-    "sources": [
-      "scripts/antigravity/adopt_runtime.py:InstallationError"
     ]
   },
   {
@@ -4455,8 +3338,7 @@
     "word": "seen",
     "cause": null,
     "sources": [
-      "scripts/analytics-remote/analytics_usage_remote.py:state",
-      "scripts/antigravity/runtime/resident_broker.py:state"
+      "scripts/analytics-remote/analytics_usage_remote.py:state"
     ]
   },
   {
@@ -4495,27 +3377,10 @@
     ]
   },
   {
-    "word": "service-failed",
-    "cause": "provider_error",
-    "sources": [
-      "src/antigravity/runtime-health.ts:REASONS",
-      "src/antigravity/runtime-health.ts:problem.reason",
-      "src/antigravity/runtime-health.ts:reason",
-      "src/antigravity/usage-contract.ts:reason"
-    ]
-  },
-  {
     "word": "serving",
     "cause": null,
     "sources": [
       "src/web-server/rust-service-supervisor.ts:state"
-    ]
-  },
-  {
-    "word": "session-observation-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
     ]
   },
   {
@@ -4693,8 +3558,6 @@
     "word": "stale",
     "cause": null,
     "sources": [
-      "scripts/antigravity/rebuild_bundle.py:result['status']",
-      "scripts/antigravity/rebuild_bundle.py:status",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
@@ -4714,14 +3577,6 @@
     ]
   },
   {
-    "word": "stale-checkpoint",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "stale-confirmation",
     "cause": null,
     "sources": [
@@ -4733,15 +3588,6 @@
     "cause": null,
     "sources": [
       "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
-    ]
-  },
-  {
-    "word": "stale-process",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/linux_process_guard.py:GuardError",
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
     ]
   },
   {
@@ -4787,7 +3633,6 @@
       "scripts/account-usage/failover_usage.py:status",
       "scripts/antigravity/quota_adapter.py:status",
       "scripts/app-updates/app_update_common.py:(status, code)",
-      "src/antigravity/managed-update-command.ts:status",
       "src/web-server/rust-service.ts:statusCodes",
       "src/web-server/services/usage-failover-contract.ts:status"
     ]
@@ -4796,18 +3641,7 @@
     "word": "stopped",
     "cause": null,
     "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']",
-      "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState",
       "src/web-server/services/claude-account-lifecycle.ts:state"
-    ]
-  },
-  {
-    "word": "stopping",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/foreground_launcher.py:message.get('switchState')",
-      "scripts/antigravity/runtime/resident_broker.py:switchState"
     ]
   },
   {
@@ -4821,7 +3655,6 @@
     "word": "string",
     "cause": null,
     "sources": [
-      "src/antigravity/ubuntu-runtime-bridge.ts:typeof value.restartState",
       "src/web-server/rust-profile-input.ts:typeof value.state",
       "src/web-server/services/additional-account-service.ts:museTransientFailure",
       "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
@@ -5020,56 +3853,12 @@
     ]
   },
   {
-    "word": "target-running",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
-    ]
-  },
-  {
     "word": "team_mismatch",
     "cause": "team_mismatch",
     "sources": [
       "scripts/account-usage/failover_usage.py:FAILURES",
       "scripts/account-usage/muse_console.py:MuseError",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
-    ]
-  },
-  {
-    "word": "terminal-control-unsupported",
-    "cause": "refused",
-    "sources": [
-      "scripts/antigravity/runtime/native_header.py:ValueError"
-    ]
-  },
-  {
-    "word": "terminal-read-unavailable",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "terminal-reply-budget-exceeded",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_header.py:ValueError"
-    ]
-  },
-  {
-    "word": "terminal-size-unsupported",
-    "cause": "refused",
-    "sources": [
-      "scripts/antigravity/runtime/native_header.py:ValueError",
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "thinking",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_attestor.py:STATES"
     ]
   },
   {
@@ -5157,34 +3946,6 @@
     ]
   },
   {
-    "word": "tool_use",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/native_status_attestor.py:STATES"
-    ]
-  },
-  {
-    "word": "transaction-ambiguous",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "transaction-commit-unproved",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "transaction-context-changed",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
     "word": "transaction-failed",
     "cause": "provider_error",
     "sources": [
@@ -5227,13 +3988,6 @@
     ]
   },
   {
-    "word": "uid",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:state"
-    ]
-  },
-  {
     "word": "unauthenticated",
     "cause": "auth_required",
     "sources": [
@@ -5271,7 +4025,6 @@
       "scripts/antigravity/quota_adapter.py:status",
       "scripts/antigravity/quota_adapter.py:window.get('status')",
       "scripts/claude-history/history_index_remote_v2.py:reason",
-      "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-normalization.ts:status",
       "src/antigravity/usage-normalization.ts:value.status",
@@ -5363,8 +4116,6 @@
       "scripts/app-updates/app_update_t3.py:cause",
       "scripts/app-updates/app_update_t3_rpc.py:cause",
       "scripts/app-updates/app_updates.py:status",
-      "src/antigravity/managed-updater.ts:NativeReviewState",
-      "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState",
       "src/store/store-service.ts:jobs.lastErrorCode",
       "src/web-server/index.ts:error.code",
       "src/web-server/services/analytics-remote-sources.ts:clock?.state",
@@ -5410,13 +4161,6 @@
     ]
   },
   {
-    "word": "unknown-conversation",
-    "cause": "provider_error",
-    "sources": [
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "unknown-grant-kind",
     "cause": "provider_error",
     "sources": [
@@ -5454,25 +4198,10 @@
     ]
   },
   {
-    "word": "unmanaged-writer",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
-    ]
-  },
-  {
     "word": "unnamed",
     "cause": null,
     "sources": [
       "src/web-server/rust-service.ts:reason"
-    ]
-  },
-  {
-    "word": "unowned-checkpoint",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
     ]
   },
   {
@@ -5531,24 +4260,6 @@
     ]
   },
   {
-    "word": "unreviewed",
-    "cause": null,
-    "sources": [
-      "src/antigravity/managed-updater.ts:NativeReviewState",
-      "src/antigravity/runtime-refresh.ts:status",
-      "src/antigravity/terminal-refresh.ts:result.status"
-    ]
-  },
-  {
-    "word": "unreviewed-process",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/linux_process_guard.py:GuardError",
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "unreviewed-processes",
     "cause": null,
     "sources": [
@@ -5571,14 +4282,6 @@
     "sources": [
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
       "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
-    ]
-  },
-  {
-    "word": "unsafe-replay",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
     ]
   },
   {
@@ -5628,27 +4331,6 @@
     ]
   },
   {
-    "word": "unsupported-session-schema",
-    "cause": "refused",
-    "sources": [
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
-    "word": "unsupported-terminal-movement",
-    "cause": "refused",
-    "sources": [
-      "scripts/antigravity/runtime/native_header.py:ValueError"
-    ]
-  },
-  {
-    "word": "unsupported-terminal-sequence",
-    "cause": "refused",
-    "sources": [
-      "scripts/antigravity/runtime/native_header.py:ValueError"
-    ]
-  },
-  {
     "word": "unverifiable",
     "cause": null,
     "sources": [
@@ -5664,13 +4346,6 @@
     ]
   },
   {
-    "word": "unverified-workspace",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
-    ]
-  },
-  {
     "word": "update_failed",
     "cause": "provider_error",
     "sources": [
@@ -5681,8 +4356,7 @@
       "scripts/app-updates/app_update_t3.py:UpdateFailure",
       "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
       "scripts/app-updates/app_update_t3_rpc.py:error.code",
-      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
-      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure"
     ]
   },
   {
@@ -5692,7 +4366,6 @@
       "scripts/app-updates/app_update_antigravity.py:t3_row.get('status')",
       "scripts/app-updates/app_update_common.py:status",
       "scripts/app-updates/app_updates.py:payload.get('status')",
-      "src/antigravity/managed-updater.ts:status",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:row.status",
@@ -5822,7 +4495,6 @@
     "word": "working",
     "cause": null,
     "sources": [
-      "scripts/antigravity/runtime/native_status_attestor.py:STATES",
       "src/web-server/status/report-schema.ts:ITEM_STATES",
       "src/web-server/status/report-schema.ts:THREAD_STATES",
       "src/web-server/status/status-view.ts:t.state"
@@ -5833,14 +4505,6 @@
     "cause": null,
     "sources": [
       "scripts/account-usage/failover_special.py:failure"
-    ]
-  },
-  {
-    "word": "workspace-mismatch",
-    "cause": null,
-    "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
-      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
     ]
   },
   {

@@ -363,7 +363,7 @@ describe('consolidated account dashboard', () => {
     expect(
       result.accounts.filter((account) => account.isActive).map((account) => account.id)
     ).toEqual(['codex:gmail']);
-    expect(result.codexAutoSwitch.enabled).toBe(false);
+    expect('codexAutoSwitch' in result).toBe(false);
     const codex = result.accounts[0];
     expect(codex.windows[0]).toEqual({
       key: 'five_hour',

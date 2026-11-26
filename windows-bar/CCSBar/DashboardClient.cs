@@ -50,8 +50,6 @@ public sealed class DashboardClient : IDisposable
         return dashboard;
     }
 
-    /// <summary>The dashboard still sends a fixed <c>codexAutoSwitch</c> (always off) for trays built before account
-    /// switching was removed (2026-11-14); this tray no longer reads or requires it.</summary>
     internal static bool SupportedDashboard(AccountDashboard dashboard) =>
         dashboard.SchemaVersion == 1 && dashboard.Accounts is not null;
 

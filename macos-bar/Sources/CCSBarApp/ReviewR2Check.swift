@@ -18,9 +18,7 @@ enum ReviewR2Check {
           "capabilities": ["antigravityProfileId": id, "antigravityHostIds": ["ubuntu"], "claudePlatforms": []]]
       }
       func dashboard(_ accounts: [[String: Any]]) throws -> AccountDashboard {
-        let object: [String: Any] = ["schemaVersion": 1, "updatedAt": "2026-10-15T12:00:00Z", "accounts": accounts,
-          "codexAutoSwitch": ["enabled": false, "thresholdPercent": 5, "pollIntervalSeconds": 60,
-            "outcome": "disabled", "message": "", "activationInProgress": false]]
+        let object: [String: Any] = ["schemaVersion": 1, "updatedAt": "2026-10-15T12:00:00Z", "accounts": accounts]
         return try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
       }
       let sample = try dashboard([account("shown"), account("hidden", hidden: true)])

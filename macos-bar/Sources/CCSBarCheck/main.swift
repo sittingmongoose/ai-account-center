@@ -63,12 +63,7 @@ private let dashboardJSON = Data("""
       ],
       "capabilities": {"codexProfile":"gmail","claudeProfileId":"gmail","claudePlatforms":["mac"]}
     }
-  ],
-  "codexAutoSwitch": {
-    "enabled":true,"thresholdPercent":5,"pollIntervalSeconds":60,"outcome":"healthy",
-    "message":"Fixture account healthy","activationInProgress":false,
-    "lastCheckedAt":"2026-10-01T02:13:45.466Z","lastSwitchedAt":null
-  }
+  ]
 }
 """.utf8)
 
@@ -947,20 +942,6 @@ private func checkDashboardAdditions() throws {
     "Without hidden providers in the DTO, every provider stays visible")
   try expect(dashboard.providerGroups.map(\.id) == ["claude", "codex", "antigravity", "cursor", "kimi-code"],
     "Tray order must place Antigravity after Codex, then the other providers")
-  // An older dashboard still sends the retired switching fields (account switching was removed on 2026-11-14):
-  // the tray ignores them, valid or malformed, and never loses the dashboard over them.
-  var older = object
-  older["antigravityAutoSwitch"] = ["enabled": "yes", "thresholdUsedPercent": 400]
-  older["accounts"] = (object["accounts"] as! [[String: Any]]).map { row -> [String: Any] in
-    var row = row
-    var caps = row["capabilities"] as! [String: Any]
-    caps["antigravityCanActivate"] = "maybe"
-    row["capabilities"] = caps
-    return row
-  }
-  let olderDashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: older))
-  try expect(olderDashboard.accounts.count == 8 && olderDashboard.visibleAccounts.count == 8,
-    "Retired switching fields from an older dashboard must be ignored without losing the dashboard")
   // One of two Antigravity accounts hidden in the tray: only the other is listed; the raw accounts stay.
   var oneHiddenAgy = object
   oneHiddenAgy["accounts"] = (object["accounts"] as! [[String: Any]]).filter { ["agy-a", "agy-b"].contains($0["id"] as! String) }
@@ -1964,9 +1945,7 @@ private func checkResetPending() throws {
       "email":"codex-2@example.com","plan":"pro","platform":"ubuntu","source":"Fixture","status":"cached","message":null,
       "fetchedAt":"\(sampledAt)","sampledAt":"\(sampledAt)","isActive":true,
       "windows":[{"key":"seven_day","label":"Weekly","usedPercent":9.25,"windowMinutes":10080,"resetAt":"\(resetAt)"}],
-      "capabilities":{"codexProfile":"a","claudePlatforms":[]}}],
-     "codexAutoSwitch":{"enabled":true,"thresholdPercent":5,"pollIntervalSeconds":60,"outcome":"healthy","message":"",
-      "activationInProgress":false,"lastCheckedAt":null,"lastSwitchedAt":null}}
+      "capabilities":{"codexProfile":"a","claudePlatforms":[]}}]}
     """
     return try JSONDecoder().decode(AccountDashboard.self, from: Data(json.utf8))
   }

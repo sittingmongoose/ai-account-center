@@ -416,8 +416,8 @@ export const tests = {
 		await t.app.signIn();
 		await serve(t, server);
 		await t.page.route((u) => new URL(u).pathname === '/api/accounts/dashboard', (r) => r.fulfill(json(board())));
-		await t.page.route((u) => new URL(u).pathname === '/api/antigravity/profiles', (r) => r.fulfill(json({ schemaVersion: 1, hostId: 'ubuntu', activationSupported: false,
-			profiles: [{ id: 'a1', email: 'agy.workspace@example.invalid', plan: 'pro', hostId: 'ubuntu', available: true, selected: live, runtimeVerified: true }] })));
+		await t.page.route((u) => new URL(u).pathname === '/api/antigravity/profiles', (r) => r.fulfill(json({ schemaVersion: 1, hostId: 'ubuntu',
+			profiles: [{ id: 'a1', email: 'agy.workspace@example.invalid', plan: 'pro', hostId: 'ubuntu', available: true, selected: live }] })));
 		await t.page.route((u) => new URL(u).pathname === '/api/accounts/registry', async (r) => {
 			registryReads++;
 			const refused = live;   // the answer as of when it was asked

@@ -29,7 +29,6 @@ const account = (id, plan, windows) => ({
   capabilities: {
     antigravityProfileId: id,
     antigravityHostIds: ['ubuntu'],
-    antigravityCanActivate: true,
   },
 });
 const data = (accounts) => ({ schemaVersion: 1, updatedAt: new Date(now).toISOString(), accounts });
