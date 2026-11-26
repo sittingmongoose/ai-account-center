@@ -124,7 +124,9 @@ public static partial class Checks
                 && view.BannerText.StartsWith("Try again in 2 minutes", StringComparison.Ordinal) && view.Pass.Value.Length == 0;
             fixture.RateLimitSeconds = null; fixture.TriesLeft = 5;
             view.Model.LimitUntil = DateTimeOffset.UtcNow.AddSeconds(-1);
-            await Task.Delay(1200);
+            // The countdown tick flips back to Password; on a busy PC it lands late, so poll for the
+            // state instead of a fixed delay (the follow-up check submits from the Password state).
+            for (int i = 0; i < 100 && view.Model.State != SignInState.Password; i++) await Task.Delay(50);
             report.Checks["signin_rate_limit_ends_back_on_the_password"] = view.Model.State == SignInState.Password && view.PrimaryEnabled;
 
             // ---- pairing: the key must work once before anything is saved
