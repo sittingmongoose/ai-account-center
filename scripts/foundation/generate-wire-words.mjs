@@ -1,16 +1,14 @@
 #!/usr/bin/env node
-// Capture cause/state vocabulary from production TypeScript ASTs and Python ASTs.
+// Capture cause/state vocabulary from the native reset route and Python ASTs; rows of retired
+// sources are kept from the committed table.
 // Run with --check to detect source drift without updating the committed table.
-import { createRequire } from 'node:module';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { toPosix } from './to-posix.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
 const words = new Map();
 const context = /(?:cause|reason|status|state|failure|error.?code|read_failures)/i;
 const wire = /^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/;
@@ -19,38 +17,13 @@ function add(word, source) {
   if (!words.has(word)) words.set(word, new Set());
   words.get(word).add(source);
 }
-function files(dir) {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    if (entry.name.startsWith('.') || ['__tests__', 'node_modules', '__pycache__'].includes(entry.name)) return [];
-    const path = resolve(dir, entry.name);
-    return entry.isDirectory() ? files(path) : [path];
-  });
-}
-for (const file of files(resolve(root, 'src')).filter(f => f.endsWith('.ts'))) {
-  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
-  function visit(node) {
-    let name;
-    let region;
-    if (ts.isTypeAliasDeclaration(node) && context.test(node.name.text)) { name = node.name.text; region = node.type; }
-    if ((ts.isPropertySignature(node) || ts.isPropertyDeclaration(node)) && context.test(node.name?.getText(source) ?? '')) {
-      name = node.name.getText(source); region = node.type;
-    }
-    if (ts.isVariableDeclaration(node) && context.test(node.name.getText(source))) { name = node.name.getText(source); region = node.initializer; }
-    if (ts.isPropertyAssignment(node) && context.test(node.name.getText(source))) { name = node.name.getText(source); region = node.initializer; }
-    if (ts.isBinaryExpression(node) && context.test(node.left.getText(source)) && ts.isStringLiteral(node.right)) {
-      name = node.left.getText(source); region = node.right;
-    }
-    if (region) {
-      const collect = child => {
-        if (ts.isStringLiteral(child)) add(child.text, `${toPosix(relative(root, file))}:${name}`);
-        ts.forEachChild(child, collect);
-      };
-      collect(region);
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(source);
-}
+// The TypeScript server (src/) was retired after this table was generated. Rows whose source
+// file no longer exists are carried forward from the committed table as frozen provenance, so
+// regenerating never drops a word a native reader still accepts.
+const committed = JSON.parse(readFileSync(resolve(root, 'tests/spec/wire-words.json'), 'utf8'));
+for (const row of committed)
+  for (const source of row.sources)
+    if (!existsSync(resolve(root, source.split(':')[0]))) add(row.word, source);
 // Reset replies now come from the native HTTP route's refusal allowlist.
 const resetRoute = 'crates/aac-http/src/public_auth/reset_routes.rs';
 const resetSource = readFileSync(resolve(root, resetRoute), 'utf8');
@@ -118,7 +91,8 @@ const table = [...words].sort(([a], [b]) => a.localeCompare(b, 'en')).map(([word
 }));
 const path = resolve(root, 'tests/spec/wire-words.json');
 const output = JSON.stringify(table, null, 2) + '\n';
-const fingerprints = Object.fromEntries([...new Set(table.flatMap(row => row.sources.map(s => s.split(':')[0])))].sort()
+// Only live sources are fingerprinted; retired ones have no file left to drift.
+const fingerprints = Object.fromEntries([...new Set(table.flatMap(row => row.sources.map(s => s.split(':')[0])))].filter(path => existsSync(resolve(root, path))).sort()
   .map(path => [path, createHash('sha256').update(readFileSync(resolve(root, path))).digest('hex')]));
 const fingerprintPath = resolve(root, 'tests/spec/wire-source-hashes.json');
 const fingerprintOutput = JSON.stringify(fingerprints, null, 2) + '\n';

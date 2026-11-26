@@ -16,10 +16,7 @@ function collect(directory: string, files: string[] = []): string[] {
 }
 
 function testSources(): string[] {
-  const underSrc = collect(path.join(repoRoot, 'src')).filter((file) =>
-    file.split(path.sep).includes('__tests__')
-  );
-  return [...collect(path.join(repoRoot, 'tests')), ...underSrc];
+  return collect(path.join(repoRoot, 'tests'));
 }
 
 describe('tests run on a GitHub-hosted Ubuntu runner', () => {

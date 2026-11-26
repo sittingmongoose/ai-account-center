@@ -19,7 +19,7 @@ are retired.
 - [dev-install.sh](../scripts/dev-install.sh) builds and validates this checkout,
   creates a local package tarball and installs it on explicit invocation. It
   keeps the tarball for local reinstall/rollback.
-- [dev-symlink.sh](../scripts/dev-symlink.sh) temporarily points an existing
+- dev-symlink.sh temporarily points an existing
   command at the local build and retains/restores its backup.
 - [Docker](../docker/README.md) builds the local dashboard-only image.
 - [Mac packaging workflow](../.github/workflows/bar-release.yml) runs manually

@@ -2,7 +2,7 @@
 
 The retained CLI surface is `ai-account-center codex-auth` with create, login,
 import-default, show and remove operations. See the current
-[help owner](../src/codex-auth/codex-auth-help.ts) rather than copying every option.
+help owner rather than copying every option.
 `ccs codex-auth` remains compatible; `ccsx` and the other retired runtime bins
 only give migration guidance. The former shell-export/use/switch/runtime-launch
 flows and `activate` are retired: AI Account Center reads each saved login's usage
@@ -15,9 +15,9 @@ remain in private `~/.ccs/codex-instances/<name>/` with the existing registry,
 shared-resource links/fallbacks and private atomic-write/backup behavior.
 Preserve profile-local content, native sessions and shared config/resources.
 
-The [profile resource helper](../src/codex-auth/codex-profile-resources.ts),
-[configuration link helper](../src/codex-auth/codex-config-symlink.ts) and
-[plugin-cache helper](../src/codex-auth/codex-profile-plugin-cache.ts) own those
+The profile resource helper,
+configuration link helper and
+plugin-cache helper own those
 compatibility boundaries. Existing profile names, session aliases and home
 overrides are not renamed with the product.
 

@@ -12,16 +12,13 @@ Run from the repository root:
 bun run test:npm
 bun test ./tests/npm/cli.test.js
 bun test ./tests/npm/postinstall.test.js
-bun test ./tests/npm/cross-platform.test.js
 ```
 
 The [package script](../../package.json) invokes `bun test tests/npm/`. The
 [slow bucket](../../scripts/run-test-bucket.js) also includes this directory.
-`cross-platform.test.js` checks that `dist/ccs.js` exists, so build artifacts must
-already be available for the full package suite. `bun run test` builds first,
-then runs the root buckets. The CLI fixture suite itself executes
-[src/ccs.ts](../../src/ccs.ts) with Bun, rather than assuming a packaged executable
-was rebuilt.
+Build artifacts must already be available for the full package suite: the CLI
+fixture suite runs the native commands in `dist/native`. `bun run test` builds first,
+then runs the root buckets.
 
 ## Suites
 
@@ -29,7 +26,6 @@ was rebuilt.
 | --- | --- |
 | [cli.test.js](./cli.test.js) | Nine CLI cases: help, version, dashboard/config aliases, config-directory selection, invalid paths, and retired-command/bin migration behavior |
 | [postinstall.test.js](./postinstall.test.js) | Direct execution of local install/uninstall lifecycle scripts, private-directory creation, idempotence, and preservation of existing files and permissions |
-| [cross-platform.test.js](./cross-platform.test.js) | Path handling, Node subprocess availability, built executable presence, binary mappings, and the `prepack` contract |
 
 ## The nine CLI cases
 
@@ -75,6 +71,6 @@ Codex login, SSH key, or desktop credential store.
 
 [Bun's preload](../../bunfig.toml) uses the
 [shared isolation helper](../shared/fixtures/test-environment.js). See the
-[main test guide](../README.md), [storage path resolver](../../src/utils/config-manager.ts),
-[dashboard authentication tests](../unit/web-server/auth-middleware.test.ts), and
+[main test guide](../README.md), storage path resolver,
+dashboard authentication tests, and
 [security reporting guide](../../SECURITY.md).

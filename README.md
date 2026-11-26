@@ -367,7 +367,7 @@ above manage usage hub keys, snapshot destinations and Cursor keys.
 ## 🛠️ Development
 
 ```bash
-bun run validate      # typecheck, lint, format, fast tests
+bun run validate      # fast tests
 bun run test:all      # the full suite
 bun run ui:validate   # the compiled Leptos UI matches its sources
 ```
@@ -377,7 +377,7 @@ See [Contributing](CONTRIBUTING.md) and the [test guide](tests/README.md). Never
 ### How it's built
 
 - **Fast:** forked from CCS on September 30, 2026. Since then: 740+ commits and a net ~288k lines added and ~380k removed against the fork point, turning a CLI router into this product.
-- **Polyglot:** ~100k lines of TypeScript, ~24k of Python, ~22k of Slint, ~16k of Swift and ~13k of C#, plus 426 test files.
+- **Polyglot:** ~320k lines of Rust, ~24k of Python, ~22k of Slint, ~16k of Swift and ~13k of C#, plus 426 test files.
 - **Agent-built, human-directed:** 529 of those commits are co-authored by AI coding agents (Claude, GPT, Qwen, GLM, Kimi and Muse models) working in parallel. Larger changes get independent reviews from a different model family before they ship.
 - **Dogfooded:** the agents that build it run on the accounts it manages, and read their own burn rate from it.
 

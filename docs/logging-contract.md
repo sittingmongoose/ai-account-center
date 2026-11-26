@@ -5,9 +5,9 @@ runtime events. They are separate from terminal UX output and must never be
 used as a substitute for user-facing recovery messages.
 
 The canonical schema is
-[`src/services/logging/log-types.ts`](../src/services/logging/log-types.ts).
+`src/services/logging/log-types.ts`.
 Defaults are defined in
-[`src/config/schemas/logging.ts`](../src/config/schemas/logging.ts).
+`src/config/schemas/logging.ts`.
 
 ## Entry Schema
 
@@ -60,12 +60,12 @@ logger.stage('respond', 'request.completed', 'Request completed', {
 });
 ```
 
-See [`src/services/logging/logger.ts`](../src/services/logging/logger.ts) for the
+See `src/services/logging/logger.ts` for the
 compiler-checked signature.
 
 ## Request Correlation
 
-[`src/services/logging/log-context.ts`](../src/services/logging/log-context.ts)
+`src/services/logging/log-context.ts`
 uses Node async-local storage within a process. Entry edges establish a
 context; loggers created downstream read its `requestId` automatically.
 
@@ -84,7 +84,7 @@ reconstructing a request.
 
 ## Redaction and Data Minimization
 
-[`src/services/logging/log-redaction.ts`](../src/services/logging/log-redaction.ts)
+`src/services/logging/log-redaction.ts`
 is the implementation source of truth. With the default `logging.redact: true`,
 the logger:
 
@@ -106,7 +106,7 @@ Redaction is defense in depth, not permission to log sensitive data. Never log:
 
 When a new secret-bearing field or flag is introduced, update the redactor and
 its tests under
-[`tests/unit/services/logging/`](../tests/unit/services/logging/).
+`tests/unit/services/logging/`.
 
 ## Error Codes and Process Exit Codes
 
@@ -121,11 +121,11 @@ Do not put a numeric process exit code in `LogEntry.error.code`, and do not make
 log consumers derive process status from that string field.
 
 The numeric mapping lives in
-[`src/errors/exit-codes.ts`](../src/errors/exit-codes.ts). Typed error
+`src/errors/exit-codes.ts`. Typed error
 assignments live in
-[`src/errors/error-types.ts`](../src/errors/error-types.ts), and propagation is
+`src/errors/error-types.ts`, and propagation is
 implemented by
-[`src/errors/error-handler.ts`](../src/errors/error-handler.ts).
+`src/errors/error-handler.ts`.
 
 ## Configuration
 

@@ -17,7 +17,7 @@ Before implementing a change, verify current source/tests, identify the owner,
 state the compatibility effects and run focused offline checks. Do not recreate
 retired runtime routing, React/Vite or original publication/deployment automation.
 
-Use [hardening measurements](hardening-debt-burndown.md) as investigation queues,
+Use hardening measurements as investigation queues,
 not automatic refactor mandates. Keep the generated inventory tied to current
 source. [Source map](codebase-summary.md), [standards](code-standards.md) and
 [architecture](system-architecture/index.md) describe the retained boundaries.

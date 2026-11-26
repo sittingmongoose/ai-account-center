@@ -1,11 +1,9 @@
 /**
  * L4 drift tests (DESIGN-M3-COMPLETE 2.4): config/tables/*.json is the one provider, tool and
- * host table. TS derives its lists from it (src/shared/tables.ts) and Rust generates its
- * constants from it (crates/aac-providers, whose `cargo test` binds the Rust hand lists outside
- * the workspace). Here: every TS view and every remaining hand list (the TS files fingerprinted
- * by tests/spec/wire-source-hashes.json, the Python fallback helpers and the page's JS) equals
- * its projection of the table, so a one-sided edit of either side fails. A synthetic provider
- * and tool added to a copy of the table reach every derived TS consumer.
+ * host table. Rust generates its constants from it (crates/aac-providers, whose `cargo test`
+ * binds the Rust hand lists outside the workspace). Here: every remaining hand list (the Python
+ * fallback helpers, the page's JS and the native bars) equals its projection of the table, so a
+ * one-sided edit of either side fails.
  */
 import { afterAll, describe, expect, it } from 'bun:test';
 import { execFileSync } from 'child_process';
@@ -81,159 +79,6 @@ describe('the tables themselves', () => {
     // An immutable compatibility list (d5ec0fc64): its readers reject later hosts, so it is
     // pinned rather than derived from the computer registry.
     expect(hostTable.legacyStorageHosts).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
-  });
-});
-
-describe('TS derives its lists from the tables', () => {
-  it('dashboard providers, analytics order and failover kinds', async () => {
-    const table = await load('src/web-server/services/dashboard-provider-table.ts');
-    expect([...table.DASHBOARD_PROVIDER_IDS]).toEqual(dashboard);
-    for (const id of rows.map(([id]) => id))
-      expect(table.isDashboardProviderId(id)).toBe(dashboard.includes(id));
-    const attribution = await load('src/web-server/services/account-analytics-attribution.ts');
-    expect([...attribution.USAGE_PROVIDER_ORDER]).toEqual([...analyticsOrder, 'other']);
-    const verbs = await load('src/web-server/services/agent-verbs.ts');
-    const allKinds = rows.flatMap(([, row]) => row.failover.kinds);
-    for (const [id, row] of rows)
-      for (const kind of allKinds)
-        expect(verbs.inventoryKind(id, kind)).toBe(row.failover.kinds.includes(kind));
-    expect(verbs.inventoryKind('retired-provider', 'qwen-session')).toBe(false);
-  });
-
-  it('usage routes, tool providers, additional sources, CLI targets and pricing aliases', async () => {
-    const attribution = await load('src/web-server/services/account-analytics-attribution.ts');
-    expect(attribution.USAGE_ROUTE_PROVIDERS).toEqual(providerTable.usageRoutes);
-    for (const tool of [
-      ...analyticsTools,
-      ...Object.keys(toolTable.scannerOnlyKinds),
-      ...Object.keys(toolTable.usageLogTools),
-    ])
-      expect(attribution.usageProviderFor(tool, null, null)).toBe(
-        toolTable.toolProviders[tool] ?? 'other'
-      );
-    expect(attribution.routeProvider('zz-not-a-route')).toBeNull();
-    const transport = await load('src/web-server/services/additional-usage-transport.ts');
-    expect([...transport.ADDITIONAL_PROVIDERS]).toEqual(providerTable.additionalProviders);
-    const projection = await load('src/web-server/services/account-dashboard-projection.ts');
-    expect(projection.ADDITIONAL_PROVIDERS).toEqual(
-      providerTable.additionalProviders.map((id: string) => [
-        id,
-        providerTable.providers[id].analytics.label,
-      ])
-    );
-    // The projection's accepted session targets and the pricing resolver's aliases are the
-    // table's own lists (module-private, so read from the source).
-    expect(
-      literals(
-        read('src/web-server/services/account-analytics-projection.ts'),
-        'const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([',
-        ']'
-      )
-    ).toEqual(toolTable.cliTargets);
-    expect(
-      literals(
-        read('src/web-server/models-dev/pricing-resolver.ts'),
-        'const PROVIDER_ALIASES = new Map<string, string>([',
-        '])'
-      )
-    ).toEqual(Object.entries(providerTable.pricingAliases).flat());
-    // The copies below are module-private, so read from their sources.
-    expect(
-      literals(
-        read('src/web-server/agent-usage/agent-usage-projection.ts'),
-        'const PROVIDERS: readonly DashboardProvider[] = [',
-        ']'
-      )
-    ).toEqual(providerTable.snapshotOrder);
-    const update = await load('src/web-server/services/app-update-contract.ts');
-    expect(Object.keys(update.UPDATE_APP_LABELS)).toEqual(toolTable.appInventory);
-    // The TypeScript runner owns the three agent-provider flows; Claude's terminal flow is the
-    // Rust-side addition the table's list has on top of it.
-    expect(
-      literals(
-        read('src/web-server/services/signin-job-types.ts'),
-        'export type SignInJobProvider =',
-        ';'
-      )
-    ).toEqual(providerTable.signInSessions.filter((id: string) => id !== 'claude'));
-    expect(
-      literals(
-        read('src/store/activity-answer.ts'),
-        'const TOOLS: readonly AccountAnalyticsActivityProvider[] = [',
-        ']'
-      )
-    ).toEqual(toolTable.activitySources);
-    expect(literals(read('src/store/activity-coverage.ts'), '  const tools = [', ']')).toEqual([
-      ...toolTable.activitySources,
-      ...Object.keys(toolTable.scannerOnlyKinds),
-    ]);
-    // The legacy cache rebuild rule has no TypeScript reader left (the migration is Rust's);
-    // pin its versions here so a one-sided edit of the rule fails in this table test too.
-    expect(toolTable.legacyRebuildThrough).toEqual({ claude: 5, codex: 6, muse: 6 });
-  });
-
-  it('analytics tools, usage-log tools and the legacy storage hosts', async () => {
-    const tools = await load('src/web-server/usage/analytics-tools.ts');
-    expect([...tools.ANALYTICS_TOOLS]).toEqual(analyticsTools);
-    const experiment = analyticsTools.filter((id) => toolTable.analyticsTools[id].experiment);
-    expect([...tools.EXPERIMENT_ANALYTICS_TOOLS]).toEqual(experiment);
-    // The type-only copy (JSON types widen `true`), bound here.
-    expect([...tools.EXPERIMENT_TOOL_TYPES]).toEqual(experiment);
-    const prefs = await load('src/web-server/services/dashboard-preferences.ts');
-    expect([...prefs.USAGE_LOG_TOOLS]).toEqual(Object.keys(toolTable.usageLogTools));
-    const hosts = await load('src/web-server/services/dashboard-hosts.ts');
-    expect([...hosts.LEGACY_STORAGE_HOSTS]).toEqual(hostTable.legacyStorageHosts);
-  });
-});
-
-describe('fingerprinted TS hand lists equal the table', () => {
-  it('the server registry labels', async () => {
-    const registry = await load('src/web-server/services/dashboard-provider-registry.ts');
-    const entries = registry.buildDashboardProviders([], [], []) as Array<{
-      id: string;
-      label: string;
-      longLabel: string;
-    }>;
-    expect(entries.map((e) => [e.id, e.label, e.longLabel])).toEqual(
-      dashboard.map((id) => [id, label(id), providerTable.providers[id].longLabel])
-    );
-  });
-
-  it("Analytics' provider table and the dashboard projection's additional providers", async () => {
-    const projection = await load('src/web-server/services/account-dashboard-projection.ts');
-    const expected = analyticsRows
-      .filter(([id]) => id !== 'claude' && id !== 'codex')
-      .map(([id, row]) => [id, row.analytics!.label]);
-    expect(projection.ADDITIONAL_PROVIDERS).toEqual(expected);
-    const analytics = await load('src/web-server/services/account-analytics-providers.ts');
-    expect(analytics.defaultAnalyticsProviderTable()).toEqual(
-      analyticsRows.map(([id, row]) => ({
-        id,
-        label: row.analytics!.label,
-        order: row.analytics!.order,
-      }))
-    );
-  });
-
-  it("the remote scan's kinds", async () => {
-    const transport = await load('src/web-server/services/analytics-remote-transport.ts');
-    expect([...transport.PYTHON_KINDS]).toEqual(analyticsTools);
-    // The transport's own runtime kind list (module-private, it validates requests, rows and
-    // discovery) is the table's scanner kinds exactly: discovery keeps a kind only when the
-    // transport accepts it (L4 review L1).
-    const entry = {
-      installed: false,
-      signals: [],
-      roots: [],
-      counts: { roots: 0, filesFound: 0, filesRead: 0, filesFailed: 0, newestMtime: null },
-    };
-    const offered = [...scannerKinds, 'zz-not-a-kind', 'toString'];
-    const discovery = transport.parseAnalyticsDiscovery({
-      kinds: Object.fromEntries(offered.map((kind) => [kind, entry])),
-    });
-    expect(Object.keys(discovery.kinds)).toEqual(scannerKinds);
-    const sources = await load('src/web-server/services/analytics-remote-sources.ts');
-    expect(sources.analyticsRemoteTargets('nas1')).toEqual(scannerKinds);
   });
 });
 
@@ -356,86 +201,6 @@ describe("the page's JS lists equal the table", () => {
   });
 });
 
-describe('a synthetic provider and tool added to the table', () => {
-  it('reach every derived TS consumer', async () => {
-    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-l4-synthetic-'));
-    try {
-      // config/private-files.json: the L2 registry the TS writers load beside the tables.
-      for (const folder of [
-        'src',
-        'config/tables',
-        'config/private-files.json',
-        'config/agent-artifacts.json',
-        'config/rust-service-routes.json',
-        'config/secret-policy.json',
-        'web-dashboard/public',
-      ])
-        fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
-      fs.symlinkSync(path.join(root, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
-      const edit = (name: string, change: (table: Record<string, any>) => void) => {
-        const file = path.join(fixture, 'config/tables', name);
-        const table = JSON.parse(fs.readFileSync(file, 'utf8'));
-        change(table);
-        fs.writeFileSync(file, JSON.stringify(table));
-      };
-      edit('providers.json', (table) => {
-        table.providers['zz-synthetic'] = {
-          ...table.providers['opencode-go'],
-          label: 'Synthetic',
-          longLabel: 'Synthetic provider',
-          analytics: { order: analyticsOrder.length, label: 'Synthetic' },
-          failover: { label: 'Synthetic', kinds: ['zz-synthetic-credential'] },
-        };
-      });
-      edit('tools.json', (table) => {
-        table.analyticsTools['zz-tool'] = {
-          label: 'Synthetic tool',
-          experiment: true,
-          extraRoots: true,
-        };
-        table.usageLogTools['zz-log'] = { label: 'Synthetic log' };
-      });
-      const providerTableModule = await load(
-        'src/web-server/services/dashboard-provider-table.ts',
-        fixture
-      );
-      expect([...providerTableModule.DASHBOARD_PROVIDER_IDS]).toEqual([
-        ...dashboard,
-        'zz-synthetic',
-      ]);
-      expect(providerTableModule.isDashboardProviderId('zz-synthetic')).toBe(true);
-      const attribution = await load(
-        'src/web-server/services/account-analytics-attribution.ts',
-        fixture
-      );
-      expect([...attribution.USAGE_PROVIDER_ORDER]).toEqual([
-        ...analyticsOrder,
-        'zz-synthetic',
-        'other',
-      ]);
-      const verbs = await load('src/web-server/services/agent-verbs.ts', fixture);
-      expect(verbs.inventoryKind('zz-synthetic', 'zz-synthetic-credential')).toBe(true);
-      expect(verbs.inventoryKind('zz-synthetic', 'opencode-go-credential')).toBe(false);
-      const tools = await load('src/web-server/usage/analytics-tools.ts', fixture);
-      expect(tools.ANALYTICS_TOOLS).toContain('zz-tool');
-      expect(tools.EXPERIMENT_ANALYTICS_TOOLS).toContain('zz-tool');
-      expect(tools.isAnalyticsTool('zz-tool')).toBe(true);
-      const prefs = await load('src/web-server/services/dashboard-preferences.ts', fixture);
-      expect(prefs.USAGE_LOG_TOOLS).toContain('zz-log');
-      expect(
-        prefs.isDashboardPreferences({
-          ...prefs.defaultDashboardPreferences(),
-          usageLogSources: [
-            { id: 'fixture', host: 'ubuntu', tool: 'zz-log', path: '/var/log/fixture' },
-          ],
-        })
-      ).toBe(true);
-    } finally {
-      fs.rmSync(fixture, { recursive: true, force: true });
-    }
-  });
-});
-
 describe('the Antigravity column table owns every copy', () => {
   const columns = json('config/tables/antigravity-columns.json').columns as Array<{
     key: string;
@@ -508,28 +273,5 @@ describe('the Antigravity column table owns every copy', () => {
     expect(normal(view.match(/const ZONE_STEP = ([\d_ *]+);/)?.[1])).toBe(
       normal(rust.match(/const ZONE_STEP: i64 = ([\d_ *]+);/)?.[1])
     );
-  });
-});
-
-describe('the carried provider lists equal their projection', () => {
-  it('the TS key-store providers', () => {
-    const source = read('src/web-server/services/account-key-store.ts');
-    expect(literals(source, 'export const KEY_PROVIDERS = [', ']')).toEqual(
-      ids((row) => row.keyStore)
-    );
-  });
-
-  it('the agent-usage and backfill provider order', () => {
-    const expected = [
-      'codex',
-      'claude',
-      ...analyticsOrder.filter((id) => id !== 'codex' && id !== 'claude'),
-    ];
-    const projection = read('src/web-server/agent-usage/agent-usage-projection.ts');
-    expect(literals(projection, 'const PROVIDERS: readonly DashboardProvider[] = [', ']')).toEqual(
-      expected
-    );
-    const backfill = read('src/store/usage-backfill.ts');
-    expect(literals(backfill, 'const PROVIDERS = [', ']')).toEqual(expected);
   });
 });

@@ -6,15 +6,17 @@ const dockerfile = readFileSync('docker/Dockerfile', 'utf8');
 const entrypoint = readFileSync('docker/entrypoint.sh', 'utf8');
 
 describe('source-built dashboard Docker lifecycle', () => {
-  it('installs locked build and runtime dependencies without package lifecycle side effects', () => {
+  it('installs locked build dependencies without package lifecycle side effects', () => {
     const installCommands = dockerfile.match(/\bbun install[^\n]*/g) ?? [];
 
-    expect(installCommands.length).toBe(2);
+    expect(installCommands.length).toBe(1);
     for (const command of installCommands) {
       expect(command).toContain('--frozen-lockfile');
       expect(command).toContain('--ignore-scripts');
     }
-    expect(installCommands.some((command) => command.includes('--production'))).toBe(true);
+    // No runtime npm dependencies remain, so the runtime stage carries no node_modules.
+    expect(dockerfile).not.toContain('--production');
+    expect(dockerfile).not.toContain('COPY --from=build /app/node_modules');
     expect(dockerfile).toContain('bun run build:all');
     // The wasm moved to dist/ui/pkg/<buildId>/; the manifest-driven check finds it.
     expect(dockerfile).toContain('test -s dist/ui/ui-build-manifest.json');

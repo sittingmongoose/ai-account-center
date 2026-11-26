@@ -8,8 +8,8 @@
 // make (view-model.mjs `dashboardViewModel`: its data, the profiles, the Antigravity inventory and the page's
 // context). synthetic.mjs adds the inputs the tests do not reach (other zones, the decline rules). Each case is then
 // run through the real view-model.mjs here: `expected` is the exact JSON.stringify of the JS view, `presentation`
-// the M3 envelope facts the TS front door computes for it (src/web-server/views/home-context.ts `homeReadInput`,
-// through envelope.ts under Bun), `ctx.formatProbe` this engine's formatter outputs (or a synthetic case's other
+// the M3 envelope facts the retired TS front door computed for it (frozen in cases.json since src/ was deleted),
+// `ctx.formatProbe` this engine's formatter outputs (or a synthetic case's other
 // proven style) and `ctx.zone` this engine's display-zone offsets (view-model.mjs `homeZoneFacts`). The Rust test (crates/aac-views/tests/home_spec.rs) builds every case and must give
 // the same bytes, or decline exactly where declines.json says. web-dashboard/tests/home-view-spec.test.mjs keeps the
 // table current with the JS.
@@ -67,16 +67,13 @@ function record() {
   }
 }
 
-/** `homeReadInput(...).presentation` for each input, from the real TS front door (Bun runs the TS modules). */
-export function presentations(inputs) {
-  const run = spawnSync(process.env.BUN || 'bun', [path.join(here, 'envelope.ts'), 'presentations'], {
-    cwd: root,
-    input: JSON.stringify(inputs),
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024 * 1024,
-  });
-  if (run.status !== 0) throw new Error(`envelope.ts failed:\n${run.stderr}`);
-  return JSON.parse(run.stdout);
+/** `homeReadInput(...).presentation` for each input. The TS front door that computed it (envelope.ts over
+ * src/web-server/views/home-context.ts) was deleted with src/ on 2026-11-27: the committed presentations in
+ * cases.json are frozen until a native envelope recorder replaces it. */
+export function presentations() {
+  throw new Error(
+    'The TypeScript envelope recorder was retired with src/; cases.json presentations are frozen. Record them from the native Home envelope instead.'
+  );
 }
 
 export async function build(recorded) {

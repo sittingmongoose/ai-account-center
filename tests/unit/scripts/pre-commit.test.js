@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const hook = path.resolve(__dirname, '../../../.husky/pre-commit');
-const phases = ['typecheck', 'lint:fix', 'format:check', 'ui:validate'];
+const phases = ['ui:validate'];
 
 // Run the real hook with harmless disposable command stand-ins. No git or
 // product command executes; a failed phase must stop the hook's control flow.

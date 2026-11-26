@@ -40,14 +40,14 @@ function hits(list, pattern) {
   return found;
 }
 
-const PRODUCT = files('src', 'scripts', 'crates', 'native', 'web-dashboard/public', 'web-dashboard/leptos/src',
+const PRODUCT = files('scripts', 'crates', 'native', 'web-dashboard/public', 'web-dashboard/leptos/src',
   'macos-bar/Sources', 'windows-bar', 'browser-bridge', 'docs', 'README.md', 'CONTRIBUTING.md');
 const PAGE = files('web-dashboard/public', 'web-dashboard/leptos/src');
 
 test('the scan reads the product sources it guards', () => {
   const names = PRODUCT.map(repoPath);
-  for (const expected of ['src/antigravity/terminal-signin.ts', 'web-dashboard/public/accounts-view.mjs',
-    'web-dashboard/leptos/src/dash.rs', 'docs/activate-in-place.md', 'src/commands/antigravity-command.ts'])
+  for (const expected of ['crates/aac-http/src/cli/antigravity.rs', 'web-dashboard/public/accounts-view.mjs',
+    'web-dashboard/leptos/src/dash.rs', 'docs/activate-in-place.md', 'crates/aac-http/src/cli.rs'])
     assert.ok(names.includes(expected), expected);
 });
 

@@ -1,5 +1,5 @@
 [test]
 # The dashboard's browser helpers use Node's test runner through bun run ui:validate.
 root = "./tests"
-preload = ["./tests/shared/fixtures/test-environment.js", "./tests/shared/fixtures/ssh-capabilities.ts"]
+preload = ["./tests/shared/fixtures/test-environment.js"]
 timeout = 10000

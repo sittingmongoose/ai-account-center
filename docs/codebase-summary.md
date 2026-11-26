@@ -9,15 +9,15 @@ the account and private-state contracts from the original CCS fork.
 | Primary CLI/bootstrap | [Native command entry points](../crates/aac-http/src/cli.rs) |
 | Installed command and compatibility bins | [package.json](../package.json) |
 | Dashboard HTTP/session boundary | [Rust public listener](../crates/aac-http/src/public_auth/mod.rs), [native owner host](../crates/aac-http/src/public_auth/owner_host.rs) |
-| Account projection | [native producer](../crates/aac-http/src/account_usage/producer.rs), [compatibility collection](../src/web-server/services/account-dashboard-service.ts) |
-| Codex saved logins | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [renewal](../src/codex-auth/codex-profile-renewal.ts), [quota reader](../src/web-server/usage/codex-quota/quota-fetcher-codex.ts) |
+| Account projection | [native producer](../crates/aac-http/src/account_usage/producer.rs), compatibility collection |
+| Codex saved logins | account service, renewal, quota reader |
 | Analytics | [native routes](../crates/aac-http/src/public_auth/analytics_routes.rs), [native writers](../crates/aac-http/src/analytics_writers.rs) |
-| Explicit app updates | [app-update service](../crates/aac-http/src/app_updates/mod.rs), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
+| Explicit app updates | [app-update service](../crates/aac-http/src/app_updates/mod.rs), host invocation and helper sync, [update helpers](../scripts/app-updates/) |
 | Leptos app frame | [lib.rs](../web-dashboard/leptos/src/lib.rs), [frame.rs](../web-dashboard/leptos/src/frame.rs) and the pages beside them; map of pages, controllers, view models and rules: [UI architecture](../web-dashboard/README-ARCHITECTURE.md) |
 | Browser controllers | [frame-dashboard.mjs](../web-dashboard/public/frame-dashboard.mjs), [frame-session.mjs](../web-dashboard/public/frame-session.mjs), [frame-analytics.mjs](../web-dashboard/public/frame-analytics.mjs) |
 | Native clients | [macos-bar](../macos-bar/), [windows-bar](../windows-bar/) |
-| Existing-host usage | [Python collectors](../scripts/account-usage/), [browser bridges](../browser-bridge/), [remote analytics scan](../src/web-server/services/analytics-remote-transport.ts) |
-| Private paths | [config-manager](../src/utils/config-manager.ts) |
+| Existing-host usage | [Python collectors](../scripts/account-usage/), [browser bridges](../browser-bridge/), remote analytics scan |
+| Private paths | config-manager |
 
 `ai-account-center dashboard` and compatible `ccs config` reach the same
 authenticated dashboard. Retired runtime bins provide guidance rather than
@@ -36,32 +36,28 @@ and names the alias.
 
 Providers, Analytics and usage-log tools, and the frozen storage host allowlist
 live in [config/tables/](../config/tables/) (`providers.json`, `tools.json`,
-`hosts.json`). TypeScript reads them through
-[src/shared/tables.ts](../src/shared/tables.ts). The Rust crate
+`hosts.json`). The Rust crate
 [aac-providers](../crates/aac-providers/) generates typed constants from the same
 files, and its consumers hold no list literals of their own. A consumer's subset of
 the table is a field there too: `providers.json`'s `additionalProviders`,
 `snapshotOrder`, `signInSessions`, `usageRoutes` and `pricingAliases`, and
 `tools.json`'s `genericUsageLogTool`, `activitySources`, `cliTargets`,
 `toolProviders`, `appInventory` and `legacyRebuildThrough`. To add a provider or
-tool, edit the JSON. `tests/spec/tables.test.ts`, `cargo test -p aac-providers` and
-`tsc` then name each hand list (Python helpers, page JS, Leptos, native modules)
-and each typed union that still needs the new row.
+tool, edit the JSON. `tests/spec/tables.test.ts` and `cargo test -p aac-providers` then name each hand
+list (Python helpers, page JS, Leptos, native modules) that still needs the new row.
 
-The service build stages the native commands in `dist/native/`, compiles the
-Antigravity terminal sign-in helper and
-[bundles](../scripts/build-codex-update-runtime.js) the Codex stop/start runtime
-into `dist/app-updates/`; the update helpers carry that bundle to Linux hosts
-without AAC, such as Nas1. The
+The service build stages the native commands, modules and agents in `dist/native/`
+and records the build lineage; Antigravity sign-in and the Codex stop/start runtime
+are native Rust (the TypeScript server was deleted on 2026-11-27). The
 [UI builder](../scripts/build-ui.js) fingerprints the Leptos crate's manifest/lock,
 sources, styles and fonts, builds locked WASM and stages `dist/ui/` with the public browser files.
 The [validator](../scripts/validate-ui.js) and
 [bundle verifier](../scripts/verify-bundle.js) bind source and packaged runtime.
 There is no React/Vite production input.
 
-Tests use Bun for TypeScript and Node for dashboard helpers. Native/bridge
+Rust tests live in each crate; Bun runs the package-script tests and Node the dashboard helpers. Native/bridge
 guides describe their independent offline checks. Source-built
 [Docker](../docker/README.md) runs the dashboard only; it does not start CLIProxy
 or import host sessions. Publication is outside the normal build.
 
-Fork cleanup: unused session-launch and Claude config-linking code is removed. The CLIProxy manager was deleted on 2026-11-14 after its Codex quota reader moved to `src/web-server/usage/codex-quota/`; account switching was removed the same day. See [migration notes](user-guide.md#existing-ccs-installations) and [approval tokens](approval-tokens.md).
+Fork cleanup: unused session-launch and Claude config-linking code is removed. The CLIProxy manager was deleted on 2026-11-14 after its Codex quota reader moved into the dashboard server; account switching was removed the same day. See [migration notes](user-guide.md#existing-ccs-installations) and [approval tokens](approval-tokens.md).

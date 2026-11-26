@@ -44,10 +44,8 @@ or `None`. Package/build fingerprints must include the shared Rust file and JSON
 ## Reusable parity corpus
 
 `tests/fixtures/secret-policy-cases.json` holds synthetic `{name, doc, secret}` cases; `secret` is the
-one expected kind or `null` for both languages. There is no per-language exception: the TypeScript
-and Rust corpus tests both refuse a case with any other key. The named TypeScript export is `secretPolicyCases` from
-`tests/fixtures/secret-policy-cases.ts`. Rust tests can use `include_str!` with the same JSON.
-Both files are included in source packaging.
+one expected kind or `null`. There is no per-case exception: the Rust corpus tests refuse a case
+with any other key and read the JSON with `include_str!`. The file is included in source packaging.
 
 JSON-looking strings (trimmed text starting with `{` or `[`) fail closed if parsing fails, with
 `unparseable embedded JSON`. Quoted embedded JSON also fails closed on parse failure. Text

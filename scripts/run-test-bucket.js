@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const rootDir = path.resolve(__dirname, '..');
-const candidateRoots = ['tests/unit', 'tests/integration', 'tests/npm', 'src'];
+const candidateRoots = ['tests/unit', 'tests/integration', 'tests/npm'];
 // Add a `.ts` test to `slowTests` when ANY of these apply:
 //   1. It spawns a child process (CLI, bun test, node, gh, etc.).
 //   2. It binds a port, starts a server, or talks to localhost.
@@ -19,42 +19,12 @@ const candidateRoots = ['tests/unit', 'tests/integration', 'tests/npm', 'src'];
 // (catches deletion drift) but CANNOT detect new undeclared slow tests.
 // Automated perf-budget enforcement tracked in issue #1071.
 const slowTests = [
-  // Pair-2 regressions use owned sockets, managed children and strict timer bounds.
-  'tests/unit/web-server/agent-default-runner.test.ts',
-  'tests/unit/web-server/ssh-dns-trust.test.ts',
   'tests/unit/web-server/rust-slow-filesystem.test.ts',
-  'tests/unit/store/store-host-deadline.test.ts',
-  'tests/unit/web-server/cursor-quota.test.ts',
   'tests/unit/web-server/reset-source-adapter.test.ts',
-  'tests/integration/computer-registry.test.ts',
-  'tests/integration/logging-request-context.test.ts',
   'tests/unit/docker/dockerfile-lifecycle-scripts.test.ts',
   'tests/unit/docker/docker-hygiene.test.ts',
-  // The helper-sync row reads the built codex runtime helper through
-  // localHelperChecksums, like app-update-helper-sync.test.ts.
-  'tests/unit/web-server/ssh-policy.test.ts',
-  'tests/unit/web-server/muse-failure-contract-interop.test.ts',
-  'tests/unit/web-server/usage-failover-transport.test.ts',
-  'tests/unit/web-server/usage-failover-codex.test.ts',
-  'tests/unit/web-server/claude-host-transport.test.ts',
-  'tests/unit/web-server/signin-process.test.ts',
-  'tests/unit/antigravity/signin-driver.test.ts',
-  'tests/unit/web-server/dashboard-auth-runtime.test.ts',
-  'tests/unit/web-server/analytics-remote-helper.test.ts',
-  'tests/unit/web-server/antigravity-usage-helper.test.ts',
-  'tests/unit/web-server/app-update-helper-sync.test.ts',
-  'tests/unit/app-updates/codex-update-runtime-bundle.test.ts',
-  'tests/unit/web-server/status/status-server-review.test.ts',
-  // Spawns a stand-in Rust service on Unix sockets and waits on restart backoff timers.
-  'tests/unit/web-server/rust-service-lifecycle.test.ts',
-  // R3 hosts a stand-in service on a Unix socket and exercises crash/restart timers.
-  'tests/unit/store/store-host.test.ts',
-  // Binds loopback ports to compare the view writers through Express.
-  'tests/unit/web-server/rust-view-reply.test.ts',
   // Reads package.json at the repo root.
   'tests/unit/foundation/npm-rust-files.test.ts',
-  // Spawns bun build and the PATH node to exercise the Node >= 26 native fetch init.
-  'tests/unit/utils/fetch-proxy-node26.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are
@@ -62,14 +32,7 @@ const slowTests = [
 const fastJsTests = new Set(['tests/unit/flag-parsing-simple.test.js']);
 
 const isolatedTests = new Set([
-  'tests/unit/web-server/agent-default-runner.test.ts',
   'tests/unit/web-server/rust-slow-filesystem.test.ts',
-  'tests/unit/store/store-host-deadline.test.ts',
-  'tests/unit/commands/bar-command.test.ts',
-  'tests/unit/utils/fetch-proxy-setup.test.ts',
-  // Strict wall-clock fixtures must not share global mocks or a saturated worker pool.
-  'tests/unit/web-server/status/status-server-review.test.ts',
-  'tests/unit/web-server/account-dashboard-service.test.ts',
 ]);
 
 const filePattern = /(\.test\.(c|m)?[jt]s|\.spec\.(c|m)?[jt]s|-test\.(c|m)?[jt]s)$/;
@@ -183,7 +146,7 @@ function getBunArgs(name, selected = selectBucket(name)) {
 }
 
 function shouldRunIsolated(file) {
-  return file.startsWith('src/') || isolatedTests.has(file) || !usesBunTestRunner(file);
+  return isolatedTests.has(file) || !usesBunTestRunner(file);
 }
 
 function getBunRuns(name, selected = selectBucket(name)) {

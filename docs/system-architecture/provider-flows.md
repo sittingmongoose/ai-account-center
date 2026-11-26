@@ -2,14 +2,14 @@
 
 The account dashboard consumes existing authenticated account sources rather
 than provisioning logins or routing AI prompts. Source boundaries are owned by
-the [account service](../../src/web-server/services/account-dashboard-service.ts),
-[additional accounts](../../src/web-server/services/additional-account-service.ts)
-and [usage transport](../../src/web-server/services/additional-usage-transport.ts).
+the account service,
+additional accounts
+and usage transport.
 
 | Source | Retained owner |
 | --- | --- |
-| Native Codex quota | [saved-profile quota collector](../../src/web-server/usage/native-quota-collector.ts), [usage collectors](../../src/web-server/usage/) |
-| Native Claude quota | [Claude Desktop live usage](../../src/web-server/services/claude-desktop-live-service.ts) with the [Python Claude collector](../../scripts/account-usage/claude_usage.py) |
+| Native Codex quota | saved-profile quota collector, usage collectors |
+| Native Claude quota | Claude Desktop live usage with the [Python Claude collector](../../scripts/account-usage/claude_usage.py) |
 | Additional desktop/plan usage | [Python collectors](../../scripts/account-usage/) |
 | OpenCode/Muse browser session bridge | [bridge source](../../browser-bridge/opencode-muse/) |
 | Qwen browser/native host bridge | [bridge source](../../browser-bridge/qwen/) |
@@ -34,7 +34,7 @@ collection. Live email, account UUID and organization verification still precede
 quota reads. Canonical path aliases share the selected binding, and a provider's
 rate-limit cooldown survives a folder change even when its quota is discarded.
 
-All quota providers share [verified usage fallback](../../src/web-server/services/usage-failover-service.ts).
+All quota providers share verified usage fallback.
 The configured primary source is tried first. A failed or unreachable source can
 use an existing sign-in on another configured Mac, Windows, Ubuntu or Nas1
 computer only when its provider account identity matches. Identity includes the
@@ -58,7 +58,7 @@ and preserves unknown native counters as unknown. Scope changes, credential
 changes and revocation cannot reuse that grant. See the
 [collector guide](../../scripts/account-usage/README.md) for its bounded format.
 
-The [transport](../../src/web-server/services/usage-failover-transport.ts) streams
+The transport streams
 the packaged Python bundle over existing SSH aliases and imports it in memory.
 It installs no remote helper and copies no credentials. Each computer reads its
 own supported sign-ins and returns normalized usage plus nonsecret identity and
@@ -86,7 +86,7 @@ its `ubuntu`, `mac` or `windows` platform, and optionally an already approved
 unsupported provider entries, and does not accept arbitrary commands or paths.
 Without a manifest the additional-provider sources default to local Ubuntu;
 absence of a local valid login is reported as unavailable. Consult the
-[source parser](../../src/web-server/services/account-usage-manifest.ts)
+source parser
 before changing an existing deployment.
 
 Nas1, the fourth computer, is a second Ubuntu computer and needs no new
@@ -119,7 +119,7 @@ credentials through bounded identifiers, never caller-supplied credential paths
 or secrets. The dashboard's trusted Claude Desktop profile configuration is
 forwarded privately to its Windows host so existing custom paths do not require
 a second manifest on that computer. Direct legacy collectors retain their existing arguments and helper
-compatibility checks. See the [registry](../../src/web-server/services/account-registry-v2.ts).
+compatibility checks. See the registry.
 
 The display-only visibility file `account-visibility.json` (0600) holds two
 independent pairs of lists: `hiddenProviders` and `hiddenAccountIds` for the
@@ -135,7 +135,7 @@ to false, and shows nothing hidden only when it has never read the file. Every
 private store refuses a folder that others can write.
 
 API keys added from the dashboard (Kimi Code, Z.ai, OpenCode Go) are kept by the
-[AAC key store](../../src/web-server/services/account-key-store.ts) in
+AAC key store in
 `account-usage/keys/<provider>-<keyId>.json` (0600 in a 0700 folder) on the host that
 collects them; another host is written by `scripts/account-usage/key_store.py` with
 the key on stdin only. The API returns only the last four characters and a

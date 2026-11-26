@@ -29,9 +29,12 @@ describe('pr ci workflow', () => {
     expect(workflow).toContain('fail-fast: false');
     expect(workflow).toContain('runs-on: ubuntu-latest');
     expect(workflow).not.toContain('self-hosted');
-    expect(workflow).toContain("cmd: 'bun run typecheck'");
-    expect(workflow).toContain("cmd: 'bun run lint'");
-    expect(workflow).toContain("cmd: 'bun run format:check'");
+    // No TypeScript production source remains, so no typecheck, lint or format step.
+    expect(workflow).not.toContain('bun run typecheck');
+    expect(workflow).not.toContain('bun run lint');
+    expect(workflow).not.toContain('bun run format:check');
+    expect(workflow).toContain("cmd: 'node scripts/personal-detail-guard.js'");
+    expect(workflow).toContain("cmd: 'node tests/spec/inventory.mjs'");
     expect(workflow).toContain(
       "key: ${{ runner.os }}-bun-cache-v3-${{ hashFiles('bun.lock', 'web-dashboard/Cargo.lock') }}"
     );

@@ -1,7 +1,7 @@
 # AI Account Center Code Standards
 
 Enforced source configuration and tests take precedence over prose. Use the
-existing [ESLint](../eslint.config.mjs), [TypeScript](../tsconfig.json),
+existing ESLint, TypeScript,
 [package scripts](../package.json) and [commitlint](../commitlint.config.cjs)
 contracts.
 
@@ -21,7 +21,7 @@ quota snapshots are not additive token totals.
 
 ## Private state and mutation
 
-Resolve private paths through [config-manager](../src/utils/config-manager.ts).
+Resolve private paths through config-manager.
 Test with temporary `CCS_HOME`; preserve `~/.ccs/`, session/profile aliases and
 native host identities. Keep tokens, cookies and raw provider payloads out of
 logs, fixtures and client models.

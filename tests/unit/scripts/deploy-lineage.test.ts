@@ -3,12 +3,6 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import {
-  deployedBuildDirs,
-  readPackagedBuild,
-  recordDeployedBuild,
-  recordRunningBuild,
-} from '../../../src/web-server/services/deployed-build';
 
 interface LineageCheck {
   ok: boolean;
@@ -215,7 +209,6 @@ describe('deployment lineage guard', () => {
     for (const relative of [
       ...Object.values(bin),
       'dist/native/aac-http' + suffix,
-      'dist/antigravity/terminal-signin-entry.js',
       'dist/ui/app/index.html',
     ]) {
       const file = path.join(packageRoot, relative);
@@ -237,11 +230,11 @@ describe('deployment lineage guard', () => {
     const repo = path.join(scope, 'repo');
     const other = path.join(scope, 'other');
     git(scope, 'init', '-q', '--bare', '-b', 'main', origin);
-    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'crates'), { recursive: true });
     git(repo, 'init', '-q', '-b', 'main');
     git(repo, 'remote', 'add', 'origin', origin);
-    fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'export const a = 1;\n');
-    // A second input directory keeps the dirty check's pathspec non-empty when src is deleted.
+    fs.writeFileSync(path.join(repo, 'crates', 'a.rs'), 'pub const A: u8 = 1;\n');
+    // A second input directory keeps the dirty check's pathspec non-empty when crates is deleted.
     fs.mkdirSync(path.join(repo, 'scripts'));
     fs.writeFileSync(path.join(repo, 'scripts', 'build.js'), 'module.exports = 1;\n');
     git(repo, 'add', '.');
@@ -250,7 +243,7 @@ describe('deployment lineage guard', () => {
     git(repo, 'push', '-q', 'origin', 'main');
     expect(lineage.readSourceBuild(repo)?.onMain).toBe(true);
     git(repo, 'checkout', '-q', '-b', 'fix/branch');
-    fs.writeFileSync(path.join(repo, 'src', 'b.ts'), 'export const b = 2;\n');
+    fs.writeFileSync(path.join(repo, 'crates', 'b.rs'), 'pub const B: u8 = 2;\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-q', '-m', 'second');
     const second = git(repo, 'rev-parse', 'HEAD');
@@ -277,69 +270,13 @@ describe('deployment lineage guard', () => {
     fs.renameSync(path.join(repo, 'notes.txt'), path.join(scope, 'notes.txt'));
     expect(() => requireLanded()).not.toThrow();
     expect(() => requireLanded(first)).toThrow('Check out the exact landed release commit');
-    fs.writeFileSync(path.join(repo, 'src', 'c.ts'), 'export const c = 3;\n');
+    fs.writeFileSync(path.join(repo, 'crates', 'c.rs'), 'pub const C: u8 = 3;\n');
     expect(lineage.readSourceBuild(repo)?.dirty).toBe(true);
-    expect(lineage.readSourceBuild(path.join(repo, 'src'))).toBeNull();
+    expect(lineage.readSourceBuild(path.join(repo, 'crates'))).toBeNull();
     // Deleting a whole tracked input directory is an uncommitted change too.
-    fs.rmSync(path.join(repo, 'src', 'c.ts'));
+    fs.rmSync(path.join(repo, 'crates', 'c.rs'));
     expect(lineage.readSourceBuild(repo)?.dirty).toBe(false);
-    fs.rmSync(path.join(repo, 'src'), { recursive: true });
+    fs.rmSync(path.join(repo, 'crates'), { recursive: true });
     expect(lineage.readSourceBuild(repo)?.dirty).toBe(true);
-  });
-});
-
-describe('running build record', () => {
-  it('reads an installed package build and ignores source checkouts', () => {
-    packaged({ commit: C, dirty: false, lineage: [C] });
-    expect(readPackagedBuild(packageRoot)).toEqual({ commit: C, branch: 'main', dirty: false });
-    expect(readPackagedBuild(path.resolve(__dirname, '../../..'))).toBeNull();
-    packaged({ commit: null, dirty: null, lineage: [] });
-    expect(readPackagedBuild(packageRoot)).toBeNull();
-  });
-
-  it('records the running build where an installer looks, even under --config-dir', () => {
-    const home = path.join(scope, 'user');
-    const custom = path.join(scope, 'custom-config');
-    fs.mkdirSync(custom);
-    expect(deployedBuildDirs(custom, {}, home)).toEqual([
-      path.resolve(custom),
-      path.resolve(home, '.ccs'),
-    ]);
-    const named = path.join(scope, 'named');
-    expect(deployedBuildDirs(custom, { CCS_HOME: named }, home)).toEqual([
-      path.resolve(custom),
-      path.resolve(named, '.ccs'),
-      path.resolve(home, '.ccs'),
-    ]);
-    const build = { commit: B, branch: 'main', dirty: false };
-    // Neither the named nor the default directory exists yet; the installer reads both.
-    expect(recordRunningBuild(custom, build, { CCS_HOME: named }, home)).toBe(0);
-    for (const dir of [custom, path.join(named, '.ccs'), path.join(home, '.ccs')])
-      expect(
-        lineage.parseLedger(
-          JSON.parse(fs.readFileSync(path.join(dir, 'deployed-build.json'), 'utf8'))
-        )
-      ).toEqual({ commit: B, branch: 'main', dirty: false });
-    expect(recordRunningBuild(custom, null, { CCS_HOME: named }, home)).toBe(0);
-  });
-
-  it('writes a private record the install guard reads, and leaves an unchanged one alone', () => {
-    const ccsDir = path.join(ccsHome, '.ccs');
-    const build = { commit: B, branch: 'main', dirty: false };
-    expect(recordDeployedBuild(ccsDir, build, new Date('2026-10-21T01:00:00.000Z'))).toBe(true);
-    const file = path.join(ccsDir, 'deployed-build.json');
-    const first = fs.readFileSync(file, 'utf8');
-    expect(lineage.parseLedger(JSON.parse(first))).toEqual({
-      commit: B,
-      branch: 'main',
-      dirty: false,
-    });
-    if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    recordDeployedBuild(ccsDir, build, new Date('2026-10-21T02:00:00.000Z'));
-    expect(fs.readFileSync(file, 'utf8')).toBe(first);
-    expect(fs.readdirSync(ccsDir)).toEqual(['deployed-build.json']);
-    expect(recordDeployedBuild(ccsDir, null)).toBe(false);
-    packaged({ commit: C, dirty: false, lineage: [C, A] });
-    expect(check().ok).toBe(false);
   });
 });
