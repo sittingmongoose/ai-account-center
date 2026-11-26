@@ -91,10 +91,20 @@ static DENIED: LazyLock<regex::Regex> =
 /// failure code, or `None` for a run that succeeded.
 type UnitCode = Option<Option<&'static str>>;
 
+/// Per-job state of Ubuntu's one `t3-acp-update.service` run: Python `UBUNTU_RUN` plus the
+/// pre-unit detection snapshots Python captured at job start, so the second row of a shared
+/// unit run still compares against pre-unit versions.
+#[derive(Default)]
+struct UnitRun {
+    code: UnitCode,
+    adapters_before: Option<Layout>,
+    zcode_before: Option<Option<String>>,
+}
+
 /// Python `UBUNTU_RUN`: the one t3-acp-update run of a job, shared by the ZCode and adapter
 /// rows. The helper had one process per job; here an entry lives as long as the job's
 /// [`Shared`] does, so a later job never inherits it.
-static UNIT_RUNS: Mutex<Vec<(Weak<Shared>, UnitCode)>> = Mutex::new(Vec::new());
+static UNIT_RUNS: Mutex<Vec<(Weak<Shared>, UnitRun)>> = Mutex::new(Vec::new());
 
 /// The process environment this module reads besides [`Host`] (Python `os.environ`).
 /// Production reads the real one; fixtures answer from their own table.
@@ -351,26 +361,30 @@ fn expand_user(path: &Path, home: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Python `os.path.expandvars` for `$NAME` and `${NAME}`; an unset name is empty.
+/// Python `os.path.expandvars` for `$NAME` and `${NAME}`; an unset name stays verbatim.
 fn expand_vars(text: &str, vars: &dyn Vars) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find('$') {
         out.push_str(&rest[..at]);
         let after = &rest[at + 1..];
-        let (name, tail) = match after.strip_prefix('{') {
+        let (raw, name, tail) = match after.strip_prefix('{') {
             Some(inner) => match inner.find('}') {
-                Some(end) => (&inner[..end], &inner[end + 1..]),
+                Some(end) => (
+                    &rest[at..at + 2 + end + 1],
+                    &inner[..end],
+                    &inner[end + 1..],
+                ),
                 None => {
-                    out.push('$');
-                    break;
+                    out.push_str(&rest[at..]);
+                    return out;
                 }
             },
             None => {
                 let end = after
                     .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
                     .unwrap_or(after.len());
-                (&after[..end], &after[end..])
+                (&rest[at..at + 1 + end], &after[..end], &after[end..])
             }
         };
         if name.is_empty() {
@@ -378,7 +392,10 @@ fn expand_vars(text: &str, vars: &dyn Vars) -> String {
             rest = after;
             continue;
         }
-        out.push_str(&vars.get(name).unwrap_or_default());
+        match vars.get(name) {
+            Some(value) => out.push_str(&value),
+            None => out.push_str(raw),
+        }
         rest = tail;
     }
     out.push_str(rest);
@@ -397,6 +414,9 @@ fn plist_strings(bytes: &[u8]) -> Option<Vec<(String, String)>> {
 }
 
 fn decode16(bytes: &[u8], big: bool) -> Option<String> {
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
     let units: Vec<u16> = bytes
         .as_chunks::<2>()
         .0
@@ -495,7 +515,7 @@ fn xml_plist(bytes: &[u8]) -> Option<Vec<(String, String)>> {
             return None;
         }
         if text[at..].starts_with("<!--") {
-            at += 4 + text[at + 4..].find("-->")?;
+            at += 4 + text[at + 4..].find("-->")? + 3;
             continue;
         }
         if text[at..].starts_with("<![CDATA[") {
@@ -536,21 +556,28 @@ fn xml_plist(bytes: &[u8]) -> Option<Vec<(String, String)>> {
         stack.push(name);
         if inner.ends_with('/') {
             stack.pop();
+            if depth == 2 && parent == Some("dict") {
+                pending = None;
+            }
             if stack.is_empty() {
                 break;
             }
             continue;
         }
-        if depth == 2 && parent == Some("dict") && matches!(name, "key" | "string") {
-            let (content, next) = element_text(&text, at, name)?;
-            at = next;
-            stack.pop();
-            if name == "key" {
-                pending = Some(decode_entities(&content)?);
-            } else if let Some(field) = pending.take()
-                && PLIST_FIELDS.contains(&field.as_str())
-            {
-                pairs.push((field, decode_entities(&content)?));
+        if depth == 2 && parent == Some("dict") {
+            if matches!(name, "key" | "string") {
+                let (content, next) = element_text(&text, at, name)?;
+                at = next;
+                stack.pop();
+                if name == "key" {
+                    pending = Some(decode_entities(&content)?);
+                } else if let Some(field) = pending.take()
+                    && PLIST_FIELDS.contains(&field.as_str())
+                {
+                    pairs.push((field, decode_entities(&content)?));
+                }
+            } else {
+                pending = None;
             }
         }
     }
@@ -749,7 +776,11 @@ fn detect_zcode(cx: &Context) -> Option<Installed> {
         return None;
     }
     let path = install.path.clone();
-    install.version = installed_version(cx.platform, &path);
+    install.version = if cx.platform == Platform::Ubuntu {
+        unit_zcode_before(&cx.shared).unwrap_or_else(|| installed_version(cx.platform, &path))
+    } else {
+        installed_version(cx.platform, &path)
+    };
     Some(install)
 }
 
@@ -1001,8 +1032,12 @@ fn default_consumer(host: &Host, adapter: Adapter) -> Option<PathBuf> {
 
 /// A `prefix=` line in the user's ~/.npmrc, or npm_config_prefix: where plain npm -g installs.
 fn npmrc_prefix(host: &Host, vars: &dyn Vars) -> Option<PathBuf> {
-    if let Some(prefix) = &host.npm_prefix {
-        return Some(expand_user(prefix, &host.home));
+    if let Some(prefix) = host.npm_prefix.clone().or_else(|| {
+        vars.get("npm_config_prefix")
+            .or_else(|| vars.get("NPM_CONFIG_PREFIX"))
+            .map(PathBuf::from)
+    }) {
+        return Some(expand_user(&prefix, &host.home));
     }
     let text = String::from_utf8(read_bytes(&host.home.join(".npmrc"), 1024 * 1024)?).ok()?;
     text.lines().take(200).find_map(|line| {
@@ -1283,7 +1318,11 @@ fn adapters_owner(host: &Host, vars: &dyn Vars, layout: &Layout, after: Option<&
 }
 
 fn detect_adapters(cx: &Context, vars: &dyn Vars) -> Option<Installed> {
-    let layout = discover_owners(&cx.host, vars);
+    let layout = if cx.platform == Platform::Ubuntu {
+        unit_adapters_before(&cx.shared).unwrap_or_else(|| discover_owners(&cx.host, vars))
+    } else {
+        discover_owners(&cx.host, vars)
+    };
     let first = (0..PARTS).find(|adapter| !layout.owners[*adapter].is_empty())?;
     let root = layout.owners[first][0].root.clone();
     let mut install = Installed::new("t3-acp-adapters", cx.platform, root.clone(), None, "npm");
@@ -1465,8 +1504,8 @@ async fn verified_package(
         }
     };
     let actual = sha(&package).ok_or_else(|| UpdateFailure::new("signature_failed"))?;
-    let wrong_size =
-        size.is_some_and(|size| std::fs::metadata(&package).is_ok_and(|info| info.len() != size));
+    let wrong_size = size
+        .is_some_and(|size| std::fs::metadata(&package).map_or(true, |info| info.len() != size));
     if actual != digest || wrong_size {
         return Err(UpdateFailure::new("signature_failed"));
     }
@@ -1580,7 +1619,7 @@ async fn busy_now(cx: &Context, layout: &Layout) -> Result<Busy, UpdateFailure> 
 /// warnings, carry EPERM or EBUSY and name the package folder. A rollback that could not
 /// remove a folder is only a warning.
 fn locked_here(output: &str, adapter: Adapter) -> bool {
-    let text = output.replace('\\', "/");
+    let text = output.replace("\\\\", "\\").replace('\\', "/");
     let errors = text
         .lines()
         .filter(|line| line.starts_with("npm error"))
@@ -1590,15 +1629,13 @@ fn locked_here(output: &str, adapter: Adapter) -> bool {
         return false;
     }
     let needle = format!("node_modules/{}", PACKAGES[adapter].1);
-    errors
-        .to_lowercase()
-        .match_indices(&needle)
-        .any(|(at, found)| {
-            !errors[at + found.len()..]
-                .chars()
-                .next()
-                .is_some_and(|next| next.is_alphanumeric() || matches!(next, '_' | '.' | '@' | '-'))
-        })
+    let lower = errors.to_lowercase();
+    lower.match_indices(&needle).any(|(at, found)| {
+        !lower[at + found.len()..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_alphanumeric() || matches!(next, '_' | '.' | '@' | '-'))
+    })
 }
 
 /// Processes executing from folder or naming it, which t3-acp-update's swap waits for.
@@ -1705,7 +1742,7 @@ fn git_bash(host: &Host, vars: &dyn Vars) -> Option<PathBuf> {
                 .is_some_and(|parent| named(parent, "bin"))
             && candidate
                 .ancestors()
-                .nth(1)
+                .nth(2)
                 .is_some_and(|home| named(home, "git"))
     })
 }
@@ -1721,7 +1758,7 @@ fn corepack_pnpm(host: &Host, vars: &dyn Vars) -> Option<PathBuf> {
                 .or_else(|| vars.get("LOCALAPPDATA"))
             {
                 Some(base) => PathBuf::from(base),
-                None if cfg!(windows) => host.home.join("AppData/Local"),
+                None if host.platform == Platform::Windows => host.home.join("AppData/Local"),
                 None => host.home.join(".cache"),
             };
             base.join("node/corepack")
@@ -1851,7 +1888,11 @@ fn install_command(
                 .into_owned();
             let path = format!(
                 "{bin_dir}{}{}",
-                if cfg!(windows) { ';' } else { ':' },
+                if host.platform == Platform::Windows {
+                    ';'
+                } else {
+                    ':'
+                },
                 vars.get("PATH").unwrap_or_default()
             );
             Some(Planned {
@@ -1903,20 +1944,65 @@ fn writable(owner: &Owner, platform: Platform) -> bool {
 // Ubuntu's oneshot unit
 // ---------------------------------------------------------------------------
 
-/// This job's entry in [`UNIT_RUNS`], created on first use. Entries of finished jobs are dropped.
-fn unit_slot(shared: &Arc<Shared>) -> usize {
+/// Mutate or insert this job's entry in [`UNIT_RUNS`], dropping entries of finished jobs.
+fn with_unit_run<T>(shared: &Arc<Shared>, change: impl FnOnce(&mut UnitRun) -> T) -> T {
     let mut runs = UNIT_RUNS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     runs.retain(|(job, _)| job.strong_count() > 0);
-    if let Some(index) = runs
-        .iter()
-        .position(|(job, _)| std::ptr::eq(job.as_ptr(), Arc::as_ptr(shared)))
+    if let Some((_, entry)) = runs
+        .iter_mut()
+        .find(|(job, _)| std::ptr::eq(job.as_ptr(), Arc::as_ptr(shared)))
     {
-        return index;
+        return change(entry);
     }
-    runs.push((Arc::downgrade(shared), None));
-    runs.len() - 1
+    let mut entry = UnitRun::default();
+    let result = change(&mut entry);
+    runs.push((Arc::downgrade(shared), entry));
+    result
+}
+
+/// Record this job's finished unit outcome in [`UNIT_RUNS`].
+fn set_unit_run(shared: &Arc<Shared>, code: Option<&'static str>) {
+    with_unit_run(shared, |entry| entry.code = Some(code));
+}
+
+/// Record pre-unit snapshots before the first row in a job starts `t3-acp-update.service`.
+fn snapshot_before_unit(
+    shared: &Arc<Shared>,
+    adapters: Option<Layout>,
+    zcode_version: Option<Option<String>>,
+) {
+    with_unit_run(shared, |entry| {
+        if entry.adapters_before.is_none()
+            && let Some(layout) = adapters
+        {
+            entry.adapters_before = Some(layout);
+        }
+        if entry.zcode_before.is_none()
+            && let Some(version) = zcode_version
+        {
+            entry.zcode_before = Some(version);
+        }
+    });
+}
+
+fn unit_adapters_before(shared: &Arc<Shared>) -> Option<Layout> {
+    let runs = UNIT_RUNS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runs.iter()
+        .find(|(job, _)| std::ptr::eq(job.as_ptr(), Arc::as_ptr(shared)))
+        .and_then(|(_, entry)| entry.adapters_before.clone())
+}
+
+fn unit_zcode_before(shared: &Arc<Shared>) -> Option<Option<String>> {
+    let runs = UNIT_RUNS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runs.iter()
+        .find(|(job, _)| std::ptr::eq(job.as_ptr(), Arc::as_ptr(shared)))
+        .and_then(|(_, entry)| entry.zcode_before.clone())
 }
 
 /// Python `UBUNTU_RUN["code"]`: `None` until this job's one unit run finished; then its
@@ -1927,7 +2013,7 @@ fn unit_ran(shared: &Arc<Shared>) -> Option<Option<&'static str>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     runs.iter()
         .find(|(job, _)| std::ptr::eq(job.as_ptr(), Arc::as_ptr(shared)))
-        .and_then(|(_, code)| *code)
+        .and_then(|(_, entry)| entry.code)
 }
 
 /// Start t3-acp-update and wait for its run, once per job; its failure code or `None`.
@@ -1935,14 +2021,7 @@ fn unit_ran(shared: &Arc<Shared>) -> Option<Option<&'static str>> {
 /// and TimeoutStartSec, so the shared npm resources stay reserved until a terminal
 /// state is verified.
 async fn run_unit(cx: &Context) -> Result<Option<&'static str>, UpdateFailure> {
-    let slot = unit_slot(&cx.shared);
-    let previous = {
-        let runs = UNIT_RUNS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        runs[slot].1
-    };
-    if let Some(code) = previous {
+    if let Some(code) = unit_ran(&cx.shared) {
         return Ok(code);
     }
     let seconds = shared::budget(cx, UNIT_SECONDS)?;
@@ -1959,10 +2038,7 @@ async fn run_unit(cx: &Context) -> Result<Option<&'static str>, UpdateFailure> {
             Some(error.code)
         }
     };
-    UNIT_RUNS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)[slot]
-        .1 = Some(code);
+    set_unit_run(&cx.shared, code);
     Ok(code)
 }
 
@@ -2058,6 +2134,13 @@ async fn zcode_ubuntu(
             "shared_updater_unsafe",
         ));
     }
+    if unit_ran(&cx.shared).is_none() {
+        snapshot_before_unit(
+            &cx.shared,
+            Some(discover_owners(&cx.host, vars)),
+            Some(Some(before.to_owned())),
+        );
+    }
     cx.phase("updating");
     let code = run_unit(cx).await?;
     state.attempted = true;
@@ -2099,10 +2182,14 @@ async fn zcode_ubuntu(
     Err(UpdateFailure::new(code.unwrap_or("update_failed")))
 }
 
-/// Python `os.access(path, os.W_OK)` by the permission bits; a missing folder is not writable.
+/// Whether this account can create files in `path` (Python `os.access(path, os.W_OK)`).
+/// A missing folder is not writable.
 fn writable_folder(path: &Path) -> bool {
-    path.metadata()
-        .is_ok_and(|info| !info.permissions().readonly())
+    path.is_dir()
+        && tempfile::Builder::new()
+            .prefix(".aac-write-check-")
+            .tempfile_in(path)
+            .is_ok()
 }
 
 fn rename(from: &Path, to: &Path) -> Result<(), UpdateFailure> {
@@ -2387,7 +2474,9 @@ async fn replace_windows(
             })
             .cloned()
             .collect();
-        let _ = services.restart(cx, install, &gone).await;
+        if !gone.is_empty() {
+            let _ = services.restart(cx, install, &gone).await;
+        }
         return Err(error);
     }
     let mut row = if contexts.is_empty() {
@@ -2401,14 +2490,18 @@ async fn replace_windows(
         .attempted(0)
     } else {
         match services.restart(cx, install, &contexts).await {
-            Ok(count) => AppRow::of(
-                install,
-                Status::Updated,
-                install.version.as_deref(),
-                Some(replace.version),
-                "desktop_reopened",
-            )
-            .attempted(count),
+            Ok(count) => {
+                let mut row = AppRow::of(
+                    install,
+                    Status::Updated,
+                    install.version.as_deref(),
+                    Some(replace.version),
+                    "desktop_reopened",
+                )
+                .attempted(count);
+                row.restart_targets = Some(vec![json!({"kind": "desktop"})]);
+                row
+            }
             Err(_) => AppRow::of(
                 install,
                 Status::RestartFailed,
@@ -2420,9 +2513,6 @@ async fn replace_windows(
         }
     };
     row.forced_stops = Some(forced);
-    if !contexts.is_empty() {
-        row.restart_targets = Some(vec![json!({"kind": "desktop"})]);
-    }
     Ok(row)
 }
 
@@ -2476,7 +2566,9 @@ async fn restore_windows(
             .state
             .join(format!("zcode-rollback-{}", processes::unique_suffix()));
         let _ = super::common::private_dir(&cx.state);
-        let _ = std::fs::rename(backup, recovery);
+        if std::fs::rename(backup, &recovery).is_err() && copy_tree(backup, &recovery).is_ok() {
+            let _ = std::fs::remove_dir_all(backup);
+        }
     }
 }
 
@@ -2511,7 +2603,10 @@ async fn zcode_update(
             } else {
                 before.clone()
             };
-            let mixed = error.code != "version_went_down" && after.is_some() && after != before;
+            let mixed = error.code != "version_went_down"
+                && after.is_some()
+                && before.is_some()
+                && after != before;
             let status = if mixed {
                 Status::RestartFailed
             } else {
@@ -2865,6 +2960,13 @@ async fn adapters_ubuntu(
                 &HashSet::new(),
             ));
         }
+        if unit_ran(&cx.shared).is_none() {
+            snapshot_before_unit(
+                &cx.shared,
+                Some(layout.clone()),
+                desktop.as_ref().map(|desktop| desktop.version.clone()),
+            );
+        }
         cx.phase("updating");
         let code = run_unit(cx).await?;
         state.attempted = true;
@@ -3081,15 +3183,20 @@ async fn adapters_steps(
 /// Python `update_adapters`: the steps and the row for any failure.
 async fn adapters_update(cx: &Context, vars: &dyn Vars) -> AppRow {
     // The contract hands `update` the generic installation only, so the copies are read
-    // again here: `attempt` runs detection and update back to back.
-    let layout = discover_owners(&cx.host, vars);
+    // again here (or taken from this job's pre-unit snapshot when `zcode` already ran
+    // `t3-acp-update.service`).
+    let layout = if cx.platform == Platform::Ubuntu {
+        unit_adapters_before(&cx.shared).unwrap_or_else(|| discover_owners(&cx.host, vars))
+    } else {
+        discover_owners(&cx.host, vars)
+    };
     adapters_update_layout(cx, vars, &layout).await
 }
 
 async fn adapters_update_layout(cx: &Context, vars: &dyn Vars, layout: &Layout) -> AppRow {
     let mut state = Attempt::default();
     let mut behind: Vec<Adapter> = Vec::new();
-    let error = match adapters_steps(cx, vars, &layout, &mut state, &mut behind).await {
+    let error = match adapters_steps(cx, vars, layout, &mut state, &mut behind).await {
         Ok(row) => return row,
         Err(error) => error,
     };
@@ -3107,7 +3214,7 @@ async fn adapters_update_layout(cx: &Context, vars: &dyn Vars, layout: &Layout) 
         return adapters_row(
             cx,
             vars,
-            &layout,
+            layout,
             Status::ActionRequired,
             None,
             error.code,
@@ -3115,11 +3222,11 @@ async fn adapters_update_layout(cx: &Context, vars: &dyn Vars, layout: &Layout) 
             &held,
         );
     }
-    let after = state.attempted.then(|| parts_now(&layout));
+    let after = state.attempted.then(|| parts_now(layout));
     adapters_row(
         cx,
         vars,
-        &layout,
+        layout,
         Status::Failed,
         after.as_ref(),
         error.code,
@@ -3206,13 +3313,16 @@ mod tests {
     type Lookup = Box<dyn FnMut(&str) -> Result<Vec<u8>, UpdateFailure> + Send>;
     type Serving = Box<dyn FnMut(&str, &Path) -> Result<(), UpdateFailure> + Send>;
     type Table = Arc<Mutex<Vec<Process>>>;
+    type RecordedRun = (Vec<OsString>, Duration, Vec<(OsString, OsString)>);
 
     /// A scripted host: answers commands, the process table, page lookups and downloads,
     /// and records what each lookup was asked for (URL, size cap, URL prefix).
     struct Fixture {
-        runs: Mutex<Vec<(Vec<OsString>, Duration)>>,
+        runs: Mutex<Vec<RecordedRun>>,
         answer: Mutex<Answer>,
         table: Table,
+        /// Optional scripted sequence of process tables; once drained, falls back to `table`.
+        scans_script: Mutex<std::collections::VecDeque<Vec<Process>>>,
         lookup: Mutex<Lookup>,
         serving: Mutex<Serving>,
         asked: Mutex<Vec<(String, u64, String)>>,
@@ -3229,6 +3339,7 @@ mod tests {
                 runs: Mutex::new(Vec::new()),
                 answer: Mutex::new(Box::new(|_| Ok(CommandOutput::default()))),
                 table,
+                scans_script: Mutex::new(std::collections::VecDeque::new()),
                 lookup: Mutex::new(Box::new(|_| Err(UpdateFailure::failed()))),
                 serving: Mutex::new(Box::new(|_, _| Err(UpdateFailure::failed()))),
                 asked: Mutex::new(Vec::new()),
@@ -3267,7 +3378,36 @@ mod tests {
                 .lock()
                 .expect("runs")
                 .iter()
-                .map(|(argv, _)| argv.clone())
+                .map(|(argv, _, _)| argv.clone())
+                .collect()
+        }
+
+        fn run_strings(&self) -> Vec<Vec<String>> {
+            self.runs()
+                .into_iter()
+                .map(|argv| {
+                    argv.into_iter()
+                        .map(|word| word.to_string_lossy().into_owned())
+                        .collect()
+                })
+                .collect()
+        }
+
+        fn run_envs(&self) -> Vec<Vec<(String, String)>> {
+            self.runs
+                .lock()
+                .expect("runs")
+                .iter()
+                .map(|(_, _, env)| {
+                    env.iter()
+                        .map(|(k, v)| {
+                            (
+                                k.to_string_lossy().into_owned(),
+                                v.to_string_lossy().into_owned(),
+                            )
+                        })
+                        .collect()
+                })
                 .collect()
         }
 
@@ -3276,7 +3416,7 @@ mod tests {
                 .lock()
                 .expect("runs")
                 .iter()
-                .map(|(_, timeout)| *timeout)
+                .map(|(_, timeout, _)| *timeout)
                 .collect()
         }
 
@@ -3300,10 +3440,11 @@ mod tests {
             diagnostics: &'a Mutex<Diagnostics>,
         ) -> BoxFuture<'a, Result<CommandOutput, UpdateFailure>> {
             Box::pin(async move {
-                self.runs
-                    .lock()
-                    .expect("runs")
-                    .push((spec.argv.clone(), spec.timeout));
+                self.runs.lock().expect("runs").push((
+                    spec.argv.clone(),
+                    spec.timeout,
+                    spec.env.clone(),
+                ));
                 let answer = {
                     let mut answer = self.answer.lock().expect("answer");
                     answer(spec)
@@ -3329,11 +3470,10 @@ mod tests {
             _platform: Platform,
         ) -> BoxFuture<'_, Result<ProcessTable, UpdateFailure>> {
             Box::pin(async move {
-                self.scans
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(ProcessTable::new(
-                    self.table.lock().expect("table").clone(),
-                ))
+                self.scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let scripted = self.scans_script.lock().expect("scans_script").pop_front();
+                let items = scripted.unwrap_or_else(|| self.table.lock().expect("table").clone());
+                Ok(ProcessTable::new(items))
             })
         }
 
@@ -3398,7 +3538,10 @@ mod tests {
     /// from the process table.
     struct Scripted {
         arguments: Mutex<Vec<(u32, Vec<String>)>>,
-        events: Mutex<Vec<&'static str>>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+        closed: Mutex<Vec<Vec<u32>>>,
+        reopened: Mutex<Vec<Vec<u32>>>,
+        session_id: Mutex<Option<u32>>,
         /// What the reopen step raises instead of reopening.
         reopen: Mutex<Option<UpdateFailure>>,
         table: Table,
@@ -3418,7 +3561,7 @@ mod tests {
         }
 
         fn session(&self) -> Option<u32> {
-            Some(1)
+            *self.session_id.lock().expect("session")
         }
 
         fn terminate<'a>(
@@ -3429,12 +3572,16 @@ mod tests {
         ) -> BoxFuture<'a, Result<u32, UpdateFailure>> {
             Box::pin(async move {
                 self.events.lock().expect("events").push("close");
+                self.closed
+                    .lock()
+                    .expect("closed")
+                    .push(contexts.iter().map(|item| item.pid).collect());
                 let mains: HashSet<u32> = contexts.iter().map(|item| item.pid).collect();
                 self.table
                     .lock()
                     .expect("table")
                     .retain(|item| !mains.contains(&item.pid) && !mains.contains(&item.ppid));
-                Ok(u32::try_from(contexts.len()).unwrap_or(u32::MAX))
+                Ok(u32::from(!contexts.is_empty()))
             })
         }
 
@@ -3446,6 +3593,10 @@ mod tests {
         ) -> BoxFuture<'a, Result<u32, UpdateFailure>> {
             Box::pin(async move {
                 self.events.lock().expect("events").push("reopen");
+                self.reopened
+                    .lock()
+                    .expect("reopened")
+                    .push(contexts.iter().map(|item| item.pid).collect());
                 match self.reopen.lock().expect("reopen").clone() {
                     Some(error) => Err(error),
                     None => Ok(u32::try_from(contexts.len()).unwrap_or(u32::MAX)),
@@ -3461,40 +3612,51 @@ mod tests {
     /// One test's folder and scripted hosts. The home folder is the test's root, as the
     /// Python tests patch `Path.home()`.
     struct Rig {
-        root: tempfile::TempDir,
+        _root: tempfile::TempDir,
+        path: PathBuf,
         system: Arc<Fixture>,
         services: Arc<Scripted>,
         table: Table,
         phases: Arc<Mutex<Vec<&'static str>>>,
         /// The test computer's PATH (empty until a test adds a folder).
         search_path: Vec<PathBuf>,
+        arch: &'static str,
     }
 
     impl Rig {
         fn start() -> Self {
+            let root = tempfile::tempdir().expect("root");
+            let path = real(root.path());
             let table: Table = Arc::new(Mutex::new(Vec::new()));
+            let events = Arc::new(Mutex::new(Vec::new()));
             Self {
-                root: tempfile::tempdir().expect("root"),
+                _root: root,
+                path,
                 system: Fixture::plain(table.clone()),
                 services: Arc::new(Scripted {
                     arguments: Mutex::new(Vec::new()),
-                    events: Mutex::new(Vec::new()),
+                    events,
+                    closed: Mutex::new(Vec::new()),
+                    reopened: Mutex::new(Vec::new()),
+                    session_id: Mutex::new(Some(1)),
                     reopen: Mutex::new(None),
                     table: table.clone(),
                 }),
                 table,
                 phases: Arc::new(Mutex::new(Vec::new())),
                 search_path: Vec::new(),
+                arch: "x86_64",
             }
         }
 
         fn path(&self) -> &Path {
-            self.root.path()
+            &self.path
         }
 
         fn host(&self, platform: Platform) -> Arc<Host> {
             let mut host = Arc::into_inner(host(self.path(), platform)).expect("own host");
             host.path = self.search_path.clone();
+            host.arch = self.arch;
             Arc::new(host)
         }
 
@@ -3503,20 +3665,34 @@ mod tests {
             self.cx_shared(platform, seconds, Arc::new(Shared::default()))
         }
 
-        /// A context that shares `shared` with the job's other rows.
-        fn cx_shared(&self, platform: Platform, seconds: u64, shared: Arc<Shared>) -> Context {
+        /// A context with an explicit deadline (including past deadlines).
+        fn cx_deadline(
+            &self,
+            platform: Platform,
+            deadline: Instant,
+            shared: Arc<Shared>,
+        ) -> Context {
             let phases = self.phases.clone();
             Context::new(
                 platform,
                 self.host(platform),
                 self.system.clone(),
                 shared,
-                Instant::now() + Duration::from_secs(seconds),
+                deadline,
                 self.path().join("stage"),
                 self.path().join("state"),
                 None,
                 || false,
                 move |phase| phases.lock().expect("phases").push(phase),
+            )
+        }
+
+        /// A context that shares `shared` with the job's other rows.
+        fn cx_shared(&self, platform: Platform, seconds: u64, shared: Arc<Shared>) -> Context {
+            self.cx_deadline(
+                platform,
+                Instant::now() + Duration::from_secs(seconds),
+                shared,
             )
         }
 
@@ -3529,12 +3705,20 @@ mod tests {
         async fn adapters(&self, platform: Platform) -> Value {
             attempt(&ADAPTERS, &self.cx(platform, 900)).await.to_value()
         }
+
+        /// Export diagnostics onto a direct `zcode_update` / `adapters_update` row, as `attempt` does.
+        fn finish(cx: &Context, mut row: AppRow) -> Value {
+            let value = row.to_value();
+            row.diagnostics = Some(cx.record(|record| record.export(&value)));
+            row.to_value()
+        }
     }
 
     fn host(root: &Path, platform: Platform) -> Arc<Host> {
+        let root = real(root);
         Arc::new(Host {
             platform,
-            home: root.to_path_buf(),
+            home: root.clone(),
             local: root.join("local"),
             roaming: root.join("roaming"),
             program_files: root.join("Program Files"),
@@ -3680,7 +3864,7 @@ mod tests {
 
     fn unit(root: &Path) {
         let file = root.join(".config/systemd/user").join(shared::ACP_UNIT);
-        std::fs::create_dir_all(&file.parent().expect("unit folder")).expect("user units");
+        std::fs::create_dir_all(file.parent().expect("unit folder")).expect("user units");
         std::fs::write(file, "[Service]\nType=oneshot\n").expect("unit");
     }
 
@@ -4107,6 +4291,3884 @@ mod tests {
                         u64::try_from(data.len()).expect("size")
                     ),
                 ]
+            );
+        }
+    }
+
+    // ------------------------------------------------------------ test helpers
+
+    fn parts_of(row: &Value) -> Vec<(String, Option<String>, Option<String>)> {
+        row["parts"]
+            .as_array()
+            .expect("parts")
+            .iter()
+            .map(|part| {
+                (
+                    part["name"].as_str().expect("name").to_owned(),
+                    part["previousVersion"].as_str().map(str::to_owned),
+                    part["version"].as_str().map(str::to_owned),
+                )
+            })
+            .collect()
+    }
+
+    fn make_executable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut perms = std::fs::metadata(path).expect("meta").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(path, perms).expect("chmod");
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    }
+
+    #[cfg(unix)]
+    fn symlink_path(target: &Path, link: &Path) {
+        if link.symlink_metadata().is_ok() {
+            let _ = std::fs::remove_file(link);
+        }
+        if let Some(parent) = link.parent() {
+            std::fs::create_dir_all(parent).expect("link parent");
+        }
+        std::os::unix::fs::symlink(target, link).expect("symlink");
+    }
+
+    fn write_npm_pair(prefix: &Path, platform: Platform) -> (PathBuf, PathBuf) {
+        if platform == Platform::Windows {
+            let node = prefix.join("node.exe");
+            let cli = prefix.join("node_modules/npm/bin/npm-cli.js");
+            std::fs::create_dir_all(cli.parent().expect("cli")).expect("cli dir");
+            std::fs::write(&node, b"node").expect("node");
+            std::fs::write(&cli, b"npm").expect("cli");
+            (node, cli)
+        } else {
+            let node = prefix.join("bin/node");
+            let cli = prefix.join("lib/node_modules/npm/bin/npm-cli.js");
+            std::fs::create_dir_all(node.parent().expect("bin")).expect("bin dir");
+            std::fs::create_dir_all(cli.parent().expect("cli")).expect("cli dir");
+            std::fs::write(&node, b"node").expect("node");
+            make_executable(&node);
+            std::fs::write(&cli, b"npm").expect("cli");
+            (node, cli)
+        }
+    }
+
+    fn write_t3_consumers(root: &Path, paths: &[PathBuf]) {
+        let settings = root.join(".t3/userdata/settings.json");
+        std::fs::create_dir_all(settings.parent().expect("t3")).expect("t3 dir");
+        let mut instances = serde_json::Map::new();
+        for (index, path) in paths.iter().enumerate() {
+            instances.insert(
+                format!("zcode-{index}"),
+                json!({
+                    "enabled": true,
+                    "config": {
+                        "commandPath": "node",
+                        "commandArgs": [path.to_string_lossy(), "server"],
+                    }
+                }),
+            );
+        }
+        std::fs::write(
+            settings,
+            json!({"providerInstances": instances}).to_string(),
+        )
+        .expect("settings");
+    }
+
+    fn write_npm_prefix_adapter(root: &Path, prefix: &str, version: &str) -> PathBuf {
+        let mods = root.join(prefix).join("lib/node_modules");
+        write_package(&mods, "zcode-acp-server", version);
+        let cli = mods.join("zcode-acp-server/dist/cli.js");
+        std::fs::create_dir_all(cli.parent().expect("dist")).expect("dist dir");
+        std::fs::write(cli, b"cli").expect("cli");
+        mods
+    }
+
+    fn write_stored_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let mut body = Vec::new();
+        let mut directory = Vec::new();
+        for (name, data) in entries {
+            let crc = {
+                let mut crc = 0xffff_ffff_u32;
+                for byte in *data {
+                    crc ^= u32::from(*byte);
+                    for _ in 0..8 {
+                        crc = if crc & 1 == 1 {
+                            (crc >> 1) ^ 0xedb8_8320
+                        } else {
+                            crc >> 1
+                        };
+                    }
+                }
+                !crc
+            };
+            let offset = u32::try_from(body.len()).expect("offset");
+            let size = u32::try_from(data.len()).expect("size");
+            let name_len = u16::try_from(name.len()).expect("name");
+            body.extend_from_slice(&[0x50, 0x4b, 0x03, 0x04, 20, 0, 0, 8, 0, 0, 0, 0, 0, 0]);
+            body.extend_from_slice(&crc.to_le_bytes());
+            body.extend_from_slice(&size.to_le_bytes());
+            body.extend_from_slice(&size.to_le_bytes());
+            body.extend_from_slice(&name_len.to_le_bytes());
+            body.extend_from_slice(&0_u16.to_le_bytes());
+            body.extend_from_slice(name.as_bytes());
+            body.extend_from_slice(data);
+            let mode: u32 = 0o100_644;
+            directory
+                .extend_from_slice(&[0x50, 0x4b, 0x01, 0x02, 20, 3, 20, 0, 0, 8, 0, 0, 0, 0, 0, 0]);
+            directory.extend_from_slice(&crc.to_le_bytes());
+            directory.extend_from_slice(&size.to_le_bytes());
+            directory.extend_from_slice(&size.to_le_bytes());
+            directory.extend_from_slice(&name_len.to_le_bytes());
+            directory.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+            directory.extend_from_slice(&(mode << 16).to_le_bytes());
+            directory.extend_from_slice(&offset.to_le_bytes());
+            directory.extend_from_slice(name.as_bytes());
+        }
+        let start = u32::try_from(body.len()).expect("start");
+        let count = u16::try_from(entries.len()).expect("count");
+        let size = u32::try_from(directory.len()).expect("size");
+        body.extend_from_slice(&directory);
+        body.extend_from_slice(&[0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]);
+        body.extend_from_slice(&count.to_le_bytes());
+        body.extend_from_slice(&count.to_le_bytes());
+        body.extend_from_slice(&size.to_le_bytes());
+        body.extend_from_slice(&start.to_le_bytes());
+        body.extend_from_slice(&0_u16.to_le_bytes());
+        std::fs::write(path, body).expect("zip");
+    }
+
+    fn extract_stored_zip(archive: &Path, dest: &Path) {
+        let bytes = std::fs::read(archive).expect("read zip");
+        let mut at = 0;
+        while bytes.get(at..at + 4) == Some(&[0x50, 0x4b, 0x03, 0x04]) {
+            let size =
+                u32::from_le_bytes(bytes[at + 18..at + 22].try_into().expect("size")) as usize;
+            let name_len =
+                u16::from_le_bytes(bytes[at + 26..at + 28].try_into().expect("name")) as usize;
+            let extra_len =
+                u16::from_le_bytes(bytes[at + 28..at + 30].try_into().expect("extra")) as usize;
+            let name = std::str::from_utf8(&bytes[at + 30..at + 30 + name_len]).expect("name");
+            let data_start = at + 30 + name_len + extra_len;
+            let data = &bytes[data_start..data_start + size];
+            let target = dest.join(name);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).expect("extract parent");
+            }
+            std::fs::write(target, data).expect("extract file");
+            at = data_start + size;
+        }
+    }
+
+    fn plist_xml_bytes(version: &str, identity: &str) -> Vec<u8> {
+        format!(
+            concat!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+                "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" ",
+                "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n",
+                "\t<key>CFBundleIdentifier</key>\n\t<string>{}</string>\n",
+                "\t<key>CFBundleShortVersionString</key>\n\t<string>{}</string>\n</dict>\n</plist>\n"
+            ),
+            identity, version
+        )
+        .into_bytes()
+    }
+
+    fn dir_entries(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder)
+            .expect("read_dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    // ------------------------------------------------------------ contract / red-green
+
+    /// Red on W1 base `9873edca7` (`Unported` reports `unknown`/`readiness_unknown`); green on W3.
+    #[tokio::test]
+    async fn zcode_and_adapters_updaters_are_ported_and_absent_is_not_installed() {
+        let rig = Rig::start();
+        for platform in [Platform::Ubuntu, Platform::Mac, Platform::Windows] {
+            for app_id in ["zcode", "t3-acp-adapters"] {
+                let cx = rig.cx(platform, 900);
+                let row = attempt(super::super::updater(app_id).expect("updater"), &cx)
+                    .await
+                    .to_value();
+                assert_eq!(
+                    (
+                        row["status"].as_str(),
+                        row["messageCode"].as_str(),
+                        row["diagnostics"]["cause"].as_str()
+                    ),
+                    (Some("not_installed"), Some("not_installed"), Some("none")),
+                    "{app_id} on {platform:?}"
+                );
+            }
+        }
+    }
+
+    /// test_manifest_binds_sha512_and_size_to_the_exact_zcode_asset
+    #[test]
+    fn manifest_binds_sha512_and_size_to_the_exact_zcode_asset() {
+        let (zip_data, dmg_data) = (b"zip", b"dmg-longer");
+        let dmg_sha =
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(dmg_data));
+        let text = manifest(NEW, "ZCode-3.14.5-mac-arm64.zip", zip_data, true).replacen(
+            "path:",
+            &format!(
+                "  - url: ZCode-3.14.5-mac-arm64.dmg\n    sha512: {dmg_sha}\n    size: 10\npath:"
+            ),
+            1,
+        );
+        assert_eq!(
+            shared::manifest_asset(&text, NEW, "ZCode-3.14.5-mac-arm64.zip").expect("zip"),
+            (sha2::Sha512::digest(zip_data).to_vec(), Some(3))
+        );
+        assert_eq!(
+            shared::manifest_asset(&text, NEW, "ZCode-3.14.5-mac-arm64.dmg")
+                .expect("dmg")
+                .1,
+            Some(10)
+        );
+        // A top-level size never stands in for the asset's own.
+        let top_level_size =
+            manifest(NEW, "A.exe", b"a", false).replace("releaseDate", "size: 99\nreleaseDate");
+        assert_eq!(
+            shared::manifest_asset(&top_level_size, NEW, "A.exe")
+                .expect("top size ignored")
+                .1,
+            None
+        );
+        assert_eq!(
+            shared::manifest_asset(&text, OLD, "ZCode-3.14.5-mac-arm64.zip")
+                .err()
+                .map(|failure| failure.code),
+            Some("signature_failed")
+        );
+    }
+
+    // ------------------------------------------------------------ Ubuntu
+
+    /// test_ubuntu_current_zcode_and_adapters_run_nothing
+    #[tokio::test]
+    async fn ubuntu_current_zcode_and_adapters_run_nothing() {
+        let rig = Rig::start();
+        unit(rig.path());
+        ubuntu_app(rig.path(), NEW);
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.1");
+        write_package(&mods, "zcode-acp-server", "0.65.1");
+        rig.system.clone().lookup(feed(
+            Some(page(&[(NEW, "linux-x64")])),
+            Some("0.10.1"),
+            Some("0.65.1"),
+        ));
+        let zrow = rig.zcode(Platform::Ubuntu).await;
+        let arow = rig.adapters(Platform::Ubuntu).await;
+        assert_eq!(
+            (
+                zrow["status"].as_str(),
+                zrow["previousVersion"].as_str(),
+                zrow["version"].as_str(),
+                zrow["updateAttempted"].as_bool()
+            ),
+            (Some("current"), Some(NEW), Some(NEW), Some(false))
+        );
+        assert_eq!(
+            (
+                arow["status"].as_str(),
+                arow["previousVersion"].as_str(),
+                arow["version"].as_str(),
+                arow["manager"].as_str()
+            ),
+            (Some("current"), None, None, Some("npm"))
+        );
+        assert_eq!(
+            parts_of(&arow),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.1".into()),
+                    Some("0.10.1".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.65.1".into()),
+                    Some("0.65.1".into())
+                ),
+            ]
+        );
+        assert!(rig.system.runs().is_empty());
+        assert_eq!(rig.system.scans(), 0);
+    }
+
+    /// test_ubuntu_t3_session_markers_report_in_use_without_running_the_unit
+    #[tokio::test]
+    async fn ubuntu_t3_session_markers_report_in_use_without_running_the_unit() {
+        let rig = Rig::start();
+        unit(rig.path());
+        let app = ubuntu_app(rig.path(), OLD);
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        let cli_path = mods
+            .join("zcode-acp-server/dist/cli.js")
+            .to_string_lossy()
+            .into_owned();
+        let zcode_bin = app.join("zcode").to_string_lossy().into_owned();
+        let zcode_cjs = app
+            .join("resources/glm/zcode.cjs")
+            .to_string_lossy()
+            .into_owned();
+        let sessions = [
+            process(10, 1, "/usr/bin/node", &["node", &cli_path, "--acp"]),
+            process(11, 10, "/usr/bin/node", &["zcode-cli"]),
+            process(12, 1, &zcode_bin, &[&zcode_bin, &zcode_cjs, "--version"]),
+        ];
+        rig.system
+            .clone()
+            .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+        for session in sessions {
+            *rig.table.lock().expect("table") = vec![session];
+            let row = rig.zcode(Platform::Ubuntu).await;
+            assert_eq!(
+                (
+                    row["status"].as_str(),
+                    row["messageCode"].as_str(),
+                    row["version"].as_str(),
+                    row["updateAttempted"].as_bool()
+                ),
+                (
+                    Some("action_required"),
+                    Some("in_use"),
+                    Some(OLD),
+                    Some(false)
+                )
+            );
+            assert!(rig.system.runs().is_empty());
+        }
+        let unrelated = process(
+            13,
+            1,
+            "/usr/bin/node",
+            &["node", "/srv/zcode-acp-server-notes/cli.js"],
+        );
+        assert!(t3_sessions(&[unrelated]).is_empty());
+    }
+
+    /// test_ubuntu_one_unit_run_serves_both_rows (+ phase sequence)
+    #[tokio::test]
+    async fn ubuntu_one_unit_run_serves_both_rows() {
+        let rig = Rig::start();
+        unit(rig.path());
+        let app = ubuntu_app(rig.path(), OLD);
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        write_package(&mods, "zcode-acp-server", "0.65.1");
+        rig.system.clone().lookup(feed(
+            Some(page(&[(NEW, "linux-x64")])),
+            Some("0.10.1"),
+            Some("0.65.1"),
+        ));
+        let app_for_run = app.clone();
+        let mods_for_run = mods.clone();
+        rig.system.clone().answering(move |_spec| {
+            write_asar(&app_for_run.join("resources"), NEW, "@zcode/desktop", 0);
+            write_package(&mods_for_run, "@brokkai/muse-acp", "0.10.1");
+            Ok(CommandOutput::default())
+        });
+        let shared = Arc::new(Shared::default());
+        let zcx = rig.cx_shared(Platform::Ubuntu, 900, shared.clone());
+        let zrow = attempt(&ZCODE, &zcx).await.to_value();
+        let acx = rig.cx_shared(Platform::Ubuntu, 900, shared);
+        let arow = attempt(&ADAPTERS, &acx).await.to_value();
+        assert_eq!(
+            rig.system.run_strings(),
+            vec![UNIT_START.map(str::to_owned).to_vec()]
+        );
+        assert!(rig.system.timeouts()[0] <= Duration::from_secs(UNIT_SECONDS));
+        assert_eq!(
+            (
+                zrow["status"].as_str(),
+                zrow["messageCode"].as_str(),
+                zrow["previousVersion"].as_str(),
+                zrow["version"].as_str(),
+                zrow["manager"].as_str(),
+                zrow["updateAttempted"].as_bool()
+            ),
+            (
+                Some("updated"),
+                Some("updated"),
+                Some(OLD),
+                Some(NEW),
+                Some("official-download"),
+                Some(true)
+            )
+        );
+        assert_eq!(
+            (
+                arow["status"].as_str(),
+                arow["messageCode"].as_str(),
+                arow["previousVersion"].as_str(),
+                arow["version"].as_str(),
+                arow["updateAttempted"].as_bool()
+            ),
+            (Some("updated"), Some("updated"), None, None, Some(true))
+        );
+        assert_eq!(
+            parts_of(&arow),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.0".into()),
+                    Some("0.10.1".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.65.1".into()),
+                    Some("0.65.1".into())
+                ),
+            ]
+        );
+        assert_eq!(
+            *rig.phases.lock().expect("phases"),
+            vec![
+                "checking", "updating", "updating", "checking", "updating", "updating",
+            ]
+        );
+    }
+
+    /// test_ubuntu_without_the_unit_zcode_is_unsupported_and_adapters_install_into_their_owner
+    #[tokio::test]
+    async fn ubuntu_without_the_unit_zcode_is_unsupported_and_adapters_install_into_their_owner() {
+        let mut rig = Rig::start();
+        ubuntu_app(rig.path(), OLD);
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        write_package(&mods, "zcode-acp-server", "0.65.1");
+        let (node, cli) = write_npm_pair(&rig.path().join("node"), Platform::Ubuntu);
+        rig.search_path
+            .push(node.parent().expect("bin").to_path_buf());
+        rig.system.clone().lookup(feed(
+            Some(page(&[(NEW, "linux-x64")])),
+            Some("0.10.1"),
+            Some("0.65.1"),
+        ));
+        let mods_for_run = mods.clone();
+        let node_str = node.to_string_lossy().into_owned();
+        let cli_str = cli.to_string_lossy().into_owned();
+        rig.system.clone().answering(move |spec| {
+            let argv: Vec<String> = spec
+                .argv
+                .iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            if argv.len() >= 3 && argv[0] == node_str && argv[1] == cli_str && argv[2] == "install"
+            {
+                write_package(&mods_for_run, "@brokkai/muse-acp", "0.10.1");
+            }
+            Ok(CommandOutput::default())
+        });
+        let zrow = rig.zcode(Platform::Ubuntu).await;
+        let arow = rig.adapters(Platform::Ubuntu).await;
+        assert_eq!(
+            (
+                zrow["status"].as_str(),
+                zrow["messageCode"].as_str(),
+                zrow["updateAttempted"].as_bool()
+            ),
+            (Some("failed"), Some("unsupported"), Some(false))
+        );
+        assert_eq!(
+            rig.system.run_strings(),
+            vec![vec![
+                node.to_string_lossy().into_owned(),
+                cli.to_string_lossy().into_owned(),
+                "install".into(),
+                "--global".into(),
+                "--prefix".into(),
+                rig.path().join(".local").to_string_lossy().into_owned(),
+                "@brokkai/muse-acp@0.10.1".into(),
+            ]]
+        );
+        assert_eq!(
+            (
+                arow["status"].as_str(),
+                arow["messageCode"].as_str(),
+                arow["updateAttempted"].as_bool()
+            ),
+            (Some("updated"), Some("updated"), Some(true))
+        );
+        assert_eq!(
+            parts_of(&arow),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.0".into()),
+                    Some("0.10.1".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.65.1".into()),
+                    Some("0.65.1".into())
+                ),
+            ]
+        );
+    }
+
+    /// test_ubuntu_unchanged_after_the_run_is_in_use_while_the_app_runs_else_its_failure
+    #[tokio::test]
+    async fn ubuntu_unchanged_after_the_run_is_in_use_while_the_app_runs_else_its_failure() {
+        let rig = Rig::start();
+        unit(rig.path());
+        let app = ubuntu_app(rig.path(), OLD);
+        let zcode_bin = app.join("zcode").to_string_lossy().into_owned();
+        let gui = process(20, 1, &zcode_bin, &[&zcode_bin]);
+        rig.system
+            .clone()
+            .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+        let cases = [
+            (
+                vec![gui],
+                Ok(CommandOutput::default()),
+                "action_required",
+                "in_use",
+            ),
+            (
+                Vec::new(),
+                Ok(CommandOutput::default()),
+                "failed",
+                "update_failed",
+            ),
+            (
+                Vec::new(),
+                Err(UpdateFailure::new("timeout")),
+                "failed",
+                "timeout",
+            ),
+        ];
+        for (running, outcome, status, code) in cases {
+            rig.system.runs.lock().expect("runs").clear();
+            {
+                let mut script = rig.system.scans_script.lock().expect("script");
+                script.clear();
+                script.push_back(Vec::new());
+                script.push_back(running);
+            }
+            rig.system.clone().answering(move |_| outcome.clone());
+            let row = rig.zcode(Platform::Ubuntu).await;
+            assert_eq!(
+                (
+                    row["status"].as_str(),
+                    row["messageCode"].as_str(),
+                    row["version"].as_str(),
+                    row["updateAttempted"].as_bool()
+                ),
+                (Some(status), Some(code), Some(OLD), Some(true))
+            );
+            assert_eq!(rig.system.runs().len(), 1);
+        }
+    }
+
+    /// test_ubuntu_unit_wait_is_bounded_by_the_host_deadline
+    #[tokio::test]
+    async fn ubuntu_unit_wait_is_bounded_by_the_host_deadline() {
+        let rig = Rig::start();
+        unit(rig.path());
+        ubuntu_app(rig.path(), OLD);
+        rig.system
+            .clone()
+            .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+        for (remaining, bound) in [(100_u64, 100_u64), (3600, UNIT_SECONDS)] {
+            rig.system.runs.lock().expect("runs").clear();
+            let cx = rig.cx(Platform::Ubuntu, remaining);
+            let install = detect_zcode(&cx).expect("zcode");
+            let _ = zcode_update(&cx, &install, &Lookups::default(), &*rig.services).await;
+            let timeout = rig.system.timeouts()[0];
+            assert!(timeout <= Duration::from_secs(bound));
+            assert!(timeout > Duration::from_secs(bound - 5));
+        }
+        rig.system.runs.lock().expect("runs").clear();
+        let past = Instant::now() - Duration::from_secs(1);
+        let cx = rig.cx_deadline(Platform::Ubuntu, past, Arc::new(Shared::default()));
+        let install = detect_zcode(&cx).expect("zcode");
+        let row = zcode_update(&cx, &install, &Lookups::default(), &*rig.services)
+            .await
+            .to_value();
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("failed"), Some("timeout"), Some(false))
+        );
+        assert!(rig.system.runs().is_empty());
+    }
+
+    /// test_ubuntu_adapters_run_the_unit_when_the_zcode_row_did_not_unless_an_adapter_runs
+    #[tokio::test]
+    async fn ubuntu_adapters_run_the_unit_when_the_zcode_row_did_not_unless_an_adapter_runs() {
+        let rig = Rig::start();
+        unit(rig.path());
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        write_package(&mods, "zcode-acp-server", "0.65.1");
+        let muse_bin = rig
+            .path()
+            .join(".local/bin/muse-acp")
+            .to_string_lossy()
+            .into_owned();
+        let acp_cli = mods
+            .join("zcode-acp-server/dist/cli.js")
+            .to_string_lossy()
+            .into_owned();
+        let muse = process(30, 1, "/usr/bin/node", &["node", &muse_bin]);
+        let acp = process(31, 1, "/usr/bin/node", &["node", &acp_cli]);
+        rig.system
+            .clone()
+            .lookup(feed(None, Some("0.10.1"), Some("0.65.1")));
+        for running in [vec![muse.clone()], vec![acp]] {
+            *rig.table.lock().expect("table") = running;
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(
+                (
+                    row["status"].as_str(),
+                    row["messageCode"].as_str(),
+                    row["updateAttempted"].as_bool()
+                ),
+                (Some("action_required"), Some("in_use"), Some(false))
+            );
+            assert_eq!(
+                parts_of(&row),
+                vec![
+                    (
+                        "muse-acp".into(),
+                        Some("0.10.0".into()),
+                        Some("0.10.0".into())
+                    ),
+                    (
+                        "zcode-acp-server".into(),
+                        Some("0.65.1".into()),
+                        Some("0.65.1".into())
+                    ),
+                ]
+            );
+            assert!(rig.system.runs().is_empty());
+        }
+        rig.table.lock().expect("table").clear();
+        let mods_for_run = mods.clone();
+        rig.system.clone().answering(move |_| {
+            write_package(&mods_for_run, "@brokkai/muse-acp", "0.10.1");
+            Ok(CommandOutput::default())
+        });
+        let row = rig.adapters(Platform::Ubuntu).await;
+        assert_eq!(row["status"], "updated");
+        assert_eq!(
+            rig.system.run_strings(),
+            vec![UNIT_START.map(str::to_owned).to_vec()]
+        );
+        // An adapter still running after an unchanged run is in_use; with none left it failed.
+        rig.system
+            .clone()
+            .lookup(feed(None, Some("0.10.2"), Some("0.65.1")));
+        rig.system
+            .clone()
+            .answering(|_| Ok(CommandOutput::default()));
+        for (running, status, code) in [
+            (vec![muse], "action_required", "in_use"),
+            (Vec::new(), "failed", "update_failed"),
+        ] {
+            {
+                let mut script = rig.system.scans_script.lock().expect("script");
+                script.clear();
+                script.push_back(Vec::new());
+                script.push_back(running);
+            }
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(
+                (
+                    row["status"].as_str(),
+                    row["messageCode"].as_str(),
+                    row["updateAttempted"].as_bool()
+                ),
+                (Some(status), Some(code), Some(true))
+            );
+        }
+    }
+
+    /// test_unreadable_feed_or_registry_fails_without_running_anything
+    #[tokio::test]
+    async fn unreadable_feed_or_registry_fails_without_running_anything() {
+        let rig = Rig::start();
+        unit(rig.path());
+        ubuntu_app(rig.path(), OLD);
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        write_package(&mods, "zcode-acp-server", "0.65.1");
+        rig.system.clone().lookup(feed(None, None, None));
+        let cx = rig.cx(Platform::Ubuntu, 900);
+        let zinstall = detect_zcode(&cx).expect("zcode");
+        let zrow = zcode_update(&cx, &zinstall, &Lookups::default(), &*rig.services)
+            .await
+            .to_value();
+        let arow = rig.adapters(Platform::Ubuntu).await;
+        assert_eq!(
+            (
+                zrow["status"].as_str(),
+                zrow["messageCode"].as_str(),
+                zrow["version"].as_str(),
+                zrow["updateAttempted"].as_bool()
+            ),
+            (
+                Some("failed"),
+                Some("zcode_release_unavailable"),
+                Some(OLD),
+                Some(false)
+            )
+        );
+        assert_eq!(
+            (
+                arow["status"].as_str(),
+                arow["messageCode"].as_str(),
+                arow["updateAttempted"].as_bool()
+            ),
+            (Some("failed"), Some("update_failed"), Some(false))
+        );
+        assert_eq!(
+            parts_of(&arow),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.0".into()),
+                    Some("0.10.0".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.65.1".into()),
+                    Some("0.65.1".into())
+                ),
+            ]
+        );
+        assert!(rig.system.runs().is_empty());
+    }
+
+    /// test_ubuntu_partial_run_with_an_adapter_still_running_holds_the_unchanged_part
+    #[tokio::test]
+    async fn ubuntu_partial_run_with_an_adapter_still_running_holds_the_unchanged_part() {
+        let rig = Rig::start();
+        unit(rig.path());
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        write_package(&mods, "zcode-acp-server", "0.65.0");
+        let acp_cli = mods
+            .join("zcode-acp-server/dist/cli.js")
+            .to_string_lossy()
+            .into_owned();
+        let acp = process(50, 1, "/usr/bin/node", &["node", &acp_cli]);
+        {
+            let mut script = rig.system.scans_script.lock().expect("script");
+            script.push_back(Vec::new());
+            script.push_back(vec![acp]);
+        }
+        rig.system
+            .clone()
+            .lookup(feed(None, Some("0.10.1"), Some("0.65.1")));
+        let mods_for_run = mods.clone();
+        rig.system.clone().answering(move |_| {
+            write_package(&mods_for_run, "@brokkai/muse-acp", "0.10.1");
+            Ok(CommandOutput::default())
+        });
+        let row = rig.adapters(Platform::Ubuntu).await;
+        assert_eq!(rig.system.runs().len(), 1);
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("action_required"), Some("in_use"), Some(true))
+        );
+        assert_eq!(
+            row["parts"],
+            json!([
+                {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.1"},
+                {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.0", "inUse": true},
+            ])
+        );
+    }
+
+    /// test_adapter_rows_always_carry_both_parts_and_null_top_level_versions
+    #[tokio::test]
+    async fn adapter_rows_always_carry_both_parts_and_null_top_level_versions() {
+        let rig = Rig::start();
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        rig.system.clone().lookup(feed(None, Some("0.10.0"), None));
+        let row = rig.adapters(Platform::Ubuntu).await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["previousVersion"].as_str(),
+                row["version"].as_str()
+            ),
+            (Some("current"), None, None)
+        );
+        assert_eq!(
+            parts_of(&row),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.0".into()),
+                    Some("0.10.0".into())
+                ),
+                ("zcode-acp-server".into(), None, None),
+            ]
+        );
+        assert!(rig.system.runs().is_empty());
+    }
+
+    /// test_unsettled_ubuntu_oneshot_blocks_npm_and_t3_without_stopping_the_unit
+    #[tokio::test]
+    async fn unsettled_ubuntu_oneshot_blocks_npm_and_t3_without_stopping_the_unit() {
+        let rig = Rig::start();
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        let shared = Arc::new(Shared::default());
+        rig.system
+            .clone()
+            .answering(|_| Err(UpdateFailure::new("timeout")));
+        let cx = rig.cx_shared(Platform::Ubuntu, 600, shared.clone());
+        assert_eq!(run_unit(&cx).await.expect("unit"), Some("timeout"));
+        assert!(shared.adapter_unit_unsettled.load(Ordering::SeqCst));
+        rig.system.clone().answering(|_| {
+            Ok(CommandOutput {
+                stdout: "start\n".into(),
+            })
+        });
+        assert!(adapter_unit_busy(&cx).await);
+        // While unsettled, attempt() refuses Ubuntu npm work with action_required/busy.
+        let blocked = attempt(
+            &ADAPTERS,
+            &rig.cx_shared(Platform::Ubuntu, 600, shared.clone()),
+        )
+        .await
+        .to_value();
+        assert_eq!(
+            (blocked["status"].as_str(), blocked["messageCode"].as_str()),
+            (Some("action_required"), Some("busy"))
+        );
+        rig.system.clone().answering(|_| {
+            Ok(CommandOutput {
+                stdout: "dead\n".into(),
+            })
+        });
+        assert!(!adapter_unit_busy(&cx).await);
+        assert!(!shared.adapter_unit_unsettled.load(Ordering::SeqCst));
+    }
+
+    /// test_partial_adapter_update_fails_only_for_unfinished_required_parts
+    #[tokio::test]
+    async fn partial_adapter_update_fails_only_for_unfinished_required_parts() {
+        let rig = Rig::start();
+        let mods = modules(rig.path(), Platform::Ubuntu);
+        write_package(&mods, "@brokkai/muse-acp", "1.0.0");
+        write_package(&mods, "zcode-acp-server", "1.0.0");
+        let nothing = Lookups::default();
+        let layout = discover_owners(&rig.host(Platform::Ubuntu), &nothing);
+        write_package(&mods, "@brokkai/muse-acp", "2.0.0");
+        let targets: Parts = [Some("2.0.0".into()), Some("2.0.0".into())];
+        let cx = rig.cx(Platform::Ubuntu, 600);
+        let row = adapters_settle(
+            &cx,
+            &nothing,
+            &layout,
+            &[MUSE, ACP],
+            &targets,
+            Codes::default(),
+            &mut HashSet::new(),
+            true,
+            Some(Some("timeout")),
+        )
+        .await
+        .expect("settle")
+        .to_value();
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("failed"), Some("timeout"))
+        );
+        assert_eq!(row["parts"].as_array().expect("parts").len(), 2);
+        let row = adapters_settle(
+            &cx,
+            &nothing,
+            &layout,
+            &[MUSE],
+            &targets,
+            Codes::default(),
+            &mut HashSet::new(),
+            true,
+            Some(Some("timeout")),
+        )
+        .await
+        .expect("settle")
+        .to_value();
+        assert_eq!(row["status"], "updated");
+    }
+
+    /// Fix round 2 C3 + Lane D R2-3: unit sibling/desktop downgrade protection and down-registry naming.
+    #[tokio::test]
+    async fn ubuntu_unit_safety_protects_siblings_desktop_and_names_down_registry() {
+        // 1. C3: unit with a newer sibling uses exact direct install instead of the shared unit.
+        {
+            let mut rig = Rig::start();
+            unit(rig.path());
+            let mods = modules(rig.path(), Platform::Ubuntu);
+            write_package(&mods, "@brokkai/muse-acp", "0.22.0");
+            write_package(&mods, "zcode-acp-server", "0.84.2");
+            let (node, _cli) = write_npm_pair(&rig.path().join("node"), Platform::Ubuntu);
+            rig.search_path
+                .push(node.parent().expect("bin").to_path_buf());
+            rig.system
+                .clone()
+                .lookup(feed(None, Some("0.21.0"), Some("0.84.3")));
+            let mods_for_run = mods.clone();
+            rig.system.clone().answering(move |spec| {
+                let argv: Vec<String> = spec
+                    .argv
+                    .iter()
+                    .map(|word| word.to_string_lossy().into_owned())
+                    .collect();
+                assert_ne!(argv[0], "/usr/bin/systemctl", "unit must not run");
+                let pkg = argv.last().expect("pkg");
+                let (name, ver) = pkg.rsplit_once('@').expect("ver");
+                write_package(&mods_for_run, name, ver);
+                Ok(CommandOutput::default())
+            });
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(row["status"], "updated");
+            assert_eq!(package_version(&mods, MUSE).as_deref(), Some("0.22.0"));
+            assert_eq!(
+                rig.system.run_strings()[0].last().map(String::as_str),
+                Some("zcode-acp-server@0.84.3")
+            );
+        }
+        // 2. C3: zcode unit cannot downgrade an adapter sibling.
+        {
+            let rig = Rig::start();
+            unit(rig.path());
+            ubuntu_app(rig.path(), OLD);
+            let mods = modules(rig.path(), Platform::Ubuntu);
+            write_package(&mods, "@brokkai/muse-acp", "0.22.0");
+            rig.system.clone().lookup(feed(
+                Some(page(&[(NEW, "linux-x64")])),
+                Some("0.21.0"),
+                None,
+            ));
+            let row = rig.zcode(Platform::Ubuntu).await;
+            assert_eq!(
+                (row["status"].as_str(), row["messageCode"].as_str()),
+                (Some("skipped"), Some("shared_updater_unsafe"))
+            );
+            assert!(rig.system.runs().is_empty());
+        }
+        // 3. C3: adapter unit verifies the Ubuntu desktop it can touch (downgrade -> version_went_down;
+        //    unreadable desktop version -> shared_updater_unsafe).
+        {
+            let rig = Rig::start();
+            unit(rig.path());
+            let app = ubuntu_app(rig.path(), NEW);
+            let mods = modules(rig.path(), Platform::Ubuntu);
+            write_package(&mods, "@brokkai/muse-acp", "0.21.0");
+            write_package(&mods, "zcode-acp-server", "0.84.2");
+            rig.system
+                .clone()
+                .lookup(feed(None, Some("0.21.0"), Some("0.84.3")));
+            let app_for_run = app.clone();
+            let mods_for_run = mods.clone();
+            rig.system.clone().answering(move |_| {
+                write_asar(&app_for_run.join("resources"), OLD, "@zcode/desktop", 0);
+                write_package(&mods_for_run, "zcode-acp-server", "0.84.3");
+                Ok(CommandOutput::default())
+            });
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(
+                (row["status"].as_str(), row["messageCode"].as_str()),
+                (Some("failed"), Some("version_went_down"))
+            );
+            // Unreadable desktop version refuses the shared unit before running it.
+            write_asar(&app.join("resources"), NEW, "impostor", 0);
+            write_package(&mods, "zcode-acp-server", "0.84.2");
+            rig.system.runs.lock().expect("runs").clear();
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(
+                (row["status"].as_str(), row["messageCode"].as_str()),
+                (Some("skipped"), Some("shared_updater_unsafe"))
+            );
+            assert!(rig.system.runs().is_empty());
+        }
+        // 4. R2-3: a down registry is named `registry_unreadable`, not blamed on shared_updater_unsafe.
+        {
+            let rig = Rig::start();
+            unit(rig.path());
+            ubuntu_app(rig.path(), OLD);
+            let mods = modules(rig.path(), Platform::Ubuntu);
+            write_package(&mods, "zcode-acp-server", "0.84.2");
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+            let row = rig.zcode(Platform::Ubuntu).await;
+            assert_eq!(
+                (
+                    row["status"].as_str(),
+                    row["messageCode"].as_str(),
+                    row["updateAttempted"].as_bool(),
+                    row["diagnostics"]["reason"].as_str()
+                ),
+                (
+                    Some("failed"),
+                    Some("registry_unreadable"),
+                    Some(false),
+                    Some("registry_unreadable")
+                )
+            );
+            assert!(rig.system.runs().is_empty());
+        }
+    }
+
+    // ------------------------------------------------------------ Mac
+
+    type FailCheck = Box<dyn FnMut(&[String]) -> bool + Send>;
+
+    #[derive(Default)]
+    struct MacOptions {
+        gui: bool,
+        session: bool,
+        opened_later: bool,
+        served: Option<Vec<u8>>,
+        entries: Option<Vec<(String, Vec<u8>)>>,
+        fail: Option<FailCheck>,
+    }
+
+    async fn run_mac_fixture(
+        mut options: MacOptions,
+    ) -> (Value, Vec<Vec<String>>, Vec<String>, PathBuf) {
+        let mut rig = Rig::start();
+        rig.arch = "aarch64";
+        let bundle = rig
+            .host(Platform::Mac)
+            .system("/Applications")
+            .join(MAC_NAME);
+        mac_bundle(&bundle, OLD, MAC_ID);
+        let archive_path = rig.path().join("fixture.zip");
+        let default_entries = vec![
+            (
+                format!("{MAC_NAME}/Contents/Info.plist"),
+                plist_xml_bytes(NEW, MAC_ID),
+            ),
+            (
+                format!("{MAC_NAME}/Contents/MacOS/ZCode"),
+                b"fixture".to_vec(),
+            ),
+        ];
+        let entries = options.entries.take().unwrap_or(default_entries);
+        let borrowed: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.as_slice()))
+            .collect();
+        write_stored_zip(&archive_path, &borrowed);
+        let archive_bytes = std::fs::read(&archive_path).expect("zip bytes");
+        let asset = format!("ZCode-{NEW}-mac-arm64.zip");
+        let manifest_text = manifest(NEW, &asset, &archive_bytes, true);
+        let served = options.served.take().unwrap_or(archive_bytes);
+        rig.system
+            .clone()
+            .lookup(feed(Some(page(&[(NEW, "macos-arm64")])), None, None));
+        rig.system.clone().serving(move |url, target| {
+            if url.ends_with("latest.yml") {
+                std::fs::write(target, &manifest_text).expect("manifest");
+            } else {
+                std::fs::write(target, &served).expect("package");
+            }
+            Ok(())
+        });
+        let main = bundle
+            .join("Contents/MacOS/ZCode")
+            .to_string_lossy()
+            .into_owned();
+        let helper = format!("{main} Helper");
+        let zcode_cjs = bundle
+            .join("Contents/Resources/glm/zcode.cjs")
+            .to_string_lossy()
+            .into_owned();
+        let mut table = Vec::new();
+        if options.gui {
+            table.push(process(40, 1, &main, &[]));
+            table.push(process(41, 40, &helper, &[]));
+        }
+        if options.session {
+            table.push(process(50, 1, "/opt/homebrew/bin/node", &[]));
+            table.push(process(51, 50, &main, &[]));
+        }
+        *rig.services.arguments.lock().expect("args") = vec![
+            (40, vec![main.clone()]),
+            (41, vec![helper, "--type=renderer".into()]),
+            (
+                50,
+                vec![
+                    "node".into(),
+                    "/opt/homebrew/lib/node_modules/zcode-acp-server/dist/cli.js".into(),
+                ],
+            ),
+            (51, vec![main.clone(), zcode_cjs]),
+            (60, vec![main.clone()]),
+        ];
+        if options.opened_later {
+            let mut later = table.clone();
+            later.push(process(60, 1, &main, &[]));
+            let mut script = rig.system.scans_script.lock().expect("script");
+            script.push_back(table);
+            script.push_back(later);
+        } else {
+            *rig.table.lock().expect("table") = table;
+        }
+        let mut fail = options.fail.take();
+        rig.system.clone().answering(move |spec| {
+            let argv: Vec<String> = spec
+                .argv
+                .iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            if let Some(check) = fail.as_mut()
+                && check(&argv)
+            {
+                return Err(UpdateFailure::failed());
+            }
+            if argv.len() >= 5 && argv[0] == "/usr/bin/ditto" && argv[1] == "-x" {
+                extract_stored_zip(Path::new(&argv[3]), Path::new(&argv[4]));
+            } else if argv.len() >= 3 && argv[0] == "/usr/bin/ditto" {
+                copy_tree(Path::new(&argv[1]), Path::new(&argv[2]))?;
+            }
+            Ok(CommandOutput::default())
+        });
+        let cx = rig.cx(Platform::Mac, 900);
+        let install = detect_zcode(&cx).expect("mac zcode");
+        let row = Rig::finish(
+            &cx,
+            zcode_update(&cx, &install, &Lookups::default(), &*rig.services).await,
+        );
+        let calls = rig.system.run_strings();
+        let downloads: Vec<String> = rig
+            .system
+            .downloads()
+            .into_iter()
+            .map(|(url, _)| url)
+            .collect();
+        let version_after = mac_version(&bundle);
+        let entries_after = dir_entries(bundle.parent().expect("Applications"));
+        // Verify on-disk state before TempDir drops via the returned bundle check tuple.
+        let mut out = row;
+        out["_versionAfter"] = json!(version_after);
+        out["_appsAfter"] = json!(entries_after);
+        (out, calls, downloads, bundle)
+    }
+
+    /// test_mac_running_gui_reports_quit_first_before_any_download
+    #[tokio::test]
+    async fn mac_running_gui_reports_quit_first_before_any_download() {
+        let (row, calls, downloads, _) = run_mac_fixture(MacOptions {
+            gui: true,
+            session: true,
+            ..MacOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["version"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (
+                Some("action_required"),
+                Some("quit_first"),
+                Some(OLD),
+                Some(false)
+            )
+        );
+        assert!(calls.is_empty());
+        assert!(downloads.is_empty());
+    }
+
+    /// test_mac_t3_session_alone_is_in_use_not_quit_first
+    #[tokio::test]
+    async fn mac_t3_session_alone_is_in_use_not_quit_first() {
+        let (row, calls, downloads, _) = run_mac_fixture(MacOptions {
+            session: true,
+            ..MacOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("action_required"), Some("in_use"), Some(false))
+        );
+        assert!(calls.is_empty());
+        assert!(downloads.is_empty());
+    }
+
+    /// test_mac_installs_the_verified_bundle_with_an_inline_requirement_and_never_opens_it
+    #[tokio::test]
+    async fn mac_installs_the_verified_bundle_with_an_inline_requirement_and_never_opens_it() {
+        let (row, calls, downloads, bundle) = run_mac_fixture(MacOptions::default()).await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["previousVersion"].as_str(),
+                row["version"].as_str(),
+                row["updateAttempted"].as_bool(),
+                row["forcedStops"].as_u64()
+            ),
+            (
+                Some("updated"),
+                Some("updated"),
+                Some(OLD),
+                Some(NEW),
+                Some(true),
+                Some(0)
+            )
+        );
+        assert_eq!(row["_versionAfter"], NEW);
+        assert_eq!(
+            downloads,
+            vec![
+                format!("{RELEASES}{NEW}/macos-arm64/latest.yml"),
+                format!("{RELEASES}{NEW}/macos-arm64/ZCode-{NEW}-mac-arm64.zip"),
+            ]
+        );
+        let requirement = "-R=identifier \"dev.zcode.app\" and anchor apple generic and certificate leaf[subject.OU] = \"8A5X4JJ39T\"";
+        assert!(calls.contains(&vec![
+            "/usr/bin/codesign".into(),
+            "--verify".into(),
+            requirement.into(),
+            bundle.to_string_lossy().into_owned(),
+        ]));
+        assert!(calls.contains(&vec![
+            "/usr/sbin/spctl".into(),
+            "--assess".into(),
+            "--type".into(),
+            "execute".into(),
+            bundle.to_string_lossy().into_owned(),
+        ]));
+        assert!(!calls.iter().any(|call| call[0] == "/usr/bin/open"));
+        assert_eq!(row["_appsAfter"], json!([MAC_NAME]));
+    }
+
+    /// test_mac_verification_failures_never_swap
+    #[tokio::test]
+    async fn mac_verification_failures_never_swap() {
+        let older = vec![(
+            format!("{MAC_NAME}/Contents/Info.plist"),
+            plist_xml_bytes("3.14.3", MAC_ID),
+        )];
+        let cases: [(&str, MacOptions); 5] = [
+            (
+                "sha512",
+                MacOptions {
+                    served: Some(b"tampered".to_vec()),
+                    ..MacOptions::default()
+                },
+            ),
+            (
+                "version",
+                MacOptions {
+                    entries: Some(older),
+                    ..MacOptions::default()
+                },
+            ),
+            (
+                "codesign",
+                MacOptions {
+                    fail: Some(Box::new(|argv| {
+                        argv.len() >= 3 && argv[..3] == ["/usr/bin/codesign", "--verify", "--deep"]
+                    })),
+                    ..MacOptions::default()
+                },
+            ),
+            (
+                "team",
+                MacOptions {
+                    fail: Some(Box::new(|argv| {
+                        argv.len() >= 3
+                            && argv[0] == "/usr/bin/codesign"
+                            && argv[2].starts_with("-R=")
+                    })),
+                    ..MacOptions::default()
+                },
+            ),
+            (
+                "spctl",
+                MacOptions {
+                    fail: Some(Box::new(|argv| argv[0] == "/usr/sbin/spctl")),
+                    ..MacOptions::default()
+                },
+            ),
+        ];
+        for (name, options) in cases {
+            let (row, calls, _, _) = run_mac_fixture(options).await;
+            assert_eq!(
+                (
+                    row["status"].as_str(),
+                    row["messageCode"].as_str(),
+                    row["version"].as_str()
+                ),
+                (Some("failed"), Some("signature_failed"), Some(OLD)),
+                "{name}"
+            );
+            assert_eq!(row["_versionAfter"], OLD, "{name}");
+            assert_eq!(row["_appsAfter"], json!([MAC_NAME]), "{name}");
+            if name == "sha512" {
+                assert!(
+                    calls.is_empty(),
+                    "nothing extracted from unverified package"
+                );
+            }
+        }
+    }
+
+    /// test_mac_archive_escape_is_rejected_before_extraction
+    #[tokio::test]
+    async fn mac_archive_escape_is_rejected_before_extraction() {
+        let (row, calls, _, _) = run_mac_fixture(MacOptions {
+            entries: Some(vec![("../escape".into(), b"fixture".to_vec())]),
+            ..MacOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("failed"), Some("signature_failed"))
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.len() >= 2 && call[..2] == ["/usr/bin/ditto", "-x"])
+        );
+    }
+
+    /// test_mac_final_check_failure_rolls_back_the_swap
+    #[tokio::test]
+    async fn mac_final_check_failure_rolls_back_the_swap() {
+        let mut checks = 0;
+        let (row, _, _, _) = run_mac_fixture(MacOptions {
+            fail: Some(Box::new(move |argv| {
+                if argv.len() >= 3 && argv[..3] == ["/usr/bin/codesign", "--verify", "--deep"] {
+                    checks += 1;
+                    return checks == 3;
+                }
+                false
+            })),
+            ..MacOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["version"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (
+                Some("failed"),
+                Some("signature_failed"),
+                Some(OLD),
+                Some(true)
+            )
+        );
+        assert_eq!(row["_versionAfter"], OLD);
+        assert_eq!(row["_appsAfter"], json!([MAC_NAME]));
+    }
+
+    /// test_mac_app_opened_during_the_download_is_never_swapped
+    #[tokio::test]
+    async fn mac_app_opened_during_the_download_is_never_swapped() {
+        let (row, _, downloads, _) = run_mac_fixture(MacOptions {
+            opened_later: true,
+            ..MacOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["version"].as_str()
+            ),
+            (Some("action_required"), Some("quit_first"), Some(OLD))
+        );
+        assert_eq!(downloads.len(), 2);
+        assert_eq!(row["_versionAfter"], OLD);
+        assert_eq!(row["_appsAfter"], json!([MAC_NAME]));
+    }
+
+    /// Unwritable /Applications fails `unsupported` before any download.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mac_unwritable_applications_folder_is_unsupported_before_download() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if std::fs::metadata("/proc/self").is_ok_and(|info| {
+            use std::os::unix::fs::MetadataExt as _;
+            info.uid() == 0
+        }) {
+            return;
+        }
+        let mut rig = Rig::start();
+        rig.arch = "aarch64";
+        let apps = rig.host(Platform::Mac).system("/Applications");
+        let bundle = apps.join(MAC_NAME);
+        mac_bundle(&bundle, OLD, MAC_ID);
+        rig.system
+            .clone()
+            .lookup(feed(Some(page(&[(NEW, "macos-arm64")])), None, None));
+        std::fs::set_permissions(&apps, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+        let cx = rig.cx(Platform::Mac, 900);
+        let install = detect_zcode(&cx).expect("mac zcode");
+        let row = zcode_update(&cx, &install, &Lookups::default(), &*rig.services)
+            .await
+            .to_value();
+        std::fs::set_permissions(&apps, std::fs::Permissions::from_mode(0o755)).expect("restore");
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("failed"), Some("unsupported"))
+        );
+        assert!(rig.system.downloads().is_empty());
+    }
+
+    /// test_mac_adapters_install_bound_to_the_owner_prefix_and_never_wait_for_running_adapters
+    #[tokio::test]
+    async fn mac_adapters_install_bound_to_the_owner_prefix_and_never_wait_for_running_adapters() {
+        let mut rig = Rig::start();
+        let mods = modules(rig.path(), Platform::Mac);
+        let prefix = mods
+            .parent()
+            .and_then(Path::parent)
+            .expect("homebrew")
+            .to_path_buf();
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        write_package(&mods, "zcode-acp-server", "0.65.1");
+        let (node, cli) = write_npm_pair(&rig.path().join("node"), Platform::Mac);
+        rig.search_path
+            .push(node.parent().expect("bin").to_path_buf());
+        rig.system
+            .clone()
+            .lookup(feed(None, Some("0.10.1"), Some("0.65.1")));
+        let layout = discover_owners(&rig.host(Platform::Mac), &Lookups::default());
+        assert_eq!(
+            layout.owners[MUSE]
+                .iter()
+                .map(|owner| (owner.prefix.clone(), owner.source))
+                .collect::<Vec<_>>(),
+            vec![(prefix.clone(), "default")]
+        );
+        let outcomes: [(Option<UpdateFailure>, bool, &str, &str); 3] = [
+            (None, true, "updated", "updated"),
+            (None, false, "failed", "update_failed"),
+            (
+                Some(UpdateFailure::new("timeout")),
+                false,
+                "failed",
+                "timeout",
+            ),
+        ];
+        let mut last_row = Value::Null;
+        for (err, mutate, status, code) in outcomes {
+            write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+            rig.system.runs.lock().expect("runs").clear();
+            let mods_for_run = mods.clone();
+            rig.system.clone().answering(move |_| {
+                if let Some(err) = &err {
+                    return Err(err.clone());
+                }
+                if mutate {
+                    write_package(&mods_for_run, "@brokkai/muse-acp", "0.10.1");
+                }
+                Ok(CommandOutput::default())
+            });
+            let row = rig.adapters(Platform::Mac).await;
+            assert_eq!(
+                (
+                    row["status"].as_str(),
+                    row["messageCode"].as_str(),
+                    row["updateAttempted"].as_bool()
+                ),
+                (Some(status), Some(code), Some(true))
+            );
+            assert_eq!(
+                rig.system.run_strings(),
+                vec![vec![
+                    node.to_string_lossy().into_owned(),
+                    cli.to_string_lossy().into_owned(),
+                    "install".into(),
+                    "--global".into(),
+                    "--prefix".into(),
+                    prefix.to_string_lossy().into_owned(),
+                    "@brokkai/muse-acp@0.10.1".into(),
+                ]]
+            );
+            assert!(rig.system.timeouts()[0] <= Duration::from_secs(NPM_SECONDS));
+            assert_eq!(
+                rig.system.scans(),
+                0,
+                "macOS never scans for running adapters"
+            );
+            last_row = row;
+        }
+        assert_eq!(
+            parts_of(&last_row),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.0".into()),
+                    Some("0.10.0".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.65.1".into()),
+                    Some("0.65.1".into())
+                ),
+            ]
+        );
+    }
+
+    // ------------------------------------------------------------ Windows ZCode
+
+    struct WindowsOptions {
+        running: Vec<u32>,
+        session: u32,
+        signer_err: Option<UpdateFailure>,
+        installer_err: Option<UpdateFailure>,
+        reopen_err: Option<UpdateFailure>,
+        extra: Vec<Process>,
+    }
+
+    impl Default for WindowsOptions {
+        fn default() -> Self {
+            Self {
+                running: Vec::new(),
+                session: 1,
+                signer_err: None,
+                installer_err: None,
+                reopen_err: None,
+                extra: Vec::new(),
+            }
+        }
+    }
+
+    struct WindowsOutcome {
+        row: Value,
+        events: Vec<&'static str>,
+        closed: Vec<Vec<u32>>,
+        reopened: Vec<Vec<u32>>,
+        version_after: Option<String>,
+        new_file_exists: bool,
+    }
+
+    async fn run_windows_zcode(options: WindowsOptions) -> WindowsOutcome {
+        let rig = Rig::start();
+        let executable = windows_app(rig.path(), OLD);
+        let data = b"MZ fixture installer".to_vec();
+        let asset = format!("ZCode-{NEW}-win-x64.exe");
+        let manifest_text = manifest(NEW, &asset, &data, true);
+        let mut table = options.extra;
+        let exe_str = executable.to_string_lossy().into_owned();
+        for pid in options.running {
+            let mut main = process(pid, 4, &exe_str, &[&exe_str]);
+            main.session = Some(options.session);
+            let mut child = process(pid + 1, pid, &exe_str, &[&exe_str, "--type=renderer"]);
+            child.session = Some(options.session);
+            table.push(main);
+            table.push(child);
+        }
+        *rig.table.lock().expect("table") = table;
+        *rig.services.reopen.lock().expect("reopen") = options.reopen_err;
+        rig.system
+            .clone()
+            .lookup(feed(Some(page(&[(NEW, "windows-x64")])), None, None));
+        let events = rig.services.events.clone();
+        let events_dl = events.clone();
+        rig.system.clone().serving(move |url, target| {
+            events_dl.lock().expect("events").push("download");
+            if url.ends_with("latest.yml") {
+                std::fs::write(target, &manifest_text).expect("manifest");
+            } else {
+                std::fs::write(target, &data).expect("installer");
+            }
+            Ok(())
+        });
+        let events_cmd = events.clone();
+        let folder = executable.parent().expect("folder").to_path_buf();
+        let signer_err = options.signer_err;
+        let installer_err = options.installer_err;
+        rig.system.clone().answering(move |spec| {
+            let text = script(&spec.argv);
+            if text.contains("Get-AuthenticodeSignature") {
+                events_cmd.lock().expect("events").push("verify");
+                if let Some(err) = &signer_err {
+                    return Err(err.clone());
+                }
+                return Ok(CommandOutput::default());
+            }
+            if text.contains("Start-Process") {
+                events_cmd.lock().expect("events").push("install");
+                assert!(text.contains(&asset), "installer asset in script: {text}");
+                write_asar(&folder.join("resources"), NEW, "@zcode/desktop", 0);
+                std::fs::write(folder.join("new-file.dll"), b"").expect("new-file");
+                if let Some(err) = &installer_err {
+                    return Err(err.clone());
+                }
+                return Ok(CommandOutput::default());
+            }
+            Ok(CommandOutput::default())
+        });
+        let cx = rig.cx(Platform::Windows, 900);
+        let install = detect_zcode(&cx).expect("windows zcode");
+        let row = Rig::finish(
+            &cx,
+            zcode_update(&cx, &install, &Lookups::default(), &*rig.services).await,
+        );
+        WindowsOutcome {
+            row,
+            events: events.lock().expect("events").clone(),
+            closed: rig.services.closed.lock().expect("closed").clone(),
+            reopened: rig.services.reopened.lock().expect("reopened").clone(),
+            version_after: installed_version(Platform::Windows, &executable),
+            new_file_exists: executable
+                .parent()
+                .expect("folder")
+                .join("new-file.dll")
+                .exists(),
+        }
+    }
+
+    /// test_windows_running_zcode_downloads_first_then_closes_installs_and_reopens
+    #[tokio::test]
+    async fn windows_running_zcode_downloads_first_then_closes_installs_and_reopens() {
+        let out = run_windows_zcode(WindowsOptions {
+            running: vec![100],
+            ..WindowsOptions::default()
+        })
+        .await;
+        assert_eq!(
+            out.events,
+            vec![
+                "download", "download", "verify", "close", "install", "reopen"
+            ]
+        );
+        assert_eq!(out.closed, vec![vec![100]]);
+        assert_eq!(out.reopened, vec![vec![100]]);
+        assert_eq!(
+            (
+                out.row["status"].as_str(),
+                out.row["messageCode"].as_str(),
+                out.row["previousVersion"].as_str(),
+                out.row["version"].as_str(),
+                out.row["manager"].as_str()
+            ),
+            (
+                Some("updated"),
+                Some("desktop_reopened"),
+                Some(OLD),
+                Some(NEW),
+                Some("official-download")
+            )
+        );
+        assert_eq!(
+            (
+                out.row["restartedProcesses"].as_u64(),
+                out.row["forcedStops"].as_u64(),
+                out.row["updateAttempted"].as_bool(),
+                out.row["restartTargets"].clone()
+            ),
+            (Some(1), Some(1), Some(true), json!([{"kind": "desktop"}]))
+        );
+    }
+
+    /// test_windows_not_running_installs_without_closing_or_reopening
+    #[tokio::test]
+    async fn windows_not_running_installs_without_closing_or_reopening() {
+        let out = run_windows_zcode(WindowsOptions::default()).await;
+        assert_eq!(
+            out.events,
+            vec!["download", "download", "verify", "install"]
+        );
+        assert_eq!(
+            (
+                out.row["status"].as_str(),
+                out.row["messageCode"].as_str(),
+                out.row["version"].as_str(),
+                out.row["restartedProcesses"].as_u64()
+            ),
+            (Some("updated"), Some("updated"), Some(NEW), Some(0))
+        );
+        assert!(out.row.get("restartTargets").is_none());
+        assert!(out.closed.is_empty());
+        assert!(out.reopened.is_empty());
+    }
+
+    /// test_windows_signer_mismatch_is_signature_failed_and_nothing_closes
+    #[tokio::test]
+    async fn windows_signer_mismatch_is_signature_failed_and_nothing_closes() {
+        let out = run_windows_zcode(WindowsOptions {
+            running: vec![100],
+            signer_err: Some(UpdateFailure::failed()),
+            ..WindowsOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                out.row["status"].as_str(),
+                out.row["messageCode"].as_str(),
+                out.row["version"].as_str(),
+                out.row["updateAttempted"].as_bool()
+            ),
+            (
+                Some("failed"),
+                Some("signature_failed"),
+                Some(OLD),
+                Some(false)
+            )
+        );
+        assert_eq!(out.events, vec!["download", "download", "verify"]);
+        assert!(out.closed.is_empty());
+        // Verify the Authenticode PowerShell script directly.
+        let rig = Rig::start();
+        let installed = windows_app(rig.path(), OLD);
+        let package = rig.path().join("ZCode-3.14.5-win-x64.exe");
+        let cx = rig.cx(Platform::Windows, 900);
+        verify_signer(&cx, &package, &installed)
+            .await
+            .expect("verify");
+        let ps = script(&rig.system.runs()[0]);
+        for part in [
+            format!(
+                "Get-AuthenticodeSignature -LiteralPath '{}'",
+                package.display()
+            ),
+            format!(
+                "Get-AuthenticodeSignature -LiteralPath '{}'",
+                installed.display()
+            ),
+            "$n.Status -ne 'Valid'".to_owned(),
+            "$o.Status -ne 'Valid'".to_owned(),
+            "$n.SignerCertificate.Subject -cne $o.SignerCertificate.Subject".to_owned(),
+            "Contains('SERIALNUMBER=91110108MA01KP2T5U')".to_owned(),
+        ] {
+            assert!(ps.contains(&part), "missing {part} in {ps}");
+        }
+        assert!(!ps.contains("Write-Output"));
+    }
+
+    /// test_windows_installer_failure_restores_the_rollback_copy_and_reopens_the_old_zcode
+    #[tokio::test]
+    async fn windows_installer_failure_restores_the_rollback_copy_and_reopens_the_old_zcode() {
+        let out = run_windows_zcode(WindowsOptions {
+            running: vec![100],
+            installer_err: Some(UpdateFailure::failed()),
+            ..WindowsOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                out.row["status"].as_str(),
+                out.row["messageCode"].as_str(),
+                out.row["previousVersion"].as_str(),
+                out.row["version"].as_str(),
+                out.row["updateAttempted"].as_bool()
+            ),
+            (
+                Some("failed"),
+                Some("update_failed"),
+                Some(OLD),
+                Some(OLD),
+                Some(true)
+            )
+        );
+        assert_eq!(out.version_after.as_deref(), Some(OLD));
+        assert!(!out.new_file_exists);
+        assert_eq!(
+            &out.events[out.events.len() - 3..],
+            ["install", "close", "reopen"]
+        );
+        assert_eq!(out.reopened, vec![vec![100]]);
+        let timed = run_windows_zcode(WindowsOptions {
+            running: vec![100],
+            installer_err: Some(UpdateFailure::new("timeout")),
+            ..WindowsOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                timed.row["status"].as_str(),
+                timed.row["messageCode"].as_str(),
+                timed.row["version"].as_str()
+            ),
+            (Some("failed"), Some("timeout"), Some(OLD))
+        );
+    }
+
+    /// test_windows_reopen_failure_is_restart_failed_with_the_new_version
+    #[tokio::test]
+    async fn windows_reopen_failure_is_restart_failed_with_the_new_version() {
+        let out = run_windows_zcode(WindowsOptions {
+            running: vec![100],
+            reopen_err: Some(UpdateFailure::new("restart_failed")),
+            ..WindowsOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                out.row["status"].as_str(),
+                out.row["messageCode"].as_str(),
+                out.row["previousVersion"].as_str(),
+                out.row["version"].as_str(),
+                out.row["forcedStops"].as_u64()
+            ),
+            (
+                Some("restart_failed"),
+                Some("restart_failed"),
+                Some(OLD),
+                Some(NEW),
+                Some(1)
+            )
+        );
+        assert!(
+            out.row.get("restartTargets").is_none(),
+            "restart_failed omits restartTargets"
+        );
+        assert_eq!(out.version_after.as_deref(), Some(NEW));
+    }
+
+    /// test_windows_t3_session_is_in_use_and_another_session_is_quit_first_before_any_download
+    #[tokio::test]
+    async fn windows_t3_session_is_in_use_and_another_session_is_quit_first_before_any_download() {
+        let mut node = process(
+            70,
+            4,
+            "C:/Program Files/nodejs/node.exe",
+            &[
+                "node.exe",
+                "C:/Users/user/AppData/Roaming/npm/node_modules/zcode-acp-server/dist/cli.js",
+            ],
+        );
+        node.session = Some(1);
+        let out = run_windows_zcode(WindowsOptions {
+            extra: vec![node],
+            ..WindowsOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                out.row["status"].as_str(),
+                out.row["messageCode"].as_str(),
+                out.row["updateAttempted"].as_bool()
+            ),
+            (Some("action_required"), Some("in_use"), Some(false))
+        );
+        assert!(out.events.is_empty());
+        assert!(out.closed.is_empty());
+
+        let other = run_windows_zcode(WindowsOptions {
+            running: vec![100],
+            session: 2,
+            ..WindowsOptions::default()
+        })
+        .await;
+        assert_eq!(
+            (
+                other.row["status"].as_str(),
+                other.row["messageCode"].as_str(),
+                other.row["version"].as_str()
+            ),
+            (Some("action_required"), Some("quit_first"), Some(OLD))
+        );
+        assert!(other.events.is_empty());
+        assert!(other.closed.is_empty());
+    }
+
+    // ------------------------------------------------------------ Windows adapters
+
+    #[derive(Clone)]
+    enum NpmOutcome {
+        Updated,
+        Unchanged,
+        Fail(UpdateFailure),
+    }
+
+    async fn run_windows_npm(
+        installed: [(&'static str, &'static str); 2],
+        latest: [&'static str; 2],
+        running: Vec<Process>,
+        outcomes: [NpmOutcome; 2],
+        with_git_bash: bool,
+    ) -> (
+        Value,
+        Vec<(Vec<String>, Duration)>,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+    ) {
+        let mut rig = Rig::start();
+        let mods = modules(rig.path(), Platform::Windows);
+        for (package, version) in installed {
+            write_package(&mods, package, version);
+        }
+        let prefix = rig.path().join("roaming/npm");
+        let (node, cli) =
+            write_npm_pair(&rig.path().join("Program Files/nodejs"), Platform::Windows);
+        rig.search_path
+            .push(node.parent().expect("nodejs").to_path_buf());
+        let bash = rig.path().join("Program Files/Git/bin/bash.exe");
+        let mut env = std::collections::HashMap::new();
+        if with_git_bash {
+            std::fs::create_dir_all(bash.parent().expect("bin")).expect("git bin");
+            std::fs::write(&bash, b"").expect("bash");
+            env.insert(
+                "ProgramFiles".to_owned(),
+                rig.path()
+                    .join("Program Files")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        *rig.table.lock().expect("table") = running;
+        rig.system
+            .clone()
+            .lookup(feed(None, Some(latest[MUSE]), Some(latest[ACP])));
+        let mods_for_run = mods.clone();
+        rig.system.clone().answering(move |spec| {
+            let pkg = spec.argv.last().expect("pkg").to_string_lossy();
+            let adapter = (0..PARTS)
+                .find(|adapter| pkg.starts_with(&format!("{}@", PACKAGES[*adapter].1)))
+                .expect("adapter");
+            match &outcomes[adapter] {
+                NpmOutcome::Fail(err) => Err(err.clone()),
+                NpmOutcome::Unchanged => Ok(CommandOutput::default()),
+                NpmOutcome::Updated => {
+                    write_package(&mods_for_run, PACKAGES[adapter].1, latest[adapter]);
+                    Ok(CommandOutput::default())
+                }
+            }
+        });
+        let vars = Lookups(env);
+        let cx = rig.cx(Platform::Windows, 900);
+        let row = Rig::finish(&cx, adapters_update(&cx, &vars).await);
+        let runs: Vec<(Vec<String>, Duration)> = rig
+            .system
+            .run_strings()
+            .into_iter()
+            .zip(rig.system.timeouts())
+            .collect();
+        (row, runs, prefix, node, cli, bash)
+    }
+
+    fn muse_running_under(root: &Path) -> Process {
+        let exe = root
+            .join("roaming/npm/node_modules/@brokkai/muse-acp/native/x86_64-pc-windows-msvc/muse-acp.exe")
+            .to_string_lossy()
+            .into_owned();
+        let mut p = process(80, 4, &exe, &[&exe]);
+        p.session = Some(1);
+        p
+    }
+
+    /// test_windows_adapters_each_install_in_its_own_npm_run_with_git_bash_as_script_shell
+    #[tokio::test]
+    async fn windows_adapters_each_install_in_its_own_npm_run_with_git_bash_as_script_shell() {
+        let (row, runs, prefix, node, cli, bash) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.0"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [NpmOutcome::Updated, NpmOutcome::Updated],
+            true,
+        )
+        .await;
+        let argvs: Vec<Vec<String>> = runs.iter().map(|(argv, _)| argv.clone()).collect();
+        assert_eq!(
+            argvs,
+            vec![
+                vec![
+                    node.to_string_lossy().into_owned(),
+                    cli.to_string_lossy().into_owned(),
+                    "install".into(),
+                    "--global".into(),
+                    "--prefix".into(),
+                    prefix.to_string_lossy().into_owned(),
+                    "--script-shell".into(),
+                    bash.to_string_lossy().into_owned(),
+                    "@brokkai/muse-acp@0.10.1".into(),
+                ],
+                vec![
+                    node.to_string_lossy().into_owned(),
+                    cli.to_string_lossy().into_owned(),
+                    "install".into(),
+                    "--global".into(),
+                    "--prefix".into(),
+                    prefix.to_string_lossy().into_owned(),
+                    "--script-shell".into(),
+                    bash.to_string_lossy().into_owned(),
+                    "zcode-acp-server@0.65.1".into(),
+                ],
+            ]
+        );
+        assert!(
+            runs.iter()
+                .all(|(_, timeout)| *timeout <= Duration::from_secs(NPM_SECONDS))
+        );
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("updated"), Some("updated"), Some(true))
+        );
+        assert_eq!(
+            parts_of(&row),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.0".into()),
+                    Some("0.10.1".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.65.0".into()),
+                    Some("0.65.1".into())
+                ),
+            ]
+        );
+        assert!(
+            row["parts"]
+                .as_array()
+                .expect("parts")
+                .iter()
+                .all(|p| p.get("inUse").is_none())
+        );
+    }
+
+    /// test_windows_current_package_is_never_reinstalled
+    #[tokio::test]
+    async fn windows_current_package_is_never_reinstalled() {
+        let (row, runs, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.1"),
+                ("zcode-acp-server", "0.65.1"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [NpmOutcome::Updated, NpmOutcome::Updated],
+            true,
+        )
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("current"), Some("current"), Some(false))
+        );
+        assert!(runs.is_empty());
+        let (_, runs, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.1"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [NpmOutcome::Updated, NpmOutcome::Updated],
+            true,
+        )
+        .await;
+        assert_eq!(
+            runs.iter()
+                .map(|(argv, _)| argv.last().expect("pkg").as_str())
+                .collect::<Vec<_>>(),
+            vec!["@brokkai/muse-acp@0.10.1"]
+        );
+    }
+
+    /// test_windows_zcode_postinstall_failure_leaves_muse_acp_updated
+    #[tokio::test]
+    async fn windows_zcode_postinstall_failure_leaves_muse_acp_updated() {
+        let (row, runs, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.0"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [
+                NpmOutcome::Updated,
+                NpmOutcome::Fail(UpdateFailure::failed()),
+            ],
+            true,
+        )
+        .await;
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("failed"), Some("update_failed"), Some(true))
+        );
+        assert_eq!(
+            parts_of(&row),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.10.0".into()),
+                    Some("0.10.1".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.65.0".into()),
+                    Some("0.65.0".into())
+                ),
+            ]
+        );
+    }
+
+    /// test_windows_running_muse_is_never_installed_while_zcode_still_updates + running muse alone
+    #[tokio::test]
+    async fn windows_running_muse_is_held_while_free_zcode_still_updates() {
+        let mut rig = Rig::start();
+        let mods = modules(rig.path(), Platform::Windows);
+        write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+        write_package(&mods, "zcode-acp-server", "0.65.0");
+        let (node, _) = write_npm_pair(&rig.path().join("Program Files/nodejs"), Platform::Windows);
+        rig.search_path
+            .push(node.parent().expect("nodejs").to_path_buf());
+        *rig.table.lock().expect("table") = vec![muse_running_under(rig.path())];
+        rig.system
+            .clone()
+            .lookup(feed(None, Some("0.10.1"), Some("0.65.1")));
+        let mods_for_run = mods.clone();
+        rig.system.clone().answering(move |spec| {
+            let pkg = spec.argv.last().expect("pkg").to_string_lossy();
+            if pkg.starts_with("zcode-acp-server@") {
+                write_package(&mods_for_run, "zcode-acp-server", "0.65.1");
+            }
+            Ok(CommandOutput::default())
+        });
+        let cx = rig.cx(Platform::Windows, 900);
+        let row = Rig::finish(&cx, adapters_update(&cx, &Lookups::default()).await);
+        assert_eq!(
+            rig.system
+                .run_strings()
+                .iter()
+                .map(|argv| argv.last().expect("pkg").as_str())
+                .collect::<Vec<_>>(),
+            vec!["zcode-acp-server@0.65.1"]
+        );
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("action_required"), Some("in_use"), Some(true))
+        );
+        assert_eq!(
+            row["parts"],
+            json!([
+                {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.0", "inUse": true},
+                {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.1"},
+            ])
+        );
+
+        // Now zcode-acp-server is already current; only running muse is behind -> npm never runs.
+        rig.system.runs.lock().expect("runs").clear();
+        let cx = rig.cx(Platform::Windows, 900);
+        let row = Rig::finish(&cx, adapters_update(&cx, &Lookups::default()).await);
+        assert!(rig.system.runs().is_empty());
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("action_required"), Some("in_use"), Some(false))
+        );
+        assert_eq!(
+            row["parts"]
+                .as_array()
+                .expect("parts")
+                .iter()
+                .map(|p| p.get("inUse").and_then(Value::as_bool).unwrap_or(false))
+                .collect::<Vec<_>>(),
+            vec![true, false]
+        );
+    }
+
+    /// test_windows_denied_without_a_process_is_permission_but_ebusy_is_in_use
+    #[tokio::test]
+    async fn windows_denied_without_a_process_is_permission_but_ebusy_is_in_use() {
+        let escaped = [
+            r"npm error code EPERM",
+            r"npm error syscall rmdir",
+            r"npm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native",
+            r"npm error Error: EPERM: operation not permitted, rmdir 'C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native'",
+        ]
+        .join("\n");
+        let (row, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.0"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [
+                NpmOutcome::Fail(UpdateFailure {
+                    output: escaped,
+                    ..UpdateFailure::failed()
+                }),
+                NpmOutcome::Updated,
+            ],
+            true,
+        )
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (
+                Some("action_required"),
+                Some("prefix_not_writable"),
+                Some(true)
+            )
+        );
+        assert_eq!(
+            row["parts"],
+            json!([
+                {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.0"},
+                {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.1"},
+            ])
+        );
+
+        let busy = [
+            r"npm error code EBUSY",
+            r"npm error path C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server",
+            r"npm error Error: EBUSY: resource busy or locked, unlink 'C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js'",
+        ]
+        .join("\n");
+        let (row, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.0"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [
+                NpmOutcome::Updated,
+                NpmOutcome::Fail(UpdateFailure {
+                    output: busy,
+                    ..UpdateFailure::failed()
+                }),
+            ],
+            true,
+        )
+        .await;
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("action_required"), Some("in_use"))
+        );
+        assert_eq!(
+            row["parts"],
+            json!([
+                {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.1"},
+                {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.0", "inUse": true},
+            ])
+        );
+    }
+
+    /// test_windows_npm_permission_error_naming_no_such_package_is_a_failure + unchanged + no git bash
+    #[tokio::test]
+    async fn windows_npm_unrelated_eperm_unchanged_and_missing_git_bash_fail_honestly() {
+        let other = "npm error code EPERM\nnpm error path C:\\Users\\user\\AppData\\Local\\npm-cache\\_cacache\\tmp";
+        let cross = "npm error code EPERM\nnpm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\zcode-acp-server\\dist";
+        for text in [other, cross] {
+            let (row, ..) = run_windows_npm(
+                [
+                    ("@brokkai/muse-acp", "0.10.0"),
+                    ("zcode-acp-server", "0.65.1"),
+                ],
+                ["0.10.1", "0.65.1"],
+                Vec::new(),
+                [
+                    NpmOutcome::Fail(UpdateFailure {
+                        output: text.into(),
+                        ..UpdateFailure::failed()
+                    }),
+                    NpmOutcome::Updated,
+                ],
+                true,
+            )
+            .await;
+            assert_eq!(
+                (row["status"].as_str(), row["messageCode"].as_str()),
+                (Some("failed"), Some("update_failed"))
+            );
+            assert_eq!(
+                parts_of(&row),
+                vec![
+                    (
+                        "muse-acp".into(),
+                        Some("0.10.0".into()),
+                        Some("0.10.0".into())
+                    ),
+                    (
+                        "zcode-acp-server".into(),
+                        Some("0.65.1".into()),
+                        Some("0.65.1".into())
+                    ),
+                ]
+            );
+        }
+        // Clean npm run that moves nothing is a failure.
+        let (row, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.0"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [NpmOutcome::Unchanged, NpmOutcome::Unchanged],
+            true,
+        )
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("failed"), Some("update_failed"), Some(true))
+        );
+        // Without Git Bash, npm gets no --script-shell and postinstall failure is visible.
+        let (row, runs, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.0"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [
+                NpmOutcome::Updated,
+                NpmOutcome::Fail(UpdateFailure::failed()),
+            ],
+            false,
+        )
+        .await;
+        assert!(
+            runs.iter()
+                .all(|(argv, _)| !argv.iter().any(|a| a == "--script-shell"))
+        );
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("failed"), Some("update_failed"))
+        );
+    }
+
+    /// test_git_bash_is_found_only_in_git_for_windows_own_bin
+    #[test]
+    fn git_bash_is_found_only_in_git_for_windows_own_bin() {
+        let rig = Rig::start();
+        let base = rig.path();
+        let git = base.join("Program Files/Git/bin/bash.exe");
+        std::fs::create_dir_all(git.parent().expect("bin")).expect("git bin");
+        std::fs::write(&git, b"").expect("bash");
+        let system = base.join("Windows/System32/bash.exe");
+        std::fs::create_dir_all(system.parent().expect("sys32")).expect("sys32");
+        std::fs::write(&system, b"").expect("sys32 bash");
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "ProgramFiles".to_owned(),
+            base.join("Program Files").to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            git_bash(&rig.host(Platform::Windows), &Lookups(env.clone())),
+            Some(git.clone())
+        );
+        env.insert(
+            "ProgramFiles".to_owned(),
+            base.join("Nothing").to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            git_bash(&rig.host(Platform::Windows), &Lookups(env.clone())),
+            None
+        );
+        // Also resolved via git.exe on PATH (`.../Git/cmd/git.exe` -> `.../Git/bin/bash.exe`).
+        let git_cmd = base.join("Program Files/Git/cmd/git.exe");
+        std::fs::create_dir_all(git_cmd.parent().expect("cmd")).expect("cmd dir");
+        std::fs::write(&git_cmd, b"").expect("git.exe");
+        let mut host = Arc::into_inner(rig.host(Platform::Windows)).expect("host");
+        host.path.push(git_cmd.parent().expect("cmd").to_path_buf());
+        assert_eq!(git_bash(&host, &Lookups(env)), Some(git));
+    }
+
+    /// test_adapter_owners_match_the_muse_native_exe_in_any_letter_case_on_windows
+    #[test]
+    fn adapter_owners_match_the_muse_native_exe_in_any_letter_case_on_windows() {
+        let root = PathBuf::from(r"C:\Users\user\AppData\Roaming\npm\node_modules");
+        let roots: [Vec<PathBuf>; PARTS] = [vec![root.clone()], vec![root.clone()]];
+        let native = r"C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native\x86_64-pc-windows-msvc\muse-acp.exe";
+        for exe in [
+            native.to_owned(),
+            native.to_lowercase(),
+            native.to_uppercase(),
+            r"c:\Users\User\AppData\Roaming\NPM\node_modules\@Brokkai\Muse-Acp\native\x86_64-pc-windows-msvc\muse-acp.exe".to_owned(),
+        ] {
+            let item = process(40, 4, &exe, &[&exe]);
+            assert_eq!(adapter_owners(&item, &roots), [true, false], "{exe}");
+        }
+        let node = r"C:\Program Files\nodejs\node.exe";
+        let script_path =
+            r"C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\bin\muse-acp.cjs";
+        assert_eq!(
+            adapter_owners(&process(41, 4, node, &[node, script_path]), &roots),
+            [true, false]
+        );
+        let martty = r"C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zcode-acp-martty\vendor\win32-x64\martty.exe";
+        assert_eq!(
+            adapter_owners(&process(42, 4, martty, &[martty]), &roots),
+            [false, true]
+        );
+        let cli = r"C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js";
+        assert_eq!(
+            adapter_owners(&process(43, 4, node, &[node, cli]), &roots),
+            [false, true]
+        );
+        let sibling = r"C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp-tools\muse-acp-tools.exe";
+        assert_eq!(
+            adapter_owners(&process(44, 4, sibling, &[sibling]), &roots),
+            [false, false]
+        );
+    }
+
+    /// test_only_npm_error_lines_naming_a_package_folder_lock_that_package
+    /// + test_windows_postinstall_failure_with_a_rollback_warning_is_failed_not_in_use
+    #[tokio::test]
+    async fn only_npm_error_lines_naming_a_package_folder_lock_that_package() {
+        let escaped = "npm error code EPERM\nnpm error path C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\node_modules\\\\@brokkai\\\\muse-acp\\\\native";
+        let plain = "npm error code EBUSY\nnpm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native";
+        for text in [escaped, plain] {
+            assert!(locked_here(text, MUSE), "{text}");
+            assert!(!locked_here(text, ACP), "{text}");
+        }
+        let warning = "npm warn cleanup [ 'C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\node_modules\\\\@brokkai\\\\muse-acp', [Error: EPERM: operation not permitted, rmdir 'C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native'] ]\nnpm error code 1\nnpm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp";
+        assert!(!locked_here(warning, MUSE));
+        assert!(!locked_here(
+            "npm error code ENOENT\nnpm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp",
+            MUSE
+        ));
+        assert!(!locked_here(
+            "npm error code EPERM\nnpm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp-tools",
+            MUSE
+        ));
+        // Incident: rollback warning with EPERM + postinstall error code 1 is failed, not in_use.
+        let incident = [
+            r"npm warn cleanup Failed to remove some directories [",
+            r"npm warn cleanup     'C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\zcode-acp-server',",
+            r"npm warn cleanup     [Error: EPERM: operation not permitted, rmdir 'C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zod\src'] {",
+            r"npm warn cleanup       code: 'EPERM',",
+            r"npm error code 1",
+            r"npm error path C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server",
+            r"npm error command failed",
+            r"npm error command C:\WINDOWS\system32\cmd.exe /d /s /c node dist/remote/hub-upgrade-notify.js 2>/dev/null || true",
+        ]
+        .join("\n");
+        let (row, ..) = run_windows_npm(
+            [
+                ("@brokkai/muse-acp", "0.10.0"),
+                ("zcode-acp-server", "0.65.0"),
+            ],
+            ["0.10.1", "0.65.1"],
+            Vec::new(),
+            [
+                NpmOutcome::Updated,
+                NpmOutcome::Fail(UpdateFailure {
+                    output: incident,
+                    ..UpdateFailure::failed()
+                }),
+            ],
+            true,
+        )
+        .await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["updateAttempted"].as_bool()
+            ),
+            (Some("failed"), Some("update_failed"), Some(true))
+        );
+        assert!(
+            row["parts"]
+                .as_array()
+                .expect("parts")
+                .iter()
+                .all(|p| p.get("inUse").is_none())
+        );
+    }
+
+    /// Fix round 2 C8: EPERM/EACCES across syscalls without a running adapter is prefix_not_writable.
+    #[tokio::test]
+    async fn windows_access_denied_without_a_running_adapter_is_not_a_lock() {
+        for errno in ["EPERM", "EACCES"] {
+            for syscall in ["rename", "unlink", "mkdir", "scandir"] {
+                let output = format!(
+                    "npm error code {errno}\nnpm error syscall {syscall}\nnpm error path C:/Program Files/nodejs/node_modules/zcode-acp-server"
+                );
+                let (row, ..) = run_windows_npm(
+                    [
+                        ("@brokkai/muse-acp", "0.10.1"),
+                        ("zcode-acp-server", "0.84.2"),
+                    ],
+                    ["0.10.1", "0.84.3"],
+                    Vec::new(),
+                    [
+                        NpmOutcome::Updated,
+                        NpmOutcome::Fail(UpdateFailure {
+                            output,
+                            ..UpdateFailure::failed()
+                        }),
+                    ],
+                    false,
+                )
+                .await;
+                assert_eq!(
+                    (row["status"].as_str(), row["messageCode"].as_str()),
+                    (Some("action_required"), Some("prefix_not_writable")),
+                    "{errno}/{syscall}"
+                );
+                assert!(
+                    row["parts"]
+                        .as_array()
+                        .expect("parts")
+                        .iter()
+                        .all(|p| p.get("inUse").is_none())
+                );
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ Ownership, managers, fix rounds
+
+    /// Fix round 1 B5: every enabled T3 consumer is updated; one left behind is never `updated`.
+    #[tokio::test]
+    async fn every_enabled_t3_consumer_of_an_adapter_is_updated_and_one_left_behind_fails() {
+        let mut rig = Rig::start();
+        let first = write_npm_prefix_adapter(rig.path(), "opt/homebrew", "0.84.2");
+        let second = write_npm_prefix_adapter(rig.path(), "second-node", "0.84.2");
+        write_t3_consumers(
+            rig.path(),
+            &[
+                first.join("zcode-acp-server/dist/cli.js"),
+                second.join("zcode-acp-server/dist/cli.js"),
+            ],
+        );
+        let (node, _) = write_npm_pair(&rig.path().join("node"), Platform::Mac);
+        rig.search_path
+            .push(node.parent().expect("bin").to_path_buf());
+        rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+        rig.system.clone().answering(|spec| {
+            let argv: Vec<String> = spec
+                .argv
+                .iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            let at = argv
+                .iter()
+                .position(|word| word == "--prefix")
+                .expect("prefix");
+            let prefix = PathBuf::from(&argv[at + 1]);
+            let (pkg, ver) = argv.last().expect("pkg").rsplit_once('@').expect("ver");
+            write_package(&prefix.join("lib/node_modules"), pkg, ver);
+            Ok(CommandOutput::default())
+        });
+        let row = rig.adapters(Platform::Mac).await;
+        assert_eq!(
+            (
+                package_version(&first, ACP).as_deref(),
+                package_version(&second, ACP).as_deref()
+            ),
+            (Some("0.84.3"), Some("0.84.3"))
+        );
+        assert_eq!(row["status"], "updated");
+        assert_eq!(rig.system.runs().len(), 2);
+
+        // Now second consumer stays at 0.84.2 -> never `updated`, lowest version kept.
+        write_package(&first, "zcode-acp-server", "0.84.2");
+        write_package(&second, "zcode-acp-server", "0.84.2");
+        let second_prefix = rig.path().join("second-node");
+        rig.system.clone().answering(move |spec| {
+            let argv: Vec<String> = spec
+                .argv
+                .iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            let at = argv
+                .iter()
+                .position(|word| word == "--prefix")
+                .expect("prefix");
+            let prefix = PathBuf::from(&argv[at + 1]);
+            let (pkg, ver) = argv.last().expect("pkg").rsplit_once('@').expect("ver");
+            let written = if prefix == second_prefix {
+                "0.84.2"
+            } else {
+                ver
+            };
+            write_package(&prefix.join("lib/node_modules"), pkg, written);
+            Ok(CommandOutput::default())
+        });
+        let row = rig.adapters(Platform::Mac).await;
+        assert_ne!(row["status"], "updated");
+        assert_eq!(row["parts"][1]["version"], "0.84.2");
+    }
+
+    /// Fix round 1 B6 + Fix round 2 C3: mirror downgrade and unplanned sibling downgrade.
+    #[tokio::test]
+    async fn mirror_serving_an_older_latest_is_version_went_down_and_unplanned_siblings_checked() {
+        let mut rig = Rig::start();
+        let homebrew = write_npm_prefix_adapter(rig.path(), "opt/homebrew", "0.84.2");
+        write_t3_consumers(rig.path(), &[homebrew.join("zcode-acp-server/dist/cli.js")]);
+        let (node, _) = write_npm_pair(&rig.path().join("node"), Platform::Mac);
+        rig.search_path
+            .push(node.parent().expect("bin").to_path_buf());
+        rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+        let hb_for_run = homebrew.clone();
+        rig.system.clone().answering(move |_| {
+            write_package(&hb_for_run, "zcode-acp-server", "0.83.0");
+            Ok(CommandOutput::default())
+        });
+        let row = rig.adapters(Platform::Mac).await;
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("failed"), Some("version_went_down"))
+        );
+        assert!(
+            rig.system.run_strings()[0]
+                .last()
+                .expect("pkg")
+                .ends_with("@0.84.3")
+        );
+
+        // C3: second owner started ahead (0.85.0) and dropped to 0.84.3 -> version_went_down even
+        // when behind is empty (sibling outside plan).
+        let first = write_npm_prefix_adapter(rig.path(), "first", "0.84.2");
+        let second = write_npm_prefix_adapter(rig.path(), "second", "0.85.0");
+        write_t3_consumers(
+            rig.path(),
+            &[
+                first.join("zcode-acp-server/dist/cli.js"),
+                second.join("zcode-acp-server/dist/cli.js"),
+            ],
+        );
+        let nothing = Lookups::default();
+        let layout = discover_owners(&rig.host(Platform::Mac), &nothing);
+        write_package(&first, "zcode-acp-server", "0.84.3");
+        write_package(&second, "zcode-acp-server", "0.84.3");
+        let targets: Parts = [None, Some("0.84.3".into())];
+        let cx = rig.cx(Platform::Mac, 600);
+        for behind in [&[ACP][..], &[][..]] {
+            let row = adapters_settle(
+                &cx,
+                &nothing,
+                &layout,
+                behind,
+                &targets,
+                Codes::default(),
+                &mut HashSet::new(),
+                true,
+                None,
+            )
+            .await
+            .expect("settle")
+            .to_value();
+            assert_eq!(
+                (row["status"].as_str(), row["messageCode"].as_str()),
+                (Some("failed"), Some("version_went_down"))
+            );
+        }
+    }
+
+    /// Fix round 1 B7 + Robustness alternate managers + Fix round 2 C6 (pnpm store copy skips).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pnpm_and_bun_install_into_their_own_global_folders_never_into_pnpm_store() {
+        // 1. B7: pnpm symlinked store installs into global dir with PNPM_HOME.
+        {
+            let mut rig = Rig::start();
+            let global_dir = rig.path().join(".local/share/pnpm/global");
+            let mods = global_dir.join("5/node_modules");
+            let populate = |version: &str| {
+                let entry = mods.join(format!(".pnpm/zcode-acp-server@{version}/node_modules"));
+                write_package(&entry, "zcode-acp-server", version);
+                let cli = entry.join("zcode-acp-server/dist/cli.js");
+                std::fs::create_dir_all(cli.parent().expect("dist")).expect("dist");
+                std::fs::write(&cli, b"cli").expect("cli");
+                symlink_path(
+                    &entry.join("zcode-acp-server"),
+                    &mods.join("zcode-acp-server"),
+                );
+            };
+            populate("0.84.2");
+            write_t3_consumers(rig.path(), &[mods.join("zcode-acp-server/dist/cli.js")]);
+            let tool = rig.path().join("tools/pnpm");
+            std::fs::create_dir_all(tool.parent().expect("tools")).expect("tools");
+            std::fs::write(&tool, b"x").expect("pnpm");
+            make_executable(&tool);
+            rig.search_path
+                .push(tool.parent().expect("tools").to_path_buf());
+            rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+            let global_for_run = global_dir.clone();
+            let mods_for_run = mods.clone();
+            rig.system.clone().answering(move |spec| {
+                let argv: Vec<String> = spec
+                    .argv
+                    .iter()
+                    .map(|word| word.to_string_lossy().into_owned())
+                    .collect();
+                let at = argv
+                    .iter()
+                    .position(|w| w == "--global-dir")
+                    .expect("global-dir");
+                if Path::new(&argv[at + 1]) == global_for_run {
+                    let ver = argv.last().expect("pkg").rsplit_once('@').expect("ver").1;
+                    let entry =
+                        mods_for_run.join(format!(".pnpm/zcode-acp-server@{ver}/node_modules"));
+                    write_package(&entry, "zcode-acp-server", ver);
+                    symlink_path(
+                        &entry.join("zcode-acp-server"),
+                        &mods_for_run.join("zcode-acp-server"),
+                    );
+                }
+                Ok(CommandOutput::default())
+            });
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(row["status"], "updated");
+            let argv = &rig.system.run_strings()[0];
+            assert_eq!(
+                argv,
+                &vec![
+                    tool.to_string_lossy().into_owned(),
+                    "add".into(),
+                    "--global".into(),
+                    "--global-dir".into(),
+                    global_dir.to_string_lossy().into_owned(),
+                    "zcode-acp-server@0.84.3".into(),
+                ]
+            );
+            let env = &rig.system.run_envs()[0];
+            assert!(env.iter().any(|(k, v)| {
+                k == "PNPM_HOME" && v == &global_dir.parent().expect("pnpm").to_string_lossy()
+            }));
+        }
+        // 2. bun global install sets BUN_INSTALL_GLOBAL_DIR.
+        {
+            let mut rig = Rig::start();
+            let mods = rig.path().join(".bun/install/global/node_modules");
+            write_package(&mods, "zcode-acp-server", "0.84.2");
+            let cli = mods.join("zcode-acp-server/dist/cli.js");
+            std::fs::create_dir_all(cli.parent().expect("dist")).expect("dist");
+            std::fs::write(&cli, b"cli").expect("cli");
+            write_t3_consumers(rig.path(), &[cli]);
+            let tool = rig.path().join("tools/bun");
+            std::fs::create_dir_all(tool.parent().expect("tools")).expect("tools");
+            std::fs::write(&tool, b"x").expect("bun");
+            make_executable(&tool);
+            rig.search_path
+                .push(tool.parent().expect("tools").to_path_buf());
+            rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+            let mods_for_run = mods.clone();
+            rig.system.clone().answering(move |_| {
+                write_package(&mods_for_run, "zcode-acp-server", "0.84.3");
+                Ok(CommandOutput::default())
+            });
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(row["status"], "updated");
+            assert_eq!(
+                rig.system.run_strings()[0],
+                vec![
+                    tool.to_string_lossy().into_owned(),
+                    "add".into(),
+                    "--global".into(),
+                    "zcode-acp-server@0.84.3".into(),
+                ]
+            );
+            assert!(rig.system.run_envs()[0].iter().any(|(k, v)| {
+                k == "BUN_INSTALL_GLOBAL_DIR"
+                    && v == &mods.parent().expect("global").to_string_lossy()
+            }));
+        }
+        // 3. C6: T3 pointing directly into `.pnpm/...` store skips with `pnpm_store_copy` before lookup.
+        {
+            let rig = Rig::start();
+            let mods = rig.path().join(".local/share/pnpm/global/5/node_modules");
+            let entry = mods.join(".pnpm/zcode-acp-server@0.84.2/node_modules");
+            write_package(&entry, "zcode-acp-server", "0.84.2");
+            let script_path = entry.join("zcode-acp-server/dist/cli.js");
+            std::fs::create_dir_all(script_path.parent().expect("dist")).expect("dist");
+            std::fs::write(&script_path, b"fixture").expect("cli");
+            symlink_path(
+                &entry.join("zcode-acp-server"),
+                &mods.join("zcode-acp-server"),
+            );
+            write_t3_consumers(rig.path(), &[script_path]);
+            rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(
+                (row["status"].as_str(), row["messageCode"].as_str()),
+                (Some("skipped"), Some("pnpm_store_copy"))
+            );
+            assert!(rig.system.asked().is_empty());
+            assert!(rig.system.runs().is_empty());
+            assert_eq!(package_version(&entry, ACP).as_deref(), Some("0.84.2"));
+        }
+    }
+
+    /// Fix round 1 B7 + R1-L8: Windows pnpm.cmd and corepack pnpm run through node, never cmd.exe.
+    #[test]
+    fn windows_pnpm_cmd_and_corepack_pnpm_use_node_never_cmd_exe() {
+        let mut rig = Rig::start();
+        let shim = rig.path().join("AppData/Roaming/npm/pnpm.cmd");
+        let entry = shim
+            .parent()
+            .expect("npm")
+            .join("node_modules/pnpm/bin/pnpm.cjs");
+        std::fs::create_dir_all(entry.parent().expect("bin")).expect("bin");
+        std::fs::write(&entry, b"x").expect("pnpm.cjs");
+        std::fs::write(&shim, b"@echo off").expect("pnpm.cmd");
+        let node = rig.path().join("nodejs/node.exe");
+        std::fs::create_dir_all(node.parent().expect("nodejs")).expect("nodejs");
+        std::fs::write(&node, b"x").expect("node.exe");
+        rig.search_path
+            .push(shim.parent().expect("npm").to_path_buf());
+        rig.search_path
+            .push(node.parent().expect("nodejs").to_path_buf());
+        let host = rig.host(Platform::Windows);
+        let owner = Owner {
+            root: rig.path().join("pnpm/global/5/node_modules"),
+            prefix: rig.path().join("pnpm/global"),
+            manager: "pnpm",
+            source: "default",
+            node: None,
+            bin_dir: None,
+        };
+        let planned = install_command(&host, &Lookups::default(), &owner, ACP, None, "0.84.3")
+            .expect("planned");
+        assert_eq!(
+            &planned.argv[..2],
+            &[node.as_os_str().to_owned(), entry.as_os_str().to_owned()]
+        );
+
+        // R1-L8: corepack cache uses lastKnownGood.json first, else newest version.
+        std::fs::remove_file(&entry).expect("rm pnpm.cjs");
+        let cache = rig.path().join("AppData/Local/node/corepack");
+        for ver in ["9.15.4", "10.12.1", "11.0.0"] {
+            let cached = cache.join(format!("v1/pnpm/{ver}/bin/pnpm.cjs"));
+            std::fs::create_dir_all(cached.parent().expect("bin")).expect("cache dir");
+            std::fs::write(&cached, b"x").expect("cached");
+        }
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "COREPACK_HOME".to_owned(),
+            cache.to_string_lossy().into_owned(),
+        );
+        let vars = Lookups(env);
+        assert_eq!(
+            pnpm_argv(&host, &vars),
+            Some(vec![
+                node.to_string_lossy().into_owned(),
+                cache
+                    .join("v1/pnpm/11.0.0/bin/pnpm.cjs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ])
+        );
+        std::fs::write(
+            cache.join("lastKnownGood.json"),
+            json!({"pnpm": "10.12.1"}).to_string(),
+        )
+        .expect("lkg");
+        assert_eq!(
+            pnpm_argv(&host, &vars),
+            Some(vec![
+                node.to_string_lossy().into_owned(),
+                cache
+                    .join("v1/pnpm/10.12.1/bin/pnpm.cjs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ])
+        );
+    }
+
+    /// Fix round 1: Windows npm prefers the prefix's own node and T3's configured node.
+    #[test]
+    fn windows_npm_prefers_the_prefixs_own_node_and_t3s_node() {
+        let mut rig = Rig::start();
+        let prefix = rig.path().join("nvm/nodejs");
+        let other = rig.path().join("Program Files/nodejs");
+        let (prefix_node, _) = write_npm_pair(&prefix, Platform::Windows);
+        let (_, _) = write_npm_pair(&other, Platform::Windows);
+        std::fs::write(other.join("npm.cmd"), b"@echo off").expect("npm.cmd");
+        rig.search_path.push(other);
+        let host = rig.host(Platform::Windows);
+        assert_eq!(
+            shared::resolve_npm(&host, &prefix).expect("resolve").0,
+            prefix_node
+        );
+        let owner = Owner {
+            root: prefix.join("node_modules"),
+            prefix: prefix.clone(),
+            manager: "npm",
+            source: "t3-config",
+            node: Some(prefix_node.clone()),
+            bin_dir: None,
+        };
+        assert_eq!(npm_pair(&host, &owner).expect("pair").0, real(&prefix_node));
+    }
+
+    /// Fix round 1 B11 + Lane D R1-L6: unwritable owner runs nothing, sibling still updates, real
+    /// failure outranks prefix_not_writable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unwritable_owner_folder_runs_nothing_and_sibling_still_updates() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if std::fs::metadata("/proc/self").is_ok_and(|info| {
+            use std::os::unix::fs::MetadataExt as _;
+            info.uid() == 0
+        }) {
+            return;
+        }
+        let mut rig = Rig::start();
+        let first = write_npm_prefix_adapter(rig.path(), "opt/homebrew", "0.84.2");
+        let second = write_npm_prefix_adapter(rig.path(), "second-node", "0.84.2");
+        write_t3_consumers(
+            rig.path(),
+            &[
+                first.join("zcode-acp-server/dist/cli.js"),
+                second.join("zcode-acp-server/dist/cli.js"),
+            ],
+        );
+        let (node, _) = write_npm_pair(&rig.path().join("node"), Platform::Mac);
+        rig.search_path
+            .push(node.parent().expect("bin").to_path_buf());
+        rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+        rig.system.clone().answering(|spec| {
+            let argv: Vec<String> = spec
+                .argv
+                .iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            let at = argv.iter().position(|w| w == "--prefix").expect("prefix");
+            let prefix = PathBuf::from(&argv[at + 1]);
+            let (pkg, ver) = argv.last().expect("pkg").rsplit_once('@').expect("ver");
+            write_package(&prefix.join("lib/node_modules"), pkg, ver);
+            Ok(CommandOutput::default())
+        });
+        std::fs::set_permissions(&first, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+        let row = rig.adapters(Platform::Mac).await;
+        std::fs::set_permissions(&first, std::fs::Permissions::from_mode(0o755)).expect("restore");
+        assert_eq!(package_version(&second, ACP).as_deref(), Some("0.84.3"));
+        assert_eq!(rig.system.runs().len(), 1);
+        assert!(
+            rig.system.run_strings()[0]
+                .iter()
+                .any(|w| w.contains("second-node"))
+        );
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["diagnostics"]["cause"].as_str()
+            ),
+            (
+                Some("action_required"),
+                Some("prefix_not_writable"),
+                Some("not_writable")
+            )
+        );
+        assert_eq!(row["parts"][1]["version"], "0.84.2");
+
+        // R1-L6: a real failure on one copy outranks prefix_not_writable on its sibling.
+        write_package(&second, "zcode-acp-server", "0.84.2");
+        rig.system
+            .clone()
+            .answering(|_| Err(UpdateFailure::failed()));
+        std::fs::set_permissions(&second, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+        let row = rig.adapters(Platform::Mac).await;
+        std::fs::set_permissions(&second, std::fs::Permissions::from_mode(0o755)).expect("restore");
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("failed"), Some("update_failed"))
+        );
+    }
+
+    /// Robustness: a plain node_modules folder on POSIX has no installer to bind and runs nothing.
+    #[tokio::test]
+    async fn plain_node_modules_folder_on_posix_is_unsupported_and_runs_nothing() {
+        let rig = Rig::start();
+        let mods = rig.path().join("vendor/node_modules");
+        write_package(&mods, "zcode-acp-server", "0.84.2");
+        let cli = mods.join("zcode-acp-server/dist/cli.js");
+        std::fs::create_dir_all(cli.parent().expect("dist")).expect("dist");
+        std::fs::write(&cli, b"cli").expect("cli");
+        write_t3_consumers(rig.path(), &[cli]);
+        rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+        let layout = discover_owners(&rig.host(Platform::Mac), &Lookups::default());
+        assert_eq!(
+            layout.owners[ACP]
+                .iter()
+                .map(|o| o.manager)
+                .collect::<Vec<_>>(),
+            vec!["other"]
+        );
+        let row = rig.adapters(Platform::Mac).await;
+        assert_eq!(
+            (row["status"].as_str(), row["messageCode"].as_str()),
+            (Some("failed"), Some("unsupported"))
+        );
+        assert!(rig.system.runs().is_empty());
+    }
+
+    /// Robustness: Mac installs into the prefix T3 runs; changing another copy reports wrong_prefix
+    /// with `diagnostics.owner.elsewhere`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mac_prefix_t3_runs_is_updated_and_wrong_prefix_reports_elsewhere() {
+        let mut rig = Rig::start();
+        let brew = rig.host(Platform::Mac).system("/opt/homebrew");
+        let brew_mods = brew.join("lib/node_modules");
+        write_package(&brew_mods, "@brokkai/muse-acp", "0.21.0");
+        write_package(&brew_mods, "zcode-acp-server", "0.84.2");
+        let zcode_cli = brew_mods.join("zcode-acp-server/dist/cli.js");
+        std::fs::create_dir_all(zcode_cli.parent().expect("dist")).expect("dist");
+        std::fs::write(&zcode_cli, b"cli").expect("cli");
+        let muse_cli = brew_mods.join("@brokkai/muse-acp/bin/muse-acp.cjs");
+        std::fs::create_dir_all(muse_cli.parent().expect("bin")).expect("bin");
+        std::fs::write(&muse_cli, b"cli").expect("muse");
+        let muse_bin = brew.join("bin/muse-acp");
+        symlink_path(&muse_cli, &muse_bin);
+        let node_home = rig.path().join(".local/opt/node-v26.13.1-darwin-arm64");
+        let (node_real, cli_real) = write_npm_pair(&node_home, Platform::Mac);
+        let node_link = brew.join("bin/node");
+        symlink_path(&node_real, &node_link);
+        rig.search_path.push(brew.join("bin"));
+        // T3 config invokes Homebrew's node symlink with Homebrew's zcode-acp-server script.
+        let settings = rig.path().join(".t3/userdata/settings.json");
+        std::fs::create_dir_all(settings.parent().expect("t3")).expect("t3");
+        std::fs::write(
+            &settings,
+            json!({
+                "providerInstances": {
+                    "zcode": {
+                        "enabled": true,
+                        "config": {
+                            "commandPath": node_link.to_string_lossy(),
+                            "commandArgs": [zcode_cli.to_string_lossy(), "server"],
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("settings");
+        rig.system
+            .clone()
+            .lookup(feed(None, Some("0.21.0"), Some("0.84.3")));
+        // 1. Honest npm installs into --prefix (Homebrew).
+        rig.system.clone().answering(|spec| {
+            let argv: Vec<String> = spec
+                .argv
+                .iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            let at = argv.iter().position(|w| w == "--prefix").expect("prefix");
+            let prefix = PathBuf::from(&argv[at + 1]);
+            let (pkg, ver) = argv.last().expect("pkg").rsplit_once('@').expect("ver");
+            write_package(&prefix.join("lib/node_modules"), pkg, ver);
+            Ok(CommandOutput::default())
+        });
+        let row = rig.adapters(Platform::Mac).await;
+        assert_eq!(
+            (row["status"].as_str(), row["updateAttempted"].as_bool()),
+            (Some("updated"), Some(true))
+        );
+        assert_eq!(
+            parts_of(&row),
+            vec![
+                (
+                    "muse-acp".into(),
+                    Some("0.21.0".into()),
+                    Some("0.21.0".into())
+                ),
+                (
+                    "zcode-acp-server".into(),
+                    Some("0.84.2".into()),
+                    Some("0.84.3".into())
+                ),
+            ]
+        );
+        let run = &rig.system.run_strings()[0];
+        assert_eq!(
+            &run[..2],
+            &[
+                node_real.to_string_lossy().into_owned(),
+                cli_real.to_string_lossy().into_owned()
+            ]
+        );
+        let at = run.iter().position(|w| w == "--prefix").expect("prefix");
+        assert_eq!(PathBuf::from(&run[at + 1]), real(&brew));
+        let packages = row["diagnostics"]["owner"]["packages"]
+            .as_array()
+            .expect("packages");
+        let sources: HashSet<(&str, &str)> = packages
+            .iter()
+            .map(|p| {
+                (
+                    p["package"].as_str().expect("pkg"),
+                    p["source"].as_str().expect("src"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sources,
+            HashSet::from([("zcode-acp-server", "t3-config"), ("muse-acp", "path")])
+        );
+        assert!(
+            !row.to_string()
+                .contains(&rig.path().to_string_lossy().into_owned())
+        );
+
+        // 2. Installer writes into standalone node's prefix instead -> wrong_prefix + elsewhere.
+        write_package(&brew_mods, "zcode-acp-server", "0.84.2");
+        let node_mods = node_home.join("lib/node_modules");
+        rig.system.clone().answering(move |_| {
+            write_package(&node_mods, "zcode-acp-server", "0.84.3");
+            Ok(CommandOutput::default())
+        });
+        let row = rig.adapters(Platform::Mac).await;
+        assert_eq!(
+            (
+                row["status"].as_str(),
+                row["messageCode"].as_str(),
+                row["diagnostics"]["cause"].as_str()
+            ),
+            (Some("failed"), Some("wrong_prefix"), Some("wrong_prefix"))
+        );
+        assert_eq!(
+            parts_of(&row)[1],
+            (
+                "zcode-acp-server".into(),
+                Some("0.84.2".into()),
+                Some("0.84.2".into())
+            )
+        );
+        assert!(
+            row["diagnostics"]["owner"]["elsewhere"]
+                .as_array()
+                .expect("elsewhere")
+                .contains(&json!({
+                    "package": "zcode-acp-server",
+                    "prefix": "~/.local/opt/node-v26.13.1-darwin-arm64",
+                    "version": "0.84.3",
+                }))
+        );
+    }
+
+    /// Fix round 2 C5 + R2-4: mixed explicit + bare commands resolve both copies, unresolved bare
+    /// skips with `mixed_ownership`, and bare missing from PATH falls back to default prefix.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mixed_explicit_and_bare_commands_resolve_or_skip_honestly() {
+        // 1. C5: explicit + bare on PATH -> both updated.
+        {
+            let mut rig = Rig::start();
+            let first = write_npm_prefix_adapter(rig.path(), "first", "0.84.2");
+            let second = write_npm_prefix_adapter(rig.path(), "second", "0.84.2");
+            let binary = rig.path().join("second/bin/zcode-acp-server");
+            symlink_path(&second.join("zcode-acp-server/dist/cli.js"), &binary);
+            let settings = rig.path().join(".t3/userdata/settings.json");
+            std::fs::create_dir_all(settings.parent().expect("t3")).expect("t3");
+            std::fs::write(
+                &settings,
+                json!({
+                    "providerInstances": {
+                        "zcode-0": {"enabled": true, "config": {"commandPath": "node", "commandArgs": [first.join("zcode-acp-server/dist/cli.js").to_string_lossy(), "server"]}},
+                        "bare": {"enabled": true, "config": {"commandPath": "zcode-acp-server"}},
+                    }
+                })
+                .to_string(),
+            )
+            .expect("settings");
+            let (node, _) = write_npm_pair(&rig.path().join("node"), Platform::Mac);
+            rig.search_path
+                .push(binary.parent().expect("bin").to_path_buf());
+            rig.search_path
+                .push(node.parent().expect("bin").to_path_buf());
+            rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+            rig.system.clone().answering(|spec| {
+                let argv: Vec<String> = spec
+                    .argv
+                    .iter()
+                    .map(|w| w.to_string_lossy().into_owned())
+                    .collect();
+                let at = argv.iter().position(|w| w == "--prefix").expect("prefix");
+                let prefix = PathBuf::from(&argv[at + 1]);
+                let (pkg, ver) = argv.last().expect("pkg").rsplit_once('@').expect("ver");
+                write_package(&prefix.join("lib/node_modules"), pkg, ver);
+                Ok(CommandOutput::default())
+            });
+            let row = rig.adapters(Platform::Mac).await;
+            assert_eq!(row["status"], "updated");
+            assert_eq!(rig.system.runs().len(), 2);
+            assert_eq!(
+                (
+                    package_version(&first, ACP).as_deref(),
+                    package_version(&second, ACP).as_deref()
+                ),
+                (Some("0.84.3"), Some("0.84.3"))
+            );
+        }
+        // 2. C5: unresolved bare command skips with mixed_ownership without running npm.
+        {
+            let rig = Rig::start();
+            let first = write_npm_prefix_adapter(rig.path(), "first", "0.84.2");
+            let settings = rig.path().join(".t3/userdata/settings.json");
+            std::fs::create_dir_all(settings.parent().expect("t3")).expect("t3");
+            std::fs::write(
+                &settings,
+                json!({
+                    "providerInstances": {
+                        "zcode-0": {"enabled": true, "config": {"commandPath": "node", "commandArgs": [first.join("zcode-acp-server/dist/cli.js").to_string_lossy(), "server"]}},
+                        "bare": {"enabled": true, "config": {"commandPath": "zcode-acp-server"}},
+                    }
+                })
+                .to_string(),
+            )
+            .expect("settings");
+            rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+            let row = rig.adapters(Platform::Mac).await;
+            assert_eq!(
+                (row["status"].as_str(), row["messageCode"].as_str()),
+                (Some("skipped"), Some("mixed_ownership"))
+            );
+            assert!(rig.system.runs().is_empty());
+        }
+        // 3. R2-4: bare command missing from helper PATH falls back to default prefix `~/.local/bin`.
+        {
+            let mut rig = Rig::start();
+            let mods = write_npm_prefix_adapter(rig.path(), ".local", "0.84.2");
+            let binary = rig.path().join(".local/bin/zcode-acp-server");
+            symlink_path(&mods.join("zcode-acp-server/dist/cli.js"), &binary);
+            let settings = rig.path().join(".t3/userdata/settings.json");
+            std::fs::create_dir_all(settings.parent().expect("t3")).expect("t3");
+            std::fs::write(
+                &settings,
+                json!({
+                    "providerInstances": {
+                        "bare": {"enabled": true, "config": {"commandPath": "zcode-acp-server"}}
+                    }
+                })
+                .to_string(),
+            )
+            .expect("settings");
+            let (node, _) = write_npm_pair(&rig.path().join("node"), Platform::Ubuntu);
+            rig.search_path
+                .push(node.parent().expect("bin").to_path_buf());
+            rig.system.clone().lookup(feed(None, None, Some("0.84.3")));
+            rig.system.clone().answering(|spec| {
+                let argv: Vec<String> = spec
+                    .argv
+                    .iter()
+                    .map(|w| w.to_string_lossy().into_owned())
+                    .collect();
+                let at = argv.iter().position(|w| w == "--prefix").expect("prefix");
+                let prefix = PathBuf::from(&argv[at + 1]);
+                let (pkg, ver) = argv.last().expect("pkg").rsplit_once('@').expect("ver");
+                write_package(&prefix.join("lib/node_modules"), pkg, ver);
+                Ok(CommandOutput::default())
+            });
+            let row = rig.adapters(Platform::Ubuntu).await;
+            assert_eq!(row["status"], "updated");
+            assert_eq!(package_version(&mods, ACP).as_deref(), Some("0.84.3"));
+            let run = &rig.system.run_strings()[0];
+            let at = run.iter().position(|w| w == "--prefix").expect("prefix");
+            assert_eq!(PathBuf::from(&run[at + 1]), rig.path().join(".local"));
+        }
+    }
+
+    // ------------------------------------------------------------ Python oracle parity
+
+    /// Direct side-by-side JSON parity against `scripts/app-updates/app_update_zcode.py` across
+    /// Ubuntu, Mac, and Windows fixtures (skips cleanly once TS3 removes the Python file or when
+    /// `python3` is absent on the host).
+    #[tokio::test]
+    async fn python_oracle_parity_across_platforms_and_failure_modes() {
+        let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/app-updates");
+        if !scripts.join("app_update_zcode.py").is_file() {
+            return;
+        }
+        let python_ok = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success());
+        if !python_ok {
+            return;
+        }
+        // Normalize wall-clock phase timings while comparing every semantic field byte-for-byte.
+        let normalize = |mut row: Value| -> Value {
+            if let Some(diag) = row.get_mut("diagnostics").and_then(Value::as_object_mut) {
+                diag.remove("phases");
+            }
+            row
+        };
+        let run_python = |script_body: &str, home: &Path| -> Value {
+            let out = std::process::Command::new("python3")
+                .arg("-c")
+                .arg(script_body)
+                .env("HOME", home)
+                .env("CCS_HOME", home.join(".ccs"))
+                .env("LOCALAPPDATA", home.join("local"))
+                .env("APPDATA", home.join("roaming"))
+                .env("PROCESSOR_ARCHITECTURE", "AMD64")
+                .env("PY_SCRIPTS", &scripts)
+                .env("PY_HOME", home)
+                .output()
+                .expect("run python oracle");
+            assert!(
+                out.status.success(),
+                "python oracle failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            serde_json::from_slice(&out.stdout).expect("oracle json")
+        };
+
+        let oracle_script = r#"
+import contextlib, json, os, pathlib, plistlib, struct, sys, time
+from unittest import mock
+os.environ["PATH"] = ""
+sys.path.insert(0, os.environ["PY_SCRIPTS"])
+import app_update_common as common
+import app_update_processes as processes
+import app_update_zcode as zcode
+
+root = pathlib.Path(os.environ["PY_HOME"]).resolve()
+
+def write_asar(resources, version, name="@zcode/desktop"):
+    resources.mkdir(parents=True, exist_ok=True)
+    pkg = json.dumps({"name": name, "productName": "ZCode", "version": version}).encode()
+    hdr = json.dumps({"files": {"package.json": {"size": len(pkg), "offset": "0"}}}).encode()
+    pad = hdr + b"\0" * ((4 - len(hdr) % 4) % 4)
+    (resources / "app.asar").write_bytes(struct.pack("<4I", 4, 8 + len(pad), 4 + len(pad), len(hdr)) + pad + pkg)
+
+def write_pkg(mods, pkg, ver):
+    (mods / pkg).mkdir(parents=True, exist_ok=True)
+    (mods / pkg / "package.json").write_text(json.dumps({"name": pkg, "version": ver}))
+
+def attach(row, record):
+    return common.with_diagnostics(row, record)
+
+def scope():
+    return common.row_diagnostics()
+
+def fresh(name):
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+out = {}
+
+# 1. ubuntu_current
+h = fresh("c1")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    app = h / ".local/opt/zcode/app"
+    write_asar(app / "resources", "3.14.5")
+    (app / "zcode").touch()
+    zcode.UBUNTU_RUN.clear()
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="x86_64"), scope() as rec:
+        out["ubuntu_current"] = attach(zcode.update_zcode(zcode.detect_zcode("ubuntu"), time.monotonic() + 600), rec)
+
+# 2. ubuntu_in_use
+h = fresh("c2")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    u = h / ".config/systemd/user/t3-acp-update.service"
+    u.parent.mkdir(parents=True, exist_ok=True); u.write_text("[Service]\n")
+    app = h / ".local/opt/zcode/app"
+    write_asar(app / "resources", "3.14.4")
+    (app / "zcode").touch()
+    zcode.UBUNTU_RUN.clear()
+    proc = processes.Process(11, 10, 1, "/usr/bin/node", "11", ["zcode-cli"])
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="x86_64"), \
+            mock.patch.object(zcode, "scan", return_value=[proc]), scope() as rec:
+        out["ubuntu_in_use"] = attach(zcode.update_zcode(zcode.detect_zcode("ubuntu"), time.monotonic() + 600), rec)
+
+# 3. ubuntu_unsupported
+h = fresh("c3")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    app = h / ".local/opt/zcode/app"
+    write_asar(app / "resources", "3.14.4")
+    (app / "zcode").touch()
+    zcode.UBUNTU_RUN.clear()
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="x86_64"), scope() as rec:
+        out["ubuntu_unsupported"] = attach(zcode.update_zcode(zcode.detect_zcode("ubuntu"), time.monotonic() + 600), rec)
+
+# 4. ubuntu_registry_unreadable
+h = fresh("c4")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    u = h / ".config/systemd/user/t3-acp-update.service"
+    u.parent.mkdir(parents=True, exist_ok=True); u.write_text("[Service]\n")
+    app = h / ".local/opt/zcode/app"
+    write_asar(app / "resources", "3.14.4")
+    (app / "zcode").touch()
+    write_pkg(h / ".local/lib/node_modules", "zcode-acp-server", "0.84.2")
+    zcode.UBUNTU_RUN.clear()
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="x86_64"), \
+            mock.patch.object(zcode, "scan", return_value=[]), \
+            mock.patch.object(zcode, "registry_version", return_value=None), scope() as rec:
+        out["ubuntu_registry_unreadable"] = attach(zcode.update_zcode(zcode.detect_zcode("ubuntu"), time.monotonic() + 600), rec)
+
+# 5. ubuntu_shared_updater_unsafe
+h = fresh("c5")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    u = h / ".config/systemd/user/t3-acp-update.service"
+    u.parent.mkdir(parents=True, exist_ok=True); u.write_text("[Service]\n")
+    app = h / ".local/opt/zcode/app"
+    write_asar(app / "resources", "3.14.4")
+    (app / "zcode").touch()
+    write_pkg(h / ".local/lib/node_modules", "@brokkai/muse-acp", "0.22.0")
+    zcode.UBUNTU_RUN.clear()
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="x86_64"), \
+            mock.patch.object(zcode, "scan", return_value=[]), \
+            mock.patch.object(zcode, "registry_version", return_value="0.21.0"), scope() as rec:
+        out["ubuntu_shared_updater_unsafe"] = attach(zcode.update_zcode(zcode.detect_zcode("ubuntu"), time.monotonic() + 600), rec)
+
+# 6. ubuntu_shared_unit_both_rows
+h = fresh("c6")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    u = h / ".config/systemd/user/t3-acp-update.service"
+    u.parent.mkdir(parents=True, exist_ok=True); u.write_text("[Service]\n")
+    app = h / ".local/opt/zcode/app"
+    write_asar(app / "resources", "3.14.4")
+    (app / "zcode").touch()
+    mods = h / ".local/lib/node_modules"
+    write_pkg(mods, "@brokkai/muse-acp", "0.10.0")
+    write_pkg(mods, "zcode-acp-server", "0.65.1")
+    zcode.UBUNTU_RUN.clear()
+    def do_unit(argv, **kw):
+        common.diagnostics().ran(argv, 0, label=kw.get("label"), failed=False)
+        write_asar(app / "resources", "3.14.5")
+        write_pkg(mods, "@brokkai/muse-acp", "0.10.1")
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="x86_64"), \
+            mock.patch.object(zcode, "scan", return_value=[]), \
+            mock.patch.object(zcode, "registry_version", side_effect={"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"}.get), \
+            mock.patch.object(zcode, "command", side_effect=do_unit):
+        with scope() as rec:
+            out["ubuntu_unit_zcode"] = attach(zcode.update_zcode(zcode.detect_zcode("ubuntu"), time.monotonic() + 600), rec)
+        # Re-detect before adapters? In real job adapters is detected before zcode runs.
+    # Re-run cleanly with detection up front:
+    write_asar(app / "resources", "3.14.4")
+    write_pkg(mods, "@brokkai/muse-acp", "0.10.0")
+    zcode.UBUNTU_RUN.clear()
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="x86_64"), \
+            mock.patch.object(zcode, "scan", return_value=[]), \
+            mock.patch.object(zcode, "registry_version", side_effect={"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"}.get), \
+            mock.patch.object(zcode, "command", side_effect=do_unit):
+        zi = zcode.detect_zcode("ubuntu")
+        ai = zcode.detect_adapters("ubuntu")
+        with scope() as rec:
+            out["ubuntu_unit_zcode"] = attach(zcode.update_zcode(zi, time.monotonic() + 600), rec)
+        with scope() as rec:
+            out["ubuntu_unit_adapters"] = attach(zcode.update_adapters(ai, time.monotonic() + 600), rec)
+
+# 7. mac_quit_first
+h = fresh("c7")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    bundle = h / "system/Applications/ZCode.app"
+    (bundle / "Contents").mkdir(parents=True, exist_ok=True)
+    with (bundle / "Contents/Info.plist").open("wb") as s:
+        plistlib.dump({"CFBundleIdentifier": zcode.MAC_ID, "CFBundleShortVersionString": "3.14.4"}, s)
+    main = str(bundle / "Contents/MacOS/ZCode")
+    proc = processes.Process(40, 1, 1, main, "40")
+    with mock.patch.object(zcode, "MAC_PATH", bundle), \
+            mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="arm64"), \
+            mock.patch.object(zcode, "scan", return_value=[proc]), \
+            mock.patch.object(zcode, "mac_arguments", return_value=[main]), scope() as rec:
+        out["mac_quit_first"] = attach(zcode.update_zcode(zcode.detect_zcode("mac"), time.monotonic() + 600), rec)
+
+# 8. windows_partial_in_use
+h = fresh("c8")
+with mock.patch.object(pathlib.Path, "home", return_value=h), \
+        mock.patch.dict(os.environ, {"APPDATA": str(h / "roaming"), "LOCALAPPDATA": str(h / "local")}):
+    mods = h / "roaming/npm/node_modules"
+    write_pkg(mods, "@brokkai/muse-acp", "0.10.0")
+    write_pkg(mods, "zcode-acp-server", "0.65.0")
+    muse_exe = str(mods / "@brokkai/muse-acp/native/x86_64-pc-windows-msvc/muse-acp.exe")
+    running = [processes.Process(80, 4, 0, muse_exe, "80", [muse_exe], session=1)]
+    def fake_npm(argv, **kw):
+        common.diagnostics().ran(argv, 0, label=kw.get("label"), failed=False)
+        write_pkg(mods, "zcode-acp-server", "0.65.1")
+    with mock.patch.object(zcode, "scan", return_value=running), \
+            mock.patch.object(zcode, "registry_version", side_effect={"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"}.get), \
+            mock.patch.object(zcode, "resolve_npm", return_value=(h / "node.exe", h / "npm-cli.js")), \
+            mock.patch.object(zcode, "git_bash", return_value=None), \
+            mock.patch.object(zcode, "command", side_effect=fake_npm), scope() as rec:
+        out["windows_partial_in_use"] = attach(zcode.update_adapters(zcode.detect_adapters("windows"), time.monotonic() + 600), rec)
+
+# 9. adapters_mixed_ownership
+h = fresh("c9")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    mods = h / "first/lib/node_modules"
+    write_pkg(mods, "zcode-acp-server", "0.84.2")
+    cli = mods / "zcode-acp-server/dist/cli.js"
+    cli.parent.mkdir(parents=True, exist_ok=True); cli.write_text("cli")
+    settings = h / ".t3/userdata/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({"providerInstances": {
+        "zcode-0": {"enabled": True, "config": {"commandPath": "node", "commandArgs": [str(cli), "server"]}},
+        "bare": {"enabled": True, "config": {"commandPath": "zcode-acp-server"}},
+    }}))
+    with scope() as rec:
+        out["adapters_mixed_ownership"] = attach(zcode.update_adapters(zcode.detect_adapters("mac"), time.monotonic() + 600), rec)
+
+# 10. mac_in_use
+h = fresh("c10")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    bundle = h / "system/Applications/ZCode.app"
+    (bundle / "Contents").mkdir(parents=True, exist_ok=True)
+    with (bundle / "Contents/Info.plist").open("wb") as s:
+        plistlib.dump({"CFBundleIdentifier": zcode.MAC_ID, "CFBundleShortVersionString": "3.14.4"}, s)
+    proc = processes.Process(50, 1, 1, "/opt/homebrew/bin/node", "50")
+    with mock.patch.object(zcode, "MAC_PATH", bundle), \
+            mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), \
+            mock.patch.object(zcode.platform, "machine", return_value="arm64"), \
+            mock.patch.object(zcode, "scan", return_value=[proc]), \
+            mock.patch.object(zcode, "mac_arguments", return_value=["node", "/opt/homebrew/lib/node_modules/zcode-acp-server/dist/cli.js"]), scope() as rec:
+        out["mac_in_use"] = attach(zcode.update_zcode(zcode.detect_zcode("mac"), time.monotonic() + 600), rec)
+
+# 11. windows_zcode_current
+h = fresh("c11")
+with mock.patch.object(pathlib.Path, "home", return_value=h), \
+        mock.patch.dict(os.environ, {"LOCALAPPDATA": str(h / "local"), "APPDATA": str(h / "roaming")}):
+    exe = h / "local/Programs/ZCode/ZCode.exe"
+    write_asar(exe.parent / "resources", "3.14.5")
+    exe.touch()
+    with mock.patch.object(zcode, "latest_zcode", return_value="3.14.5"), scope() as rec:
+        out["windows_zcode_current"] = attach(zcode.update_zcode(zcode.detect_zcode("windows"), time.monotonic() + 600), rec)
+
+# 12. adapters_pnpm_store_copy
+h = fresh("c12")
+with mock.patch.object(pathlib.Path, "home", return_value=h):
+    mods = h / ".local/share/pnpm/global/5/node_modules"
+    entry = mods / ".pnpm/zcode-acp-server@0.84.2/node_modules"
+    write_pkg(entry, "zcode-acp-server", "0.84.2")
+    cli = entry / "zcode-acp-server/dist/cli.js"
+    cli.parent.mkdir(parents=True, exist_ok=True); cli.write_text("cli")
+    settings = h / ".t3/userdata/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({"providerInstances": {
+        "zcode-0": {"enabled": True, "config": {"commandPath": "node", "commandArgs": [str(cli), "server"]}},
+    }}))
+    with scope() as rec:
+        out["adapters_pnpm_store_copy"] = attach(zcode.update_adapters(zcode.detect_adapters("ubuntu"), time.monotonic() + 600), rec)
+
+print(json.dumps(out))
+"#;
+
+        let py_tmp = tempfile::tempdir().expect("py_tmp");
+        let py = run_python(oracle_script, &real(py_tmp.path()));
+
+        // Now run the exact same 9 scenarios through Rust and compare every semantic JSON field!
+        let mut rust_rows = serde_json::Map::new();
+
+        // 1. ubuntu_current
+        {
+            let rig = Rig::start();
+            ubuntu_app(rig.path(), NEW);
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+            rust_rows.insert("ubuntu_current".into(), rig.zcode(Platform::Ubuntu).await);
+        }
+        // 2. ubuntu_in_use
+        {
+            let rig = Rig::start();
+            unit(rig.path());
+            ubuntu_app(rig.path(), OLD);
+            *rig.table.lock().expect("table") =
+                vec![process(11, 10, "/usr/bin/node", &["zcode-cli"])];
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+            rust_rows.insert("ubuntu_in_use".into(), rig.zcode(Platform::Ubuntu).await);
+        }
+        // 3. ubuntu_unsupported
+        {
+            let rig = Rig::start();
+            ubuntu_app(rig.path(), OLD);
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+            rust_rows.insert(
+                "ubuntu_unsupported".into(),
+                rig.zcode(Platform::Ubuntu).await,
+            );
+        }
+        // 4. ubuntu_registry_unreadable
+        {
+            let rig = Rig::start();
+            unit(rig.path());
+            ubuntu_app(rig.path(), OLD);
+            write_package(
+                &modules(rig.path(), Platform::Ubuntu),
+                "zcode-acp-server",
+                "0.84.2",
+            );
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "linux-x64")])), None, None));
+            rust_rows.insert(
+                "ubuntu_registry_unreadable".into(),
+                rig.zcode(Platform::Ubuntu).await,
+            );
+        }
+        // 5. ubuntu_shared_updater_unsafe
+        {
+            let rig = Rig::start();
+            unit(rig.path());
+            ubuntu_app(rig.path(), OLD);
+            write_package(
+                &modules(rig.path(), Platform::Ubuntu),
+                "@brokkai/muse-acp",
+                "0.22.0",
+            );
+            rig.system.clone().lookup(feed(
+                Some(page(&[(NEW, "linux-x64")])),
+                Some("0.21.0"),
+                None,
+            ));
+            rust_rows.insert(
+                "ubuntu_shared_updater_unsafe".into(),
+                rig.zcode(Platform::Ubuntu).await,
+            );
+        }
+        // 6. ubuntu_shared_unit_both_rows (detect both before zcode runs, like run_apply)
+        {
+            let rig = Rig::start();
+            unit(rig.path());
+            let app = ubuntu_app(rig.path(), OLD);
+            let mods = modules(rig.path(), Platform::Ubuntu);
+            write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+            write_package(&mods, "zcode-acp-server", "0.65.1");
+            rig.system.clone().lookup(feed(
+                Some(page(&[(NEW, "linux-x64")])),
+                Some("0.10.1"),
+                Some("0.65.1"),
+            ));
+            let app_for_run = app.clone();
+            let mods_for_run = mods.clone();
+            rig.system.clone().answering(move |_| {
+                write_asar(&app_for_run.join("resources"), NEW, "@zcode/desktop", 0);
+                write_package(&mods_for_run, "@brokkai/muse-acp", "0.10.1");
+                Ok(CommandOutput::default())
+            });
+            let shared = Arc::new(Shared::default());
+            let zcx = rig.cx_shared(Platform::Ubuntu, 600, shared.clone());
+            let acx = rig.cx_shared(Platform::Ubuntu, 600, shared);
+            let zi = detect_zcode(&zcx).expect("zcode");
+            let layout = discover_owners(&acx.host, &Lookups::default());
+            let zrow = Rig::finish(
+                &zcx,
+                zcode_update(&zcx, &zi, &Lookups::default(), &*rig.services).await,
+            );
+            let arow = Rig::finish(
+                &acx,
+                adapters_update_layout(&acx, &Lookups::default(), &layout).await,
+            );
+            rust_rows.insert("ubuntu_unit_zcode".into(), zrow);
+            rust_rows.insert("ubuntu_unit_adapters".into(), arow);
+        }
+        // 7. mac_quit_first
+        {
+            let mut rig = Rig::start();
+            rig.arch = "aarch64";
+            let bundle = rig
+                .host(Platform::Mac)
+                .system("/Applications")
+                .join(MAC_NAME);
+            mac_bundle(&bundle, OLD, MAC_ID);
+            let main = bundle
+                .join("Contents/MacOS/ZCode")
+                .to_string_lossy()
+                .into_owned();
+            *rig.table.lock().expect("table") = vec![process(40, 1, &main, &[])];
+            *rig.services.arguments.lock().expect("args") = vec![(40, vec![main])];
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "macos-arm64")])), None, None));
+            let cx = rig.cx(Platform::Mac, 600);
+            let zi = detect_zcode(&cx).expect("mac zcode");
+            let row = Rig::finish(
+                &cx,
+                zcode_update(&cx, &zi, &Lookups::default(), &*rig.services).await,
+            );
+            rust_rows.insert("mac_quit_first".into(), row);
+        }
+        // 8. windows_partial_in_use
+        {
+            let mut rig = Rig::start();
+            let mods = modules(rig.path(), Platform::Windows);
+            write_package(&mods, "@brokkai/muse-acp", "0.10.0");
+            write_package(&mods, "zcode-acp-server", "0.65.0");
+            let (node, _) =
+                write_npm_pair(&rig.path().join("Program Files/nodejs"), Platform::Windows);
+            rig.search_path
+                .push(node.parent().expect("nodejs").to_path_buf());
+            *rig.table.lock().expect("table") = vec![muse_running_under(rig.path())];
+            rig.system
+                .clone()
+                .lookup(feed(None, Some("0.10.1"), Some("0.65.1")));
+            let mods_for_run = mods.clone();
+            rig.system.clone().answering(move |_| {
+                write_package(&mods_for_run, "zcode-acp-server", "0.65.1");
+                Ok(CommandOutput::default())
+            });
+            let cx = rig.cx(Platform::Windows, 600);
+            let row = Rig::finish(&cx, adapters_update(&cx, &Lookups::default()).await);
+            rust_rows.insert("windows_partial_in_use".into(), row);
+        }
+        // 9. adapters_mixed_ownership
+        {
+            let rig = Rig::start();
+            let first = write_npm_prefix_adapter(rig.path(), "first", "0.84.2");
+            let settings = rig.path().join(".t3/userdata/settings.json");
+            std::fs::create_dir_all(settings.parent().expect("t3")).expect("t3");
+            std::fs::write(
+                &settings,
+                json!({
+                    "providerInstances": {
+                        "zcode-0": {"enabled": true, "config": {"commandPath": "node", "commandArgs": [first.join("zcode-acp-server/dist/cli.js").to_string_lossy(), "server"]}},
+                        "bare": {"enabled": true, "config": {"commandPath": "zcode-acp-server"}},
+                    }
+                })
+                .to_string(),
+            )
+            .expect("settings");
+            let cx = rig.cx(Platform::Mac, 600);
+            let row = Rig::finish(&cx, adapters_update(&cx, &Lookups::default()).await);
+            // Python's Mac default owner prefix is `/opt/homebrew`, while Rig mounts it at `<root>/system/opt/homebrew`.
+            // Scrub the test system_root prefix so the JSON comparison tests everything else verbatim.
+            let mut normalized = row;
+            if let Some(pkgs) = normalized["diagnostics"]["owner"]["packages"].as_array_mut() {
+                for pkg in pkgs {
+                    if pkg["prefix"]
+                        .as_str()
+                        .is_some_and(|p| p.ends_with("/system/opt/homebrew"))
+                    {
+                        pkg["prefix"] = json!("/opt/homebrew");
+                    }
+                }
+            }
+            rust_rows.insert("adapters_mixed_ownership".into(), normalized);
+        }
+        // 10. mac_in_use
+        {
+            let mut rig = Rig::start();
+            rig.arch = "aarch64";
+            let bundle = rig
+                .host(Platform::Mac)
+                .system("/Applications")
+                .join(MAC_NAME);
+            mac_bundle(&bundle, OLD, MAC_ID);
+            *rig.table.lock().expect("table") = vec![process(50, 1, "/opt/homebrew/bin/node", &[])];
+            *rig.services.arguments.lock().expect("args") = vec![(
+                50,
+                vec![
+                    "node".into(),
+                    "/opt/homebrew/lib/node_modules/zcode-acp-server/dist/cli.js".into(),
+                ],
+            )];
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "macos-arm64")])), None, None));
+            let cx = rig.cx(Platform::Mac, 600);
+            let zi = detect_zcode(&cx).expect("mac zcode");
+            let row = Rig::finish(
+                &cx,
+                zcode_update(&cx, &zi, &Lookups::default(), &*rig.services).await,
+            );
+            rust_rows.insert("mac_in_use".into(), row);
+        }
+        // 11. windows_zcode_current
+        {
+            let rig = Rig::start();
+            windows_app(rig.path(), NEW);
+            rig.system
+                .clone()
+                .lookup(feed(Some(page(&[(NEW, "windows-x64")])), None, None));
+            let cx = rig.cx(Platform::Windows, 600);
+            let zi = detect_zcode(&cx).expect("windows zcode");
+            let row = Rig::finish(
+                &cx,
+                zcode_update(&cx, &zi, &Lookups::default(), &*rig.services).await,
+            );
+            rust_rows.insert("windows_zcode_current".into(), row);
+        }
+        // 12. adapters_pnpm_store_copy
+        {
+            let rig = Rig::start();
+            let mods = rig.path().join(".local/share/pnpm/global/5/node_modules");
+            let entry = mods.join(".pnpm/zcode-acp-server@0.84.2/node_modules");
+            write_package(&entry, "zcode-acp-server", "0.84.2");
+            let cli = entry.join("zcode-acp-server/dist/cli.js");
+            std::fs::create_dir_all(cli.parent().expect("dist")).expect("dist");
+            std::fs::write(&cli, b"cli").expect("cli");
+            write_t3_consumers(rig.path(), &[cli]);
+            let cx = rig.cx(Platform::Ubuntu, 600);
+            let row = Rig::finish(&cx, adapters_update(&cx, &Lookups::default()).await);
+            rust_rows.insert("adapters_pnpm_store_copy".into(), row);
+        }
+
+        let py_obj = py.as_object().expect("py object");
+        assert_eq!(py_obj.len(), rust_rows.len(), "scenario count");
+        for (name, rust_row) in rust_rows {
+            let py_row = py_obj.get(&name).expect("py scenario").clone();
+            assert_eq!(
+                normalize(rust_row),
+                normalize(py_row),
+                "Python oracle parity mismatch on scenario `{name}`"
             );
         }
     }
