@@ -330,6 +330,250 @@ impl AntigravityMaintenanceLease {
     pub fn writer(&self) -> &LegacyLease {
         &self.lease
     }
+
+    /// Whether `.transaction-lock` exists and is held by a live (non-stale) process.
+    /// Returns `Ok(false)` when absent or provably stale, `Ok(true)` when live, or `Err`
+    /// if the lock entry is unsafe (e.g. symlink or non-directory).
+    pub fn lock_held_live(
+        root: &Path,
+        now_ms: u64,
+        stale_after_ms: u64,
+        mut is_stale: impl FnMut(&[u8], u64) -> Option<bool>,
+    ) -> io::Result<bool> {
+        let marker = root.join("antigravity-profiles").join(".transaction-lock");
+        let meta = match fs::symlink_metadata(&marker) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err),
+        };
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(refused());
+        }
+        Ok(stale_lock_reason(&marker, now_ms, stale_after_ms, &mut is_stale).is_none())
+    }
+
+    /// Acquire `.transaction-lock`, reclaiming a provably abandoned lock via a serialized
+    /// `.transaction-lock.takeover` claim folder (`registry.ts:acquireLock`).
+    /// Returns `(lease, Some(reason))` when a stale lock was recovered.
+    pub fn claim_or_recover(
+        root: &Path,
+        holder_record: &[u8],
+        now_ms: u64,
+        stale_after_ms: u64,
+        mut is_stale: impl FnMut(&[u8], u64) -> Option<bool>,
+    ) -> io::Result<(Self, Option<String>)> {
+        match Self::claim(root, holder_record) {
+            Ok(lease) => return Ok((lease, None)),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+            Err(err) => return Err(err),
+        }
+        let parent = root.join("antigravity-profiles");
+        private_profile_directory(&parent)?;
+        let marker = parent.join(".transaction-lock");
+        let judged = match open_leaf(&marker, true) {
+            Ok(dir) => dir,
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "transaction lock held",
+                ));
+            }
+        };
+        let Some(reason) = stale_lock_reason(&marker, now_ms, stale_after_ms, &mut is_stale) else {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "transaction lock held",
+            ));
+        };
+        let claim_path = parent.join(".transaction-lock.takeover");
+        // Acquire takeover claim folder (reclaiming an abandoned claim older than stale_after_ms).
+        let claim_stage =
+            stage_lock_folder(&parent, ".transaction-lock.takeover.new-", holder_record)?;
+        let mut claim_placed = place_lock_folder(claim_stage.0.path(), &claim_path);
+        if !claim_placed
+            && stale_lock_reason(&claim_path, now_ms, stale_after_ms, &mut is_stale).is_some()
+            && let Ok(claim_judged) = open_leaf(&claim_path, true)
+            && let Some(aside) = move_lock_aside(
+                &parent,
+                &claim_path,
+                &claim_judged,
+                ".transaction-lock.takeover.stale-",
+            )
+        {
+            discard_stale_lock_dir(&aside);
+            claim_placed = place_lock_folder(claim_stage.0.path(), &claim_path);
+        }
+        if !claim_placed {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "transaction lock held",
+            ));
+        }
+        let claim_dir = open_leaf(&claim_path, true).ok();
+        let claim_holder = claim_stage.1;
+        let _claim_guard = ClaimDropGuard {
+            path: claim_path,
+            dir: claim_dir,
+            holder: claim_holder,
+        };
+        // Re-verify the judged lock identity and staleness under the takeover claim.
+        if !matches_named(&judged, &marker, true).unwrap_or(false)
+            || stale_lock_reason(&marker, now_ms, stale_after_ms, &mut is_stale).is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "transaction lock held",
+            ));
+        }
+        let Some(aside) = move_lock_aside(&parent, &marker, &judged, ".transaction-lock.stale-")
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "transaction lock held",
+            ));
+        };
+        let lease_result = Self::claim(root, holder_record);
+        discard_stale_lock_dir(&aside);
+        let lease = lease_result?;
+        Ok((lease, Some(reason)))
+    }
+}
+
+struct ClaimDropGuard {
+    path: PathBuf,
+    dir: Option<File>,
+    holder: File,
+}
+
+impl Drop for ClaimDropGuard {
+    fn drop(&mut self) {
+        let Some(dir) = &self.dir else {
+            return;
+        };
+        let file = self.path.join("holder.json");
+        if matches_named(dir, &self.path, true).unwrap_or(false)
+            && matches_named(&self.holder, &file, false).unwrap_or(false)
+        {
+            #[cfg(unix)]
+            let _ = rustix::fs::unlinkat(dir, "holder.json", rustix::fs::AtFlags::empty());
+            #[cfg(windows)]
+            let _ = fs::remove_file(&file);
+            if matches_named(dir, &self.path, true).unwrap_or(false) {
+                let _ = fs::remove_dir(&self.path);
+            }
+        }
+    }
+}
+
+fn stage_lock_folder(
+    parent: &Path,
+    prefix: &str,
+    holder_record: &[u8],
+) -> io::Result<(tempfile::TempDir, File)> {
+    let stage = tempfile::Builder::new().prefix(prefix).tempdir_in(parent)?;
+    #[cfg(unix)]
+    fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o700))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut holder = options.open(stage.path().join("holder.json"))?;
+    set_private(&holder).map_err(|_| refused())?;
+    holder.write_all(holder_record)?;
+    holder.sync_all()?;
+    Ok((stage, holder))
+}
+
+fn place_lock_folder(staged: &Path, target: &Path) -> bool {
+    if fs::symlink_metadata(target).is_ok() {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    let res = rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        staged,
+        rustix::fs::CWD,
+        target,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .is_ok();
+    #[cfg(not(target_os = "linux"))]
+    let res = fs::rename(staged, target).is_ok();
+    res
+}
+
+fn stale_lock_reason(
+    lock: &Path,
+    now_ms: u64,
+    stale_after_ms: u64,
+    is_stale: &mut impl FnMut(&[u8], u64) -> Option<bool>,
+) -> Option<String> {
+    let holder = lock.join("holder.json");
+    if let Ok(meta) = fs::symlink_metadata(&holder)
+        && meta.is_file()
+        && !meta.file_type().is_symlink()
+        && meta.len() <= 512
+        && mode_is(&meta, 0o077, 0)
+        && !crate::path::foreign(&meta)
+        && let Ok(bytes) = read_bounded(&holder, 512)
+    {
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| u64::try_from(d.as_millis()).ok())
+            .unwrap_or(0);
+        if let Some(stale) = is_stale(&bytes, mtime_ms) {
+            return stale.then(|| "stale holder".to_owned());
+        }
+    }
+    let meta = fs::symlink_metadata(lock).ok()?;
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| u64::try_from(d.as_millis()).ok())?;
+    (now_ms.saturating_sub(mtime_ms) > stale_after_ms)
+        .then(|| format!("lock is older than {stale_after_ms}ms without a holder record"))
+}
+
+fn move_lock_aside(parent: &Path, lock: &Path, judged: &File, prefix: &str) -> Option<PathBuf> {
+    if !matches_named(judged, lock, true).unwrap_or(false) {
+        return None;
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let aside = parent.join(format!("{prefix}{}-{nonce}", std::process::id()));
+    #[cfg(target_os = "linux")]
+    let moved = rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        lock,
+        rustix::fs::CWD,
+        &aside,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .is_ok();
+    #[cfg(not(target_os = "linux"))]
+    let moved = fs::rename(lock, &aside).is_ok();
+    moved.then_some(aside)
+}
+
+fn discard_stale_lock_dir(aside: &Path) {
+    let Ok(entries) = fs::read_dir(aside) else {
+        return;
+    };
+    let names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    if names.len() == 1 && names[0] == "holder.json" {
+        let _ = fs::remove_file(aside.join("holder.json"));
+    }
+    if fs::read_dir(aside).is_ok_and(|mut it| it.next().is_none()) {
+        let _ = fs::remove_dir(aside);
+    }
 }
 
 impl Drop for AntigravityMaintenanceLease {

@@ -3,6 +3,7 @@
 //! verb that drives one CLI session per agent process. The install commit stays with the
 //! TypeScript front door until M5.
 
+pub mod antigravity_driver;
 pub mod jobs;
 pub mod journal;
 pub mod parser;

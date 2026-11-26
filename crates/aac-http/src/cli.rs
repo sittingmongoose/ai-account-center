@@ -7,7 +7,8 @@ use std::{
 };
 
 mod admin;
-pub(crate) mod antigravity;
+/// Native `ai-account-center antigravity` CLI subcommands.
+pub mod antigravity;
 mod bar;
 mod codex_auth;
 mod config_write;
@@ -251,40 +252,6 @@ fn retired(command: &str) -> i32 {
     }
     eprintln!("    Use ai-account-center dashboard, codex-auth, bar, or --help.");
     1
-}
-
-pub(crate) fn antigravity_signin(args: &[String], ccs: &Path) -> Result<i32, String> {
-    let script = env::var_os("AAC_TS_CLI")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let exe = crate::identity::executable_path_for_assets().ok()?;
-            let directory = exe.parent()?;
-            [
-                "../antigravity/terminal-signin-entry.js",
-                "../../dist/antigravity/terminal-signin-entry.js",
-            ]
-            .into_iter()
-            .map(|relative| directory.join(relative))
-            .find(|candidate| candidate.is_file())
-        })
-        .ok_or("The packaged Antigravity sign-in worker is missing.")?;
-    let mut command = Command::new("node");
-    command.arg(script).args(args).env("CCS_DIR", ccs);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        Err(format!(
-            "Cannot start the Antigravity sign-in worker: {}",
-            command.exec()
-        ))
-    }
-    #[cfg(not(unix))]
-    {
-        command
-            .status()
-            .map(|status| status.code().unwrap_or(1))
-            .map_err(|error| format!("Cannot start the Antigravity sign-in worker: {error}"))
-    }
 }
 
 struct Listen {

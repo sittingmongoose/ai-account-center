@@ -1,5 +1,6 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
 pub mod allocator;
+mod antigravity;
 mod apps;
 mod claude_host;
 mod cursor_open;
@@ -15,7 +16,8 @@ mod proof;
 mod quota;
 mod scan;
 mod signin;
-mod signin_session;
+/// Interactive sign-in session state machine, PTY driver, journal and verb.
+pub mod signin_session;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{
     Control, Event, Handshake, MAX_FRAME_BYTES, MAX_SCAN_FRAME_BYTES, PROTOCOL_VERSION, Request,
@@ -500,6 +502,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
 
     if request.verb == "apps" {
         return apps::run_inventory(&request.args).await;
+    }
+    if request.verb == "antigravity" {
+        return antigravity::run(&request.args).await;
     }
     if request.verb == "inventory" {
         return inventory::run(&request.args).await;

@@ -18,6 +18,7 @@ pub mod antigravity_probes;
 pub mod antigravity_quota;
 pub mod antigravity_renewal;
 pub mod antigravity_runtime;
+pub mod antigravity_worker;
 pub mod app_update_routes;
 pub mod app_updates;
 mod claude_account_store;

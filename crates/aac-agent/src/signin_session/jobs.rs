@@ -476,6 +476,7 @@ mod tests {
                 args: vec![],
                 env: Default::default(),
                 pty: true,
+                antigravity_driver: None,
             },
         }
     }

@@ -1098,14 +1098,29 @@ for (const args of ANTIGRAVITY_PARITY) {
   fs.rmSync(homeB, { recursive: true, force: true });
 }
 {
-  // signin delegates to the labelled TS CLI while prepare/complete stay in TS (M5).
+  // signin runs natively in Rust (P1): matches TS validation & non-interactive refusal, and ignores AAC_TS_CLI.
+  for (const args of [
+    ['antigravity', 'signin', 'Bad Name'],
+    ['antigravity', 'signin', 'work'],
+  ]) {
+    const homeA = freshHome();
+    const homeB = freshHome();
+    equalRuns(
+      `antigravity ${args.slice(1).join(' ')}`,
+      runCli('ts', homeA, args),
+      runCli('rust', homeB, args),
+      [homeA, homeB]
+    );
+    fs.rmSync(homeA, { recursive: true, force: true });
+    fs.rmSync(homeB, { recursive: true, force: true });
+  }
   const home = freshHome();
   const fake = path.join(home, 'fake-cli.cjs');
-  fs.writeFileSync(fake, "console.log(process.argv.slice(2).join(' '));\n");
+  fs.writeFileSync(fake, "console.log('SHOULD_NOT_RUN');\n");
   const rust = runCli('rust', home, ['antigravity', 'signin', 'work'], { AAC_TS_CLI: fake });
   check(
-    'antigravity signin delegates',
-    rust.status === 0 && rust.stdout === 'antigravity signin work\n',
+    'antigravity signin ignores AAC_TS_CLI',
+    rust.status === 1 && !rust.stdout.includes('SHOULD_NOT_RUN'),
     JSON.stringify(rust)
   );
   fs.rmSync(home, { recursive: true, force: true });

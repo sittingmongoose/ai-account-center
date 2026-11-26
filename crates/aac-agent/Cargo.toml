@@ -35,7 +35,7 @@ url = "2.5"
 security-framework = "3"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["signal", "process"] }
+nix = { version = "0.31", features = ["signal", "process", "term", "poll"] }
 
 [dev-dependencies]
 aac-config.workspace = true

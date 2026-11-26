@@ -53,31 +53,51 @@ fn host_key(ccs: &Path) -> PathBuf {
     ccs.canonicalize().unwrap_or_else(|_| ccs.to_path_buf())
 }
 
+enum Backend {
+    Native { home: PathBuf },
+    Script { quota: Worker, native: Worker },
+}
+
 /// The Antigravity profile host for one CCS scope.
 pub struct Host {
     ccs: PathBuf,
     home: PathBuf,
-    quota: Worker,
-    native: Worker,
+    backend: Backend,
     state: Mutex<State>,
 }
 
 impl Host {
-    /// A host over explicit trusted paths. Construction reads no credential and spawns nothing.
+    /// A host over explicit trusted script paths (used by fixture tests and `AAC_ANTIGRAVITY_SCRIPTS`).
+    /// Construction reads no credential and spawns nothing.
     pub(crate) fn new(paths: &Paths<'_>) -> Option<Self> {
         let quota = Worker::new(paths.python, paths.quota, paths.collectors)?;
         let native = Worker::new(paths.python, paths.native, paths.collectors)?;
         Some(Self {
             ccs: paths.ccs.to_path_buf(),
             home: paths.home.to_path_buf(),
-            quota,
-            native,
+            backend: Backend::Script { quota, native },
             state: Mutex::new(State {
                 identity: None,
                 service: QuotaService::default(),
                 cooldowns: Cooldowns::default(),
             }),
         })
+    }
+
+    /// Native Rust host for one CCS scope and live user home (zero Python workers).
+    pub fn native(ccs: &Path, home: &Path) -> Self {
+        Self {
+            ccs: ccs.to_path_buf(),
+            home: home.to_path_buf(),
+            backend: Backend::Native {
+                home: home.to_path_buf(),
+            },
+            state: Mutex::new(State {
+                identity: None,
+                service: QuotaService::default(),
+                cooldowns: Cooldowns::default(),
+            }),
+        }
     }
 
     /// The long-lived host for this CCS root: Accounts and Profiles share one quota owner.
@@ -116,28 +136,30 @@ impl Host {
             .remove(&key);
     }
 
-    /// The service's own construction: `$HOME`, `/usr/bin/python3` and the packaged scripts.
+    /// The service's own construction: native Rust by default (no Python workers or scripts
+    /// directory required). If `AAC_ANTIGRAVITY_SCRIPTS` is explicitly set (test override),
+    /// delegates to those explicit script paths.
     pub fn from_root(ccs: &Path) -> Option<Self> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))?;
-        let scripts = match std::env::var_os("AAC_ANTIGRAVITY_SCRIPTS") {
-            Some(explicit) => PathBuf::from(explicit),
-            None => crate::identity::package_scripts(
-                &crate::identity::executable_path_for_assets().ok()?,
-            )?,
-        };
-        let python = std::env::var_os("AAC_ANTIGRAVITY_PYTHON")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/usr/bin/python3"));
-        Self::new(&Paths {
-            ccs,
-            home: &home,
-            python: &python,
-            quota: &scripts.join("antigravity/quota_worker.py"),
-            native: &scripts.join("antigravity/native_credential_worker.py"),
-            collectors: &scripts.join("account-usage"),
-        })
+        if let Some(explicit) =
+            std::env::var_os("AAC_ANTIGRAVITY_SCRIPTS").filter(|v| !v.is_empty())
+        {
+            let scripts = PathBuf::from(explicit);
+            let python = std::env::var_os("AAC_ANTIGRAVITY_PYTHON")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/usr/bin/python3"));
+            return Self::new(&Paths {
+                ccs,
+                home: &home,
+                python: &python,
+                quota: &scripts.join("antigravity/quota_worker.py"),
+                native: &scripts.join("antigravity/native_credential_worker.py"),
+                collectors: &scripts.join("account-usage"),
+            });
+        }
+        Some(Self::native(ccs, &home))
     }
 
     /// `readInventoryIdentity`: the live login's own identity, cached by the four stored paths'
@@ -169,40 +191,84 @@ impl Host {
 
     /// Read and verify the native credential for a lifecycle operation without cache reuse.
     pub(crate) fn read_native_credential(&self) -> Option<(Vec<u8>, String)> {
-        let read = self.native.invoke_with(
-            &["--home", self.home.to_str()?],
-            &json!({"operation": "read"}),
-        )?;
-        if read.get("format").and_then(Value::as_str) != Some("antigravity-consumer-json") {
-            return None;
+        match &self.backend {
+            Backend::Native { home } => {
+                let snap = aac_files::antigravity_store::UbuntuFileStore::new(home)
+                    .read_current()
+                    .ok()?;
+                let raw = snap.credential.raw().to_vec();
+                let rev = snap.credential.revision().to_owned();
+                if raw.is_empty() || raw.len() > 16_384 || sha256_hex(&raw) != rev {
+                    return None;
+                }
+                Some((raw, rev))
+            }
+            Backend::Script { native, .. } => {
+                let read = native.invoke_with(
+                    &["--home", self.home.to_str()?],
+                    &json!({"operation": "read"}),
+                )?;
+                if read.get("format").and_then(Value::as_str) != Some("antigravity-consumer-json") {
+                    return None;
+                }
+                let revision = read.get("revision").and_then(Value::as_str)?;
+                let credential =
+                    base64_decode(read.get("credentialBase64").and_then(Value::as_str)?)?;
+                if credential.is_empty()
+                    || credential.len() > 16_384
+                    || sha256_hex(&credential) != revision
+                {
+                    return None;
+                }
+                Some((credential, revision.to_owned()))
+            }
         }
-        let revision = read.get("revision").and_then(Value::as_str)?;
-        let credential = base64_decode(read.get("credentialBase64").and_then(Value::as_str)?)?;
-        if credential.is_empty() || credential.len() > 16_384 || sha256_hex(&credential) != revision
-        {
-            return None;
-        }
-        Some((credential, revision.to_owned()))
     }
 
     pub(crate) fn validate_credential(&self, credential: &[u8]) -> Option<LiveIdentity> {
-        self.quota.validate_credential(credential)
+        match &self.backend {
+            Backend::Native { home } => {
+                crate::antigravity_worker::validate_credential_live(home, credential)
+            }
+            Backend::Script { quota, .. } => quota.validate_credential(credential),
+        }
     }
 
     pub(crate) fn install_native_credential(&self, credential: &[u8], expected: &str) -> bool {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        self.home
-            .to_str()
-            .and_then(|home| {
-                self.native.invoke_with(
-                    &["--home", home],
-                    &json!({"operation":"install","credentialBase64":STANDARD.encode(credential),
-                "expectedFingerprint":expected}),
-                )
-            })
-            .is_some_and(|receipt| {
-                receipt["installedFingerprint"].as_str() == Some(&sha256_hex(credential))
-            })
+        match &self.backend {
+            Backend::Native { home } => {
+                let store = aac_files::antigravity_store::UbuntuFileStore::new(home);
+                let Ok(before) = store.read_current() else {
+                    return false;
+                };
+                if before.credential.revision() != expected {
+                    return false;
+                }
+                let Ok(replacement) =
+                    aac_files::antigravity_store::PrivateCredential::new(credential.to_vec())
+                else {
+                    return false;
+                };
+                store
+                    .install(&replacement, &before)
+                    .is_ok_and(|r| r.installed.credential.revision() == sha256_hex(credential))
+            }
+            Backend::Script { native, .. } => {
+                use base64::{Engine, engine::general_purpose::STANDARD};
+                self.home
+                    .to_str()
+                    .and_then(|home| {
+                        native.invoke_with(
+                            &["--home", home],
+                            &json!({"operation":"install","credentialBase64":STANDARD.encode(credential),
+                        "expectedFingerprint":expected}),
+                        )
+                    })
+                    .is_some_and(|receipt| {
+                        receipt["installedFingerprint"].as_str() == Some(&sha256_hex(credential))
+                    })
+            }
+        }
     }
 
     /// The public inventory for this CCS scope.
@@ -233,7 +299,7 @@ impl Host {
         let live = self.live_identity(now);
         let mut guard = self.state.lock().ok()?;
         let guard = &mut *guard;
-        let worker = &self.quota;
+        let backend = &self.backend;
         let registry = &state;
         let mut collect = |profile_id: &str| -> Option<Value> {
             let record = registry.profile(profile_id)?;
@@ -247,7 +313,12 @@ impl Host {
                 credential_format: "antigravity-consumer-json",
                 credential_bytes: &bytes,
             };
-            worker.collect_quota(&request)
+            match backend {
+                Backend::Native { home } => {
+                    crate::antigravity_worker::collect_quota_live(home, &request)
+                }
+                Backend::Script { quota, .. } => quota.collect_quota(&request),
+            }
         };
         let read = crate::antigravity_quota::Read {
             ccs: &self.ccs,

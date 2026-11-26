@@ -47,6 +47,7 @@ pub(crate) fn resolve_asset_path(path: PathBuf) -> PathBuf {
 }
 
 /// The packaged scripts sit beside `dist`, above the installed native binaries.
+#[allow(dead_code)]
 pub(crate) fn package_scripts(executable: &Path) -> Option<PathBuf> {
     Some(executable.parent()?.parent()?.parent()?.join("scripts"))
 }
