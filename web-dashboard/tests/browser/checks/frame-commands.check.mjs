@@ -7,9 +7,10 @@
 
 const MENU = '.chrome .select-btn[aria-label="Account"]';
 
-async function open(t, tab) {
+async function open(t, tab, beforeNavigate) {
 	await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 	await t.app.signIn();
+	await beforeNavigate?.();
 	await t.goto(`/app/${tab}?e2e`, { settleMs: 300 });
 	await t.until(`${tab}: the frame is drawn, signed in`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-card') && !document.querySelector('.boot-splash'), null, { timeout: 30000, hard: true });
 }
@@ -46,24 +47,24 @@ const frameState = (t) => t.page.evaluate(() => ({
 
 export const tests = {
 	async 'frame: a Scoreboard read the server refuses brings the sign-in'(t) {
-		await open(t, 'scoreboard');
-		// Its first read is done (the header shows its time): a Refresh during a read is not a second read.
-		await t.until('the Scoreboard has read once', () => !!document.querySelector('.chrome .status-line b')?.textContent, null, { timeout: 30000, hard: true });
-		// Hold the next read before it reaches the server, then let the real server refuse it.
-		// A poll may claim this read before Refresh does.
 		const scoreboard = (url) => new URL(url).pathname === '/api/scoreboard';
 		let releaseRead;
 		const sessionEnded = new Promise((resolve) => { releaseRead = resolve; });
-		await t.page.route(scoreboard, async (route) => {
-			await sessionEnded;
-			await route.continue();
-		});
+		let firstRead = true;
 		try {
+			await open(t, 'scoreboard', () => t.page.route(scoreboard, async (route) => {
+				// Let the first read populate the page. Hold every subsequent read until after logout.
+				if (!firstRead) await sessionEnded;
+				firstRead = false;
+				await route.continue();
+			}));
+			await t.until('the Scoreboard has read once', () => !!document.querySelector('.chrome .status-line b')?.textContent, null, { timeout: 30000, hard: true });
+			// A poll may have started this read already. In either case the real server must refuse it.
+			await t.page.click('.chrome button[aria-label="Refresh"]');
 			await endOnServer(t);
-			await Promise.all([
-				t.page.waitForResponse((r) => scoreboard(r.url()) && r.status() === 401, { timeout: 15000 }),
-				t.page.click('.chrome button[aria-label="Refresh"]').then(releaseRead),
-			]);
+			const refused = t.page.waitForResponse((r) => scoreboard(r.url()) && r.status() === 401, { timeout: 15000 });
+			releaseRead();
+			await refused;
 		} finally {
 			releaseRead();
 			await t.page.unroute(scoreboard);

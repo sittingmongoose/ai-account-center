@@ -18,6 +18,8 @@ async function statusFixture(t, name) {
   const { AgentReportsReader } = require(path.join(dist, 'agent-reports-reader.js'));
   const { buildStatusView } = require(path.join(dist, 'status-view.js'));
   const { MACHINE_IDS } = require(path.resolve(dist, '../services/dashboard-hosts.js'));
+  const { secretFilter } = require(path.resolve(dist, '../../shared/secret-policy.js'));
+  assert.ok(secretFilter(), 'The Status fixture needs the native secret filter. Run bun run status:build.');
   const share = path.join(t.state.home, name);
   const now = Date.now();
   const reader = new AgentReportsReader({ root: () => share, now: () => now });
