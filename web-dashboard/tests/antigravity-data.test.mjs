@@ -44,3 +44,23 @@ test('a runtime service that cannot load its parser is named plainly; hostile fi
     'Runtime service failed; managed updates wait until its cause is fixed');
   for (const runtimeServiceProblem of [null, 'missing', [], { reason: 'not running' }]) assert.equal(antigravityServiceProblem({ runtimeServiceProblem }), null);
 });
+// Deep review 2026-11-26 (Medium): removing the Active mark dropped the selected login's unverified runtime from Home
+// and Details. It is a plain warning of its own now, with live quota data and no mark.
+test('a selected profile whose runtime is not verified says so on Home and in Details', async () => {
+  const { dashboardViewModel, detailsViewModel } = await import('../public/view-model.mjs');
+  const f = fixture(); f.inventory.profiles[0].runtimeVerified = false;
+  const ctx = { now: NOW, antigravityInventory: f.inventory };
+  const rows = dashboardViewModel(f.data, ctx).sections.find((s) => s.id === 'antigravity').rows;
+  assert.match(rows[0].meta, / · runtime unverified$/);
+  assert.doesNotMatch(rows[1].meta, /unverified/);
+  const details = detailsViewModel(f.data, f.data.accounts[0].id, ctx);
+  assert.deepEqual(details.facts.find((x) => x.label === 'Runtime'), { label: 'Runtime', value: 'Unverified on Ubuntu', mono: false });
+  assert.equal(details.facts.find((x) => x.label === 'Status').value, 'Live');
+  // a verified runtime, a saved login that is not selected and no inventory say nothing
+  assert.equal(detailsViewModel(f.data, f.data.accounts[1].id, ctx).facts.some((x) => x.label === 'Runtime'), false);
+  f.inventory.profiles[0].runtimeVerified = true;
+  assert.doesNotMatch(dashboardViewModel(f.data, ctx).sections.find((s) => s.id === 'antigravity').rows[0].meta, /unverified/);
+  assert.equal(detailsViewModel(f.data, f.data.accounts[0].id, ctx).facts.some((x) => x.label === 'Runtime'), false);
+  f.inventory.profiles[0].runtimeVerified = false;
+  assert.equal(detailsViewModel(f.data, f.data.accounts[0].id, { now: NOW }).facts.some((x) => x.label === 'Runtime'), false);
+});

@@ -862,6 +862,12 @@ fn antigravity_section(
                 plan.to_string(),
                 cx.host_label(account)?,
                 age_or_status(cx, account)?,
+                // the live login whose runtime is not verified says so (view-model.mjs)
+                if bound.is_some_and(|b| b.unverified) {
+                    "runtime unverified".to_string()
+                } else {
+                    String::new()
+                },
             ]),
             status: match bound {
                 Some(b) if !b.status.is_empty() => b.status.clone(),

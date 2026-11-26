@@ -240,9 +240,13 @@ export function focusChart(acc, payload, ctx) {
   const shadeOf = i => Math.min(2, i);
   let series;
   if (cmp && prim) {
+    // Two accounts with the same name before the @ (sam@alpha, sam@beta) keep their full addresses in the legend,
+    // the line labels and the hover rows (deep review 2026-11-26: Compare read "sam" twice).
+    const tags = peers.map(tagOf);
+    const nameOf = (a, i) => tags.filter(tag => tag === tags[i]).length > 1 ? a.email : tags[i];
     series = peers.map((a, i) => {
       const w = a.windows.find(x => x.key === prim.key && x.meter) || (!['cursor', 'antigravity'].includes(acc.provider) && meters(a).find(x => !x.scoped && x.period === prim.period));
-      return w ? { acc: a, w, shade: shadeOf(i), dash: i % 3, width: a.id === acc.id ? 2.4 : 1.9, name: tagOf(a), tag: tagOf(a) } : null;
+      return w ? { acc: a, w, shade: shadeOf(i), dash: i % 3, width: a.id === acc.id ? 2.4 : 1.9, name: nameOf(a, i), tag: nameOf(a, i) } : null;
     }).filter(Boolean);
   } else {
     series = focusWindows(acc).map((w, i) => ({ acc, w, shade: shadeOf(i), dash: i % 3, width: w === prim ? 2.4 : 1.9, name: acc.provider === 'antigravity' || w.raw?.label ? fullName(acc.provider, w) : w.short, tag: w.short }));

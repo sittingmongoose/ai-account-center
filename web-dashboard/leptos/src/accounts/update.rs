@@ -78,7 +78,8 @@ pub fn short_word(result: &str) -> String {
         "Update it in the app" => "update in the app",
         "Update held" => "held",
         "Skipped: cancelled" => "skipped",
-        "Models not registered yet" | "Updated, models not registered yet" => "models pending",
+        "Updated, model refresh failed" => "updated, model refresh failed",
+        "Model refresh failed" => "model refresh failed",
         "Check timed out" | "Timed out" => "timed out",
         "Unknown" | "Unknown result" => "unknown",
         "Running" => "running",
@@ -96,10 +97,12 @@ pub fn short_word(result: &str) -> String {
     }
 }
 
-/// A narrow table's word for a cell: one short token that never wraps in a column a seventh of a phone wide. A failure
-/// or a step for the user stays a word (drawn as a colored chip), never just a mark, and every failure reads "failed"
-/// (a failed restart too: "restart" alone would read as an instruction); the full result stays in the
-/// cell's tip and the row's details. Unknown words keep their own text (clipped, never broken).
+/// A narrow table's word for a cell: a word or two that fit a column a seventh of a phone wide and wrap only between
+/// words. A failure or a step for the user stays words (drawn as a colored chip), never just a mark, and a failure says
+/// what failed (a failed restart reads "failed": "restart" alone would read as an instruction; a failed model refresh
+/// reads "models failed", deep review 2026-11-26); the full result stays in the cell's label and tip and the row's
+/// details. Unknown words keep their own text (wrapped between words, never broken). An update's version is
+/// `cell_words`'s to fit.
 pub fn tiny_word(result: &str) -> String {
     let r = result.trim();
     if let Some(version) = r.strip_prefix("Updated to ") {
@@ -120,15 +123,16 @@ pub fn tiny_word(result: &str) -> String {
         "Update it in the app" => "in app",
         "Update held" => "held",
         "Skipped: cancelled" => "skipped",
-        "Models not registered yet" | "Updated, models not registered yet" => "models",
-        "Check timed out" | "Timed out" => "timeout",
+        // the binary moved or not, its model refresh failed; an updated one also says "updated" (`tiny_lead`)
+        "Updated, model refresh failed" | "Model refresh failed" => "models failed",
+        "Check timed out" | "Timed out" => "timed out",
         "Unknown" | "Unknown result" => "unknown",
         "Sign-in needed" => "sign-in",
         "Blocked by policy" => "policy",
-        "Another copy runs" => "copy",
-        "Updated the wrong copy" => "wrong",
+        "Another copy runs" => "other copy",
+        "Updated the wrong copy" => "wrong copy",
         "Folder not writable" => "locked",
-        "T3 reply lost" => "lost",
+        "T3 reply lost" => "reply lost",
         "T3 not installed" => "no T3",
         "T3 not ready" => "T3 slow",
         "After T3 restarts" => "pending",
@@ -144,6 +148,105 @@ pub fn tiny_word(result: &str) -> String {
     } else {
         tiny.to_string()
     }
+}
+
+/// What a narrow cell says before its chip when the app did update although a later step failed: "updated" (in the
+/// updated color) over "models failed", so a moved binary with a failed model refresh never reads like a failed
+/// refresh on the version that was already there.
+pub fn tiny_lead(result: &str) -> Option<&'static str> {
+    (result.trim() == "Updated, model refresh failed").then_some("updated")
+}
+
+/// Advance width of `c` in Instrument Sans at weight 600 (an updated cell's weight), in ems: measured in Chrome
+/// 2026-11-26 (canvas `measureText` at 1000 px). Anything else, "→" too (it comes from a fallback font), counts as a
+/// full em, so a guess errs towards "updated".
+fn em_600(c: char) -> f64 {
+    let thousandths = match c {
+        '0' => 677,
+        '1' => 387,
+        '2' => 557,
+        '3' => 579,
+        '4' => 615,
+        '5' => 581,
+        '6' => 615,
+        '7' => 561,
+        '8' => 598,
+        '9' => 619,
+        '.' => 275,
+        '-' => 493,
+        '+' | '~' => 544,
+        '_' => 466,
+        ' ' => 193,
+        'a' | 'k' => 558,
+        'b' | 'd' | 'g' | 'p' | 'q' => 621,
+        'c' => 552,
+        'e' => 571,
+        'f' => 370,
+        'h' | 'n' => 612,
+        'i' | 'j' | 'l' => 260,
+        'm' => 941,
+        'o' => 597,
+        'r' => 390,
+        's' => 494,
+        't' => 406,
+        'u' => 604,
+        'v' | 'y' => 536,
+        'w' => 800,
+        'x' => 587,
+        'z' => 513,
+        _ => 1000,
+    };
+    f64::from(thousandths) / 1000.0
+}
+
+/// How wide `text` is drawn at `px` in an updated cell's font.
+pub fn text_width(text: &str, px: f64) -> f64 {
+    text.chars().map(em_600).sum::<f64>() * px
+}
+
+/// The compact table's row padding, column gap and cell font size (app.css `.upd-table.compact`); the wide table's
+/// cell font size.
+const COMPACT_PAD: f64 = 8.0;
+const COMPACT_GAP: f64 = 3.0;
+const COMPACT_FONT: f64 = 10.5;
+const WIDE_FONT: f64 = 12.0;
+
+/// One computer column's width in a card `width` px wide with `hosts` columns: compact, the row's padding and gaps
+/// shared out; wide, the grid's `minmax(130px, 1.3fr)` app column and 16 px sides and 12 px gaps (app.css).
+pub fn column_width(width: f64, hosts: usize, compact: bool) -> f64 {
+    let h = hosts.max(1) as f64;
+    if compact {
+        return (width - 2.0 * COMPACT_PAD - COMPACT_GAP * (h - 1.0)) / h;
+    }
+    let room = width - 32.0 - 12.0 * h;
+    let share = room / (1.3 + h);
+    if 1.3 * share >= 130.0 {
+        share
+    } else {
+        (room - 130.0) / h
+    }
+}
+
+/// A cell's two forms: the wide table's words for its `wide` px column and the compact table's for its `tiny` px one.
+/// An update names its version only while the whole "→version" fits the column on one line (with a little room for
+/// rounding), else it says "updated" (deep review 2026-11-26: a Windows MSIX 26.1113.36452.0 and a T3 nightly 0.1.10-nightly.20261113.4616
+/// were cut or ran under the next computer); the exact version stays in the cell's label and tip and the row's details.
+pub fn cell_words(result: &str, wide: f64, tiny: f64) -> (String, String) {
+    let r = result.trim();
+    if let Some(version) = r.strip_prefix("Updated to ") {
+        let fit = |text: String, px: f64, col: f64| {
+            if text_width(&text, px) * 1.03 + 1.0 <= col {
+                text
+            } else {
+                "updated".to_string()
+            }
+        };
+        return (
+            fit(format!("→ {version}"), WIDE_FONT, wide),
+            fit(format!("→{version}"), COMPACT_FONT, tiny),
+        );
+    }
+    (short_word(r), tiny_word(r))
 }
 
 /// A narrow table's word under a computer's head (its state line): a word or two that wrap only between words.
@@ -249,6 +352,11 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
         }
     });
     let compact = Memo::new(move |_| compact_table(card_width.get(), hosts.with(|h| h.len())));
+    // each layout's computer column width, for the words an updated cell can fit
+    let columns = Memo::new(move |_| {
+        let (w, h) = (card_width.get(), hosts.with(|h| h.len()));
+        (column_width(w, h, false), column_width(w, h, true))
+    });
     view! {
         <section class="plate ac-card upd" data-probe="update-card" node_ref=card>
             <button type="button" class="upd-head" aria-expanded=move || if open.get() { "true" } else { "false" }
@@ -330,13 +438,18 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                                         <span>{app3}</span>
                                     </span>
                                     {r.cells.into_iter().map(|c| match c {
-                                        Some(c) => view! {
-                                            <span class=format!("ut-cell {}", tone_class(&c.tone)) class:running=c.running role="cell" title=full_words(&c)>
-                                                <span class="ut-w">{short_word(&c.result)}</span>
-                                                <span class="ut-t" aria-hidden="true">{tiny_word(&c.result)}</span>
-                                                {c.running.then(|| view! { <span class="ut-bar"></span> })}
-                                            </span>
-                                        }.into_any(),
+                                        Some(c) => {
+                                            let (r1, r2) = (c.result.clone(), c.result.clone());
+                                            view! {
+                                                <span class=format!("ut-cell {}", tone_class(&c.tone)) class:running=c.running role="cell"
+                                                    title=full_words(&c) aria-label=(!c.result.is_empty()).then(|| c.result.clone())>
+                                                    <span class="ut-w">{move || cell_words(&r1, columns.get().0, columns.get().1).0}</span>
+                                                    {tiny_lead(&c.result).map(|lead| view! { <span class="ut-l" aria-hidden="true">{lead}</span> })}
+                                                    <span class="ut-t" aria-hidden="true">{move || cell_words(&r2, columns.get().0, columns.get().1).1}</span>
+                                                    {c.running.then(|| view! { <span class="ut-bar"></span> })}
+                                                </span>
+                                            }.into_any()
+                                        }
                                         None => view! { <span class="ut-cell q4" role="cell">"–"</span> }.into_any(),
                                     }).collect_view()}
                                 </button>
@@ -470,6 +583,73 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(host_tiny(&none), "no results");
+    }
+
+    #[test]
+    fn a_failed_model_refresh_reads_as_a_failure_and_says_whether_the_app_updated() {
+        // deep review 2026-11-26 (High): both Muse cases read "models" in amber
+        assert_eq!(tiny_word("Updated, model refresh failed"), "models failed");
+        assert_eq!(tiny_lead("Updated, model refresh failed"), Some("updated"));
+        assert_eq!(tiny_word("Model refresh failed"), "models failed");
+        assert_eq!(tiny_lead("Model refresh failed"), None);
+        assert_eq!(
+            short_word("Updated, model refresh failed"),
+            "updated, model refresh failed"
+        );
+        assert_eq!(short_word("Model refresh failed"), "model refresh failed");
+        // critical results keep what went wrong in the cell
+        assert_eq!(tiny_word("Updated the wrong copy"), "wrong copy");
+        assert_eq!(tiny_word("T3 reply lost"), "reply lost");
+        assert_eq!(tiny_word("Another copy runs"), "other copy");
+        assert_eq!(tiny_word("Timed out"), "timed out");
+        assert_eq!(tiny_lead("Updated, restart failed"), None);
+    }
+
+    #[test]
+    fn an_update_names_its_version_only_where_the_whole_version_fits() {
+        // a 375 px phone's card (357 px) with seven computers: about 46 px a column
+        let (wide, tiny) = (column_width(357.0, 7, false), column_width(357.0, 7, true));
+        assert!((tiny - 46.14).abs() < 0.01);
+        assert_eq!(cell_words("Updated to 2.1.3", wide, tiny).1, "→2.1.3");
+        // the committed Windows MSIX and T3 nightly results (tests/spec/agent/app-update-rows.json)
+        assert_eq!(
+            cell_words("Updated to 26.1113.36452.0", wide, tiny).1,
+            "updated"
+        );
+        assert_eq!(
+            cell_words("Updated to 0.1.10-nightly.20261113.4616", wide, tiny).1,
+            "updated"
+        );
+        // just above the wide cutoff (947 px card, 100 px columns) the nightly and the MSIX say "updated" too
+        let wide = column_width(947.0, 7, false);
+        assert!(wide > 100.0 && wide < 100.5);
+        assert_eq!(
+            cell_words("Updated to 0.1.10-nightly.20261113.4616", wide, 0.0).0,
+            "updated"
+        );
+        assert_eq!(
+            cell_words("Updated to 26.1113.36452.0", wide, 0.0).0,
+            "updated"
+        );
+        assert_eq!(cell_words("Updated to 2.1.3", wide, 0.0).0, "→ 2.1.3");
+        // a 1920 desktop's card has room for both, as before
+        let wide = column_width(1840.0, 7, false);
+        assert_eq!(
+            cell_words("Updated to 0.1.10-nightly.20261113.4616", wide, 0.0).0,
+            "→ 0.1.10-nightly.20261113.4616"
+        );
+        assert_eq!(
+            cell_words("Updated to 26.1113.36452.0", wide, 0.0).0,
+            "→ 26.1113.36452.0"
+        );
+        // every other result keeps its words
+        assert_eq!(
+            cell_words("Quit to finish update", 50.0, 50.0),
+            ("quit to finish".to_string(), "quit".to_string())
+        );
+        // the table's widths at 11 px are never below the reviewers' FreeType measure of the MSIX (77.9 px)
+        assert!(text_width("26.1113.36452.0", 11.0) >= 77.9);
+        assert!((text_width("updated", 11.0) - 44.0).abs() < 0.5);
     }
 
     #[test]

@@ -47,9 +47,22 @@ export function dashboard({ rich = false } = {}) {
 }
 
 const APPS = [['claude-code', 'Claude Code'], ['claude-desktop', 'Claude Desktop'], ['codex-cli', 'Codex CLI'], ['codex-desktop', 'Codex Desktop'], ['antigravity-cli', 'Antigravity CLI'], ['muse-code', 'Muse Code'], ['omp', 'OMP'], ['zcode', 'ZCode'], ['t3-code', 'T3 Code'], ['t3-acp-adapters', 'T3 ACP adapters']];
+// Real results with long words (deep review 2026-11-26): the committed agent contract rows
+// (tests/spec/agent/app-update-rows.json: the Windows MSIX version, the T3 nightly, the timed-out computer) and the two
+// Muse model-refresh failures (tests/accounts-view.test.mjs), keyed by computer and app.
+const CATALOG = 'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.';
+const CONTRACT = {
+	'windows|codex-desktop': { status: 'updated', previousVersion: '26.1101.9.0', version: '26.1113.36452.0', message: 'Updated: it closed, installed the update and reopened.' },
+	'nas1|t3-code': { status: 'updated', previousVersion: '', version: '0.1.10-nightly.20261113.4616', message: 'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes.' },
+	'nas1|omp': { status: 'unknown', previousVersion: '', version: '', message: 'Timed out: this computer did not finish in time.' },
+	'ubuntu|muse-code': { status: 'restart_failed', previousVersion: '1.2.3', version: '1.2.4', message: CATALOG },
+	'mac|muse-code': { status: 'failed', previousVersion: '1.2.3', version: '1.2.3', message: CATALOG },
+};
+
 /** A finished Update apps run on four computers: mostly current, a few updated, one failed, one needing action.
- * `restartFailed` adds a Windows Codex Desktop that updated but did not reopen (a second failure). */
-export function updateJob({ restartFailed = false } = {}) {
+ * `restartFailed` adds a Windows Codex Desktop that updated but did not reopen (a second failure); with `contract`
+ * (the real long results in CONTRACT, Windows Codex Desktop among them) that failure is Windows Claude Desktop's. */
+export function updateJob({ restartFailed = false, contract = false } = {}) {
 	const results = [];
 	for (const host of ['mac', 'windows', 'ubuntu', 'nas1']) {
 		for (const [appId, appLabel] of APPS) {
@@ -58,7 +71,8 @@ export function updateJob({ restartFailed = false } = {}) {
 			if (appId === 'claude-code' && host !== 'windows') { status = 'updated'; previousVersion = '2.1.0'; version = '2.1.3'; }
 			if (appId === 'codex-desktop' && host === 'mac') { status = 'action_required'; message = 'Quit Codex Desktop to finish the update.'; }
 			if (appId === 'zcode' && host === 'windows') { status = 'not_installed'; version = ''; }
-			if (restartFailed && appId === 'codex-desktop' && host === 'windows') { status = 'restart_failed'; previousVersion = '1.4.1'; message = 'Updated, but Codex Desktop did not open again.'; }
+			if (restartFailed && appId === (contract ? 'claude-desktop' : 'codex-desktop') && host === 'windows') { status = 'restart_failed'; previousVersion = '1.4.1'; message = `Updated, but ${appLabel} did not open again.`; }
+			if (contract && CONTRACT[`${host}|${appId}`]) ({ status, previousVersion, version, message } = CONTRACT[`${host}|${appId}`]);
 			let diagnostics;
 			if (appId === 'antigravity-cli' && host === 'nas1') {
 				status = 'failed'; message = 'The download stopped: connection reset.';

@@ -16,6 +16,8 @@ pub struct Bound {
     pub status: String,
     /// Note words.
     pub note: String,
+    /// The live (selected) login whose runtime is not verified.
+    pub unverified: bool,
 }
 
 /// `antigravityView(data, inventory)` for Home.
@@ -218,6 +220,7 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
             profile: id.into(),
             status: format!("{lead}{tail}"),
             note,
+            unverified: selected && !verified,
         });
     }
     Ok(Native {

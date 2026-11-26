@@ -169,6 +169,29 @@ test('focus charts: no switch threshold, compare overlays without adding, Fable 
   assert.deepEqual(claude.legend.filter(l => l.kind === 'series').map(l => l.name), ['Fable weekly', 'Weekly usage']);
 });
 
+// Deep review 2026-11-26 (Astra, Medium): with the "(active)" suffix gone, two quota histories with the same name before
+// the @ read "sam" twice in Compare. Colliding names keep their full addresses in the legend, the line labels and
+// the hover rows; distinct ones stay short.
+test('Compare tells two accounts with the same name before the @ apart', () => {
+  const twins = {
+    history: analytics.history,
+    accounts: [
+      account('codex:alpha', 'codex', 'sam@alpha.example', [{ ...win('seven_day', 'Weekly usage', 44), points: [point(now - 6 * H, 40), point(now - 1 * H, 44)] }]),
+      account('codex:beta', 'codex', 'sam@beta.example', [{ ...win('seven_day', 'Weekly usage', 31), points: [point(now - 6 * H, 30), point(now - 1 * H, 31)] }]),
+      account('codex:c', 'codex', 'c@example.test', [{ ...win('seven_day', 'Weekly usage', 12), points: [point(now - 6 * H, 10), point(now - 1 * H, 12)] }]),
+    ],
+  };
+  const board = { accounts: twins.accounts.map(({ id, provider, email, windows }) => account(id, provider, email, windows.map(({ points, ...w }) => w))) };
+  board.accounts[0].isActive = true;
+  const accounts = quotaAccounts(twins, { now, dashboard: board });
+  const f = focusChart(accounts.find(a => a.id === 'codex:alpha'), twins, { now, width: 900, height: 270, compare: true, accounts });
+  const names = f.legend.filter(l => l.kind === 'series').map(l => l.name);
+  assert.deepEqual([...names].sort(), ['c', 'sam@alpha.example', 'sam@beta.example']);
+  const last = f.stops.filter(x => !x.proj).at(-1).rows.map(r => `${r.name} ${r.value}`);
+  assert.ok(last.includes('sam@alpha.example 44%') && last.includes('sam@beta.example 31%'), last.join(' | '));
+  assert.equal(f.labels.some(l => /^sam \d/.test(l.text)), false);
+});
+
 test('projections come only from readings of the current reset period', () => {
   const accounts = quotaAccounts(analytics, { now, dashboard });
   const b = accounts.find(a => a.id === 'codex:b');

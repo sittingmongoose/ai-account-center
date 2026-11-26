@@ -12,6 +12,7 @@ import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, hostLabel, planLa
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { lazyFormat } from './time-format.mjs';
+import { antigravityView } from './antigravity-data.mjs';
 import { transportOf, transportNote, TRANSPORT_TEXT, TRUSTED_NOTE } from './transport.mjs';
 export { transportOf, transportNote, TRUSTED_NOTE };
 
@@ -250,8 +251,11 @@ function rowActions(provider, account, homeRow, ctx) {
     case 'cli': {
       const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
       // The live login signs in again like any other: the server renews the live Antigravity
-      // login on Ubuntu in place (the registry's refusal names it).
-      const isLive = reg?.removeRefusal === 'account_active';
+      // login on Ubuntu in place. The registry's refusal names it, and so does the inventory's selected profile bound
+      // to this row, which arrives with the dashboard before the registry catches up (deep review 2026-11-26: a newly
+      // live login briefly promised a terminal command). The registry still gates the action itself.
+      const isLive = reg?.removeRefusal === 'account_active'
+        || antigravityView(ctx.data, ctx.antigravityInventory).antigravityAccounts.some(row => row.id === account.id && row.selected);
       const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
         : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
           : action({ ...signinFields, enabled: true, tip: isLive
@@ -778,7 +782,8 @@ const rowWord = (row, label) => {
   return row.status === 'unknown'
     ? [unknownWord(row, label), /timed out/i.test(text(row.message)) ? 'warn' : '']
     : row.status === 'action_required' ? [actionWord(row), 'warn']
-      : isCatalogPending(row) ? [row.status === 'restart_failed' ? 'Updated, models not registered yet' : 'Models not registered yet', 'warn']
+      // A failed model-catalog refresh is a failure (the head counts it as one), and an updated binary says so.
+      : isCatalogPending(row) ? [row.status === 'restart_failed' ? 'Updated, model refresh failed' : 'Model refresh failed', 'crit']
       : (RESULT[row.status] || ['Unknown result', '']);
 };
 // How long a computer has been on its current step ("45s", "3m 05s"); '' below the

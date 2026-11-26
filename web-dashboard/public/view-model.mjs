@@ -888,6 +888,8 @@ function antigravitySection(accounts, data, inventory, now) {
         account.status === 'ok' || account.status === 'cached'
           ? relative(account.sampledAt || account.fetchedAt, now)
           : statusWord(account),
+        // The live login whose runtime is not verified says so (deep review 2026-11-26: the Active mark carried it).
+        nativeRow?.selected && !nativeRow.runtimeVerified ? 'runtime unverified' : '',
       ]
         .filter(Boolean)
         .join(' · '),
@@ -1097,9 +1099,17 @@ export function detailsViewModel(data, id, ctx = {}) {
     account.capabilities?.codexProfile ||
     account.capabilities?.antigravityProfileId ||
     '';
+  // The selected Antigravity login whose runtime is not verified: a fact of its own, beside its quota reading's status
+  // (deep review 2026-11-26: Details read "Live" for a verified and an unverified runtime alike).
+  const unverified =
+    account.provider === 'antigravity' &&
+    antigravityView(data, ctx.antigravityInventory).antigravityAccounts.some(
+      (row) => row.id === account.id && row.selected && !row.runtimeVerified
+    );
   const facts = [
     ...antigravityPlanFacts(account),
     { label: 'Status', value: statusWord(account), mono: false },
+    ...(unverified ? [{ label: 'Runtime', value: 'Unverified on Ubuntu', mono: false }] : []),
     ...antigravityServiceFacts(account),
     {
       label: 'Sampled',

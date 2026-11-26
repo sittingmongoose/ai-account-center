@@ -660,6 +660,29 @@ test('Antigravity: the live login signs in again (enabled), only Remove is refus
   assert.match(expired.body, /watch has lapsed/);
 });
 
+// Deep review 2026-11-26 (Medium): the dashboard and the inventory arrive before the registry. A login that just
+// became live (the inventory's selected profile bound to this row) keeps the renewal tip while the registry still
+// has its old reply (no refusal yet); the registry still decides whether Sign in again is enabled.
+test('Antigravity: a newly live login keeps its renewal tip while the registry catches up', () => {
+  const ag1 = account({
+    id: 'antigravity:profile:gmail', provider: 'antigravity', email: 'gmail@example.test', platform: 'ubuntu',
+    capabilities: { antigravityProfileId: 'gmail' },
+  });
+  const inventory = (selected) => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [
+    { id: 'gmail', email: 'gmail@example.test', hostId: 'ubuntu', available: true, selected, runtimeVerified: true },
+  ] });
+  const p = providers({ antigravity: { capabilities: { add: false, signInAgain: true, remove: true } } });
+  const stale = registry([reg('antigravity:profile:gmail', 'antigravity', { actions: { signInAgain: true, remove: true }, removeRefusal: null })]);
+  const tip = (ctx) => row(accountsViewModel(data([ag1], { providers: p }), { now, ...ctx }), 'antigravity:profile:gmail').actions[0];
+  assert.match(tip({ registry: stale, antigravityInventory: inventory(true) }).tip, /live Antigravity login there is renewed too/);
+  assert.match(tip({ registry: stale, antigravityInventory: inventory(false) }).tip, /Sign in from a terminal on Ubuntu/);
+  assert.match(tip({ registry: stale }).tip, /Sign in from a terminal on Ubuntu/);
+  // the registry gates the action: a refused sign-in stays off, live or not
+  const off = registry([reg('antigravity:profile:gmail', 'antigravity', { actions: { signInAgain: false, remove: true }, removeRefusal: null })]);
+  assert.equal(tip({ registry: off, antigravityInventory: inventory(true) }).enabled, false);
+  assert.equal(tip({ antigravityInventory: inventory(true) }).enabled, false);
+});
+
 test('an account whose readings come from Nas1 says so, while its platform stays ubuntu', () => {
   const accounts = [
     account({ id: 'zai:acct:nas', provider: 'zai', email: null, label: 'Nas', platform: 'ubuntu', host: 'nas1', capabilities: {} }),
@@ -1096,7 +1119,7 @@ test('Update apps offers Retry failed only for failed or unknown rows of a finis
   );
 });
 
-test('Update apps Muse catalog-pending row reads as updated-but-not-clean', () => {
+test('Update apps Muse catalog-pending row reads as a failure, updated or not', () => {
   const catalogMessage =
     'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.';
   const job = {
@@ -1121,13 +1144,15 @@ test('Update apps Muse catalog-pending row reads as updated-but-not-clean', () =
   };
   const view = updateResultsView(job, now);
   const museMoved = view.hosts.find((h) => h.id === 'ubuntu').items.find((i) => i.app === 'Muse Code');
-  assert.deepEqual([museMoved.result, museMoved.tone], ['Updated, models not registered yet', 'warn']);
+  // deep review 2026-11-26 (High): a failed model refresh reads as a failure, and the moved binary says it updated
+  assert.deepEqual([museMoved.result, museMoved.tone], ['Updated, model refresh failed', 'crit']);
   assert.match(museMoved.tip, /not registered yet/);
   assert.match(museMoved.tip, /Open Muse once/);
   assert.match(museMoved.tip, /1\.2\.3 to 1\.2\.4/);
   // the stale-catalog row that never moved: honest, and never "Updated"
   const museStale = view.hosts.find((h) => h.id === 'mac').items.find((i) => i.app === 'Muse Code');
-  assert.deepEqual([museStale.result, museStale.tone], ['Models not registered yet', 'warn']);
+  assert.deepEqual([museStale.result, museStale.tone], ['Model refresh failed', 'crit']);
+  assert.match(museStale.tip, /not registered yet/);
   // a clean updated row keeps its version label and good tone
   const codex = view.hosts.find((h) => h.id === 'ubuntu').items.find((i) => i.app === 'Codex CLI');
   assert.deepEqual([codex.result, codex.tone], ['Updated to 1.1.0', 'good']);
