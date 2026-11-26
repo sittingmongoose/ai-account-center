@@ -2221,11 +2221,16 @@ mod dto_tests {
         let folder = run.join("aac-http-abcdefabcdefabcdefabcdef");
         fs::create_dir(&folder)?;
         fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))?;
+        let identity = aac_store::build_identity();
+        if identity["commit"] == "unknown" {
+            eprintln!("skipped: build commit unknown (no .git); set AAC_BUILD_COMMIT to run");
+            return Ok(());
+        }
         let mut raw = serde_json::json!({
             "ccsDir": root, "socketPath": folder.join("http.sock"),
             "secret": "c".repeat(64), "bootId": "abcdefabcdefabcdefabcdef",
             "store": {"dir": root.join("store"), "retentionDays": 0,
-                      "bindingIdentity": aac_store::build_identity()},
+                      "bindingIdentity": identity},
         });
         assert!(
             Boot::from_json(&serde_json::to_vec(&raw)?)?
