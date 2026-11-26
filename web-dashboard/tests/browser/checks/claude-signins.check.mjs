@@ -55,6 +55,12 @@ const noSideways = async (t, name) => t.check(name, await t.page.evaluate(() => 
 
 export const tests = {
 	async 'sign-in renewal: header, notice, rows and Details'(t) {
+		// A clean context with service workers blocked: the run's shared context may already
+		// have an active worker from an earlier test, and sw.js passes /api requests through
+		// its own fetch, which page.route cannot intercept — the stubs would be bypassed and
+		// the fixture's rows/notice would never render (TOOL-ISSUES 77's sequence leak, the
+		// same root cause as live-updates' film test). The worker is not this check's subject.
+		await t.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
 		await t.app.stub('/api/accounts/dashboard', FIXTURE);
 		// Accounts draws the registry too: answered empty, so only the fixture's accounts are on the page
 		await t.app.stub('/api/accounts/registry', { providers: [], accounts: [], jobs: [], trash: [] });
