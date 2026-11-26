@@ -967,14 +967,19 @@ impl Agents {
         let Some(id) = random_call_id() else {
             return MutationReply::Uncertain;
         };
+        let response_cap = if verb == "claude-history" {
+            64 * 1024
+        } else {
+            4096
+        };
         let call = json!({
             "computer":computer,"args":args,"deadlineMs":deadline_ms,"timeoutMs":deadline_ms+2000,
-            "maxBytes":4096,"callId":id
+            "maxBytes":response_cap,"callId":id
         });
         let response = self
             .call_inner(verb, call.to_string().as_bytes(), true)
             .await;
-        let Ok(bytes) = axum::body::to_bytes(response.into_body(), 4096).await else {
+        let Ok(bytes) = axum::body::to_bytes(response.into_body(), response_cap).await else {
             return MutationReply::Uncertain;
         };
         let Ok(mut frame) = serde_json::from_slice::<Value>(&bytes) else {

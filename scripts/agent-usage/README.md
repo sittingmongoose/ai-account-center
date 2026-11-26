@@ -2,11 +2,13 @@
 
 The AI Account Center dashboard writes the quota left on every AI account it tracks into this
 folder after each refresh (every minute by default). Any agent on any computer that can read the
-folder can use it: no key, no network route, nothing to install. AI Account Center keeps every file
+folder can use it through the native AI Account Center CLI: no key and no network route. AI Account Center keeps every file
 here current; edits are overwritten.
 
-Run the reader from this folder: `python3 <this folder>/aac-usage` on Linux and macOS,
-`python <this folder>\aac-usage` on Windows. `locations.json` lists where each computer finds this
+Run the published reader from this folder: `<this folder>/aac-usage` on Linux and macOS,
+`<this folder>\aac-usage.cmd` on Windows. The launchers call the installed native
+`ai-account-center usage` command; it must be on PATH. The retained source Python reader is
+an offline test oracle and is not published. `locations.json` lists where each computer finds this
 folder, as the dashboard's owner set it, and `aac-usage rules` includes them.
 
 ## Files

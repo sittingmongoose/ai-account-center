@@ -167,11 +167,11 @@ fn load(folder: &Path, name: &str) -> Result<Value, String> {
 /// Resolve the published native reader's sibling snapshot, after explicit and environment paths.
 pub fn snapshot_folder(explicit: Option<&Path>) -> Option<PathBuf> {
     explicit
-        .map(Path::to_path_buf)
+        .map(|p| p.components().collect::<PathBuf>())
         .or_else(|| {
             std::env::var_os("AAC_USAGE_DIR")
                 .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
+                .map(|p| PathBuf::from(p).components().collect::<PathBuf>())
         })
         .or_else(|| {
             let exe = std::env::current_exe().ok()?;

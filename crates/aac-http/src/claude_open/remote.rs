@@ -1,12 +1,9 @@
-//! The production remote boundary for the Open orchestrator: lane E's `claude-history` verb
-//! and lane F's `claude-host` open verb through the service's L5 pool, with the packaged
-//! reference helpers and the fixed Open commands over the identical SSH policy as the
-//! fallback — exactly the attempts the TS transports make, in the same order.
+//! Native history and host operations over the authenticated agent pool. Mutations never replay.
 use super::open::{AgentOpen, Remote, SshError, SshOutput};
 use super::sync_service::HelperCall;
 use crate::agent_transport::{Agents, Selector};
 use aac_core::Cause;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -21,32 +18,15 @@ const HISTORY_HELPER_MODES: [&str; 6] = [
     "snapshot-cleanup",
 ];
 const MAX_PRIVATE_INDEX_BYTES: usize = 24 * 1024 * 1024;
-const WRITER_SHA256: &str = "0b3b4cbb14db144457684bf7683d53bbbc38529d4b92c9c6590ab089eff0c132";
-const MAX_HELPER_SOURCE_BYTES: usize = 128 * 1024;
-
-/// The fixed bootstrap the TS transport sends over SSH: it execs the packaged helper with the
-/// request on stdin and the packaged sources in globals. Byte for byte the reference's.
-const BOOTSTRAP_CODE: &str = "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];globals()['__ccs_history_helper_source__']=_s;globals()['__ccs_history_node_bridge_source__']=_p.get('nodeBridgeSource');sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-history-helper','exec'))";
-
 /// The Open orchestrator's remote boundary over the service's agent pool.
 pub struct AgentRemote {
     agents: Arc<Agents>,
-    package_root: PathBuf,
 }
 
 impl AgentRemote {
     /// A boundary for one boot; the package root is the trusted front door's, never a request's.
-    pub(crate) fn new(agents: Arc<Agents>, package_root: PathBuf) -> Self {
-        Self {
-            agents,
-            package_root,
-        }
-    }
-
-    /// `readPackagedSource`: the canonical LF bytes of one packaged helper.
-    fn packaged_source(&self, relative: &str) -> Result<Vec<u8>, ()> {
-        let bytes = std::fs::read(self.package_root.join(relative)).map_err(|_| ())?;
-        Ok(with_lf_line_endings(bytes))
+    pub(crate) fn new(agents: Arc<Agents>, _package_root: PathBuf) -> Self {
+        Self { agents }
     }
 
     fn selector(platform: &str, ssh_host: &str) -> Selector {
@@ -55,25 +35,6 @@ impl AgentRemote {
             ssh_host: Some(ssh_host.to_string()),
         }
     }
-}
-
-/// `withLfLineEndings`: only CR LF pairs change; a lone CR stays, so any other edit fails its pin.
-fn with_lf_line_endings(bytes: Vec<u8>) -> Vec<u8> {
-    if !bytes.contains(&b'\r') {
-        return bytes;
-    }
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
-            out.push(b'\n');
-            index += 2;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-    out
 }
 
 impl HelperCall for AgentRemote {
@@ -86,79 +47,49 @@ impl HelperCall for AgentRemote {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, ()>> + Send + 'a>> {
         Box::pin(async move {
             // runClaudeHistoryHelper's admission: fixed modes, bound profile and platform.
-            let mode = request["mode"].as_str().ok_or(())?;
+            let mode = request["mode"].as_str().ok_or(())?.to_owned();
             if !super::manifest::profile_id_pattern(profile_id)
                 || request["profileId"].as_str() != Some(profile_id)
                 || request["platform"].as_str() != Some(platform)
-                || !HISTORY_HELPER_MODES.contains(&mode)
+                || !HISTORY_HELPER_MODES.contains(&mode.as_str())
             {
                 return Err(());
             }
-            let helper =
-                self.packaged_source("scripts/claude-history/history_index_remote_v2.py")?;
-            if helper.len() > MAX_HELPER_SOURCE_BYTES {
-                return Err(());
-            }
-            let mut private_request = request.clone();
-            let mut bridge: Option<String> = None;
-            if mode == "append" {
-                let writer = self
-                    .packaged_source("scripts/claude-history/history_index_transaction_v1.cjs")?;
-                if super::js::sha(&writer) != WRITER_SHA256 {
-                    return Err(());
-                }
-                private_request["transactionSource"] = json!(String::from_utf8_lossy(&writer));
-                let bridge_bytes = self
-                    .packaged_source("scripts/claude-history/history_index_node_bridge_v2.cjs")?;
-                if bridge_bytes.len() > MAX_HELPER_SOURCE_BYTES {
-                    return Err(());
-                }
-                bridge = Some(String::from_utf8_lossy(&bridge_bytes).into_owned());
-            }
-            let input = serde_json::to_vec(&json!({
-                "helperSource": String::from_utf8_lossy(&helper),
-                "nodeBridgeSource": bridge,
-                "request": private_request
-            }))
-            .map_err(|_| ())?;
-            if input.len() > MAX_PRIVATE_INDEX_BYTES {
-                return Err(());
-            }
-            // The verb attempt covers exactly the three read modes the TS adapter attempts;
-            // every other mode keeps the packaged Python/Node writer on the reference path.
-            if matches!(mode, "collect" | "closed-check" | "protected-check")
-                && let Some(value) = self
+            if matches!(mode.as_str(), "append" | "snapshot-cleanup") {
+                return match self
                     .agents
-                    .call_value(
+                    .call_mutation(
                         "claude-history",
-                        Self::selector(platform, ssh_host),
-                        request.clone(),
-                        25000,
+                        &Self::selector(platform, ssh_host),
+                        request,
                         30000,
-                        1024 * 1024,
                     )
                     .await
-                && history_reply_valid(mode, profile_id, platform, &value)
-            {
-                return serde_json::to_vec(&value).map_err(|_| ());
+                {
+                    crate::agent_transport::MutationReply::Result(value)
+                        if history_reply_valid(&mode, profile_id, platform, &value) =>
+                    {
+                        serde_json::to_vec(&value).map_err(|_| ())
+                    }
+                    _ => Err(()),
+                };
             }
-            // The reference bootstrap: private data and sources travel in the SSH stdin pipe.
-            let argv = reference_helper_argv(platform, &input)?;
-            let output = self
+            let value = self
                 .agents
-                .reference(
+                .call_value(
+                    "claude-history",
                     Self::selector(platform, ssh_host),
-                    argv,
-                    input,
+                    request,
+                    25000,
                     30000,
                     MAX_PRIVATE_INDEX_BYTES,
                 )
                 .await
-                .map_err(|_| ())?;
-            if output.code != Some(0) {
+                .ok_or(())?;
+            if !history_reply_valid(&mode, profile_id, platform, &value) {
                 return Err(());
             }
-            Ok(output.stdout)
+            serde_json::to_vec(&value).map_err(|_| ())
         })
     }
 }
@@ -177,40 +108,76 @@ fn history_reply_valid(mode: &str, profile_id: &str, platform: &str, value: &Val
                 && value["records"].is_array()
                 && value["revision"].is_string()
         }
+        "verify-transcripts" => map.len() == 1 && value["verified"].is_boolean(),
+        "snapshot-cleanup" => {
+            map.len() == 3
+                && ["kept", "deleted", "skipped"].iter().all(|k| {
+                    value[*k]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().all(Value::is_string))
+                })
+        }
+        "append" => append_receipt_valid(value),
         _ => false,
     }
 }
 
-/// The fixed interpreter argv for the reference bootstrap on each platform.
-fn reference_helper_argv(platform: &str, _input: &[u8]) -> Result<Vec<std::ffi::OsString>, ()> {
-    if platform == "mac" {
-        return Ok(vec![
-            "/usr/bin/python3".into(),
-            "-c".into(),
-            BOOTSTRAP_CODE.into(),
-        ]);
+fn append_receipt_valid(value: &Value) -> bool {
+    const REQUIRED: [&str; 11] = [
+        "schemaVersion",
+        "status",
+        "createdCount",
+        "recoveryRequired",
+        "ownedFilesRolledBack",
+        "snapshotBindingVerified",
+        "privateSnapshotsPreserved",
+        "profileApplyEndpointImplemented",
+        "vendorResumeImplemented",
+        "distributedLeaseImplemented",
+        "writerQuiescent",
+    ];
+    let Some(map) = value.as_object() else {
+        return false;
+    };
+    if REQUIRED.iter().any(|k| !map.contains_key(*k))
+        || map.keys().any(|k| {
+            !REQUIRED.contains(&k.as_str())
+                && !["createdCountBeforeRefusal", "protectedBytesUnchanged"].contains(&k.as_str())
+        })
+        || value["schemaVersion"] != 2
+        || value["writerQuiescent"] != true
+    {
+        return false;
     }
-    // The Windows bootstrap finds the migration venv's fixed python, then runs the same code.
-    let script = [
-        "$ErrorActionPreference = 'Stop'",
-        "$python = [IO.Path]::Combine($env:USERPROFILE, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
-        "if (-not [IO.File]::Exists($python)) { exit 1 }",
-        &format!("& $python -c '{}'", BOOTSTRAP_CODE.replace('\'', "''")),
-        "exit $LASTEXITCODE",
-    ]
-    .join("; ");
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    let units: Vec<u8> = script
-        .encode_utf16()
-        .flat_map(|unit| unit.to_le_bytes())
-        .collect();
-    Ok(vec![
-        "powershell.exe".into(),
-        "-NoProfile".into(),
-        "-NonInteractive".into(),
-        "-EncodedCommand".into(),
-        STANDARD.encode(units).into(),
-    ])
+    for k in ["createdCount", "createdCountBeforeRefusal"] {
+        if (k == "createdCount" || map.contains_key(k))
+            && !value[k].as_u64().is_some_and(|n| n <= 200)
+        {
+            return false;
+        }
+    }
+    if REQUIRED[3..].iter().any(|k| !value[*k].is_boolean())
+        || [
+            "profileApplyEndpointImplemented",
+            "vendorResumeImplemented",
+            "distributedLeaseImplemented",
+        ]
+        .iter()
+        .any(|k| value[*k] != false)
+    {
+        return false;
+    }
+    match value["status"].as_str() {
+        Some("created_metadata") => {
+            value["createdCount"].as_u64().is_some_and(|n| n >= 1)
+                && value["protectedBytesUnchanged"] == true
+                && value["recoveryRequired"] == false
+                && value["snapshotBindingVerified"] == true
+                && value["privateSnapshotsPreserved"] == true
+        }
+        Some("refused") => value["createdCount"] == 0,
+        _ => false,
+    }
 }
 
 impl Remote for AgentRemote {
@@ -272,5 +239,27 @@ impl Remote for AgentRemote {
                 stdout: output.stdout,
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn append_receipts_keep_the_frozen_helpers_strict_contract() {
+        let good = json!({"schemaVersion":2,"status":"created_metadata","createdCount":1,"protectedBytesUnchanged":true,"recoveryRequired":false,"ownedFilesRolledBack":false,"snapshotBindingVerified":true,"privateSnapshotsPreserved":true,"profileApplyEndpointImplemented":false,"vendorResumeImplemented":false,"distributedLeaseImplemented":false,"writerQuiescent":true});
+        assert!(append_receipt_valid(&good));
+        for (key, value) in [
+            ("createdCount", json!(0)),
+            ("recoveryRequired", json!(true)),
+            ("privateSnapshotsPreserved", json!(false)),
+            ("vendorResumeImplemented", json!(true)),
+            ("extra", json!(true)),
+        ] {
+            let mut bad = good.clone();
+            bad[key] = value;
+            assert!(!append_receipt_valid(&bad), "{bad}");
+        }
     }
 }

@@ -17,7 +17,7 @@ mod signin;
 mod signin_session;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{
-    Control, Event, Handshake, MAX_FRAME_BYTES, MAX_SCAN_FRAME_BYTES, PROTOCOL_VERSION, Request,
+    Control, Event, Handshake, MAX_FRAME_BYTES, MAX_HISTORY_FRAME_BYTES, PROTOCOL_VERSION, Request,
     frame_cap,
 };
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
@@ -76,7 +76,7 @@ pub async fn run(
 ) -> Result<i32, Failure> {
     let frame = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        read_line(&mut reader, MAX_SCAN_FRAME_BYTES),
+        read_line(&mut reader, MAX_HISTORY_FRAME_BYTES),
     )
     .await;
     let request = match frame {

@@ -4,7 +4,7 @@ const END: &str = "<!-- aac-usage rules: end -->";
 pub(super) fn text(folder: Option<&Path>) -> String {
     let command = folder.map(|p| {
         p.join(if cfg!(windows) {
-            "aac-usage.exe"
+            "aac-usage.cmd"
         } else {
             "aac-usage"
         })

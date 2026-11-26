@@ -27,8 +27,11 @@ it does not refresh providers. Its text and JSON remove burn paces when the read
 stale or predates a reset that has passed. Rules installation is explicit and preserves
 existing line endings and hard links.
 
-The publisher still distributes the Python reader until native binaries for every shared-folder
-consumer are packaged. Building this executable alone does not change that distribution.
+The publisher distributes POSIX and Windows launchers that call `ai-account-center usage`.
+Each consumer needs the installed native CLI on PATH. The standalone reader binary is also
+available for direct use. After updating all consumers, run the published `aac-usage install-rules`
+to replace older managed instructions that invoked the reader through Python. The retained
+Python reader is an offline test oracle and is no longer published.
 
 ## Snapshot configuration
 

@@ -2,9 +2,9 @@
 
 ## Uncertain append hold
 
-Before the existing SSH append call, the service creates and fsyncs one owned 0600 nonce marker inside an owned 0700 `claude-history-pending` directory in the existing private CCS root. This file contains only fixed profile/platform IDs, a nonce and timestamps. It contains no account credentials, descriptor content, transcript or identity UUID.
+Before the native agent append call, the service creates and fsyncs one owned 0600 nonce marker inside an owned 0700 `claude-history-pending` directory in the existing private CCS root. This file contains only fixed profile/platform IDs, a nonce and timestamps. It contains no account credentials, descriptor content, transcript or identity UUID.
 
-The fixed helper acknowledges `writerQuiescent:true` only after its direct Node subprocess has finished or Python has killed **and waited for** that child on its own timeout. A successful SSH transport response alone is insufficient: the append reply must also be canonical, well-formed and explicitly acknowledged. A lost/malformed reply retains the pending marker. Open checks the durable marker before optional-policy lookup and again after synchronization. A second click, missing policy, changed policy or backend restart never clears it.
+The native agent acknowledges `writerQuiescent:true` only after its synchronous transaction has returned, including any ownership-checked rollback. It has no child metadata writer. Read-only native guard processes are bounded and reaped before a terminal receipt. A successful transport response alone is insufficient: the append reply must also be canonical, well-formed and explicitly acknowledged. A lost/malformed reply retains the pending marker. Open checks the durable marker before optional-policy lookup and again after synchronization. A second click, missing policy, changed policy or backend restart never clears it.
 
 Completion updates only the held, revalidated inode to `finished`; it does not unlink or overwrite a replacement path. An operation never finishes another operation's marker. Unknown, pending, nonprivate, linked, empty or malformed state holds Open. The implementation is intended for the current POSIX backend; it does not claim Windows ACL verification for the backend marker directory.
 
@@ -14,7 +14,7 @@ Manual recovery requires separately reviewed, authoritative proof that the exact
 
 ## Microbatches: one record per transaction, one marker per Open
 
-A full 18-record append overran the 25-second Node deadline, so the copy runs one record per transaction (`MICROBATCH_RECORDS = 1`). Each transaction keeps every guard check and the same deadlines (25 s for Node, 30 s for SSH). Between transactions, a fresh read of the target must show exactly the original rows plus the rows confirmed so far.
+The historical Node writer exceeded its deadline on a full 18-record append. The native port keeps the established one-record microbatch (`MICROBATCH_RECORDS = 1`), every guard check, and the 30-second agent call bound. Between transactions, a fresh read of the target must show exactly the original rows plus the rows confirmed so far.
 
 One Open uses one marker file. It is armed before the first batch, finished by each batch's trusted terminal receipt, and returned to pending (`rearm()`) right before the next batch. It is pending only while an append may be in flight. A rearm interrupted after it truncated the file leaves an empty file, which holds Open like any malformed marker.
 
@@ -22,7 +22,7 @@ One Open uses one marker file. It is armed before the first batch, finished by e
 
 One Open copies for at most `OPEN_COPY_BUDGET_MS` (45 s, counted from the start of the Open's history work) and at most `MAX_BATCHES_PER_OPEN` (50) batches. The bound is checked only between batches, after the last batch's receipt finished the marker, so stopping holds nothing. The copy then returns `status: 'partial'`, `reason: 'open_copy_budget_reached'`, the confirmed `createdCount` and a `remainingCount`. Claude opens as usual, and `openOperation` ends `opened` with `confirmedCount` below `totalCount`. The next Open plans only the records still missing. In-process callers may tighten the bound (tests do), never loosen it. An unreadable clock counts as an exhausted budget.
 
-Each one-record transaction costs four helper calls over SSH: a closed check, a protected check, the append, then a fresh read of the target. The real Mac and Windows costs are unmeasured; only a local synthetic run exists (4.6-4.8 s per transaction against the 25 s deadline).
+Each one-record transaction costs four native agent calls: a closed check, a protected check, the append, then a fresh read of the target. The real Mac and Windows costs are unmeasured; only a local synthetic run exists (4.6-4.8 s per transaction against the 25 s deadline).
 
 ## Clean stops before an append
 
@@ -56,3 +56,19 @@ A measured, platform-qualified batch size above 1 would also cut the count.
 ## Test scope
 
 All fixtures are offline and synthetic. The delayed-preparation/lost-reply scenario was constructed with an owned local Node child, not observed on the user's SSH endpoints. Existing native/source confirmation guards remain unchanged. The initial 50 project/SSH descriptors are coverage, not a guaranteed successful transfer; 28 other entries remain outside this mapping, and actual SSH/NTFS/ACL/timing capacity still needs separate acceptance.
+
+## Native runtime and rollout
+
+The HTTP history adapter dispatches all six modes to `aac-agent`; it never sends Python or Node
+source. The agent uses `aac-files` for no-follow reads, private snapshots, exclusive stages,
+create-only hard links, per-mutation root/protected-state checks, and ownership-checked rollback.
+Windows guards pin the app package version, install location and ASAR manager hash; process
+arguments and private ACLs are checked with fixed native PowerShell programs. Transcript metadata
+is checked on the policy-bound Linux endpoint with a fixed POSIX program and isolated SSH options.
+No transcript content is read or changed. An uncertain append never replays.
+
+The retained Python and Node files serve only as offline parity oracles until the deletion lane
+removes them. Committed receipt and Windows guard corpora keep regular tests independent of those
+legacy files. An explicitly ignored collection test can be run before deletion to compare both
+implementations on the same synthetic filesystem. Native Mac and Windows smoke remains a release
+gate; synthetic fixtures do not establish native timing or installed-app compatibility.
