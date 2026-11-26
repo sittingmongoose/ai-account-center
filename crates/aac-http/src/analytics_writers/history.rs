@@ -1348,7 +1348,8 @@ mod tests {
         )
         .expect("activity sources");
         assert_eq!(
-            sources["sources"][0]["backfillRead"]["unreadableRecords"], 2
+            sources["sources"][0]["backfillRead"]["unreadableRecords"],
+            2
         );
         let range = aac_store::ops::call(
             &engine,

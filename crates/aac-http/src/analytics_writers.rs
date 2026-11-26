@@ -2167,7 +2167,8 @@ mod tests {
         conn.close().expect("close fixture db");
         let answer2 = scan(&cache);
         assert_eq!(
-            answer2["kinds"]["devin"]["unreadableRecords"], json!(1),
+            answer2["kinds"]["devin"]["unreadableRecords"],
+            json!(1),
             "the backend answer is mixed: {answer2}"
         );
         let (source2, kind_rows, _) = scanned_kind(
@@ -2203,10 +2204,7 @@ mod tests {
             reports2[0]
         );
         assert_eq!(reports2[0]["state"], "partial");
-        assert_eq!(
-            reports2[0]["counts"]["unreadableRecords"],
-            json!(1)
-        );
+        assert_eq!(reports2[0]["counts"]["unreadableRecords"], json!(1));
         let receipt = ingest_reports(&engine, &reports2).expect("ingest mixed report");
         assert_eq!(receipt["refused"], json!([]));
         assert_eq!(receipt["put"], json!(0), "the old hour adds no cells");
@@ -2234,10 +2232,7 @@ mod tests {
             !detail.contains("readable usage included"),
             "no readable-usage claim without usable cells: {detail}"
         );
-        assert_eq!(
-            activity["sources"][0]["unreadableRecords"],
-            json!(1)
-        );
+        assert_eq!(activity["sources"][0]["unreadableRecords"], json!(1));
     }
 
     /// Every record unreadable and nothing readable: the scan is unreadable.
