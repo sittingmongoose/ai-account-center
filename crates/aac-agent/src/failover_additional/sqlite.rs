@@ -255,3 +255,121 @@ pub(crate) fn cursor_vscdb_rows(
     }
     out
 }
+
+/// Read up to 8 enabled OMP OAuth rows for standalone desktop collectors (`desktop_helpers.omp_credentials`).
+pub(crate) fn omp_desktop_oauth_rows(
+    home: &Path,
+    provider: &str,
+    tracker: &mut ReadTracker,
+) -> Vec<Value> {
+    let path = home.join(".omp/agent/agent.db");
+    let conn = match open_readonly(&path, 2000, 3, false) {
+        Ok(Some(c)) => c,
+        Ok(None) => return Vec::new(),
+        Err(()) => {
+            tracker.record_failure();
+            return Vec::new();
+        }
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT data FROM auth_credentials WHERE provider=?1 AND credential_type='oauth' \
+         AND disabled_cause IS NULL ORDER BY rowid DESC LIMIT 8",
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            tracker.record_failure();
+            return Vec::new();
+        }
+    };
+    let rows = match stmt.query_map([provider], |row| {
+        let raw = match row.get_ref(0)? {
+            ValueRef::Text(b) => std::str::from_utf8(b).ok().map(str::to_owned),
+            _ => None,
+        };
+        Ok(raw)
+    }) {
+        Ok(iter) => iter,
+        Err(_) => {
+            tracker.record_failure();
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for entry in rows {
+        let Ok(raw) = entry else {
+            tracker.record_failure();
+            return Vec::new();
+        };
+        let parsed = raw
+            .filter(|s| s.chars().count() <= MAX_AGY_OMP_BYTES)
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .filter(Value::is_object);
+        if let Some(obj) = parsed {
+            out.push(obj);
+        } else {
+            tracker.record_failure();
+        }
+    }
+    out
+}
+
+/// Read all four Cursor desktop keys from `state.vscdb` (`desktop_usage.cursor_credentials`).
+pub(crate) fn cursor_desktop_vscdb_rows(
+    database: &Path,
+    tracker: &mut ReadTracker,
+) -> BTreeMap<String, Value> {
+    let conn = match open_readonly(database, 2000, 3, false) {
+        Ok(Some(c)) => c,
+        Ok(None) => return BTreeMap::new(),
+        Err(()) => {
+            tracker.record_failure();
+            return BTreeMap::new();
+        }
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT key,value FROM ItemTable WHERE key IN \
+         ('cursorAuth/accessToken','cursorAuth/refreshToken','cursorAuth/cachedEmail','cursorAuth/stripeMembershipType') \
+         LIMIT 16",
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            tracker.record_failure();
+            return BTreeMap::new();
+        }
+    };
+    let rows = match stmt.query_map([], |row| {
+        let key = match row.get_ref(0)? {
+            ValueRef::Text(b) => std::str::from_utf8(b).ok().map(str::to_owned),
+            _ => None,
+        };
+        let val = match row.get_ref(1)? {
+            ValueRef::Null => Value::Null,
+            ValueRef::Integer(i) => Value::from(i),
+            ValueRef::Real(f) => serde_json::Number::from_f64(f)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+            ValueRef::Text(b) => std::str::from_utf8(b)
+                .map(|s| Value::String(s.to_owned()))
+                .unwrap_or(Value::Null),
+            ValueRef::Blob(_) => Value::Null,
+        };
+        Ok((key, val))
+    }) {
+        Ok(iter) => iter,
+        Err(_) => {
+            tracker.record_failure();
+            return BTreeMap::new();
+        }
+    };
+    let mut out = BTreeMap::new();
+    for entry in rows {
+        let Ok((key, val)) = entry else {
+            tracker.record_failure();
+            return BTreeMap::new();
+        };
+        if let Some(k) = key {
+            out.insert(k, val);
+        }
+    }
+    out
+}

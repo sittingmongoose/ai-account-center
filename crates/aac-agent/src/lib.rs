@@ -2,6 +2,8 @@
 mod apps;
 mod claude_host;
 mod cursor_open;
+/// Standalone desktop usage collectors and shared helpers (`desktop_helpers.py`, `desktop_usage.py`, `cursor_usage.py`).
+pub mod desktop_usage;
 mod failover;
 /// Own-host additional-provider failover discovery and collection.
 pub mod failover_additional;

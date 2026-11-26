@@ -94,17 +94,24 @@ pub(crate) fn cookie(credential: &Credential) -> Result<String, CollectionError>
     ))
 }
 
+fn is_py_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
 pub(crate) fn normalize_legacy(payload: &Value) -> Vec<Value> {
     let Some(usage) = payload.get("individualUsage").and_then(Value::as_object) else {
         return Vec::new();
     };
     let reset = ["billingCycleEnd", "endOfMonth", "resetsAt", "nextReset"]
         .into_iter()
-        .find_map(|k| {
-            payload
-                .get(k)
-                .filter(|v| !v.is_null() && v.as_str() != Some(""))
-        });
+        .find_map(|k| payload.get(k).filter(|v| is_py_truthy(v)));
     let mut windows = Vec::new();
     for (key, label) in [("plan", "Plan spend"), ("onDemand", "On-demand spend")] {
         let Some(bucket) = usage.get(key).and_then(Value::as_object) else {
@@ -202,16 +209,22 @@ fn period(plan_info: &Value) -> Option<&'static str> {
     if val.is_boolean() {
         return None;
     }
-    if val.as_i64() == Some(2) || val.as_str() == Some("INCLUDED_USAGE_PERIOD_WEEKLY") {
+    if val.as_i64() == Some(2)
+        || val.as_f64() == Some(2.0)
+        || val.as_str() == Some("INCLUDED_USAGE_PERIOD_WEEKLY")
+    {
         return Some("weekly");
     }
-    if val.as_i64() == Some(1) || val.as_str() == Some("INCLUDED_USAGE_PERIOD_MONTHLY") {
+    if val.as_i64() == Some(1)
+        || val.as_f64() == Some(1.0)
+        || val.as_str() == Some("INCLUDED_USAGE_PERIOD_MONTHLY")
+    {
         return Some("monthly");
     }
     None
 }
 
-fn milliseconds_reset(value: Option<&Value>) -> Option<String> {
+pub(crate) fn milliseconds_reset(value: Option<&Value>) -> Option<String> {
     let val = value?;
     if val.is_boolean() {
         return None;
@@ -220,7 +233,7 @@ fn milliseconds_reset(value: Option<&Value>) -> Option<String> {
         if !s.is_ascii() || s.is_empty() || s.len() > 16 || !s.bytes().all(|b| b.is_ascii_digit()) {
             return None;
         }
-        s.parse::<f64>().ok()?
+        s.parse::<u64>().ok().map(|n| n as f64)?
     } else {
         number(val)?
     };
