@@ -110,6 +110,33 @@ impl SourceContext {
 
 // ---- resolution ------------------------------------------------------------------------------
 
+/// Which Claude credential host platform a target routes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClaudePlatform {
+    Windows,
+    Mac,
+}
+
+impl ClaudePlatform {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Mac => "mac",
+        }
+    }
+
+    fn local_supported(self) -> bool {
+        match self {
+            Self::Windows => cfg!(windows),
+            Self::Mac => cfg!(target_os = "macos"),
+        }
+    }
+}
+
+fn claude_host_id(platform: ClaudePlatform, ssh_host: Option<&str>) -> String {
+    format!("{}:{}", platform.as_str(), ssh_host.unwrap_or("local"))
+}
+
 /// A resolved reset account.
 pub(crate) enum Target {
     Zai {
@@ -123,6 +150,7 @@ pub(crate) enum Target {
         profile: String,
     },
     Claude {
+        platform: ClaudePlatform,
         profile: String,
         email: String,
         profile_dir: Option<String>,
@@ -255,9 +283,33 @@ fn codex_account_id(auth: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// `listClaudeDesktopProfiles` + the adapter's lookup: the launcher inventory's profile named by
-/// `claude:<id ?? email>`, whose Windows launcher has an SSH alias (the service runs on Unix).
-fn claude_profile(ccs: &Path, account: &str) -> Res<Target> {
+fn claude_target_from_launcher(
+    platform: ClaudePlatform,
+    profile_id: Option<&str>,
+    email: &str,
+    launcher: Launcher,
+) -> Option<Target> {
+    if launcher.ssh_host.is_none() && !platform.local_supported() {
+        return None;
+    }
+    let is_default = launcher.is_default == Some(true)
+        || launcher
+            .profile_path
+            .as_deref()
+            .is_some_and(default_claude_data_folder);
+    Some(Target::Claude {
+        platform,
+        profile: profile_id.unwrap_or("default").to_owned(),
+        email: email.to_owned(),
+        profile_dir: launcher.profile_path,
+        is_default,
+        ssh_host: launcher.ssh_host,
+    })
+}
+
+/// `listClaudeDesktopProfiles` + the adapter's lookup: runnable Claude credential-host targets for
+/// `claude:<id ?? email>`, preferring Windows first and falling back to Mac Keychain hosts.
+fn claude_targets(ccs: &Path, account: &str) -> Res<Vec<Target>> {
     let invalid = "inventory-invalid";
     let unavailable = "credential-host-unavailable";
     // Over 4 MiB is over the TS limit of 1 Mi UTF-16 units whatever the characters are.
@@ -292,28 +344,68 @@ fn claude_profile(ccs: &Path, account: &str) -> Res<Target> {
         }
     }
     let profile = found.ok_or(unavailable)?;
-    let windows = profile.windows.ok_or(unavailable)?;
-    let ssh_host = windows.ssh_host;
-    if ssh_host.is_none() && !cfg!(windows) {
+    let mut targets = Vec::new();
+    if let Some(windows) = profile.windows
+        && let Some(target) = claude_target_from_launcher(
+            ClaudePlatform::Windows,
+            profile.id.as_deref(),
+            &profile.email,
+            windows,
+        )
+    {
+        targets.push(target);
+    }
+    if let Some(mac) = profile.mac
+        && let Some(target) = claude_target_from_launcher(
+            ClaudePlatform::Mac,
+            profile.id.as_deref(),
+            &profile.email,
+            mac,
+        )
+    {
+        targets.push(target);
+    }
+    if targets.is_empty() {
         return Err(unavailable);
     }
-    let is_default = windows.is_default == Some(true)
-        || windows
-            .profile_path
-            .as_deref()
-            .is_some_and(default_claude_data_folder);
-    Ok(Target::Claude {
-        profile: profile.id.unwrap_or_else(|| "default".to_owned()),
-        email: profile.email,
-        profile_dir: windows.profile_path,
-        is_default,
-        ssh_host,
-    })
+    Ok(targets)
+}
+
+fn claude_profile(ccs: &Path, account: &str) -> Res<Target> {
+    claude_targets(ccs, account)?
+        .into_iter()
+        .next()
+        .ok_or("credential-host-unavailable")
+}
+
+/// Pin a confirmed Claude write to the exact `identity.host` committed in the ledger.
+fn resolve_claude_for_write(ccs: &Path, account: &str, write: &Value) -> Res<Target> {
+    let targets = claude_targets(ccs, account)?;
+    if let Some(expected_host) = write
+        .get("identity")
+        .and_then(|identity| identity.get("host"))
+        .and_then(Value::as_str)
+    {
+        return targets
+            .into_iter()
+            .find(|target| match target {
+                Target::Claude {
+                    platform, ssh_host, ..
+                } => claude_host_id(*platform, ssh_host.as_deref()) == expected_host,
+                _ => false,
+            })
+            .ok_or("credential-host-unavailable");
+    }
+    targets
+        .into_iter()
+        .next()
+        .ok_or("credential-host-unavailable")
 }
 
 struct ClaudeProfile {
     id: Option<String>,
     email: String,
+    mac: Option<Launcher>,
     windows: Option<Launcher>,
 }
 struct Launcher {
@@ -398,20 +490,22 @@ fn read_profile(value: &Value) -> Option<ClaudeProfile> {
         }
     };
     let mac = match value.get("mac") {
-        None => false,
-        Some(v) => {
-            read_launcher(v, false)?;
-            true
-        }
+        None => None,
+        Some(v) => Some(read_launcher(v, false)?),
     };
     let windows = match value.get("windows") {
         None => None,
         Some(v) => Some(read_launcher(v, true)?),
     };
-    if !mac && windows.is_none() {
+    if mac.is_none() && windows.is_none() {
         return None;
     }
-    Some(ClaudeProfile { id, email, windows })
+    Some(ClaudeProfile {
+        id,
+        email,
+        mac,
+        windows,
+    })
 }
 /// `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`.
 fn email_shape(email: &str) -> bool {
@@ -883,8 +977,16 @@ pub(crate) fn windows_helper_command() -> String {
     )
 }
 
+/// Remote POSIX command for the macOS Claude helper; double-quoted because `BOOTSTRAP` has only
+/// single quotes and no shell-expanded characters.
+pub(crate) fn mac_helper_command() -> String {
+    format!(r#"/usr/bin/env PYTHONIOENCODING=utf-8 PYTHONUTF8=1 /usr/bin/python3 -c "{BOOTSTRAP}""#)
+}
+
 /// The adapter's `source`: the packaged Claude helper wrapped so it runs `reset_host(request)`.
-fn claude_helper_source(ctx: &SourceContext) -> Res<String> {
+/// Windows keeps the exact legacy wrapper for TS parity; macOS also passes `__aac_source__` so
+/// remote SSH sessions can bridge into the desktop `gui/<uid>` Keychain session without secrets.
+fn claude_helper_source(ctx: &SourceContext, platform: ClaudePlatform) -> Res<String> {
     let bytes = read_file(
         &ctx.package
             .as_deref()
@@ -898,18 +1000,30 @@ fn claude_helper_source(ctx: &SourceContext) -> Res<String> {
     let script = String::from_utf8(bytes).map_err(|_| "credential-host-unavailable")?;
     let literal = serde_json::to_string(&serde_json::to_string(&script).map_err(|_| "shape")?)
         .map_err(|_| "shape")?;
-    Ok([
-        "import json,sys".to_owned(),
-        "scope={\"__name__\":\"aac_private_reset\"}".to_owned(),
-        format!("exec(compile(json.loads({literal}),\"managed-reset\",\"exec\"),scope)"),
-        "request=json.load(sys.stdin)".to_owned(),
-        "print(json.dumps(scope[\"reset_host\"](request),allow_nan=False))".to_owned(),
-    ]
-    .join("\n"))
+    match platform {
+        ClaudePlatform::Windows => Ok([
+            "import json,sys".to_owned(),
+            "scope={\"__name__\":\"aac_private_reset\"}".to_owned(),
+            format!("exec(compile(json.loads({literal}),\"managed-reset\",\"exec\"),scope)"),
+            "request=json.load(sys.stdin)".to_owned(),
+            "print(json.dumps(scope[\"reset_host\"](request),allow_nan=False))".to_owned(),
+        ]
+        .join("\n")),
+        ClaudePlatform::Mac => Ok([
+            "import json,sys".to_owned(),
+            format!("_src=json.loads({literal})"),
+            "scope={\"__name__\":\"aac_private_reset\",\"__aac_source__\":_src}".to_owned(),
+            "exec(compile(_src,\"managed-reset\",\"exec\"),scope)".to_owned(),
+            "request=json.load(sys.stdin)".to_owned(),
+            "print(json.dumps(scope[\"reset_host\"](request),allow_nan=False))".to_owned(),
+        ]
+        .join("\n")),
+    }
 }
 
 fn claude_input(target: &Target, write: Option<&Value>) -> Value {
     let Target::Claude {
+        platform,
         profile,
         email,
         profile_dir,
@@ -925,7 +1039,7 @@ fn claude_input(target: &Target, write: Option<&Value>) -> Value {
         "expectedEmail": email,
         "profileDir": profile_dir,
         "isDefault": is_default,
-        "host": format!("windows:{}", ssh_host.as_deref().unwrap_or("local")),
+        "host": claude_host_id(*platform, ssh_host.as_deref()),
         "write": write.cloned().unwrap_or(Value::Null),
     })
 }
@@ -933,25 +1047,40 @@ fn claude_input(target: &Target, write: Option<&Value>) -> Value {
 /// `privateUsageInvocation` + `sshLaunch`: the exact command the native helper spawns.
 fn claude_command(
     ctx: &SourceContext,
+    platform: ClaudePlatform,
     ssh_host: Option<&str>,
     helper_source: String,
     input: Value,
 ) -> Res<HelperCommand> {
     let (executable, args) = if let Some(ssh_host) = ssh_host {
-        let args = ssh_argv(ctx, ssh_host, &windows_helper_command(), 3)?;
+        let remote = match platform {
+            ClaudePlatform::Windows => windows_helper_command(),
+            ClaudePlatform::Mac => mac_helper_command(),
+        };
+        let args = ssh_argv(ctx, ssh_host, &remote, 3)?;
         let executable = ssh_launch(ctx, &args)?;
         (
             executable.to_str().ok_or("ssh-unavailable")?.to_owned(),
             args,
         )
     } else {
-        let venv = std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .map(|home| home.join(".ccs/claude-session-migration/venv/Scripts/python.exe"));
-        let executable = venv
-            .filter(|path| path.is_file())
-            .and_then(|path| path.into_os_string().into_string().ok())
-            .unwrap_or_else(|| "python".to_owned());
+        let executable = match platform {
+            ClaudePlatform::Windows => {
+                let venv = std::env::var_os("USERPROFILE")
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".ccs/claude-session-migration/venv/Scripts/python.exe"));
+                venv.filter(|path| path.is_file())
+                    .and_then(|path| path.into_os_string().into_string().ok())
+                    .unwrap_or_else(|| "python".to_owned())
+            }
+            ClaudePlatform::Mac => {
+                if Path::new("/usr/bin/python3").is_file() {
+                    "/usr/bin/python3".to_owned()
+                } else {
+                    "python3".to_owned()
+                }
+            }
+        };
         (executable, vec!["-c".to_owned(), BOOTSTRAP.to_owned()])
     };
     Ok(HelperCommand {
@@ -986,8 +1115,75 @@ pub(crate) fn call(ctx: &SourceContext, db: &Path, body: &[u8]) -> Res<Value> {
     }
 }
 
+fn read_claude_target(
+    ctx: &SourceContext,
+    db: &Path,
+    account: &str,
+    target: &Target,
+) -> Res<Value> {
+    let Target::Claude {
+        platform, ssh_host, ..
+    } = target
+    else {
+        return Err("credential-host-unavailable");
+    };
+    let source = claude_helper_source(ctx, *platform)?;
+    let command = claude_command(
+        ctx,
+        *platform,
+        ssh_host.as_deref(),
+        source,
+        claude_input(target, None),
+    )?;
+    let body = json!({
+        "op": "sourceClaudeRead",
+        "routeAccount": account,
+        "command": {"executable": command.executable, "args": command.args, "payload": command.payload},
+    });
+    aac_status::reset::service_call(db, body.to_string().as_bytes())
+}
+
+fn claude_read_fallback_allowed(err: &str) -> bool {
+    matches!(
+        err,
+        "credential-host-unavailable"
+            | "ssh-unavailable"
+            | "ssh-policy-refused"
+            | "signed-out"
+            | "no-matching-code-login"
+    )
+}
+
+fn more_specific_claude_error(first: &'static str, next: &'static str) -> &'static str {
+    let is_login_state = |code: &str| matches!(code, "signed-out" | "no-matching-code-login");
+    if is_login_state(first) && !is_login_state(next) {
+        first
+    } else {
+        next
+    }
+}
+
 /// A ticketed read through the native capture transactions on the claims file.
 pub(crate) fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> {
+    if account.starts_with("claude:") {
+        let targets = claude_targets(&ctx.ccs, account)?;
+        let mut last_err: Option<&'static str> = None;
+        for target in targets {
+            match read_claude_target(ctx, db, account, &target) {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(err) => {
+                    if !claude_read_fallback_allowed(err) {
+                        return Err(err);
+                    }
+                    last_err = Some(match last_err {
+                        None => err,
+                        Some(prev) => more_specific_claude_error(prev, err),
+                    });
+                }
+            }
+        }
+        return Err(last_err.unwrap_or("credential-host-unavailable"));
+    }
     let target = resolve(ctx, account)?;
     let body = match &target {
         Target::Zai { .. } => return zai::read(ctx, db, account, &target),
@@ -1003,20 +1199,7 @@ pub(crate) fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> 
             "profile": profile,
             "host": local_computer(&ctx.hostname),
         }),
-        Target::Claude { ssh_host, .. } => {
-            let source = claude_helper_source(ctx)?;
-            let command = claude_command(
-                ctx,
-                ssh_host.as_deref(),
-                source,
-                claude_input(&target, None),
-            )?;
-            json!({
-                "op": "sourceClaudeRead",
-                "routeAccount": account,
-                "command": {"executable": command.executable, "args": command.args, "payload": command.payload},
-            })
-        }
+        Target::Claude { .. } => return Err("credential-host-unavailable"),
     };
     aac_status::reset::service_call(db, body.to_string().as_bytes())
 }
@@ -1033,19 +1216,25 @@ pub(crate) fn send(ctx: &SourceContext, db: &Path, write: &Value) -> Res<Value> 
     if account.starts_with("claude:") {
         // Everything before the host command is dispatched proves nothing was sent.
         let prepared = (|| -> Res<(Target, String)> {
-            let target = resolve(ctx, account)?;
-            let source = claude_helper_source(ctx)?;
+            let target = resolve_claude_for_write(&ctx.ccs, account, write)?;
+            let Target::Claude { platform, .. } = &target else {
+                return Err("credential-host-unavailable");
+            };
+            let source = claude_helper_source(ctx, *platform)?;
             Ok((target, source))
         })();
         let Ok((target, source)) = prepared else {
             return Ok(json!({"outcome": "not-sent"}));
         };
-        let Target::Claude { ssh_host, .. } = &target else {
+        let Target::Claude {
+            platform, ssh_host, ..
+        } = &target
+        else {
             return Ok(json!({"outcome": "not-sent"}));
         };
         let input = claude_input(&target, Some(write));
         // Dispatched from here: a failure may follow a spend, so it is an error (ambiguous).
-        let command = claude_command(ctx, ssh_host.as_deref(), source, input.clone())
+        let command = claude_command(ctx, *platform, ssh_host.as_deref(), source, input.clone())
             .map_err(|_| "host-unconfirmed")?;
         return aac_status::reset_claude_source::run(&command, input, CLAIM_TIMEOUT)
             .map_err(|_| "host-unconfirmed");
@@ -1180,5 +1369,276 @@ mod tests {
                 String::from_utf8_lossy(bad)
             );
         }
+    }
+    #[test]
+    fn mac_only_claude_profile_resolves_for_reset_claims() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("claude-desktop-profiles.json"),
+            json!({
+                "version": 1,
+                "profiles": [
+                    {
+                        "id": "mac-only",
+                        "email": "fixture@example.com",
+                        "mac": {
+                            "launcherName": "Claude (mac-only)",
+                            "profilePath": "/Users/fixture/Library/Application Support/Claude-mac-only",
+                            "sshHost": "fixture-mac"
+                        }
+                    },
+                    {
+                        "id": "mac-default",
+                        "email": "default@example.com",
+                        "mac": {
+                            "launcherName": "Claude",
+                            "profilePath": "/Users/fixture/Library/Application Support/Claude",
+                            "sshHost": "fixture-mac"
+                        }
+                    },
+                    {
+                        "id": "mac-no-ssh",
+                        "email": "local@example.com",
+                        "mac": {
+                            "launcherName": "Claude",
+                            "profilePath": "/Users/fixture/Library/Application Support/Claude"
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let ctx = SourceContext::from_env(root.path(), None);
+        let target = resolve(&ctx, "claude:mac-only").expect("mac-only profile must resolve");
+        let input = claude_input(&target, None);
+        assert_eq!(input["host"], "mac:fixture-mac");
+        assert_eq!(input["profile"], "mac-only");
+        assert_eq!(input["expectedEmail"], "fixture@example.com");
+        assert_eq!(
+            input["profileDir"],
+            "/Users/fixture/Library/Application Support/Claude-mac-only"
+        );
+        assert_eq!(input["isDefault"], false);
+
+        let default_target = resolve(&ctx, "claude:mac-default").unwrap();
+        assert_eq!(claude_input(&default_target, None)["isDefault"], true);
+
+        if cfg!(target_os = "macos") {
+            let local_target = resolve(&ctx, "claude:mac-no-ssh").unwrap();
+            assert_eq!(claude_input(&local_target, None)["host"], "mac:local");
+        } else {
+            assert_eq!(
+                resolve(&ctx, "claude:mac-no-ssh").err(),
+                Some("credential-host-unavailable")
+            );
+        }
+
+        let cmd = mac_helper_command();
+        assert!(cmd.contains("/usr/bin/python3 -c"));
+        assert!(cmd.contains("PYTHONIOENCODING=utf-8 PYTHONUTF8=1"));
+        assert!(cmd.contains(BOOTSTRAP));
+    }
+
+    #[cfg(unix)]
+    fn write_fake_ssh(bin_dir: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = bin_dir.join("ssh");
+        std::fs::write(&path, format!("#!/usr/bin/python3\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn test_context(root: &Path, bin_dir: &Path) -> SourceContext {
+        let pkg = root.join("pkg");
+        std::fs::create_dir_all(pkg.join("scripts/account-usage")).unwrap();
+        std::fs::write(
+            pkg.join("scripts/account-usage/claude_usage.py"),
+            "def reset_host(req): return {'unavailable': True}\n",
+        )
+        .unwrap();
+        let ssh_dir = root.join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        std::fs::write(ssh_dir.join("known_hosts"), "").unwrap();
+        SourceContext {
+            ccs: root.to_path_buf(),
+            package: Some(pkg),
+            home: root.as_os_str().to_os_string(),
+            identity_file: None,
+            known_hosts_file: Some(ssh_dir.join("known_hosts").to_string_lossy().into_owned()),
+            hostname: "ubuntuserver".to_owned(),
+            path: bin_dir.as_os_str().to_os_string(),
+            log: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dual_host_read_falls_back_to_mac_and_send_pins_to_confirmed_host() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log_file = root.path().join("calls.jsonl");
+        let win_mode = root.path().join("win-mode");
+        std::fs::write(&win_mode, "down").unwrap();
+
+        std::fs::write(
+            root.path().join("claude-desktop-profiles.json"),
+            json!({
+                "version": 1,
+                "profiles": [{
+                    "id": "dual",
+                    "email": "fixture@example.com",
+                    "windows": {
+                        "launcherName": "Claude (dual)",
+                        "profilePath": "C:\\Users\\fixture\\AppData\\Roaming\\Claude-dual",
+                        "sshHost": "fixture-win"
+                    },
+                    "mac": {
+                        "launcherName": "Claude (dual)",
+                        "profilePath": "/Users/fixture/Library/Application Support/Claude-dual",
+                        "sshHost": "fixture-mac"
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let fake_ssh = format!(
+            r#"import json, sys
+from pathlib import Path
+argv = sys.argv[1:]
+if '-G' in argv:
+    sys.exit(0)
+sep = argv.index('--')
+alias = argv[sep + 1]
+remote_cmd = argv[sep + 2]
+payload = json.loads(sys.stdin.buffer.read().decode('utf-8'))
+req = payload['request']
+with Path({log:?}).open('a', encoding='utf-8') as f:
+    f.write(json.dumps({{'alias': alias, 'action': req.get('action'), 'host': req.get('host'), 'has_src_var': '__aac_source__' in payload.get('helperSource', ''), 'remote_cmd': remote_cmd}}) + '\n')
+if alias == 'fixture-win':
+    mode = Path({win_mode:?}).read_text().strip()
+    if mode == 'down':
+        sys.exit(255)
+    if mode == 'rate-limited':
+        if req.get('action') == 'capture':
+            print(json.dumps({{'account': '11111111-1111-1111-1111-111111111111', 'organization': '33333333-3333-3333-3333-333333333333', 'savedLoginBinding': 'a' * 64, 'observedAtMs': 1700000000000}}))
+        else:
+            print(json.dumps({{'unavailable': True, 'reason': 'rate-limited'}}))
+        sys.exit(0)
+action = req.get('action')
+if action == 'capture':
+    print(json.dumps({{
+        'account': '11111111-1111-1111-1111-111111111111',
+        'organization': '33333333-3333-3333-3333-333333333333',
+        'savedLoginBinding': 'b' * 64,
+        'observedAtMs': 1700000000000,
+    }}))
+elif action == 'read':
+    print(json.dumps({{
+        'identity': {{
+            'provider': 'claude',
+            'account': '11111111-1111-1111-1111-111111111111',
+            'organization': '33333333-3333-3333-3333-333333333333',
+            'profile': 'dual',
+            'host': req['host'],
+        }},
+        'observedAtMs': 1700000000000,
+        'savedLoginBinding': 'b' * 64,
+        'raw': {{
+            'eligible': True,
+            'grants': [{{'id': 'mac_grant', 'resets_left': 1, 'resets_total': 1, 'paused': False, 'usable_now': True, 'clears': ['five_hour']}}]
+        }},
+        'expiries': [None],
+        'windows': {{'five_hour': 90}},
+        'sourceBinding': 'c' * 64,
+        'accountLabel': 'fixture@example.com',
+    }}))
+elif action == 'claim':
+    print(json.dumps({{'outcome': 'reset'}}))
+"#,
+            log = log_file.to_string_lossy(),
+            win_mode = win_mode.to_string_lossy(),
+        );
+        write_fake_ssh(&bin, &fake_ssh);
+
+        let ctx = test_context(root.path(), &bin);
+        let db = root.path().join("claims.sqlite");
+
+        // 1. Windows unreachable -> read falls back to Mac cleanly.
+        let snap = read(&ctx, &db, "claude:dual").expect("read must fall back to mac");
+        assert_eq!(snap["identity"]["host"], "mac:fixture-mac");
+        let calls: Vec<Value> = std::fs::read_to_string(&log_file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0]["alias"], "fixture-win");
+        assert_eq!(calls[0]["has_src_var"], false);
+        assert_eq!(calls[1]["alias"], "fixture-mac");
+        assert_eq!(calls[1]["action"], "capture");
+        assert_eq!(calls[1]["has_src_var"], true);
+        assert!(
+            calls[1]["remote_cmd"]
+                .as_str()
+                .unwrap()
+                .contains("/usr/bin/python3 -c")
+        );
+        assert_eq!(calls[2]["alias"], "fixture-mac");
+        assert_eq!(calls[2]["action"], "read");
+
+        // 2. Windows rate-limited -> must NOT silently fall back to Mac.
+        std::fs::write(&win_mode, "rate-limited").unwrap();
+        std::fs::remove_file(&log_file).unwrap();
+        assert_eq!(read(&ctx, &db, "claude:dual").err(), Some("rate-limited"));
+        let rl_calls: Vec<Value> = std::fs::read_to_string(&log_file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert!(rl_calls.iter().all(|c| c["alias"] == "fixture-win"));
+
+        // 3. send() with identity.host == "mac:fixture-mac" routes ONLY to fixture-mac.
+        std::fs::remove_file(&log_file).unwrap();
+        let write_mac = json!({
+            "routeAccount": "claude:dual",
+            "identity": {
+                "provider": "claude",
+                "account": "11111111-1111-1111-1111-111111111111",
+                "organization": "33333333-3333-3333-3333-333333333333",
+                "profile": "dual",
+                "host": "mac:fixture-mac"
+            },
+            "sourceBinding": "c".repeat(64),
+            "method": "claude.reset_rate_limits",
+            "body": {"program": "cedar_ember", "grant_id": "mac_grant", "request_id": "req-1"}
+        });
+        assert_eq!(
+            send(&ctx, &db, &write_mac).unwrap(),
+            json!({"outcome": "reset"})
+        );
+        let send_calls: Vec<Value> = std::fs::read_to_string(&log_file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(send_calls.len(), 1);
+        assert_eq!(send_calls[0]["alias"], "fixture-mac");
+        assert_eq!(send_calls[0]["action"], "claim");
+
+        // 4. send() pinned to a missing host refuses as not-sent without spawning ssh.
+        std::fs::remove_file(&log_file).unwrap();
+        let mut wrong_host = write_mac.clone();
+        wrong_host["identity"]["host"] = json!("mac:other-mac");
+        assert_eq!(
+            send(&ctx, &db, &wrong_host).unwrap(),
+            json!({"outcome": "not-sent"})
+        );
+        assert!(!log_file.exists());
     }
 }
