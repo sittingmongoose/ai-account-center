@@ -1435,13 +1435,15 @@ export async function runMemoryBudget(opts) {
 
 function formatHumanSummary(summary) {
   const m = summary.memory;
+  const pss = (value) => (value === null ? 'unavailable' : `${value} MiB`);
   const lines = [
     `[i] AAC memory budget run (${summary.durationSec}s, seed=${summary.seed}, samples=${m.sampleCount})`,
     `    timing: fixture=${(summary.timingMs.fixture / 1000).toFixed(1)}s boot=${(summary.timingMs.boot / 1000).toFixed(2)}s total=${(summary.timingMs.total / 1000).toFixed(1)}s`,
-    `    server steady (t>=${m.steadyAfterSec}s): RSS=${m.steadyMedianRssMiB} MiB, PSS=${m.steadyMedianPssMiB} MiB`,
-    `    server peak:               RSS=${m.peakRssMiB} MiB, PSS=${m.peakPssMiB} MiB`,
-    `    children peak:             RSS=${m.childrenPeakRssMiB} MiB, PSS=${m.childrenPeakPssMiB} MiB (max children=${m.maxChildren})`,
-    `    total peak:                RSS=${m.totalPeakRssMiB} MiB, PSS=${m.totalPeakPssMiB} MiB`,
+    `    server steady (t>=${m.steadyAfterSec}s): RSS=${m.steadyMedianRssMiB} MiB, PSS=${pss(m.steadyMedianPssMiB)}`,
+    `    server peak:               RSS=${m.peakRssMiB} MiB, PSS=${pss(m.peakPssMiB)}`,
+    `    children peak:             RSS=${m.childrenPeakRssMiB} MiB, PSS=${pss(m.childrenPeakPssMiB)} (max children=${m.maxChildren})`,
+    `    total peak:                RSS=${m.totalPeakRssMiB} MiB, PSS=${pss(m.totalPeakPssMiB)}`,
+    `    ${m.samplingNote}`,
   ];
   for (const [name, row] of Object.entries(summary.routes)) {
     lines.push(
