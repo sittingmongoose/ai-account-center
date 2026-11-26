@@ -1,0 +1,24 @@
+[package]
+name = "aac-claude-renew"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Claude Code sign-in renewal: the server renews each computer's sign-in through the CLI's own login, with a plain Chrome profile and an accessibility press on the browser computer"
+
+[[bin]]
+name = "aac-claude-renew"
+path = "src/bin/aac-claude-renew.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
+regex = { workspace = true, features = ["unicode-perl"] }
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

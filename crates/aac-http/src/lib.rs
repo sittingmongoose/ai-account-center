@@ -25,6 +25,7 @@ mod claude_account_store;
 mod claude_host;
 pub mod claude_lifecycle;
 pub mod claude_open;
+mod claude_renew_job;
 pub mod cli;
 mod codex_quotas;
 mod collection;
