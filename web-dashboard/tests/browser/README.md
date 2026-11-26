@@ -60,6 +60,8 @@ splash hands over to the form once; Status, Analytics and the Scoreboard show th
 Status and Analytics open while their numbers change and counts navigations, re-mounts, meters swept back to zero,
 blank frames and scroll or focus resets; its `film` test is the one to record (`--grep film --record <abs.mp4>`).
 
+**Browser memory (opt-in).** `checks/browser-memory.check.mjs` records each tab's JS heap, wasm memory, DOM nodes and Chrome renderer/GPU PSS, plus the idle Home tab after sitting open; run with `--grep 'browser memory'` (`--set idleSeconds=`, `--set out=<file>`; `--set limitMB=<n>` fails when the idle renderer PSS exceeds n MB).
+
 **Status on the real pins (opt-in).** `checks/status-real-pins.check.mjs` writes every pinned thread's roster row and sheet, plus the page's words, to `real-pins-<format>.json` in the run folder. Two builds can then be compared line by line, for example the tree in `--set repo=<other tree>` against this one:
 
 ```sh

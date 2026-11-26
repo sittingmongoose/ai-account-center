@@ -5395,6 +5395,13 @@
       ]
     },
     {
+      "file": "web-dashboard/tests/browser/checks/browser-memory.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "web-dashboard/tests/browser/checks/claude-signins.check.mjs",
       "kind": "internal",
       "evidence": [],
