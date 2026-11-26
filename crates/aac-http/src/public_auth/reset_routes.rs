@@ -259,6 +259,7 @@ fn ledger(db: &Path, op: &str, account: &str, mut input: Value) -> Result<Value>
 
 const SAFE_REASONS: &[&str] = &[
     "check-again-required",
+    "claim-unproven",
     "claim-token-outstanding",
     "confirmation-invalid",
     "cooldown",
@@ -357,6 +358,10 @@ impl ResetRoutes {
             let inventory = result.and_then(|db| {
                 match self.read(&db, &source, account, work.deadline - LEDGER_RESERVE) {
                     Ok(snapshot) => ledger(&db, "inventory", account, json!({"snapshot":snapshot})),
+                    Err(error) if account.starts_with("zai:") && error != "zai-quota-unavailable" => {
+                        // Without a proven current identity, do not recover the previous key's evidence.
+                        Ok(json!({"status":"unavailable","reason":safe_reason(error).unwrap_or("reset-inventory-unavailable"),"grants":[]}))
+                    }
                     Err(error) => {
                         let mut recovery = ledger(&db, "pending", account, json!({}))?;
                         let reason = recovery["reason"]
@@ -382,6 +387,7 @@ impl ResetRoutes {
             Err(error) => {
                 let evidence = result
                     .ok()
+                    .filter(|_| !account.starts_with("zai:"))
                     .and_then(|db| ledger(&db, "pending", account, json!({})).ok())
                     .map_or(Value::Null, |mut recovery| recovery["evidence"].take());
                 refusal(safe_reason(error), work.sent(), evidence)
@@ -452,12 +458,12 @@ impl ResetRoutes {
                     json!({"outcome":"not-sent"})
                 } else {
                     work.set_sent(true);
-                    reset_source_route::send(source, &write)
+                    reset_source_route::send(source, db, &write)
                         .unwrap_or_else(|_| json!({"outcome":"ambiguous"}))
                 };
                 drop(send_slot);
                 if work.sent() && result["outcome"] == "not-sent" {
-                    if account.starts_with("claude:") {
+                    if account.starts_with("claude:") || account.starts_with("zai:") {
                         work.set_sent(false);
                     } else {
                         result = json!({"outcome":"ambiguous"});

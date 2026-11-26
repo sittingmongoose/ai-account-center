@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod zai;
+
 type Res<T> = Result<T, &'static str>;
 
 /// One private or package file through the shared hardened read (L2): never a link leaf, at
@@ -110,6 +112,11 @@ impl SourceContext {
 
 /// A resolved reset account.
 pub(crate) enum Target {
+    Zai {
+        key_id: String,
+        key_path: PathBuf,
+        label: String,
+    },
     Codex {
         home: String,
         account: String,
@@ -132,6 +139,9 @@ pub(crate) fn resolve(ctx: &SourceContext, account: &str) -> Res<Target> {
             account,
             profile: name.to_owned(),
         });
+    }
+    if account.starts_with("zai:") {
+        return zai::resolve(ctx, account);
     }
     if !account.starts_with("claude:") {
         return Err("provider-read-only");
@@ -970,7 +980,7 @@ pub(crate) fn call(ctx: &SourceContext, db: &Path, body: &[u8]) -> Res<Value> {
                 .get("write")
                 .filter(|w| w.is_object())
                 .ok_or("shape")?;
-            send(ctx, write)
+            send(ctx, db, write)
         }
         _ => Err("shape"),
     }
@@ -980,6 +990,7 @@ pub(crate) fn call(ctx: &SourceContext, db: &Path, body: &[u8]) -> Res<Value> {
 pub(crate) fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> {
     let target = resolve(ctx, account)?;
     let body = match &target {
+        Target::Zai { .. } => return zai::read(ctx, db, account, &target),
         Target::Codex {
             home,
             account: expected,
@@ -1011,11 +1022,14 @@ pub(crate) fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> 
 }
 
 /// The one provider send for an attempt the ledger began. Never retried here.
-pub(crate) fn send(ctx: &SourceContext, write: &Value) -> Res<Value> {
+pub(crate) fn send(ctx: &SourceContext, db: &Path, write: &Value) -> Res<Value> {
     let account = write
         .get("routeAccount")
         .and_then(Value::as_str)
         .ok_or("shape")?;
+    if account.starts_with("zai:") {
+        return Ok(zai::send(ctx, db, account, write));
+    }
     if account.starts_with("claude:") {
         // Everything before the host command is dispatched proves nothing was sent.
         let prepared = (|| -> Res<(Target, String)> {
@@ -1115,15 +1129,15 @@ mod tests {
         let ctx = SourceContext::from_env(root.path(), None);
         let write = |account: &str| json!({"routeAccount": account});
         assert_eq!(
-            send(&ctx, &write("claude:missing")).unwrap(),
+            send(&ctx, root.path(), &write("claude:missing")).unwrap(),
             json!({"outcome":"not-sent"})
         );
         assert_eq!(
-            send(&ctx, &write("codex:missing")).unwrap_err(),
+            send(&ctx, root.path(), &write("codex:missing")).unwrap_err(),
             "credential-host-unavailable"
         );
         assert_eq!(
-            send(&ctx, &write("cursor:any")).unwrap_err(),
+            send(&ctx, root.path(), &write("cursor:any")).unwrap_err(),
             "provider-read-only"
         );
     }

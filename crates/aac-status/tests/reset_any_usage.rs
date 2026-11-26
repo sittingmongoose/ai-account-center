@@ -356,11 +356,13 @@ fn claude(week: f64) -> Snapshot {
             left: 2,
             expires_at_ms: None,
             usable: true,
+            variant: None,
             words: None,
         }],
         windows: std::collections::BTreeMap::from([("seven_day".into(), week), ("five_hour".into(), 10.0)]),
         executor_ready: true,
         source_binding: "synthetic-binding".into(),
+        weekly_reset_at_ms: None,
         account_label: "synthetic-principal".into(),
     }
 }
@@ -415,6 +417,7 @@ fn codex(five: f64, week: f64) -> Snapshot {
         left: 1,
         expires_at_ms: Some(NOW + 10_000),
         usable: true,
+        variant: None,
         words: None,
     };
     Snapshot {
@@ -431,6 +434,7 @@ fn codex(five: f64, week: f64) -> Snapshot {
         windows: std::collections::BTreeMap::from([("five_hour".into(), five), ("seven_day".into(), week)]),
         executor_ready: true,
         source_binding: "synthetic-binding".into(),
+        weekly_reset_at_ms: None,
         account_label: "synthetic-principal".into(),
     }
 }

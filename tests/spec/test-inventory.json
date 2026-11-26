@@ -996,6 +996,12 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/reset_source_route/zai.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/runs_ingest_gate.rs",
       "kind": "table",
       "evidence": [
@@ -1717,6 +1723,12 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "crates/aac-status/tests/reset_zai.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-status/tests/run_corrections.rs",

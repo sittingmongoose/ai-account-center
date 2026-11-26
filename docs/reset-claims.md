@@ -7,9 +7,8 @@ Real spend requires the owner's explicit confirmation in released AAC.
 Public inventory names individual opaque `grantKey` targets and reports kind,
 refill sentence, remaining count, expiry, sample time/age and a blocked reason.
 Exact provider IDs, organization, profile and credential host stay private.
-Unknown kinds remain read-only; Qwen has no supported reset operation and Zai
-claiming is not implemented. R4 permits observation separately, not guessing its
-transport or sending a claim.
+Unknown kinds remain read-only. Qwen has no supported reset operation. Z.ai
+claims stay disabled pending the supervised first claim.
 
 All routes are under `/api/accounts/:accountId/reset-claims`, protected by the
 existing dashboard API authentication and origin guards. Signed-in phone/web
@@ -43,7 +42,7 @@ spend until Check again settles it.
 Tokens and target keys are 64 hex characters. Request objects have exact fields;
 raw provider grant IDs, host paths, organization IDs and executable names cannot
 be provided by the browser. Responses and errors never echo private input.
-`claimed` requires a fresh same-identity read with the exact grant decrement.
+`claimed` requires a fresh same-identity read with evidence for the exact grant.
 A Claude full reset requires the overall weekly reading to fall. Every other
 refilled limit with readings on both sides must fall or already be at zero.
 A Fable reset requires the overall weekly reading to fall and checks that Fable
@@ -56,10 +55,13 @@ Codex requires only the exact credit's decrement: OpenAI
 chooses which limits a credit refills, so window movement is evidence, not proof.
 Only a `redeemed` credit is a decrement. A `redeeming` credit keeps its count but
 cannot be used or sent; it confirms a claim only when OpenAI itself answered
-`reset` or `alreadyRedeemed` for that attempt
-(`crates/aac-status/src/reset.rs:1250-1256`). After a lost answer it stays
+`reset` or `alreadyRedeemed` for that attempt. After a lost answer it stays
 `claimed-unconfirmed` and pending until a later fresh same-identity read supplies
-qualifying proof (`reset.rs:1001-1008`).
+qualifying proof.
+
+A newer same-key read confirms a Z.ai claim when the chosen pack disappears or becomes unavailable and weekly
+usage falls. After a lost answer, a read started at least two minutes after the send can settle the claim as
+`not-applied` when the exact pack is still available and the weekly reset time is unchanged.
 The confirmation must render prepare's authoritative `account.label`, never a
 cached account card label. Provider `reset` without proof is
 `claimed-unconfirmed`; `providerSuccess` distinguishes this from a timeout.
@@ -263,8 +265,10 @@ server's fresh read fits inside its 120 s). For a Codex credit it also says what
 `usage` ("Weekly 60% used, 5-hour 2% used.") and "OpenAI chooses which limits refill. If nothing refills, nothing
 is spent." Only "Use this reset" calls the claim route. The result line belongs to
 the newest local account action; unresolved server claims provide status, while settled receipts appear in dated history.
-The group reads inventory again; current limits come from source readings. Z.ai
-cards are listed with "Use in Z.ai"; Qwen says its plan has none. Paired native bars never call these routes.
+The group reads inventory again; current limits come from source readings. For Z.ai, dashboard-owned keys use
+the exact pack inventory. Weekly packs start a new seven-day window and clear five-hour usage. The monthly
+limit stays as it is. Five-hour packs are read-only until their provider type is known. Remote and discovered
+accounts keep the "Use in Z.ai" link. Qwen says its plan has no resets. Paired native bars never call these routes.
 
 Inventory, pending recovery, prepare, claim and check responses carry `evidence`:
 `{canonicalAccountKey, revision, latestAttempt, pendingAttempts}`. Revisions and

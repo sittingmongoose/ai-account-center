@@ -23,6 +23,9 @@ pub struct Grant {
     /// shown as the provider names it. Absent for every mapped kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub words: Option<String>,
+    /// Private provider variant, bound to the chosen grant by its fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
 }
 
 /// Upstream kind words as display text: printable ASCII letters, digits and a few separators, at most 48 characters.
@@ -60,6 +63,8 @@ pub struct Snapshot {
     pub source_binding: String,
     #[serde(default)]
     pub account_label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly_reset_at_ms: Option<i64>,
 }
 
 use serde_json::Value;
@@ -173,6 +178,7 @@ pub fn claude(cedar: &Value, expiries: &[Option<i64>]) -> Result<Vec<Grant>> {
                 left,
                 expires_at_ms: expiries[i],
                 usable: usable && !paused,
+                variant: None,
                 words,
             })
         })
@@ -194,6 +200,7 @@ pub fn codex(details: &Value, expiries: &[Option<i64>], known_type: &str, clears
             Ok(Grant {
                 id: id(&g["id"])?,
                 kind: if known { "banked" } else { "unknown" }.to_owned(),
+                variant: None,
                 words: if known { None } else { provider_words(ty) },
                 clears: clears.to_vec(),
                 left: if status == "available" { 1 } else { 0 },
@@ -227,6 +234,7 @@ pub fn normalize_claude(args: &str) -> Result<Value> {
         windows: a.windows,
         executor_ready: true,
         source_binding: a.source_binding,
+        weekly_reset_at_ms: None,
         account_label: a.account_label
     }))
 }

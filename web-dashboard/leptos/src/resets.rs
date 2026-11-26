@@ -10,7 +10,7 @@
 //! unconfirmed claim blocks every Use reset on the account until Check again settles it.
 //!
 //! Rows from the usage reading (no grant keys) show while the inventory loads, or when it can't be read, and can't
-//! be used. Z.ai cards are listed with "Use in Z.ai"; Qwen says its plan has none.
+//! be used. Z.ai packs from a dashboard key use the inventory. Other Z.ai accounts link to Z.ai.
 
 use crate::api::{FetchError, send};
 use crate::dash::nullable;
@@ -110,6 +110,7 @@ pub struct ClaimResult {
     #[serde(deserialize_with = "nullable")]
     pub verification: String,
     pub provider_success: bool,
+    pub weekly_reset_at_ms: Option<f64>,
     #[serde(deserialize_with = "nullable")]
     pub windows: Vec<Refilled>,
     #[serde(deserialize_with = "nullable")]
@@ -307,6 +308,8 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         }
         "no-matching-code-login" => "AAC found no matching Claude Code login on Windows for this account.".into(),
         "ambiguous-code-login" => "AAC found several matching Claude Code logins on Windows and couldn't select one for this reset.".into(),
+        "claim-unproven" => "AAC has yet to verify that this key can use a reset pack.".into(),
+        "reset-inventory-unavailable" if provider == "zai" => "Z.ai reset pack inventory is unavailable.".into(),
         "grant-unavailable" => "The provider says this reset can't be used yet.".into(),
         "redeeming" => "OpenAI is using this reset now.".into(),
         "no-fable-usage" => "Fable usage is at 0%. There is no Fable usage to reset.".into(),
@@ -340,7 +343,9 @@ pub fn rows_from_inventory(inv: &Inventory, provider: &str, now_ms: f64) -> Vec<
         .map(|g| {
             let unknown = g.kind == "unknown" || refill_words(&g.kind).is_none();
             let reason = g.claim_blocked_reason.clone().unwrap_or_default();
-            let phase = if g.resets_left == 0 {
+            let phase = if provider == "zai" && g.expires_at_ms.is_some_and(|e| e <= now_ms) {
+                Phase::Expired
+            } else if g.resets_left == 0 {
                 Phase::Used
             } else if g.expires_at_ms.is_some_and(|e| e <= now_ms) {
                 Phase::Expired
@@ -361,6 +366,8 @@ pub fn rows_from_inventory(inv: &Inventory, provider: &str, now_ms: f64) -> Vec<
                     Some(words) => format!("\u{201c}{words}\u{201d}"),
                     None => "A reset of another kind".into(),
                 }
+            } else if provider == "zai" {
+                g.label.clone()
             } else {
                 refill_words(&g.kind).unwrap_or_default().into()
             };
@@ -370,6 +377,8 @@ pub fn rows_from_inventory(inv: &Inventory, provider: &str, now_ms: f64) -> Vec<
                 UNKNOWN_NOTE.into()
             } else if phase.spent() || claimable {
                 g.refills_text.clone()
+            } else if provider == "zai" {
+                format!("{} {}", g.refills_text, why_not(&reason, provider))
             } else {
                 why_not(&reason, provider)
             };
@@ -498,10 +507,10 @@ pub fn summary(rows: &[Row], mode: &str, day: &dyn Fn(f64) -> String) -> (String
             "Qwen's only top-up is a Credit Pack, bought in the Qwen console.".into(),
         );
     }
-    let (one, many) = if mode == "zai" {
-        ("reset card", "reset cards")
-    } else {
-        ("rate-limit reset", "rate-limit resets")
+    let (one, many) = match mode {
+        "zai" => ("reset card", "reset cards"),
+        "zai-local" => ("reset pack", "reset packs"),
+        _ => ("rate-limit reset", "rate-limit resets"),
     };
     let c = counts(rows);
     let lead = if c.ready > 0 {
@@ -642,7 +651,18 @@ fn result_words(r: &ClaimResult, provider: &str) -> Said {
             }).collect::<Vec<_>>().join(", ");
             plain(&format!("Reset confirmed from the limits AAC could check. No comparable reading for {limits}."))
         }
+        "claimed" if provider == "zai" => {
+            let mut text = "Reset applied and confirmed.".to_string();
+            if let Some(usage) = used_now(&r.windows) {
+                text.push_str(&format!(" {usage}"));
+            }
+            if let Some(at) = r.weekly_reset_at_ms {
+                text.push_str(&format!(" The new week ends {}.", when(at)));
+            }
+            plain(&text)
+        }
         "claimed" => plain("Reset applied and confirmed."),
+        "not-applied" => plain("The reset was not applied. The same pack is still available."),
         // A Codex claim is confirmed by the exact credit being spent, not by any limit falling.
         "claimed-unconfirmed" if r.provider_success && provider == "codex" => Said {
             text: "Reset was applied, but AAC hasn't seen the credit spent yet. Check again.".into(),
@@ -728,6 +748,7 @@ pub fn history_word(outcome: &str) -> &'static str {
     match outcome {
         "claimed" => "Used, confirmed",
         "claimed-unconfirmed" => "Unconfirmed",
+        "not-applied" => "Not applied",
         "nothing-to-reset" => "Nothing to reset",
         "not-sent" => "Not sent",
         "no-credit" => "No reset left",
@@ -1277,6 +1298,12 @@ impl ResetCtx {
             entries.sort_by_key(|e| e.sequence.parse::<u64>().unwrap_or(0));
         });
     }
+    fn shows_claim_evidence(&self) -> bool {
+        self.provider.get() != "zai"
+            || self
+                .load
+                .with(|load| matches!(load, Load::Ready(inv) if inv.evidence.is_some()))
+    }
     fn history_of(&self, account: &str) -> Vec<HistoryEvent> {
         let canonical = self.lock_key(account);
         self.histories
@@ -1790,8 +1817,27 @@ pub fn ResetsGroup(
     });
     let has_rows = move || rows.with(|r| !r.is_empty());
     let mode_s = StoredValue::new(mode.clone());
+    let zai_external = move || {
+        mode_s.get_value() == "zai"
+            && rc
+                .load
+                .with(|load| matches!(load, Load::Ready(i) if i.reason == "provider-read-only"))
+    };
     let summary_v = move || {
-        let (lead, rest) = rows.with(|r| summary(r, &mode_s.get_value(), &day));
+        let mode = mode_s.get_value();
+        let (lead, rest) = rows.with(|r| {
+            if mode != "zai" || zai_external() {
+                return summary(r, &mode, &day);
+            }
+            if r.is_empty()
+                && !rc
+                    .load
+                    .with(|l| matches!(l, Load::Ready(i) if i.status == "ok"))
+            {
+                return ("Z.ai reset packs.".into(), String::new());
+            }
+            summary(r, "zai-local", &day)
+        });
         view! { <p class="fg-sum"><b>{lead}</b>{(!rest.is_empty()).then(|| format!(" {rest}"))}</p> }
     };
     let head = move || {
@@ -1803,19 +1849,26 @@ pub fn ResetsGroup(
         let mode = mode_s.get_value();
         let provider = rc.provider.get();
         if mode == "zai" {
-            return rows.with(|r| !r.is_empty()).then(|| {
-                (
-                    "Z.ai cards are used in Z.ai; AAC only lists them.".to_string(),
-                    false,
-                )
+            if zai_external() {
+                return None;
+            }
+            return rc.load.with(|l| match l {
+                Load::Loading | Load::Idle => {
+                    Some(("Checking for Z.ai reset packs…".into(), false))
+                }
+                Load::Ready(i) if i.status == "ok" => None,
+                _ => Some(("Z.ai reset pack inventory is unavailable.".into(), true)),
             });
         }
-        if mode != "claim" {
-            return None;
+        if mode == "claim" {
+            return rc.load.with(|l| inventory_read_note(l, &provider));
         }
-        rc.load.with(|l| inventory_read_note(l, &provider))
+        None
     };
     let pending_line = move || {
+        if !rc.shows_claim_evidence() {
+            return None;
+        }
         let said = rc.said.get();
         let pending = rc.unresolved.with(Unresolved::blocks);
         let said = said.or_else(|| {
@@ -1865,7 +1918,7 @@ pub fn ResetsGroup(
             })}
             {move || why().map(|(text, bad)| view! { <p class="fg-line" class:w-crit=bad>{text}</p> })}
             {pending_line}
-            {(mode == "zai").then(|| view! {
+            {move || zai_external().then(|| view! {
                 <p class="fg-line"><a class="btn sm ghost" href="https://z.ai/manage-apikey/subscription" target="_blank" rel="noopener noreferrer">"Use in Z.ai \u{2197}"</a></p>
             })}
             {(n_bal > 0).then(|| view! {
@@ -1996,7 +2049,8 @@ fn ResetConfirm(rc: ResetCtx) -> impl IntoView {
         );
         // A Codex credit can be used at any usage: say what is used now and that OpenAI picks what refills.
         let banked = g.kind == "banked";
-        let used = banked.then(|| used_now(&prepared.usage)).flatten();
+        let zai = rc.provider.get() == "zai";
+        let used = (banked || zai).then(|| used_now(&prepared.usage)).flatten();
         let expired = move || !sending && now.get() >= deadline;
         let reopen_at = reopen_deadline(prepared.expires_at_ms, deadline, js_sys::Date::now());
         let reopen = grant_key.clone();
@@ -2065,6 +2119,9 @@ pub fn ResetHistory(rc: ResetCtx) -> impl IntoView {
         history_rows(&rc.history_of(&account))
     });
     move || {
+        if !rc.shows_claim_evidence() {
+            return None;
+        }
         let list = rows.get();
         let older = rc.older.get();
         if list.is_empty() && older.is_empty() {

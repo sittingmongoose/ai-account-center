@@ -1,6 +1,7 @@
 //! Guarded reset claims. Inputs are PRIVATE collector snapshots, never browser bodies.
 //! The executor seam must prove identity on the credential host before returning a snapshot.
 //! No timer, switch handler or inventory read can dispatch a write.
+use crate::reset_rules::rules;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -41,7 +42,7 @@ impl Snapshot {
         if self.observed_at_ms > now || now - self.observed_at_ms > 30_000 {
             return Err("stale-inventory");
         }
-        if !matches!(self.identity.provider.as_str(), "claude" | "codex" | "zai" | "qwen") {
+        if rules(&self.identity.provider).is_none() && self.identity.provider != "qwen" {
             return Err("shape");
         }
         if self.grants.len() > 256
@@ -84,82 +85,37 @@ impl Snapshot {
         Ok(())
     }
 }
-fn kind(provider: &str, g: &Grant) -> Option<(&'static str, &'static str)> {
-    match (provider, g.kind.as_str()) {
-        ("claude", "session") => Some(("5-hour reset", "Refills your 5-hour allowance.")),
-        ("claude", "weekly") => Some(("Weekly reset", "Refills your weekly allowance.")),
-        ("claude", "full") => Some(("Full reset", "Refills your 5-hour and weekly allowances.")),
-        ("claude", "fable") => Some((
-            "Fable reset",
-            "Refills the Fable limit and restores the portion of your weekly allowance used by Fable.",
-        )),
-        ("codex", "banked") => Some(("Banked reset", "Refills the eligible Codex usage windows.")),
-        _ => None,
-    }
-}
 fn blocked(s: &Snapshot, g: &Grant, now: i64) -> Option<&'static str> {
-    if !matches!(s.identity.provider.as_str(), "claude" | "codex") {
+    let Some(r) = rules(&s.identity.provider) else {
         return Some("provider-read-only");
-    }
-    if kind(&s.identity.provider, g).is_none() {
+    };
+    if r.kind(g).is_none() {
         return Some("unknown-grant-kind");
     }
     if g.id.is_none() {
         return Some("exact-grant-unavailable");
     }
-    if s.identity.provider == "claude"
-        && g.id.as_ref().is_some_and(|id| {
-            id.len() > 40
-                || !id
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
-        })
-    {
-        return Some("unsupported-grant-id");
+    if let Some(reason) = r.grant_id_refusal(g) {
+        return Some(reason);
     }
     if !s.executor_ready {
         return Some("credential-host-unavailable");
     }
-    if s.identity.provider == "claude" && s.identity.organization.is_empty() {
-        return Some("identity-unconfirmed");
+    if let Some(reason) = r.identity_refusal(s) {
+        return Some(reason);
     }
     if g.expires_at_ms.is_some_and(|v| v <= now) || g.left == 0 {
         return Some("grant-unavailable");
     }
     if !g.usable {
-        // A Codex credit OpenAI is redeeming keeps its count until the refill finishes; it is in progress, not
-        // saved for later, so the page can say what is happening instead of "not usable yet".
-        return Some(if s.identity.provider == "codex" {
-            "redeeming"
-        } else {
-            "grant-unavailable"
-        });
+        return Some(r.unusable_reason());
     }
-    let permits_unobserved = s.identity.provider == "claude" && matches!(g.kind.as_str(), "full" | "fable");
-    if s.identity.provider == "claude"
-        && (permits_unobserved || g.kind == "weekly")
-        && s.windows.get("seven_day") == Some(&0.0)
-    {
-        return Some("no-weekly-usage");
-    }
-    if s.identity.provider == "claude" && g.kind == "fable" && s.windows.get("seven_day_overage_included") == Some(&0.0)
-    {
-        return Some("no-fable-usage");
-    }
-    let missing_required_window = if permits_unobserved {
-        !s.windows.contains_key("seven_day")
-    } else {
-        g.clears.iter().any(|k| !s.windows.contains_key(k))
-    };
-    if g.clears.is_empty() || missing_required_window {
-        return Some("refill-windows-unconfirmed");
-    }
-    None
+    r.blocked(s, g)
 }
 fn public(s: &Snapshot, g: &Grant, key: &str, now: i64) -> Value {
-    let (label, text) =
-        kind(&s.identity.provider, g).unwrap_or(("Other reset", "AAC does not know what this refills yet."));
-    let known = kind(&s.identity.provider, g).is_some();
+    let kind = rules(&s.identity.provider).and_then(|r| r.kind(g));
+    let (label, text) = kind.unwrap_or(("Other reset", "AAC does not know what this refills yet."));
+    let known = kind.is_some();
     // An unmapped kind keeps the provider's own (sanitised) words so it can be shown as the provider names it.
     let words = if known { None } else { g.words.as_deref() };
     json!({"grantKey":key,"kind":if known{g.kind.as_str()}else{"unknown"},"label":label,"refillsText":text,"providerWords":words,"resetsLeft":g.left,"expiresAtMs":g.expires_at_ms,"claimable":blocked(s,g,now).is_none(),"claimBlockedReason":blocked(s,g,now)})
@@ -234,6 +190,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS targets(key TEXT PRIMARY KEY, account TEXT NOT NULL, snapshot TEXT NOT NULL, grant_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS confirmations(token TEXT PRIMARY KEY, caller TEXT NOT NULL, account TEXT NOT NULL, target TEXT NOT NULL, fingerprint TEXT NOT NULL, expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(key TEXT PRIMARY KEY, account TEXT NOT NULL, target TEXT NOT NULL, before_json TEXT NOT NULL, grant_json TEXT NOT NULL, outcome TEXT NOT NULL, pending INTEGER NOT NULL, created INTEGER NOT NULL, lock_key TEXT NOT NULL, provider_success INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS zai_sends(attempt TEXT PRIMARY KEY, started_ms INTEGER NOT NULL);
             CREATE UNIQUE INDEX IF NOT EXISTS pending_account ON attempts(lock_key) WHERE pending=1;
             CREATE TABLE IF NOT EXISTS holds(account TEXT PRIMARY KEY, until_ms INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS history(seq INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, account_hash TEXT NOT NULL, event TEXT NOT NULL, target_hash TEXT NOT NULL, outcome TEXT NOT NULL, details TEXT NOT NULL DEFAULT '{}');
@@ -451,6 +408,61 @@ impl Store {
         Ok((captured, ticket))
     }
 
+    /// Bind a Z.ai read after the provider supplies the identity, only if no newer read
+    /// has started on the route. Its credential capture and ticket precede provider I/O.
+    pub fn bind_zai_read(&mut self, account: &str, ticket: &ReadTicket, identity: &Identity) -> Result<()> {
+        let tx = sql(self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        if identity.provider != "zai" || ticket.capture_version != 1 || ticket.route_key != hash(account) {
+            return Err("identity-unconfirmed");
+        }
+        let sequence = ticket.order().ok_or("stale-inventory")?;
+        let latest: i64 = sql(tx.query_row(
+            "SELECT value FROM read_ticket_counters WHERE account=?",
+            [account],
+            |r| r.get(0),
+        ))?;
+        if sequence != latest {
+            return Err("stale-inventory");
+        }
+        let since = Self::capture_since_from(&tx, account)?;
+        Self::bind_capture(&tx, account, identity, sequence, since)?;
+        sql(tx.commit())
+    }
+
+    /// Mark the one Z.ai dispatch immediately before its POST. Only an existing pending
+    /// attempt with an identical ledger-authored write can be marked, and only once.
+    pub fn mark_zai_send(&mut self, write: &Value, now: i64) -> Result<()> {
+        let attempt = write["attemptKey"].as_str().filter(|key| opaque(key)).ok_or("shape")?;
+        let account = write["routeAccount"].as_str().ok_or("shape")?;
+        let tx = sql(self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let now = (self.clock)(now)?;
+        let (before, grant, created): (String, String, i64) = sql(tx.query_row(
+            "SELECT before_json,grant_json,created FROM attempts WHERE key=? AND account=? AND pending=1",
+            params![attempt, account],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ))?;
+        let before: Snapshot = serde_json::from_str(&before).map_err(|_| "shape")?;
+        let grant: Grant = serde_json::from_str(&grant).map_err(|_| "shape")?;
+        let exact = Write::new(&before, &grant, attempt)?;
+        if before.identity.provider != "zai"
+            || now < created
+            || exact.method != write["method"]
+            || exact.body != write["body"]
+            || exact.source_binding != write["sourceBinding"]
+            || json!(exact.identity) != write["identity"]
+            || grant.expires_at_ms.is_some_and(|expiry| expiry <= now)
+            || Self::account_canonical_from(&tx, account)? != Some(Self::canonical(&before)?)
+        {
+            return Err("grant-changed");
+        }
+        sql(tx.execute("INSERT INTO zai_sends VALUES(?,?)", params![attempt, now]))?;
+        sql(tx.commit())
+    }
+
     fn bind_capture(
         db: &Connection,
         account: &str,
@@ -458,11 +470,11 @@ impl Store {
         sequence: i64,
         since_before: Option<i64>,
     ) -> Result<()> {
-        if !matches!(identity.provider.as_str(), "codex" | "claude")
+        if rules(&identity.provider).is_none()
             || identity.account.is_empty()
             || identity.profile.is_empty()
             || identity.host.is_empty()
-            || (identity.provider == "claude" && identity.organization.is_empty())
+            || (matches!(identity.provider.as_str(), "claude" | "zai") && identity.organization.is_empty())
         {
             return Err("identity-unconfirmed");
         }
@@ -945,13 +957,16 @@ impl Store {
             vec![]
         };
         let mut receipt = json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows,"sentUsage":sent_usage});
+        if let Some(at) = details["weeklyResetAtMs"].as_i64() {
+            receipt["weeklyResetAtMs"] = json!(at);
+        }
         if !unobserved.is_empty() {
             receipt["unobservedWindows"] = json!(unobserved);
         }
         if stored == "not-sent"
             && let Some(reason) = details["refusalReason"]
                 .as_str()
-                .filter(|r| REFUSAL_REASONS.contains(r))
+                .filter(|r| refusal_reason(&details["provider"], r))
         {
             receipt["refusalReason"] = json!(reason);
         }
@@ -1009,10 +1024,48 @@ impl Store {
         let g: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
         // OpenAI itself answered `reset` or `alreadyRedeemed` for this attempt, now or earlier.
         let provider_said_spent = previous_success || matches!(outcome, Outcome::Reset | Outcome::PriorSuccess);
+        let sent_at: Option<i64> = if before.identity.provider == "zai" {
+            sql(tx
+                .query_row("SELECT started_ms FROM zai_sends WHERE attempt=?", [attempt], |r| {
+                    r.get(0)
+                })
+                .optional())?
+        } else {
+            None
+        };
+        let after = if before.identity.provider == "zai" {
+            let current: Option<i64> = sql(tx
+                .query_row(
+                    "SELECT value FROM read_ticket_counters WHERE account=?",
+                    [account],
+                    |r| r.get(0),
+                )
+                .optional())?;
+            let same_account = Self::account_canonical_from(&tx, account)? == Some(Self::canonical(&before)?);
+            let route = hash(account);
+            after.filter(|a| {
+                same_account
+                    && sent_at.is_some_and(|sent| a.observed_at_ms >= sent)
+                    && a.read_ticket.as_ref().is_some_and(|ticket| {
+                        ticket.route_key == route && ticket.order().is_some_and(|order| Some(order) == current)
+                    })
+            })
+        } else {
+            after
+        };
         let verified = matches!(outcome, Outcome::Reset | Outcome::Ambiguous | Outcome::PriorSuccess)
             && after.is_some_and(|a| verify(&before, &g, a, now, provider_said_spent));
+        let unspent = matches!(outcome, Outcome::Ambiguous)
+            && !provider_said_spent
+            && sent_at.zip(after).is_some_and(|(sent, a)| {
+                newer_snapshot(&before, a, now)
+                    && rules(&before.identity.provider)
+                        .is_some_and(|r| r.unspent(&before, &g, a, a.observed_at_ms.saturating_sub(sent)))
+            });
         let (result, pending) = if verified {
             ("claimed", false)
+        } else if unspent {
+            ("not-applied", false)
         } else {
             match outcome {
                 Outcome::Reset | Outcome::Ambiguous => ("claimed-unconfirmed", true),
@@ -1045,10 +1098,16 @@ impl Store {
         }
         Self::audit(&tx, now, account, "verification", attempt, result, {
             let mut details = json!({"provider":before.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"idempotencyHash":hash(attempt),"providerSuccess":provider_success,"providerOutcome":outcome.word(),"verified":verified,"beforeCount":g.left,"afterCount":after.and_then(|a|a.grants.iter().find(|n|n.id==g.id).map(|n|n.left)),"beforeWindows":before.windows,"afterWindows":after.map(|a|&a.windows)});
+            if verified
+                && before.identity.provider == "zai"
+                && let Some(at) = after.and_then(|a| a.weekly_reset_at_ms)
+            {
+                details["weeklyResetAtMs"] = json!(at);
+            }
             // The reason is kept only for a settled no-send; earlier provider
             // success for the same attempt keeps its own answer.
             if result == "not-sent"
-                && let Some(reason) = reason.filter(|r| REFUSAL_REASONS.contains(r))
+                && let Some(reason) = reason.filter(|r| refusal_reason(&details["provider"], r))
             {
                 details["refusalReason"] = json!(reason);
             }
@@ -1176,6 +1235,10 @@ const REFUSAL_REASONS: &[&str] = &[
     "no-matching-code-login",
     "ambiguous-code-login",
 ];
+fn refusal_reason(provider: &Value, reason: &str) -> bool {
+    REFUSAL_REASONS.contains(&reason)
+        || provider == "zai" && matches!(reason, "claim-unproven" | "grant-changed" | "identity-changed")
+}
 impl Outcome {
     fn word(self) -> &'static str {
         match self {
@@ -1204,27 +1267,9 @@ pub struct Write {
 }
 impl Write {
     fn new(s: &Snapshot, g: &Grant, key: &str) -> Result<Self> {
-        let id = g.id.as_deref().ok_or("exact-grant-unavailable")?;
-        let (method, body) = match s.identity.provider.as_str() {
-            "claude" => {
-                if id.len() > 40
-                    || !id
-                        .bytes()
-                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
-                {
-                    return Err("exact-grant-unavailable");
-                }
-                (
-                    "claude.reset_rate_limits",
-                    json!({"program":"cedar_ember","grant_id":id,"request_id":key}),
-                )
-            }
-            "codex" => (
-                "account/rateLimitResetCredit/consume",
-                json!({"creditId":id,"idempotencyKey":key}),
-            ),
-            _ => return Err("provider-read-only"),
-        };
+        let (method, body) = rules(&s.identity.provider)
+            .ok_or("provider-read-only")?
+            .write(s, g, key)?;
         Ok(Self {
             method,
             body,
@@ -1234,6 +1279,11 @@ impl Write {
     }
 }
 fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64, provider_said_spent: bool) -> bool {
+    newer_snapshot(before, after, now)
+        && rules(&before.identity.provider).is_some_and(|r| r.verify(before, g, after, provider_said_spent))
+}
+
+fn newer_snapshot(before: &Snapshot, after: &Snapshot, now: i64) -> bool {
     let after_order = after
         .read_ticket
         .as_ref()
@@ -1246,55 +1296,7 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64, provider_sai
         .filter(|ticket| ticket.capture_version == 1)
         .map_or(Some(0), ReadTicket::order);
     let newer = matches!((before_order, after_order), (Some(before), Some(after)) if after > before);
-    if after.validate(now).is_err() || after.identity != before.identity || !newer {
-        return false;
-    }
-    // A missing grant alone is not proof: Claude needs an explicit chosen-grant decrement. OpenAI, though,
-    // removes a redeemed Codex credit from its list (seen live on 2026-11-16: the claim refilled the weekly
-    // window and the credit vanished, and the account then stayed locked as unconfirmed). So for Codex, a
-    // credit OpenAI itself answered `reset` or `alreadyRedeemed` for, gone from a newer read of the same
-    // identity, was spent by this attempt.
-    let Some(new) = after.grants.iter().find(|n| n.id == g.id) else {
-        return before.identity.provider == "codex" && provider_said_spent;
-    };
-    let spent = new.left.checked_add(1) == Some(g.left);
-    if before.identity.provider == "codex" {
-        // OpenAI chooses which limits a credit refills, and a credit can be used at any usage, so no window
-        // movement is required: the exact credit `redeemed` is the proof. Windows that fell are reported as
-        // evidence by the receipt. A `redeeming` credit (same count, not usable) is still in progress; it counts
-        // only when OpenAI itself answered `reset` or `alreadyRedeemed` for this attempt.
-        let redeeming = new.left == g.left && !new.usable;
-        return spent || (provider_said_spent && redeeming);
-    }
-    if before.identity.provider == "claude" && matches!(g.kind.as_str(), "full" | "fable") {
-        let readings = |key: &str| before.windows.get(key).zip(after.windows.get(key));
-        if !spent || !readings("seven_day").is_some_and(|(b, a)| a < b) {
-            return false;
-        }
-        if g.kind == "fable" {
-            // Scoped Fable and overall weekly percentages describe different allowances.
-            return readings("seven_day_overage_included").is_none_or(|(b, a)| a < b);
-        }
-        // A limit absent from either read cannot supply refill evidence. Already-empty limits can stay empty.
-        return g
-            .clears
-            .iter()
-            .all(|key| readings(key).is_none_or(|(b, a)| a < b || *b == 0.0 && *a == 0.0));
-    }
-    spent
-        && !g.clears.is_empty()
-        && g.clears
-            .iter()
-            .all(|k| match (before.windows.get(k), after.windows.get(k)) {
-                (Some(b), Some(a)) => a <= b,
-                _ => false,
-            })
-        && g.clears
-            .iter()
-            .any(|k| match (before.windows.get(k), after.windows.get(k)) {
-                (Some(b), Some(a)) => a < b,
-                _ => false,
-            })
+    after.validate(now).is_ok() && after.identity == before.identity && newer
 }
 
 fn wall_now() -> Result<i64> {

@@ -23,11 +23,13 @@ fn snap(account: &str, profile: &str, host: &str) -> Snapshot {
             left: 1,
             expires_at_ms: None,
             usable: true,
+            variant: None,
             words: None,
         }],
         windows: std::collections::BTreeMap::from([("primary".into(), 100.0)]),
         executor_ready: true,
         source_binding: format!("binding-{account}-{profile}-{host}"),
+        weekly_reset_at_ms: None,
         account_label: "fixture-principal".into(),
     }
 }

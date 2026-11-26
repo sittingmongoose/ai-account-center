@@ -26,6 +26,7 @@ fn grant(id: &str, left: u32) -> Grant {
         left,
         expires_at_ms: None,
         usable: true,
+        variant: None,
         words: None,
     }
 }
@@ -47,6 +48,7 @@ fn snapshot(db: &Path, left_b: u32, used: f64) -> Value {
         windows: std::collections::BTreeMap::from([("seven_day".into(), used)]),
         executor_ready: true,
         source_binding: "synthetic-binding".into(),
+        weekly_reset_at_ms: None,
         account_label: "synthetic-principal".into(),
     })
     .unwrap()

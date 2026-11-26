@@ -28,6 +28,7 @@ fn snapshot(provider: &str) -> Snapshot {
                 left: 2,
                 expires_at_ms: None,
                 usable: true,
+                variant: None,
                 words: None,
             },
             Grant {
@@ -37,12 +38,14 @@ fn snapshot(provider: &str) -> Snapshot {
                 left: 1,
                 expires_at_ms: None,
                 usable: true,
+                variant: None,
                 words: None,
             },
         ],
         windows: std::collections::BTreeMap::from([("seven_day".into(), 100.0)]),
         executor_ready: true,
         source_binding: "synthetic-binding".into(),
+        weekly_reset_at_ms: None,
         account_label: "synthetic-principal".into(),
     }
 }

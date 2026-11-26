@@ -264,6 +264,7 @@ fn codex_inner(
         grants.push(Grant {
             id: Some(id.to_owned()),
             kind: if known { "banked" } else { "unknown" }.into(),
+            variant: None,
             words: if known {
                 None
             } else {
@@ -326,6 +327,7 @@ fn codex_inner(
         windows,
         executor_ready: true,
         source_binding: state,
+        weekly_reset_at_ms: None,
         account_label: email
     }))
 }

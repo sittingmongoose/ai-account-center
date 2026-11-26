@@ -57,7 +57,7 @@ const inventory = (spent = false, pending = null) => ({
 });
 
 /** The reset routes, answered in the page. `claim` picks the claim's answer; every request is recorded. */
-function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_000, two = false, checkGate = null } = {}) {
+function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_000, two = false, checkGate = null, zaiLocal = false } = {}) {
 	const server = fakeServer();
 	const r = { spent: false, pending: null, claim };
 	const accounts = two ? [...DASHBOARD.accounts, CLAUDE_TWO] : DASHBOARD.accounts;
@@ -103,6 +103,14 @@ function resetServer({ claim = 'claimed', emptyWeekly = false, confirmMs = 120_0
 		})],
 		['GET', /^\/api\/accounts\/preferences$/, () => json(200, {})],
 		['GET', /^\/api\/(?:(?:antigravity|codex)\/profiles|claude\/desktop-profiles)$/, () => json(200, { profiles: [] })],
+		['GET', /^\/api\/accounts\/zai%3Az1\/reset-claims$/, () => json(200, zaiLocal ? {
+			status: 'ok', observedAtMs: Date.now(), canonicalAccountKey: KEY('6'), bindingRevision: '1',
+			grants: [
+				{ ...grant(KEY('e'), 'weekly', 'Weekly reset pack', 1, 12, false, 'claim-unproven'),
+					refillsText: 'Starts a new 7-day week and clears the 5-hour window. The monthly limit stays as it is.' },
+				grant(KEY('f'), 'unknown', 'Other reset', 1, 16, false, 'unknown-grant-kind', '5-hour reset pack'),
+			],
+		} : { status: 'unavailable', reason: 'provider-read-only', grants: [] })],
 		['GET', /^\/api\/accounts\/claude%3Aone\/reset-claims$/, () => {
 			// The server prunes expired tokens during a read and advances the revision; mirror that so
 			// a reopen read after the token's expiry sees a newer, token-free snapshot it can admit.
@@ -314,17 +322,39 @@ export const tests = {
 		await t.until('the dialog reopened', () => !!document.querySelector('[data-probe="reset-dialog"]'), null, { timeout: 5000 });
 	},
 
-	async 'resets: Z.ai lists its cards with Use in Z.ai, Qwen has none, neither reads the claim routes'(t) {
+	async 'resets: remote Z.ai cards link to Z.ai and Qwen has no resets'(t) {
 		const { server } = resetServer();
 		await open(t, server);
 		await openDetails(t, 'zai:z1');
+		await t.page.waitForSelector('.details [data-probe="resets"] a[href^="https://z.ai/"]');
 		await t.text('.details [data-probe="resets"] .fg-sum b', '2 reset cards ready.');
 		await t.visible('.details [data-probe="resets"] a[href^="https://z.ai/"]', 'Use in Z.ai');
 		await t.check('no Use reset for Z.ai', await t.page.evaluate(() => !document.querySelector('.details [data-probe="reset-use"]')));
 		await t.page.keyboard.press('Escape');
 		await openDetails(t, 'qwen:q1');
 		await t.text('.details [data-probe="resets"] .fg-sum b', 'No resets on this plan.');
-		await t.check('neither read a reset route', resetRequests(server).length === 0, JSON.stringify(resetRequests(server)));
+		await t.check('Z.ai only checks inventory and Qwen sends no request',
+			resetRequests(server).every((q) => q.method === 'GET' && q.path.includes('zai%3Az1')),
+			JSON.stringify(resetRequests(server)));
+	},
+
+	async 'resets: dashboard Z.ai key shows exact packs with claims off'(t) {
+		for (const pose of [{ width: 1440, height: 900 }, { width: 390, height: 844, phone: true }]) {
+			const { server } = resetServer({ zaiLocal: true });
+			await open(t, server, pose);
+			await openDetails(t, 'zai:z1');
+			const group = t.page.locator('.details [data-probe="resets"]');
+			await group.getByText('Weekly reset pack', { exact: true }).waitFor();
+			const text = await group.innerText();
+			await t.check('weekly pack explains both token windows and the monthly limit',
+				text.includes('Starts a new 7-day week') && text.includes('5-hour window') && text.includes('monthly limit'), text);
+			await t.check('weekly claim is unproven and the 5-hour pack is read-only',
+				text.includes('key can use a reset pack') && text.includes('5-hour reset pack') && text.includes('know what this refills'), text);
+			await t.check('dashboard key has no send control or external claim link',
+				await group.locator('[data-probe="reset-use"], a[href^="https://z.ai/"]').count() === 0);
+			await t.check('only inventory read', resetRequests(server).length > 0 && resetRequests(server).every((q) => q.method === 'GET'),
+				JSON.stringify(resetRequests(server)));
+		}
 	},
 
 	async 'resets: on a 390 phone and the folded Duo the sheet keeps every button reachable and unclipped'(t) {

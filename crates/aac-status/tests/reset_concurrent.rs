@@ -25,11 +25,13 @@ fn snap() -> Snapshot {
             left: 1,
             expires_at_ms: None,
             usable: true,
+            variant: None,
             words: None,
         }],
         windows: std::collections::BTreeMap::from([("primary".into(), 100.0)]),
         executor_ready: true,
         source_binding: "fixture-binding".into(),
+        weekly_reset_at_ms: None,
         account_label: "fixture-principal".into(),
     }
 }

@@ -147,7 +147,7 @@ pub struct DetailsView {
     pub amounts: Vec<AmountView>,
     #[serde(deserialize_with = "nullable")]
     pub facts: Vec<FactView>,
-    /// "claim" (Claude, Codex), "zai" (listed only), "qwen" (none on the plan) or "".
+    /// "claim" (Claude, Codex), "zai" (local inventory or provider link), "qwen" (none on the plan) or "".
     #[serde(deserialize_with = "nullable")]
     pub resets_mode: String,
     /// The resets the usage reading lists (shown until, or unless, the reset inventory is read).
@@ -163,7 +163,7 @@ pub struct DetailsView {
 impl DetailsView {
     /// The private inventory is authoritative even when the public reading has no reset rows yet.
     pub fn reads_resets(&self) -> bool {
-        self.resets_mode == "claim"
+        matches!(self.resets_mode.as_str(), "claim" | "zai")
     }
 }
 
@@ -546,7 +546,7 @@ mod tests {
         assert!(s.browser_session.is_empty());
         // a Z.ai or Qwen account never reads the claim inventory
         let z = parse(r#"{"id":"zai:a","provider":"zai","resetsMode":"zai","resetRows":[{"key":"z","state":"ready","left":2}]}"#).unwrap();
-        assert!(!z.reads_resets());
+        assert!(z.reads_resets());
     }
 
     #[test]
