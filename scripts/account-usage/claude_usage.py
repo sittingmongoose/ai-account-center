@@ -26,13 +26,19 @@ import math
 import ntpath
 import os
 from pathlib import Path
+import plistlib
 import re
+import shutil
 import sqlite3
 import stat
+import subprocess
 import sys
+import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.request
+import uuid
 
 
 # Same safe-ID rule as the server (CLAUDE_PROFILE_ID_PATTERN). Which IDs exist
@@ -235,9 +241,24 @@ def _canonical_profile_directory(value):
         raise UsageUnavailable()
 
 
+def _mac_profile_path(profile_id, home=None, is_default=False):
+    home = Path.home() if home is None else Path(home)
+    support = home / "Library" / "Application Support"
+    return support / ("Claude" if is_default else "Claude-" + profile_id)
+
+
 def resolve_profile_path(profile_id, profile_dir, home=None, is_default=False):
     """Prefer the caller-supplied manifest directory; otherwise derive the
-    generic named-profile directory (or the Store default when flagged)."""
+    generic named-profile directory (or the Store/Mac default when flagged)."""
+    if sys.platform == "darwin":
+        if profile_dir is not None:
+            if (not isinstance(profile_dir, str) or not profile_dir or len(profile_dir) > 4096
+                    or "\x00" in profile_dir or not os.path.isabs(profile_dir)):
+                raise UsageUnavailable()
+            return _canonical_profile_directory(Path(profile_dir))
+        if not valid_profile_id(profile_id):
+            raise UsageUnavailable()
+        return _canonical_profile_directory(_mac_profile_path(profile_id, home, is_default))
     if profile_dir is not None:
         if (not isinstance(profile_dir, str) or not profile_dir or len(profile_dir) > 4096
                 or "\x00" in profile_dir or not ntpath.isabs(profile_dir)):
@@ -292,17 +313,162 @@ def profile_key(profile_root):
     return unprotect(wrapped[5:])
 
 
-def decrypt_cache(profile_path):
-    # cryptography is already installed on the user's Windows machine. No
-    # packages are downloaded by the collector.
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+MAC_KEYCHAIN_ITEM_NOT_FOUND = -25300
+MAC_KEYCHAIN_ACL_OR_LOCKED = (-25293, -25308)
 
+
+def _mac_keychain_account():
+    """The Keychain account Claude Code keys its items to: $USER, else the OS user name."""
+    value = os.environ.get("USER")
+    if not value:
+        try:
+            import pwd
+            value = pwd.getpwuid(os.getuid()).pw_name
+        except Exception:
+            value = None
+    if value and re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        return value
+    return "claude-code-user"
+
+
+def _mac_keychain_unlocked():
+    """Check whether the default macOS login Keychain is unlocked in this session, without UI."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+        security.SecKeychainSetUserInteractionAllowed.argtypes = [ctypes.c_bool]
+        security.SecKeychainSetUserInteractionAllowed.restype = ctypes.c_int32
+        if security.SecKeychainSetUserInteractionAllowed(False) != 0:
+            return False
+        security.SecKeychainGetStatus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        security.SecKeychainGetStatus.restype = ctypes.c_int32
+        flags = ctypes.c_uint32(0)
+        rc = security.SecKeychainGetStatus(None, ctypes.byref(flags))
+        return rc == 0 and bool(flags.value & 1)
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _mac_keychain_read_bytes(service, account=None, allow_security_cli=False):
+    """Read one macOS Keychain generic password non-interactively.
+
+    Returns (0, raw_bytes), (-25300, None) when absent, or (osstatus, None) when
+    locked/refused. Only Claude Code items (created by `/usr/bin/security`) may
+    use the `/usr/bin/security` fallback, and only after proving the login
+    Keychain is unlocked in a non-SSH desktop session.
+    """
+    if sys.platform != "darwin":
+        return MAC_KEYCHAIN_ITEM_NOT_FOUND, None
+    try:
+        security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+        security.SecKeychainSetUserInteractionAllowed.argtypes = [ctypes.c_bool]
+        security.SecKeychainSetUserInteractionAllowed.restype = ctypes.c_int32
+        if security.SecKeychainSetUserInteractionAllowed(False) != 0:
+            return -1, None
+        find = security.SecKeychainFindGenericPassword
+        find.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
+            ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p,
+        ]
+        find.restype = ctypes.c_int32
+        security.SecKeychainItemFreeContent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        service_bytes = service.encode("utf-8")
+        account_bytes = account.encode("utf-8") if account else None
+        length, pointer = ctypes.c_uint32(), ctypes.c_void_p()
+        rc = find(
+            None, len(service_bytes), service_bytes,
+            len(account_bytes) if account_bytes is not None else 0, account_bytes,
+            ctypes.byref(length), ctypes.byref(pointer), None,
+        )
+        if rc == 0:
+            try:
+                if not 0 < length.value <= MAX_BYTES or not pointer:
+                    return -1, None
+                return 0, ctypes.string_at(pointer, length.value)
+            finally:
+                security.SecKeychainItemFreeContent(None, pointer)
+        if rc == MAC_KEYCHAIN_ITEM_NOT_FOUND:
+            return MAC_KEYCHAIN_ITEM_NOT_FOUND, None
+        if (allow_security_cli and account and rc in MAC_KEYCHAIN_ACL_OR_LOCKED
+                and _mac_keychain_unlocked()
+                and not os.environ.get("SSH_CONNECTION") and not os.environ.get("SSH_CLIENT")):
+            try:
+                proc = subprocess.run(
+                    ["/usr/bin/security", "find-generic-password", "-a", account, "-s", service, "-w"],
+                    capture_output=True, timeout=3,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return rc, None
+            if proc.returncode == 0:
+                raw = proc.stdout.rstrip(b"\r\n")
+                if 0 < len(raw) <= MAX_BYTES:
+                    return 0, raw
+        return rc, None
+    except (OSError, ValueError, UnicodeError, AttributeError):
+        return -1, None
+
+
+def _mac_aes128_cbc_decrypt(key, iv, ciphertext):
+    """Decrypt Electron macOS safeStorage AES-128-CBC ciphertext via CommonCrypto."""
+    lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    lib.CCCrypt.argtypes = [
+        ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+        ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    lib.CCCrypt.restype = ctypes.c_int32
+    out_cap = len(ciphertext) + 16
+    if out_cap > MAX_BYTES + 16:
+        raise UsageUnavailable()
+    out_buf = ctypes.create_string_buffer(out_cap)
+    out_len = ctypes.c_size_t(0)
+    # kCCDecrypt=1, kCCAlgorithmAES128=0, kCCOptionPKCS7Padding=1
+    rc = lib.CCCrypt(
+        1, 0, 1,
+        key, len(key), iv,
+        ciphertext, len(ciphertext),
+        out_buf, out_cap, ctypes.byref(out_len),
+    )
+    if rc != 0 or not 0 < out_len.value <= MAX_BYTES:
+        raise UsageUnavailable()
+    return out_buf.raw[:out_len.value]
+
+
+def decrypt_cache(profile_path):
     config = read_json(profile_path / "config.json")
     account_uuid = config.get("lastKnownAccountUuid")
     if not isinstance(account_uuid, str) or not re.fullmatch(UUID, account_uuid):
         raise UsageUnavailable("needs_sign_in")
-    key = profile_key(profile_path)
     blob = decode_base64(config.get("oauth:tokenCacheV2"))
+    if sys.platform == "darwin":
+        if not blob.startswith(b"v10") or len(blob) < 19 or (len(blob) - 3) % 16 != 0:
+            raise UsageUnavailable()
+        rc, secret_bytes = _mac_keychain_read_bytes(
+            "Claude Safe Storage", "Claude Key", allow_security_cli=False
+        )
+        if rc != 0 or not secret_bytes:
+            raise UsageUnavailable()
+        try:
+            key = hashlib.pbkdf2_hmac("sha1", secret_bytes, b"saltysalt", 1003, dklen=16)
+            decoded = _mac_aes128_cbc_decrypt(key, b" " * 16, blob[3:])
+            if len(decoded) > MAX_BYTES:
+                raise UsageUnavailable()
+            cache = json.loads(decoded)
+        except UsageUnavailable:
+            raise
+        except Exception:
+            raise UsageUnavailable()
+        if not isinstance(cache, dict) or len(cache) > 128:
+            raise UsageUnavailable()
+        return account_uuid, cache
+    # cryptography is already installed on the user's Windows machine. No
+    # packages are downloaded by the collector.
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = profile_key(profile_path)
     if not blob.startswith(b"v10") or len(blob) < 31:
         raise UsageUnavailable()
     try:
@@ -1352,7 +1518,7 @@ def _reset_target_organization(request):
 def _desktop_reset_login(request):
     """The Desktop profile's saved login, read without any provider call."""
     profile_id = request["profile"]
-    if (sys.platform != "win32" or not valid_profile_id(profile_id)
+    if (sys.platform not in ("win32", "darwin") or not valid_profile_id(profile_id)
             or resolve_expected_email(request["expectedEmail"]) is None):
         raise UsageUnavailable()
     organization = _reset_target_organization(request)
@@ -1401,23 +1567,51 @@ def _code_login_roots(home):
     return roots[:MAX_CODE_LOGIN_ROOTS]
 
 
+def _mac_code_keychain_service(root, home):
+    if root == home / ".claude":
+        return "Claude Code-credentials"
+    digest = hashlib.sha256(unicodedata.normalize("NFC", str(root)).encode("utf-8")).hexdigest()[:8]
+    return "Claude Code-credentials-" + digest
+
+
+def _code_login_oauth(root, home):
+    if sys.platform == "darwin":
+        rc, raw = _mac_keychain_read_bytes(
+            _mac_code_keychain_service(root, home),
+            _mac_keychain_account(),
+            allow_security_cli=True,
+        )
+        if rc == 0 and raw:
+            try:
+                parsed = json.loads(raw.decode("utf-8-sig"))
+                return parsed.get("claudeAiOauth") if isinstance(parsed, dict) else None
+            except (ValueError, UnicodeError):
+                return None
+        if rc != MAC_KEYCHAIN_ITEM_NOT_FOUND:
+            # Keychain answered locked/unreadable; do not silently substitute a file.
+            return None
+    credentials = root / ".credentials.json"
+    if not _regular_file(credentials):
+        return None
+    return read_json(credentials).get("claudeAiOauth")
+
+
 def code_reset_logins(expected_email, home=None):
     """Unexpired Claude Code OAuth logins on this computer whose saved account
     email is the expected one. Read only: AAC never refreshes or writes them."""
     expected = resolve_expected_email(expected_email)
-    if sys.platform != "win32" or expected is None:
+    if sys.platform not in ("win32", "darwin") or expected is None:
         return []
     home = Path(home) if home is not None else _code_home()
     found = []
     now = time.time() * 1000
     for root in _code_login_roots(home):
         metadata = home / ".claude.json" if root == home / ".claude" else root / ".claude.json"
-        credentials = root / ".credentials.json"
-        if not _regular_file(metadata) or not _regular_file(credentials):
+        if not _regular_file(metadata):
             continue
         try:
             saved = read_json(metadata).get("oauthAccount")
-            oauth = read_json(credentials).get("claudeAiOauth")
+            oauth = _code_login_oauth(root, home)
         except UsageUnavailable:
             continue
         if not isinstance(saved, dict) or not isinstance(oauth, dict):
@@ -1550,12 +1744,13 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
     result = {
         "schemaVersion": 1, "provider": "claude", "profileId": profile_id,
         "platform": platform, "status": "unavailable", "email": None,
-        "source": "Claude Desktop live quota on Windows", "plan": None,
+        "source": "Claude Desktop live quota on macOS" if platform == "mac" else "Claude Desktop live quota on Windows", "plan": None,
         "fetchedAt": None, "accountVerified": False, "organizationVerified": False,
         "windows": [],
     }
     expected = resolve_expected_email(expected_email)
-    if not valid_profile_id(profile_id) or expected is None or platform != "windows" or sys.platform != "win32":
+    platform_ok = (platform == "windows" and sys.platform == "win32") or (platform == "mac" and sys.platform == "darwin")
+    if not valid_profile_id(profile_id) or expected is None or not platform_ok:
         return result
     cooldown = {}
     try:
@@ -1806,6 +2001,148 @@ def reset_host(request):
     return result
 
 
+def _mac_helper_source_text():
+    embedded = globals().get("__aac_source__")
+    if isinstance(embedded, str) and embedded:
+        return embedded
+    file_path = globals().get("__file__")
+    if isinstance(file_path, str):
+        candidate = Path(file_path)
+        if _regular_file(candidate):
+            try:
+                return candidate.read_text(encoding="utf-8")
+            except OSError:
+                return None
+    return None
+
+
+def _mac_needs_gui_bridge():
+    """An SSH process on macOS runs outside the user's GUI Keychain security session."""
+    if sys.platform != "darwin" or os.environ.get("AAC_MAC_GUI_HELPER") == "1":
+        return False
+    return not _mac_keychain_unlocked()
+
+
+def _mac_run_in_gui_session(request, dispatch):
+    """Run one bounded reset_host call inside launchd `gui/<uid>` so macOS Keychain works over SSH.
+
+    Zero credentials touch disk: only helper source, the non-secret request JSON,
+    and the non-secret reply JSON pass through the private 0700 temp directory.
+    """
+    source_text = _mac_helper_source_text()
+    if not source_text:
+        return None
+    domain = "gui/" + str(os.getuid())
+    try:
+        probe = subprocess.run(["/bin/launchctl", "print", domain], capture_output=True, timeout=1.5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if probe.returncode != 0:
+        return None
+
+    is_claim = request.get("action") == "claim"
+    budget = 3.0 if request.get("action") == "capture" else 10.5
+    deadline = time.monotonic() + budget
+    label = "com.ccs.reset-claims." + uuid.uuid4().hex
+    service = domain + "/" + label
+    temp_dir = Path(tempfile.mkdtemp(prefix="aac-reset-gui-"))
+    os.chmod(temp_dir, 0o700)
+    bootstrapped = False
+    try:
+        source_path = temp_dir / "source.py"
+        runner_path = temp_dir / "runner.py"
+        req_path = temp_dir / "request.json"
+        out_path = temp_dir / "result.json"
+        plist_path = temp_dir / "agent.plist"
+
+        source_path.write_text(source_text, encoding="utf-8")
+        os.chmod(source_path, 0o600)
+        runner_code = (
+            "import json, os, sys\n"
+            "scope = {'__name__': 'aac_private_reset'}\n"
+            "exec(compile(open(sys.argv[1], encoding='utf-8').read(), 'managed-reset', 'exec'), scope)\n"
+            "req = json.load(sys.stdin)\n"
+            "ans = scope['reset_host'](req)\n"
+            "tmp = sys.argv[2] + '.tmp'\n"
+            "with open(tmp, 'w', encoding='utf-8') as f:\n"
+            "    json.dump(ans, f, allow_nan=False)\n"
+            "os.chmod(tmp, 0o600)\n"
+            "os.replace(tmp, sys.argv[2])\n"
+        )
+        runner_path.write_text(runner_code, encoding="utf-8")
+        os.chmod(runner_path, 0o600)
+        req_path.write_text(json.dumps(request, allow_nan=False), encoding="utf-8")
+        os.chmod(req_path, 0o600)
+
+        env = {"AAC_MAC_GUI_HELPER": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        for name in ("HOME", "USER", "LOGNAME", "LANG"):
+            if val := os.environ.get(name):
+                env[name] = val
+        plist_path.write_bytes(plistlib.dumps({
+            "Label": label,
+            "ProgramArguments": [sys.executable, str(runner_path), str(source_path), str(out_path)],
+            "WorkingDirectory": str(temp_dir),
+            "RunAtLoad": True,
+            "ProcessType": "Interactive",
+            "KeepAlive": False,
+            "AbandonProcessGroup": False,
+            "ExitTimeOut": 1,
+            "StandardInPath": str(req_path),
+            "StandardOutPath": "/dev/null",
+            "StandardErrorPath": "/dev/null",
+            "EnvironmentVariables": env,
+        }))
+        os.chmod(plist_path, 0o600)
+
+        # Once bootstrap runs for a claim, the child may reach the provider POST.
+        if is_claim:
+            dispatch["started"] = True
+        bootstrapped = True
+        remaining = max(0.2, deadline - time.monotonic())
+        boot = subprocess.run(
+            ["/bin/launchctl", "bootstrap", domain, str(plist_path)],
+            capture_output=True, timeout=min(3.0, remaining),
+        )
+        if boot.returncode != 0:
+            return {"unavailable": True, "outcome": "ambiguous"} if is_claim else {"unavailable": True}
+
+        while time.monotonic() < deadline:
+            if out_path.is_file():
+                break
+            remaining = max(0.1, deadline - time.monotonic())
+            try:
+                polled = subprocess.run(
+                    ["/bin/launchctl", "print", service],
+                    capture_output=True, text=True, timeout=min(1.0, remaining),
+                )
+            except (OSError, subprocess.SubprocessError):
+                break
+            if polled.returncode != 0:
+                break
+            job_phase = re.search(r"^\s*state = (.+)$", polled.stdout or "", re.M)
+            job_exit = re.search(r"^\s*last exit code = (\d+)", polled.stdout or "", re.M)
+            if job_phase and job_phase.group(1).strip() in ("not running", "exited") and job_exit:
+                break
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+        if out_path.is_file():
+            raw = out_path.read_bytes()[:MAX_BYTES + 1]
+            if len(raw) <= MAX_BYTES:
+                parsed = json.loads(raw.decode("utf-8"))
+                if isinstance(parsed, dict):
+                    return parsed
+        return {"unavailable": True, "outcome": "ambiguous"} if is_claim else {"unavailable": True}
+    except Exception:
+        return {"unavailable": True, "outcome": "ambiguous"} if is_claim else {"unavailable": True}
+    finally:
+        if bootstrapped:
+            try:
+                subprocess.run(["/bin/launchctl", "bootout", service], capture_output=True, timeout=2.0)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def _reset_host(request, dispatch):
     """Private stdin host RPC. Credentials stay on this host, including during writes.
 
@@ -1813,13 +2150,20 @@ def _reset_host(request, dispatch):
     No public collector CLI, refresh or switch calls this function.
     """
     try:
+        if _mac_needs_gui_bridge():
+            bridged = _mac_run_in_gui_session(request, dispatch)
+            if bridged is not None:
+                return bridged
+            if dispatch["started"]:
+                return {"unavailable": True, "outcome": "ambiguous"}
         profile_id = request["profile"]
+        host_platform = "mac" if sys.platform == "darwin" else "windows"
         if request.get("action") == "capture":
             return capture_reset_login(request)
         captured = []
         codes = code_reset_logins(request.get("expectedEmail"))
         if not codes:
-            result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
+            result = collect(profile_id, host_platform, expected_email=request["expectedEmail"],
                              profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
                              private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
                              expected_saved_organization=_reset_target_organization(request))
@@ -1838,7 +2182,7 @@ def _reset_host(request, dispatch):
 
             result = {"status": "needs_sign_in"}
             if login["desktop"] is not None:
-                result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
+                result = collect(profile_id, host_platform, expected_email=request["expectedEmail"],
                                  profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
                                  private_reset_sink=captured.append, expected_saved_binding=login["desktop"]["binding"],
                                  expected_saved_organization=login["organization"])

@@ -1,6 +1,6 @@
 {
   "crates/aac-http/src/public_auth/reset_routes.rs": "0e2f27a5f4473605bf01548b916bb956879df73ef432509efc4dfc4394065514",
-  "scripts/account-usage/claude_usage.py": "c667bba1afb50be0b0efce4bfeb18c79029ddc1f7c5ccab732b298082d7a9da5",
+  "scripts/account-usage/claude_usage.py": "b221b859434ee9ae949b1638a71d616506e7b27de59e39c85cb954f0b643728e",
   "scripts/account-usage/cursor_usage.py": "7fc27661a8f9a44a67683c7d485366d903e41d732d1a2014aed7fef405cee154",
   "scripts/account-usage/desktop_helpers.py": "86d73d556af2c28855d48258bbd9687c8c55d3070d629c282664aab1a10880d3",
   "scripts/account-usage/desktop_usage.py": "21716466b3defc9356524c7b9cd1e453437f2c43f3ef3755296e4d119738d5df",

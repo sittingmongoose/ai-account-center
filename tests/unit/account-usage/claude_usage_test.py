@@ -2921,5 +2921,262 @@ class RefusalReasonParityTests(unittest.TestCase):
             self.assertIn(f'"{reason}"', page, reason)
 
 
+
+class MacKeychainResetHostTests(unittest.TestCase):
+    CODE_TOKEN = "fixture-private-mac-code-token"
+    DESKTOP_TOKEN = "fixture-private-mac-desktop-token"
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.home, ignore_errors=True))
+        root = self.home / ".claude-t3" / "work"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".claude.json").write_text(json.dumps({"oauthAccount": {
+            "accountUuid": ACCOUNT, "organizationUuid": ORG, "emailAddress": EMAIL}}))
+        self.code_root = root
+        self.desktop_dir = self.home / "Library" / "Application Support" / "Claude-work"
+        self.request = {
+            "profile": "work",
+            "expectedEmail": EMAIL,
+            "profileDir": str(self.desktop_dir),
+            "isDefault": False,
+            "host": "mac:fixture-mac",
+            "action": "read",
+        }
+
+    def code_payload(self, token=None, expires=None, scopes=("user:inference", "user:profile")):
+        return json.dumps({"claudeAiOauth": {
+            "accessToken": token or self.CODE_TOKEN,
+            "refreshToken": "fixture-private-mac-refresh",
+            "expiresAt": expires if expires is not None else (time.time() + 3600) * 1000,
+            "scopes": list(scopes),
+        }}).encode("utf-8")
+
+    def usage_payload(self):
+        return {"seven_day": {"utilization": 85}, "cedar_ember": {
+            "eligible": True,
+            "grants": [{"id": "mac_grant", "resets_left": 1, "resets_total": 1,
+                        "paused": False, "usable_now": True, "clears": ["seven_day"]}],
+        }}
+
+    def test_mac_code_keychain_capture_read_and_claim(self):
+        expected_svc = "Claude Code-credentials-" + hashlib.sha256(str(self.code_root).encode("utf-8")).hexdigest()[:8]
+        seen = []
+
+        fixed_payload = self.code_payload()
+
+        def fake_kc(service, account=None, allow_security_cli=False):
+            seen.append((service, allow_security_cli))
+            if service == expected_svc:
+                return (0, fixed_payload)
+            return (usage.MAC_KEYCHAIN_ITEM_NOT_FOUND, None)
+
+        fake_client = FakeClient(profile(), self.usage_payload())
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=True), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", side_effect=fake_kc), \
+             mock.patch.object(usage, "Client") as client_cls:
+            capture = usage.reset_host(dict(self.request, action="capture"))
+        client_cls.assert_not_called()
+        self.assertEqual((capture["account"], capture["organization"]), (ACCOUNT, ORG))
+        self.assertNotIn(self.CODE_TOKEN, json.dumps(capture))
+        self.assertTrue(any(svc == expected_svc and allow for svc, allow in seen))
+
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=True), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", side_effect=fake_kc), \
+             mock.patch.object(usage, "Client", return_value=fake_client):
+            read_res = usage.reset_host(dict(
+                self.request,
+                action="read",
+                expectedSavedBinding=capture["savedLoginBinding"],
+                expectedSavedOrganization=ORG,
+            ))
+        self.assertEqual(read_res["identity"]["host"], "mac:fixture-mac")
+        self.assertEqual(read_res["raw"]["grants"][0]["id"], "mac_grant")
+        self.assertNotIn(self.CODE_TOKEN, json.dumps(read_res))
+
+        class FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n): return json.dumps({"result": "reset"}).encode("utf-8")
+
+        claim_client = FakeClient(profile(), self.usage_payload())
+        sent_reqs = []
+
+        class FakeOpener:
+            def open(self, req, timeout=None):
+                sent_reqs.append(req)
+                return FakeResp()
+
+        claim_client.opener = FakeOpener()
+        write = {
+            "identity": read_res["identity"],
+            "sourceBinding": read_res["sourceBinding"],
+            "method": "claude.reset_rate_limits",
+            "body": {"program": "cedar_ember", "grant_id": "mac_grant", "request_id": "mac-req-1"},
+        }
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=True), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", side_effect=fake_kc), \
+             mock.patch.object(usage, "Client", return_value=claim_client):
+            claim_res = usage.reset_host(dict(self.request, action="claim", write=write))
+        self.assertEqual(claim_res, {"outcome": "reset"})
+        self.assertEqual(len(sent_reqs), 1)
+        self.assertTrue(sent_reqs[0].headers["User-agent"].startswith("claude-cli/"))
+
+    def test_mac_default_code_keychain_and_locked_does_not_substitute_file(self):
+        default_dir = self.home / ".claude"
+        default_dir.mkdir(parents=True, exist_ok=True)
+        (self.home / ".claude.json").write_text(json.dumps({"oauthAccount": {
+            "accountUuid": ACCOUNT, "organizationUuid": ORG, "emailAddress": EMAIL}}))
+        (default_dir / ".credentials.json").write_text(self.code_payload().decode("utf-8"))
+        __import__("shutil").rmtree(self.home / ".claude-t3")
+
+        # 1. Locked Keychain (-25293) must NOT fall back to .credentials.json.
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", return_value=(-25293, None)):
+            self.assertEqual(usage.code_reset_logins(EMAIL, home=self.home), [])
+
+        # 2. Absent Keychain item (-25300) falls back to .credentials.json.
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", return_value=(usage.MAC_KEYCHAIN_ITEM_NOT_FOUND, None)):
+            found = usage.code_reset_logins(EMAIL, home=self.home)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["account"], ACCOUNT)
+        self.assertEqual(usage._mac_code_keychain_service(default_dir, self.home), "Claude Code-credentials")
+
+    def test_mac_desktop_safe_storage_decrypt_and_locked_fallback(self):
+        self.desktop_dir.mkdir(parents=True, exist_ok=True)
+        cache_obj = cache(key(), token=self.DESKTOP_TOKEN, expiresAt=(time.time() + 3600) * 1000)
+        plain_json = json.dumps(cache_obj).encode("utf-8")
+        fake_ct = b"X" * 32
+        (self.desktop_dir / "config.json").write_text(json.dumps({
+            "lastKnownAccountUuid": ACCOUNT,
+            "oauth:tokenCacheV2": base64.b64encode(b"v10" + fake_ct).decode("ascii"),
+        }))
+
+        expected_key = hashlib.pbkdf2_hmac("sha1", b"fixture-safe-storage-pass", b"saltysalt", 1003, dklen=16)
+        decrypt_args = []
+
+        def fake_aes(k, iv, ct):
+            decrypt_args.append((k, iv, ct))
+            return plain_json
+
+        def kc_desktop_ok(service, account=None, allow_security_cli=False):
+            if service == "Claude Safe Storage":
+                self.assertEqual(account, "Claude Key")
+                self.assertFalse(allow_security_cli)
+                return (0, b"fixture-safe-storage-pass")
+            return (usage.MAC_KEYCHAIN_ITEM_NOT_FOUND, None)
+
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=True), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", side_effect=kc_desktop_ok), \
+             mock.patch.object(usage, "_mac_aes128_cbc_decrypt", side_effect=fake_aes), \
+             mock.patch.object(usage, "Client", return_value=FakeClient(profile(), self.usage_payload())):
+            cap = usage.reset_host(dict(self.request, action="capture"))
+            res = usage.reset_host(dict(
+                self.request,
+                action="read",
+                expectedSavedBinding=cap["savedLoginBinding"],
+                expectedSavedOrganization=ORG,
+            ))
+        self.assertEqual(res["identity"]["host"], "mac:fixture-mac")
+        self.assertEqual(decrypt_args[0], (expected_key, b" " * 16, fake_ct))
+        self.assertNotIn(self.DESKTOP_TOKEN, json.dumps(res))
+
+        # When Claude Safe Storage is ACL-refused (-25293), Code Keychain takes over cleanly.
+        code_svc = "Claude Code-credentials-" + hashlib.sha256(str(self.code_root).encode("utf-8")).hexdigest()[:8]
+
+        def kc_desktop_locked(service, account=None, allow_security_cli=False):
+            if service == "Claude Safe Storage":
+                return (-25293, None)
+            if service == code_svc:
+                return (0, self.code_payload())
+            return (usage.MAC_KEYCHAIN_ITEM_NOT_FOUND, None)
+
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=True), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", side_effect=kc_desktop_locked), \
+             mock.patch.object(usage, "Client", return_value=FakeClient(profile(), self.usage_payload())):
+            cap2 = usage.reset_host(dict(self.request, action="capture"))
+        self.assertEqual((cap2["account"], cap2["organization"]), (ACCOUNT, ORG))
+
+    def test_mac_ssh_gui_bridge_delegates_cleans_up_and_preserves_claim_safety(self):
+        import plistlib
+        calls = []
+        created_dirs = []
+
+        def fake_launchctl(argv, **kwargs):
+            calls.append(argv)
+            if argv[:2] == ["/bin/launchctl", "print"] and len(argv) == 3 and "/" in argv[2] and argv[2].count("/") == 1:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if argv[:2] == ["/bin/launchctl", "bootstrap"]:
+                plist = plistlib.loads(Path(argv[3]).read_bytes())
+                created_dirs.append(Path(plist["WorkingDirectory"]))
+                self.assertEqual(plist["ProcessType"], "Interactive")
+                self.assertEqual(plist["EnvironmentVariables"]["AAC_MAC_GUI_HELPER"], "1")
+                self.assertEqual(plist["StandardOutPath"], "/dev/null")
+                self.assertEqual(plist["StandardErrorPath"], "/dev/null")
+                out_file = Path(plist["ProgramArguments"][3])
+                out_file.write_text(json.dumps({
+                    "account": ACCOUNT, "organization": ORG,
+                    "savedLoginBinding": "d" * 64, "observedAtMs": 1700000000000,
+                }), encoding="utf-8")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if argv[:2] == ["/bin/launchctl", "print"]:
+                return mock.Mock(returncode=0, stdout="state = exited\nlast exit code = 0\n", stderr="")
+            if argv[:2] == ["/bin/launchctl", "bootout"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected subprocess: {argv}")
+
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.dict(os.environ, {"SSH_CONNECTION": "1 2 3 4"}, clear=False), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=False), \
+             mock.patch.object(usage.subprocess, "run", side_effect=fake_launchctl):
+            res = usage.reset_host(dict(self.request, action="capture"))
+        self.assertEqual((res["account"], res["organization"]), (ACCOUNT, ORG))
+        self.assertTrue(any(c[:2] == ["/bin/launchctl", "bootout"] for c in calls))
+        self.assertEqual(len(created_dirs), 1)
+        self.assertFalse(created_dirs[0].exists(), "temp dir must be cleaned up")
+
+        # Claim when GUI domain is unavailable (before bootstrap) -> proves not-sent!
+        def no_gui(argv, **kwargs):
+            return mock.Mock(returncode=113, stdout="", stderr="Could not find domain")
+
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.dict(os.environ, {"SSH_CONNECTION": "1 2 3 4"}, clear=False), \
+             mock.patch.object(usage, "_code_home", return_value=self.home), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=False), \
+             mock.patch.object(usage, "_mac_keychain_read_bytes", return_value=(-25293, None)), \
+             mock.patch.object(usage.subprocess, "run", side_effect=no_gui):
+            claim_no_gui = usage.reset_host(dict(self.request, action="claim", write={}))
+        self.assertEqual(claim_no_gui["outcome"], "not-sent")
+
+        # Claim after bootstrap if child produces no reply -> fails closed as ambiguous!
+        def bootstrap_hang(argv, **kwargs):
+            if argv[:2] == ["/bin/launchctl", "print"] and argv[2].count("/") == 1:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if argv[:2] == ["/bin/launchctl", "bootstrap"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if argv[:2] == ["/bin/launchctl", "print"]:
+                return mock.Mock(returncode=0, stdout="state = exited\nlast exit code = 1\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(usage.sys, "platform", "darwin"), \
+             mock.patch.dict(os.environ, {"SSH_CONNECTION": "1 2 3 4"}, clear=False), \
+             mock.patch.object(usage, "_mac_keychain_unlocked", return_value=False), \
+             mock.patch.object(usage.subprocess, "run", side_effect=bootstrap_hang):
+            claim_ambig = usage.reset_host(dict(self.request, action="claim", write={}))
+        self.assertEqual(claim_ambig["outcome"], "ambiguous")
+
 if __name__ == "__main__":
     unittest.main()
