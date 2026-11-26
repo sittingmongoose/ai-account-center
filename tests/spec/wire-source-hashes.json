@@ -53,7 +53,7 @@
   "scripts/app-updates/app_update_zcode.py": "b949dd919c947b524f7fe2a8ab6d375e254c08fe2fc2b47351374b52dac976d9",
   "scripts/app-updates/app_updates.py": "5b13e45509e588b0cd3874f7ad1199a8e157f2d555c703c14c072cb90367e247",
   "scripts/claude-history/history_index_remote_v2.py": "a6e9b16f2cd758e8bc0c8355b536ff2004f847e2d1c9724f1bb0a7e8c6f8e12c",
-  "scripts/claude-signin/claude_signin.py": "42e82f9e3f41506b39650f5c3b287f41b6159726b7171c5c9a8d5d978adf89a7",
+  "scripts/claude-signin/claude_signin.py": "8c075d35a291a6f2ec02dc46754e8a2511bc7a0dc8df064ff60a78f0825f0c44",
   "src/antigravity/account-lifecycle.ts": "6372a3e9fb4ac5155ea73b310c650f4c740d3ed8d61cbb7f68a5345c907f262e",
   "src/antigravity/managed-update-command.ts": "1bdf3c40087c9c29e7f8ba1e962b59d528b873f1a0fc324c8a0876b83a32a07b",
   "src/antigravity/managed-updater.ts": "79d0aad92e6a1274ba75cda621e82323965399fa9ef28cdbe4d2fe439c49d4eb",
