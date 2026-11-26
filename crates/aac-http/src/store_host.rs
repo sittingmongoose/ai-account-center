@@ -1162,6 +1162,9 @@ mod tests {
         let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["passes"], json!(1), "{jobs}");
         assert_eq!(jobs["jobs"]["lastErrorMs"], Value::Null, "{jobs}");
+        Ok(())
+    }
+
     /// N3: while the boot open runs, reads answer busy within the bounded wait instead of
     /// parking one of the store's few threads; once it opens they answer as before.
     #[test]
