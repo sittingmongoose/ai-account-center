@@ -273,6 +273,66 @@ fn incomplete_backfill_with_unreadable_evidence_is_scan_history() {
     );
 }
 
+/// A mixed live read whose only readable hour falls before the Store's settle line adds no
+/// cells. With no verified cells retained the Store records the read as
+/// `unreadable/read_failed` (the evidence counts stay); with stored usage retained on a
+/// replaced hour or a day carried as unchanged, the read stays `partial`.
+#[test]
+fn mixed_reads_without_cells_or_stored_usage_are_read_failures() {
+    let dir = temp_dir("act-mixed-empty");
+    let engine = open(&dir);
+    let read = T0 + 300 * D;
+    let old = read - 10 * D;
+    ingest(&engine, vec![complete("ubuntu", read, vec![])]);
+    let mut mixed = report(
+        "ubuntu",
+        read + H,
+        "partial",
+        false,
+        None,
+        vec![cell(old, Some(SESSION_A), "gpt-6", 100)],
+    );
+    mixed["counts"] = json!({"unreadableRecords": 1});
+    let receipt = ingest(&engine, vec![mixed]);
+    assert_eq!(receipt["put"], 0, "the old hour adds no cells");
+    assert_eq!(tokens_in(&engine, old, old), 0);
+    let sources = call(
+        &engine,
+        "activitySources",
+        json!({ "fromMs": old - D, "toMs": read + 2 * H }),
+    );
+    let source = &sources["sources"][0];
+    assert_eq!(source["state"], "unreadable");
+    assert_eq!(source["cause"], "read_failed");
+    assert_eq!(source["counts"]["unreadable_records"], 1);
+
+    // Stored usage retained: an identical replay adds nothing but the read stays partial,
+    // and so does a read carrying the stored day as unchanged (sameDays).
+    let dir = temp_dir("act-mixed-retained");
+    let engine = open(&dir);
+    let hour = read - 5 * H;
+    let cells = || vec![cell(hour, Some(SESSION_A), "gpt-6", 100)];
+    ingest(&engine, vec![complete("ubuntu", read, cells())]);
+    let mut replay = report("ubuntu", read + H, "partial", false, None, cells());
+    replay["counts"] = json!({"unreadableRecords": 1});
+    let receipt = ingest(&engine, vec![replay]);
+    assert_eq!(receipt["put"], 0, "an identical replay adds nothing");
+    let mut carried = report("ubuntu", read + 2 * H, "partial", false, None, vec![]);
+    carried["counts"] = json!({"unreadableRecords": 1});
+    carried["sameDays"] = json!([(hour / D) as u64]);
+    let receipt = ingest(&engine, vec![carried]);
+    assert_eq!(receipt["put"], 0);
+    let sources = call(
+        &engine,
+        "activitySources",
+        json!({ "fromMs": hour - D, "toMs": read + 3 * H }),
+    );
+    let source = &sources["sources"][0];
+    assert_eq!(source["state"], "partial");
+    assert_eq!(source["counts"]["unreadable_records"], 1);
+    assert_eq!(tokens_in(&engine, hour, hour), 100);
+}
+
 #[test]
 fn a_rebuild_from_the_logs_gives_the_same_tables() {
     let dir = temp_dir("act-replay");

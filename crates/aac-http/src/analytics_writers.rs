@@ -2047,6 +2047,199 @@ mod tests {
         );
     }
 
+    /// A mixed live read whose only readable hour falls before the Store's settle line adds
+    /// no cells, so the source has no usable usage: it is `unreadable/read_failed`, never
+    /// `cached` with a "Cached" badge for a source with no usage. Two real Devin scans on a
+    /// fixed writer clock: a complete no_usage read advances the settle line, then a mixed
+    /// read whose readable hour is older than it.
+    #[test]
+    fn a_mixed_read_with_no_ingested_cells_is_a_read_failure() {
+        let dir = tempfile::tempdir().expect("fixture home");
+        let engine = Arc::new(
+            aac_store::ops::open_engine(
+                dir.path().join("store").to_str().expect("fixture path"),
+                None,
+                None,
+            )
+            .expect("open activity store"),
+        );
+        // The follow-up's clock: 2026-11-25 12:50 UTC.
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-25T12:50:00Z")
+            .expect("clock")
+            .timestamp_millis();
+        // Four days back: older than the 72-hour settle line a complete read sets.
+        let old = now - 4 * DAY - 600_000;
+        let db = dir.path().join(".local/share/devin/cli/sessions.db");
+        std::fs::create_dir_all(db.parent().expect("fixture parent")).expect("fixture folder");
+        let conn = rusqlite::Connection::open(&db).expect("open fixture db");
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (id TEXT, working_directory TEXT, model TEXT);
+             CREATE TABLE IF NOT EXISTS message_nodes (session_id TEXT, chat_message TEXT, created_at INTEGER);",
+        )
+        .expect("fixture schema");
+        conn.execute(
+            "INSERT INTO sessions VALUES ('s1', '/tmp', 'devin-model')",
+            [],
+        )
+        .expect("fixture session");
+        conn.close().expect("close fixture db");
+        let env = aac_usage::discover::Env::from([
+            (
+                "HOME".to_string(),
+                dir.path().to_string_lossy().into_owned(),
+            ),
+            ("PATH".to_string(), String::new()),
+        ]);
+        let scan = |cache: &scan_state::Cache| {
+            let mut prints = cache.fingerprints.clone();
+            prints.insert(
+                "_store".into(),
+                json!({"settledBefore":{}, "settledSlot": 1}),
+            );
+            aac_usage::protocol::scan(
+                &aac_usage::protocol::parse_request(
+                    json!({"kinds":["devin"],"minDateMs":now - 31 * DAY,"fingerprints":prints})
+                        .to_string()
+                        .as_bytes(),
+                )
+                .expect("scanner request"),
+                dir.path(),
+                &env,
+            )
+        };
+        let mut cache = scan_state::Cache::default();
+        // Pass 1: the empty database is a complete no_usage read; it advances the settle line.
+        let (source1, _, _) = scanned_kind(
+            &scan(&cache),
+            "devin",
+            "ubuntu",
+            (now, now - 31 * DAY),
+            (false, false, false),
+            &mut cache,
+        );
+        let worker1 = collect::worker_from_scan(
+            &[],
+            &[],
+            "devin",
+            "ubuntu",
+            now,
+            &ResolverPricing::new(dir.path()),
+        );
+        let reports1 = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &[json!({"tool":"devin", "host":"ubuntu", "data":worker1})],
+            states: &[source1],
+            window_from_ms: now - DAY,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &["devin".into()].into_iter().collect(),
+        });
+        assert_eq!(reports1[0]["state"], "no_usage");
+        assert_eq!(reports1[0]["complete"], json!(true));
+        let receipt1 = ingest_reports(&engine, &reports1).expect("ingest empty read");
+        assert_eq!(receipt1["refused"], json!([]));
+        // Pass 2: one readable reply four days old, one unreadable reply now.
+        let conn = rusqlite::Connection::open(&db).expect("open fixture db");
+        for (id, at, metrics) in [
+            (
+                "m1",
+                old,
+                json!({"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 0, "cache_creation_tokens": 0}),
+            ),
+            ("m2", now - 60_000, json!({"output_tokens": 5})),
+        ] {
+            let message = json!({
+                "message_id": id,
+                "metadata": {
+                    "request_id": id,
+                    "created_at": aac_num::ecma::to_iso_string(at).expect("reply date"),
+                    "generation_model": "devin-model",
+                    "metrics": metrics,
+                },
+            })
+            .to_string();
+            conn.execute(
+                "INSERT INTO message_nodes VALUES ('s1', ?, ?)",
+                rusqlite::params![message, at / 1000],
+            )
+            .expect("fixture reply");
+        }
+        conn.close().expect("close fixture db");
+        let answer2 = scan(&cache);
+        assert_eq!(
+            answer2["kinds"]["devin"]["unreadableRecords"], json!(1),
+            "the backend answer is mixed: {answer2}"
+        );
+        let (source2, kind_rows, _) = scanned_kind(
+            &answer2,
+            "devin",
+            "ubuntu",
+            (now, now - 31 * DAY),
+            (false, false, false),
+            &mut cache,
+        );
+        assert_eq!(source2["state"], "scanning", "the mixed scan is partial");
+        let worker2 = collect::worker_from_scan(
+            &kind_rows,
+            &[],
+            "devin",
+            "ubuntu",
+            now,
+            &ResolverPricing::new(dir.path()),
+        );
+        let reports2 = report::build_activity_reports(&ReportArgs {
+            local: &HashMap::new(),
+            remote: &[json!({"tool":"devin", "host":"ubuntu", "data":worker2})],
+            states: &[source2],
+            window_from_ms: now - DAY,
+            now,
+            local_complete: &HashSet::new(),
+            scanner_owned: &["devin".into()].into_iter().collect(),
+        });
+        assert_eq!(
+            reports2[0]["cells"].as_array().expect("cells").len(),
+            1,
+            "the mixed report reaches ingest with its one cell: {}",
+            reports2[0]
+        );
+        assert_eq!(reports2[0]["state"], "partial");
+        assert_eq!(
+            reports2[0]["counts"]["unreadableRecords"],
+            json!(1)
+        );
+        let receipt = ingest_reports(&engine, &reports2).expect("ingest mixed report");
+        assert_eq!(receipt["refused"], json!([]));
+        assert_eq!(receipt["put"], json!(0), "the old hour adds no cells");
+        assert_eq!(receipt["deleted"], json!(0));
+        let activity = crate::analytics_route::compose(
+            engine.clone(),
+            dir.path(),
+            None,
+            &crate::analytics_live::Live::default(),
+            Some("range=7d&tz=UTC"),
+            now,
+        )
+        .expect("native Analytics answer")["activity"]
+            .clone();
+        assert_eq!(activity["sources"][0]["state"], "unreadable");
+        assert_eq!(activity["sources"][0]["cause"], json!("read_failed"));
+        let detail = activity["sources"][0]["detail"]
+            .as_str()
+            .expect("failure disclosure");
+        assert!(
+            detail.contains("could not be read"),
+            "the failure detail stands: {detail}"
+        );
+        assert!(
+            !detail.contains("readable usage included"),
+            "no readable-usage claim without usable cells: {detail}"
+        );
+        assert_eq!(
+            activity["sources"][0]["unreadableRecords"],
+            json!(1)
+        );
+    }
+
     /// Every record unreadable and nothing readable: the scan is unreadable.
     #[test]
     fn unreadable_records_without_readable_rows_is_unreadable() {

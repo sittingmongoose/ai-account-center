@@ -1454,6 +1454,38 @@ fn read_row(p: &Prepared<'_>) -> ReadRow {
     }
 }
 
+/// A live read that mixes unreadable records with readable usage: a state that implies the
+/// readable numbers stand, with the unreadable-record evidence beside them.
+fn mixed_live_read(entry: &ReadEvEntry) -> bool {
+    entry.read.kind.is_none()
+        && entry
+            .read
+            .counts
+            .as_ref()
+            .and_then(|c| c.unreadable_records)
+            .is_some_and(|count| count > 0)
+        && matches!(entry.read.state.as_str(), "partial" | "cached" | "scanning")
+}
+
+/// The Store holds at least one hourly cell for the source (verified cells retained: from an
+/// earlier read, from a settle-skipped hour, or on days the sender carried as unchanged). The
+/// stored span only widens, so a span alone proves nothing once cells were removed: walk its
+/// days until a stored day is found.
+fn retains_cells(txn: &WriteTransaction, computer: &str, tool: &str) -> Result<bool> {
+    let c = intern(txn, K_COMPUTER, computer)?;
+    let t = intern(txn, K_TOOL, tool)?;
+    let src = read_source(txn, c, t)?;
+    let (Some(first), Some(last)) = (src.first_h, src.last_h) else {
+        return Ok(false);
+    };
+    for day in first / 24..=last / 24 {
+        if !load_day(txn, day, c, t)?.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Records reports (design 4.2): cells and sessions by replace, raise or leave; read headers as
 /// scan history when they change or hourly; the live read time always.
 pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
@@ -1473,6 +1505,9 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
     }
     // Readings first: every day after the newest closed one. The ledger then takes the closed
     // days as that commit saw them; days only ever close, so each day is decided once.
+    // A report contributes when either pass changes its cells; the read-state correction below
+    // stands on this ingest decision.
+    let mut touched = vec![false; prepared.len()];
     let mut closed: Option<u32> = None;
     for log in [LogId::Readings, LogId::Ledger] {
         let (put, del, sess, events) = engine.commit(log, |batch| {
@@ -1487,8 +1522,11 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
                 (LogId::Ledger, None) => false,
             };
             let (mut put, mut del, mut sess, mut events) = (0, 0, 0, 0);
-            for p in &prepared {
+            for (index, p) in prepared.iter().enumerate() {
                 let (puts, dels, sessions) = decide(batch.txn, p, &wanted)?;
+                if !puts.is_empty() || !dels.is_empty() {
+                    touched[index] = true;
+                }
                 put += puts.len();
                 del += dels.len();
                 sess += sessions.len();
@@ -1512,7 +1550,7 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
     }
     // Scan history: a read is logged when its state, cause or completeness changed, when its
     // covered span reaches a new hour, or when it has not been logged for an hour.
-    let reads: Vec<ReadEvEntry> = prepared
+    let mut reads: Vec<ReadEvEntry> = prepared
         .iter()
         .map(|p| ReadEvEntry {
             c: p.checked.report.computer.clone(),
@@ -1520,6 +1558,31 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
             read: read_row(p),
         })
         .collect();
+    // A mixed live read's state stands only if this ingest added or changed cells or the
+    // Store retains verified cells (from an earlier read, a settle-skipped hour, or days the
+    // sender carried as unchanged). With neither, the Store holds no usable usage for the
+    // source: the read failed, not a cached partial. Disclosure counts stay; the settle line
+    // stands; the scan history and the live table below keep the corrected rows.
+    if reads
+        .iter()
+        .enumerate()
+        .any(|(index, entry)| !touched[index] && mixed_live_read(entry))
+    {
+        engine.with_db(|db| {
+            let txn = begin(db)?;
+            for (index, entry) in reads.iter_mut().enumerate() {
+                if touched[index] || !mixed_live_read(entry) {
+                    continue;
+                }
+                if !retains_cells(&txn, &entry.c, &entry.t)? {
+                    entry.read.state = "unreadable".into();
+                    entry.read.cause = Some("read_failed".into());
+                }
+            }
+            txn.commit()?;
+            Ok(())
+        })?;
+    }
     let logged = engine.commit(LogId::Ledger, |batch| {
         let mut due = Vec::new();
         for entry in &reads {
