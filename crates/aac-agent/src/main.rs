@@ -22,6 +22,10 @@ async fn main() {
             }
             Err(_) => 1,
         }
+    } else if args.len() == 1 && args[0] == "--claude-reset" {
+        aac_agent::claude_reset_stdio().await
+    } else if args.len() == 2 && args[0] == "--claude-reset-gui" {
+        aac_agent::claude_reset_gui(std::path::Path::new(&args[1])).await
     } else if args.is_empty() {
         aac_agent::run(BufReader::new(tokio::io::stdin()), tokio::io::stdout())
             .await

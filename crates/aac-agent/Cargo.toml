@@ -29,9 +29,14 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 unicode-normalization = "0.1"
 url = "2.5"
+# Already in the lock through rustls: AES-256-GCM and PBKDF2 for the Claude Desktop caches.
+ring = "0.17"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["signal", "process"] }

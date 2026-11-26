@@ -21,6 +21,7 @@ dependencies = [
  "nix",
  "regex",
  "reqwest",
+ "ring",
  "security-framework",
  "serde",
  "serde_json",
@@ -29,6 +30,7 @@ dependencies = [
  "tokio",
  "unicode-normalization",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

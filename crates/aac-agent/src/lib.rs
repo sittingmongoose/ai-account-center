@@ -1,6 +1,7 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
 mod apps;
 mod claude_host;
+mod claude_usage;
 mod cursor_open;
 mod failover;
 mod files;
@@ -21,6 +22,41 @@ use aac_protocol::{
     frame_cap,
 };
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
+
+/// The private Claude reset host, one call per process: `{"request": {...}}` on stdin (the
+/// reset transaction's helper payload), one JSON answer on stdout. Exit 0 unless the input or
+/// output itself failed; every refusal is an answer, never provider text.
+pub async fn claude_reset_stdio() -> i32 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut bytes = vec![];
+    if tokio::io::stdin()
+        .take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .is_err()
+        || bytes.len() > 2 * 1024 * 1024
+    {
+        return 1;
+    }
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return 1;
+    };
+    let answer = claude_usage::host::reset_host(&payload["request"]).await;
+    let Ok(mut out) = serde_json::to_vec(&answer) else {
+        return 1;
+    };
+    out.push(b'\n');
+    let mut stdout = tokio::io::stdout();
+    if stdout.write_all(&out).await.is_err() || stdout.flush().await.is_err() {
+        return 1;
+    }
+    0
+}
+
+/// The macOS GUI-session child of [`claude_reset_stdio`] (launchd `gui/<uid>`).
+pub async fn claude_reset_gui(reply: &std::path::Path) -> i32 {
+    claude_usage::keychain_bridge::child(reply).await
+}
 
 /// Return the exact build identity used by shipping's manifest handshake.
 pub fn handshake() -> Handshake {
