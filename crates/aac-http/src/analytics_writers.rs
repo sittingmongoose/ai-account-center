@@ -24,6 +24,7 @@ use std::time::Duration;
 mod analytics_jsonl;
 mod claude_contributions;
 mod claude_mirrors;
+mod claude_owners;
 mod experiment_roots;
 mod experiment_signatures;
 mod fixed_scanner;
@@ -73,24 +74,36 @@ struct QuotaState {
 /// The collection aggregation's [`Pricing`] seam over the G15 Rust resolver: the same
 /// `getModelPricingWithSource` lookup the TS collector uses, reading the registry cache the
 /// scheduled `ModelsDevRefresh` keeps fresh. Interior mutability carries the resolver's memo.
+/// One pass's resolutions are remembered: every computer and tool asks for the same few models.
 struct ResolverPricing {
     resolver: Mutex<aac_views::pricing::Resolver>,
+    resolved: Mutex<HashMap<(String, Option<String>), PricingResolution>>,
 }
 
 impl ResolverPricing {
     fn new(ccs_dir: &Path) -> Self {
         ResolverPricing {
             resolver: Mutex::new(aac_views::pricing::Resolver::new(ccs_dir)),
+            resolved: Mutex::new(HashMap::new()),
         }
     }
 }
 
 impl Pricing for ResolverPricing {
     fn resolve(&self, model: &str, provider: Option<&str>) -> PricingResolution {
+        let key = (model.to_owned(), provider.map(str::to_owned));
+        if let Some(found) = self
+            .resolved
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+        {
+            return found.clone();
+        }
         let mut resolver = self.resolver.lock().unwrap_or_else(|p| p.into_inner());
         let resolution = resolver.get_model_pricing_with_source(model, provider, None);
         let rates = resolution.pricing.rates;
-        PricingResolution {
+        let found = PricingResolution {
             rates: Rates {
                 input: rates.input_per_million,
                 output: rates.output_per_million,
@@ -98,7 +111,12 @@ impl Pricing for ResolverPricing {
                 cache_read: rates.cache_read_per_million,
             },
             source: resolution.source.as_str().to_string(),
-        }
+        };
+        self.resolved
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key, found.clone());
+        found
     }
 }
 
@@ -282,6 +300,28 @@ fn quota_interval_ms(refresh_seconds: i64) -> i64 {
     configured.clamp(30_000, 3_600_000)
 }
 
+/// A pass's start: the scheduler's clock reading and the monotonic instant it was taken.
+struct PassClock {
+    started_ms: i64,
+    started: std::time::Instant,
+}
+
+impl PassClock {
+    fn start(now: i64) -> Self {
+        PassClock {
+            started_ms: now,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// Record the pass as fetched when it finished, so the next one waits a full interval
+    /// after this one ends (a 65 s pass with a 60 s interval must not restart 15 s later).
+    fn finish(&self, state: &mut WriterState) {
+        let elapsed = i64::try_from(self.started.elapsed().as_millis()).unwrap_or(i64::MAX);
+        state.fetched_at = self.started_ms.saturating_add(elapsed);
+    }
+}
+
 /// Whether the activity collection is due (`startIfDue`): the converge interval while a scan is
 /// converging, else the refresh interval, since the last fetch.
 fn activity_due(state: &WriterState, now: i64, refresh_interval_ms: i64) -> bool {
@@ -394,7 +434,7 @@ fn has_readable_records(answer: &Value, cache: &scan_state::Cache, kind: &str) -
         .rows
         .iter()
         .chain(cache.srows.iter())
-        .any(|row| row["k"].as_str() == Some(kind))
+        .any(|row| &*row.kind == kind)
 }
 
 /// Whether the answer itself is incomplete: record-level read errors or a non-final read
@@ -412,7 +452,8 @@ fn answer_incomplete(answer: &Value, kind: &str) -> bool {
         )
 }
 
-/// One tool of a valid scanner answer: its source state and the cached rows the writer reports.
+/// One tool of a valid scanner answer applied to the cache: its source state. The writer reports
+/// the tool's cached rows, read in place from the cache ([`scan_state::of_kind`]).
 /// `flags` are (settled prints packed, source limited, experiment discovery still running).
 fn scanned_kind(
     answer: &Value,
@@ -421,7 +462,7 @@ fn scanned_kind(
     (now, cutoff): (i64, i64),
     (packed, limited, discovering): (bool, bool, bool),
     cache: &mut scan_state::Cache,
-) -> (Value, Vec<Value>, Vec<Value>) {
+) -> Value {
     let settle = |readable: bool| -> (&'static str, Option<&'static str>) {
         let (state, cause) = source_state(answer, kind, readable);
         if limited {
@@ -448,25 +489,14 @@ fn scanned_kind(
     if !applied && complete {
         (state, cause) = ("scanning", None);
     }
-    let of_kind = |rows: &[Value]| -> Vec<Value> {
-        rows.iter()
-            .filter(|r| r["k"].as_str() == Some(kind))
-            .cloned()
-            .collect()
-    };
-    let kind_rows = of_kind(&cache.rows);
-    let kind_srows = of_kind(&cache.srows);
     // A complete read that holds no usage is no_usage, as Wave 84 reported it (FINAL-ASTRA H2):
     // with no usage there is no data clock to verify. Failed reads, incomplete discovery and
     // unread usage never reach `ok` here, and newer activity still reads as stale in the report.
-    if state == "ok" && kind_rows.is_empty() && kind_srows.is_empty() {
+    let holds = |rows: &[aac_store::scan_row::ScanRow]| rows.iter().any(|r| &*r.kind == kind);
+    if state == "ok" && !holds(&cache.rows) && !holds(&cache.srows) {
         state = "no_usage";
     }
-    (
-        scan_source_state(answer, kind, host, now, state, cause),
-        kind_rows,
-        kind_srows,
-    )
+    scan_source_state(answer, kind, host, now, state, cause)
 }
 
 fn scan_source_state(
@@ -630,10 +660,11 @@ async fn activity_pass(
         guard.generation += 1;
         (guard.generation, guard.experiments.clone())
     };
+    let clock = PassClock::start(now);
     let computers = agents.usage_hosts().await;
     if computers.is_empty() {
         let _pass = live.pass();
-        state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = now;
+        clock.finish(&mut state.lock().unwrap_or_else(|p| p.into_inner()));
         return;
     }
     let cutoff = now - 31 * DAY;
@@ -655,7 +686,6 @@ async fn activity_pass(
     let mut remote: Vec<Value> = Vec::new();
     let mut claude = Vec::new();
     let mut states: Vec<Value> = Vec::new();
-    let mut checkpoints = Vec::new();
     let preferences = crate::account_reads::preferences(ccs_dir);
     let kinds = aac_providers::scanner_kinds()
         .map(str::to_owned)
@@ -704,6 +734,7 @@ async fn activity_pass(
         let settled_before = activity::settled_before(engine, host).unwrap_or_default();
         let batches = scan_state::requests(args, &kinds, &cache.fingerprints, &settled_before, now);
         let mut scanned = false;
+        let mut claude_state = None;
         let start_state = states.len();
         for (batch, args) in batches {
             if args.is_null() {
@@ -729,7 +760,7 @@ async fn activity_pass(
                                 || experiment_roots::tracks(kind),
                                 |snapshot| snapshot.discovering(kind),
                             );
-                        let (source, kind_rows, kind_srows) = scanned_kind(
+                        let source = scanned_kind(
                             &answer,
                             kind,
                             host,
@@ -738,22 +769,12 @@ async fn activity_pass(
                             &mut cache,
                         );
                         if kind == "claude" {
-                            claude.push(claude_mirrors::Part {
-                                host,
-                                state_index: states.len(),
-                                rows: kind_rows,
-                                sessions: kind_srows,
-                                fingerprints: cache
-                                    .fingerprints
-                                    .get("claude")
-                                    .cloned()
-                                    .unwrap_or(Value::Null),
-                            });
+                            // Moved out of the cache once its checkpoint is encoded.
+                            claude_state = Some(states.len());
                         } else {
-                            let worker = collect::worker_from_scan(
-                                &kind_rows,
-                                &kind_srows,
-                                kind,
+                            let worker = collect::worker_from_rows(
+                                &scan_state::of_kind(&cache.rows, kind),
+                                &scan_state::of_kind(&cache.srows, kind),
                                 host,
                                 now,
                                 &pricing,
@@ -771,7 +792,18 @@ async fn activity_pass(
         }
         if scanned {
             match cache.encode() {
-                Ok(bytes) => checkpoints.push((format!("live/scanner/{host}"), bytes)),
+                // Saved now, one computer at a time, and only when it changed; a superseded
+                // pass leaves the store to the newer one.
+                Ok(bytes) => {
+                    let current =
+                        state.lock().unwrap_or_else(|p| p.into_inner()).generation == generation;
+                    if current && let Err(error) = cache.save_encoded(engine, host, &bytes) {
+                        tracing::warn!(
+                            code = error.code,
+                            "Analytics scanner state could not be saved"
+                        );
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(
                         code = error.code,
@@ -786,31 +818,26 @@ async fn activity_pass(
                 }
             }
         }
+        if let Some(state_index) = claude_state {
+            let (rows, sessions, fingerprints) = cache.take_kind("claude");
+            claude.push(claude_mirrors::Part {
+                host,
+                state_index,
+                rows,
+                sessions,
+                fingerprints,
+            });
+        }
     }
     // Shape and ingest under the lock; a superseding generation drops this pass's writes.
     let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
     if generation != guard.generation {
         return;
     }
-    for (key, bytes) in checkpoints {
-        if let Err(error) = aac_store::analytics_cache::put(engine, &key, &bytes) {
-            tracing::warn!(
-                code = error.code,
-                "Analytics scanner state could not be saved"
-            );
-        }
-    }
     match claude_contributions::prepare_live(engine, &mut claude, &mut states, now, &pricing) {
         Ok(()) => {
             for part in claude {
-                let worker = collect::worker_from_scan(
-                    &part.rows,
-                    &part.sessions,
-                    "claude",
-                    part.host,
-                    now,
-                    &pricing,
-                );
+                let worker = part.worker(now, &pricing);
                 remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
             }
         }
@@ -861,7 +888,7 @@ async fn activity_pass(
         }
     }
     guard.states = states;
-    guard.fetched_at = now;
+    clock.finish(&mut guard);
     if guard
         .states
         .iter()
@@ -1119,6 +1146,57 @@ fn report_writer_failure(name: &'static str, error: &tokio::task::JoinError) {
 
 #[cfg(test)]
 mod tests {
+    use aac_store::scan_row::ScanRow;
+
+    /// The writer's per-tool step, plus the tool's cached rows as the scanner's objects.
+    fn scanned_kind(
+        answer: &serde_json::Value,
+        kind: &str,
+        host: &str,
+        times: (i64, i64),
+        flags: (bool, bool, bool),
+        cache: &mut super::scan_state::Cache,
+    ) -> (
+        serde_json::Value,
+        Vec<serde_json::Value>,
+        Vec<serde_json::Value>,
+    ) {
+        let source = super::scanned_kind(answer, kind, host, times, flags, cache);
+        let values = |rows: &[ScanRow]| {
+            super::scan_state::of_kind(rows, kind)
+                .into_iter()
+                .map(ScanRow::to_value)
+                .collect()
+        };
+        (source, values(&cache.rows), values(&cache.srows))
+    }
+
+    fn typed(rows: &[serde_json::Value]) -> Vec<ScanRow> {
+        rows.iter()
+            .map(|row| serde_json::from_value(row.clone()).expect("scanner row"))
+            .collect()
+    }
+
+    #[test]
+    fn a_long_activity_pass_waits_a_full_interval_after_it_ends() {
+        let Some(started) =
+            std::time::Instant::now().checked_sub(std::time::Duration::from_secs(65))
+        else {
+            return;
+        };
+        let start = 1_800_000_000_000;
+        let mut state = super::WriterState::default();
+        super::PassClock {
+            started_ms: start,
+            started,
+        }
+        .finish(&mut state);
+        // The 65 s pass ended 5 s after the 60 s interval would have run from its start.
+        assert!(!super::activity_due(&state, start + 60_000, 60_000));
+        assert!(!super::activity_due(&state, start + 120_000, 60_000));
+        assert!(super::activity_due(&state, start + 126_000, 60_000));
+    }
+
     #[test]
     fn the_scanner_budget_leaves_room_inside_the_scan_call() {
         // The agent stops a scan call at SCAN_DEADLINE_MS; the scanner must return its partial
@@ -1622,8 +1700,8 @@ mod tests {
                     claude.push(claude_mirrors::Part {
                         host,
                         state_index: states.len(),
-                        rows,
-                        sessions: srows,
+                        rows: typed(&rows),
+                        sessions: typed(&srows),
                         fingerprints: cache
                             .fingerprints
                             .get("claude")
@@ -1644,14 +1722,7 @@ mod tests {
         }
         claude_mirrors::select_live(&engine, &mut claude, &mut states).expect("mirror owners");
         for part in claude {
-            let worker = collect::worker_from_scan(
-                &part.rows,
-                &part.sessions,
-                "claude",
-                part.host,
-                now,
-                &pricing,
-            );
+            let worker = part.worker(now, &pricing);
             remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
         }
         let reports = report::build_activity_reports(&ReportArgs {

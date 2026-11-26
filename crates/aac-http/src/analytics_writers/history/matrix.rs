@@ -51,7 +51,14 @@ impl Observation {
     }
 
     fn part(&self, state_index: usize) -> claude_mirrors::Part<'_> {
-        let rows = |name: &str| self.answer[name].as_array().expect("scanner rows").clone();
+        let rows = |name: &str| {
+            self.answer[name]
+                .as_array()
+                .expect("scanner rows")
+                .iter()
+                .map(|row| serde_json::from_value(row.clone()).expect("scanner row"))
+                .collect()
+        };
         claude_mirrors::Part {
             host: self.host,
             state_index,
@@ -145,14 +152,7 @@ impl Fixture<'_> {
                     archive.push((archive_path(observation.host), bytes));
                     if self.case.repair {
                         let part = observation.part(0);
-                        let worker = collect::worker_from_scan(
-                            &part.rows,
-                            &part.sessions,
-                            "claude",
-                            part.host,
-                            self.now,
-                            &pricing,
-                        );
+                        let worker = part.worker(self.now, &pricing);
                         let value = report::rows_report(&report::RowsReportArgs {
                             computer: part.host,
                             tool: "claude",
@@ -255,14 +255,7 @@ impl Fixture<'_> {
                 let remote: Vec<_> = parts
                     .iter()
                     .map(|part| {
-                        let worker = collect::worker_from_scan(
-                            &part.rows,
-                            &part.sessions,
-                            "claude",
-                            part.host,
-                            self.now,
-                            &pricing,
-                        );
+                        let worker = part.worker(self.now, &pricing);
                         json!({"tool":"claude","host":part.host,"data":worker})
                     })
                     .collect();

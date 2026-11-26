@@ -1,6 +1,7 @@
 //! One bounded historical source per turn, with a cursor independent of the live 31-day scan.
 use super::{ResolverPricing, claude_mirrors, experiment_roots, fixed_scanner, scan_state};
 use crate::agent_transport::Agents;
+use aac_store::scan_row::ScanRow;
 use aac_store::{
     activity, analytics_cache, collect, contract, engine::Engine, error::Result, report,
 };
@@ -72,7 +73,7 @@ impl<'a> Source<'a> {
 
     fn load(&self, store: &Engine) -> Result<scan_state::Cache> {
         match analytics_cache::get(store, &self.checkpoint())? {
-            Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Some(bytes) => scan_state::Cache::decode(&bytes),
             None => Ok(scan_state::Cache::default()),
         }
     }
@@ -167,16 +168,21 @@ impl<'a> Source<'a> {
     fn publish(
         &self,
         store: &Engine,
-        rows: &[Value],
-        sessions: &[Value],
+        rows: &[ScanRow],
+        sessions: &[ScanRow],
         complete: bool,
         unreadable_records: Option<u64>,
         cause: Option<&str>,
         now: i64,
         pricing: &dyn collect::Pricing,
     ) -> Result<()> {
-        let worker =
-            collect::worker_from_scan(rows, sessions, self.tool, self.computer, now, pricing);
+        let worker = collect::worker_from_rows(
+            &rows.iter().collect::<Vec<_>>(),
+            &sessions.iter().collect::<Vec<_>>(),
+            self.computer,
+            now,
+            pricing,
+        );
         let mut value = report::rows_report(&report::RowsReportArgs {
             computer: self.computer,
             tool: self.tool,
@@ -561,7 +567,7 @@ mod tests {
                 }
                 let store = open();
                 let mut cache =
-                    serde_json::from_slice(&snapshot).expect("decode scanner checkpoint");
+                    scan_state::Cache::decode(&snapshot).expect("decode scanner checkpoint");
                 publish(&store, &mut cache);
                 read(&store);
             }
@@ -901,10 +907,7 @@ mod tests {
         assert_eq!(once["sessions"]["total"], 1);
         assert_eq!(once["sessions"]["sample"][0]["computer"], "nas1");
         let owners = claude_mirrors::load(&store, claude_mirrors::HISTORY).expect("redb owners");
-        assert_eq!(
-            owners.values().map(String::as_str).collect::<Vec<_>>(),
-            vec!["nas1"]
-        );
+        assert_eq!(owners.values().collect::<Vec<_>>(), vec!["nas1"]);
         assert!(mirror.done(&store).expect("mirror scan receipt"));
         assert!(original.done(&store).expect("original scan receipt"));
         store.close().expect("close after recording");

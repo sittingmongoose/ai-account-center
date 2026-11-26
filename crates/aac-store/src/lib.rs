@@ -29,6 +29,7 @@ pub mod run_identity;
 pub mod run_schema;
 pub mod runs;
 pub mod sampler;
+pub mod scan_row;
 pub mod scoreboard_agg;
 #[path = "../../../native/shared/secret_policy.rs"]
 pub mod secret_policy;

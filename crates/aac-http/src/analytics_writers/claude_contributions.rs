@@ -3,6 +3,7 @@
 use super::claude_mirrors::{self, Part};
 use aac_store::{
     activity, analytics_cache, collect, contract, engine::Engine, error::Result, report,
+    scan_row::ScanRow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const PHASES: [&str; 3] = ["migration", "backfill", "live"];
-type ScanRows = (Vec<Value>, Vec<Value>);
+type ScanRows<'a> = (Vec<&'a ScanRow>, Vec<&'a ScanRow>);
 
 #[derive(Default, Deserialize, Serialize)]
 struct Hour {
@@ -50,7 +51,7 @@ fn key(host: &str, hour: u64, phase: &str) -> String {
     format!("claude/contributions/{host}/{hour}/{phase}")
 }
 
-fn split<'a>(part: &'a Part<'_>, mirror: bool) -> BTreeMap<Option<&'a str>, ScanRows> {
+fn split<'a>(part: &'a Part<'_>, mirror: bool) -> BTreeMap<Option<&'a str>, ScanRows<'a>> {
     let mut groups: BTreeMap<_, ScanRows> = BTreeMap::new();
     for (session, rows) in [(false, &part.rows), (true, &part.sessions)] {
         for row in rows {
@@ -65,9 +66,9 @@ fn split<'a>(part: &'a Part<'_>, mirror: bool) -> BTreeMap<Option<&'a str>, Scan
             };
             let pair = groups.entry(group).or_default();
             if session {
-                pair.1.push(row.clone());
+                pair.1.push(row);
             } else {
-                pair.0.push(row.clone());
+                pair.0.push(row);
             }
         }
     }
@@ -91,19 +92,20 @@ pub(super) fn remember(
     let previous = history.len();
     let mut snapshots = BTreeMap::<u64, Hour>::new();
     for (name, (rows, sessions)) in split(part, true) {
-        let worker = collect::worker_from_scan(&rows, &sessions, "claude", part.host, now, pricing);
+        let worker = collect::worker_from_rows(&rows, &sessions, part.host, now, pricing);
         for cell in worker["cells"].as_array().into_iter().flatten() {
             let Some(hour) = cell_hour(cell) else {
                 continue;
             };
             let snapshot = snapshots.entry(hour).or_default();
             if let Some(name) = name {
-                Arc::make_mut(&mut owners)
-                    .entry(name.to_owned())
-                    .or_insert_with(|| part.host.to_owned());
-                Arc::make_mut(&mut history)
-                    .entry(name.to_owned())
-                    .or_insert_with(|| part.host.to_owned());
+                // Copy a shared map only to add a name it lacks.
+                if !owners.contains_key(name) {
+                    Arc::make_mut(&mut owners).insert(name, part.host);
+                }
+                if !history.contains_key(name) {
+                    Arc::make_mut(&mut history).insert(name, part.host);
+                }
                 snapshot
                     .mirrors
                     .entry(name.to_owned())
@@ -163,13 +165,12 @@ pub(super) fn reconcile(
                 continue;
             }
             let Some(mirror_host) = mirrors.get(name) else {
-                Arc::make_mut(&mut history)
-                    .entry(name.to_owned())
-                    .or_insert_with(|| part.host.to_owned());
+                if !history.contains_key(name) {
+                    Arc::make_mut(&mut history).insert(name, part.host);
+                }
                 continue;
             };
-            let worker =
-                collect::worker_from_scan(&rows, &sessions, "claude", part.host, now, pricing);
+            let worker = collect::worker_from_rows(&rows, &sessions, part.host, now, pricing);
             let mut by_hour = BTreeMap::<u64, Vec<&Value>>::new();
             for cell in worker["cells"].as_array().into_iter().flatten() {
                 if let Some(hour) = cell_hour(cell) {
@@ -180,8 +181,8 @@ pub(super) fn reconcile(
                 .iter()
                 .filter_map(|row| {
                     Some((
-                        row["s"].as_str()?.to_owned(),
-                        (part.host.to_owned(), row["z"].as_u64()?),
+                        row.session.as_deref()?.to_owned(),
+                        (part.host.to_owned(), u64::try_from(row.last?).ok()?),
                     ))
                 })
                 .collect::<BTreeMap<_, _>>();
@@ -209,7 +210,7 @@ pub(super) fn reconcile(
                     }
                     let after = snapshot.projection(mirror_host, now)?;
                     if activity::reconcile_claude_projection(store, &before, &after, &originals)? {
-                        Arc::make_mut(&mut history).insert(name.to_owned(), part.host.to_owned());
+                        Arc::make_mut(&mut history).insert(name, part.host);
                         claude_mirrors::save(store, claude_mirrors::HISTORY, &history)?;
                         snapshot.mirrors.retain(|_, cells| !cells.is_empty());
                         let lookup = key(mirror_host, hour, phase);

@@ -2,6 +2,7 @@
 use super::super::{claude_contributions, claude_mirrors, scan_state};
 use super::{Failures, Migration};
 use aac_store::error::{Error, Result};
+use aac_store::scan_row::ScanRow;
 use aac_store::{activity, analytics_cache, collect, contract};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -77,10 +78,9 @@ fn legacy_owners(migration: &Migration<'_>) -> Result<claude_mirrors::Owners> {
     for (name, host) in value["owners"].as_object().into_iter().flatten() {
         if !name.is_empty()
             && let Some(host) = host.as_str().filter(|id| contract::ident_ok(id))
+            && !previous.contains_key(name)
         {
-            Arc::make_mut(&mut previous)
-                .entry(name.clone())
-                .or_insert_with(|| host.to_owned());
+            Arc::make_mut(&mut previous).insert(name, host);
         }
     }
     Ok(Arc::unwrap_or_clone(previous))
@@ -119,20 +119,18 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
         }
         let mut files = BTreeSet::new();
         for row in cache.scan.rows.iter().chain(&cache.scan.srows) {
-            if row["k"] != "claude" {
+            if &*row.kind != "claude" {
                 continue;
             }
             if let Some((name, true)) = claude_mirrors::row_identity(row, &prints) {
-                if let Some(file) = row["f"].as_str() {
-                    files.insert(file);
-                }
-                if let Some(session) = row["s"].as_str() {
+                files.insert(&*row.file);
+                if let Some(session) = row.session.as_deref() {
                     session_names
                         .entry(session.to_owned())
                         .or_default()
                         .insert(name.to_owned());
                 }
-                if let Some(hour) = row["h"].as_str()
+                if let Some(hour) = row.hour.as_deref()
                     && let Some(ms) =
                         contract::parse_iso(&format!("{}:00Z", hour.replace(' ', "T")))
                 {
@@ -143,7 +141,13 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
         parts.push(claude_mirrors::Part {
             host: archive.computer,
             state_index: states.len(),
-            rows: files.into_iter().map(|file| json!({"f":file})).collect(),
+            rows: files
+                .into_iter()
+                .map(|file| aac_store::scan_row::ScanRow {
+                    file: file.into(),
+                    ..Default::default()
+                })
+                .collect(),
             sessions: Vec::new(),
             fingerprints: Value::Object(fingerprints),
         });
@@ -160,7 +164,7 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
     let present: BTreeSet<_> = parts.iter().map(|part| part.host).collect();
     let absent: BTreeSet<_> = previous
         .values()
-        .filter(|host| !present.contains(host.as_str()))
+        .filter(|host| !present.contains(*host))
         .collect();
     for host in absent {
         states.push(json!({"tool":"claude","host":host,"state":"cached"}));
@@ -168,13 +172,13 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
     let stored_owners = claude_mirrors::load(migration.store, claude_mirrors::HISTORY)?;
     let mut committed = stored_owners.clone();
     Arc::make_mut(&mut committed).retain(|name, host| {
-        !originals.contains(name) || !mirrors.contains(&(name.clone(), host.as_str()))
+        !originals.contains(name) || !mirrors.contains(&(name.to_owned(), host))
     });
     if let Some(local) = migration.local {
         for (name, _) in &mirrors {
             if migration.local_originals.contains(name) {
                 originals.insert(name.clone());
-                Arc::make_mut(&mut committed).insert(name.clone(), local.to_owned());
+                Arc::make_mut(&mut committed).insert(name, local);
             }
         }
     }
@@ -193,7 +197,7 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
             // The same transcript is already in dated Store history on this source.
             // Never treat a host known to hold this mirror as an original.
             originals.insert(name.clone());
-            Arc::make_mut(&mut committed).insert(name.clone(), computer);
+            Arc::make_mut(&mut committed).insert(name, &computer);
         }
     }
     let selected = claude_mirrors::choose(&mut parts, &mut states, &previous, &committed);
@@ -219,10 +223,10 @@ fn rows_for(
     tool: &str,
     computer: &str,
     selection: ClaudeRows<'_>,
-) -> (Vec<Value>, Vec<Value>) {
+) -> (Vec<ScanRow>, Vec<ScanRow>) {
     let prints = cache.fingerprints.get("claude").unwrap_or(&Value::Null);
-    let keep = |row: &&Value| {
-        row["k"] == tool
+    let keep = |row: &&ScanRow| {
+        &*row.kind == tool
             && (tool != "claude"
                 || claude_mirrors::row_identity(row, prints).is_none_or(|(name, mirror)| {
                     match selection {
@@ -248,13 +252,11 @@ fn rows_for(
 fn worker(
     migration: &Migration<'_>,
     computer: &str,
-    tool: &str,
-    (rows, sessions): &(Vec<Value>, Vec<Value>),
+    (rows, sessions): &(Vec<ScanRow>, Vec<ScanRow>),
 ) -> Value {
-    collect::worker_from_scan(
-        rows,
-        sessions,
-        tool,
+    collect::worker_from_rows(
+        &rows.iter().collect::<Vec<_>>(),
+        &sessions.iter().collect::<Vec<_>>(),
         computer,
         migration.now,
         &migration.pricing,
@@ -327,7 +329,7 @@ pub(super) fn commit(
         let prints = scan.fingerprints.get("claude").unwrap_or(&Value::Null);
         if !cache.rebuilds("claude")
             && scan.rows.iter().chain(&scan.srows).any(|row| {
-                row["k"] == "claude"
+                &*row.kind == "claude"
                     && claude_mirrors::row_identity(row, prints).is_some_and(|(_, mirror)| mirror)
             })
         {
@@ -376,7 +378,7 @@ fn import_independent(
             let raw = rows_for(&cache.scan, tool, computer, ClaudeRows::All);
             let has_rows = !raw.0.is_empty() || !raw.1.is_empty();
             if imported_before && has_rows {
-                let previous = worker(migration, computer, tool, &raw);
+                let previous = worker(migration, computer, &raw);
                 repair_obsolete(migration, computer, tool, previous)?;
             }
             if has_rows || cache.scan.fingerprints.contains_key(tool) {
@@ -411,7 +413,7 @@ fn import_independent(
                     &migration.pricing,
                 )?;
             }
-            let worker = worker(migration, computer, tool, &selected);
+            let worker = worker(migration, computer, &selected);
             migration.import_rows(computer, tool, &[worker])?;
         }
     }
@@ -470,7 +472,7 @@ fn import_mirrors(
             migration.now,
             &migration.pricing,
         )?;
-        let worker = worker(migration, computer, "claude", &selected);
+        let worker = worker(migration, computer, &selected);
         migration.import_rows(computer, "claude", &[worker])?;
     }
     if !imported_before {
@@ -482,7 +484,7 @@ fn import_mirrors(
         return Ok(());
     }
     let report = |rows| -> Result<contract::Report> {
-        let worker = worker(migration, computer, "claude", rows);
+        let worker = worker(migration, computer, rows);
         let mut value = migration.rows_report(computer, "claude", &[worker]);
         value["sessions"] = json!([]);
         Ok(serde_json::from_value(value)?)
@@ -491,20 +493,23 @@ fn import_mirrors(
     let retained_sessions: HashSet<_> = repaired
         .1
         .iter()
-        .filter_map(|row| row["s"].as_str())
+        .filter_map(|row| row.session.as_deref())
         .collect();
     let mut original_sessions = BTreeMap::<String, (String, u64)>::new();
-    for row in cache.srows.iter().filter(|row| row["k"] == "claude") {
+    for row in cache.srows.iter().filter(|row| &*row.kind == "claude") {
         if let Some((name, true)) = claude_mirrors::row_identity(row, prints)
             && owners.originals.contains(name)
             && let Some(owner) = owners.owners.get(name).filter(|owner| *owner != computer)
-            && let (Some(session), Some(end)) = (row["s"].as_str(), row["z"].as_u64())
+            && let (Some(session), Some(end)) = (
+                row.session.as_deref(),
+                row.last.and_then(|end| u64::try_from(end).ok()),
+            )
             && !retained_sessions.contains(session)
         {
             original_sessions
                 .entry(session.to_owned())
                 .and_modify(|entry| entry.1 = entry.1.max(end))
-                .or_insert_with(|| (owner.clone(), end));
+                .or_insert_with(|| ((*owner).to_owned(), end));
         }
     }
     activity::repair_remote_import(

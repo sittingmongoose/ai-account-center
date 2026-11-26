@@ -101,88 +101,87 @@ pub fn normalize_cache_payload(payload: &Value) -> Option<(f64, Map<String, Valu
     Some((fetched_at, providers))
 }
 
-/// The parsed cache plus the normalized model index `findModel` builds per provider models map:
-/// normalized key and normalized `id` both point at the model's key in the map (a later entry
-/// wins a collision, like the TS `Map.set`).
+/// The parsed cache as resolution reads it: per provider (payload order) its `id`, and per model
+/// its `id` and resolved list rates, with the normalized model index `findModel` builds (the
+/// normalized key and the normalized `id` both point at the model; a later entry wins a
+/// collision, like the TS `Map.set`). The catalog's other fields (names, limits, modalities,
+/// dates) and the JSON tree itself are not kept resident; the cache file and the refresh return
+/// payload keep them, since the write path serializes the full normalized map.
 pub struct CachedRegistry {
     /// `fetchedAt` as parsed.
     pub fetched_at: f64,
-    /// The normalized providers pruned to the fields resolution reads (see [`prune`]),
-    /// in payload order.
-    pub providers: Map<String, Value>,
-    /// Provider key → (normalized candidate id → model key).
-    index: HashMap<String, HashMap<String, String>>,
+    providers: Vec<ProviderEntry>,
+    /// Provider key to its position in `providers`.
+    keys: HashMap<Box<str>, usize>,
 }
 
-fn build_index(providers: &Map<String, Value>) -> HashMap<String, HashMap<String, String>> {
-    let mut index = HashMap::new();
-    for (provider_key, provider) in providers {
-        let Some(models) = provider.get("models").and_then(Value::as_object) else {
-            continue;
-        };
-        let mut entries = HashMap::new();
-        for (model_key, model) in models {
-            if !model.is_object() {
-                continue;
-            }
-            entries.insert(normalize_id(model_key), model_key.clone());
-            if let Some(id) = model.get("id").and_then(Value::as_str) {
-                entries.insert(normalize_id(id), model_key.clone());
-            }
-        }
-        index.insert(provider_key.clone(), entries);
-    }
-    index
+struct ProviderEntry {
+    key: Box<str>,
+    id: Box<str>,
+    models: Vec<ModelEntry>,
+    /// Normalized candidate id to the model's position in `models`.
+    index: HashMap<Box<str>, usize>,
 }
 
-/// The resident registry keeps only what resolution reads: each provider's `id` and each
-/// model's `id` and `cost`. The catalog's other fields (names, limits, modalities, dates) are
-/// the bulk of the parsed tree; the cache file and the refresh return payload keep them, since
-/// the write path serializes the full normalized map, not this pruned one.
-fn prune(providers: Map<String, Value>) -> Map<String, Value> {
-    providers
-        .into_iter()
-        .map(|(key, provider)| {
-            let mut slim = Map::new();
-            if let Value::Object(mut provider) = provider {
-                if let Some(id) = provider.remove("id") {
-                    slim.insert("id".into(), id);
-                }
-                if let Some(Value::Object(models)) = provider.remove("models") {
-                    let models: Map<String, Value> = models
-                        .into_iter()
-                        .map(|(model_key, model)| {
-                            let mut small = Map::new();
-                            if let Value::Object(mut model) = model {
-                                if let Some(id) = model.remove("id") {
-                                    small.insert("id".into(), id);
-                                }
-                                if let Some(cost) = model.remove("cost") {
-                                    small.insert("cost".into(), cost);
-                                }
-                            }
-                            (model_key, Value::Object(small))
-                        })
-                        .collect();
-                    slim.insert("models".into(), Value::Object(models));
-                }
-            }
-            (key, Value::Object(slim))
-        })
-        .collect()
+struct ModelEntry {
+    id: Option<Box<str>>,
+    /// `toPricing` of the model's `cost`, None when it has no usable input and output rates.
+    rates: Option<Rates>,
 }
 
 impl CachedRegistry {
-    /// Wrap already-normalized providers (with their `fetchedAt`), keeping only the fields
+    /// Index already-normalized providers (with their `fetchedAt`), keeping only what
     /// resolution reads.
     pub fn new(fetched_at: f64, providers: Map<String, Value>) -> Self {
-        let providers = prune(providers);
-        let index = build_index(&providers);
+        let mut entries = Vec::with_capacity(providers.len());
+        let mut keys = HashMap::with_capacity(providers.len());
+        for (key, provider) in &providers {
+            let id = provider
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let mut models = Vec::new();
+            let mut index = HashMap::new();
+            if let Some(listed) = provider.get("models").and_then(Value::as_object) {
+                for (model_key, model) in listed {
+                    if !model.is_object() {
+                        continue;
+                    }
+                    let id = model.get("id").and_then(Value::as_str);
+                    index.insert(normalize_id(model_key).into_boxed_str(), models.len());
+                    if let Some(id) = id {
+                        index.insert(normalize_id(id).into_boxed_str(), models.len());
+                    }
+                    models.push(ModelEntry {
+                        id: id.map(Box::from),
+                        rates: to_pricing(model.get("cost")),
+                    });
+                }
+            }
+            keys.insert(Box::from(key.as_str()), entries.len());
+            entries.push(ProviderEntry {
+                key: Box::from(key.as_str()),
+                id: Box::from(id),
+                models,
+                index,
+            });
+        }
+        drop(providers);
         CachedRegistry {
             fetched_at,
-            providers,
-            index,
+            providers: entries,
+            keys,
         }
+    }
+
+    /// The provider keys, in payload order.
+    pub fn provider_keys(&self) -> impl Iterator<Item = &str> {
+        self.providers.iter().map(|provider| &*provider.key)
+    }
+
+    /// Whether the registry lists the provider key.
+    pub fn has_provider(&self, key: &str) -> bool {
+        self.keys.contains_key(key)
     }
 }
 
@@ -536,10 +535,10 @@ fn to_pricing(cost: Option<&Value>) -> Option<Rates> {
 }
 
 /// `findModel` over the index.
-fn find_model<'a>(index: &'a HashMap<String, String>, model: &str) -> Option<&'a str> {
+fn find_model(index: &HashMap<Box<str>, usize>, model: &str) -> Option<usize> {
     get_model_candidates(model)
         .iter()
-        .find_map(|candidate| index.get(candidate).map(String::as_str))
+        .find_map(|candidate| index.get(candidate.as_str()).copied())
 }
 
 /// `resolveProviderModel` for a provider already resolved to its map key: the provider's and
@@ -549,21 +548,12 @@ fn resolve_in_provider(
     provider_key: &str,
     model: &str,
 ) -> Option<(String, String, Rates)> {
-    let provider = cached.providers.get(provider_key)?;
-    let entry_key = find_model(cached.index.get(provider_key)?, model)?;
-    let entry = provider.get("models")?.get(entry_key)?;
-    let rates = to_pricing(entry.get("cost"))?;
+    let provider = &cached.providers[*cached.keys.get(provider_key)?];
+    let entry = &provider.models[find_model(&provider.index, model)?];
+    let rates = entry.rates?;
     Some((
-        provider
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        entry
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
+        provider.id.to_string(),
+        entry.id.as_deref().unwrap_or_default().to_owned(),
         rates,
     ))
 }
@@ -592,7 +582,7 @@ pub fn resolve_unambiguous_model(
     model: &str,
 ) -> Option<(String, String, Rates)> {
     let mut first: Option<(String, String, Rates)> = None;
-    for provider_key in cached.providers.keys() {
+    for provider_key in cached.provider_keys() {
         if let Some(found) = resolve_in_provider(cached, provider_key, model) {
             if first.as_ref().is_some_and(|f| !same_rates(&f.2, &found.2)) {
                 return None;
@@ -607,19 +597,10 @@ pub fn resolve_unambiguous_model(
 /// bytes, which is the same order for the ASCII ids real registries use.
 pub fn get_known_models_dev_models(cached: &CachedRegistry) -> Vec<String> {
     let mut ids = std::collections::BTreeSet::new();
-    for provider in cached.providers.values() {
-        let Some(models) = provider.get("models").and_then(Value::as_object) else {
-            continue;
-        };
-        for model in models.values() {
-            if let Some(id) = model.get("id").and_then(Value::as_str) {
-                ids.insert(format!(
-                    "{}/{id}",
-                    provider
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                ));
+    for provider in &cached.providers {
+        for model in &provider.models {
+            if let Some(id) = &model.id {
+                ids.insert(format!("{}/{id}", provider.id));
             }
         }
     }
@@ -717,8 +698,8 @@ mod tests {
         );
         cache.write(&replacement, 3.0);
         let cached = cache.read(true, 0.0).expect("re-read");
-        assert_eq!(cached.providers.len(), 1);
-        assert!(cached.providers.contains_key("anthropic"));
+        assert_eq!(cached.provider_keys().count(), 1);
+        assert!(cached.has_provider("anthropic"));
     }
 
     #[test]
@@ -798,27 +779,8 @@ mod tests {
         .expect("normalizes");
         cache.write(&full, 1.0);
         let cached = cache.read(true, 0.0).expect("read");
-        let provider = cached.providers.get("openai").expect("provider");
-        assert_eq!(
-            provider
-                .as_object()
-                .expect("object")
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["id", "models"]
-        );
-        let model = &provider["models"]["gpt-5.5"];
-        assert_eq!(
-            model
-                .as_object()
-                .expect("object")
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["id", "cost"]
-        );
-        // Resolution still answers from the pruned tree.
+        assert_eq!(get_known_models_dev_models(cached), ["openai/gpt-5.5"]);
+        // Resolution answers from the compact index alone.
         let (_, _, rates) = resolve_provider_model(cached, "openai", "gpt-5.5").expect("rates");
         assert_eq!(rates.input_per_million, 5.0);
         assert_eq!(rates.output_per_million, 30.0);
@@ -862,7 +824,7 @@ mod tests {
         let cached = first
             .read(true, 0.0)
             .expect("re-read after the other cache wrote");
-        assert!(cached.providers.contains_key("anthropic"));
-        assert!(!cached.providers.contains_key("openai"));
+        assert!(cached.has_provider("anthropic"));
+        assert!(!cached.has_provider("openai"));
     }
 }

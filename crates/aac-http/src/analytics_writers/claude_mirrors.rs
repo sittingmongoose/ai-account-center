@@ -1,15 +1,16 @@
 //! Select Claude SSH mirrors across computers before the file keys are aggregated away.
 
 use aac_store::{
-    analytics_cache,
+    analytics_cache, collect,
     engine::Engine,
     error::{Error, Result},
+    scan_row::ScanRow,
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-pub(super) type Owners = BTreeMap<String, String>;
+pub(super) use super::claude_owners::Owners;
 
 pub(super) const LIVE: &str = "live/claude-mirror-owners";
 pub(super) const HISTORY: &str = "history/claude-mirror-owners";
@@ -19,9 +20,22 @@ const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(super) struct Part<'a> {
     pub(super) host: &'a str,
     pub(super) state_index: usize,
-    pub(super) rows: Vec<Value>,
-    pub(super) sessions: Vec<Value>,
+    pub(super) rows: Vec<ScanRow>,
+    pub(super) sessions: Vec<ScanRow>,
     pub(super) fingerprints: Value,
+}
+
+impl Part<'_> {
+    /// The part's priced cells and sessions.
+    pub(super) fn worker(&self, now: i64, pricing: &dyn collect::Pricing) -> Value {
+        collect::worker_from_rows(
+            &self.rows.iter().collect::<Vec<_>>(),
+            &self.sessions.iter().collect::<Vec<_>>(),
+            self.host,
+            now,
+            pricing,
+        )
+    }
 }
 
 /// One parsed owner map per (store instance, key) for the whole process: the activity pass
@@ -83,8 +97,8 @@ pub(super) fn identity(print: &Value) -> Option<(&str, bool)> {
     Some((name, print["claudeMirror"].as_bool()?))
 }
 
-pub(super) fn row_identity<'a>(row: &Value, fingerprints: &'a Value) -> Option<(&'a str, bool)> {
-    identity(&fingerprints[row["f"].as_str()?])
+pub(super) fn row_identity<'a>(row: &ScanRow, fingerprints: &'a Value) -> Option<(&'a str, bool)> {
+    identity(fingerprints.get(&*row.file)?)
 }
 
 /// A confirmed original always wins. Otherwise retain a prior owner across failures
@@ -117,16 +131,15 @@ pub(super) fn select(
 pub(super) fn keep_historical_originals(store: &Engine, part: &mut Part<'_>) -> Result<()> {
     let mut owners = load(store, HISTORY)?;
     let mut changed = false;
-    let mut keep = |row: &Value| {
+    let mut keep = |row: &ScanRow| {
         let Some((name, false)) = row_identity(row, &part.fingerprints) else {
             return false;
         };
-        Arc::make_mut(&mut owners)
-            .entry(name.to_owned())
-            .or_insert_with(|| {
-                changed = true;
-                part.host.to_owned()
-            });
+        // Copy the shared map only to add a name it lacks.
+        if !owners.contains_key(name) {
+            Arc::make_mut(&mut owners).insert(name, part.host);
+            changed = true;
+        }
         true
     };
     part.rows.retain(&mut keep);
@@ -169,41 +182,28 @@ pub(super) fn choose(
         {
             if let Some((name, false)) = identity(print) {
                 present.insert((host, name));
-                originals
-                    .entry(name.to_owned())
-                    .or_insert_with(|| host.to_owned());
+                originals.insert_absent(name, host);
             }
         }
         for row in part.rows.iter().chain(&part.sessions) {
             if let Some((name, true)) = row_identity(row, &part.fingerprints) {
                 present.insert((host, name));
-                owners
-                    .entry(name.to_owned())
-                    .or_insert_with(|| host.to_owned());
+                owners.insert_absent(name, host);
             }
         }
     }
-    for (name, host) in previous {
-        if configured.contains(host.as_str())
-            && (!complete.contains(host.as_str())
-                || present.contains(&(host.as_str(), name.as_str())))
+    for (name, host) in previous.iter() {
+        if configured.contains(host)
+            && (!complete.contains(host) || present.contains(&(host, &*name)))
         {
-            owners.insert(name.clone(), host.clone());
+            owners.insert(&name, host);
         }
     }
-    owners.extend(
-        committed
-            .iter()
-            .map(|(name, host)| (name.clone(), host.clone())),
-    );
-    owners.extend(
-        originals
-            .iter()
-            .map(|(name, host)| (name.clone(), host.clone())),
-    );
+    owners.extend_from(committed);
+    owners.extend_from(&originals);
 
     for part in parts {
-        let keep = |row: &Value| match row_identity(row, &part.fingerprints) {
+        let keep = |row: &ScanRow| match row_identity(row, &part.fingerprints) {
             Some((name, true)) => {
                 !originals.contains_key(name)
                     && owners.get(name).is_some_and(|host| host == part.host)
@@ -223,7 +223,13 @@ pub(super) fn choose(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aac_store::{collect, ops, report};
+    use aac_store::{ops, report};
+
+    fn typed(rows: &[Value]) -> Vec<ScanRow> {
+        rows.iter()
+            .map(|row| serde_json::from_value(row.clone()).expect("scanner row"))
+            .collect()
+    }
 
     fn part(host: &'static str, state_index: usize, mirror: bool, time: i64) -> Part<'static> {
         let hour = aac_store::usage::iso(time);
@@ -239,8 +245,8 @@ mod tests {
         Part {
             host,
             state_index,
-            rows: vec![row],
-            sessions: vec![session],
+            rows: typed(&[row]),
+            sessions: typed(&[session]),
             fingerprints: json!({
                 "fixture-file": {"claudeName": "same-basename-digest", "claudeMirror": mirror}
             }),
@@ -263,14 +269,7 @@ mod tests {
         let workers = parts
             .iter()
             .map(|part| {
-                let data = collect::worker_from_scan(
-                    &part.rows,
-                    &part.sessions,
-                    "claude",
-                    part.host,
-                    now,
-                    &pricing,
-                );
+                let data = part.worker(now, &pricing);
                 json!({ "tool": "claude", "host": part.host, "data": data })
             })
             .collect::<Vec<_>>();
@@ -349,7 +348,7 @@ mod tests {
                 home.path(),
                 &aac_usage::discover::Env::default(),
             );
-            let rows = answer["rows"].as_array().expect("scanner rows").clone();
+            let rows = typed(answer["rows"].as_array().expect("scanner rows"));
             assert_eq!(rows.len(), 1, "{host}: {answer}");
             assert_eq!(answer["srows"], json!([]));
             Part {
@@ -376,11 +375,11 @@ mod tests {
         assert!(!original_is_mirror);
         let mut states = [state("odroid", "ok"), state("nas1", "ok")];
         select(&mut parts, &mut states, &Owners::new());
-        let rows: Vec<&Value> = parts.iter().flat_map(|part| &part.rows).collect();
+        let rows: Vec<&ScanRow> = parts.iter().flat_map(|part| &part.rows).collect();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["i"], 70);
-        assert_eq!(rows[0]["o"], 30);
-        assert_eq!(rows[0]["n"], 1);
+        assert_eq!(rows[0].tokens[0], 70);
+        assert_eq!(rows[0].tokens[1], 30);
+        assert_eq!(rows[0].events, 1);
     }
 
     #[test]
@@ -419,10 +418,7 @@ mod tests {
             part("mac", 1, true, 0),
         ];
         let reelected = select(&mut parts, &mut states, &owners).expect("re-elected mirror owner");
-        assert_eq!(
-            reelected.get("same-basename-digest").map(String::as_str),
-            Some("mac")
-        );
+        assert_eq!(reelected.get("same-basename-digest"), Some("mac"));
         assert_eq!(parts[1].rows.len(), 1);
         assert_eq!(parts[1].sessions.len(), 1);
     }
@@ -433,7 +429,7 @@ mod tests {
         let engine = ops::open_engine(fixture.path().to_str().expect("path"), None, None)
             .expect("open activity store");
         let mut owners = Owners::new();
-        owners.insert("same-basename-digest".to_owned(), "nas1".to_owned());
+        owners.insert("same-basename-digest", "nas1");
         save(&engine, LIVE, &owners).expect("save");
         let first = load(&engine, LIVE).expect("first load");
         let second = load(&engine, LIVE).expect("second load");
@@ -443,14 +439,11 @@ mod tests {
         );
         // A save refreshes the shared map for the next load.
         let mut updated = Owners::new();
-        updated.insert("same-basename-digest".to_owned(), "mac".to_owned());
+        updated.insert("same-basename-digest", "mac");
         save(&engine, LIVE, &updated).expect("re-save");
         let third = load(&engine, LIVE).expect("third load");
         assert!(!Arc::ptr_eq(&first, &third));
-        assert_eq!(
-            third.get("same-basename-digest").map(String::as_str),
-            Some("mac")
-        );
+        assert_eq!(third.get("same-basename-digest"), Some("mac"));
         engine.close().expect("close");
     }
 
@@ -461,10 +454,10 @@ mod tests {
         let ea = ops::open_engine(a.path().to_str().expect("path"), None, None).expect("open a");
         let eb = ops::open_engine(b.path().to_str().expect("path"), None, None).expect("open b");
         let mut owners = Owners::new();
-        owners.insert("name".to_owned(), "nas1".to_owned());
+        owners.insert("name", "nas1");
         save(&ea, HISTORY, &owners).expect("save a");
         let from_b = load(&eb, HISTORY).expect("load b");
-        assert!(from_b.is_empty(), "another store's map is not this store's");
+        assert_eq!(from_b.len(), 0, "another store's map is not this store's");
         ea.close().expect("close a");
         eb.close().expect("close b");
     }

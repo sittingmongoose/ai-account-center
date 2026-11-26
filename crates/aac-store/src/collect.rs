@@ -8,10 +8,12 @@
 //! and policy overrides it owns); this module applies the resolved facts with the collector's exact
 //! arithmetic — a logged cost wins, the rest prices at list rates, and the fallback part is kept
 //! apart. [`Pricing`] is the fed-facts seam the host supplies and the parity vectors pin.
+use crate::scan_row::{Interner, ScanRow};
 use aac_num::ecma::{parse_instant, to_iso_string};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 const HOUR: i64 = 3_600_000;
 /// `FUTURE_SLACK_MS`: records dated more than this after the read are counted, not written.
@@ -133,22 +135,6 @@ fn label(value: &str, max: usize) -> String {
     cleaned.trim().chars().take(max).collect()
 }
 
-fn as_f64(value: &Value) -> f64 {
-    value.as_f64().unwrap_or(0.0)
-}
-
-/// `Math.floor(v)` for a finite number, else 0 (the collector's token counts are non-negative).
-fn floor_count(value: &Value) -> i64 {
-    let n = as_f64(value);
-    if n.is_finite() { n.floor() as i64 } else { 0 }
-}
-
-/// `count`: a finite positive number floored, else 0.
-fn count(value: &Value) -> u64 {
-    let n = as_f64(value);
-    if n.is_finite() && n > 0.0 { n.floor() as u64 } else { 0 }
-}
-
 fn iso(ms: i64) -> String {
     to_iso_string(ms).expect("collection time within the ISO domain")
 }
@@ -167,210 +153,140 @@ fn remote_row_provider(kind: &str, route: Option<&str>) -> Option<String> {
     }
 }
 
-/// `toCompact`: the scanner's compact rows as the collector's compact entries.
-pub fn to_compact(rows: &[Value]) -> Vec<Value> {
-    rows.iter()
-        .map(|row| {
-            let kind = row["k"].as_str().unwrap_or("");
-            let provider = scan_provider(kind, row["m"].as_str(), row["p"].as_str());
-            let hour = row["h"].as_str().unwrap_or("").replace(' ', "T");
-            let mut entry = Map::new();
-            entry.insert("inputTokens".into(), json!(floor_count(&row["i"])));
-            entry.insert("outputTokens".into(), json!(floor_count(&row["o"])));
-            entry.insert("cacheCreationTokens".into(), json!(floor_count(&row["cw"])));
-            entry.insert("cacheReadTokens".into(), json!(floor_count(&row["cr"])));
-            entry.insert("model".into(), json!(row["m"].as_str().unwrap_or("")));
-            entry.insert("sessionId".into(), json!(""));
-            entry.insert("timestamp".into(), json!(format!("{hour}:00Z")));
-            entry.insert("projectPath".into(), json!(""));
-            entry.insert("target".into(), json!(kind));
-            if let Some(provider) = provider {
-                entry.insert("provider".into(), json!(provider));
-            }
-            let cost = as_f64(&row["c"]);
-            match row["costBasis"].as_str() {
-                Some("unknown") => {
-                    entry.insert("costBasis".into(), json!("unknown"));
-                }
-                Some("reported") => {
-                    entry.insert("costUsd".into(), json!(cost));
-                    entry.insert("costBasis".into(), json!("reported"));
-                }
-                _ => {
-                    if cost > 0.0 {
-                        entry.insert("costUsd".into(), json!(cost));
-                    }
-                }
-            }
-            json!({ "entry": Value::Object(entry), "events": floor_count(&row["n"]) })
-        })
-        .collect()
+/// The compact entry's provider (`toCompact`), or the row's tool where it names none: the
+/// routing word `cellsFromCompact` and `aggregateSessionAggregates` read.
+fn routing<'a>(row: &'a ScanRow, provider: &'a Option<String>) -> &'a str {
+    provider.as_deref().unwrap_or(&row.kind)
 }
 
-/// `toSessionAggregates`: the scanner's session rows as the collector's session aggregates.
-pub fn to_session_aggregates(srows: &[Value]) -> Vec<Value> {
-    srows
-        .iter()
-        .map(|row| {
-            let kind = row["k"].as_str().unwrap_or("");
-            let provider = scan_provider(kind, row["m"].as_str(), row["p"].as_str());
-            let mut out = Map::new();
-            out.insert("sessionId".into(), json!(row["s"].as_str().unwrap_or("")));
-            out.insert("model".into(), json!(row["m"].as_str().unwrap_or("")));
-            if let Some(provider) = provider {
-                out.insert("provider".into(), json!(provider));
-            }
-            out.insert("target".into(), json!(kind));
-            out.insert("firstMs".into(), json!(floor_count(&row["a"])));
-            out.insert("lastMs".into(), json!(floor_count(&row["z"])));
-            out.insert("inputTokens".into(), json!(floor_count(&row["i"])));
-            out.insert("outputTokens".into(), json!(floor_count(&row["o"])));
-            out.insert("cacheCreationTokens".into(), json!(floor_count(&row["cw"])));
-            out.insert("cacheReadTokens".into(), json!(floor_count(&row["cr"])));
-            let cost = as_f64(&row["c"]);
-            if cost > 0.0 {
-                out.insert("cost".into(), json!(cost));
-            }
-            out.insert("events".into(), json!(floor_count(&row["n"])));
-            Value::Object(out)
-        })
-        .collect()
+/// List rates applied to the unlogged token counts (input, output, cache write, cache read).
+fn listed(unlogged: [f64; 4], rates: Rates) -> f64 {
+    let [input, output, write, read] = unlogged;
+    (input / 1_000_000.0) * rates.input
+        + (output / 1_000_000.0) * rates.output
+        + (write / 1_000_000.0) * rates.cache_creation
+        + (read / 1_000_000.0) * rates.cache_read
 }
+
+/// The row's tokens in the collector's order: input, output, cache creation, cache read.
+fn entry_tokens(row: &ScanRow) -> [u64; 4] {
+    let [input, output, read, write] = row.tokens;
+    [input, output, write, read]
+}
+
+const TOKEN_FIELDS: [&str; 4] = ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens"];
 
 struct Slot {
-    cell: Map<String, Value>,
+    hour: String,
+    session_key: Option<String>,
+    route: usize,
+    tokens: [u64; 4],
+    events: u64,
     logged: f64,
     unlogged: [f64; 4],
 }
 
-/// `cellsFromCompact`: the absolute totals of each UTC hour, session, route and model, priced with
-/// the fed facts. `keyed`: the rows' session ids are already published keys. Returns the cells and
-/// the count of future-dated records left out.
-pub fn cells_from_compact(
-    rows: &[Value],
-    tool: &str,
-    keyed: bool,
+/// `toCompact` then `cellsFromCompact` (keyed): the absolute totals of each UTC hour, session,
+/// route and model, priced with the fed facts. A row's session is the published key its file's
+/// session row names. Returns the cells and the count of future-dated records left out.
+fn cells_from_rows(
+    rows: &[&ScanRow],
+    session_of: &HashMap<&str, &str>,
     now: i64,
     pricing: &dyn Pricing,
 ) -> (Vec<Value>, u64) {
     let limit = now + FUTURE_SLACK_MS;
-    let mut order: Vec<String> = Vec::new();
-    let mut slots: HashMap<String, Slot> = HashMap::new();
+    let mut hours: HashMap<&str, Option<i64>> = HashMap::new();
+    // (tool, model, logged provider) to the (route, modelRaw) pair's index.
+    let mut labels: HashMap<(&str, &str, Option<&str>), usize> = HashMap::new();
+    let mut routes: Vec<(String, String)> = Vec::new();
+    let mut route_index: HashMap<(String, String), usize> = HashMap::new();
+    let mut order: Vec<Slot> = Vec::new();
+    let mut slots: HashMap<(i64, Option<&str>, usize), usize> = HashMap::new();
     let mut future = 0u64;
     for row in rows {
-        let entry = &row["entry"];
-        let Some(at) = entry["timestamp"].as_str().and_then(parse_instant) else {
+        let hour = row.hour.as_deref().unwrap_or("");
+        let at = *hours
+            .entry(hour)
+            .or_insert_with(|| parse_instant(&format!("{}:00Z", hour.replace(' ', "T"))));
+        let Some(at) = at else {
             continue;
         };
         if at > limit {
-            future += count(&row["events"]).max(1);
+            future += row.events.max(1);
             continue;
         }
-        let hour = iso(at.div_euclid(HOUR) * HOUR);
-        let provider = entry["provider"].as_str().or_else(|| entry["target"].as_str());
-        let model_raw = {
-            let raw = label(entry["model"].as_str().unwrap_or(""), MAX_MODEL);
-            if raw.is_empty() { "unknown".to_string() } else { raw }
-        };
-        let route = if is_kimi_code_usage(Some(&model_raw), provider) {
-            "kimi-code".to_string()
-        } else {
-            label(&normalize_provider(provider).unwrap_or_default(), MAX_ROUTE).to_lowercase()
-        };
-        let raw = entry["sessionId"].as_str().unwrap_or("");
-        let session_key = if raw.is_empty() {
-            None
-        } else if keyed {
-            is_hex16(raw).then(|| raw.to_string())
-        } else {
-            Some(session_key(tool, raw))
-        };
-        let session_hash = if !raw.is_empty() && !keyed {
-            Some(session_hash(tool, raw))
-        } else {
-            None
-        };
-        let id = format!(
-            "{hour}\u{0}{}\u{0}{route}\u{0}{model_raw}",
-            session_key.as_deref().unwrap_or("")
-        );
-        if !slots.contains_key(&id) {
-            let mut cell = Map::new();
-            cell.insert("hour".into(), json!(hour));
-            cell.insert("sessionKey".into(), json!(session_key));
-            if let Some(hash) = session_hash {
-                cell.insert("sessionHash".into(), json!(hash));
-            }
-            cell.insert("route".into(), json!(route));
-            cell.insert("modelRaw".into(), json!(model_raw));
-            cell.insert("inputTokens".into(), json!(0));
-            cell.insert("outputTokens".into(), json!(0));
-            cell.insert("cacheCreationTokens".into(), json!(0));
-            cell.insert("cacheReadTokens".into(), json!(0));
-            cell.insert("events".into(), json!(0));
-            order.push(id.clone());
-            slots.insert(
-                id.clone(),
-                Slot {
-                    cell,
-                    logged: 0.0,
-                    unlogged: [0.0; 4],
-                },
-            );
+        let route = *labels
+            .entry((&row.kind, &row.model, row.provider.as_deref()))
+            .or_insert_with(|| {
+                let provider = scan_provider(&row.kind, Some(&row.model), row.provider.as_deref());
+                let provider = routing(row, &provider);
+                let model_raw = {
+                    let raw = label(&row.model, MAX_MODEL);
+                    if raw.is_empty() { "unknown".to_string() } else { raw }
+                };
+                let route = if is_kimi_code_usage(Some(&model_raw), Some(provider)) {
+                    "kimi-code".to_string()
+                } else {
+                    label(&normalize_provider(Some(provider)).unwrap_or_default(), MAX_ROUTE).to_lowercase()
+                };
+                // Different spellings can share one label pair; they share its cell.
+                *route_index
+                    .entry((route.clone(), model_raw.clone()))
+                    .or_insert_with(|| {
+                        routes.push((route, model_raw));
+                        routes.len() - 1
+                    })
+            });
+        let session = session_of.get(&*row.file).copied().filter(|key| is_hex16(key));
+        let hour_ms = at.div_euclid(HOUR) * HOUR;
+        let index = *slots.entry((hour_ms, session, route)).or_insert_with(|| {
+            order.push(Slot {
+                hour: iso(hour_ms),
+                session_key: session.map(str::to_string),
+                route,
+                tokens: [0; 4],
+                events: 0,
+                logged: 0.0,
+                unlogged: [0.0; 4],
+            });
+            order.len() - 1
+        });
+        let slot = &mut order[index];
+        let tokens = entry_tokens(row);
+        for (total, value) in slot.tokens.iter_mut().zip(tokens) {
+            *total += value;
         }
-        let slot = slots.get_mut(&id).expect("slot just inserted");
-        let tokens = [
-            count(&entry["inputTokens"]),
-            count(&entry["outputTokens"]),
-            count(&entry["cacheCreationTokens"]),
-            count(&entry["cacheReadTokens"]),
-        ];
-        for (field, value) in ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens"]
-            .iter()
-            .zip(tokens)
-        {
-            let current = slot.cell[*field].as_u64().unwrap_or(0);
-            slot.cell.insert((*field).into(), json!(current + value));
-        }
-        let events = slot.cell["events"].as_u64().unwrap_or(0) + count(&row["events"]);
-        slot.cell.insert("events".into(), json!(events));
-        let cost_usd = entry["costUsd"].as_f64();
-        if cost_usd.is_some_and(|c| c > 0.0) {
-            slot.logged += cost_usd.unwrap_or(0.0);
+        slot.events += row.events;
+        if row.cost > 0.0 && row.cost_basis.as_deref() != Some("unknown") {
+            slot.logged += row.cost;
         } else {
-            for (i, value) in tokens.iter().enumerate() {
-                slot.unlogged[i] += *value as f64;
+            for (pending, value) in slot.unlogged.iter_mut().zip(tokens) {
+                *pending += value as f64;
             }
         }
     }
-    let mut cache: HashMap<String, PricingResolution> = HashMap::new();
+    let mut resolved: HashMap<usize, PricingResolution> = HashMap::new();
     let mut cells = Vec::new();
-    for id in order {
-        let slot = slots.remove(&id).expect("ordered slot");
-        let route = slot.cell["route"].as_str().unwrap_or("").to_string();
-        let model_raw = slot.cell["modelRaw"].as_str().unwrap_or("").to_string();
-        let key = format!("{route}\u{0}{model_raw}");
-        let resolved = cache
-            .entry(key)
-            .or_insert_with(|| {
-                let provider = if route.is_empty() { None } else { Some(route.as_str()) };
-                pricing.resolve(&model_raw, provider)
-            })
-            .clone();
-        let rates = resolved.rates;
-        let [input, output, write, read] = slot.unlogged;
-        let listed = (input / 1_000_000.0) * rates.input
-            + (output / 1_000_000.0) * rates.output
-            + (write / 1_000_000.0) * rates.cache_creation
-            + (read / 1_000_000.0) * rates.cache_read;
-        let tokens = slot.cell["inputTokens"].as_u64().unwrap_or(0)
-            + slot.cell["outputTokens"].as_u64().unwrap_or(0)
-            + slot.cell["cacheCreationTokens"].as_u64().unwrap_or(0)
-            + slot.cell["cacheReadTokens"].as_u64().unwrap_or(0);
-        if tokens == 0 && slot.logged == 0.0 {
+    for slot in order {
+        let (route, model_raw) = &routes[slot.route];
+        let resolution = resolved.entry(slot.route).or_insert_with(|| {
+            let provider = if route.is_empty() { None } else { Some(route.as_str()) };
+            pricing.resolve(model_raw, provider)
+        });
+        let listed = listed(slot.unlogged, resolution.rates);
+        if slot.tokens.iter().sum::<u64>() == 0 && slot.logged == 0.0 {
             continue;
         }
-        let mut cell = slot.cell;
+        let mut cell = Map::new();
+        cell.insert("hour".into(), json!(slot.hour));
+        cell.insert("sessionKey".into(), json!(slot.session_key));
+        cell.insert("route".into(), json!(route));
+        cell.insert("modelRaw".into(), json!(model_raw));
+        for (field, value) in TOKEN_FIELDS.iter().zip(slot.tokens) {
+            cell.insert((*field).into(), json!(value));
+        }
+        cell.insert("events".into(), json!(slot.events));
         cell.insert(
             "loggedCostUsd".into(),
             if slot.logged > 0.0 {
@@ -382,193 +298,152 @@ pub fn cells_from_compact(
         cell.insert("costUsd".into(), json!(slot.logged + listed));
         cell.insert(
             "fallbackCostUsd".into(),
-            json!(if resolved.source == "fallback" { listed } else { 0.0 }),
+            json!(if resolution.source == "fallback" { listed } else { 0.0 }),
         );
         cells.push(Value::Object(cell));
     }
     (cells, future)
 }
 
-struct SessionBucket {
-    /// Model key to its breakdown (insertion order kept).
-    models: Vec<(String, Map<String, Value>)>,
-    logged: HashMap<String, f64>,
-    unlogged: HashMap<String, [f64; 4]>,
-    first_ms: i64,
-    last_ms: i64,
-    target: Option<String>,
+struct ModelSlot {
+    key: (Option<String>, Arc<str>),
+    tokens: [u64; 4],
+    logged: f64,
+    unlogged: [f64; 4],
 }
 
-/// `aggregateSessionAggregates`: the session rows the report builder's `sessionsOf` reads, priced
-/// with the fed facts. Only the fields `sessionsOf` consumes are shaped (key, first/last, target,
-/// model breakdowns); the projection's extra labels stay with the front door.
-pub fn aggregate_sessions(rows: &[Value], pricing: &dyn Pricing) -> Vec<Value> {
-    let mut order: Vec<String> = Vec::new();
-    let mut sessions: HashMap<String, SessionBucket> = HashMap::new();
-    for row in rows {
-        let Some(session_id) = row["sessionId"].as_str() else {
-            continue;
-        };
+struct SessionBucket {
+    /// The model breakdowns, in first-seen order.
+    models: Vec<ModelSlot>,
+    first_ms: i64,
+    last_ms: i64,
+    target: Arc<str>,
+}
+
+/// `toSessionAggregates` then `aggregateSessionAggregates`: the session rows the report builder's
+/// `sessionsOf` reads, priced with the fed facts. Only the fields `sessionsOf` consumes are shaped
+/// (key, first/last, target, model breakdowns); the projection's extra labels stay with the front
+/// door.
+fn sessions_from_rows(srows: &[&ScanRow], pricing: &dyn Pricing) -> Vec<Value> {
+    let mut order: Vec<SessionBucket> = Vec::new();
+    let mut ids: Vec<&str> = Vec::new();
+    let mut sessions: HashMap<&str, usize> = HashMap::new();
+    for row in srows {
+        let session_id = row.session.as_deref().unwrap_or("");
         if session_id.is_empty() {
             continue;
         }
-        let first = row["firstMs"].as_f64();
-        let last = row["lastMs"].as_f64();
-        let (Some(first), Some(last)) = (first, last) else {
-            continue;
-        };
-        if !first.is_finite() || !last.is_finite() || last < first {
+        let (first, last) = (row.first.unwrap_or(0), row.last.unwrap_or(0));
+        if last < first {
             continue;
         }
-        let first = first as i64;
-        let last = last as i64;
-        if !sessions.contains_key(session_id) {
-            if sessions.len() >= MAX_SESSION_ROWS {
-                continue;
-            }
-            order.push(session_id.to_string());
-            sessions.insert(
-                session_id.to_string(),
-                SessionBucket {
+        let index = match sessions.get(session_id) {
+            Some(index) => *index,
+            None => {
+                if sessions.len() >= MAX_SESSION_ROWS {
+                    continue;
+                }
+                sessions.insert(session_id, order.len());
+                ids.push(session_id);
+                order.push(SessionBucket {
                     models: Vec::new(),
-                    logged: HashMap::new(),
-                    unlogged: HashMap::new(),
                     first_ms: first,
                     last_ms: last,
-                    target: row["target"].as_str().map(str::to_string),
-                },
-            );
-        }
-        let bucket = sessions.get_mut(session_id).expect("bucket");
+                    target: Arc::clone(&row.kind),
+                });
+                order.len() - 1
+            }
+        };
+        let bucket = &mut order[index];
         bucket.first_ms = bucket.first_ms.min(first);
         bucket.last_ms = bucket.last_ms.max(last);
-        if let Some(target) = row["target"].as_str() {
-            bucket.target = Some(target.to_string());
-        }
-        let provider = normalize_provider(row["provider"].as_str().or_else(|| row["target"].as_str()));
-        let model_name = row["model"].as_str().unwrap_or("").to_string();
-        let model_key = format!("{}\u{0}{model_name}", provider.as_deref().unwrap_or(""));
-        if !bucket.models.iter().any(|(k, _)| k == &model_key) {
-            let mut model = Map::new();
-            model.insert("modelName".into(), json!(model_name));
-            if let Some(provider) = &provider {
-                model.insert("provider".into(), json!(provider));
+        bucket.target = Arc::clone(&row.kind);
+        let provider = scan_provider(&row.kind, Some(&row.model), row.provider.as_deref());
+        let provider = normalize_provider(Some(routing(row, &provider)));
+        let key = (provider, Arc::clone(&row.model));
+        let model = match bucket.models.iter().position(|model| model.key == key) {
+            Some(position) => &mut bucket.models[position],
+            None => {
+                bucket.models.push(ModelSlot {
+                    key,
+                    tokens: [0; 4],
+                    logged: 0.0,
+                    unlogged: [0.0; 4],
+                });
+                bucket.models.last_mut().expect("model just pushed")
             }
-            model.insert("inputTokens".into(), json!(0));
-            model.insert("outputTokens".into(), json!(0));
-            model.insert("cacheCreationTokens".into(), json!(0));
-            model.insert("cacheReadTokens".into(), json!(0));
-            model.insert("cost".into(), json!(0.0));
-            bucket.models.push((model_key.clone(), model));
+        };
+        let tokens = entry_tokens(row);
+        for (total, value) in model.tokens.iter_mut().zip(tokens) {
+            *total += value;
         }
-        let model = &mut bucket
-            .models
-            .iter_mut()
-            .find(|(k, _)| k == &model_key)
-            .expect("model")
-            .1;
-        for field in ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens"] {
-            let current = model[field].as_u64().unwrap_or(0);
-            model.insert(field.into(), json!(current + count(&row[field])));
-        }
-        let cost = row["cost"].as_f64();
-        if cost.is_some_and(|c| c > 0.0) {
-            *bucket.logged.entry(model_key.clone()).or_insert(0.0) += cost.unwrap_or(0.0);
+        if row.cost > 0.0 {
+            model.logged += row.cost;
         } else {
-            let pending = bucket.unlogged.entry(model_key.clone()).or_insert([0.0; 4]);
-            for (i, field) in ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens"]
-                .iter()
-                .enumerate()
-            {
-                pending[i] += count(&row[field]) as f64;
+            for (pending, value) in model.unlogged.iter_mut().zip(tokens) {
+                *pending += value as f64;
             }
         }
     }
-    let mut cache: HashMap<String, PricingResolution> = HashMap::new();
-    let mut out: Vec<Value> = Vec::new();
-    for session_id in order {
-        let bucket = sessions.remove(&session_id).expect("ordered bucket");
-        let mut breakdowns: Vec<Value> = Vec::new();
-        for (model_key, mut model) in bucket.models {
-            let model_name = model["modelName"].as_str().unwrap_or("").to_string();
-            let provider = model.get("provider").and_then(Value::as_str);
-            let resolved = cache
-                .entry(model_key.clone())
-                .or_insert_with(|| pricing.resolve(&model_name, provider))
-                .clone();
-            let rates = resolved.rates;
-            let [input, output, write, read] = bucket.unlogged.get(&model_key).copied().unwrap_or([0.0; 4]);
-            let listed = (input / 1_000_000.0) * rates.input
-                + (output / 1_000_000.0) * rates.output
-                + (write / 1_000_000.0) * rates.cache_creation
-                + (read / 1_000_000.0) * rates.cache_read;
-            let cost = bucket.logged.get(&model_key).copied().unwrap_or(0.0) + listed;
-            model.insert("cost".into(), json!(cost));
-            if resolved.source == "fallback" && listed > 0.0 {
-                model.insert("fallbackCost".into(), json!(listed));
+    let mut resolved: HashMap<(Option<String>, Arc<str>), PricingResolution> = HashMap::new();
+    let mut out: Vec<(String, Value)> = Vec::new();
+    for (session_id, bucket) in ids.into_iter().zip(order) {
+        let mut breakdowns: Vec<(f64, Value)> = Vec::new();
+        for model in bucket.models {
+            let (provider, name) = &model.key;
+            let resolution = resolved
+                .entry(model.key.clone())
+                .or_insert_with(|| pricing.resolve(name, provider.as_deref()));
+            let listed = listed(model.unlogged, resolution.rates);
+            let cost = model.logged + listed;
+            let mut breakdown = Map::new();
+            breakdown.insert("modelName".into(), json!(&**name));
+            if let Some(provider) = provider {
+                breakdown.insert("provider".into(), json!(provider));
             }
-            breakdowns.push(Value::Object(model));
+            for (field, value) in TOKEN_FIELDS.iter().zip(model.tokens) {
+                breakdown.insert((*field).into(), json!(value));
+            }
+            breakdown.insert("cost".into(), json!(cost));
+            if resolution.source == "fallback" && listed > 0.0 {
+                breakdown.insert("fallbackCost".into(), json!(listed));
+            }
+            breakdowns.push((cost, Value::Object(breakdown)));
         }
         // The collector sorts breakdowns by cost descending; sessionsOf keeps that order.
-        breakdowns.sort_by(|a, b| {
-            as_f64(&b["cost"])
-                .partial_cmp(&as_f64(&a["cost"]))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        breakdowns.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let last = iso(bucket.last_ms);
         let mut session = Map::new();
         session.insert("sessionId".into(), json!(session_id));
         session.insert("firstActivity".into(), json!(iso(bucket.first_ms)));
-        session.insert("lastActivity".into(), json!(iso(bucket.last_ms)));
-        session.insert("modelBreakdowns".into(), Value::Array(breakdowns));
-        if let Some(target) = bucket.target {
-            session.insert("target".into(), json!(target));
-        }
-        out.push(Value::Object(session));
+        session.insert("lastActivity".into(), json!(last));
+        session.insert(
+            "modelBreakdowns".into(),
+            Value::Array(breakdowns.into_iter().map(|(_, b)| b).collect()),
+        );
+        session.insert("target".into(), json!(&*bucket.target));
+        out.push((last, Value::Object(session)));
     }
     // Newest session first (the collector's lastActivity localeCompare descending).
-    out.sort_by(|a, b| {
-        b["lastActivity"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(a["lastActivity"].as_str().unwrap_or(""))
-    });
-    out
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.into_iter().map(|(_, session)| session).collect()
 }
 
 /// `toWorkerResult` for the scanner's answer: one tool's cells and session rows read on `host`,
 /// priced with the fed facts. The report builder shapes these into the store's usage reports.
-pub fn worker_from_scan(
-    rows: &[Value],
-    srows: &[Value],
-    kind: &str,
-    host: &str,
-    now: i64,
-    pricing: &dyn Pricing,
-) -> Value {
-    let compact = to_compact(rows);
+pub fn worker_from_rows(rows: &[&ScanRow], srows: &[&ScanRow], host: &str, now: i64, pricing: &dyn Pricing) -> Value {
     // A row's file names its session through the session rows (keyed on the host that read them).
-    let mut session_of: HashMap<String, String> = HashMap::new();
+    let mut session_of: HashMap<&str, &str> = HashMap::new();
     for row in srows {
-        if let (Some(file), Some(key)) = (row["f"].as_str(), row["s"].as_str())
-            && !file.is_empty()
-            && !key.is_empty()
+        if let Some(session) = row.session.as_deref()
+            && !row.file.is_empty()
+            && !session.is_empty()
         {
-            session_of.insert(file.to_string(), key.to_string());
+            session_of.insert(&row.file, session);
         }
     }
-    let keyed_compact: Vec<Value> = compact
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let file = rows[index]["f"].as_str().unwrap_or("");
-            let session_id = session_of.get(file).cloned().unwrap_or_default();
-            let mut entry = entry.clone();
-            entry["entry"]["sessionId"] = json!(session_id);
-            entry
-        })
-        .collect();
-    let (cells, future) = cells_from_compact(&keyed_compact, kind, true, now, pricing);
-    let session = aggregate_sessions(&to_session_aggregates(srows), pricing);
+    let (cells, future) = cells_from_rows(rows, &session_of, now, pricing);
+    let session = sessions_from_rows(srows, pricing);
     let mut result = Map::new();
     result.insert("hourly".into(), json!([]));
     result.insert("cells".into(), Value::Array(cells));
@@ -579,3 +454,29 @@ pub fn worker_from_scan(
     result.insert("session".into(), Value::Array(session));
     Value::Object(result)
 }
+
+/// [`worker_from_rows`] for rows held as the scanner's JSON objects.
+pub fn worker_from_scan(
+    rows: &[Value],
+    srows: &[Value],
+    _kind: &str,
+    host: &str,
+    now: i64,
+    pricing: &dyn Pricing,
+) -> Value {
+    let mut interner = Interner::default();
+    let mut typed =
+        |rows: &[Value]| -> Vec<ScanRow> { rows.iter().map(|row| ScanRow::from_value(row, &mut interner)).collect() };
+    let (rows, srows) = (typed(rows), typed(srows));
+    worker_from_rows(
+        &rows.iter().collect::<Vec<_>>(),
+        &srows.iter().collect::<Vec<_>>(),
+        host,
+        now,
+        pricing,
+    )
+}
+
+#[cfg(test)]
+#[path = "collect_value_oracle.rs"]
+mod oracle;

@@ -924,11 +924,15 @@ impl Agents {
             .checked_client(&selector, deadline)
             .await
             .map_err(|failure| failure.cause)?;
-        let args_text = serde_json::to_string(args).map_err(|_| Cause::Refused)?;
-        let wire = format!(
-            "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":{args_text}}}"
-        );
-        let request = serde_json::from_str::<Request>(&wire).map_err(|_| Cause::Refused)?;
+        // The frame is written once: the arguments serialize straight into it (they can be
+        // megabytes of prints), with no separate copy of their text.
+        let mut wire = format!(
+            "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":"
+        )
+        .into_bytes();
+        serde_json::to_writer(&mut wire, args).map_err(|_| Cause::Refused)?;
+        wire.push(b'}');
+        let request = serde_json::from_slice::<Request>(&wire).map_err(|_| Cause::Refused)?;
         let mut options = CallOptions::new(Duration::ZERO, max_bytes);
         options.deadline = deadline;
         options.scan = true;
@@ -936,7 +940,7 @@ impl Agents {
         let (progress, _events) = mpsc::channel(4);
         let _permit = permit;
         let events = client
-            .call_controlled_encoded(&request, wire.as_bytes(), &options, controls, progress)
+            .call_controlled_encoded(&request, &wire, &options, controls, progress)
             .await
             .map_err(|failure| failure.cause)?;
         match events.last() {
