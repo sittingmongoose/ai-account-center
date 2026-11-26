@@ -11,7 +11,7 @@ use crate::discover::{Env, env_dir};
 use crate::util;
 use rusqlite::types::Value as Sql;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub fn database(home: &Path, env: &Env) -> PathBuf {
@@ -85,7 +85,7 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
         return "error";
     };
     if sqlite::note_db(collector, "devin", &filekey, current) {
-        super::cursor::replay(collector, "devin", &filekey);
+        sqlite::replay(collector, "devin", &filekey);
         collector.confirm_file("devin", &filekey);
         return "ok";
     }
@@ -122,7 +122,8 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
         return "error";
     };
     let mut seen: HashSet<String> = HashSet::new();
-    let mut unreadable = 0u64;
+    let mut incomplete: HashMap<String, Option<i64>> = HashMap::new();
+    let mut unreadable = sqlite::Unreadable::default();
     for reply in replies {
         let Some(session) = sqlite::text(&reply[0]) else {
             continue;
@@ -134,28 +135,32 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
             continue;
         }
         let Some(id) = sqlite::text(&reply[1]).or_else(|| sqlite::text(&reply[2])) else {
-            unreadable += 1;
+            unreadable.record(at);
             continue;
         };
-        if !seen.insert(id.clone()) {
+        if seen.contains(&id) {
             continue;
         }
-        let (Some(input), Some(output), Some(read), Some(write)) = (
+        let (Some(at), Some(input), Some(output), Some(read), Some(write)) = (
+            at,
             sqlite::count(&reply[6]),
             sqlite::count(&reply[7]),
             cache_count(&reply[8]),
             cache_count(&reply[9]),
         ) else {
-            unreadable += 1;
-            continue;
-        };
-        let Some(at) = at else {
-            unreadable += 1;
+            // Incomplete copies stay pending. A dated reply remains in range until its last
+            // copy ages out, and an undated copy has no known expiry.
+            incomplete
+                .entry(id)
+                .and_modify(|seen| *seen = seen.zip(at).map(|(a, b)| a.max(b)))
+                .or_insert(at);
             continue;
         };
         let Some(hour) = util::hour_label(at, collector.now_ms) else {
             continue;
         };
+        incomplete.remove(&id);
+        seen.insert(id.clone());
         let raw_model = sqlite::text(&reply[5])
             .or_else(|| sqlite::text(&reply[11]))
             .unwrap_or_else(|| "unknown-devin-model".into());
@@ -183,10 +188,10 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
             0.0,
         );
     }
-    if unreadable > 0 {
-        *collector.unreadable_records.entry("devin".into()).or_default() += unreadable as usize;
-        collector.set_pending("devin", &filekey, |print| print.unreadable_records = Some(unreadable));
+    for at in incomplete.into_values() {
+        unreadable.record(at);
     }
+    unreadable.publish(collector, "devin", &filekey);
     collector.confirm_file("devin", &filekey);
     "ok"
 }

@@ -443,3 +443,131 @@ fn experiment_folders_outside_pm_experiments_are_found_and_copies_count_once() {
         .collect();
     assert!(origins.contains(&"experiment"));
 }
+
+#[test]
+fn analytics_deep_devin_keeps_the_readable_copy_in_either_order() {
+    for bad_first in [true, false] {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let db = devin_fixture(h);
+        let conn = Connection::open(db).unwrap();
+        let bad_row = if bad_first { 1 } else { 3 };
+        conn.execute(
+            "UPDATE message_nodes SET chat_message = json_remove(chat_message,
+            '$.metadata.metrics.input_tokens') WHERE row_id = ?",
+            [bad_row],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message_nodes
+            SELECT 5, session_id, 'node-5', parent_node_id,
+            json_set(json_remove(chat_message, '$.metadata.metrics.input_tokens'),
+            '$.message_id', 'all-bad'), created_at, metadata FROM message_nodes WHERE row_id = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message_nodes
+            SELECT 6, session_id, 'node-6', parent_node_id, chat_message, created_at, metadata
+            FROM message_nodes WHERE row_id = 5",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let mut ask = request(&["devin"], false);
+        ask.min_date_ms = 1_788_000_000_000;
+        let answer = protocol::scan(&ask, h, &env(h));
+        assert_eq!(sums(&answer, "devin"), [1500, 80, 110_000, 0, 2]);
+        assert_eq!(answer["kinds"]["devin"]["unreadableRecords"], 1);
+    }
+}
+
+#[test]
+fn analytics_deep_devin_unreadable_reply_ages_out_on_same_fingerprint() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let conn = Connection::open(devin_fixture(h)).unwrap();
+    conn.execute(
+        "UPDATE message_nodes SET chat_message =
+        json_remove(chat_message, '$.metadata.metrics.input_tokens') WHERE row_id = 2",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO message_nodes
+        SELECT 5, session_id, 'node-5', parent_node_id,
+        json_set(chat_message,'$.message_id','recent','$.metadata.created_at',?),
+        created_at, metadata FROM message_nodes WHERE row_id = 1",
+        [AT],
+    )
+    .unwrap();
+    drop(conn);
+    let mut ask = request(&["devin"], false);
+    ask.min_date_ms = 1_788_000_000_000;
+    let first = protocol::scan(&ask, h, &env(h));
+    assert_eq!(first["kinds"]["devin"]["unreadableRecords"], 1);
+    ask.fingerprints
+        .insert("devin".to_owned(), first["kinds"]["devin"]["fingerprints"].clone());
+    ask.min_date_ms = 1_790_000_000_000;
+    let next = protocol::scan(&ask, h, &env(h));
+    assert!(next["kinds"]["devin"]["unreadableRecords"].is_null());
+    assert_eq!(sums(&next, "devin"), [1000, 40, 50_000, 0, 1]);
+}
+
+#[test]
+fn analytics_deep_cursor_dates_bound_both_bad_counters_and_malformed_json() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let conn = cursor_fixture(&cursor_store(h, "fixture"));
+    conn.execute(
+        "UPDATE runs SET started_at = '2026-09-18T22:48:23Z',
+        finished_at = '2026-09-18T22:48:23Z' WHERE run_id IN ('run-3', 'run-5')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        r#"UPDATE runs SET usage_json = '{"outputTokens":5}' WHERE run_id = 'run-3'"#,
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let mut ask = request(&["cursor"], false);
+    let live = protocol::scan(&ask, h, &env(h));
+    assert!(live["kinds"]["cursor"]["unreadableRecords"].is_null());
+    assert_eq!(sums(&live, "cursor"), [300, 80, 1300, 100, 2]);
+    ask.fingerprints
+        .insert("cursor".to_owned(), live["kinds"]["cursor"]["fingerprints"].clone());
+    ask.min_date_ms = 1_788_000_000_000;
+    let history = protocol::scan(&ask, h, &env(h));
+    assert_eq!(history["kinds"]["cursor"]["unreadableRecords"], 2);
+    ask.fingerprints
+        .insert("cursor".to_owned(), history["kinds"]["cursor"]["fingerprints"].clone());
+    ask.min_date_ms = 1_790_000_000_000;
+    let live = protocol::scan(&ask, h, &env(h));
+    assert!(live["kinds"]["cursor"]["unreadableRecords"].is_null());
+}
+
+#[test]
+fn undated_cursor_usage_still_counts_as_unreadable_after_the_cutoff_moves() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let conn = cursor_fixture(&cursor_store(h, "fixture"));
+    conn.execute(
+        "UPDATE runs SET started_at = NULL, finished_at = NULL WHERE run_id IN ('run-3', 'run-5')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let mut ask = request(&["cursor"], false);
+    let first = protocol::scan(&ask, h, &env(h));
+    assert_eq!(first["kinds"]["cursor"]["unreadableRecords"], 2);
+    ask.fingerprints
+        .insert("cursor".to_owned(), first["kinds"]["cursor"]["fingerprints"].clone());
+    ask.min_date_ms += 86_400_000;
+    let later = protocol::scan(&ask, h, &env(h));
+    assert_eq!(later["kinds"]["cursor"]["unreadableRecords"], 2);
+    assert!(
+        later["rows"].as_array().unwrap().is_empty(),
+        "the fingerprint still applies"
+    );
+}

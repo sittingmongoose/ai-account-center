@@ -115,7 +115,14 @@ const RUNS_NO_AGENTS: &str = "SELECT r.run_id, r.agent_id, r.model, r.started_at
      json_extract(r.usage_json, '$.cacheReadTokens'), json_extract(r.usage_json, '$.cacheWriteTokens'), \
      json_extract(r.usage_json, '$.totalTokens'), NULL \
      FROM runs r WHERE r.usage_json IS NOT NULL AND json_valid(r.usage_json)";
-const BROKEN: &str = "SELECT count(*) FROM runs WHERE usage_json IS NOT NULL AND NOT json_valid(usage_json)";
+const BROKEN: &str =
+    "SELECT started_at, finished_at FROM runs WHERE usage_json IS NOT NULL AND NOT json_valid(usage_json)";
+
+fn run_time(started: &Sql, finished: &Sql) -> Option<i64> {
+    [finished, started]
+        .into_iter()
+        .find_map(|column| sqlite::text(column).and_then(|stamp| util::iso_ms(&stamp)))
+}
 
 /// One store: "ok", "empty" (no `runs` table yet), "error" or "cut". A run another store already
 /// counted (a copied store) counts once, in the first store by path (FIX-ROUND-BIG 2). A store is
@@ -155,12 +162,22 @@ fn scan_store(
     } else {
         RUNS_NO_AGENTS
     };
-    let read: rusqlite::Result<Vec<Vec<Sql>>> = (|| {
+    let read: rusqlite::Result<_> = (|| {
         let mut statement = connection.prepare(query)?;
         let rows = statement.query_map([], |row| (0..11).map(|i| row.get::<_, Sql>(i)).collect())?;
-        rows.collect()
+        let runs = rows.collect::<rusqlite::Result<Vec<Vec<Sql>>>>()?;
+        let mut broken = connection.prepare(BROKEN)?;
+        let dates = broken.query_map([], |row| Ok(run_time(&row.get(0)?, &row.get(1)?)))?;
+        let mut unreadable = sqlite::Unreadable::default();
+        for at in dates {
+            let at = at?;
+            if at.is_none_or(|at| at >= collector.min_date_ms) {
+                unreadable.record(at);
+            }
+        }
+        Ok((runs, unreadable))
     })();
-    let Ok(runs) = read else {
+    let Ok((runs, mut unreadable)) = read else {
         if collector.expired() {
             collector.truncated = true;
             return "cut";
@@ -168,13 +185,12 @@ fn scan_store(
         collector.read_failure("cursor", filekey);
         return "error";
     };
-    let broken: i64 = connection.query_row(BROKEN, [], |row| row.get(0)).unwrap_or(0);
-    let mut unreadable = broken.max(0) as u64;
     for run in runs {
         let (Some(run_id), Some(agent_id)) = (sqlite::text(&run[0]), sqlite::text(&run[1])) else {
             continue;
         };
-        if !runs_seen.insert(run_id.clone()) {
+        let at = run_time(&run[3], &run[4]);
+        if at.is_some_and(|at| at < collector.min_date_ms) || !runs_seen.insert(run_id.clone()) {
             continue;
         }
         // Every counter must be there: a missing one is "not logged", never 0 (FIX-ROUND-BIG 5).
@@ -185,23 +201,17 @@ fn scan_store(
         };
         let (Some(input), Some(output), Some(read), Some(write)) = (numbers[0], numbers[1], numbers[2], numbers[3])
         else {
-            unreadable += 1;
+            unreadable.record(at);
             continue;
         };
         let Some(split) = tokens(input, output, read, write, total) else {
-            unreadable += 1;
+            unreadable.record(at);
             continue;
         };
-        let at = sqlite::text(&run[4])
-            .or_else(|| sqlite::text(&run[3]))
-            .and_then(|t| util::iso_ms(&t));
         let Some(epoch_ms) = at else {
-            unreadable += 1;
+            unreadable.record(at);
             continue;
         };
-        if epoch_ms < collector.min_date_ms {
-            continue;
-        }
         let Some(hour) = util::hour_label(epoch_ms, collector.now_ms) else {
             continue;
         };
@@ -239,10 +249,7 @@ fn scan_store(
             0.0,
         );
     }
-    if unreadable > 0 {
-        *collector.unreadable_records.entry("cursor".into()).or_default() += unreadable as usize;
-        collector.set_pending("cursor", &filekey, |print| print.unreadable_records = Some(unreadable));
-    }
+    unreadable.publish(collector, "cursor", &filekey);
     collector.confirm_file("cursor", &filekey);
     "ok"
 }
@@ -339,7 +346,7 @@ pub fn collect(collector: &mut Collector, home: &Path) -> &'static str {
     if !changed && before == keys {
         for key in keys {
             if collector.is_pending("cursor", &key) {
-                replay(collector, "cursor", &key);
+                sqlite::replay(collector, "cursor", &key);
                 collector.confirm_file("cursor", &key);
             }
         }
@@ -378,24 +385,4 @@ pub fn collect(collector: &mut Collector, home: &Path) -> &'static str {
         }
     }
     "ok"
-}
-
-/// An unchanged database keeps what its last read found wrong (FIX-ROUND-BIG 5): its unreadable
-/// records and its write-ahead-log note, from the print the server sent back.
-pub fn replay(collector: &mut Collector, kind: &str, key: &str) {
-    let Some(prior) = collector.prior_print(kind, key).cloned() else {
-        return;
-    };
-    if let Some(count) = prior
-        .get("unreadableRecords")
-        .and_then(Value::as_u64)
-        .filter(|n| *n > 0)
-    {
-        *collector.unreadable_records.entry(kind.to_string()).or_default() += count as usize;
-        collector.set_pending(kind, key, |print| print.unreadable_records = Some(count));
-    }
-    if prior.get("walUnread").and_then(Value::as_bool) == Some(true) {
-        collector.kind_wal_unread.insert(kind.to_string());
-        collector.set_pending(kind, key, |print| print.wal_unread = Some(true));
-    }
 }

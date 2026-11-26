@@ -111,10 +111,21 @@ pub fn tables(connection: &Connection) -> rusqlite::Result<Vec<String>> {
 /// Note a database's print as read this scan; true when unchanged since the prior one. A database
 /// whose last read could not see its write-ahead log is read again even when its bytes match: the
 /// log may be visible now, and its rows must be counted.
-pub fn note_db(collector: &mut Collector, kind: &str, filekey: &str, current: Print) -> bool {
+pub fn note_db(collector: &mut Collector, kind: &str, filekey: &str, mut current: Print) -> bool {
     let prior = collector.prior_print(kind, filekey);
     let waited = prior.is_some_and(|p| p.get("walUnread").and_then(Value::as_bool) == Some(true));
-    let unchanged = !waited && same(prior, &current);
+    let cutoff = collector.min_date_ms;
+    let covers_window = prior.is_some_and(|print| {
+        print["sqliteMinDateMs"]
+            .as_i64()
+            .is_some_and(|previous| previous <= cutoff)
+            && (print["unreadableRecords"].as_u64().unwrap_or(0) == 0
+                || print
+                    .get("oldestUnreadableMs")
+                    .is_some_and(|at| at.is_null() || at.as_i64().is_some_and(|ms| ms >= cutoff)))
+    });
+    let unchanged = !waited && covers_window && same(prior, &current);
+    current.sqlite_min_date_ms = Some(cutoff);
     collector
         .pending
         .entry(kind.to_string())
@@ -138,4 +149,44 @@ pub fn text(value: &rusqlite::types::Value) -> Option<String> {
         rusqlite::types::Value::Text(text) => Some(text.clone()),
         _ => None,
     }
+}
+
+/// The count and earliest expiry of unreadable records in a SQLite scan.
+#[derive(Default)]
+pub struct Unreadable {
+    count: u64,
+    oldest_ms: Option<i64>,
+}
+
+impl Unreadable {
+    /// Count a record, including one with no usable date.
+    pub fn record(&mut self, at: Option<i64>) {
+        self.count += 1;
+        if let Some(at) = at {
+            self.oldest_ms = Some(self.oldest_ms.map_or(at, |oldest| oldest.min(at)));
+        }
+    }
+
+    /// Publish the evidence with the source and its fingerprint.
+    pub fn publish(&self, collector: &mut Collector, kind: &str, key: &str) {
+        if self.count > 0 {
+            *collector.unreadable_records.entry(kind.to_owned()).or_default() += self.count as usize;
+            collector.set_pending(kind, key, |print| {
+                print.unreadable_records = Some(self.count);
+                print.oldest_unreadable_ms = self.oldest_ms;
+            });
+        }
+    }
+}
+
+/// Carry the evidence of an unchanged scan whose count still applies to the requested window.
+pub fn replay(collector: &mut Collector, kind: &str, key: &str) {
+    let Some(prior) = collector.prior_print(kind, key) else {
+        return;
+    };
+    Unreadable {
+        count: prior["unreadableRecords"].as_u64().unwrap_or(0),
+        oldest_ms: prior["oldestUnreadableMs"].as_i64(),
+    }
+    .publish(collector, kind, key);
 }

@@ -184,6 +184,10 @@ pub struct Print {
     /// Records (Cursor runs, Devin replies) this database's last read could not count: an unchanged
     /// database says so again (FIX-ROUND-BIG 5).
     pub unreadable_records: Option<u64>,
+    /// Earliest dated unreadable record. For a nonzero count, None means all are undated.
+    pub oldest_unreadable_ms: Option<i64>,
+    /// The requested cutoff of this SQLite read.
+    pub sqlite_min_date_ms: Option<i64>,
     /// The last read was immutable while the write-ahead log held rows: said again while unchanged.
     pub wal_unread: Option<bool>,
     /// A usage-shaped record this file holds could not be decoded: the file's earlier measurement
@@ -271,6 +275,8 @@ impl Print {
             msg_head: None,
             progress: None,
             unreadable_records: None,
+            oldest_unreadable_ms: None,
+            sqlite_min_date_ms: None,
             wal_unread: None,
             unread_usage: None,
             estimated_clock: None,
@@ -323,6 +329,10 @@ impl Print {
         }
         if let Some(count) = self.unreadable_records {
             map.insert("unreadableRecords".into(), Value::from(count));
+            map.insert("oldestUnreadableMs".into(), json!(self.oldest_unreadable_ms));
+        }
+        if let Some(cutoff) = self.sqlite_min_date_ms {
+            map.insert("sqliteMinDateMs".into(), json!(cutoff));
         }
         if let Some(wal) = self.wal_unread {
             map.insert("walUnread".into(), Value::from(wal));
