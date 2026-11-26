@@ -489,6 +489,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_saved.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/analytics_writers.rs",
       "kind": "internal",
       "evidence": [],
@@ -1972,6 +1978,12 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "crates/aac-views/src/analytics.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-views/src/analytics_activity.rs",
@@ -5584,6 +5596,12 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "web-dashboard/tests/device-fixture-run.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "web-dashboard/tests/device.test.mjs",
