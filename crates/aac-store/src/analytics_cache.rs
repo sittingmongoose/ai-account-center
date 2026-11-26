@@ -6,6 +6,54 @@ use serde_json::Value;
 
 pub(crate) const TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("analytics_cache");
 
+/// Durable input fingerprint; cache writes themselves never advance these checkpoints.
+pub fn answer_generation(engine: &Engine) -> Result<String> {
+    engine.with_db(|db| {
+        let txn = db.begin_read()?;
+        let table = txn.open_table(crate::db::CHECKPOINT)?;
+        let mut bytes = Vec::new();
+        for row in table.iter()? {
+            let (key, value) = row?;
+            bytes.extend_from_slice(&(key.value().len() as u64).to_le_bytes());
+            bytes.extend_from_slice(key.value().as_bytes());
+            let cp: crate::db::Checkpoint = crate::msgpack::from_bytes(value.value())?;
+            // Sealing/reopening a segment may move its physical cursor without changing
+            // any projected facts. The logical position and survivor chain name the data.
+            let logical = crate::msgpack::to_bytes(&(
+                cp.last_sequence_id,
+                cp.last_event_id,
+                cp.survivor_prefix_sha256,
+                cp.projector_schema_version,
+            ))?;
+            bytes.extend_from_slice(&(logical.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(&logical);
+        }
+        bytes.extend_from_slice(b"meta");
+        // Includes repair epochs and retention/schema changes, without table statistics or
+        // a write transaction. Conservative invalidation is preferable to stale attribution.
+        let meta = txn.open_table(crate::db::META)?;
+        for row in meta.iter()? {
+            let (key, value) = row?;
+            if matches!(
+                key.value(),
+                "clean_shutdown"
+                    | "last_verify_ms"
+                    | "last_compact_ms"
+                    | "last_backup_ms"
+                    | "last_share_backup_ms"
+                    | "backup_readings_seq"
+            ) {
+                continue;
+            }
+            bytes.extend_from_slice(&(key.value().len() as u64).to_le_bytes());
+            bytes.extend_from_slice(key.value().as_bytes());
+            bytes.extend_from_slice(&(value.value().len() as u64).to_le_bytes());
+            bytes.extend_from_slice(value.value());
+        }
+        Ok(aac_core::sha256_hex(&bytes))
+    })
+}
+
 pub fn get(engine: &Engine, key: &str) -> Result<Option<Vec<u8>>> {
     engine.with_db(|db| {
         let txn = db.begin_read()?;

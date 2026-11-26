@@ -792,6 +792,8 @@ impl CachedScoreboardBody {
 }
 
 struct CachedView {
+    /// Eligible for immediate stale serving when starting an aggregate refresh.
+    swr_safe: bool,
     at: u64,
     /// The snapshot generation these final bytes belong to.
     generation: u64,
@@ -818,6 +820,7 @@ impl CachedView {
         let (body, raw_bytes) = CachedScoreboardBody::build(raw, &etag, age_value_offset);
         (
             Self {
+                swr_safe: true,
                 at,
                 generation,
                 seq,
@@ -843,6 +846,7 @@ impl CachedView {
         etag: String,
     ) -> Self {
         Self {
+            swr_safe: true,
             at,
             generation,
             seq,
@@ -2473,6 +2477,15 @@ impl ScoreboardOwned {
         }
     }
 
+    /// Composer parity checks explicitly wait for fresh data instead of exercising SWR.
+    #[cfg(test)]
+    async fn answer_fresh(&self, feed: &str) -> Result<(Vec<u8>, String), Decline> {
+        match self.answer_inner(feed, true, false, None).await? {
+            EncodedView::Payload { bytes, etag, .. } => Ok((bytes.to_vec(), etag)),
+            EncodedView::NotModified { .. } => Err(Decline::Internal),
+        }
+    }
+
     /// [`Self::answer_encoded`]; a refresh composes instead of serving the stale view it replaces.
     async fn answer_inner(
         &self,
@@ -2541,6 +2554,7 @@ impl ScoreboardOwned {
                     store_incarnation,
                     store_file_rev,
                     &feed,
+                    feed_text,
                     generation,
                     &catalog_hash,
                     now,
@@ -2905,6 +2919,7 @@ impl ScoreboardOwned {
         store_incarnation: u64,
         store_file_rev: u64,
         feed: &Feed,
+        feed_text: &str,
         generation: u64,
         catalog_hash: &str,
         now: u64,
@@ -2999,6 +3014,31 @@ impl ScoreboardOwned {
                     &hit,
                     now,
                     false,
+                    accept_gzip,
+                    if_none_match,
+                )));
+            }
+        }
+
+        // The first caller after an input change also gets stale data immediately, while
+        // the same singleflight owner refreshes the aggregate behind that response.
+        if !refresh {
+            let hit = self
+                .last_good
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(&filter_key)
+                .cloned();
+            if let Some(hit) = hit
+                && hit.swr_safe
+                // A repair can change file state without changing effective run generation.
+                && (hit.generation != generation || hit.seq == store_file_rev)
+            {
+                self.spawn_refresh(feed_text, &admitted_cache_key);
+                return Some(Ok(render_cached_view(
+                    &hit,
+                    now,
+                    true,
                     accept_gzip,
                     if_none_match,
                 )));
@@ -3261,6 +3301,13 @@ impl ScoreboardOwned {
                 importing: pass_more,
             };
             let composed = crate::scoreboard_compose::compose(&input)?;
+            let swr_safe = composed.view["unscored"]["unreadable"]
+                .as_u64()
+                .unwrap_or(0)
+                == 0
+                && composed.view["sources"]
+                    .as_array()
+                    .is_some_and(|sources| sources.iter().all(|s| s["state"] != "unreadable"));
             let mut writer = Writer::with_capacity(64 * 1024);
             writer.value(&composed.view);
             drop(composed.view);
@@ -3270,7 +3317,7 @@ impl ScoreboardOwned {
             let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
             let etag = format!("W/\"{hex}\"");
             let age_value_offset = find_age_zero_offset(&bytes);
-            let (cached, raw_bytes) = CachedView::from_raw(
+            let (mut cached, raw_bytes) = CachedView::from_raw(
                 now,
                 gen_for_cache,
                 read_file_rev,
@@ -3278,6 +3325,7 @@ impl ScoreboardOwned {
                 age_value_offset,
                 etag,
             );
+            cached.swr_safe = swr_safe;
             Ok(ComposedBytes { cached, raw_bytes })
         })
         .await;
@@ -4738,6 +4786,43 @@ mod tests {
                     .to_string()
             });
         assert_eq!(title.as_deref(), Some("Task b, rewritten longer"));
+    }
+
+    #[tokio::test]
+    async fn aggregate_first_changed_read_serves_stale_without_waiting() {
+        let now = large_now();
+        let root = tempfile::tempdir().expect("fixture");
+        write_bench(root.path());
+        std::fs::create_dir_all(root.path().join("v1/catalog")).expect("fixture");
+        let ccs = tempfile::tempdir().expect("fixture");
+        let store = StoreHost::new(boot(ccs.path().join("store")));
+        store.open_at_boot();
+        let own = owner(root.path().to_path_buf(), Some(store));
+        own.seed().await;
+        own.catalog_pass(now);
+        own.ingest_pass_at(true, now).await;
+        own.answer(&feed_text_bare(now, "UTC"))
+            .await
+            .expect("fixture");
+        own.pass
+            .lock()
+            .expect("fixture")
+            .problems
+            .push(json!({"file":"fixture", "since":now}));
+        let (entered, mut entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        *own.before_store_read.lock().expect("fixture") = Some((entered, release_rx));
+        let (raw, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            own.answer(&feed_text_bare(now + 1_000, "UTC")),
+        )
+        .await
+        .expect("first changed read must serve stale immediately")
+        .expect("fixture");
+        let value: serde_json::Value = serde_json::from_slice(&raw).expect("fixture");
+        assert_eq!(value["refreshing"], true);
+        let _ = (&mut entered_rx).await;
+        let _ = release.send(());
     }
 
     /// While a compose runs, the last good view answers instead of a `busy` decline.
@@ -6666,10 +6751,21 @@ mod tests {
         std::fs::write(dir.join("vm.lead--after-200s.json"), added).expect("write new run");
         owner.ingest_pass_at(true, now + 205_000).await;
 
+        let feed = feed_text_bare(now + 210_000, "UTC");
+        let (stale, _) = owner.answer(&feed).await.expect("stale after new run");
+        let stale: Json = serde_json::from_slice(&stale).expect("stale JSON");
+        assert_eq!(stale["refreshing"], true);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !owner.composing.lock().expect("composing").is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background refresh completes");
         let (bytes3, etag3) = owner
-            .answer(&feed_text_bare(now + 210_000, "UTC"))
+            .answer(&feed)
             .await
-            .expect("answer after new run");
+            .expect("fresh after background refresh");
         assert_eq!(
             owner.compose_count.load(Ordering::Relaxed),
             2,
@@ -6876,7 +6972,8 @@ mod tests {
         std::fs::write(d.join("b.json"), rev_b.to_string()).expect("write b rev 2");
         own.ingest_pass_at(true, now + 11_000).await;
         let feed_after = feed_text_bare(now + 12_000, "UTC");
-        let (rebuilt_bytes, rebuilt_etag) = own.answer(&feed_after).await.expect("rebuilt answer");
+        let (rebuilt_bytes, rebuilt_etag) =
+            own.answer_fresh(&feed_after).await.expect("rebuilt answer");
         let (rebuilt_legacy, rebuilt_legacy_etag) =
             answer_legacy_for_parity(&own, &feed_after).await;
         assert_eq!(

@@ -3,7 +3,7 @@
 //! generation Accounts and Home render, the activity collector's live flag, the display zone's
 //! offsets from the host zoneinfo, the pricing facts over the store dictionary and the provider
 //! table — then composes through [`aac_views::analytics_owned::compose_native`]. Every input is an
-//! existing owner's answer: no second collector, cache or table.
+//! existing owner's answer. `analytics_saved` caches final response bytes around this composition.
 use aac_store::engine::Engine;
 use aac_views::decline::Decline;
 use serde_json::{Map, Value, json};

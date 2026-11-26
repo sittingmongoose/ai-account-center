@@ -61,7 +61,7 @@ pub(super) struct OwnerHost {
     #[cfg(not(unix))]
     cursor: std::sync::Arc<crate::account_usage::cursor::Reader>,
     #[cfg(not(unix))]
-    analytics_cache: Mutex<std::collections::VecDeque<(String, i64, crate::compress::CachedBody)>>,
+    analytics_cache: std::sync::Arc<crate::analytics_saved::Saved>,
 }
 
 struct PublicOwners {
@@ -118,7 +118,7 @@ impl OwnerHost {
             #[cfg(not(unix))]
             cursor: std::sync::Arc::default(),
             #[cfg(not(unix))]
-            analytics_cache: Mutex::default(),
+            analytics_cache: std::sync::Arc::default(),
         })
     }
 
@@ -530,24 +530,24 @@ impl OwnerHost {
             let native = self.public_owners();
             let cache = native.as_ref().and_then(|owner| owner.usage_cache());
             let now_check = super::now();
-            let cache_key = (!force_refresh).then(|| {
-                let mac_gen = cache
+            let inputs = format!(
+                "{:?}:{:?}",
+                cache
                     .as_ref()
-                    .and_then(|c| c.generation(crate::account_usage::Desktop::Mac, false))
-                    .unwrap_or_default();
-                let win_gen = cache
+                    .and_then(|c| c.generation(crate::account_usage::Desktop::Mac, false)),
+                cache
                     .as_ref()
                     .and_then(|c| c.generation(crate::account_usage::Desktop::Windows, false))
-                    .unwrap_or_default();
-                format!(
-                    "{}|{}|{}|{}|{}",
-                    query.as_deref().unwrap_or_default(),
-                    engine.write_seq(),
-                    self.analytics_live.refreshing(),
-                    mac_gen,
-                    win_gen
-                )
-            });
+            );
+            let (filter, version) = crate::analytics_saved::keys(
+                &engine,
+                &self.root,
+                query.as_deref(),
+                &inputs,
+                self.analytics_live.refreshing(),
+                now_check,
+            )
+            .ok()?;
             let build_reply = |cached: &crate::compress::CachedBody,
                                raw_fallback: Option<Bytes>|
              -> Option<ServiceReply> {
@@ -589,50 +589,57 @@ impl OwnerHost {
                     body,
                 })
             };
-            if let Some(key) = &cache_key {
-                let hit = self.analytics_cache.lock().ok().and_then(|guard| {
-                    guard
-                        .iter()
-                        .find(|(k, at, _)| k == key && now_check.saturating_sub(*at) < 30_000)
-                        .map(|(_, _, body)| body.clone())
-                });
-                if let Some(cached) = hit {
-                    return build_reply(&cached, None);
-                }
-            }
             let root = self.root.clone();
             let live = self.analytics_live.clone();
-            let (mut answer, engine, now, query) = self
-                .analytics_reads
-                .blocking(crate::table::Pool::Reads, move || {
-                    let now = super::now();
-                    let snapshot =
-                        cache.and_then(|cache| crate::analytics_route::snapshot(&cache, now));
-                    let answer = crate::analytics_route::compose(
-                        engine.clone(),
-                        &root,
-                        snapshot.as_ref(),
-                        &live,
-                        query.as_deref(),
-                        now,
-                    );
-                    Ok((answer, engine, now, query))
-                })
+            let limits = self.analytics_reads.clone();
+            let cursor = self.cursor();
+            let owners = native.and_then(|n| n.cursor_owners());
+            let build_engine = engine.clone();
+            let (status, cached) = self
+                .analytics_cache
+                .answer(
+                    engine,
+                    filter,
+                    version,
+                    now_check,
+                    reload,
+                    move || async move {
+                        let compose_root = root.clone();
+                        let (mut answer, engine, now, query) = limits
+                            .blocking(crate::table::Pool::Reads, move || {
+                                let now = super::now();
+                                let snapshot = cache.and_then(|cache| {
+                                    crate::analytics_route::snapshot(&cache, now)
+                                });
+                                let answer = crate::analytics_route::compose(
+                                    build_engine.clone(),
+                                    &compose_root,
+                                    snapshot.as_ref(),
+                                    &live,
+                                    query.as_deref(),
+                                    now,
+                                );
+                                Ok((answer, build_engine, now, query))
+                            })
+                            .await?;
+                        if let Some(owners) = owners
+                            && let Ok(value) = &mut answer
+                            && let Some(activity) = value["activity"].as_object_mut()
+                            && let Some(status) = cursor
+                                .analytics(root, owners, engine, now, force_refresh)
+                                .await
+                        {
+                            activity.insert("cursorAccount".into(), status);
+                        }
+                        limits
+                            .blocking(crate::table::Pool::Reads, move || {
+                                crate::analytics_route::encode(answer, query.as_deref())
+                            })
+                            .await
+                    },
+                )
                 .await
                 .ok()?;
-            if let Some(owners) = native.and_then(|native| native.cursor_owners())
-                && let Ok(value) = &mut answer
-                && let Some(activity) = value["activity"].as_object_mut()
-            {
-                if let Some(status) = self
-                    .cursor()
-                    .analytics(self.root.clone(), owners, engine, now, force_refresh)
-                    .await
-                {
-                    activity.insert("cursorAccount".into(), status);
-                }
-            }
-            let (status, bytes) = crate::analytics_route::encode(answer, query.as_deref()).ok()?;
             if status != 200 {
                 let mut headers = HeaderMap::new();
                 headers.insert(
@@ -642,22 +649,10 @@ impl OwnerHost {
                 return Some(ServiceReply {
                     status,
                     headers,
-                    body: Bytes::from(bytes),
+                    body: cached.serve(false).ok()?.0,
                 });
             }
-            let etag = crate::compress::weak_etag_sha1(&bytes);
-            let (cached, raw_bytes) =
-                crate::compress::CachedBody::from_raw_with_identity(bytes, etag);
-            if let Some(key) = cache_key
-                && let Ok(mut guard) = self.analytics_cache.lock()
-            {
-                guard.retain(|(k, _, _)| k != &key);
-                guard.push_back((key, now_check, cached.clone()));
-                while guard.len() > 4 {
-                    guard.pop_front();
-                }
-            }
-            build_reply(&cached, Some(raw_bytes))
+            build_reply(&cached, None)
         }
     }
 

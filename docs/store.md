@@ -268,6 +268,15 @@ Analytics caches. A redb snapshot retains these copies. A rebuild from the event
 projected usage. To recover the original archived files or saved offsets after a quarantine, use
 the previous redb or restore a backup that includes redb.
 
+The dashboard also keeps four compressed Analytics answers under `answer/analytics/v1/`.
+Each saved answer names its query and account/settings identity, durable checkpoint and metadata
+fingerprint, and 30-second clock bucket. Cache writes do not change that fingerprint. Repeated
+reads reuse the encoded bytes; one caller rebuilds a changed answer while others receive the
+previous answer marked stale and refreshing. Stale answers expire after five minutes, and an
+explicit Refresh waits for fresh composition. Changed account inventory or capture/visibility
+settings prevent stale reuse. These answers are disposable and are recomposed after a missing,
+corrupt or mismatched cache entry; they are never a source of usage facts.
+
 ## 3. redb tables
 
 ### 3.1 Conventions

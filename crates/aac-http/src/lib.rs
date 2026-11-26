@@ -9,6 +9,7 @@ mod agent_transport;
 pub mod allocator;
 mod analytics_live;
 mod analytics_route;
+mod analytics_saved;
 mod analytics_storage;
 mod analytics_writers;
 mod answers_owned;

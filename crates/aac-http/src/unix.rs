@@ -156,16 +156,7 @@ struct Shared {
     /// R5/A2: whether the Analytics activity pass is in flight (the read's `refreshing`).
     analytics_live: Arc<crate::analytics_live::Live>,
     /// Bounded 4-entry generation-keyed Analytics response cache (eliminates per-poll recompute).
-    analytics_cache: Arc<std::sync::Mutex<std::collections::VecDeque<AnalyticsCacheEntry>>>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct AnalyticsCacheKey {
-    query: String,
-    write_seq: u64,
-    refreshing: bool,
-    mac_gen: Option<String>,
-    win_gen: Option<String>,
+    analytics_cache: Arc<crate::analytics_saved::Saved>,
 }
 
 /// Direct in-process handle to an embedded private service router.
@@ -180,13 +171,6 @@ impl LocalService {
         let service = hyper_util::service::TowerToHyperService::new(self.router.clone());
         hyper::service::Service::call(&service, request).await.ok()
     }
-}
-
-struct AnalyticsCacheEntry {
-    key: AnalyticsCacheKey,
-    at_ms: i64,
-    status: u16,
-    body: crate::compress::CachedBody,
 }
 
 fn analytics_reply(
@@ -1571,145 +1555,99 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(row.handler, Decline::Unsupported);
             };
             let root = shared.boot.ccs_dir.clone();
-            let cursor_root = root.clone();
-            let compose_query = query.clone();
-            // The same fed dashboard generation Accounts and Home render, as the read's input.
-            let cache = shared.account_usage.clone();
-            let feeds = shared.feeds.clone();
-            let live = Arc::clone(&shared.analytics_live);
             let force_refresh =
                 url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
                     .any(|(key, value)| key == "refresh" && value == "true");
             let reload = force_refresh || no_cache;
-            let now_check = aac_store::engine::now_ms() as i64;
-            let cache_key = if !force_refresh {
-                store.analytics_engine().map(|engine| AnalyticsCacheKey {
-                    query: query.clone().unwrap_or_default(),
-                    write_seq: engine.write_seq(),
-                    refreshing: live.refreshing(),
-                    mac_gen: cache.generation(crate::account_usage::Desktop::Mac, false),
-                    win_gen: cache.generation(crate::account_usage::Desktop::Windows, false),
-                })
-            } else {
-                None
+            let Some(engine) = store.analytics_engine() else {
+                return decline(row.handler, Decline::Busy);
             };
-            if let Some(key) = &cache_key {
-                let hit = shared.analytics_cache.lock().ok().and_then(|guard| {
-                    guard
-                        .iter()
-                        .find(|e| e.key == *key && now_check.saturating_sub(e.at_ms) < 30_000)
-                        .map(|e| (e.status, e.body.clone()))
-                });
-                if let Some((status, cached)) = hit {
+            let now = aac_store::engine::now_ms() as i64;
+            let inputs = format!(
+                "{:?}:{:?}:{:?}",
+                shared
+                    .account_usage
+                    .generation(crate::account_usage::Desktop::Mac, false),
+                shared
+                    .account_usage
+                    .generation(crate::account_usage::Desktop::Windows, false),
+                shared
+                    .feeds
+                    .latest("analytics-dashboard")
+                    .ok()
+                    .map(|g| g.digest)
+            );
+            let (filter, version) = match crate::analytics_saved::keys(
+                &engine,
+                &root,
+                query.as_deref(),
+                &inputs,
+                shared.analytics_live.refreshing(),
+                now,
+            ) {
+                Ok(keys) => keys,
+                Err(reason) => return decline(row.handler, reason),
+            };
+            let own = Arc::clone(shared);
+            let build_engine = engine.clone();
+            let pool = row.pool;
+            let result = shared
+                .analytics_cache
+                .answer(engine, filter, version, now, reload, move || async move {
+                    let cache = own.account_usage.clone();
+                    let feeds = own.feeds.clone();
+                    let live = own.analytics_live.clone();
+                    let compose_query = query.clone();
+                    let compose_root = root.clone();
+                    let cursor_engine = build_engine.clone();
+                    let (mut answer, now) = own
+                        .limits
+                        .blocking(pool, move || {
+                            let now = aac_store::engine::now_ms() as i64;
+                            let snapshot = analytics_snapshot(&cache, &feeds, now);
+                            let answer = crate::analytics_route::compose(
+                                build_engine,
+                                &compose_root,
+                                snapshot.as_ref(),
+                                &live,
+                                compose_query.as_deref(),
+                                now,
+                            );
+                            Ok((answer, now))
+                        })
+                        .await?;
+                    if own.owners.owner(crate::account_usage::cursor::ROW)
+                        == Some(registry::Role::RustService)
+                        && let Ok(value) = &mut answer
+                        && let Some(activity) = value["activity"].as_object_mut()
+                        && let Some(status) = Arc::clone(&own.cursor)
+                            .analytics(root, own.owners.clone(), cursor_engine, now, force_refresh)
+                            .await
+                    {
+                        activity.insert("cursorAccount".into(), status);
+                    }
+                    own.limits
+                        .blocking(pool, move || {
+                            crate::analytics_route::encode(answer, query.as_deref())
+                        })
+                        .await
+                })
+                .await;
+            match result {
+                Ok((status, cached)) => {
                     if status == 200
                         && !reload
                         && crate::compress::not_modified(if_none_match.as_deref(), &cached.etag)
                     {
                         return analytics_not_modified(&cached.etag, cached.raw_len());
                     }
-                    if let Ok((bytes, gzip)) = cached.serve(accept_gzip) {
-                        return analytics_reply(
-                            status,
-                            bytes,
-                            cached.raw_len(),
-                            gzip,
-                            &cached.etag,
-                        );
-                    }
-                }
-            }
-            let result = shared
-                .limits
-                .blocking(row.pool, move || {
-                    store.wait_ready();
-                    let engine = store.analytics_engine().ok_or(Decline::Internal)?;
-                    let now = aac_store::engine::now_ms() as i64;
-                    let snapshot = analytics_snapshot(&cache, &feeds, now);
-                    let answer = crate::analytics_route::compose(
-                        Arc::clone(&engine),
-                        &root,
-                        snapshot.as_ref(),
-                        &live,
-                        compose_query.as_deref(),
-                        now,
-                    );
-                    Ok((answer, engine, now))
-                })
-                .await;
-            let result = match result {
-                Ok((mut answer, engine, now)) => {
-                    if shared.owners.owner(crate::account_usage::cursor::ROW)
-                        == Some(registry::Role::RustService)
-                        && let Ok(value) = &mut answer
-                        && let Some(activity) = value["activity"].as_object_mut()
-                        && let Some(status) = Arc::clone(&shared.cursor)
-                            .analytics(
-                                cursor_root,
-                                shared.owners.clone(),
-                                engine,
-                                now,
-                                force_refresh,
-                            )
-                            .await
-                    {
-                        activity.insert("cursorAccount".into(), status);
-                    }
-                    let encode_query = query.clone();
-                    shared
-                        .limits
-                        .blocking(row.pool, move || {
-                            let (status, bytes) =
-                                crate::analytics_route::encode(answer, encode_query.as_deref())?;
-                            if status == 200 {
-                                let etag = crate::compress::weak_etag_sha1(&bytes);
-                                let (cached, raw_bytes) =
-                                    crate::compress::CachedBody::from_raw_with_identity(
-                                        bytes, etag,
-                                    );
-                                Ok((status, Some((cached, raw_bytes)), Vec::new()))
-                            } else {
-                                Ok((status, None, bytes))
-                            }
-                        })
-                        .await
-                }
-                Err(reason) => Err(reason),
-            };
-            match result {
-                Ok((status, Some((cached, raw_bytes)), _)) => {
-                    if let Some(key) = cache_key
-                        && let Ok(mut guard) = shared.analytics_cache.lock()
-                    {
-                        guard.retain(|e| e.key != key);
-                        guard.push_back(AnalyticsCacheEntry {
-                            key,
-                            at_ms: now_check,
-                            status,
-                            body: cached.clone(),
-                        });
-                        while guard.len() > 4 {
-                            guard.pop_front();
+                    match cached.serve(accept_gzip) {
+                        Ok((bytes, gzip)) => {
+                            analytics_reply(status, bytes, cached.raw_len(), gzip, &cached.etag)
                         }
+                        Err(_) => decline(row.handler, Decline::Internal),
                     }
-                    if !reload
-                        && crate::compress::not_modified(if_none_match.as_deref(), &cached.etag)
-                    {
-                        return analytics_not_modified(&cached.etag, cached.raw_len());
-                    }
-                    if accept_gzip
-                        && cached.is_gzipped()
-                        && let Ok((gz, true)) = cached.serve(true)
-                    {
-                        return analytics_reply(status, gz, cached.raw_len(), true, &cached.etag);
-                    }
-                    analytics_reply(status, raw_bytes, cached.raw_len(), false, &cached.etag)
                 }
-                Ok((status, None, bytes)) => (
-                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    bytes,
-                )
-                    .into_response(),
                 Err(reason) => decline(row.handler, reason),
             }
         }
