@@ -32,6 +32,7 @@ export interface ResetRouteDeps {
 const SAFE_REASONS = new Set([
   'check-again-required',
   'claim-token-outstanding',
+  'claim-unproven',
   'confirmation-invalid',
   'cooldown',
   'grant-changed',

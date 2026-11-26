@@ -549,6 +549,13 @@
     ]
   },
   {
+    "word": "claim-unproven",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "claude",
     "cause": null,
     "sources": [
