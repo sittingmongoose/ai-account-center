@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  buildLegacySourceAccounts,
   buildSyntheticAccounts,
   createRng,
   generateMemoryFixture,
@@ -214,6 +216,22 @@ describe('memory budget fixture generator', () => {
     expect(new Set(accounts.map((a) => a.provider)).size).toBe(3);
     expect(new Set(accounts.map((a) => a.identity)).size).toBe(19);
     expect(accounts.every((a) => a.email.endsWith('@example.invalid'))).toBe(true);
+  });
+
+  it('builds the legacy <provider>:usage source rows from the provider table with derive-matching identities', () => {
+    const table = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, 'config', 'tables', 'providers.json'), 'utf8')
+    );
+    const accounts = buildLegacySourceAccounts();
+    expect(accounts.map((a) => a.id)).toEqual(table.additionalProviders.map((p: string) => `${p}:usage`));
+    expect(new Set(accounts.map((a) => a.provider))).toEqual(new Set(table.additionalProviders));
+    expect(accounts.every((a) => a.platform === 'ubuntu')).toBe(true);
+    for (const account of accounts) {
+      const expected = createHash('sha256')
+        .update(JSON.stringify([account.provider, account.id, null]))
+        .digest('hex');
+      expect(account.identity).toBe(expected);
+    }
   });
 
   it('produces reproducible sequences from createRng', () => {

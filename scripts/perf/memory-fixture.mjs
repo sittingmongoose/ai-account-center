@@ -353,6 +353,40 @@ export function buildSyntheticAccounts(totalAccounts = 19) {
   return accounts;
 }
 
+/**
+ * The legacy account-usage sources the dashboard boot lists when no account registry
+ * exists in the config root: one `<provider>:usage` row per `additionalProviders`
+ * (config/tables/providers.json — the same file the Rust provider tables are generated
+ * from), on ubuntu, with no email. Analytics matches stored quota history to the live
+ * inventory by the identity `AccountKey::derive` produces (crates/aac-core/src/ids.rs:
+ * sha256 of the JSON tuple with a null address), so the fixture seeds those identities
+ * — without them the quota history matches no live account and Analytics serves an
+ * empty quota history.
+ */
+export function buildLegacySourceAccounts() {
+  const table = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, 'config', 'tables', 'providers.json'), 'utf8')
+  );
+  const providers = table.additionalProviders;
+  return providers.map((provider, i) => {
+    const id = `${provider}:usage`;
+    return {
+      index: 1000 + i,
+      id,
+      provider,
+      tool: provider,
+      route: provider,
+      email: null,
+      identity: sha256Hex(JSON.stringify([provider, id, null])),
+      plan: null,
+      platform: 'ubuntu',
+      source: 'Synthetic usage source',
+      isActive: false,
+      models: [],
+    };
+  });
+}
+
 /** Write ~2,000 writer folders (thread.json, status.json, tasks.json) + return the ~20 run writers. */
 function generateWriters(reportsDir, rng, now, totalWriters, runWriterCount) {
   const writersDir = path.join(reportsDir, 'v1', 'writers');
@@ -927,6 +961,12 @@ function generateAnalyticsUsageLogs(usageLogsDir, accounts, rng, now, days, quot
   const quotaDir = path.join(usageLogsDir, 'quota-history');
   fs.mkdirSync(quotaDir, { recursive: true });
 
+  // Quota history is seeded for the synthetic accounts and for the legacy
+  // `<provider>:usage` rows boot lists, so Analytics serves both inventory shapes.
+  // Activity still uses the 19 synthetic accounts only.
+  const legacyAccounts = buildLegacySourceAccounts();
+  const quotaAccounts = [...accounts, ...legacyAccounts];
+
   const startMs = now - days * DAY;
   const stepMs = Math.max(5 * MIN, Math.floor(DAY / Math.max(1, quotaSamplesPerDay)));
   let quotaObservations = 0;
@@ -939,7 +979,7 @@ function generateAnalyticsUsageLogs(usageLogsDir, accounts, rng, now, days, quot
       const t = dayStart + s * stepMs;
       if (t >= now) break;
       const stamped = isoMs(t);
-      for (const account of accounts) {
+      for (const account of quotaAccounts) {
         const status = rng.next() < 0.004 ? 'error' : 'ok';
         records.push({
           identity: account.identity,
@@ -1104,6 +1144,7 @@ function generateAnalyticsUsageLogs(usageLogsDir, accounts, rng, now, days, quot
     quotaFiles,
     activityFiles,
     quotaObservations,
+    legacySourceAccounts: legacyAccounts.length,
     activityEvents: totalActivityEvents,
     sessions: activitySessions,
   };
@@ -1506,6 +1547,7 @@ export async function generateMemoryFixture(outDir, userOptions = {}) {
       registryEntries: registryResult.totalRegistryEntries,
       providers: PROVIDER_SPECS.length,
       accounts: accounts.length,
+      legacySourceAccounts: analyticsResult.legacySourceAccounts,
       days: options.days,
       quotaObservations: analyticsResult.quotaObservations,
       activityEvents: analyticsResult.activityEvents,
