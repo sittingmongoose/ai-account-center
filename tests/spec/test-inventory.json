@@ -203,9 +203,10 @@
     },
     {
       "file": "crates/aac-agent/tests/agent.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-agent/tests/apps_update.rs",
@@ -2202,6 +2203,12 @@
     },
     {
       "file": "native/aac-usage/tests/review_settled_append.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/scan_index.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
