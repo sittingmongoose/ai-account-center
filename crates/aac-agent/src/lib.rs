@@ -120,8 +120,9 @@ pub async fn run(
             .map_err(|_| Failure::new(Cause::Damaged, "invalid agent request JSON"))
             .and_then(|mut request| {
                 if request.verb == "failover-inventory" && !failover::request_proven(&bytes) {
-                    // Delegate raw spellings/caps before serde can erase their distinction.
-                    request.args = serde_json::json!({"unprovenRawRequest": true});
+                    // Judge raw spellings/caps before serde can erase their distinction. Only the
+                    // action survives, so the refusal answers in that action's shape.
+                    request.args = failover::unproven_args(&request.args);
                 }
                 if bytes.len() >= frame_cap(&request.verb) {
                     Err(Failure::new(

@@ -112,6 +112,27 @@ fn document(bytes: &[u8], cap: usize, bom: bool) -> Option<Value> {
 pub(crate) fn request_proven(bytes: &[u8]) -> bool {
     bytes.len() <= 64 * 1024 && document(bytes, 64 * 1024, false).is_some()
 }
+/// The reason a request frame that fails the strict input check is refused with.
+const UNPROVEN: &str = "request-not-proven";
+/// What survives of a raw request frame that failed `request_proven`: the marker and the
+/// action, when it is one of the two this verb serves.
+pub(crate) fn unproven_args(args: &Value) -> Value {
+    let action = args["action"]
+        .as_str()
+        .filter(|a| ["inventory", "collect"].contains(a));
+    json!({"unprovenRawRequest": true, "action": action})
+}
+/// The honest answer to a frame that failed the strict input check: an unread inventory or an
+/// unavailable collection, with the reason. It never delegates to Python.
+fn unproven(args: &Value) -> Value {
+    if args["action"] == "collect" {
+        let mut out = dispatch::failure("unavailable", &Value::Null, &Value::Null);
+        out["reason"] = json!(UNPROVEN);
+        out
+    } else {
+        json!({"version":1,"action":"inventory","candidates":[],"failed":true,"reason":UNPROVEN})
+    }
+}
 fn read(path: &Path, cap: usize, bom: bool) -> Option<Value> {
     read_with_policy(path, cap, bom, false)
 }
@@ -982,6 +1003,9 @@ pub(crate) fn run_with_adapter(args: &Value, mut adapter: impl Adapter) -> Value
     runtime.block_on(dispatch::execute(args, &mut adapter, clock.get() as i64))
 }
 pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
+    if args["unprovenRawRequest"] == true {
+        return Ok(unproven(args));
+    }
     // Claude inventory and collection are native on every platform (U1): never Python.
     if args["provider"] == "claude" {
         return Ok(run_with_adapter(args, claude::Claude));

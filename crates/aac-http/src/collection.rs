@@ -25,6 +25,25 @@ const VERBS: [&str; 4] = [
     "failover-collect",
 ];
 const MAX_PENDING: usize = 16;
+
+/// The agent verb that answers one collection request, or `None` for the managed Python
+/// helper. Claude inventory and collection are native in the agent on every platform (its
+/// `failover-inventory` verb serves both actions), so Claude never reaches the helper.
+fn agent_verb(verb: &str, args: &Value) -> Option<&'static str> {
+    let verb = VERBS.into_iter().find(|v| *v == verb)?;
+    if verb.starts_with("failover-") && args["provider"] == "claude" {
+        return Some("failover-inventory");
+    }
+    // Wallet inventory uses the existing capsule parser, which is not an M2 agent reader.
+    let wallet = verb == "failover-inventory" && args["provider"] == "opencode-wallet";
+    (verb != "failover-collect" && !wallet).then_some(verb)
+}
+
+/// Whether an agent that declines a request (an older agent's `{"fallback":"python"}`) may
+/// hand it to the helper. Claude may not: its answer is the agent's, or honestly none.
+fn helper_may_answer(verb: &str, args: &Value) -> bool {
+    verb == "failover-inventory" && args["provider"] != "claude"
+}
 type Key = [u8; 32];
 enum Collected {
     Value(Value),
@@ -128,7 +147,7 @@ impl Collection {
             .collect(agents.clone(), &call, request, Instant::now())
             .await;
         let result = match reply {
-            Err("unsupported") if verb == "failover-inventory" => {
+            Err("unsupported") if helper_may_answer(verb, args) => {
                 self.read_helper(
                     &agents,
                     &call.computer,
@@ -213,19 +232,22 @@ impl Collection {
                 let collection = self.clone();
                 let computer = call.computer.clone();
                 let cap = call.max_bytes;
-                let wire = call.wire(&request.verb);
+                let route = agent_verb(&request.verb, &request.args);
+                let wire = route.map(|verb| call.wire(verb));
                 tokio::spawn(async move {
                     // A lost dashboard connection does not spawn a second provider read.
                     // The original pass still owns its slot and absolute deadline.
-                    // Wallet inventory uses the existing capsule parser, which is not an M2 agent reader.
-                    let wallet = request.verb == "failover-inventory"
-                        && request.args["provider"] == "opencode-wallet";
-                    let result = if request.verb == "failover-collect" || wallet {
-                        collection
-                            .read_helper(&agents, &computer, &request.args, deadline, cap)
-                            .await
-                    } else {
-                        read_agent(&agents, computer, request, wire, deadline, cap).await
+                    let result = match (route, wire) {
+                        (Some(verb), Some(wire)) => {
+                            let mut request = request;
+                            request.verb = verb.into();
+                            read_agent(&agents, computer, request, wire, deadline, cap).await
+                        }
+                        _ => {
+                            collection
+                                .read_helper(&agents, &computer, &request.args, deadline, cap)
+                                .await
+                        }
                     };
                     let mut pending = collection.pending.lock().unwrap_or_else(|e| e.into_inner());
                     sender.send_replace(Some(result));
@@ -315,6 +337,35 @@ async fn read_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_collection_runs_in_the_agent_and_never_in_the_python_helper() {
+        let claude = json!({"version":1,"action":"collect","provider":"claude"});
+        assert_eq!(
+            agent_verb("failover-collect", &claude),
+            Some("failover-inventory")
+        );
+        let inventory = json!({"version":1,"action":"inventory","provider":"claude"});
+        assert_eq!(
+            agent_verb("failover-inventory", &inventory),
+            Some("failover-inventory")
+        );
+        assert!(!helper_may_answer("failover-inventory", &inventory));
+        assert!(!helper_may_answer("failover-collect", &claude));
+        // Providers without a native collector keep their existing routes.
+        let codex = json!({"version":1,"action":"collect","provider":"codex"});
+        assert_eq!(agent_verb("failover-collect", &codex), None);
+        let wallet = json!({"version":1,"action":"inventory","provider":"opencode-wallet"});
+        assert_eq!(agent_verb("failover-inventory", &wallet), None);
+        let codex = json!({"version":1,"action":"inventory","provider":"codex"});
+        assert_eq!(
+            agent_verb("failover-inventory", &codex),
+            Some("failover-inventory")
+        );
+        assert!(helper_may_answer("failover-inventory", &codex));
+        assert_eq!(agent_verb("quota-read", &json!({})), Some("quota-read"));
+        assert_eq!(agent_verb("unknown", &json!({})), None);
+    }
 
     #[tokio::test(start_paused = true)]
     async fn schedules_the_exact_configured_interval_and_releases_waiters_on_stop() {

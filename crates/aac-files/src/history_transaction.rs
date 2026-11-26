@@ -335,12 +335,16 @@ pub fn append(
         }
         let folder = profile.join(format!(".history-index-snapshot-{}", unique()?));
         state.before("createSnapshot", &folder)?;
-        let mut builder = fs::DirBuilder::new();
+        // Only Unix narrows the mode; elsewhere the builder needs no `mut` (clippy -D warnings).
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         builder.create(&folder)?;
         state.snapshot = Some((folder.clone(), directory(&folder)?));
         state.private(&folder, true)?;

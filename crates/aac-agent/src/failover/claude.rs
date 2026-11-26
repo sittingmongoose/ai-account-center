@@ -447,7 +447,18 @@ async fn collect(candidate: &Value, c: &Context) -> Value {
     let mut observed: Vec<Value> = vec![];
     let result = collect_inner(candidate, c, &mut observed).await;
     let mut out = match result {
-        Ok(sample) => json!({"sample":sample,"failureCode":null}),
+        Ok(Collected { sample, hold: None }) => json!({"sample":sample,"failureCode":null}),
+        // Python's cooldown: the sample stands, and the provider's 429 still holds the account.
+        Ok(Collected {
+            sample,
+            hold: Some(retry),
+        }) => {
+            let mut v = json!({"sample":sample,"failureCode":"rate_limited"});
+            if let Some(r) = retry {
+                v["retryAfterSeconds"] = json!(r);
+            }
+            v
+        }
         Err(Failure(code, retry)) => {
             let mut v = json!({"sample":null,"failureCode":code});
             if let Some(r) = retry {
@@ -485,7 +496,7 @@ async fn collect_inner(
     candidate: &Value,
     c: &Context,
     observed: &mut Vec<Value>,
-) -> Result<Value, Failure> {
+) -> Result<Collected, Failure> {
     if c.provider != "claude" {
         return Err(Failure("unavailable", None));
     }
@@ -544,13 +555,26 @@ async fn collect_inner(
     }
     let plan = normalize::claude_plan(&account, &org, &candidate["plan"]);
     let plan_class = normalize::claude_plan_class(&account, &org, plan.as_deref());
-    // The claude.ai web extras (prepaid balance and web grants) are not read here: OAuth usage
-    // already carries the grants, and an unread balance stays unavailable, never zero.
+    // The web-only extras come from the same OAuth sign-in: the usage answer carries the reset
+    // grants and the weekly session reset, and the prepaid balance has its own OAuth route. An
+    // unread balance stays unavailable, never zero; it never fails the quota it rides on.
     let reset = if normalize::has_reset_grants(&windows) {
         "ok"
     } else {
         "unavailable"
     };
+    let organization = candidate["_organization"].as_str().unwrap_or("");
+    let (prepaid, hold) = prepaid_windows(&client, organization, token, observed).await;
+    let prepaid_status = if prepaid.is_some() {
+        "ok"
+    } else {
+        "unavailable"
+    };
+    for window in prepaid.unwrap_or_default() {
+        if !windows.iter().any(|w| w["key"] == window["key"]) {
+            windows.push(window);
+        }
+    }
     verify_root()?;
     let stamp = normalize::iso_ms(crate::claude_usage::now_ms());
     let platform_label = match c.platform {
@@ -566,8 +590,45 @@ async fn collect_inner(
     if let Some(class) = plan_class {
         sample["planClass"] = json!(class);
     }
-    sample["optionalExtras"] = json!({"resetCredits":reset,"prepaidBalance":"unavailable"});
-    Ok(sample)
+    sample["optionalExtras"] = json!({"resetCredits":reset,"prepaidBalance":prepaid_status});
+    // Ties retained extras to this sign-in and its stored revision (`optionalExtrasContext`).
+    sample["optionalExtrasContext"] = json!(aac_core::sha256_hex(
+        json!([
+            "claude-optional-oauth-v1",
+            candidate["identity"],
+            candidate["revision"]
+        ])
+        .to_string()
+        .as_bytes()
+    ));
+    Ok(Collected { sample, hold })
+}
+/// `optional_web_windows`' balance half over OAuth: `Some` windows once the balance was read
+/// (possibly none, as Python), and the provider's hold when it answered 429.
+async fn prepaid_windows(
+    client: &Client,
+    organization: &str,
+    token: &str,
+    observed: &mut Vec<Value>,
+) -> (Option<Vec<Value>>, Option<Option<i64>>) {
+    let result = client.prepaid(organization, token).await;
+    let (status, retry) = match &result {
+        Ok(_) => (Some(200), None),
+        Err(e) => (e.status, e.retry_after),
+    };
+    if observed.len() < 5 {
+        observed.push(json!({"stage":"optional_web","status":status,"retryAfterSeconds":retry}));
+    }
+    match result {
+        Ok(value) => (Some(normalize::normalize_prepaid(&value)), None),
+        Err(e) if e.status == Some(429) => (None, Some(e.retry_after)),
+        Err(_) => (None, None),
+    }
+}
+/// A verified sample, plus the provider's hold when an optional read was rate limited.
+struct Collected {
+    sample: Value,
+    hold: Option<Option<i64>>,
 }
 
 #[cfg(test)]
@@ -626,8 +687,11 @@ mod tests {
         );
     }
 
-    /// A local server answering each request in order; returns its origin and the requests.
-    fn server(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    /// A local server answering each request in order with its status line
+    /// (`429 Too Many Requests\r\nRetry-After: 7`); returns its origin and the requests.
+    fn server_with(
+        responses: Vec<(&'static str, String)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -636,7 +700,7 @@ mod tests {
             listener.set_nonblocking(true).unwrap();
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             let mut seen = vec![];
-            for body in responses {
+            for (status, body) in responses {
                 let mut stream = loop {
                     match listener.accept() {
                         Ok((stream, _)) => break stream,
@@ -654,7 +718,7 @@ mod tests {
                 let size = stream.read(&mut input).unwrap();
                 seen.push(String::from_utf8_lossy(&input[..size]).into_owned());
                 let reply = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 stream.write_all(reply.as_bytes()).unwrap();
@@ -672,9 +736,23 @@ mod tests {
         dir
     }
     fn collect_against(home: &Path, profile: Value) -> (Value, Vec<String>) {
+        let prepaid = json!({"amount":2500,"currency":"USD","next_expires_at":null});
+        collect_with(home, profile, ("200 OK", prepaid.to_string()))
+    }
+    /// One collect: profile, usage (with the weekly session reset), then the prepaid answer.
+    fn collect_with(
+        home: &Path,
+        profile: Value,
+        prepaid: (&'static str, String),
+    ) -> (Value, Vec<String>) {
         let usage = json!({"five_hour":{"utilization":12,"resets_at":"2026-11-26T20:00:00Z"},
-            "cedar_ember":{"eligible":true,"grants":[{"resets_left":1,"resets_total":1,"paused":false}]}});
-        let (origin, worker) = server(vec![profile.to_string(), usage.to_string()]);
+            "cedar_ember":{"eligible":true,"grants":[{"resets_left":1,"resets_total":1,"paused":false}]},
+            "juniper_tide":{"eligible":true,"available":true,"resets_per_week":1,"next_available_at":null}});
+        let (origin, worker) = server_with(vec![
+            ("200 OK", profile.to_string()),
+            ("200 OK", usage.to_string()),
+            prepaid,
+        ]);
         crate::claude_usage::http::TEST_ORIGIN.with(|o| *o.borrow_mut() = Some(origin));
         let home = home.to_string_lossy().to_string();
         let inventory =
@@ -705,20 +783,94 @@ mod tests {
             [
                 "five_hour",
                 "reset_credits_available",
-                "reset_credit_available_grant_1"
+                "reset_credit_available_grant_1",
+                "session_reset_allowance",
+                "prepaid_balance"
             ]
         );
+        let prepaid = &sample["windows"].as_array().unwrap()[4];
+        assert_eq!(prepaid["remaining"], json!(25.0), "{prepaid}");
+        assert_eq!(prepaid["unit"], "USD", "{prepaid}");
         assert_eq!(sample["planClass"], "max");
         assert_eq!(sample["optionalExtras"]["resetCredits"], "ok");
-        assert_eq!(sample["optionalExtras"]["prepaidBalance"], "unavailable");
-        assert_eq!(out["claudeHttp"].as_array().unwrap().len(), 2);
+        assert_eq!(sample["optionalExtras"]["prepaidBalance"], "ok");
+        assert!(
+            sample["optionalExtrasContext"]
+                .as_str()
+                .is_some_and(|c| c.len() == 64)
+        );
+        let stages: Vec<_> = out["claudeHttp"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["stage"].as_str().unwrap())
+            .collect();
+        assert_eq!(stages, ["oauth_profile", "oauth_usage", "optional_web"]);
         assert!(!out.to_string().contains("synthetic-token"));
         assert!(requests[0].starts_with("GET /api/oauth/profile "));
-        assert!(requests[1].starts_with("GET /api/oauth/usage?cedar_ember=1 "));
+        assert!(requests[1].starts_with("GET /api/oauth/usage?cedar_ember=1&at_wall=1 "));
+        assert!(requests[2].starts_with(
+            "GET /api/oauth/organizations/33333333-3333-3333-3333-333333333333/prepaid/credits "
+        ));
+        assert!(
+            requests[2]
+                .to_ascii_lowercase()
+                .contains("x-organization-uuid: 33333333-3333-3333-3333-333333333333")
+        );
         assert!(
             requests[0].contains("authorization: Bearer synthetic-token")
                 || requests[0].contains("Authorization: Bearer synthetic-token")
         );
+    }
+
+    fn max_profile() -> Value {
+        json!({"account":{"uuid":"11111111-1111-1111-1111-111111111111","email":"user@example.test","has_claude_max":true},
+            "organization":{"uuid":"33333333-3333-3333-3333-333333333333","rate_limit_tier":"default_claude_max_20x"}})
+    }
+
+    #[test]
+    fn an_unread_prepaid_balance_stays_unavailable_and_keeps_the_quota() {
+        let dir = live_fixture();
+        let (out, _) = collect_with(
+            dir.path(),
+            max_profile(),
+            ("500 Internal Server Error", "{}".into()),
+        );
+        assert_eq!(out["failureCode"], Value::Null, "{out}");
+        let sample = &out["sample"];
+        assert_eq!(sample["optionalExtras"]["prepaidBalance"], "unavailable");
+        assert!(
+            !sample["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w["key"] == "prepaid_balance"),
+            "never a zero balance"
+        );
+        assert!(
+            sample["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w["key"] == "five_hour")
+        );
+    }
+
+    #[test]
+    fn a_rate_limited_prepaid_read_holds_the_account_but_keeps_the_sample() {
+        let dir = live_fixture();
+        let (out, _) = collect_with(
+            dir.path(),
+            max_profile(),
+            ("429 Too Many Requests\r\nRetry-After: 7", "{}".into()),
+        );
+        assert_eq!(out["failureCode"], "rate_limited", "{out}");
+        assert_eq!(out["retryAfterSeconds"], 7);
+        assert_eq!(
+            out["sample"]["optionalExtras"]["prepaidBalance"],
+            "unavailable"
+        );
+        assert_eq!(out["sample"]["optionalExtras"]["resetCredits"], "ok");
     }
 
     #[test]

@@ -200,6 +200,7 @@ impl Drop for Presence {
 
 #[cfg(all(test, windows))]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
