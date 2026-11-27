@@ -15,7 +15,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+#[cfg(target_os = "linux")]
+use std::io::Write;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -948,6 +950,7 @@ impl SecureFileStore {
         self.install(&receipt.before.credential, &receipt.installed)
     }
 
+    #[cfg(target_os = "linux")]
     fn same(left: &FileSnapshot, right: &FileSnapshot) -> bool {
         (
             left.device,

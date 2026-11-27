@@ -337,12 +337,28 @@ else:
         .iter()
         .find(|row| row["id"] == "claude:fixture-mac")
         .unwrap();
-    assert_eq!(
-        profile["signInNeeded"],
-        json!(["mac"]),
-        "agent-off Mac sign-in probe"
-    );
-    assert_eq!(profile["status"], "needs_sign_in");
+    if agent_on {
+        assert_eq!(
+            profile["signInNeeded"],
+            json!(["mac"]),
+            "agent-on Mac sign-in probe"
+        );
+        assert_eq!(profile["status"], "needs_sign_in");
+    } else {
+        // P3: Claude host operations are native only. With the agent off nothing replays
+        // through the old packaged Python helper, so the Mac sign-in state stays unknown
+        // instead of being read some other way.
+        assert_eq!(
+            profile["signInNeeded"],
+            Value::Null,
+            "agent-off Mac sign-in probe: {profile}"
+        );
+        assert_eq!(
+            profile["status"], "needs_sign_in",
+            "agent-off status: {profile}"
+        );
+        assert!(!root.join("host-session").exists());
+    }
     if agent_on {
         assert_eq!(
             fs::read_to_string(root.join("agent-session"))
@@ -393,9 +409,9 @@ else:
         return;
     }
 
-    assert_eq!(
-        fs::read_to_string(root.join("host-session")).unwrap(),
-        host_alias("mac")
+    assert!(
+        !root.join("host-session").exists(),
+        "agent-off Claude host call replayed through the packaged helper"
     );
     if history_only {
         for (platform, id, percent, host, expected_path) in [

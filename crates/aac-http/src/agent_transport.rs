@@ -575,11 +575,16 @@ impl Agents {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Failure::new(Cause::Busy, "agent transport saturated"))?;
-        // R5b: a local app-update agent waits for the one-at-a-time gate.
-        let _local_permit = self
-            .local_agent_permit(&selector, deadline)
-            .await
-            .map_err(|cause| Failure::new(cause, "local agent gate"))?;
+        // R5b: a local app-update agent waits for the one-at-a-time gate. A cancel is the
+        // control call for the update that holds the gate: gating it would leave a local
+        // Update all uncancellable until it finished on its own.
+        let _local_permit = if args["action"] == "cancel" {
+            None
+        } else {
+            self.local_agent_permit(&selector, deadline)
+                .await
+                .map_err(|cause| Failure::new(cause, "local agent gate"))?
+        };
         let client = tokio::select! {
             biased;
             _ = options.cancel.cancelled() => return Err(Failure::new(Cause::Cancelled, "app call cancelled before dispatch")),
