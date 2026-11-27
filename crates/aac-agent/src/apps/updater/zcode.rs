@@ -4793,8 +4793,8 @@ mod tests {
             Some("0.65.1"),
         ));
         let mods_for_run = mods.clone();
-        let node_str = node.to_string_lossy().into_owned();
-        let cli_str = cli.to_string_lossy().into_owned();
+        let node_str = plain(&node).to_string_lossy().into_owned();
+        let cli_str = plain(&cli).to_string_lossy().into_owned();
         rig.system.clone().answering(move |spec| {
             let argv: Vec<String> = spec
                 .argv

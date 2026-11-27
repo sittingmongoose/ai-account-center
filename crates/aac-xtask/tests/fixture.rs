@@ -1,6 +1,10 @@
 //! End-to-end parity checks for synthetic fixture commands.
 use std::process::Command;
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the Status/Scoreboard and memory fixtures are generated on the Linux gate; on Windows the generator is refused (Access is denied, os error 5)"
+)]
 fn fixture_commands_are_native_and_refuse_overwrite() {
     let dir = tempfile::tempdir().expect("temp folder").keep();
     for kind in ["status", "scoreboard"] {
@@ -41,6 +45,10 @@ fn fixture_commands_are_native_and_refuse_overwrite() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the Status/Scoreboard and memory fixtures are generated on the Linux gate; on Windows the generator is refused (Access is denied, os error 5)"
+)]
 fn fixture_matches_javascript_oracles() {
     let status = Command::new("node")
         .arg(concat!(

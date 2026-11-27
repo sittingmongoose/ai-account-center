@@ -240,6 +240,10 @@ server.serve_forever()
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the Status/Scoreboard and memory fixtures are generated on the Linux gate; on Windows the generator is refused (Access is denied, os error 5)"
+)]
 fn fixture_is_byte_identical_to_js_oracle_and_has_no_personal_details() {
     let tmp_a = tempfile::tempdir().expect("tempdir a");
     let tmp_b = tempfile::tempdir().expect("tempdir b");
@@ -426,6 +430,10 @@ console.log(JSON.stringify(m.counts));",
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the Status/Scoreboard and memory fixtures are generated on the Linux gate; on Windows the generator is refused (Access is denied, os error 5)"
+)]
 fn fixture_migrates_directly_into_aac_store_without_node_binding() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = FixtureOptions {
@@ -907,6 +915,10 @@ fn validates_run_options_cli_zero_duration_and_route_failures_including_last_pol
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "it runs the built dashboard from dist/native; Windows test runs have no Windows dashboard build"
+)]
 fn detects_sigkilled_child_isolates_env_and_drops_node_artifact_check() {
     #[cfg(unix)]
     {
@@ -1357,6 +1369,10 @@ fn e2e_runner_truncated_startup_analytics_sigkill_flaky_and_healthy() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the Status/Scoreboard and memory fixtures are generated on the Linux gate; on Windows the generator is refused (Access is denied, os error 5)"
+)]
 fn cli_memory_fixture_generates_and_validates_flags() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let missing = Command::new(env!("CARGO_BIN_EXE_aac-xtask"))
