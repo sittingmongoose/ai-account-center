@@ -844,8 +844,10 @@ fn fixed_seven_computer_registry_invariants() {
     let table_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web-dashboard/public/computers.json");
     let table: Value = serde_json::from_str(&fs::read_to_string(&table_path).unwrap()).unwrap();
+    // Every computer has an SSH route, the VM included (`ubuntu-vm`): a dashboard that runs on
+    // no registered computer reaches all seven through the agent (`AAC_DASHBOARD_COMPUTER`).
     let expected = [
-        ("ubuntu", "linux", false),
+        ("ubuntu", "linux", true),
         ("mac", "mac", true),
         ("windows", "windows", true),
         ("nas1", "linux", true),
@@ -882,7 +884,8 @@ fn fixed_seven_computer_registry_invariants() {
                 .is_some_and(|l| !l.trim().is_empty()),
             "label for {id}"
         );
-        if has_ssh {
+        {
+            assert!(has_ssh, "every computer has an ssh route");
             let alias = entry["sshAlias"]
                 .as_str()
                 .unwrap_or_else(|| panic!("expected sshAlias for {id}"));
@@ -892,11 +895,6 @@ fn fixed_seven_computer_registry_invariants() {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')),
                 "safe ssh alias for {id}: {alias}"
-            );
-        } else {
-            assert!(
-                entry["sshAlias"].is_null(),
-                "local host {id} has no sshAlias"
             );
         }
     }

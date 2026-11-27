@@ -1416,21 +1416,15 @@ fn computers_rows() -> Vec<(String, String, Option<String>)> {
         .collect()
 }
 
-fn hostname() -> String {
-    if cfg!(windows) {
-        return std::env::var("COMPUTERNAME").unwrap_or_default();
-    }
-    if let Some(name) = read_file("/proc/sys/kernel/hostname") {
-        return name.trim().to_owned();
-    }
-    std::env::var("HOSTNAME").unwrap_or_default()
+/// The machine id Status reads in place: the computer this dashboard runs on, or none (an
+/// empty id) for a dashboard on no registered computer, whose every machine is read over ssh.
+fn local_machine() -> String {
+    local_machine_at(crate::dashboard_host::this_computer())
 }
 
-fn local_machine() -> String {
-    let computer = aac_status::computers::local_computer(&hostname(), std::env::consts::OS);
-    aac_status::computers::computer(computer)
-        .and_then(|row| row["machineId"].as_str())
-        .unwrap_or(computer)
+fn local_machine_at(here: Option<&str>) -> String {
+    here.and_then(|id| aac_status::computers::registry()[id]["machineId"].as_str())
+        .unwrap_or_default()
         .to_owned()
 }
 
@@ -2961,5 +2955,21 @@ mod low_tests {
             .await
             .expect("a healthy generation set recovers");
         assert!(!bytes.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod dashboard_host_tests {
+    /// Status reads the dashboard's own machine in place and the VM over ssh elsewhere.
+    #[test]
+    fn status_reads_the_vm_in_place_only_on_the_vm() {
+        assert_eq!(super::local_machine_at(Some("ubuntu")), "vm");
+        assert_eq!(super::local_machine_at(Some("nas1")), "nas1");
+        assert_eq!(super::local_machine_at(None), "");
+        let vm = aac_status::computers::machine_rows()
+            .into_iter()
+            .find(|row| row.0 == "vm")
+            .expect("the VM row");
+        assert_eq!(vm.2, Some("ubuntu-vm"), "the VM has an ssh route");
     }
 }

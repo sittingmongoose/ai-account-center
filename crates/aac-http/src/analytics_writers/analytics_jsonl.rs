@@ -379,6 +379,24 @@ pub(crate) struct Read {
     pub(crate) complete: bool,
 }
 
+/// The saved Generic JSONL sources on `host` when this dashboard does not run there (the VM
+/// seen from a dashboard elsewhere): their folders are read in place only, never over SSH, so
+/// each configured source is unreadable rather than read as empty.
+pub(crate) fn not_in_place(preferences: Option<&Value>, host: &str, now: i64) -> Read {
+    let configured = host == "ubuntu"
+        && preferences
+            .and_then(|prefs| prefs["usageLogSources"].as_array())
+            .into_iter()
+            .flatten()
+            .any(|source| {
+                source["tool"].as_str() == Some("jsonl") && source["host"].as_str() == Some(host)
+            });
+    Read {
+        state: configured.then(|| state_row(host, "unreadable", Some("unreadable_folder"), now)),
+        ..Read::default()
+    }
+}
+
 /// The saved Generic JSONL sources on `host`, read under `cutoff` and priced at `now`.
 pub(crate) fn read(
     preferences: Option<&Value>,
@@ -516,6 +534,20 @@ fn state_row(host: &str, state: &str, cause: Option<&str>, now: i64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dashboard_elsewhere_reports_the_vm_jsonl_sources_unreadable() {
+        let prefs = json!({"usageLogSources": [
+            {"id": "fixture", "tool": "jsonl", "host": "ubuntu", "path": "/var/log/fixture"}
+        ]});
+        let read = not_in_place(Some(&prefs), "ubuntu", 0);
+        assert!(read.data.is_empty() && !read.complete);
+        let state = read.state.expect("a configured source has a state");
+        assert_eq!(state["state"], "unreadable");
+        assert_eq!(state["cause"], "unreadable_folder");
+        assert!(not_in_place(Some(&prefs), "nas1", 0).state.is_none());
+        assert!(not_in_place(None, "ubuntu", 0).state.is_none());
+    }
 
     /// A fixed rate table: the writer's pricing seam, without the registry.
     struct FixturePricing;

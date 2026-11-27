@@ -715,7 +715,13 @@ async fn activity_pass(
             experiments.add_zcode_paths(&mut extra_roots, &mut overflow);
         }
         if generic {
-            let read = analytics_jsonl::read(preferences.as_ref(), host, cutoff, now, &pricing);
+            // Generic JSONL folders are read in place: from a dashboard elsewhere, the VM's are
+            // unreadable, never empty.
+            let read = if local {
+                analytics_jsonl::read(preferences.as_ref(), host, cutoff, now, &pricing)
+            } else {
+                analytics_jsonl::not_in_place(preferences.as_ref(), host, now)
+            };
             mapped_state |= read.state.is_some();
             mapped_complete = read.complete;
             if let Some(state) = read.state {
@@ -961,10 +967,7 @@ async fn migrate_files(
         .into_iter()
         .find(|host| host.alias.is_none())
         .map(|host| host.id)
-        .or_else(|| {
-            aac_files::process::hostname()
-                .map(|host| crate::reset_source_route::local_computer(&host))
-        });
+        .or_else(|| crate::dashboard_host::this_computer().map(str::to_owned));
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
         if matches!(migration::Migration::needed(&engine), Ok(false)) {

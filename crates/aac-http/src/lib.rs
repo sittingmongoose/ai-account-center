@@ -39,6 +39,7 @@ mod collection_cache;
 mod compact_share;
 mod compress;
 mod dashboard_fed;
+mod dashboard_host;
 pub mod dashboard_observations;
 mod feed;
 mod home_fed;

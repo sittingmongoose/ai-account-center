@@ -15,7 +15,10 @@
 //! ```
 //!
 //! A host without `ssh` is this computer. Use the AI Account Center computer names so the
-//! dashboard matches the rows.
+//! dashboard matches the rows. Under the dashboard, the host named as the computer the dashboard
+//! runs on is read in place even when it has `ssh` (so one file serves the VM and a dashboard
+//! elsewhere, `{"name": "ubuntu", "os": "linux", "ssh": "ubuntu-vm"}`), and a dashboard that runs
+//! on no covered computer leaves out every host without `ssh` ([`Here`]).
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -239,6 +242,49 @@ impl Config {
     }
 }
 
+/// Where the server that runs renewal is, as the dashboard decides it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Here {
+    /// As the settings say: a host without `ssh` is this computer (the standalone command).
+    #[default]
+    AsConfigured,
+    /// The server runs on this AI Account Center computer: that host is read in place, even
+    /// when the settings give it an `ssh` alias.
+    Computer(String),
+    /// The server runs on no covered computer: a host is reached only over its `ssh` alias.
+    Elsewhere,
+}
+
+impl Config {
+    /// Places the hosts for a server at `here`. Returns the hosts left out: without an `ssh`
+    /// alias, they would otherwise be read on a computer that is not theirs.
+    pub fn place(&mut self, here: &Here) -> Vec<String> {
+        let mut left_out = Vec::new();
+        match here {
+            Here::AsConfigured => {}
+            Here::Computer(name) => {
+                for host in &mut self.hosts {
+                    if host.name == *name {
+                        host.ssh = None;
+                    } else if host.ssh.is_none() {
+                        left_out.push(host.name.clone());
+                    }
+                }
+            }
+            Here::Elsewhere => {
+                left_out.extend(
+                    self.hosts
+                        .iter()
+                        .filter(|host| host.ssh.is_none())
+                        .map(|host| host.name.clone()),
+                );
+            }
+        }
+        self.hosts.retain(|host| !left_out.contains(&host.name));
+        left_out
+    }
+}
+
 /// `<CCS dir>/claude-renew`, where the settings and the state live.
 pub fn state_dir(ccs_dir: &Path) -> PathBuf {
     ccs_dir.join("claude-renew")
@@ -260,6 +306,37 @@ mod tests {
         assert_eq!(cfg.captcha_backoff_hours, 12.0);
         assert_eq!(cfg.host("ubuntu").and_then(|h| h.ssh.clone()), None);
         assert_eq!(cfg.host("windows").map(|h| h.os), Some(Os::Windows));
+    }
+
+    /// One settings file for both: the VM renews itself in place on the VM, and a dashboard
+    /// elsewhere reaches the VM over `ubuntu-vm`.
+    #[test]
+    fn renewal_reaches_the_vm_over_ssh_when_the_dashboard_runs_elsewhere() {
+        const VM: &str = r#"{"hosts":[{"name":"mac","os":"mac","ssh":"test-mac"},
+            {"name":"ubuntu","os":"linux","ssh":"ubuntu-vm"},{"name":"stray","os":"linux"}],"publishDir":"/tmp/x"}"#;
+        let ssh = |cfg: &Config, name: &str| cfg.host(name).and_then(|h| h.ssh.clone());
+        let mut on_vm = Config::parse(VM).expect("parse");
+        assert_eq!(
+            on_vm.place(&Here::Computer("ubuntu".into())),
+            vec!["stray".to_owned()]
+        );
+        assert_eq!(ssh(&on_vm, "ubuntu"), None, "the VM renews itself in place");
+        assert_eq!(ssh(&on_vm, "mac").as_deref(), Some("test-mac"));
+        let mut elsewhere = Config::parse(VM).expect("parse");
+        assert_eq!(elsewhere.place(&Here::Elsewhere), vec!["stray".to_owned()]);
+        assert_eq!(ssh(&elsewhere, "ubuntu").as_deref(), Some("ubuntu-vm"));
+        assert!(elsewhere.host("stray").is_none());
+        let argv = crate::remote::SshRemote::plain().argv(
+            elsewhere.host("ubuntu").expect("vm"),
+            &crate::remote::Script::Sh("true".into()),
+            false,
+        );
+        assert_eq!(argv[0], "ssh");
+        let dashdash = argv.iter().position(|a| a == "--").expect("--");
+        assert_eq!(argv[dashdash + 1], "ubuntu-vm");
+        let mut standalone = Config::parse(VM).expect("parse");
+        assert!(standalone.place(&Here::AsConfigured).is_empty());
+        assert_eq!(standalone.hosts.len(), 3);
     }
 
     #[test]

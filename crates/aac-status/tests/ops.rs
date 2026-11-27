@@ -25,7 +25,7 @@ fn remote_pin_answers_round_trip_through_the_dispatch() {
     assert_eq!(refused["ok"], serde_json::json!(false));
     assert_eq!(refused["reason"], "shape");
 
-    let wrong_machine = ops::dispatch("parseRemotePins", r#"{ "machine": "vm", "json": "[]" }"#);
+    let wrong_machine = ops::dispatch("parseRemotePins", r#"{ "machine": "pc", "json": "[]" }"#);
     assert_eq!(wrong_machine.unwrap_err().code, "invalid");
 }
 

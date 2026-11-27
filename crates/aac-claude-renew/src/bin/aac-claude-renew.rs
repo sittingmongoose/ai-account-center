@@ -121,6 +121,7 @@ fn main() {
                 dry_run: flag("--dry-run"),
                 scheduled: command == "tick" && !flag("--dry-run"),
                 echo: true,
+                here: config::Here::AsConfigured,
             };
             let publish_default = None;
             match service::run(&ccs, publish_default, options) {

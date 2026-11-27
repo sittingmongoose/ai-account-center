@@ -145,7 +145,8 @@ mod tests {
     #[test]
     fn registry_covers_alexis_and_rejects_unlisted_machines() {
         assert!(known_machine("alexis", true));
-        assert!(!known_machine("vm", true));
+        // The VM has an SSH route too (`ubuntu-vm`), for a dashboard that runs elsewhere.
+        assert!(known_machine("vm", true));
         assert!(known_machine("vm", false));
         assert!(!known_machine("unregistered", false));
         assert_eq!(machine_label("alexis"), "Alexis PC");
