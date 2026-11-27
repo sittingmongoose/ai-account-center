@@ -24,6 +24,29 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc, watch};
 
+/// A large request's arguments as JSON text (an Analytics scan's prints), shared by the
+/// request and its transport so the text is held once while the call runs.
+pub(crate) struct ArgsText(Box<RawValue>);
+
+impl ArgsText {
+    pub(crate) fn new(text: Box<RawValue>) -> Self {
+        ArgsText(text)
+    }
+}
+
+impl std::ops::Deref for ArgsText {
+    type Target = RawValue;
+    fn deref(&self) -> &RawValue {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for ArgsText {
+    fn as_ref(&self) -> &[u8] {
+        self.0.get().as_bytes()
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Catalog {
@@ -917,6 +940,19 @@ impl Agents {
         timeout_ms: u64,
         max_bytes: usize,
     ) -> Result<ProcessOutput, Cause> {
+        self.reference_stdin(computer, argv, stdin.into(), timeout_ms, max_bytes)
+            .await
+    }
+
+    /// [`Self::reference`] with stdin given as shared parts, written without a copy.
+    pub(crate) async fn reference_stdin(
+        &self,
+        computer: Selector,
+        argv: Vec<std::ffi::OsString>,
+        stdin: aac_transport::Stdin,
+        timeout_ms: u64,
+        max_bytes: usize,
+    ) -> Result<ProcessOutput, Cause> {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         let handle = self
             .computer(&computer, deadline)
@@ -932,7 +968,7 @@ impl Agents {
             max_bytes.saturating_add(65536),
         );
         options.deadline = deadline;
-        let result = handle.execute(&argv, &stdin, &options).await;
+        let result = handle.execute_stdin(&argv, stdin, &options).await;
         drop(permit);
         result.map_err(|failure| failure.cause)
     }
@@ -941,12 +977,13 @@ impl Agents {
     /// answer (the v2 response) as its JSON text, or a named error. Unlike [`Self::call`], it
     /// collects the terminal frame instead of streaming NDJSON to the front door: the scheduler
     /// owns the cadence and reads the rows itself, so no front-door control channel is registered.
-    /// Neither the arguments (megabytes of prints) nor the answer become a value tree here.
+    /// Neither the arguments (megabytes of prints) nor the answer become a value tree here, and
+    /// the arguments are sent as they are held, never copied.
     pub(crate) async fn scan_usage(
         self: &Arc<Self>,
         platform: &str,
         ssh_host: Option<&str>,
-        args: &RawValue,
+        args: Arc<ArgsText>,
         deadline_ms: u64,
         max_bytes: usize,
         call_id: &str,
@@ -971,25 +1008,25 @@ impl Agents {
             .checked_client(&selector, deadline)
             .await
             .map_err(|failure| failure.cause)?;
-        // The frame is written once, the arguments' text straight into it.
-        let mut wire = format!(
-            "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":{},\"deadlineMs\":{deadline_ms},\"args\":",
-            json!(call_id)
-        )
-        .into_bytes();
-        wire.extend_from_slice(args.get().as_bytes());
-        wire.push(b'}');
         let mut options = CallOptions::new(Duration::ZERO, max_bytes);
         options.deadline = deadline;
         options.scan = true;
         let (_input, controls) = mpsc::channel(8);
         let (progress, _events) = mpsc::channel(4);
         let _permit = permit;
+        // The transport writes the envelope around the arguments' text.
         let terminal = client
-            .call_controlled_raw(&wire, &options, controls, progress)
+            .call_controlled_args(
+                "scan-usage",
+                call_id,
+                deadline_ms,
+                args,
+                &options,
+                controls,
+                progress,
+            )
             .await
             .map_err(|failure| failure.cause)?;
-        drop(wire);
         match terminal {
             RawTerminal::Result(value) if python_fallback(&value) => Err(Cause::AgentMissing),
             RawTerminal::Result(value) => Ok(value),

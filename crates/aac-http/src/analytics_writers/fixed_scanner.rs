@@ -1,8 +1,8 @@
 //! The packaged standalone reader, run locally or through the registered, pinned SSH transport.
-use crate::agent_transport::{self, Agents, Selector, UsageHost};
+use crate::agent_transport::{self, Agents, ArgsText, Selector, UsageHost};
 use aac_core::Cause;
-use serde_json::{Value, value::RawValue};
-use std::{ffi::OsString, path::Path};
+use serde_json::Value;
+use std::{ffi::OsString, path::Path, sync::Arc};
 
 const SCANNER_MISSING: i32 = 87;
 const NAME: &str = "aac-usage-scan";
@@ -67,7 +67,7 @@ pub(super) fn eligible(host: &UsageHost) -> bool {
 pub(super) async fn scan(
     agents: &Agents,
     host: &UsageHost,
-    args: &RawValue,
+    args: Arc<ArgsText>,
     timeout_ms: u64,
     max_bytes: usize,
 ) -> Result<Vec<u8>, Cause> {
@@ -89,11 +89,12 @@ pub(super) async fn scan(
     .await
     .map_err(|_| Cause::AgentMissing)?
     .ok_or(Cause::AgentMissing)?;
-    let mut input = Vec::with_capacity(args.get().len() + 1);
-    input.extend_from_slice(args.get().as_bytes());
-    input.push(b'\n');
+    // The arguments' text is written as it is held, then its line end.
+    let input = aac_transport::Stdin::default()
+        .part(args)
+        .part(Arc::new(b"\n"));
     let output = agents
-        .reference(
+        .reference_stdin(
             Selector::usage(host.platform, host.alias.as_deref()),
             argv,
             input,

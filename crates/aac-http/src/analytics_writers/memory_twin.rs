@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! A live-sized twin of one busy computer's Analytics activity pass, with a counting allocator:
 //! the heap of each step of the local scan (checkpoint load, scan request, agent call, answer,
 //! apply and aggregation, checkpoint save) in exact bytes. Built only with the `memory-twin`
@@ -9,16 +10,26 @@
 //! thousands of per-file prints, most of them settled, each with a reader `appendState`, and
 //! about 100k hour and session rows); the agent's answer is what a steady pass returns: every
 //! unsettled print, a confirmation per settled one, and the rows of the files that changed.
+//!
+//! The soak (MEM7) runs whole passes over seven live-shaped computers for `AAC_TWIN_MINUTES`
+//! (default 20), each scan a real local child process through the transport that waits
+//! `AAC_TWIN_WAIT_MS` (default 3000) before it answers, and samples the exact heap and RSS
+//! (tuned mimalloc underneath, as the service runs) every 50 ms:
+//!
+//! `cargo test -p aac-http --release --features memory-twin --lib memory_twin_soak -- --ignored --nocapture --test-threads=1`
 use super::scan_answer::Answer;
 use super::scan_state::{self, Cache};
 use aac_store::collect;
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Counting;
+
+/// The service binaries' allocator.
+static UNDER: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
@@ -26,8 +37,8 @@ static PEAK: AtomicUsize = AtomicUsize::new(0);
 #[allow(unsafe_code)]
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: forwarded unchanged to the system allocator.
-        let ptr = unsafe { System.alloc(layout) };
+        // SAFETY: forwarded unchanged to the service's allocator.
+        let ptr = unsafe { UNDER.alloc(layout) };
         if !ptr.is_null() {
             let now = CURRENT.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
             PEAK.fetch_max(now, Ordering::Relaxed);
@@ -36,12 +47,12 @@ unsafe impl GlobalAlloc for Counting {
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: the pointer came from `alloc` with this layout.
-        unsafe { System.dealloc(ptr, layout) };
+        unsafe { UNDER.dealloc(ptr, layout) };
         CURRENT.fetch_sub(layout.size(), Ordering::Relaxed);
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        // SAFETY: forwarded unchanged to the system allocator.
-        let out = unsafe { System.realloc(ptr, layout, size) };
+        // SAFETY: forwarded unchanged to the service's allocator.
+        let out = unsafe { UNDER.realloc(ptr, layout, size) };
         if !out.is_null() {
             if size >= layout.size() {
                 let now = CURRENT.fetch_add(size - layout.size(), Ordering::Relaxed) + size
@@ -151,12 +162,19 @@ struct Twin {
     now: i64,
     slot: u64,
     settled_before: HashMap<String, u64>,
+    /// This computer's size against the busy one's.
+    scale: f64,
 }
 
 impl Twin {
     fn new() -> Self {
+        Self::scaled(1.0)
+    }
+
+    fn scaled(scale: f64) -> Self {
         let now = 1_795_212_000_000;
         Twin {
+            scale,
             pass: std::cell::Cell::new(1),
             now,
             slot: now as u64 / aac_usage::collector::SETTLED_CHECK_MS,
@@ -165,6 +183,10 @@ impl Twin {
                 .map(|(kind, ..)| ((*kind).to_owned(), (now - 3 * DAY) as u64))
                 .collect(),
         }
+    }
+
+    fn count(&self, count: usize) -> usize {
+        ((count as f64 * self.scale) as usize).max(20)
     }
 
     fn key(kind: &str, index: usize) -> String {
@@ -239,6 +261,7 @@ impl Twin {
         let mut srows = Vec::new();
         let mut states = Map::new();
         for (kind, count, share, per_file) in TOOLS {
+            let count = self.count(count);
             let mut prints = Map::new();
             for index in 0..count {
                 prints.insert(
@@ -269,6 +292,7 @@ impl Twin {
             if !kinds.iter().any(|k| k == kind) {
                 continue;
             }
+            let count = self.count(count);
             let mut prints = Map::new();
             let mut changed = 0;
             for index in 0..count {
@@ -366,20 +390,20 @@ fn pass(
             .iter()
             .map(|kind| args.packed.contains(kind))
             .collect();
+        let parked = meter.step("set the checkpoint aside", || cache.park());
         let bytes = meter.step("agent call: frame, envelope, answer bytes", || {
-            // scan_usage: the frame, then the transport's checks and the agent's output.
-            let mut wire =
-                br#"{"protocol":1,"verb":"scan-usage","id":"twin","deadlineMs":120000,"args":"#
-                    .to_vec();
-            wire.extend_from_slice(args.text.get().as_bytes());
-            wire.push(b'}');
-            let envelope: BTreeMap<String, &RawValue> =
-                serde_json::from_slice(&wire).expect("envelope");
+            // call_controlled_args: the arguments are checked and written as they are held,
+            // inside a small envelope; then the agent's output.
             let inner: BTreeMap<String, &RawValue> =
-                serde_json::from_str(envelope["args"].get()).expect("arguments");
+                serde_json::from_str(args.text.get()).expect("arguments");
             drop(inner);
-            let mut input = wire.clone();
-            input.push(b'\n');
+            let input = aac_transport::Stdin::default()
+                .part(std::sync::Arc::new(
+                    br#"{"protocol":1,"verb":"scan-usage","id":"twin","deadlineMs":120000,"args":"#
+                        .to_vec(),
+                ))
+                .part(args.text.clone())
+                .part(std::sync::Arc::new(b"}\n"));
             let line = &lines[&format!("{}:{}", twin.pass.get(), batch.join(","))];
             // The streaming buffer and the collected output hold the terminal line.
             let buffer = line.clone();
@@ -394,10 +418,12 @@ fn pass(
             stdout.truncate(end);
             stdout.drain(..start);
             drop(input);
-            drop(wire);
             stdout
         });
         drop(args);
+        cache = meter.step("read the checkpoint back", || {
+            parked.restore(engine, HOST).expect("restore")
+        });
         let mut answer = meter.step("read the answer", || {
             Answer::parse(&bytes, &mut cache.strings).expect("answer")
         });
@@ -496,4 +522,328 @@ fn memory_twin_busy_computer_pass() {
         mib(steady),
         mib(again)
     );
+}
+
+/// The soak's computers: (name, size against the busy one), shaped like live's seven
+/// checkpoints (31.6, 11.2, 8.0, 6.3, 8.6, 7.2 and 4.3 MiB).
+const SOAK_HOSTS: [(&str, f64); 7] = [
+    ("ubuntu", 1.0),
+    ("nas1", 0.354),
+    ("1070ti", 0.254),
+    ("odroid", 0.2),
+    ("mac", 0.272),
+    ("windows", 0.227),
+    ("alexis", 0.136),
+];
+/// Answers prepared per computer: the soak cycles through them.
+const SOAK_ANSWERS: u64 = 3;
+
+static IN_CALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn rss_bytes() -> usize {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|text| text.split_whitespace().nth(1)?.parse::<usize>().ok())
+        .map_or(0, |pages| pages * 4096)
+}
+
+fn local_computer(dir: &std::path::Path) -> aac_transport::Computer {
+    let config = aac_config::ComputerConfig {
+        id: aac_core::ComputerId::new("twin").expect("id"),
+        label: "Twin".into(),
+        os: aac_config::OperatingSystem::Linux,
+        transport: aac_config::TransportConfig::Local,
+        roles: Vec::new(),
+        metadata: Default::default(),
+    };
+    let policy = aac_transport::SshPolicy::new(dir.join("known_hosts"), dir.join("run"));
+    aac_transport::Computer::new(config, policy).expect("local computer")
+}
+
+/// One scan call as the dashboard makes it: the frame on a child's stdin through the transport,
+/// the child's wait, and the answer's text carved out of its output.
+async fn soak_call(
+    computer: &aac_transport::Computer,
+    args: std::sync::Arc<crate::agent_transport::ArgsText>,
+    answer: &std::path::Path,
+    wait_ms: u64,
+) -> Vec<u8> {
+    let argv: Vec<std::ffi::OsString> = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        format!(
+            "cat >/dev/null; sleep {}; cat \"$0\"",
+            wait_ms as f64 / 1000.0
+        )
+        .into(),
+        answer.into(),
+    ];
+    // call_controlled_args: the envelope around the arguments as they are held. The pass keeps
+    // its share for the fixed scanner's fallback while the agent's call runs.
+    let input = aac_transport::Stdin::default()
+        .part(std::sync::Arc::new(
+            br#"{"protocol":1,"verb":"scan-usage","id":"twin","deadlineMs":120000,"args":"#
+                .to_vec(),
+        ))
+        .part(args.clone())
+        .part(std::sync::Arc::new(b"}\n"));
+    let options = aac_transport::CallOptions::new(
+        std::time::Duration::from_millis(wait_ms + 60_000),
+        64 * 1024 * 1024,
+    );
+    IN_CALL.store(true, Ordering::Relaxed);
+    let output = computer
+        .execute_stdin(&argv, input, &options)
+        .await
+        .expect("twin scan");
+    IN_CALL.store(false, Ordering::Relaxed);
+    drop(args);
+    let mut stdout = output.stdout;
+    let (start, end) = {
+        let fields: BTreeMap<String, &RawValue> =
+            serde_json::from_slice(&stdout[..stdout.len() - 1]).expect("event");
+        let value = fields["value"].get();
+        let start = value.as_ptr() as usize - stdout.as_ptr() as usize;
+        (start, start + value.len())
+    };
+    stdout.truncate(end);
+    stdout.drain(..start);
+    stdout
+}
+
+/// One pass over every soak computer, as `activity_pass` runs it (the workers and Claude parts
+/// are held to the pass's end).
+async fn soak_pass(
+    engine: &aac_store::engine::Engine,
+    computer: &aac_transport::Computer,
+    twins: &[(&str, Twin)],
+    answers: &std::path::Path,
+    round: u64,
+    wait_ms: u64,
+) -> usize {
+    let pricing = super::ResolverPricing::new(std::path::Path::new("/nonexistent-twin"));
+    let kinds: Vec<String> = TOOLS.iter().map(|(k, ..)| (*k).to_owned()).collect();
+    let mut remote = Vec::new();
+    let mut claude = Vec::new();
+    let mut calls = 0;
+    for (host, twin) in twins {
+        let cutoff = twin.now - 31 * DAY;
+        let mut cache = Cache::load(engine, host).expect("load");
+        let args = super::scan_request(&kinds, cutoff, json!({}), false, None);
+        let requests = scan_state::Requests::new(
+            args,
+            &kinds,
+            &cache.fingerprints,
+            &twin.settled_before,
+            twin.now,
+        );
+        let mut claude_state = false;
+        for batch in requests.batches.clone() {
+            let args = requests
+                .args(&batch, &cache.fingerprints)
+                .expect("request fits");
+            let packed: Vec<bool> = batch
+                .iter()
+                .map(|kind| args.packed.contains(kind))
+                .collect();
+            let answer = answers.join(format!("{host}-{round}-{}.json", batch.join(",")));
+            let parked = cache.park();
+            let bytes = soak_call(computer, args.text, &answer, wait_ms).await;
+            cache = parked.restore(engine, host).expect("restore");
+            calls += 1;
+            let mut answer = Answer::parse(&bytes, &mut cache.strings).expect("answer");
+            drop(bytes);
+            assert!(super::valid_scan_answer(&answer, &batch));
+            for (kind, packed) in batch.iter().zip(packed) {
+                let source = super::scanned_kind(
+                    &mut answer,
+                    kind,
+                    host,
+                    (twin.now, cutoff),
+                    (packed, false, false),
+                    &mut cache,
+                );
+                assert_eq!(source["state"], "ok", "{host} {kind}: {source}");
+                if kind == "claude" {
+                    claude_state = true;
+                } else {
+                    remote.push(collect::worker_from_rows(
+                        &scan_state::of_kind(&cache.rows, kind),
+                        &scan_state::of_kind(&cache.srows, kind),
+                        host,
+                        twin.now,
+                        &pricing,
+                    ));
+                }
+            }
+        }
+        cache.save(engine, host).expect("save");
+        if claude_state {
+            claude.push(cache.take_kind("claude"));
+        }
+    }
+    drop(claude);
+    drop(remote);
+    calls
+}
+
+fn percentile(sorted: &[usize], share: f64) -> usize {
+    sorted
+        .get(((sorted.len() as f64 - 1.0) * share).round() as usize)
+        .copied()
+        .unwrap_or(0)
+}
+
+fn summary(label: &str, values: &mut [usize]) -> String {
+    values.sort_unstable();
+    format!(
+        "{label}: min {:.1} / median {:.1} / p90 {:.1} / max {:.1} MiB",
+        mib(percentile(values, 0.0)),
+        mib(percentile(values, 0.5)),
+        mib(percentile(values, 0.9)),
+        mib(percentile(values, 1.0)),
+    )
+}
+
+#[test]
+#[ignore = "memory twin soak: run alone with --features memory-twin --ignored --test-threads=1"]
+fn memory_twin_soak() {
+    crate::allocator::tune_mimalloc();
+    let minutes = env_u64("AAC_TWIN_MINUTES", 20);
+    let wait_ms = env_u64("AAC_TWIN_WAIT_MS", 3000);
+    let period = std::time::Duration::from_secs(env_u64("AAC_TWIN_PERIOD_S", 90));
+    let dir = tempfile::tempdir().expect("twin dir");
+    let engine = store(dir.path());
+    let answers = dir.path().join("answers");
+    std::fs::create_dir_all(&answers).expect("answers");
+    let kinds: Vec<String> = TOOLS.iter().map(|(k, ..)| (*k).to_owned()).collect();
+    let twins: Vec<(&str, Twin)> = SOAK_HOSTS
+        .iter()
+        .map(|(host, scale)| (*host, Twin::scaled(*scale)))
+        .collect();
+    for (host, twin) in &twins {
+        let checkpoint = serde_json::to_vec(&twin.checkpoint()).expect("checkpoint");
+        println!("{host}: checkpoint {:.1} MiB", mib(checkpoint.len()));
+        aac_store::analytics_cache::put(&engine, &format!("live/scanner/{host}"), &checkpoint)
+            .expect("seed checkpoint");
+        drop(checkpoint);
+        let cache = Cache::load(&engine, host).expect("load");
+        let args = super::scan_request(&kinds, twin.now - 31 * DAY, json!({}), false, None);
+        for (batch, args) in scan_state::requests(
+            args,
+            &kinds,
+            &cache.fingerprints,
+            &twin.settled_before,
+            twin.now,
+        ) {
+            let args = args.expect("request fits");
+            println!(
+                "  request {:?}: {:.2} MiB",
+                batch,
+                mib(args.text.get().len())
+            );
+            for round in 0..SOAK_ANSWERS {
+                let line = result_line("twin", &twin.answer(&batch, round + 1));
+                std::fs::write(
+                    answers.join(format!("{host}-{round}-{}.json", batch.join(","))),
+                    line,
+                )
+                .expect("answer file");
+            }
+        }
+        drop(cache);
+        // The document migrates to parts on the first save, as live's did long ago.
+        let mut cache = Cache::load(&engine, host).expect("load");
+        cache.save(&engine, host).expect("migrate");
+    }
+    crate::allocator::reclaim_after_pass();
+    let computer = local_computer(dir.path());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started = std::time::Instant::now();
+    let sampler = {
+        let stop = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut samples = Vec::new();
+            while !stop.load(Ordering::Relaxed) {
+                samples.push((
+                    started.elapsed().as_secs_f64(),
+                    CURRENT.load(Ordering::Relaxed),
+                    rss_bytes(),
+                    IN_CALL.load(Ordering::Relaxed),
+                ));
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            samples
+        })
+    };
+    let until = started + std::time::Duration::from_secs(minutes * 60);
+    let mut passes = 0;
+    let mut calls = 0;
+    let mut durations = Vec::new();
+    while std::time::Instant::now() < until {
+        let begun = std::time::Instant::now();
+        let round = passes % SOAK_ANSWERS;
+        calls += runtime.block_on(soak_pass(
+            &engine, &computer, &twins, &answers, round, wait_ms,
+        ));
+        crate::allocator::reclaim_after_pass();
+        passes += 1;
+        durations.push(begun.elapsed().as_secs_f64());
+        if let Some(rest) = period.checked_sub(begun.elapsed()) {
+            std::thread::sleep(
+                rest.min(until.saturating_duration_since(std::time::Instant::now())),
+            );
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    let samples = sampler.join().expect("sampler");
+    if let Ok(path) = std::env::var("AAC_TWIN_OUT") {
+        let mut csv = String::from("seconds,heap_bytes,rss_bytes,in_call\n");
+        for (at, heap, rss, call) in &samples {
+            csv.push_str(&format!("{at:.2},{heap},{rss},{}\n", u8::from(*call)));
+        }
+        std::fs::write(path, csv).expect("samples");
+    }
+    let steady: Vec<_> = samples.iter().filter(|(at, ..)| *at >= 20.0).collect();
+    let mut heap: Vec<usize> = steady.iter().map(|(_, heap, ..)| *heap).collect();
+    let mut rss: Vec<usize> = steady.iter().map(|(_, _, rss, _)| *rss).collect();
+    let mut in_call: Vec<usize> = steady
+        .iter()
+        .filter(|(.., call)| *call)
+        .map(|(_, heap, ..)| *heap)
+        .collect();
+    println!(
+        "\nSOAK {minutes} min, {passes} passes, {calls} calls, wait {wait_ms} ms, pass {:.0}-{:.0} s",
+        durations.iter().copied().fold(f64::MAX, f64::min),
+        durations.iter().copied().fold(0.0, f64::max)
+    );
+    println!("{}", summary("heap", &mut heap));
+    println!("{}", summary("heap during calls", &mut in_call));
+    println!("{}", summary("rss", &mut rss));
+    // Drift: each five minutes' trough.
+    let windows = (minutes * 60).div_ceil(300);
+    let troughs: Vec<String> = (0..windows)
+        .filter_map(|window| {
+            let (from, to) = (window as f64 * 300.0, (window + 1) as f64 * 300.0);
+            let part: Vec<_> = samples
+                .iter()
+                .filter(|(at, ..)| *at >= from.max(20.0) && *at < to)
+                .collect();
+            let heap = part.iter().map(|(_, heap, ..)| *heap).min()?;
+            let rss = part.iter().map(|(_, _, rss, _)| *rss).min()?;
+            Some(format!("{:.1}/{:.1}", mib(heap), mib(rss)))
+        })
+        .collect();
+    println!("5-minute troughs heap/rss MiB: {}", troughs.join("  "));
 }

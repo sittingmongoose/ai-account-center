@@ -509,6 +509,95 @@ async fn scan_shipping_is_fake_only_uploads_once_and_keeps_discovery_frame_capac
 }
 
 #[tokio::test]
+async fn mem7_scan_arguments_are_sent_byte_for_byte_inside_the_envelope_and_let_go() {
+    let fixture = Fixture::new();
+    let (artifact, mut scenario) = fixture.artifact();
+    scenario["recordStdin"] = json!(true);
+    scenario["value"] = json!({"version": 2});
+    fixture.scenario(scenario);
+    let client = AgentClient::new(fixture.computer.clone(), artifact);
+    // Raw spellings (spacing, escapes, number forms) are kept as the caller wrote them.
+    let text = format!(
+        r#"{{ "kinds":["codex"], "minDateMs":0e0, "fingerprints":{{"a\u00e9":{{"x":1.50}}}}, "fixture":"{}" }}"#,
+        "x".repeat(200_000)
+    );
+    let args: StdinPart = std::sync::Arc::new(text.clone().into_bytes());
+    let options = CallOptions::new(Duration::from_secs(5), 1024 * 1024);
+    let (_input, controls) = tokio::sync::mpsc::channel(8);
+    let (progress, _events) = tokio::sync::mpsc::channel(4);
+    let terminal = client
+        .call_controlled_args(
+            "scan-usage",
+            "g14-activity-1-ubuntu-codex",
+            120_000,
+            std::sync::Arc::clone(&args),
+            &options,
+            controls,
+            progress,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(terminal, RawTerminal::Result(value) if value == br#"{"version": 2}"#));
+    // The frame the dashboard wrote before (the envelope, then the arguments' text) and its
+    // line end.
+    let expected = format!(
+        r#"{{"protocol":1,"verb":"scan-usage","id":"g14-activity-1-ubuntu-codex","deadlineMs":120000,"args":{text}}}"#
+    ) + "\n";
+    assert_eq!(
+        std::fs::read(fixture.root.path().join("stdin.bin")).unwrap(),
+        expected.into_bytes()
+    );
+    assert_eq!(
+        std::sync::Arc::strong_count(&args),
+        1,
+        "the transport holds no share of the arguments after the call"
+    );
+    for (verb, id, text) in [
+        ("scan-usage", "fixture", "[1]"),
+        ("scan-usage", "fixture", "{\"a\":"),
+        ("scan-usage", "bad id", "{}"),
+        ("Scan", "fixture", "{}"),
+    ] {
+        let (_input, controls) = tokio::sync::mpsc::channel(8);
+        let (progress, _events) = tokio::sync::mpsc::channel(4);
+        let refused = client
+            .call_controlled_args(
+                verb,
+                id,
+                1000,
+                std::sync::Arc::new(text.as_bytes().to_vec()),
+                &options,
+                controls,
+                progress,
+            )
+            .await;
+        assert!(
+            matches!(refused, Err(ref failure) if failure.cause == Cause::Refused),
+            "{verb} {id} {text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mem7_shared_stdin_parts_are_written_in_order() {
+    let fixture = Fixture::new();
+    let argv: Vec<OsString> = vec!["fixture-agent".into()];
+    let first: StdinPart = std::sync::Arc::new(b"{\"fixture\":".to_vec());
+    let stdin = Stdin::default()
+        .part(std::sync::Arc::clone(&first))
+        .part(std::sync::Arc::new(b"1}"))
+        .part(std::sync::Arc::new(b"\n"));
+    assert_eq!(stdin.len(), 14);
+    let output = fixture
+        .computer
+        .execute_stdin(&argv, stdin, &fixture.options())
+        .await
+        .unwrap();
+    assert_eq!(output.stdout, b"{\"fixture\":1}\n");
+    assert_eq!(std::sync::Arc::strong_count(&first), 1);
+}
+
+#[tokio::test]
 async fn every_handshake_dimension_is_checked() {
     for field in ["name", "version", "target", "protocol"] {
         let fixture = Fixture::new();
@@ -949,19 +1038,20 @@ async fn close_foreign_masters_exits_live_and_purges_dead() {
     let ssh = dir.path().join("ssh");
     std::fs::write(
         &ssh,
-        format!(
-            "#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n",
-            log.display()
-        ),
+        format!("#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n", log.display()),
     )
     .unwrap();
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     // Live master from another instance.
-    let live_path = dir.path().join("cm-0000000000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let live_path = dir
+        .path()
+        .join("cm-0000000000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     let _live = std::os::unix::net::UnixListener::bind(&live_path).unwrap();
     // Dead master: bind then drop.
-    let dead_path = dir.path().join("cm-1111111111111111-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let dead_path = dir
+        .path()
+        .join("cm-1111111111111111-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     {
         let l = std::os::unix::net::UnixListener::bind(&dead_path).unwrap();
         drop(l);
@@ -970,7 +1060,9 @@ async fn close_foreign_masters_exits_live_and_purges_dead() {
     // Age past the 2 s mid-creation guard.
     tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
     // Fresh file, mid-creation: must survive.
-    let fresh_path = dir.path().join("cm-2222222222222222-cccccccccccccccccccccccccccccccccccccccc");
+    let fresh_path = dir
+        .path()
+        .join("cm-2222222222222222-cccccccccccccccccccccccccccccccccccccccc");
     {
         let l = std::os::unix::net::UnixListener::bind(&fresh_path).unwrap();
         drop(l);

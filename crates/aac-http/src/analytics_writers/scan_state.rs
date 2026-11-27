@@ -7,6 +7,7 @@
 //! migration leaves its document in place for a rolled-back build (see [`Cache::load`]).
 use super::scan_answer::Answer;
 use super::scan_print::{self, Fingerprints, Identities, Print, Prints};
+use crate::agent_transport::ArgsText;
 use aac_store::scan_row::{Interner, ScanRow, with_interner};
 use aac_store::{analytics_cache, engine::Engine, error::Result};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
@@ -87,7 +88,7 @@ impl Stored {
             srows: self.srows,
             states: self.states,
             strings: self.strings,
-            saved: Saved::default(),
+            ..Cache::default()
         };
         cache.order_rows();
         cache
@@ -156,6 +157,8 @@ pub(super) struct Written {
 struct Saved {
     header: Option<[u8; 32]>,
     parts: HashMap<String, [u8; 32]>,
+    /// (tool, file bucket) of each stored part, in order.
+    listed: Vec<(String, u32)>,
     /// The revision 1 document's digest, carried into the header.
     migrated_from: Option<String>,
 }
@@ -238,9 +241,10 @@ fn hex(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// One scan request's arguments: the frame text, and the tools whose settled prints it packed.
+/// One scan request's arguments: the frame text (held once, shared with the transport), and the
+/// tools whose settled prints it packed.
 pub(super) struct ScanArgs {
-    pub text: Box<RawValue>,
+    pub text: Arc<ArgsText>,
     pub packed: HashSet<String>,
 }
 
@@ -310,8 +314,9 @@ impl Serialize for Frame<'_> {
     }
 }
 
-fn frame_text(frame: &Frame<'_>) -> Option<Box<RawValue>> {
-    RawValue::from_string(serde_json::to_string(frame).ok()?).ok()
+fn frame_text(frame: &Frame<'_>) -> Option<Arc<ArgsText>> {
+    let text = RawValue::from_string(serde_json::to_string(frame).ok()?).ok()?;
+    Some(Arc::new(ArgsText::new(text)))
 }
 
 /// Retain the full checkpoint of settled files (`settledPacked`): their prints as one JSON
@@ -468,6 +473,130 @@ pub(super) struct Cache {
     /// One copy of each row string, for rows this cache reads and gains.
     pub strings: Interner,
     saved: Saved,
+    /// Whether the tools this cache has not changed are what the store holds (it was read from,
+    /// or saved as, parts).
+    backed: bool,
+    /// The tools changed since then.
+    touched: HashSet<String>,
+}
+
+/// A computer's scanner state set aside while a scan call waits, so the pass does not hold it
+/// (tens of megabytes on a busy computer) for the whole call: the tools this pass changed,
+/// each compressed, and the store's digests of the rest, which [`Parked::restore`] reads back.
+pub(super) enum Parked {
+    /// Kept as it is (it could not be set aside).
+    Held(Box<Cache>),
+    Aside(Box<Aside>),
+}
+
+pub(super) struct Aside {
+    kinds: Vec<String>,
+    states: Map<String, Value>,
+    saved: Saved,
+    backed: bool,
+    touched: HashSet<String>,
+    /// Each set-aside tool's prints and rows in their order, as one compressed part.
+    held: Vec<(String, Vec<u8>)>,
+}
+
+/// Where a part read back comes from.
+enum Source<'a> {
+    Stored(&'a [u8]),
+    Compressed(&'a [u8]),
+}
+
+impl Parked {
+    /// The cache as it was set aside. The parts read back must be the ones the store held then;
+    /// any other content is refused (`changed`).
+    pub fn restore(self, store: &Engine, host: &str) -> Result<Cache> {
+        let aside = match self {
+            Parked::Held(cache) => return Ok(*cache),
+            Parked::Aside(aside) => *aside,
+        };
+        let changed = || {
+            aac_store::error::Error::new("changed", "Analytics scanner state changed during a scan")
+        };
+        let mut cache = Cache {
+            fingerprints: Fingerprints(
+                aside
+                    .kinds
+                    .into_iter()
+                    .map(|kind| (kind, Prints::default()))
+                    .collect(),
+            ),
+            states: aside.states,
+            saved: aside.saved,
+            backed: aside.backed,
+            touched: aside.touched,
+            ..Cache::default()
+        };
+        let mut strings = Interner::default();
+        let mut read = |cache: &mut Cache, kind: &str, source: Source<'_>| -> Result<()> {
+            let (part, held) = with_interner(std::mem::take(&mut strings), || match source {
+                Source::Stored(bytes) => serde_json::from_slice::<Part>(bytes).map_err(Into::into),
+                // Streamed: the part's text is never held whole.
+                Source::Compressed(bytes) => zstd::stream::read::Decoder::new(bytes)
+                    .map_err(aac_store::error::Error::from)
+                    .and_then(|decoder| {
+                        serde_json::from_reader::<_, Part>(std::io::BufReader::new(decoder))
+                            .map_err(Into::into)
+                    }),
+            });
+            strings = held;
+            let part: Part = part?;
+            // A tool's entry is in the set-aside order already; one it did not have (it holds
+            // only rows) is not added.
+            if !part.fingerprints.0.is_empty() {
+                cache
+                    .fingerprints
+                    .entry(kind.to_owned())
+                    .or_default()
+                    .extend(part.fingerprints.0);
+            }
+            cache.rows.extend(part.rows);
+            cache.srows.extend(part.srows);
+            Ok(())
+        };
+        if cache.backed {
+            let header = analytics_cache::get(store, &header_key(host))?;
+            if header.as_deref().map(digest) != cache.saved.header {
+                return Err(changed());
+            }
+            let aside: HashSet<&str> = aside.held.iter().map(|(kind, _)| kind.as_str()).collect();
+            let wanted: Vec<(String, &str)> = cache
+                .saved
+                .listed
+                .iter()
+                .filter(|(kind, _)| !aside.contains(kind.as_str()))
+                .map(|(kind, bucket)| (part_key(host, kind, *bucket), kind.as_str()))
+                .collect();
+            let kinds: HashMap<String, String> = wanted
+                .iter()
+                .map(|(key, kind)| (key.clone(), (*kind).to_owned()))
+                .collect();
+            let keys: Vec<String> = wanted.into_iter().map(|(key, _)| key).collect();
+            let sums = std::mem::take(&mut cache.saved.parts);
+            let mut found = 0;
+            let result = analytics_cache::read_each(store, &keys, |key, bytes| {
+                if sums.get(key) != Some(&digest(bytes)) {
+                    return Err(changed());
+                }
+                found += 1;
+                read(&mut cache, &kinds[key], Source::Stored(bytes))
+            });
+            cache.saved.parts = sums;
+            result?;
+            if found != keys.len() {
+                return Err(changed());
+            }
+        }
+        for (kind, compressed) in aside.held {
+            read(&mut cache, &kind, Source::Compressed(&compressed))?;
+        }
+        cache.strings = strings;
+        cache.order_rows();
+        Ok(cache)
+    }
 }
 
 /// The rows of one tool, borrowed.
@@ -528,8 +657,10 @@ impl Cache {
             saved: Saved {
                 header: Some(sum),
                 migrated_from: header.migrated_from,
+                listed: header.parts.clone(),
                 ..Saved::default()
             },
+            backed: true,
             ..Cache::default()
         };
         let keys: Vec<String> = header
@@ -705,7 +836,7 @@ impl Cache {
         let header = serde_json::to_vec(&Header {
             revision: 2,
             kinds: self.fingerprints.keys().cloned().collect(),
-            parts: listed,
+            parts: listed.clone(),
             states: self.states.clone(),
             migrated_from: self.saved.migrated_from.clone(),
         })?;
@@ -714,6 +845,9 @@ impl Cache {
             writes.push((header_key(host), header));
         }
         if writes.is_empty() && removed.is_empty() {
+            self.saved.listed = listed;
+            self.backed = true;
+            self.touched.clear();
             return Ok(Written::default());
         }
         let written = Written {
@@ -723,13 +857,60 @@ impl Cache {
         analytics_cache::replace_many(store, &writes, &removed)?;
         self.saved.header = Some(header_sum);
         self.saved.parts = parts;
+        self.saved.listed = listed;
+        self.backed = true;
+        self.touched.clear();
         mark_checked(store, host, header_sum);
         Ok(written)
+    }
+
+    /// Set the cache aside for a scan call's wait (see [`Parked`]): only the tools changed since
+    /// it was read or saved (every tool, for a cache the store does not hold) stay in memory,
+    /// compressed; the rest is read back from the store by [`Parked::restore`].
+    pub fn park(self) -> Parked {
+        let mut aside: std::collections::BTreeSet<&str> =
+            self.touched.iter().map(String::as_str).collect();
+        if !self.backed {
+            aside.extend(self.fingerprints.keys().map(String::as_str));
+            aside.extend(self.rows.iter().chain(&self.srows).map(|row| &*row.kind));
+        }
+        let aside: Vec<String> = aside.into_iter().map(str::to_owned).collect();
+        let mut held = Vec::with_capacity(aside.len());
+        for kind in aside {
+            let prints = self
+                .fingerprints
+                .get(&kind)
+                .map(|prints| prints.iter().collect())
+                .unwrap_or_default();
+            let part = PartRef {
+                fingerprints: PrintRefs(prints),
+                rows: &of_kind(&self.rows, &kind),
+                srows: &of_kind(&self.srows, &kind),
+            };
+            let compressed = (|| {
+                let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 1).ok()?;
+                serde_json::to_writer(&mut encoder, &part).ok()?;
+                encoder.finish().ok()
+            })();
+            let Some(compressed) = compressed else {
+                return Parked::Held(Box::new(self));
+            };
+            held.push((kind, compressed));
+        }
+        Parked::Aside(Box::new(Aside {
+            kinds: self.fingerprints.keys().cloned().collect(),
+            states: self.states,
+            saved: self.saved,
+            backed: self.backed,
+            touched: self.touched,
+            held,
+        }))
     }
 
     /// Move one tool's rows out, with the Claude identities of its prints, for a reader that
     /// outlives this cache.
     pub fn take_kind(&mut self, kind: &str) -> (Vec<ScanRow>, Vec<ScanRow>, Identities) {
+        self.touched.insert(kind.to_owned());
         let split = |rows: &mut Vec<ScanRow>| {
             let (taken, kept) = std::mem::take(rows)
                 .into_iter()
@@ -774,6 +955,7 @@ impl Cache {
         let Some(fresh) = read.fingerprints.take() else {
             return false;
         };
+        self.touched.insert(kind.to_owned());
         let metadata = read.meta.clone();
         let state = &metadata;
         let mut prior = self
@@ -1558,5 +1740,198 @@ mod tests {
         assert_eq!(report["counts"]["freshness"]["newestDataMs"], used);
         assert_eq!(report["counts"]["estimatedClock"], true);
         assert_eq!(report["cells"], full_report["cells"]);
+    }
+
+    /// One tool's read: `files` files over many buckets, each with two hour rows and a session,
+    /// their sizes and counts set by `generation`; an `appendState` cursor and a Claude identity
+    /// on each print, so the prints carry what live ones do.
+    fn tool_read(kind: &str, files: usize, generation: u64) -> Value {
+        let mut prints = Map::new();
+        let mut rows = Vec::new();
+        let mut srows = Vec::new();
+        for n in 0..files {
+            let key = format!("{kind}:/fixture/{n:03}.jsonl");
+            let size = 1000 + n as u64 + generation * 10;
+            prints.insert(
+                key.clone(),
+                json!({"size":size,"mtimeMs":size,"fileIdentity":format!("9:{n}"),
+                    "head":"h","tail":format!("t{generation}"),
+                    "appendState":{"model":"fixture","seen":[n, generation],"pending":""},
+                    "claudeName":format!("conversation-{}", n % 7),"claudeMirror":n % 5 == 0}),
+            );
+            for hour in ["2026-11-03 03", "2026-11-03 04"] {
+                rows.push(
+                    json!({"k":kind,"f":key,"m":format!("model-{}", n % 3),"h":hour,
+                    "i":size,"o":n,"cr":7,"cw":1,"n":1,"c":0.1 * n as f64 + 0.03}),
+                );
+            }
+            srows.push(
+                json!({"k":kind,"f":key,"s":format!("session-{n}"),"m":"model-0",
+                "a":1_000 + n as i64,"z":2_000 + n as i64 + generation as i64,"i":size,"n":1,
+                "c":0.07}),
+            );
+        }
+        json!({"kinds":{(kind):{"state":"ok","fingerprints":prints,"files":files}},
+            "rows":rows,"srows":srows})
+    }
+
+    const PARK_KINDS: [&str; 3] = ["codex", "omp", "claude"];
+
+    /// A stored checkpoint of three tools, saved the same way to `stores`.
+    fn seed_parts(stores: &[&Engine]) {
+        for store in stores {
+            let mut cache = Cache::default();
+            for (index, kind) in PARK_KINDS.iter().enumerate() {
+                assert!(cache.apply_value(kind, &tool_read(kind, 90 + index * 10, 1), true, 0));
+            }
+            cache.save(store, "fixture").expect("seed save");
+        }
+    }
+
+    fn request_text(cache: &Cache, kind: &str) -> String {
+        let kinds: Vec<String> = PARK_KINDS.iter().map(|kind| (*kind).to_owned()).collect();
+        let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
+        let requests = Requests::new(args, &kinds, &cache.fingerprints, &HashMap::new(), 600_000);
+        requests
+            .args(&[kind.to_owned()], &cache.fingerprints)
+            .expect("request")
+            .text
+            .get()
+            .to_owned()
+    }
+
+    fn stored(store: &Engine) -> Vec<(String, Vec<u8>)> {
+        let header = analytics_cache::get(store, &header_key("fixture"))
+            .expect("header")
+            .expect("saved header");
+        let parsed: Header = serde_json::from_slice(&header).expect("header json");
+        let mut out = vec![(header_key("fixture"), header)];
+        for (kind, bucket) in parsed.parts {
+            let key = part_key("fixture", &kind, bucket);
+            let bytes = analytics_cache::get(store, &key)
+                .expect("part")
+                .expect("part bytes");
+            out.push((key, bytes));
+        }
+        out
+    }
+
+    #[test]
+    fn mem7_a_parked_cache_comes_back_exactly_as_it_was_and_saves_the_same_bytes() {
+        let (one, two) = (
+            tempfile::tempdir().expect("one"),
+            tempfile::tempdir().expect("two"),
+        );
+        let (parked_store, held_store) = (fixture_store(one.path()), fixture_store(two.path()));
+        seed_parts(&[&parked_store, &held_store]);
+        let mut parked = Cache::load(&parked_store, "fixture").expect("load");
+        let mut held = Cache::load(&held_store, "fixture").expect("load");
+        // A pass's tools one call at a time, as `activity_pass` runs them: the parked cache is
+        // set aside across each call; the held one is the cache as the pass kept it before.
+        for kind in PARK_KINDS {
+            assert_eq!(request_text(&parked, kind), request_text(&held, kind));
+            let aside = parked.park();
+            match &aside {
+                Parked::Aside(aside) => {
+                    let kinds: Vec<&str> = aside.held.iter().map(|(k, _)| k.as_str()).collect();
+                    let mut changed: Vec<&str> = PARK_KINDS
+                        .iter()
+                        .copied()
+                        .take_while(|done| *done != kind)
+                        .collect();
+                    changed.sort_unstable();
+                    assert_eq!(kinds, changed, "only the tools this pass changed stay");
+                }
+                Parked::Held(_) => panic!("a stored cache is set aside"),
+            }
+            parked = aside.restore(&parked_store, "fixture").expect("restore");
+            assert_eq!(
+                parked.encode().expect("parked"),
+                held.encode().expect("held")
+            );
+            let read = tool_read(kind, 95, 2);
+            assert!(parked.apply_value(kind, &read, true, 0));
+            assert!(held.apply_value(kind, &read, true, 0));
+            assert_eq!(
+                parked.encode().expect("parked"),
+                held.encode().expect("held")
+            );
+        }
+        // One last set-aside after every tool changed, then the save writes the same parts.
+        parked = parked
+            .park()
+            .restore(&parked_store, "fixture")
+            .expect("restore");
+        assert_eq!(parked.rows, held.rows);
+        assert_eq!(parked.srows, held.srows);
+        let written = parked.save(&parked_store, "fixture").expect("save parked");
+        assert_eq!(
+            written,
+            held.save(&held_store, "fixture").expect("save held")
+        );
+        assert!(written.keys > 0);
+        assert_eq!(stored(&parked_store), stored(&held_store));
+        let (rows, srows, _) = parked.take_kind("claude");
+        let (held_rows, held_srows, _) = held.take_kind("claude");
+        assert_eq!((rows, srows), (held_rows, held_srows));
+    }
+
+    #[test]
+    fn mem7_a_cache_the_store_does_not_hold_is_set_aside_whole() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let store = fixture_store(home.path());
+        let mut old = Cache::default();
+        for kind in PARK_KINDS {
+            assert!(old.apply_value(kind, &tool_read(kind, 40, 1), true, 0));
+        }
+        let document = old.encode().expect("revision 1 document");
+        analytics_cache::put(&store, &legacy_key("fixture"), &document).expect("old build save");
+        forget_checked();
+        let legacy = Cache::load(&store, "fixture").expect("legacy load");
+        let aside = legacy.park();
+        match &aside {
+            Parked::Aside(aside) => assert_eq!(aside.held.len(), PARK_KINDS.len()),
+            Parked::Held(_) => panic!("set aside"),
+        }
+        let back = aside.restore(&store, "fixture").expect("restore");
+        assert_eq!(back.encode().expect("encode"), document);
+        // A computer with no checkpoint yet.
+        let empty = Cache::load(&store, "none")
+            .expect("empty")
+            .park()
+            .restore(&store, "none")
+            .expect("restore empty");
+        assert_eq!(content(&empty), content(&Cache::default()));
+    }
+
+    #[test]
+    fn mem7_a_checkpoint_changed_during_the_wait_is_refused() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let store = fixture_store(home.path());
+        seed_parts(&[&store]);
+        // Another save of this computer (a newer header).
+        let aside = Cache::load(&store, "fixture").expect("load").park();
+        let mut other = Cache::load(&store, "fixture").expect("load");
+        assert!(other.apply_value("codex", &tool_read("codex", 90, 3), true, 0));
+        other.save(&store, "fixture").expect("other save");
+        let refused = aside.restore(&store, "fixture").err().expect("refused");
+        assert_eq!(refused.code, "changed");
+        // One part's bytes replaced under the same header.
+        let aside = Cache::load(&store, "fixture").expect("load").park();
+        let header: Header = serde_json::from_slice(
+            &analytics_cache::get(&store, &header_key("fixture"))
+                .expect("header")
+                .expect("header bytes"),
+        )
+        .expect("header json");
+        let (kind, bucket) = &header.parts[0];
+        analytics_cache::put(
+            &store,
+            &part_key("fixture", kind, *bucket),
+            br#"{"fingerprints":{},"rows":[],"srows":[]}"#,
+        )
+        .expect("replace a part");
+        let refused = aside.restore(&store, "fixture").err().expect("refused");
+        assert_eq!(refused.code, "changed");
     }
 }
