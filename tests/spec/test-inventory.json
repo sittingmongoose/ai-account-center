@@ -2558,6 +2558,40 @@
       ]
     },
     {
+      "file": "crates/aac-xtask/src/release.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-xtask/tests/build_parity.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-xtask/tests/fixture.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-xtask/tests/perf_parity.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-xtask/tests/release_parity.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
       "file": "macos-bar/Sources/CCSBarApp/PanelSelfTest.swift",
       "kind": "internal",
       "evidence": [],

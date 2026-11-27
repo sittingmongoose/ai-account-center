@@ -20,6 +20,7 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - 'tests/docs/quickstart-parity.sh'
       - 'tests/docs/documentation-freshness.js'
+      - 'crates/aac-xtask/**'
       - '.github/workflows/docs-parity.yml'
   pull_request:
     paths:
@@ -40,6 +41,7 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - 'tests/docs/quickstart-parity.sh'
       - 'tests/docs/documentation-freshness.js'
+      - 'crates/aac-xtask/**'
       - '.github/workflows/docs-parity.yml'
 
 permissions:
@@ -58,8 +60,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: '1.99.1'
+
       - name: Run quickstart parity check
-        run: bash tests/docs/quickstart-parity.sh
+        run: cargo run --locked -p aac-xtask -- check quickstart
 
       - name: Validate documentation pointers and relative links
-        run: node tests/docs/documentation-freshness.js
+        run: cargo run --locked -p aac-xtask -- check docs

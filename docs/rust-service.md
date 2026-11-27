@@ -362,7 +362,7 @@ L2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 2.2). No answer 
   own registry, and a front door attaches only to a boot with its own owners. TS writers
   (`private-json-store.ts`, the key store, the preference and refresh-settings writers, the
   readers check) refuse a row TS does not own.
-- **Gate.** `scripts/foundation/one-file-policy.mjs` (in `tests/spec/run.mjs`): outside
+- **Gate.** `cargo run --locked -p aac-xtask -- check one-file-policy`: outside
   `crates/aac-files`, no Rust source uses `O_NOFOLLOW`, `custom_flags`, `OpenOptions`,
   `File::open`, `File::create`, `fs::read`, `fs::read_to_string`, `fs::write`, `fs::rename`
   or a tempfile persist. The
@@ -911,7 +911,7 @@ hub key. Use the native `dashboard usage-hub` command to manage it.
 
 Set `AAC_RUST_UI_DIR` to a packaged `dist/ui` for development, or set
 `AAC_UI_EMBED_DIR` when building the binary for a self-contained install.
-Supply the output from `scripts/build-ui.js`, including its build manifest.
+Supply the output from `cargo run --locked -p aac-xtask -- build ui`, including its build manifest.
 An unpackaged development binary also looks for `dist/ui` in the checkout.
 The front door uses strong per-encoding ETags for the verified precompressed
 variants and keeps unversioned assets, the service worker and the app frame

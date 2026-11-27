@@ -242,10 +242,10 @@ unavailable/cached outcomes. Container packaging supplies no host credentials.
 
 ## Build and distribution
 
-The [builder](../../scripts/build-ui.js) fingerprints the Leptos crate's manifest/lock,
+The [builder](../../crates/aac-xtask/src/ui.rs) fingerprints the Leptos crate's manifest/lock,
 Rust sources, styles and fonts and the shared registry, compiles locked WASM and stages directly into `dist/ui/`.
-[Validation](../../scripts/validate-ui.js) and
-[verification](../../scripts/verify-bundle.js) bind packaged runtime to current
+[Validation](../../crates/aac-xtask/src/ui.rs) and
+[verification](../../crates/aac-xtask/src/bundle.rs) bind packaged runtime to current
 source. Native and bridge source roots have independent offline checks.
 
 The wasm-pack output is staged in `dist/ui/pkg/<buildId>/`, where `buildId` is the

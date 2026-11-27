@@ -23,8 +23,7 @@ Agents report through the files described in
 The reports root is `/mnt/Cursor/agent-reports` unless `AAC_AGENT_REPORTS_DIR` names another (tests and the phone test
 server always set it to a temporary fixture folder). The private store is `<ccsDir>/status/` (`getCcsDir()`).
 Test servers also set `AAC_PM_MAIL_REGISTRY_DIR` (default `/mnt/Cursor/Inbox/registry`, read-only) and
-`AAC_STATUS_DOORBELL=off` (answers are stored and signed, nobody is rung). `node scripts/status-fixture.mjs <dir>
---ccs-dir <dir>` writes a realistic fixture and prints that environment.
+`AAC_STATUS_DOORBELL=off` (answers are stored and signed, nobody is rung). `cargo run --locked -p aac-xtask -- fixture status <dir> --ccs-dir <dir>` writes a realistic fixture and prints that environment.
 
 **Reports folder.** At startup AAC creates `<reports>/v1/`, `v1/writers/` (mode 0777) and `v1/answers/`,
 `v1/keys/`, `v1/schemas/`, `v1/catalog/` when missing, but never the reports root itself (an unmounted share must not

@@ -98,18 +98,21 @@ not refresh dashboard assets.
 
 The shipped native binaries build with thin LTO and 16 codegen units, applied
 as `CARGO_PROFILE_RELEASE_*` overrides that each native build script sets
-(`build-dashboard-native.js`, `build-native.js`, `build-status-native.js`).
-The root `Cargo.toml` keeps its pinned profile: `scripts/build-agent.js` hashes
-that file into the agent source fingerprint, so a profile edit there breaks the
-approved agent pins. `build-dashboard-native.js` builds the `aac-http` service
-and one `ccs` CLI binary; every compatibility name (`ai-account-center`, the
-retired bins) is staged from `ccs`, whose `cli::run` dispatches on `argv[0]`.
+(`build-dashboard-native.js`, `build-native.js`, `build-status-native.js`,
+and `aac-xtask build` in `crates/aac-xtask/src/build.rs`, which `build:server`
+now runs). The root `Cargo.toml` keeps its pinned profile:
+`scripts/build-agent.js` and `crates/aac-xtask/src/build.rs` hash that file
+into the agent source fingerprint with identical inputs, so a profile edit
+there breaks the approved agent pins. `aac-xtask build dashboard` (like
+`build-dashboard-native.js`) builds the `aac-http` service and one `ccs` CLI
+binary; every compatibility name (`ai-account-center`, the retired bins) is
+staged from `ccs`, whose `cli::run` dispatches on `argv[0]`.
 
 For documentation:
 
 ```bash
-bash tests/docs/quickstart-parity.sh
-node tests/docs/documentation-freshness.js
+cargo run --locked -p aac-xtask -- check quickstart
+cargo run --locked -p aac-xtask -- check docs
 ```
 
 Native/bridge guides describe their offline checks. Broaden tests when warranted

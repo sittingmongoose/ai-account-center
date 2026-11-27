@@ -187,7 +187,7 @@ Source and is not cached, so the next read rebuilds it complete. Nothing runs wh
 re-reads every `refresh.pollSeconds` while visible. There is no `/ws` hint: scans happen only on reads, so there is
 nothing to push between them.
 
-A generated example is `docs/agent-reports/examples/scoreboard-view.example.json` (from `scripts/scoreboard-fixture.mjs`;
+A generated example is `docs/agent-reports/examples/scoreboard-view.example.json` (from `aac-xtask fixture scoreboard`;
 a test keeps it equal to what the server builds; refresh with `UPDATE_SCOREBOARD_EXAMPLE=1 bun test
 tests/unit/web-server/scoreboard/scoreboard-view.test.ts`).
 

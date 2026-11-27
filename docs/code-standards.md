@@ -45,7 +45,7 @@ part of the product contract. That computer's real hostname, addresses and paths
 outside the usual `$HOME` conventions never appear, and no configurable host or
 alias is added for it.
 
-[personal-detail-guard](../scripts/personal-detail-guard.js) enforces this. It
+[personal-detail-guard](../crates/aac-xtask/src/guards.rs) enforces this. It
 keeps only SHA-256 hashes of the blocked lowercased words and IPv4 /24 prefixes,
 hashes every word and address prefix in each tracked text file (binary files and
 `node_modules` are skipped) and fails on a match. It runs in the pre-push CI
@@ -56,8 +56,8 @@ depends on a value is listed in the guard's allowlist with an exact count.
 ## Verification
 
 Run focused offline tests and the relevant TypeScript gate. Dashboard changes
-need the actual [Leptos build](../scripts/build-ui.js) and
-[UI validation](../scripts/validate-ui.js), including the source fingerprint.
+need the actual [Leptos build](../crates/aac-xtask/src/ui.rs) and
+[UI validation](../crates/aac-xtask/src/ui.rs), including the source fingerprint.
 Native/bridge changes use their platform checks. Do not silently substitute
 fixtures for live provider evidence.
 

@@ -49,10 +49,10 @@ list (Python helpers, page JS, Leptos, native modules) that still needs the new 
 The service build stages the native commands, modules and agents in `dist/native/`
 and records the build lineage; Antigravity sign-in and the Codex stop/start runtime
 are native Rust (the TypeScript server was deleted on 2026-11-27). The
-[UI builder](../scripts/build-ui.js) fingerprints the Leptos crate's manifest/lock,
+[UI builder](../crates/aac-xtask/src/ui.rs) fingerprints the Leptos crate's manifest/lock,
 sources, styles and fonts, builds locked WASM and stages `dist/ui/` with the public browser files.
-The [validator](../scripts/validate-ui.js) and
-[bundle verifier](../scripts/verify-bundle.js) bind source and packaged runtime.
+The [validator](../crates/aac-xtask/src/ui.rs) and
+[bundle verifier](../crates/aac-xtask/src/bundle.rs) bind source and packaged runtime.
 There is no React/Vite production input.
 
 Rust tests live in each crate; Bun runs the package-script tests and Node the dashboard helpers. Native/bridge
