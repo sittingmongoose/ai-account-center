@@ -1123,6 +1123,10 @@ fn additional_handles_exact_providers_and_rejects_unknown_or_synthetic() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the Muse console capsule store is Unix-only, as in muse_console.py"
+)]
 fn additional_muse_inventory_attribution_capsule_identity_and_expiry() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
@@ -1221,6 +1225,10 @@ fn additional_muse_inventory_attribution_capsule_identity_and_expiry() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "the Muse console capsule store is Unix-only, as in muse_console.py"
+)]
 async fn additional_muse_portal_budget_caching_upgrade_and_429() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
@@ -1774,6 +1782,10 @@ fn jwt_compact(payload: Value) -> String {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the Muse console capsule store is Unix-only, as in muse_console.py"
+)]
 fn python_oracle_exact_golden_digests_all_eight_providers() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
@@ -2641,6 +2653,10 @@ async fn special_saved_registry_edge_cases_and_identity_guards() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "the Muse console capsule store is Unix-only, as in muse_console.py"
+)]
 async fn additional_muse_native_budget_capsule_races_and_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();

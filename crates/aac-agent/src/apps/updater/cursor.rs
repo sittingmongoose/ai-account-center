@@ -2060,7 +2060,19 @@ At line:1 char:28
             &["2026.11.13-aaaaaaa", "2026.11.13-bbbbbbb"],
         );
         let later = folder.join("versions/2026.11.13-bbbbbbb");
-        std::fs::File::open(&later)
+        // Windows opens a folder only with backup semantics, and setting its time needs
+        // write-attributes access.
+        #[cfg(windows)]
+        let handle = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .access_mode(0x0100)
+                .custom_flags(0x0200_0000)
+                .open(&later)
+        };
+        #[cfg(not(windows))]
+        let handle = std::fs::File::open(&later);
+        handle
             .expect("folder")
             .set_modified(SystemTime::now() + Duration::from_secs(60))
             .expect("mtime");

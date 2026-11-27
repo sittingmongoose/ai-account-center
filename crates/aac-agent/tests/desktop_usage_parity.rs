@@ -1264,6 +1264,10 @@ async fn antigravity_two_services_failover_throttles_budgets_and_neon_derivation
 // =========================================================================
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "the Muse console capsule store is Unix-only, as in muse_console.py"
+)]
 async fn standalone_muse_collect_contract_and_portal_capsule_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
@@ -2165,6 +2169,10 @@ fn assert_json_num_eq(actual: &Value, expected: &Value, label: &str) {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the live Python oracle decodes its pipe in the Windows code page (TS3 retires it)"
+)]
 fn live_python_oracle_exact_parity_across_desktop_helpers_desktop_usage_and_cursor_usage() {
     use std::io::Write;
     use std::process::{Command, Stdio};
