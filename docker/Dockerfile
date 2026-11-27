@@ -91,7 +91,6 @@ COPY --from=build /app/config/secret-policy.json ./config/secret-policy.json
 COPY --from=build /app/web-dashboard/public/computers.json ./web-dashboard/public/computers.json
 COPY --from=build /app/docs/agent-reports/schemas ./docs/agent-reports/schemas
 COPY --from=build /app/docs/agent-reports/catalog ./docs/agent-reports/catalog
-COPY --from=build /app/browser-bridge ./browser-bridge
 COPY --from=build /app/README.md ./README.md
 COPY --from=build /app/LICENSE ./LICENSE
 

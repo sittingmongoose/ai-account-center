@@ -120,8 +120,8 @@ fn apply_source_identity(mut row: Value, source: &Source) -> Value {
     row
 }
 
-/// Collect Qwen Token Plan usage in-process when a pasted web session exists in `root`.
-/// Returns `None` when no pasted Qwen session is stored (leaving legacy/failover unchanged).
+/// Collect Qwen Token Plan usage in-process from the pasted web session in `root`.
+/// Missing or unreadable sessions report `needs_sign_in`; no legacy bridge is consulted.
 pub(super) async fn collect_qwen(
     root: &Path,
     state: &WebSessionState,
@@ -129,15 +129,27 @@ pub(super) async fn collect_qwen(
     now_ms: i64,
     force: bool,
 ) -> Option<Value> {
-    let root_buf = root.to_path_buf();
-    let stored = tokio::task::spawn_blocking(move || web_session::load(&root_buf, Surface::Qwen))
-        .await
-        .ok()?
-        .ok()??;
-    let fp = stored.meta.fingerprint.clone();
-    let cached = state.snapshot(Surface::Qwen, &fp);
     let now_iso = iso_seconds(now_ms);
     let platform = host_platform();
+    let root_buf = root.to_path_buf();
+    let stored = match tokio::task::spawn_blocking(move || {
+        web_session::load(&root_buf, Surface::Qwen)
+    })
+    .await
+    {
+        Ok(Ok(Some(stored))) => stored,
+        _ => {
+            return Some(qwen_error_row(
+                source,
+                platform,
+                "needs_sign_in",
+                "Paste a Qwen console session to refresh usage.",
+                &now_iso,
+            ));
+        }
+    };
+    let fp = stored.meta.fingerprint.clone();
+    let cached = state.snapshot(Surface::Qwen, &fp);
 
     if !force && now_ms < cached.cooldown_until_ms {
         if let Some(prev) = cached.last_good {
@@ -257,26 +269,37 @@ fn qwen_error_row(
     })
 }
 
-/// Collect OpenCode Zen console wallet usage in-process when a pasted web session exists in `root`.
-/// Returns `None` when no pasted OpenCode wallet session is stored.
+/// Collect OpenCode Zen console wallet usage in-process from the pasted web session in `root`.
+/// Missing or unreadable sessions report `needs_sign_in`; no legacy bridge is consulted.
 pub(super) async fn collect_opencode_wallet(
     root: &Path,
     state: &WebSessionState,
     now_ms: i64,
     force: bool,
 ) -> Option<Value> {
+    let now_iso = iso_seconds(now_ms);
+    let platform = host_platform();
     let root_buf = root.to_path_buf();
-    let stored =
-        tokio::task::spawn_blocking(move || web_session::load(&root_buf, Surface::OpencodeWallet))
-            .await
-            .ok()?
-            .ok()??;
+    let stored = match tokio::task::spawn_blocking(move || {
+        web_session::load(&root_buf, Surface::OpencodeWallet)
+    })
+    .await
+    {
+        Ok(Ok(Some(stored))) => stored,
+        _ => {
+            return Some(opencode_error_row(
+                "plan-opencode-go-console-web-000000000000",
+                platform,
+                "needs_sign_in",
+                "Paste an OpenCode console session to refresh the wallet.",
+                &now_iso,
+            ));
+        }
+    };
     let cookies = stored.secret.cookies()?.to_vec();
     let workspace = stored.meta.workspace_id.clone();
     let fp = stored.meta.fingerprint.clone();
     let cached = state.snapshot(Surface::OpencodeWallet, &fp);
-    let now_iso = iso_seconds(now_ms);
-    let platform = host_platform();
     let fallback_id = workspace
         .as_deref()
         .map(opencode::wallet_account_id)
@@ -418,8 +441,8 @@ fn opencode_error_row(
     })
 }
 
-/// Collect Muse Code portal quota in-process when a pasted web session exists in `root`.
-/// Returns `None` when no pasted Muse session is stored (leaving failover unchanged).
+/// Collect Muse Code portal quota in-process from the pasted web session in `root`.
+/// Missing or unreadable sessions report `needs_sign_in`; no legacy bridge is consulted.
 pub(super) async fn collect_muse(
     root: &Path,
     home: Option<&Path>,
@@ -428,16 +451,30 @@ pub(super) async fn collect_muse(
     now_ms: i64,
     force: bool,
 ) -> Option<Value> {
+    let now_iso = iso_seconds(now_ms);
+    let platform = host_platform();
     let root_buf = root.to_path_buf();
-    let stored = tokio::task::spawn_blocking(move || web_session::load(&root_buf, Surface::Muse))
-        .await
-        .ok()?
-        .ok()??;
+    let stored = match tokio::task::spawn_blocking(move || {
+        web_session::load(&root_buf, Surface::Muse)
+    })
+    .await
+    {
+        Ok(Ok(Some(stored))) => stored,
+        _ => {
+            return Some(muse_error_row(
+                source,
+                None,
+                None,
+                platform,
+                "needs_sign_in",
+                "Paste a Muse Code portal session to refresh usage.",
+                &now_iso,
+            ));
+        }
+    };
     let cookies = stored.secret.cookies()?.to_vec();
     let fp = stored.meta.fingerprint.clone();
     let cached = state.snapshot(Surface::Muse, &fp);
-    let now_iso = iso_seconds(now_ms);
-    let platform = host_platform();
 
     if !force && now_ms < cached.cooldown_until_ms {
         return Some(match cached.last_good {
@@ -905,5 +942,30 @@ mod tests {
         assert_eq!(expired["windows"][0]["usedPercent"], 25.0);
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn retired_bridge_surfaces_require_pasted_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = WebSessionState::default();
+        let now = 1_795_608_000_000_i64;
+
+        let qwen = collect_qwen(dir.path(), &state, &dummy_source("qwen"), now, false)
+            .await
+            .expect("Qwen must not fall back to the retired bridge");
+        assert_eq!(qwen["status"], "needs_sign_in");
+        assert_eq!(qwen["windows"], json!([]));
+
+        let wallet = collect_opencode_wallet(dir.path(), &state, now, false)
+            .await
+            .expect("OpenCode wallet must not fall back to the retired bridge");
+        assert_eq!(wallet["status"], "needs_sign_in");
+        assert_eq!(wallet["windows"], json!([]));
+
+        let muse = collect_muse(dir.path(), None, &state, &dummy_source("muse"), now, false)
+            .await
+            .expect("Muse must not fall back to the retired bridge");
+        assert_eq!(muse["status"], "needs_sign_in");
+        assert_eq!(muse["windows"], json!([]));
     }
 }

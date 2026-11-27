@@ -427,19 +427,6 @@ impl Producer {
             .await
     }
 
-    async fn read_primary(
-        &self,
-        platform: &str,
-        alias: Option<&str>,
-        provider: &str,
-        candidate: &Value,
-        now: i64,
-    ) -> Option<Value> {
-        self.read_primary_reply(platform, alias, provider, candidate, now)
-            .await
-            .0
-    }
-
     /// The collect reply's sample and failure code for one candidate. A failed
     /// read returns no sample; the code lets the Codex rows keep the TS
     /// `needsReauth` status (`needs_sign_in`) that the helper reports without

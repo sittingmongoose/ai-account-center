@@ -1,12 +1,11 @@
-"""Own-host Antigravity and OpenCode workspace sources for usage failover.
+"""Own-host Antigravity sources for usage failover.
 
 Inventory is read-only and makes no provider requests. Its identity hints select
 a candidate; collection must prove that identity again with the provider. Fields
 prefixed with ``_`` are private process data, never part of the wire inventory.
 No credential leaves its host, and no live application login is replaced.
 
-Packaged dependencies: desktop_usage.py, desktop_helpers.py, and
-browser-bridge/opencode-muse/native-host/opencode_console.py (as a sibling).
+Packaged dependencies: desktop_usage.py and desktop_helpers.py.
 """
 from __future__ import annotations
 
@@ -32,7 +31,6 @@ REGISTRY = re.compile(r"registry-([0-9]{12})\.json\Z")
 PLATFORMS = {"ubuntu": "Ubuntu", "mac": "Mac", "windows": "Windows"}
 MAX_BYTES = 1024 * 1024
 IDENTITY_KIND = "antigravity-subject"
-WALLET_KIND = "opencode-workspace"
 USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
@@ -307,45 +305,6 @@ def _discover(home):
     return result
 
 
-def _wallet_supported(platform):
-    return os.name == "posix" and platform != "windows"
-
-
-def _wallet(ccs_dir, platform):
-    # The existing capsule reader uses POSIX ownership checks. A Windows browser
-    # login without that supported private capsule is not an invented source.
-    if not _wallet_supported(platform):
-        return []
-    try:
-        import opencode_console as console
-        relative = Path("account-usage") / console.CAPSULE_NAME
-        raw = _read(ccs_dir, relative)
-        # Confirm that the directory exists first; read_capsule must never create
-        # an absent directory while performing inventory.
-        root = _path(ccs_dir, "account-usage")
-        cookies, workspace = console.read_capsule(root)
-        if _read(ccs_dir, relative) != raw:
-            # Changed while being read: unverified this time, not removed.
-            helpers.read_failed()
-            return []
-        return [{"locator": _digest("opencode-wallet:browser-capsule"), "selectors": ["wallet"],
-                 "identity": {"kind": WALLET_KIND, "key": _digest(workspace)}, "revision": _digest(raw),
-                 "email": None, "plan": None, "_provider": "opencode-wallet",
-                 "_cookies": cookies, "_workspace": workspace}]
-    except ImportError:
-        # Missing bridge modules are an unsupported source, not an unreadable one.
-        return []
-    except Exception:
-        # A missing capsule is absent; one that exists but cannot be read is not removed.
-        try:
-            import opencode_console as console
-            os.lstat(Path(ccs_dir) / "account-usage" / console.CAPSULE_NAME)
-        except (ImportError, FileNotFoundError, NotADirectoryError):
-            return []
-        except OSError:
-            pass
-        helpers.read_failed()
-        return []
 
 
 def inventory(provider, home: Path, platform: str, ccs_dir=None):
@@ -356,8 +315,6 @@ def inventory(provider, home: Path, platform: str, ccs_dir=None):
     ccs_dir = Path(ccs_dir) if ccs_dir is not None else home / ".ccs"
     if provider == "antigravity":
         return _antigravity(home, ccs_dir)
-    if provider == "opencode-wallet":
-        return helpers.attribute_reads(["wallet"], lambda: _wallet(ccs_dir, platform))
     return []
 
 
@@ -435,34 +392,15 @@ def _collect_antigravity(candidate, home, platform):
     return {"sample": sample, "failureCode": None}
 
 
-def _collect_wallet(candidate, platform):
-    import opencode_console as console
-    workspace, sample = console.collect(candidate["_cookies"], candidate["_workspace"])
-    if (workspace != candidate["_workspace"]
-            or candidate["identity"] != {"kind": WALLET_KIND, "key": _digest(workspace)}
-            or sample.get("id") != "plan-opencode-go-console-mac-" + _digest(workspace)[:12]):
-        return {"sample": None, "failureCode": "identity_mismatch"}
-    failure = sample.get("_usageFailure")
-    sample = console.public_sample(sample)
-    sample["platform"] = platform
-    sample["source"] = "Authenticated OpenCode console workspace on " + PLATFORMS[platform]
-    result = {"sample": sample, "failureCode": None}
-    if isinstance(failure, dict) and failure.get("code") == "rate_limited":
-        result["failureCode"] = "rate_limited"
-        retry = failure.get("retryAfterSeconds")
-        if isinstance(retry, (int, float)) and not isinstance(retry, bool) and math.isfinite(retry):
-            result["retryAfterSeconds"] = min(86400, max(0, retry))
-    return result
 
 
 def collect(candidate, home: Path, platform: str, ccs_dir=None):
     """Collect one freshly inventoried candidate, then reject local sign-in races."""
     try:
         provider = candidate["_provider"]
-        if platform not in PLATFORMS or provider not in ("antigravity", "opencode-wallet"):
+        if platform not in PLATFORMS or provider != "antigravity":
             return {"sample": None, "failureCode": "unavailable"}
-        result = (_collect_antigravity(candidate, Path(home), platform) if provider == "antigravity"
-                  else _collect_wallet(candidate, platform))
+        result = _collect_antigravity(candidate, Path(home), platform)
         if result["sample"] is not None:
             failures = helpers.READ_FAILURES
             try:
@@ -505,6 +443,5 @@ def collect(candidate, home: Path, platform: str, ccs_dir=None):
             if isinstance(retry, (int, float)) and not isinstance(retry, bool) and math.isfinite(retry):
                 result["retryAfterSeconds"] = min(86400, max(0, retry))
             return result
-        failure = ("needs_sign_in" if code in ("needs_sign_in", "no_browser_cookie") else
-                   "identity_mismatch" if code == "workspace_mismatch" else "provider_error")
+        failure = "needs_sign_in" if code == "needs_sign_in" else "provider_error"
         return {"sample": None, "failureCode": failure}
