@@ -231,6 +231,7 @@ impl SshPolicy {
         }
     }
 
+    /// Windows has no SSH control sockets to clean.
     #[cfg(not(unix))]
     pub fn cleanup_stale_sockets(_directory: &Path) {}
 

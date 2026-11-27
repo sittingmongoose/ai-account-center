@@ -1217,6 +1217,8 @@ mod tests {
 
         save_with_owners(&owners, &root, Surface::Qwen, &parsed).unwrap();
         let path = root.join("account-usage/sessions/qwen.json");
+        #[cfg(not(unix))]
+        let _ = &path;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;

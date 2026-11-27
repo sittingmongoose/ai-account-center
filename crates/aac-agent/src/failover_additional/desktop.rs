@@ -1139,7 +1139,7 @@ pub(crate) fn windows_private_metadata(path: &Path) -> bool {
                     return false;
                 }
                 let mut out = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
+                if let Some(stdout) = child.stdout.take() {
                     use std::io::Read as _;
                     let _ = stdout.take(64).read_to_string(&mut out);
                 }

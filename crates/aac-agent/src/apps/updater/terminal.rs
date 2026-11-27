@@ -59,6 +59,7 @@ pub(crate) fn restart_environment(context: &Process) -> Env {
 }
 
 /// Python `mac_terminal_environment`: [`restart_environment`] without the SSH session.
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn mac_terminal_environment(context: &Process) -> Env {
     restart_environment(context)
         .into_iter()
@@ -237,6 +238,7 @@ pub(crate) async fn restart_cli(
     Err(UpdateFailure::new("restart_failed"))
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 static ENDPOINT: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\Aterminal-[0-9a-f]{32}\.sock\z").expect("endpoint"));
 #[cfg(windows)]

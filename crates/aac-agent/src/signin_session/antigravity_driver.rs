@@ -5,6 +5,8 @@
 //! forwards submitted codes with `\n` -> `\r`, polls the masked OAuth token file every
 //! 250ms until two consecutive `Complete | Unsafe` observations, and stops the child
 //! process group cleanly.
+// The PTY driver runs only where the sign-in relay exists (Unix); Windows compiles it unused.
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 
 use crate::signin_session::process::{Command, Handle, Killer, ProcessEvent, SpawnFailure};
 use aac_files::antigravity_store::{MaskedCredentialState, masked_credential_state};

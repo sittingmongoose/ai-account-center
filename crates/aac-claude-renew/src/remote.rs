@@ -388,6 +388,7 @@ mod tests {
     use super::*;
     use crate::config::Os;
 
+    #[cfg_attr(windows, allow(dead_code))]
     fn local() -> Host {
         Host {
             name: "here".into(),

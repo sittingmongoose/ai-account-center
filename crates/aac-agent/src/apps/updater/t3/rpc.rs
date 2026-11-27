@@ -306,6 +306,7 @@ pub(super) fn t3_installed(cx: &Context) -> bool {
 }
 
 /// Python `shlex.split` (POSIX mode, comments off): `None` on an unterminated quote.
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn shell_split(text: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();

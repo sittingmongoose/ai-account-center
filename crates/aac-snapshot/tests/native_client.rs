@@ -1,4 +1,5 @@
 //! Publication and native launcher integration, with no installed product or provider required.
+#![cfg_attr(windows, allow(unused_imports))]
 use aac_snapshot::client;
 use serde_json::json;
 use std::{fs, path::Path};

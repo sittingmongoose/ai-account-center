@@ -8,6 +8,8 @@
 //! checks it came up; nothing is carried to a later click. Codex Desktop: the
 //! desktops a run closed are owed until AAC's own relaunch of each is seen coming up,
 //! kept in the marker for the next click.
+// The bridge drives the Ubuntu Codex runtime (lane P2); other systems compile it unused.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 use crate::apps::updater::{AppRow, Context, Platform, Status, common::write_private_json};
 use serde_json::{Map, Value, json};
 use std::{path::PathBuf, sync::LazyLock, time::Duration};
