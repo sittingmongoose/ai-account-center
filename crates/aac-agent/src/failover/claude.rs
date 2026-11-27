@@ -67,7 +67,7 @@ fn mac_keychain(home: &Path) -> Vec<Value> {
         return vec![];
     }
     let root = home.join(".claude");
-    let metadata = read(&home.join(".claude.json"), CORE_CAP, true).unwrap_or(Value::Null);
+    let metadata = claude_metadata(&home.join(".claude.json"));
     let account = &metadata["oauthAccount"];
     let (Some(account_id), Some(org_id), Some(address)) = (
         uuid(&account["accountUuid"]),
@@ -667,6 +667,74 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0]["email"], "user@example.test");
         assert!(!out.to_string().contains("synthetic-token"));
+    }
+
+    /// LIVE r34: Claude Code's own `.claude.json` carries floats, non-ASCII text and a
+    /// non-ASCII account name. None of it is read, so none of it may fail the inventory.
+    #[test]
+    fn claude_codes_own_state_file_content_never_fails_the_inventory() {
+        let dir = fixture();
+        let state = "{\n  \"numStartups\": 12,\n  \"additionalModelCostsCache\": {\"m\": {\"promptCacheReadTokens\": 0.3}},\n  \"cachedFeatureFlags\": {\"banner\": \"Extra credit \u{2014} \u{2026}\"},\n  \"oauthAccount\": {\n    \"accountUuid\": \"11111111-1111-1111-1111-111111111111\",\n    \"organizationUuid\": \"33333333-3333-3333-3333-333333333333\",\n    \"emailAddress\": \"user@example.test\",\n    \"displayName\": \"Jos\u{e9}\",\n    \"organizationName\": \"Jos\u{e9}\u{2019}s Organization\"\n  }\n}\n";
+        std::fs::write(dir.path().join(".claude.json"), state).unwrap();
+        let home = dir.path().to_string_lossy().to_string();
+        let out =
+            run(&json!({"version":1,"action":"inventory","provider":"claude","homeDir":home}))
+                .expect("inventory");
+        assert!(out.get("failed").is_none(), "{out}");
+        let candidates = out["candidates"].as_array().expect("candidates");
+        assert_eq!(candidates.len(), 1, "{out}");
+        assert_eq!(candidates[0]["email"], "user@example.test");
+        assert!(!out.to_string().contains("Jos"));
+    }
+
+    /// LIVE r34: T3 Code's settings name its instances in non-ASCII ("Claude \u{b7} me"); the
+    /// Claude rows read only each instance's driver and home, so the names never fail them.
+    #[test]
+    fn t3_settings_with_non_ascii_names_still_find_the_t3_claude_home() {
+        let dir = fixture();
+        let home = dir.path();
+        let t3 = home.join(".claude-t3/me");
+        write(
+            &t3.join(".claude.json"),
+            json!({"oauthAccount":{"accountUuid":"22222222-2222-2222-2222-222222222222",
+                "organizationUuid":"44444444-4444-4444-4444-444444444444","emailAddress":"me@example.test"}}),
+        );
+        write(
+            &t3.join(".credentials.json"),
+            json!({"claudeAiOauth":{"accessToken":"synthetic-token-2","expiresAt":1,"subscriptionType":"max"}}),
+        );
+        let settings = format!(
+            "{{\"ratio\": 0.5, \"providerInstances\": {{\"claude_me\": {{\"driver\": \"claudeAgent\", \"displayName\": \"Claude \u{b7} me\", \"config\": {{\"homePath\": \"{}\"}}}}}}}}",
+            t3.display()
+        );
+        std::fs::create_dir_all(home.join(".t3/userdata")).unwrap();
+        std::fs::write(home.join(".t3/userdata/settings.json"), settings).unwrap();
+        let out = run(
+            &json!({"version":1,"action":"inventory","provider":"claude",
+            "homeDir":home.to_string_lossy()}),
+        )
+        .expect("inventory");
+        assert!(out.get("failed").is_none(), "{out}");
+        let emails: Vec<_> = out["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["email"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(emails.contains(&"me@example.test".to_owned()), "{out}");
+        assert!(emails.contains(&"user@example.test".to_owned()), "{out}");
+    }
+
+    /// A state file that is not JSON stays unread: the inventory says so instead of guessing.
+    #[test]
+    fn an_unparsable_claude_state_file_is_an_unread_inventory() {
+        let dir = fixture();
+        std::fs::write(dir.path().join(".claude.json"), b"{\"oauthAccount\": ").unwrap();
+        let home = dir.path().to_string_lossy().to_string();
+        let out =
+            run(&json!({"version":1,"action":"inventory","provider":"claude","homeDir":home}))
+                .expect("inventory");
+        assert_eq!(out["failed"], true, "{out}");
     }
 
     #[test]

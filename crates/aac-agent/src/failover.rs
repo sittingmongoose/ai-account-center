@@ -137,22 +137,58 @@ fn unproven(args: &Value) -> Value {
 fn read(path: &Path, cap: usize, bom: bool) -> Option<Value> {
     read_with_policy(path, cap, bom, false)
 }
-fn read_with_policy(path: &Path, cap: usize, bom: bool, private: bool) -> Option<Value> {
-    // Python's `_read_present`: one ordinary file of this user, of at most `cap` bytes, with no
-    // link anywhere on its path; a private record also has no group or other bit. Absent reads
-    // as absent; everything else is outside this subset and delegates.
+/// Python's `_read_present`: one ordinary file of this user, of at most `cap` bytes, with no
+/// link anywhere on its path; a private record also has no group or other bit. Absent reads as
+/// absent; everything else is outside this subset and rejects.
+fn present(path: &Path, cap: usize, private: bool) -> Option<Vec<u8>> {
     let policy = ReadPolicy::capped(cap as u64)
         .ancestors(Ancestors::NoLinkBelow(root_of(path)))
         .owner(Owner::Mine)
         .mode(if private { Mode::Private } else { Mode::Any });
-    let bytes = match files::read_with(path, &policy) {
-        files::Regular::Read(bytes, _) => bytes,
-        files::Regular::Missing => return None,
+    match files::read_with(path, &policy) {
+        files::Regular::Read(bytes, _) => Some(bytes),
+        files::Regular::Missing => None,
         _ => {
             proof::reject();
-            return None;
+            None
         }
+    }
+}
+/// Another program's JSON object (Claude Code's `.claude.json`, T3 Code's `settings.json`),
+/// under the same file policy but without the strict document grammar. Those files carry floats,
+/// non-ASCII names and whatever else their owners add, none of which the Claude rows read; the
+/// grammar would reject them and take the whole Claude inventory down, and since U1b nothing
+/// stands behind that rejection. Callers read only the fields they need and prove those. A file
+/// that is not a JSON object still rejects (unread, never guessed).
+fn foreign(path: &Path) -> Option<Value> {
+    let bytes = present(path, CORE_CAP, false)?;
+    let raw = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    match serde_json::from_slice::<Value>(raw) {
+        Ok(value) if value.is_object() => Some(value),
+        _ => {
+            proof::reject();
+            None
+        }
+    }
+}
+/// The `oauthAccount` identity of Claude Code's own state file (`.claude.json`), as
+/// `{"oauthAccount":{..}}` with only the three fields `uuid` and `email` prove.
+fn claude_metadata(path: &Path) -> Value {
+    let Some(Value::Object(mut document)) = foreign(path) else {
+        return Value::Null;
     };
+    let account = document.remove("oauthAccount").unwrap_or(Value::Null);
+    let field = |name: &str| account.get(name).filter(|v| v.is_string()).cloned();
+    let mut kept = serde_json::Map::new();
+    for name in ["accountUuid", "organizationUuid", "emailAddress"] {
+        if let Some(value) = field(name) {
+            kept.insert(name.into(), value);
+        }
+    }
+    json!({"oauthAccount": kept})
+}
+fn read_with_policy(path: &Path, cap: usize, bom: bool, private: bool) -> Option<Value> {
+    let bytes = present(path, cap, private)?;
     let value = document(&bytes, cap, bom)?;
     if !value.is_object() {
         proof::reject();
@@ -358,8 +394,15 @@ fn roots(home: &Path, ccs: &Path, provider: &str) -> Vec<(PathBuf, Vec<String>)>
                 .map(|p| p.join("shadow")),
         );
     }
-    let settings =
-        read(&home.join(".t3/userdata/settings.json"), CORE_CAP, true).unwrap_or(Value::Null);
+    // T3 Code's settings carry non-ASCII display names; only `driver` and `config.homePath`
+    // are read below, and those are proven there. Codex keeps the strict read (and its helper).
+    let settings_path = home.join(".t3/userdata/settings.json");
+    let settings = if provider == "claude" {
+        foreign(&settings_path)
+    } else {
+        read(&settings_path, CORE_CAP, true)
+    }
+    .unwrap_or(Value::Null);
     if let Some(instances) = settings.get("providerInstances").filter(|v| !v.is_null()) {
         if let Some(instances) = instances.as_object() {
             if instances.len() > 64 {
@@ -536,7 +579,7 @@ fn core_candidates(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
             } else {
                 root.join(".claude.json")
             };
-            let raw = read(&metadata_path, CORE_CAP, true).unwrap_or(Value::Null);
+            let raw = claude_metadata(&metadata_path);
             let account = &raw["oauthAccount"];
             let (Some(account_id), Some(org_id), Some(address)) = (
                 uuid(&account["accountUuid"]),
