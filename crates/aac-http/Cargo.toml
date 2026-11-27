@@ -8,6 +8,10 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
+# MEM7 lane 1: on Linux the service binaries run on tuned jemalloc (see src/allocator.rs).
+# The one switch back to mimalloc on Linux: drop "linux-jemalloc" from `default`.
+default = ["linux-jemalloc"]
+linux-jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-sys"]
 # Only drill binaries pause inside store operations.
 parity-fixtures = ["aac-store/parity-fixtures"]
 # A counting allocator for the Analytics pass memory twin (tests only).
@@ -38,8 +42,9 @@ aac-usage = { path = "../../native/aac-usage" }
 base64 = "0.22"
 indexmap = "2.14.2"
 libc.workspace = true
-# The service binaries' global allocator: glibc arenas retained multi-GB of freed
-# compose transients as RSS (service-memory lane); mimalloc hands pages back.
+# The service binaries' global allocator on macOS and Windows (and on Linux without
+# `linux-jemalloc`): glibc arenas retained multi-GB of freed compose transients as RSS
+# (service-memory lane); mimalloc hands pages back.
 mimalloc = "0.1"
 serde.workspace = true
 serde_yaml.workspace = true
@@ -79,6 +84,13 @@ rusqlite = { version = "0.37", features = ["serialize"] }
 [dev-dependencies]
 aac-renewal = { workspace = true, features = ["parity-fixtures"] }
 tokio-tungstenite = "0.29"
+
+# Linux global allocator (MEM7 lane 1): mimalloc v3 kept ~220-245 MiB of freed pages on
+# live; jemalloc with background purging held a flat trough on the MEM6 twin. Prefixed
+# symbols: C libraries keep the tuned glibc malloc. `stats` serves `thread.allocated`.
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = { version = "0.6", optional = true, features = ["stats"] }
+tikv-jemalloc-sys = { version = "0.6", optional = true, features = ["stats"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_SystemInformation"] }
