@@ -704,8 +704,9 @@ mod tests {
             json!({"claudeAiOauth":{"accessToken":"synthetic-token-2","expiresAt":1,"subscriptionType":"max"}}),
         );
         let settings = format!(
-            "{{\"ratio\": 0.5, \"providerInstances\": {{\"claude_me\": {{\"driver\": \"claudeAgent\", \"displayName\": \"Claude \u{b7} me\", \"config\": {{\"homePath\": \"{}\"}}}}}}}}",
-            t3.display()
+            "{{\"ratio\": 0.5, \"providerInstances\": {{\"claude_me\": {{\"driver\": \"claudeAgent\", \"displayName\": \"Claude \u{b7} me\", \"config\": {{\"homePath\": {}}}}}}}}}",
+            // A JSON string, so a Windows path's backslashes are escaped.
+            serde_json::to_string(&t3.to_string_lossy()).unwrap()
         );
         std::fs::create_dir_all(home.join(".t3/userdata")).unwrap();
         std::fs::write(home.join(".t3/userdata/settings.json"), settings).unwrap();
