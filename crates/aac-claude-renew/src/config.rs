@@ -5,9 +5,9 @@
 //! {
 //!   "enabled": true,
 //!   "hosts": [
-//!     {"name": "mac", "os": "mac", "ssh": "jared-mac"},
+//!     {"name": "mac", "os": "mac", "ssh": "test-mac"},
 //!     {"name": "ubuntu", "os": "linux"},
-//!     {"name": "windows", "os": "windows", "ssh": "jared-windows"}
+//!     {"name": "windows", "os": "windows", "ssh": "test-windows"}
 //!   ],
 //!   "browserHost": "mac",
 //!   "publishDir": "/mnt/Cursor/aac-usage"
@@ -248,8 +248,8 @@ pub fn state_dir(ccs_dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    const GOOD: &str = r#"{"hosts":[{"name":"mac","os":"mac","ssh":"jared-mac"},{"name":"ubuntu","os":"linux"},
-        {"name":"windows","os":"windows","ssh":"jared-windows"}],"publishDir":"/tmp/x"}"#;
+    const GOOD: &str = r#"{"hosts":[{"name":"mac","os":"mac","ssh":"test-mac"},{"name":"ubuntu","os":"linux"},
+        {"name":"windows","os":"windows","ssh":"test-windows"}],"publishDir":"/tmp/x"}"#;
 
     #[test]
     fn parses_defaults() {
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn emails_and_names() {
-        assert!(safe_email("jared@sittingmongoose.party"));
+        assert!(safe_email("owner@example.party"));
         assert!(safe_email("a.b+c@me.com"));
         assert!(!safe_email("a b@me.com"));
         assert!(!safe_email("a@b"));

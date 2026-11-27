@@ -42,6 +42,20 @@ const ALLOWED = {
   'crates/aac-agent/src/history.rs': {
     '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 3,
   },
+  // The native history verb (P3) keeps the same stable profile id; its tests and fixture
+  // generator name it, and the Windows process-table fixture carries it per Claude row.
+  'crates/aac-agent/src/history/native.rs': {
+    '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 1,
+  },
+  'crates/aac-agent/src/history/native_tests.rs': {
+    '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 2,
+  },
+  'crates/aac-agent/tests/fixtures/windows-processes.json': {
+    '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 8,
+  },
+  'crates/aac-agent/tests/generate-history-fixtures.py': {
+    '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 1,
+  },
   // The Rust Claude Open port admits the same pinned profile as the agent and helper.
   'crates/aac-http/src/claude_open/sync.rs': {
     '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 2,

@@ -599,7 +599,7 @@ mod tests {
 
     fn cfg() -> Config {
         Config::parse(
-            r#"{"hosts":[{"name":"mac","os":"mac","ssh":"jared-mac"},{"name":"windows","os":"windows","ssh":"jared-windows"}]}"#,
+            r#"{"hosts":[{"name":"mac","os":"mac","ssh":"test-mac"},{"name":"windows","os":"windows","ssh":"test-windows"}]}"#,
         )
         .expect("cfg")
     }

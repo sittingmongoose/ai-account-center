@@ -658,9 +658,9 @@ mod tests {
             signed_in_as(&[
                 "Claude Code would like to connect".into(),
                 "Logged in as".into(),
-                "Jared@X.party.".into()
+                "Owner@X.party.".into()
             ]),
-            Some("jared@x.party".into())
+            Some("owner@x.party".into())
         );
         assert_eq!(signed_in_as(&["nothing".into()]), None);
         let texts = r#"{"ok":true,"data":{"matches":[{"name":"Logged in as ","ref_id":null,"role":"statictext"},{"name":"A@b.com","role":"statictext"}]}}"#;
@@ -802,7 +802,7 @@ mod tests {
         Host {
             name: "mac".into(),
             os: Os::Mac,
-            ssh: Some("jared-mac".into()),
+            ssh: Some("test-mac".into()),
             claude: None,
         }
     }

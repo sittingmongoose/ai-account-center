@@ -104,6 +104,66 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/src/apps/updater/antigravity.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/cli_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/cursor.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/desktop/tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/runner_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/t3/tests.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/tests.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/windows_task_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/apps/updater/zcode.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-agent/src/claude_host.rs",
       "kind": "internal",
       "evidence": [],
@@ -117,6 +177,36 @@
     },
     {
       "file": "crates/aac-agent/src/claude_host/windows.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/claude_usage/desktop.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/claude_usage/host.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/claude_usage/http.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/claude_usage/keychain.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/claude_usage/normalize.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -141,12 +231,57 @@
     },
     {
       "file": "crates/aac-agent/src/failover.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/failover/claude.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/failover/console/tests.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/failover/core.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/failover/dispatch.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-agent/src/files.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/history/native.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/history/native_tests.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/history/transcript.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -214,6 +349,28 @@
       ]
     },
     {
+      "file": "crates/aac-agent/src/web_session/muse.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/web_session/opencode.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/web_session/qwen.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
       "file": "crates/aac-agent/tests/agent.rs",
       "kind": "helper",
       "evidence": [
@@ -232,6 +389,20 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "crates/aac-agent/tests/desktop_usage_parity.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/tests/failover_adapters.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-agent/tests/launch_exec.rs",
@@ -258,7 +429,74 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-claude-renew/src/browser.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/config.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/hostcmd.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-claude-renew/src/lib.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/plan.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/publish.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/remote.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/service.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/state.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-claude-renew/src/tick.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-config/tests/config.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-config/tests/config_invariants.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -315,6 +553,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-files/src/kernel.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/src/lib.rs",
       "kind": "internal",
       "evidence": [],
@@ -357,6 +601,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-files/src/web_session.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-files/src/zoneinfo.rs",
       "kind": "internal",
       "evidence": [],
@@ -383,6 +634,12 @@
     },
     {
       "file": "crates/aac-files/tests/files.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/tests/history_transaction.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -483,6 +740,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/account_usage/producer/web_sessions.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
     },
     {
       "file": "crates/aac-http/src/account_usage/rows.rs",
@@ -647,10 +911,9 @@
     },
     {
       "file": "crates/aac-http/src/claude_host.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/claude_lifecycle.rs",
@@ -678,6 +941,12 @@
     },
     {
       "file": "crates/aac-http/src/claude_open/markers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_open/remote.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -755,6 +1024,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/collection.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-http/src/compress.rs",
@@ -958,6 +1234,13 @@
     },
     {
       "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_remove.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_sessions.rs",
       "kind": "safety",
       "evidence": [
         "safety"
@@ -1193,6 +1476,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/tests/config_settings_routes.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/contract_edge_and_hub.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/tests/g4_parity.rs",
       "kind": "internal",
       "evidence": [],
@@ -1243,10 +1538,24 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/tests/public_auth_endpoints.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/tests/read_numbers.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/reset_http_invariants.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-http/tests/socket.rs",
@@ -1264,6 +1573,12 @@
     },
     {
       "file": "crates/aac-http/tests/store_host.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/usage_cli.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1483,6 +1798,12 @@
       ]
     },
     {
+      "file": "crates/aac-snapshot/src/reader/rules.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-snapshot/src/renewal.rs",
       "kind": "internal",
       "evidence": [],
@@ -1501,7 +1822,19 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-snapshot/tests/native_client.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-snapshot/tests/parity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/tests/reader.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3387,6 +3720,13 @@
       "evidence": [
         "HTTP",
         "table"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/web-session-paste.check.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
       ]
     },
     {
