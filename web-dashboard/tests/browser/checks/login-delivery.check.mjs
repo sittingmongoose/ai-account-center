@@ -30,7 +30,7 @@ export const tests = {
 			const r = await fetch('/api/accounts/logins/delivery/put', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type }, body });
 			return { status: r.status, text: await r.text() };
 		}, [body, type]);
-		const rotating = await post(JSON.stringify({ kind: 'codex-signin', provider: 'claude', account: 'claude:x', secret: SECRET, expiresOn: null, computers: ['ubuntu'], confirm: 'deliver' }));
+		const rotating = await post(JSON.stringify({ kind: 'codex-signin', provider: 'claude', account: 'claude:x', secret: SECRET, expiresOn: null, targets: [{ computer: 'ubuntu', expect: 'absent' }], confirm: 'deliver' }));
 		await t.check('a rotating sign-in is refused (403 on plain HTTP, else 422 by type)', [403, 422].includes(rotating.status), rotating);
 		await t.check('the refusal does not echo the secret', !rotating.text.includes('TESTONLY'), rotating.text);
 		const plain = await post('x', 'text/plain');
@@ -52,6 +52,10 @@ export const tests = {
 		await t.until('every delivered login is drawn', (n) => document.querySelectorAll(n).length > 0, ROWS, { timeout: 30000 });
 		await t.check('one row per delivered login', await t.page.locator(ROWS).count() === FIXTURE.logins.length);
 		await t.check('a fingerprint is shown, never a secret', /sha256:0011223344556677/.test(await t.page.locator(ROWS).first().innerText()));
+		await t.check('a computer holding another value names it', /Nas1 other value 55667788/.test(await t.page.locator(ROWS).first().innerText()));
+		await t.check('a login whose computers disagree says so and offers no copy', /Computers disagree/.test(await t.page.locator(ROWS).nth(1).innerText()) && await t.page.locator(ROWS).nth(1).locator('[data-probe="ld-copy"]').count() === 0);
+		await t.check('an unreadable file is named', /Ubuntu unreadable file/.test(await t.page.locator(ROWS).nth(2).innerText()));
+		await t.check('another computer answering is said, with Trust it', await t.page.locator('[data-probe="ld-other:windows"] [data-probe="ld-trust"]').count() === 1);
 		await t.page.locator('.ld').scrollIntoViewIfNeeded();
 		await t.crop('delivery-desktop', '.ld', 'Static logins at 1920: three rows (account, kind, fingerprint, end, where, actions), the expiring one in amber, Copy to the rest only where a computer lacks it');
 		await noSideways(t, 'no sideways scroll at 1920');
@@ -60,6 +64,7 @@ export const tests = {
 		await t.check('the secret field is a password field', await t.page.locator('[data-probe="ld-secret"]').getAttribute('type') === 'password');
 		await t.page.locator('[data-probe="ld-account"]').selectOption('claude:sam');
 		await t.page.locator('[data-probe="ld-secret"]').fill(SECRET);
+		await t.check('a computer another one answered for cannot be ticked', await t.page.locator('[data-probe="ld-comp:windows"]').isDisabled());
 		await t.page.locator('[data-probe="ld-comp:mac"]').check();
 		await t.page.locator('[data-probe="ld-review"]').click();
 		await t.until('the confirmation is shown', () => !!document.querySelector('[data-probe="ld-confirm"]'));
@@ -68,7 +73,7 @@ export const tests = {
 		await t.page.locator('[data-probe="ld-confirm-go"]').click();
 		await t.until('the receipt is shown', () => !!document.querySelector('[data-probe="ld-outcome"]'));
 		const body = JSON.parse(sent[0] || '{}');
-		await t.check('one request carried the secret, with an explicit confirm', sent.length === 1 && body.secret === SECRET && body.confirm === 'deliver' && body.computers?.[0] === 'mac', body.confirm);
+		await t.check('one request carried the secret, with an explicit confirm and what the page showed for Mac', sent.length === 1 && body.secret === SECRET && body.confirm === 'deliver' && body.targets?.length === 1 && body.targets[0].computer === 'mac' && body.targets[0].expect === 'absent', body.confirm);
 		await t.check('no page text or field holds the secret after sending', await t.page.evaluate((s) => {
 			const values = [...document.querySelectorAll('input, textarea')].map((el) => el.value);
 			return !document.documentElement.outerHTML.includes(s) && !values.some((v) => v.includes(s));

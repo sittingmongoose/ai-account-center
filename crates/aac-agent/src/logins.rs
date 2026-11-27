@@ -148,18 +148,63 @@ pub(crate) fn run(verb: &str, args: &Value) -> Result<Value, Failure> {
     }
 }
 
+/// This computer's host name, or `unnamed` when it has none in the admitted shape.
+fn host() -> String {
+    #[cfg(unix)]
+    let name = {
+        let mut buf = [0u8; 256];
+        // SAFETY: gethostname writes at most `buf.len()` bytes into the buffer it is given.
+        #[allow(unsafe_code)]
+        let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+        let end = buf.iter().position(|b| *b == 0).unwrap_or(0);
+        ok.then(|| String::from_utf8_lossy(&buf[..end]).into_owned())
+    };
+    #[cfg(not(unix))]
+    let name = std::env::var("COMPUTERNAME").ok();
+    name.filter(|n| credential::valid_host(n))
+        .unwrap_or_else(|| "unnamed".into())
+}
+
+/// This computer's identity: its key (made once) and host name.
+fn computer(args: &Value) -> Result<credential::ComputerId, Failure> {
+    Ok(credential::ComputerId {
+        key: credential::computer_key(&root(args)?)?,
+        host: host(),
+    })
+}
+
+/// A write or copy names the computer the dashboard pinned; another computer refuses it before
+/// any login file is opened.
+fn same_computer(args: &Value) -> Result<(), Failure> {
+    let wanted = text(args, "computer")?;
+    if !credential::valid_computer_key(wanted) || computer(args)?.key != wanted {
+        return Err(Failure::new(Cause::IdentityMismatch, "another computer"));
+    }
+    Ok(())
+}
+
 fn inventory(args: &Value) -> Result<Value, Failure> {
     keys(args, &["home"], &[])?;
+    let computer = computer(args)?;
     let listed = credential::list(&root(args)?)?;
     let mut logins = Vec::new();
-    let mut unreadable = 0u32;
-    for (_, summary) in listed {
+    // Files that exist but cannot be read safely, by the login id their name carries (`?` when
+    // even that is unknown): the dashboard must never take them for absent.
+    let mut unreadable = Vec::new();
+    for (name, summary) in listed {
         match summary {
             Ok(summary) => logins.push(summary),
-            Err(_) => unreadable += 1,
+            Err(_) => unreadable.push(
+                name.strip_suffix(".json")
+                    .and_then(|stem| stem.rsplit_once('-'))
+                    .map(|(_, id)| id)
+                    .filter(|id| credential::valid_login_id(id))
+                    .unwrap_or("?")
+                    .to_owned(),
+            ),
         }
     }
-    Ok(json!({"os": os(), "logins": logins, "unreadable": unreadable}))
+    Ok(json!({"os": os(), "computer": computer, "logins": logins, "unreadable": unreadable}))
 }
 
 fn put(args: &Value) -> Result<Value, Failure> {
@@ -175,8 +220,10 @@ fn put(args: &Value) -> Result<Value, Failure> {
             "expect",
             "home",
             "nowMs",
+            "computer",
         ],
         &[
+            "computer",
             "loginId",
             "kind",
             "provider",
@@ -187,6 +234,7 @@ fn put(args: &Value) -> Result<Value, Failure> {
         ],
     )?;
     let wanted = identity(args)?;
+    same_computer(args)?;
     let secret = text(args, "secret")?;
     credential::admit_secret(wanted.1, secret).map_err(refusal)?;
     let expires_at = match &args["expiresAt"] {
@@ -235,10 +283,15 @@ fn put(args: &Value) -> Result<Value, Failure> {
 fn remove(args: &Value) -> Result<Value, Failure> {
     keys(
         args,
-        &["loginId", "kind", "provider", "account", "expect", "home"],
-        &["loginId", "kind", "provider", "account", "expect"],
+        &[
+            "loginId", "kind", "provider", "account", "expect", "home", "computer",
+        ],
+        &[
+            "loginId", "kind", "provider", "account", "expect", "computer",
+        ],
     )?;
     let wanted = identity(args)?;
+    same_computer(args)?;
     let expect = text(args, "expect")?;
     if !credential::valid_fingerprint(expect) {
         return Err(refused("invalid login request"));
@@ -266,10 +319,19 @@ fn copy(args: &Value) -> Result<Value, Failure> {
             "account",
             "fingerprint",
             "home",
+            "computer",
         ],
-        &["loginId", "kind", "provider", "account", "fingerprint"],
+        &[
+            "loginId",
+            "kind",
+            "provider",
+            "account",
+            "fingerprint",
+            "computer",
+        ],
     )?;
     let wanted = identity(args)?;
+    same_computer(args)?;
     let fingerprint = text(args, "fingerprint")?;
     if !credential::valid_fingerprint(fingerprint) {
         return Err(refused("invalid login request"));
@@ -307,15 +369,20 @@ mod tests {
         tempfile::tempdir().unwrap()
     }
 
+    fn key(home: &tempfile::TempDir) -> String {
+        credential::computer_key(&home.path().join(".ccs")).unwrap()
+    }
+
     fn put_args(home: &tempfile::TempDir, secret: &str, expect: &str) -> Value {
         json!({"loginId":"0a1b2c3d","kind":"claude-token","provider":"claude",
             "account":"claude:test","secret":secret,"expiresAt":"2027-11-27T00:00:00Z",
-            "expect":expect,"home":home.path().to_str().unwrap(),"nowMs":1_795_000_000_000i64})
+            "expect":expect,"home":home.path().to_str().unwrap(),"nowMs":1_795_000_000_000i64,
+            "computer":key(home)})
     }
 
     fn ident(home: &tempfile::TempDir) -> Value {
         json!({"loginId":"0a1b2c3d","kind":"claude-token","provider":"claude",
-            "account":"claude:test","home":home.path().to_str().unwrap()})
+            "account":"claude:test","home":home.path().to_str().unwrap(),"computer":key(home)})
     }
 
     /// Red/green: every rotating kind is refused by its type, before any file is touched.
@@ -441,5 +508,124 @@ mod tests {
         let error = run("login-put", &put_args(&home, OTHER, "absent")).unwrap_err();
         let text = serde_json::to_string(&error).unwrap();
         assert!(!text.contains("TESTONLY"), "{text}");
+    }
+
+    /// Red/green (review M1, both reviewers): a request routed to another computer of the same
+    /// operating system is refused before any login file is touched, for every writing verb.
+    #[test]
+    fn another_computer_refuses_before_touching_a_file() {
+        let intended = home();
+        let wrong = home();
+        let mut args = put_args(&intended, TOKEN, "absent");
+        args["home"] = json!(wrong.path().to_str().unwrap());
+        assert_eq!(
+            run("login-put", &args).unwrap_err().cause,
+            Cause::IdentityMismatch
+        );
+        assert!(!wrong.path().join(".ccs/logins").exists());
+        run("login-put", &put_args(&wrong, TOKEN, "absent")).unwrap();
+        for (verb, extra) in [
+            (
+                "login-copy",
+                ("fingerprint", credential::fingerprint(TOKEN)),
+            ),
+            ("login-remove", ("expect", credential::fingerprint(TOKEN))),
+        ] {
+            let mut args = ident(&intended);
+            args["home"] = json!(wrong.path().to_str().unwrap());
+            args[extra.0] = json!(extra.1);
+            assert_eq!(
+                run(verb, &args).unwrap_err().cause,
+                Cause::IdentityMismatch,
+                "{verb}"
+            );
+        }
+        assert!(
+            wrong
+                .path()
+                .join(".ccs/logins/claude-0a1b2c3d.json")
+                .exists()
+        );
+        let inventory = run(
+            "login-inventory",
+            &json!({"home": wrong.path().to_str().unwrap()}),
+        )
+        .unwrap();
+        assert_eq!(inventory["computer"]["key"], key(&wrong));
+        assert_ne!(inventory["computer"]["key"], key(&intended));
+    }
+
+    /// Red/green (review Astra M2): an unsafe file is listed as unreadable by its login id.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_named_not_hidden() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = home();
+        run("login-put", &put_args(&home, TOKEN, "absent")).unwrap();
+        let path = home.path().join(".ccs/logins/claude-0a1b2c3d.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let inventory = run(
+            "login-inventory",
+            &json!({"home": home.path().to_str().unwrap()}),
+        )
+        .unwrap();
+        assert_eq!(inventory["logins"].as_array().unwrap().len(), 0);
+        assert_eq!(inventory["unreadable"], json!(["0a1b2c3d"]));
+    }
+
+    /// Red/green (review Astra M3): repeating an unchanged delivery keeps the previous generation.
+    #[test]
+    fn a_repeat_delivery_keeps_the_previous_generation() {
+        let home = home();
+        run("login-put", &put_args(&home, TOKEN, "absent")).unwrap();
+        let mut replacement = put_args(&home, OTHER, &credential::fingerprint(TOKEN));
+        replacement["nowMs"] = json!(1_795_000_001_000i64);
+        run("login-put", &replacement).unwrap();
+        let path = home
+            .path()
+            .join(".ccs/logins/previous/claude-0a1b2c3d.json");
+        let before = std::fs::read(&path).unwrap();
+        let mut repeat = put_args(&home, OTHER, &credential::fingerprint(OTHER));
+        repeat["nowMs"] = json!(1_795_000_002_000i64);
+        let receipt = run("login-put", &repeat).unwrap();
+        assert_eq!(receipt["written"], "unchanged");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    /// From the Astra review: two confirmed writes racing for one file have one winner.
+    #[test]
+    fn competing_writes_have_one_winner() {
+        use std::sync::{Arc, Barrier};
+        let home = home();
+        run("login-put", &put_args(&home, TOKEN, "absent")).unwrap();
+        let expect = credential::fingerprint(TOKEN);
+        let one = put_args(&home, OTHER, &expect);
+        let two = put_args(
+            &home,
+            "sk-ant-oat01-TESTONLY-agent-token-2222222222222",
+            &expect,
+        );
+        let gate = Arc::new(Barrier::new(3));
+        let (g1, g2) = (gate.clone(), gate.clone());
+        let h1 = std::thread::spawn(move || {
+            g1.wait();
+            run("login-put", &one)
+        });
+        let h2 = std::thread::spawn(move || {
+            g2.wait();
+            run("login-put", &two)
+        });
+        gate.wait();
+        let outcomes = [h1.join().unwrap(), h2.join().unwrap()];
+        assert_eq!(outcomes.iter().filter(|r| r.is_ok()).count(), 1);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter_map(|r| r.as_ref().err())
+                .next()
+                .unwrap()
+                .cause,
+            Cause::ConfirmationInvalid
+        );
     }
 }

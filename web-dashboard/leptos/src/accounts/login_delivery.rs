@@ -17,7 +17,8 @@ pub(crate) const PATH: &str = "/api/accounts/logins/delivery";
 pub(crate) struct Form {
     /// A replace keeps the login's id and the fingerprint the page showed.
     pub login_id: Option<String>,
-    pub replace_fingerprint: Option<String>,
+    /// For a replace: what the page showed on each computer that holds this login (its fingerprint).
+    pub shown: Vec<(String, String)>,
     pub kind: String,
     pub provider: String,
     pub account: String,
@@ -46,6 +47,15 @@ impl std::fmt::Debug for Form {
     }
 }
 
+/// `[{"computer":..,"expect":..}]`.
+fn targets(list: &[(String, String)]) -> serde_json::Value {
+    serde_json::Value::Array(
+        list.iter()
+            .map(|(c, e)| json!({"computer": c, "expect": e}))
+            .collect(),
+    )
+}
+
 impl Form {
     /// Ready to review: every field the server needs.
     pub(crate) fn ready(&self) -> bool {
@@ -56,12 +66,28 @@ impl Form {
             && !self.computers.is_empty()
     }
 
+    /// Each ticked computer with what the page showed there: the copy it holds, else `absent`.
+    pub(crate) fn expects(&self) -> Vec<(String, String)> {
+        self.computers
+            .iter()
+            .map(|c| {
+                let shown = self
+                    .shown
+                    .iter()
+                    .find(|(id, _)| id == c)
+                    .map(|(_, fp)| fp.clone());
+                (c.clone(), shown.unwrap_or_else(|| "absent".into()))
+            })
+            .collect()
+    }
+
     /// The request body, built once: the secret is moved out of the form, so the page no longer holds it.
     pub(crate) fn take_body(&mut self) -> String {
         let secret = std::mem::take(&mut self.secret);
-        let confirm = match &self.replace_fingerprint {
-            Some(fp) => format!("replace:{fp}"),
-            None => "deliver".to_owned(),
+        let confirm = if self.login_id.is_some() {
+            "replace"
+        } else {
+            "deliver"
         };
         json!({
             "loginId": self.login_id,
@@ -70,53 +96,75 @@ impl Form {
             "account": self.account,
             "secret": secret.trim(),
             "expiresOn": (!self.expires_on.is_empty()).then_some(&self.expires_on),
-            "computers": self.computers,
+            "targets": targets(&self.expects()),
             "confirm": confirm,
         })
         .to_string()
     }
 }
 
-/// The body that copies a login from its first healthy holder to every computer without it, or `None` when there is
-/// nothing to copy.
-pub(crate) fn copy_body(login: &DeliveredLogin, computers: &[String]) -> Option<String> {
-    let from = login
-        .holders
+/// Computers that can be written now: enrolled ones.
+pub(crate) fn writable(computers: &[aac_api::login_delivery::DeliveryComputer]) -> Vec<String> {
+    computers
         .iter()
-        .find(|h| h.state == "ok")?
-        .computer
-        .clone();
+        .filter(|c| c.state == "enrolled")
+        .map(|c| c.id.clone())
+        .collect()
+}
+
+/// The body that copies the current value from a computer holding it to every enrolled computer that lacks it or
+/// holds another value, naming what each one holds. `None` when no computer holds the current value or none needs it.
+pub(crate) fn copy_body(login: &DeliveredLogin, computers: &[String]) -> Option<String> {
+    if login.fingerprint.is_empty() {
+        return None;
+    }
+    let from = login.holders.iter().find(|h| h.state == "ok")?;
     let to = missing(login, computers);
     (!to.is_empty()).then(|| {
-        json!({"loginId": login.login_id, "from": from, "to": to,
-            "confirm": format!("copy:{}", login.fingerprint)})
+        json!({"loginId": login.login_id,
+            "from": {"computer": from.computer, "fingerprint": from.fingerprint},
+            "to": targets(&to), "confirm": "copy"})
         .to_string()
     })
 }
 
-/// The body that removes a login from every computer the registry lists for it.
-pub(crate) fn remove_body(login: &DeliveredLogin) -> String {
-    let computers: Vec<&str> = login.holders.iter().map(|h| h.computer.as_str()).collect();
-    json!({"loginId": login.login_id, "computers": computers,
-        "confirm": format!("remove:{}", login.fingerprint)})
-    .to_string()
+/// The body that removes a login from every computer where the page knows its value.
+pub(crate) fn remove_body(login: &DeliveredLogin) -> Option<String> {
+    let list: Vec<(String, String)> = login
+        .holders
+        .iter()
+        .filter(|h| matches!(h.state.as_str(), "ok" | "differs") && !h.fingerprint.is_empty())
+        .map(|h| (h.computer.clone(), h.fingerprint.clone()))
+        .collect();
+    (!list.is_empty()).then(|| {
+        json!({"loginId": login.login_id, "targets": targets(&list), "confirm": "remove"})
+            .to_string()
+    })
 }
 
-/// Computers that do not hold the login in good order.
-pub(crate) fn missing(login: &DeliveredLogin, computers: &[String]) -> Vec<String> {
+/// Enrolled computers that do not hold the current value, with what each holds (`absent` when nothing). A computer
+/// whose file cannot be read, or that holds another account, is left out: nothing can be confirmed there.
+pub(crate) fn missing(login: &DeliveredLogin, computers: &[String]) -> Vec<(String, String)> {
     computers
         .iter()
-        .filter(|c| {
-            !login
-                .holders
-                .iter()
-                .any(|h| &h.computer == *c && h.state == "ok")
+        .filter_map(|c| match login.holders.iter().find(|h| &h.computer == c) {
+            None => Some((c.clone(), "absent".to_owned())),
+            Some(h) if h.state == "differs" && !h.fingerprint.is_empty() => {
+                Some((c.clone(), h.fingerprint.clone()))
+            }
+            Some(_) => None,
         })
-        .cloned()
         .collect()
 }
 
-/// "nas1 ok · mac changed": where it is, in words.
+/// A fingerprint in short: its first 8 hex digits.
+pub(crate) fn short(fp: &str) -> &str {
+    fp.strip_prefix("sha256:")
+        .and_then(|h| h.get(..8))
+        .unwrap_or(fp)
+}
+
+/// "Mac ok · Nas1 differs 00112233": where it is, in words.
 pub(crate) fn holders_line(login: &DeliveredLogin, labels: &[(String, String)]) -> String {
     if login.holders.is_empty() {
         return "On no computer".into();
@@ -130,12 +178,13 @@ pub(crate) fn holders_line(login: &DeliveredLogin, labels: &[(String, String)]) 
                 .find(|(id, _)| id == &h.computer)
                 .map_or(h.computer.as_str(), |(_, label)| label.as_str());
             let state = match h.state.as_str() {
-                "ok" => "ok",
-                "unchecked" => "not checked",
-                "missing" => "missing",
-                "changed" => "changed",
-                "mismatch" => "mismatch",
-                _ => "unknown",
+                "ok" => "ok".to_owned(),
+                "differs" => format!("other value {}", short(&h.fingerprint)),
+                "unchecked" => "not checked".into(),
+                "unreadable" => "unreadable file".into(),
+                "other-account" => "another account".into(),
+                "wrong-computer" => "another computer answered".into(),
+                _ => "unknown".into(),
             };
             format!("{name} {state}")
         })
@@ -198,7 +247,7 @@ async fn fetch() -> Result<DeliveryView, FetchError> {
 async fn post(action: &str, body: String) -> Result<Option<DeliveryReceipt>, String> {
     let url = format!("{PATH}/{action}");
     match send("POST", &url, Some(body)).await {
-        Ok((200, text)) if action == "check" => {
+        Ok((200, text)) if matches!(action, "check" | "trust") => {
             parse_view(&text).map(|_| None).map_err(|e| e.sentence())
         }
         Ok((200, text)) => serde_json::from_str::<DeliveryReceipt>(&text)
@@ -215,6 +264,7 @@ enum Pending {
     Deliver,
     Copy(String, String),
     Remove(String, String),
+    Trust(String, String),
 }
 
 /// The static-logins section inside the Logins plate.
@@ -265,11 +315,19 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
         let mut f = Form::default();
         if let Some(l) = login {
             f.login_id = Some(l.login_id.clone());
-            f.replace_fingerprint = Some(l.fingerprint.clone());
+            // What the page shows on each computer; a replace confirms exactly these.
+            f.shown = l
+                .holders
+                .iter()
+                .filter(|h| {
+                    matches!(h.state.as_str(), "ok" | "differs") && !h.fingerprint.is_empty()
+                })
+                .map(|h| (h.computer.clone(), h.fingerprint.clone()))
+                .collect();
             f.kind = l.kind.clone();
             f.provider = l.provider.clone();
             f.account = l.account.clone();
-            f.computers = l.holders.iter().map(|h| h.computer.clone()).collect();
+            f.computers = f.shown.iter().map(|(c, _)| c.clone()).collect();
         } else {
             f.kind = "claude-token".into();
         }
@@ -299,6 +357,19 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
             {move || outcome.get().map(|o| match o {
                 Ok(lines) => view! { <ul class="ld-out" data-probe="ld-outcome">{lines.into_iter().map(|l| view! { <li>{l}</li> }).collect_view()}</ul> }.into_any(),
                 Err(msg) => view! { <p class="ac-note crit" data-probe="ld-refused">{msg}</p> }.into_any(),
+            })}
+            {move || state.with(|s| match s {
+                Some(Ok(v)) => v.computers.iter().filter(|c| c.state == "other").map(|c| {
+                    let body = json!({"computer": c.id, "key": c.seen_key, "confirm": "trust"}).to_string();
+                    let text = format!("Trust the computer answering as {} (host {}) from now on? Only if it was rebuilt or renamed: until then nothing is sent to it.", c.label, c.host);
+                    let line = format!("{}: another computer answered (host {}). Nothing is sent to it.", c.label, c.host);
+                    view! {
+                        <p class="ac-note crit ld-other" data-probe=format!("ld-other:{}", c.id)>{line}" "
+                            <button type="button" class="btn sm" data-probe="ld-trust" on:click=move |_| pending.set(Some(Pending::Trust(body.clone(), text.clone())))>"Trust it"</button>
+                        </p>
+                    }
+                }).collect_view().into_any(),
+                _ => ().into_any(),
             })}
             <Show when=move || open.get()>
                 {move || state.with(|s| s.as_ref().and_then(|s| s.as_ref().ok()).cloned()).map(|view_now| {
@@ -358,16 +429,22 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                                 {computers.into_iter().map(|c| {
                                     let id = c.id.clone();
                                     let id2 = c.id.clone();
+                                    let enrolled = c.state == "enrolled";
+                                    let note = match c.state.as_str() {
+                                        "enrolled" => "",
+                                        "new" => " (check computers first)",
+                                        _ => " (another computer answered)",
+                                    };
                                     view! {
-                                        <label class="check ld-comp">
-                                            <input type="checkbox" data-probe=format!("ld-comp:{}", c.id)
+                                        <label class="check ld-comp" class:off=!enrolled>
+                                            <input type="checkbox" data-probe=format!("ld-comp:{}", c.id) disabled=!enrolled
                                                 prop:checked=move || form.with(|f| f.computers.contains(&id))
                                                 on:change=move |e| {
                                                     let on = event_target_checked(&e);
                                                     let id = id2.clone();
                                                     form.update(|f| { f.computers.retain(|x| x != &id); if on { f.computers.push(id); } });
                                                 }/>
-                                            <span>{c.label.clone()}</span>
+                                            <span>{format!("{}{note}", c.label)}</span>
                                         </label>
                                     }
                                 }).collect_view()}
@@ -388,15 +465,26 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                 let (text, label, act) = match &p {
                     Pending::Deliver => {
                         let n = form.with_untracked(|f| f.computers.len());
-                        let replace = form.with_untracked(|f| f.replace_fingerprint.clone());
+                        let replace = form.with_untracked(|f| f.login_id.is_some());
+                        let named = form.with_untracked(|f| {
+                            f.expects()
+                                .iter()
+                                .map(|(c, e)| {
+                                    let name = labels.get_untracked().iter().find(|(id, _)| id == c).map_or(c.clone(), |(_, l)| l.clone());
+                                    if e == "absent" { format!("{name} (none there)") } else { format!("{name} (replaces {})", short(e)) }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        });
                         let text = match replace {
-                            Some(fp) => format!("Replace the login with fingerprint {fp} on {n} computer{}. A computer holding another one is left alone.", if n == 1 { "" } else { "s" }),
-                            None => format!("Write this {} to {n} computer{}. It is sent once and never shown again.", kind_label(&form.with_untracked(|f| f.kind.clone())), if n == 1 { "" } else { "s" }),
+                            true => format!("Replace this login on {named}. A computer holding anything else is left alone."),
+                            false => format!("Write this {} to {n} computer{}. It is sent once and never shown again.", kind_label(&form.with_untracked(|f| f.kind.clone())), if n == 1 { "" } else { "s" }),
                         };
                         (text, "Deliver", "put")
                     }
                     Pending::Copy(_, text) => (text.clone(), "Copy", "copy"),
                     Pending::Remove(_, text) => (text.clone(), "Remove", "remove"),
+                    Pending::Trust(_, text) => (text.clone(), "Trust it", "trust"),
                 };
                 let p2 = p.clone();
                 view! {
@@ -409,6 +497,7 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                                     Pending::Deliver => confirm_deliver(e),
                                     Pending::Copy(body, _) => run("copy", body.clone()),
                                     Pending::Remove(body, _) => run("remove", body.clone()),
+                                    Pending::Trust(body, _) => run("trust", body.clone()),
                                 }>{label}</button>
                         </div>
                     </div>
@@ -419,7 +508,7 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                 Some(Err(e)) => view! { <p class="ac-note crit">{format!("Static logins could not be read. {}", e.sentence())}</p> }.into_any(),
                 Some(Ok(v)) if v.logins.is_empty() => view! { <p class="ac-note" data-probe="ld-empty">"No static login has been delivered yet."</p> }.into_any(),
                 Some(Ok(v)) => {
-                    let all: Vec<String> = v.computers.iter().map(|c| c.id.clone()).collect();
+                    let all: Vec<String> = writable(&v.computers);
                     let labels_now = labels.get_untracked();
                     view! {
                         <div class="ld-rows" role="table" aria-label="Static logins">
@@ -428,7 +517,8 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                                 let missing_n = missing(&login, &all).len();
                                 let holders = holders_line(&login, &labels_now);
                                 let remove = remove_body(&login);
-                                let fp = login.fingerprint.clone();
+                                let fp = if login.fingerprint.is_empty() { "Computers disagree".to_owned() } else { login.fingerprint.clone() };
+                                let fp_short = short(&login.fingerprint).to_owned();
                                 let replace_login = login.clone();
                                 let health = match login.health.as_str() {
                                     "ended" => "lg-h crit",
@@ -439,19 +529,19 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                                     <div class="ld-row" role="row" data-probe=format!("ld-row:{}", login.login_id)>
                                         <span class="ld-acct" role="cell" title=login.account_label.clone()>{login.account_label.clone()}</span>
                                         <span class="ld-kind" role="cell">{kind_label(&login.kind)}</span>
-                                        <span class="ld-fp mono" role="cell" title="Fingerprint of the secret (not the secret)">{login.fingerprint.clone()}</span>
+                                        <span class="ld-fp mono" role="cell" title="Fingerprint of the current value (not the secret)">{fp.clone()}</span>
                                         <span class=health role="cell">{login.ends_text.clone()}</span>
                                         <span class="ld-where" role="cell" title=holders.clone()>{holders.clone()}</span>
                                         <span class="ld-row-acts" role="cell">
                                             {copy.map(|body| {
-                                                let text = format!("Copy the login with fingerprint {fp} to {missing_n} more computer{}.", if missing_n == 1 { "" } else { "s" });
+                                                let text = format!("Copy the value {fp_short} to {missing_n} more computer{}. A computer holding another value gets this one in its place; anything not shown here is left alone.", if missing_n == 1 { "" } else { "s" });
                                                 view! { <button type="button" class="btn sm" data-probe="ld-copy" on:click=move |_| pending.set(Some(Pending::Copy(body.clone(), text.clone())))>"Copy to the rest"</button> }
                                             })}
                                             <button type="button" class="btn sm" data-probe="ld-replace" on:click=move |_| start(Some(replace_login.clone()))>"Replace"</button>
-                                            {
-                                                let text = format!("Remove the login with fingerprint {} from every computer that holds it.", login.fingerprint);
+                                            {remove.map(|remove| {
+                                                let text = "Remove this login from every computer where its value is shown. An unreadable file or another value there is left alone.".to_owned();
                                                 view! { <button type="button" class="btn sm danger-text" data-probe="ld-remove" on:click=move |_| pending.set(Some(Pending::Remove(remove.clone(), text.clone())))>"Remove"</button> }
-                                            }
+                                            })}
                                         </span>
                                     </div>
                                 }
@@ -467,9 +557,20 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aac_api::login_delivery::LoginHolder;
+    use aac_api::login_delivery::{DeliveryComputer, LoginHolder};
 
     const SECRET: &str = "sk-ant-oat01-TESTONLY-page-token-0000000";
+    const A: &str = "sha256:0011223344556677";
+    const B: &str = "sha256:8899aabbccddeeff";
+
+    fn holder(computer: &str, fingerprint: &str, state: &str) -> LoginHolder {
+        LoginHolder {
+            computer: computer.into(),
+            delivered_at: String::new(),
+            fingerprint: fingerprint.into(),
+            state: state.into(),
+        }
+    }
 
     fn login() -> DeliveredLogin {
         DeliveredLogin {
@@ -478,18 +579,11 @@ mod tests {
             provider: "claude".into(),
             account: "claude:me".into(),
             account_label: "me@example.com".into(),
-            fingerprint: "sha256:0011223344556677".into(),
+            fingerprint: A.into(),
             holders: vec![
-                LoginHolder {
-                    computer: "ubuntu".into(),
-                    delivered_at: String::new(),
-                    state: "ok".into(),
-                },
-                LoginHolder {
-                    computer: "mac".into(),
-                    delivered_at: String::new(),
-                    state: "changed".into(),
-                },
+                holder("ubuntu", A, "ok"),
+                holder("mac", B, "differs"),
+                holder("win", "", "unreadable"),
             ],
             ..Default::default()
         }
@@ -511,46 +605,86 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&form.take_body()).expect("test value");
         assert_eq!(body["secret"], SECRET);
         assert_eq!(body["confirm"], "deliver");
+        assert_eq!(
+            body["targets"],
+            json!([{"computer":"ubuntu","expect":"absent"}])
+        );
         assert_eq!(body["expiresOn"], serde_json::Value::Null);
         assert!(form.secret.is_empty());
         assert!(!format!("{form:?}").contains("TESTONLY"));
         assert!(!form.ready());
     }
 
+    /// A replace names, per computer, the value the page showed there.
     #[test]
-    fn a_replace_confirms_the_fingerprint_it_showed() {
+    fn a_replace_confirms_what_each_computer_holds() {
         let mut form = Form {
             login_id: Some("0a1b2c3d".into()),
-            replace_fingerprint: Some("sha256:0011223344556677".into()),
+            shown: vec![("ubuntu".into(), A.into()), ("mac".into(), B.into())],
             kind: "claude-token".into(),
             provider: "claude".into(),
             account: "claude:me".into(),
             secret: SECRET.into(),
             expires_on: "2027-11-01".into(),
-            computers: vec!["ubuntu".into()],
+            computers: vec!["ubuntu".into(), "mac".into(), "nas1".into()],
         };
         let body: serde_json::Value = serde_json::from_str(&form.take_body()).expect("test value");
-        assert_eq!(body["confirm"], "replace:sha256:0011223344556677");
-        assert_eq!(body["loginId"], "0a1b2c3d");
+        assert_eq!(body["confirm"], "replace");
+        assert_eq!(
+            body["targets"],
+            json!([{"computer":"ubuntu","expect":A},{"computer":"mac","expect":B},
+                {"computer":"nas1","expect":"absent"}])
+        );
         assert_eq!(body["expiresOn"], "2027-11-01");
     }
 
+    /// Red/green (review): copy names the source's value and what each destination holds; an
+    /// unreadable computer is never a destination or a removal target; a login whose computers
+    /// disagree offers no copy.
     #[test]
-    fn copy_and_remove_bodies_name_the_fingerprint_and_carry_no_secret() {
-        let all = vec!["ubuntu".to_owned(), "mac".to_owned(), "nas1".to_owned()];
+    fn copy_and_remove_bodies_name_each_computers_value() {
+        let all = vec![
+            "ubuntu".to_owned(),
+            "mac".to_owned(),
+            "nas1".to_owned(),
+            "win".to_owned(),
+        ];
         let copy: serde_json::Value =
             serde_json::from_str(&copy_body(&login(), &all).expect("test value"))
                 .expect("test value");
-        assert_eq!(copy["from"], "ubuntu");
-        assert_eq!(copy["to"], serde_json::json!(["mac", "nas1"]));
-        assert_eq!(copy["confirm"], "copy:sha256:0011223344556677");
+        assert_eq!(copy["from"], json!({"computer":"ubuntu","fingerprint":A}));
+        assert_eq!(
+            copy["to"],
+            json!([{"computer":"mac","expect":B},{"computer":"nas1","expect":"absent"}])
+        );
+        assert_eq!(copy["confirm"], "copy");
         let remove: serde_json::Value =
-            serde_json::from_str(&remove_body(&login())).expect("test value");
-        assert_eq!(remove["computers"], serde_json::json!(["ubuntu", "mac"]));
-        assert_eq!(remove["confirm"], "remove:sha256:0011223344556677");
-        let mut none_ok = login();
-        none_ok.holders[0].state = "missing".into();
-        assert!(copy_body(&none_ok, &all).is_none());
+            serde_json::from_str(&remove_body(&login()).expect("test value")).expect("test value");
+        assert_eq!(
+            remove["targets"],
+            json!([{"computer":"ubuntu","expect":A},{"computer":"mac","expect":B}])
+        );
+        let mut disagree = login();
+        disagree.fingerprint.clear();
+        assert!(copy_body(&disagree, &all).is_none());
+        let computers = vec![
+            DeliveryComputer {
+                id: "ubuntu".into(),
+                state: "enrolled".into(),
+                ..Default::default()
+            },
+            DeliveryComputer {
+                id: "mac".into(),
+                state: "new".into(),
+                ..Default::default()
+            },
+            DeliveryComputer {
+                id: "nas1".into(),
+                state: "other".into(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(writable(&computers), ["ubuntu"]);
     }
 
     #[test]
@@ -558,11 +692,11 @@ mod tests {
         let labels = vec![("ubuntu".to_owned(), "Ubuntu VM".to_owned())];
         assert_eq!(
             holders_line(&login(), &labels),
-            "Ubuntu VM ok · mac changed"
+            "Ubuntu VM ok · mac other value 8899aabb · win unreadable file"
         );
         let receipt = DeliveryReceipt {
             login_id: "0a1b2c3d".into(),
-            fingerprint: "sha256:0011223344556677".into(),
+            fingerprint: A.into(),
             results: vec![aac_api::login_delivery::DeliveryResult {
                 computer: "ubuntu".into(),
                 state: "delivered".into(),

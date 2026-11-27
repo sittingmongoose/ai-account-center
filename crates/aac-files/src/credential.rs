@@ -243,6 +243,14 @@ impl Record {
         Ok(Self { summary, secret })
     }
 
+    /// The same login with the same secret and end; only the arrival time may differ.
+    pub fn same_content(&self, other: &Record) -> bool {
+        self.summary.same_identity(&other.summary)
+            && self.summary.fingerprint == other.summary.fingerprint
+            && self.summary.expires_at == other.summary.expires_at
+            && self.secret == other.secret
+    }
+
     /// The secret, for the one caller that hands it to another computer's agent.
     pub fn secret(&self) -> &str {
         &self.secret
@@ -384,7 +392,9 @@ impl CredentialFile {
         let current_bytes = read_private(&self.root, self.store.path())?;
         let current = current_bytes.as_deref().map(Record::decode).transpose()?;
         decide(current.as_ref())?;
-        if current.as_ref() == Some(record) {
+        // A repeat of what is already there (same login, secret and end) changes nothing: the file,
+        // its arrival time and the previous generation all stay as they are.
+        if current.as_ref().is_some_and(|c| c.same_content(record)) {
             return Ok(Written::Unchanged);
         }
         let bytes = record.encode()?;
@@ -481,6 +491,95 @@ pub fn list(root: &Path) -> Result<Vec<Listed>, Failure> {
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
+}
+
+/// The registry row of this computer's login identity (`login-computer.json`).
+pub const COMPUTER_ROW_ID: &str = "login-computer";
+
+/// This computer's identity for login delivery: a random key made once by its agent, plus its
+/// host name. The dashboard pins both when the owner checks the computers, and every write names
+/// the pinned key, so a request routed to another computer is refused before a file is touched.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComputerId {
+    /// 32 lowercase hex digits.
+    pub key: String,
+    /// The computer's host name (1-64 of letters, digits, `.`, `_`, `-`).
+    pub host: String,
+}
+
+/// A computer key's shape.
+pub fn valid_computer_key(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// A host name's shape.
+pub fn valid_host(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComputerDisk {
+    version: u32,
+    key: String,
+}
+
+fn parse_key(bytes: &[u8]) -> Result<String, Failure> {
+    let disk: ComputerDisk = serde_json::from_slice(bytes)
+        .map_err(|_| Failure::new(Cause::Damaged, "computer key is not valid"))?;
+    if disk.version != 1 || !valid_computer_key(&disk.key) {
+        return Err(Failure::new(Cause::Damaged, "computer key is not valid"));
+    }
+    Ok(disk.key)
+}
+
+/// This computer's key under `root`, made (0600, under its lease) the first time it is asked.
+/// A file that is not private, or not valid, is refused, never replaced.
+pub fn computer_key(root: &Path) -> Result<String, Failure> {
+    // An existing key is read without the lease: it never changes once made, and readers must
+    // not queue behind each other. Only making it takes the lease (and reads again under it).
+    let row = registry::row(COMPUTER_ROW_ID)?;
+    let path = root.join(&row.path);
+    if let Ok(Some(bytes)) = read_private(root, &path) {
+        return parse_key(&bytes);
+    }
+    let start = std::time::Instant::now();
+    let store = loop {
+        match registry::claim_as_agent(COMPUTER_ROW_ID, root, None) {
+            Err(e)
+                if e.cause == Cause::Busy
+                    && start.elapsed() < std::time::Duration::from_secs(2) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            other => break other?,
+        }
+    };
+    match read::read(store.path(), &policy(root)) {
+        Read::Bytes(bytes, _) if single_link(store.path()) => parse_key(&bytes),
+        Read::Absent => {
+            let mut raw = [0u8; 16];
+            getrandom::fill(&mut raw)
+                .map_err(|_| Failure::new(Cause::Refused, "no random source"))?;
+            let key: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+            let mut bytes = serde_json::to_vec(&ComputerDisk {
+                version: 1,
+                key: key.clone(),
+            })
+            .map_err(|_| Failure::new(Cause::Bug, "computer key encoding"))?;
+            bytes.push(b'\n');
+            store.write(&bytes)?;
+            Ok(key)
+        }
+        _ => Err(unsafe_file()),
+    }
 }
 
 #[cfg(test)]
@@ -642,6 +741,41 @@ mod tests {
         std::fs::hard_link(&path, root.join("logins/extra")).unwrap();
         assert!(file.read().is_err());
         assert!(list(&root).unwrap()[0].1.is_err());
+    }
+
+    /// Red/green (review M3): repeating an unchanged delivery keeps the previous generation.
+    #[cfg(unix)]
+    #[test]
+    fn an_unchanged_write_keeps_the_file_and_its_backup() {
+        let (_dir, root) = root();
+        let other = "sk-ant-oat01-TESTONLY-second-token-1111111111";
+        let file = CredentialFile::claim_as_agent(&root, "claude", "0a1b2c3d").unwrap();
+        file.replace(&Record::new(summary(TOKEN), TOKEN.into()).unwrap(), |_| {
+            Ok(())
+        })
+        .unwrap();
+        let second = Record::new(summary(other), other.into()).unwrap();
+        file.replace(&second, |_| Ok(())).unwrap();
+        let backup = root.join("logins/previous/claude-0a1b2c3d.json");
+        let before = crate::read_bounded(&backup, MAX_BYTES).unwrap();
+        let mut later = summary(other);
+        later.written_at = "2026-11-28T05:00:00Z".into();
+        let repeat = Record::new(later, other.into()).unwrap();
+        assert_eq!(
+            file.replace(&repeat, |_| Ok(())).unwrap(),
+            Written::Unchanged
+        );
+        assert_eq!(crate::read_bounded(&backup, MAX_BYTES).unwrap(), before);
+        assert_eq!(file.read().unwrap().unwrap(), second);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_computer_key_is_made_once_and_kept() {
+        let (_dir, root) = root();
+        let key = computer_key(&root).unwrap();
+        assert!(valid_computer_key(&key));
+        assert_eq!(computer_key(&root).unwrap(), key);
     }
 
     #[test]

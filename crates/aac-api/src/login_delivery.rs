@@ -46,6 +46,16 @@ pub struct DeliveryComputer {
     /// Its name in words.
     #[serde(deserialize_with = "nullable")]
     pub label: String,
+    /// `enrolled` (its identity is pinned), `new` (never checked: check the computers first) or
+    /// `other` (another computer answered for it; trust it only if it was rebuilt or renamed).
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
+    /// The host name it reported when it was pinned, or the other one that answered.
+    #[serde(deserialize_with = "nullable")]
+    pub host: String,
+    /// For `other`: the key of the computer that answered, which a trust confirmation names.
+    #[serde(deserialize_with = "nullable")]
+    pub seen_key: String,
 }
 
 /// One account a static login can belong to.
@@ -97,7 +107,8 @@ pub struct DeliveredLogin {
     /// The account in words.
     #[serde(deserialize_with = "nullable")]
     pub account_label: String,
-    /// The secret's fingerprint.
+    /// The current generation's fingerprint; empty when the computers disagree and no delivery
+    /// has settled which one is current.
     #[serde(deserialize_with = "nullable")]
     pub fingerprint: String,
     /// When it ends, ISO, when that is known.
@@ -123,8 +134,13 @@ pub struct LoginHolder {
     /// When it was delivered there, ISO.
     #[serde(deserialize_with = "nullable")]
     pub delivered_at: String,
-    /// `ok` (last check found this fingerprint), `unchecked`, `missing`, `changed` (another
-    /// fingerprint) or `mismatch` (another account, or another computer answered).
+    /// The fingerprint last seen there; empty when it could not be read.
+    #[serde(deserialize_with = "nullable")]
+    pub fingerprint: String,
+    /// `ok` (holds the current generation), `differs` (holds another generation, named by
+    /// `fingerprint`), `unreadable` (a file is there but cannot be read safely), `unchecked` (not
+    /// reached at the last check), `other-account` (another account or kind under this id) or
+    /// `wrong-computer` (another computer answered).
     #[serde(deserialize_with = "nullable")]
     pub state: String,
 }
@@ -151,8 +167,8 @@ pub struct DeliveryResult {
     /// The computer's id.
     #[serde(deserialize_with = "nullable")]
     pub computer: String,
-    /// `delivered`, `unchanged`, `removed`, `absent`, `refused`, `mismatch`, `changed` or
-    /// `unreachable`.
+    /// `delivered`, `unchanged`, `removed`, `absent`, `refused`, `mismatch`, `changed`,
+    /// `unreadable`, `unenrolled`, `wrong-computer` or `unreachable`.
     #[serde(deserialize_with = "nullable")]
     pub state: String,
     /// The state in words.
