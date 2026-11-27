@@ -3393,6 +3393,7 @@ mod tests {
                 .collect()
         }
 
+        #[cfg_attr(not(unix), allow(dead_code))]
         fn run_envs(&self) -> Vec<Vec<(String, String)>> {
             self.runs
                 .lock()

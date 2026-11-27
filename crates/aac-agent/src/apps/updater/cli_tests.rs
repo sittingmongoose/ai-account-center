@@ -163,6 +163,7 @@ fn link(target: &Path, at: &Path) {
     std::os::unix::fs::symlink(target, at).expect("link");
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn version_of(
     spec: &CommandSpec,
     answers: &[(&str, &str)],

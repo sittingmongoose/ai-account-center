@@ -652,8 +652,6 @@ impl Agents {
         } else {
             verb
         };
-        #[cfg(not(unix))]
-        let verb = verb;
         // Only the in-process host orchestration may use the mutation verb directly.
         if !(call.valid(verb) || internal_host && verb == "claude-host" && call.bounded(verb)) {
             return unavailable(&call.call_id, "shape");

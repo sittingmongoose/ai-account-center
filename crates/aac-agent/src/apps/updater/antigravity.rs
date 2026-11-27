@@ -1304,6 +1304,7 @@ mod tests {
     fn mode(_: &Path, _: u32) {}
 
     /// Puts a T3 0.1.12 release folder back before its temporary root goes away.
+    #[cfg_attr(not(unix), allow(dead_code))]
     struct Writable(PathBuf);
 
     impl Drop for Writable {

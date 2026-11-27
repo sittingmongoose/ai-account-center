@@ -2365,6 +2365,7 @@ impl<'a> Session<'a> {
     }
 
     #[cfg(test)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(super) fn with_test_bearer(cx: &'a Context, endpoint: &Endpoint, token: &str) -> Self {
         let mut session = Self::new(cx, endpoint);
         session.inner.bearer = Some(Bearer {

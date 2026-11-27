@@ -1,5 +1,6 @@
 #![cfg(test)]
 //! Unit, integration, red/green, and Python-oracle parity tests for lane W5 (`t3.rs` + `t3/rpc.rs`).
+#[cfg_attr(not(unix), allow(unused_imports))]
 use super::rpc::{Endpoint, Origin};
 use super::*;
 use crate::apps::updater::{
@@ -23,6 +24,7 @@ const SELF_OLD: &str = "0.1.12-nightly.20261120.4994";
 const SELF_NEW: &str = "0.1.12-nightly.20261120.5009";
 const TOKEN: &str = "private-rpc-fixture-secret";
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn named(number: u32) -> String {
     format!("0.0.46-nightly.20261007.{number}")
 }

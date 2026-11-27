@@ -1,6 +1,12 @@
 //! Private service HTTP core and opt-in M6 dashboard front door.
 //! The collection, settings and account-read owners build on every platform the dashboard does;
 //! the private Unix protocol and the services it alone serves stay on Unix.
+// Windows builds the CLI and the shared owners only; the Unix-only service, its feeds and
+// their test fixtures compile there unused.
+#![cfg_attr(
+    not(unix),
+    allow(dead_code, unused_imports, unused_variables, unused_mut)
+)]
 
 mod account_approvals;
 mod account_reads;

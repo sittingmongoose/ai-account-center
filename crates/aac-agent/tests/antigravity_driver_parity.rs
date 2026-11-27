@@ -1,5 +1,7 @@
 //! RED/GREEN parity tests for `aac-agent` Antigravity sign-in PTY driver and `"antigravity"` verb.
 #![allow(clippy::unwrap_used)]
+// The PTY driver cases need Unix; Windows runs the parsing cases only.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
 use aac_agent::signin_session::antigravity_driver::{
     DriverSpec, extract_url, menu_ready, strip_controls, url_origin,
