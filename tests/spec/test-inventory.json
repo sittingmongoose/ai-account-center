@@ -939,6 +939,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/claude_renew_job.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/cli.rs",
       "kind": "internal",
       "evidence": [],
@@ -1009,6 +1016,12 @@
     },
     {
       "file": "crates/aac-http/src/compress.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/dashboard_host.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

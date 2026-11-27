@@ -101,13 +101,12 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
 /// A small JSON file this command only reads: `Ok(None)` when it is not there, `Err` when it is
 /// not a plain file of at most `cap` bytes holding JSON.
 fn small_json(path: &Path, cap: u64) -> Result<Option<Value>, ()> {
-    match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Ok(meta) if meta.is_file() && meta.len() <= cap => {}
-        _ => return Err(()),
+    use aac_files::read::{self, Read, ReadPolicy};
+    match read::read(path, &ReadPolicy::capped(cap)) {
+        Read::Absent => Ok(None),
+        Read::Bytes(bytes, _) => serde_json::from_slice(&bytes).map(Some).map_err(|_| ()),
+        _ => Err(()),
     }
-    let bytes = std::fs::read(path).map_err(|_| ())?;
-    serde_json::from_slice(&bytes).map(Some).map_err(|_| ())
 }
 
 /// The renewal computers (name, whether it is this computer) and the profiles left alone.
