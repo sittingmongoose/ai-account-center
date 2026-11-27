@@ -2,7 +2,7 @@
 //! `--logins-status` (the owner or the lead runs them over ssh; the dashboard never does).
 //!
 //! ```text
-//! aac-agent --logins-quarantine [--codex] [--claude <profile,...>] [--claude-renewal-host <name>] [--dry-run]
+//! aac-agent --logins-quarantine [--codex] [--claude <profile[=account],...>] [--claude-renewal-host <name>] [--dry-run]
 //! aac-agent --logins-restore
 //! aac-agent --logins-status
 //! ```
@@ -11,10 +11,16 @@
 //!   switches the dashboard on this computer to read each Codex account only through a T3
 //!   instance's own login with the identity the saved copy proved (pinned before the move).
 //! - `--claude a,b` moves those Claude sign-in files (`default` is `~/.claude`, others are
-//!   `~/.claude-t3/<profile>`). Name only profiles that already run on a static token.
+//!   `~/.claude-t3/<profile>`). Each profile is refused unless this computer already holds a
+//!   delivered Claude token for its account that reads cleanly (and, where the static logins
+//!   registry lives, the registry shows it delivered here with one clean read). The account is
+//!   `claude:<profile>`, the Claude account whose email the profile is signed in with, or the one
+//!   named as `profile=<account>`.
 //! - `--claude-renewal-host <name>` (on the dashboard computer) cuts Claude renewal to that
-//!   computer's sign-ins, one per account. It never goes with `--claude` in the same run: the
-//!   renewal computer keeps its full sign-ins.
+//!   computer's sign-ins, one per account. The name must be a computer in the Claude renewal
+//!   settings. A second profile of an account there is not renewed: it must already run on a
+//!   static token, or be listed with `--claude` in the same run (only on that computer). Its
+//!   renewed profiles are never moved.
 //!
 //! Nothing is deleted. The quarantine prints the one command that puts everything back.
 use crate::failover;
@@ -24,13 +30,15 @@ use aac_files::login_rollback::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The parsed quarantine request.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Request {
     codex: bool,
     claude: Vec<String>,
+    /// `profile=<account>`: the Claude account (`claude:<account>`) whose token that profile uses.
+    claude_accounts: BTreeMap<String, String>,
     renewal_host: Option<String>,
     dry_run: bool,
 }
@@ -46,9 +54,25 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
             "--dry-run" if !request.dry_run => request.dry_run = true,
             "--claude" if request.claude.is_empty() => {
                 let list = words.next().ok_or("--claude needs profile names")??;
-                request.claude = list.split(',').map(str::to_owned).collect();
-                if request.claude.iter().any(|p| !rollback::valid_name(p)) {
-                    return Err("--claude takes profile names like default,party".into());
+                for item in list.split(',') {
+                    let (profile, account) = match item.split_once('=') {
+                        Some((profile, account)) => (profile, Some(account)),
+                        None => (item, None),
+                    };
+                    if !rollback::valid_name(profile)
+                        || account.is_some_and(|a| !rollback::valid_name(a))
+                        || request.claude.iter().any(|p| p == profile)
+                    {
+                        return Err(
+                            "--claude takes profile names like default=jmtashjian,party".into()
+                        );
+                    }
+                    request.claude.push(profile.to_owned());
+                    if let Some(account) = account {
+                        request
+                            .claude_accounts
+                            .insert(profile.to_owned(), account.to_owned());
+                    }
                 }
             }
             "--claude-renewal-host" if request.renewal_host.is_none() => {
@@ -67,13 +91,350 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
                 .into(),
         );
     }
-    if !request.claude.is_empty() && request.renewal_host.is_some() {
-        return Err(
-            "the Claude renewal computer keeps its sign-ins: run --claude on the other computers"
-                .into(),
-        );
-    }
     Ok(request)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Claude checks run before anything moves (dry run included). They read the renewal
+// settings and state, the static logins and their registry; they write nothing.
+
+/// A small JSON file this command only reads: `Ok(None)` when it is not there, `Err` when it is
+/// not a plain file of at most `cap` bytes holding JSON.
+fn small_json(path: &Path, cap: u64) -> Result<Option<Value>, ()> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Ok(meta) if meta.is_file() && meta.len() <= cap => {}
+        _ => return Err(()),
+    }
+    let bytes = std::fs::read(path).map_err(|_| ())?;
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| ())
+}
+
+/// The computers in the Claude renewal settings (`<ccs>/claude-renew/config.json`): each name and
+/// whether it is this computer (no `ssh`), plus the profile names the renewal leaves alone.
+fn renewal_settings(places: &Places) -> Result<(Vec<(String, bool)>, Vec<String>), String> {
+    let value = match small_json(
+        &places.ccs.join("claude-renew").join("config.json"),
+        1 << 20,
+    ) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Err(
+                "the Claude renewal settings are not on this computer, so the renewal computer cannot be checked; run this on the dashboard computer"
+                    .into(),
+            );
+        }
+        Err(()) => return Err("the Claude renewal settings cannot be read".into()),
+    };
+    let hosts: Vec<(String, bool)> = value["hosts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|host| {
+            let name = host["name"].as_str().filter(|n| rollback::valid_name(n))?;
+            Some((name.to_owned(), host["ssh"].is_null()))
+        })
+        .collect();
+    if hosts.is_empty() {
+        return Err("the Claude renewal settings name no computer".into());
+    }
+    let ignore = value["ignoreProfiles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    Ok((hosts, ignore))
+}
+
+/// The sign-ins the Claude renewal last read on `host` (`<ccs>/claude-renew/state.json`), by
+/// profile name, each with its account email when one was read.
+fn renewal_signins(
+    places: &Places,
+    host: &str,
+    ignore: &[String],
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let state = match small_json(&places.ccs.join("claude-renew").join("state.json"), 8 << 20) {
+        Ok(Some(state)) => state,
+        Ok(None) => Value::Null,
+        Err(()) => return Err("the Claude renewal state cannot be read".into()),
+    };
+    let mut found: Vec<(String, Option<String>)> = state["profiles"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, saved)| {
+            let (h, profile) = key.split_once('/')?;
+            (h == host && rollback::valid_name(profile) && !ignore.iter().any(|i| i == profile))
+                .then(|| {
+                    (
+                        profile.to_owned(),
+                        saved["email"].as_str().map(str::to_owned),
+                    )
+                })
+        })
+        .collect();
+    if found.is_empty() {
+        return Err(format!(
+            "the Claude renewal has not read any sign-in on {host} yet, so its renewed and cut profiles cannot be named; let it run once, then try again"
+        ));
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// The renewal runner's rule (`aac_claude_renew::step3::renewed`): by profile name, the first
+/// sign-in of each account is renewed (one with no account read yet stays renewed); every later
+/// one is cut, paired with the profile that renews its account.
+fn kept_and_cut(signins: &[(String, Option<String>)]) -> (Vec<String>, Vec<(String, String)>) {
+    let mut first: BTreeMap<&str, &str> = BTreeMap::new();
+    let (mut kept, mut cut) = (Vec::new(), Vec::new());
+    for (profile, email) in signins {
+        match email.as_deref().map(|e| (e, first.get(e).copied())) {
+            Some((_, Some(renewed))) => cut.push((profile.clone(), renewed.to_owned())),
+            Some((e, None)) => {
+                first.insert(e, profile);
+                kept.push(profile.clone());
+            }
+            None => kept.push(profile.clone()),
+        }
+    }
+    (kept, cut)
+}
+
+/// The profile's config folder on this computer (`~/.claude` or `~/.claude-t3/<profile>`).
+fn claude_folder(places: &Places, profile: &str) -> PathBuf {
+    if profile == "default" {
+        places.home.join(".claude")
+    } else {
+        places.home.join(".claude-t3").join(profile)
+    }
+}
+
+/// The account email this profile is signed in with here, from Claude Code's own `.claude.json`.
+fn claude_email(places: &Places, profile: &str) -> Option<String> {
+    let path = if profile == "default" {
+        places.home.join(".claude.json")
+    } else {
+        claude_folder(places, profile).join(".claude.json")
+    };
+    small_json(&path, 8 << 20).ok()??["oauthAccount"]["emailAddress"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// The Claude accounts (`claude:<id>`) whose token a profile may use: the one named for it; else
+/// `claude:<profile>` and every account in the Claude profiles list here signed in with the same
+/// email. `claude:<profile>` is left out when that list gives it another email.
+fn claude_accounts(places: &Places, profile: &str, named: Option<&str>) -> Vec<String> {
+    if let Some(account) = named {
+        return vec![format!("claude:{account}")];
+    }
+    let email = claude_email(places, profile);
+    let listed: Vec<(String, String)> =
+        match small_json(&places.ccs.join("claude-desktop-profiles.json"), 1 << 20) {
+            Ok(Some(list)) if list["version"] == 1 => list["profiles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| {
+                    Some((
+                        p["id"].as_str()?.to_owned(),
+                        p["email"].as_str()?.to_owned(),
+                    ))
+                })
+                .collect(),
+            _ => vec![],
+        };
+    let mut accounts = Vec::new();
+    let other_email = listed
+        .iter()
+        .any(|(id, e)| id == profile && email.as_ref().is_some_and(|mine| mine != e));
+    if !other_email {
+        accounts.push(format!("claude:{profile}"));
+    }
+    if let Some(email) = &email {
+        for (id, e) in &listed {
+            let account = format!("claude:{id}");
+            if e == email && !accounts.contains(&account) {
+                accounts.push(account);
+            }
+        }
+    }
+    accounts
+}
+
+/// Where the static logins registry lives (the dashboard computer), it must show the login
+/// delivered to this computer with one clean read of the same value.
+fn registry_shows(places: &Places, login_id: &str, fingerprint: &str) -> Result<(), String> {
+    let registry = match small_json(&places.ccs.join("logins-registry.json"), 262_144) {
+        Ok(Some(registry)) => registry,
+        Ok(None) => return Ok(()),
+        Err(()) => return Err("the static logins registry on this computer cannot be read".into()),
+    };
+    let check = "run Check computers under Static logins, then try again";
+    let key = small_json(&places.ccs.join("login-computer.json"), 4096)
+        .ok()
+        .flatten()
+        .and_then(|k| k["key"].as_str().map(str::to_owned))
+        .ok_or_else(|| {
+            format!("this computer has no login key, so the registry cannot name it; {check}")
+        })?;
+    let computer = registry["computers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|pin| pin["key"] == key.as_str())
+        .and_then(|pin| pin["computer"].as_str())
+        .ok_or_else(|| {
+            format!("the static logins registry does not list this computer; {check}")
+        })?;
+    let entry = registry["logins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["loginId"] == login_id);
+    let clean = entry.is_some_and(|e| {
+        e["fingerprint"] == fingerprint
+            && e["holders"].as_array().into_iter().flatten().any(|h| {
+                h["computer"] == computer && h["fingerprint"] == fingerprint && h["seen"] == "seen"
+            })
+    });
+    if clean {
+        Ok(())
+    } else {
+        Err(format!(
+            "the static logins registry does not show login {login_id} delivered to {computer} with one clean read; {check}"
+        ))
+    }
+}
+
+/// The delivered static Claude token this profile runs on here (its login id), or why not.
+fn static_token(places: &Places, profile: &str, named: Option<&str>) -> Result<String, String> {
+    let accounts = claude_accounts(places, profile, named);
+    let listed = aac_files::credential::list(&places.ccs)
+        .map_err(|_| format!("{profile}: the static logins on this computer cannot be listed"))?;
+    let tokens: Vec<_> = listed
+        .iter()
+        .filter_map(|(_, read)| read.as_ref().ok())
+        .filter(|s| s.kind == aac_files::credential::Kind::ClaudeToken)
+        .collect();
+    let Some(token) = tokens.iter().find(|s| accounts.contains(&s.account)) else {
+        let held: Vec<&str> = tokens.iter().map(|s| s.account.as_str()).collect();
+        return Err(format!(
+            "{profile}: no delivered Claude token for {} reads cleanly on this computer (Claude tokens here: {}); deliver one under Static logins and use it on that instance first, or name its account as {profile}=<account>",
+            if accounts.is_empty() {
+                "its account".to_owned()
+            } else {
+                accounts.join(" or ")
+            },
+            if held.is_empty() {
+                "none".to_owned()
+            } else {
+                held.join(", ")
+            },
+        ));
+    };
+    registry_shows(places, &token.login_id, &token.fingerprint)
+        .map_err(|why| format!("{profile}: {why}"))?;
+    Ok(token.login_id.clone())
+}
+
+/// The Claude checks of one request: the lines that name what was found, and why it is refused.
+fn check_claude(places: &Places, request: &Request) -> (Vec<String>, Result<(), String>) {
+    let mut lines = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
+    let named = |p: &str| request.claude_accounts.get(p).map(String::as_str);
+    let mut renewed: Vec<String> = Vec::new();
+    let mut cut_here: Vec<String> = Vec::new();
+    let mut renewal_here = false;
+    if let Some(host) = &request.renewal_host {
+        let (hosts, ignore) = match renewal_settings(places) {
+            Ok(found) => found,
+            Err(why) => return (lines, Err(why)),
+        };
+        let Some((_, here)) = hosts.iter().find(|(name, _)| name == host) else {
+            let names: Vec<&str> = hosts.iter().map(|(n, _)| n.as_str()).collect();
+            return (
+                lines,
+                Err(format!(
+                    "{host} is not a computer in the Claude renewal settings (they name {}); switching on with it would pause Claude renewal everywhere",
+                    names.join(", ")
+                )),
+            );
+        };
+        renewal_here = *here;
+        let signins = match renewal_signins(places, host, &ignore) {
+            Ok(found) => found,
+            Err(why) => return (lines, Err(why)),
+        };
+        let (kept, cut) = kept_and_cut(&signins);
+        lines.push(format!(
+            "Claude renewal on {host} keeps: {}",
+            kept.join(", ")
+        ));
+        for (profile, renews) in &cut {
+            let what = format!("{host}/{profile} (same account as {host}/{renews}, not renewed)");
+            if !renewal_here {
+                problems.push(format!(
+                    "{what} can be checked only on {host}, which is not this computer"
+                ));
+                lines.push(format!("  cut        {what}: refused, not this computer"));
+            } else if request.claude.contains(profile) {
+                lines.push(format!("  cut        {what}: listed for quarantine"));
+                cut_here.push(profile.clone());
+            } else if !claude_folder(places, profile).exists() {
+                lines.push(format!(
+                    "  cut        {what}: no profile folder here, nothing signs out"
+                ));
+            } else {
+                match static_token(places, profile, None) {
+                    Ok(id) => lines.push(format!("  cut        {what}: on static token {id}")),
+                    Err(why) => {
+                        lines.push(format!("  cut        {what}: refused"));
+                        problems.push(format!(
+                            "{why}; or list {profile} with --claude to quarantine its sign-in"
+                        ));
+                    }
+                }
+            }
+        }
+        renewed = kept;
+    }
+    for profile in &request.claude {
+        if request.renewal_host.is_some() {
+            if !renewal_here {
+                problems.push(
+                    "--claude goes with --claude-renewal-host only on the renewal computer itself"
+                        .into(),
+                );
+                break;
+            }
+            if renewed.contains(profile) {
+                problems.push(format!(
+                    "{profile} is renewed on the renewal computer, which keeps that sign-in"
+                ));
+                continue;
+            }
+            if !cut_here.contains(profile) {
+                problems.push(format!(
+                    "{profile} is not a cut profile of the renewal computer; run --claude on the other computers"
+                ));
+                continue;
+            }
+        }
+        match static_token(places, profile, named(profile)) {
+            Ok(id) => lines.push(format!("  token      {profile}: on static token {id}")),
+            Err(why) => problems.push(why),
+        }
+    }
+    let verdict = if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; "))
+    };
+    (lines, verdict)
 }
 
 fn places() -> Result<Places, String> {
@@ -287,6 +648,14 @@ fn quarantine(args: &[OsString], out: &mut impl std::io::Write) -> i32 {
             return 1;
         }
     };
+    let (lines, verdict) = check_claude(&places, &request);
+    for line in &lines {
+        say(out, line);
+    }
+    if let Err(why) = verdict {
+        say(out, &format!("Refused: {why}. Nothing was moved."));
+        return 1;
+    }
     let inventory = if request.codex {
         inventory(&places)
     } else {
@@ -564,11 +933,299 @@ mod tests {
             "--claude",
             "--claude ../x",
             "--codex --codex",
-            "--claude default --claude-renewal-host ubuntu",
+            "--claude a,a",
+            "--claude a=../x",
+            "--claude =x",
             "--purge",
         ] {
             assert!(parse(&words(bad)).is_err(), "{bad}");
         }
+        let both = parse(&words(
+            "--claude default=jmtashjian,tokentest --claude-renewal-host ubuntu",
+        ))
+        .unwrap();
+        assert_eq!(both.claude, ["default", "tokentest"]);
+        assert_eq!(both.claude_accounts["default"], "jmtashjian");
+        assert!(!both.claude_accounts.contains_key("tokentest"));
+    }
+
+    // ---- The three review lows: fixtures for the renewal settings, state and static logins.
+
+    const TOKEN: &str = "sk-ant-oat01-TESTONLY-rollback-token-000000000000";
+
+    fn fixture() -> (tempfile::TempDir, Places) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let places = Places {
+            ccs: home.join(".ccs"),
+            home,
+        };
+        let renew = places.ccs.join("claude-renew");
+        std::fs::create_dir_all(&renew).unwrap();
+        #[cfg(unix)]
+        for private in [&places.home, &places.ccs] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(
+            renew.join("config.json"),
+            r#"{"hosts":[{"name":"ubuntu","os":"linux"},{"name":"nas1","os":"linux","ssh":"test-nas1"},{"name":"mac","os":"mac","ssh":"test-mac"}],"ignoreProfiles":["retired"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            renew.join("state.json"),
+            r#"{"version":1,"profiles":{
+                "ubuntu/default":{"email":"own@example.test"},
+                "ubuntu/gmail":{"email":"gmail@example.test"},
+                "ubuntu/tokentest":{"email":"own@example.test"},
+                "ubuntu/retired":{"email":"own@example.test"},
+                "nas1/party":{"email":"party@example.test"},
+                "nas1/second":{"email":"party@example.test"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            places.ccs.join("claude-desktop-profiles.json"),
+            r#"{"version":1,"profiles":[{"id":"jmtashjian","email":"own@example.test"},{"id":"party","email":"party@example.test"}]}"#,
+        )
+        .unwrap();
+        for (profile, email) in [
+            ("default", "own@example.test"),
+            ("gmail", "gmail@example.test"),
+            ("tokentest", "own@example.test"),
+            ("party", "party@example.test"),
+        ] {
+            let folder = claude_folder(&places, profile);
+            std::fs::create_dir_all(&folder).unwrap();
+            let state = if profile == "default" {
+                places.home.join(".claude.json")
+            } else {
+                folder.join(".claude.json")
+            };
+            std::fs::write(
+                state,
+                format!(r#"{{"oauthAccount":{{"emailAddress":"{email}"}}}}"#),
+            )
+            .unwrap();
+        }
+        (dir, places)
+    }
+
+    /// Deliver a static Claude token for `account` through the agent's own `login-put`.
+    fn deliver(places: &Places, login_id: &str, account: &str) {
+        let key = aac_files::credential::computer_key(&places.ccs).unwrap();
+        crate::logins::run(
+            "login-put",
+            &json!({"loginId":login_id,"kind":"claude-token","provider":"claude",
+                "account":account,"secret":TOKEN,"expiresAt":"2027-11-27T00:00:00Z",
+                "expect":"absent","home":places.home.to_str().unwrap(),
+                "nowMs":1_795_000_000_000i64,"computer":key}),
+        )
+        .unwrap();
+    }
+
+    fn request(claude: &[&str], host: Option<&str>) -> Request {
+        let mut request = Request {
+            renewal_host: host.map(str::to_owned),
+            ..Request::default()
+        };
+        for item in claude {
+            match item.split_once('=') {
+                Some((p, a)) => {
+                    request.claude.push(p.to_owned());
+                    request.claude_accounts.insert(p.to_owned(), a.to_owned());
+                }
+                None => request.claude.push((*item).to_owned()),
+            }
+        }
+        request
+    }
+
+    /// Review low 2: the renewal computer must be a computer in the Claude renewal settings; a
+    /// typo is refused with the configured names (dry run too: the check runs before anything).
+    #[test]
+    fn the_renewal_computer_must_be_in_the_renewal_settings() {
+        let (_dir, places) = fixture();
+        let (_, verdict) = check_claude(&places, &request(&[], Some("ubunto")));
+        let why = verdict.unwrap_err();
+        assert!(
+            why.contains("ubunto is not a computer in the Claude renewal settings (they name ubuntu, nas1, mac)"),
+            "{why}"
+        );
+        assert!(why.contains("pause Claude renewal everywhere"), "{why}");
+        std::fs::remove_file(places.ccs.join("claude-renew/config.json")).unwrap();
+        let (_, verdict) = check_claude(&places, &request(&[], Some("ubuntu")));
+        assert!(
+            verdict
+                .unwrap_err()
+                .contains("renewal settings are not on this computer")
+        );
+        std::fs::write(places.ccs.join("claude-renew/config.json"), "{").unwrap();
+        let (_, verdict) = check_claude(&places, &request(&[], Some("ubuntu")));
+        assert!(verdict.unwrap_err().contains("cannot be read"));
+    }
+
+    /// Review low 1: a second profile of an account on the renewal computer is named in the dry
+    /// run and blocks switch-on until it is on a static token or listed for quarantine; the
+    /// renewed profiles are listed and can never be quarantined there.
+    #[test]
+    fn a_second_profile_on_the_renewal_computer_is_named_and_refused() {
+        let (_dir, places) = fixture();
+        let (lines, verdict) = check_claude(&places, &request(&[], Some("ubuntu")));
+        let text = lines.join("\n");
+        assert!(
+            text.contains("Claude renewal on ubuntu keeps: default, gmail"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "cut        ubuntu/tokentest (same account as ubuntu/default, not renewed): refused"
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.contains("retired"),
+            "ignored profiles are left alone: {text}"
+        );
+        let why = verdict.unwrap_err();
+        assert!(
+            why.contains("tokentest: no delivered Claude token"),
+            "{why}"
+        );
+        assert!(why.contains("or list tokentest with --claude"), "{why}");
+        assert!(!why.contains("@"), "no email in the output: {why}");
+
+        // A renewed profile is never quarantined on the renewal computer.
+        let (_, verdict) = check_claude(&places, &request(&["gmail"], Some("ubuntu")));
+        assert!(
+            verdict
+                .unwrap_err()
+                .contains("gmail is renewed on the renewal computer")
+        );
+
+        // Listed for quarantine: still needs its static token (low 3).
+        let (lines, verdict) = check_claude(&places, &request(&["tokentest"], Some("ubuntu")));
+        assert!(lines.join("\n").contains(
+            "tokentest (same account as ubuntu/default, not renewed): listed for quarantine"
+        ));
+        assert!(verdict.is_err());
+
+        // On a static token of its account (found through the Claude profiles list): switch-on.
+        deliver(&places, "0a1b2c3d", "claude:jmtashjian");
+        let (lines, verdict) = check_claude(&places, &request(&[], Some("ubuntu")));
+        assert_eq!(verdict, Ok(()));
+        assert!(lines.join("\n").contains(
+            "tokentest (same account as ubuntu/default, not renewed): on static token 0a1b2c3d"
+        ));
+        let (_, verdict) = check_claude(&places, &request(&["tokentest"], Some("ubuntu")));
+        assert_eq!(verdict, Ok(()));
+
+        // The renewal computer is another computer with a second profile: refused, named.
+        let (lines, verdict) = check_claude(&places, &request(&[], Some("nas1")));
+        assert!(
+            lines
+                .join("\n")
+                .contains("nas1/second (same account as nas1/party")
+        );
+        assert!(
+            verdict
+                .unwrap_err()
+                .contains("can be checked only on nas1, which is not this computer")
+        );
+        // ... and --claude goes with the renewal host only on that computer.
+        let (_, verdict) = check_claude(&places, &request(&["party"], Some("mac")));
+        let why = verdict.unwrap_err();
+        assert!(
+            why.contains("not read any sign-in on mac")
+                || why.contains("only on the renewal computer"),
+            "{why}"
+        );
+    }
+
+    /// Review low 3: `--claude <profile>` is refused unless this computer holds a delivered
+    /// Claude token for that profile's account that reads cleanly, and (where the static logins
+    /// registry lives) the registry shows it delivered here with one clean read.
+    #[test]
+    fn claude_quarantine_needs_a_static_token_in_use_here() {
+        let (_dir, places) = fixture();
+        let (_, verdict) = check_claude(&places, &request(&["party"], None));
+        let why = verdict.unwrap_err();
+        assert!(
+            why.contains("party: no delivered Claude token for claude:party reads cleanly on this computer (Claude tokens here: none)"),
+            "{why}"
+        );
+        deliver(&places, "1a1b2c3d", "claude:gmail");
+        let why = check_claude(&places, &request(&["party"], None))
+            .1
+            .unwrap_err();
+        assert!(why.contains("(Claude tokens here: claude:gmail)"), "{why}");
+        deliver(&places, "2a1b2c3d", "claude:party");
+        let (lines, verdict) = check_claude(&places, &request(&["party"], None));
+        assert_eq!(verdict, Ok(()));
+        assert!(
+            lines
+                .join("\n")
+                .contains("token      party: on static token 2a1b2c3d")
+        );
+
+        // `default` is not an account name: matched through its email, or named explicitly.
+        let why = check_claude(&places, &request(&["default"], None))
+            .1
+            .unwrap_err();
+        assert!(why.contains("claude:default or claude:jmtashjian"), "{why}");
+        assert_eq!(
+            check_claude(&places, &request(&["default=gmail"], None)).1,
+            Ok(())
+        );
+        // A name whose listed email is another account's is never taken on its name alone.
+        std::fs::write(
+            claude_folder(&places, "party").join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"gmail@example.test"}}"#,
+        )
+        .unwrap();
+        let why = check_claude(&places, &request(&["party"], None))
+            .1
+            .unwrap_err();
+        assert!(!why.contains("claude:party "), "{why}");
+        std::fs::write(
+            claude_folder(&places, "party").join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"party@example.test"}}"#,
+        )
+        .unwrap();
+
+        // The dashboard computer: the registry must show it delivered here with a clean read.
+        let key = aac_files::credential::computer_key(&places.ccs).unwrap();
+        let fp = aac_files::credential::fingerprint(TOKEN);
+        let registry = |pin: &str, seen: &str| {
+            json!({"version":1,"checkedAt":null,"computers":[{"computer":"ubuntu","key":pin,"host":"vm","enrolledAt":"2026-11-27T00:00:00Z","seen":null}],
+                "notes":[],"logins":[{"loginId":"2a1b2c3d","kind":"claude-token","provider":"claude","account":"claude:party",
+                "fingerprint":fp,"expiresAt":null,"createdAt":"2026-11-27T00:00:00Z",
+                "holders":[{"computer":"ubuntu","fingerprint":fp,"deliveredAt":"2026-11-27T00:00:00Z","seen":seen}]}]})
+            .to_string()
+        };
+        let path = places.ccs.join("logins-registry.json");
+        std::fs::write(&path, registry(&"f".repeat(32), "seen")).unwrap();
+        let why = check_claude(&places, &request(&["party"], None))
+            .1
+            .unwrap_err();
+        assert!(why.contains("does not list this computer"), "{why}");
+        std::fs::write(&path, registry(&key, "unreadable")).unwrap();
+        let why = check_claude(&places, &request(&["party"], None))
+            .1
+            .unwrap_err();
+        assert!(
+            why.contains("does not show login 2a1b2c3d delivered to ubuntu with one clean read"),
+            "{why}"
+        );
+        std::fs::write(&path, registry(&key, "seen")).unwrap();
+        assert_eq!(check_claude(&places, &request(&["party"], None)).1, Ok(()));
+        std::fs::write(&path, "{").unwrap();
+        let why = check_claude(&places, &request(&["party"], None))
+            .1
+            .unwrap_err();
+        assert!(
+            why.contains("registry on this computer cannot be read"),
+            "{why}"
+        );
     }
 
     fn row(selectors: &[&str], key: char, email: &str) -> Value {

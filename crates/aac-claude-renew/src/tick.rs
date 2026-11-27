@@ -244,6 +244,10 @@ pub fn tick(
     let renewed_here = renewal_set(cfg, &scans);
     if let Some(keys) = &renewed_here {
         deps.say(&match &cfg.step3 {
+            // A name the settings do not know renews nothing: say so, never pause silently.
+            Step3::RenewOnly(host) if cfg.host(host).is_none() => format!(
+                "step 3: the logins switch names {host}, which is not a computer in these settings; no sign-in is renewed until it is fixed or restored"
+            ),
             Step3::RenewOnly(host) => format!(
                 "step 3: renewing only {host}'s sign-ins, one per account ({} kept)",
                 keys.len()
@@ -783,6 +787,38 @@ mod tests {
         assert_eq!(
             report.outcomes,
             vec![("windows/aaa".to_owned(), "renewed".to_owned())]
+        );
+    }
+
+    /// Step 3, review low 2: a switch naming a computer these settings do not know renews nothing,
+    /// and the log says so in words (never a bare "0 kept").
+    #[test]
+    fn step3_says_when_the_renewal_computer_is_not_configured() {
+        let world = Arc::new(Mutex::new(World {
+            twin: true,
+            ..World::default()
+        }));
+        let fake = Fake(world.clone());
+        let lines = Mutex::new(vec![]);
+        let log = |l: &str| lines.lock().expect("lock").push(l.to_owned());
+        let now = || NOW;
+        let deps = Deps {
+            remote: &fake,
+            now: &now,
+            log: &log,
+            waits: fast(),
+        };
+        let mut config = cfg();
+        config.step3 = Step3::RenewOnly("nas9".into());
+        let mut st = State::default();
+        tick(&config, &mut st, &deps, None, false, false);
+        assert_eq!(world.lock().expect("lock").logins, 0);
+        let logged = lines.lock().expect("lock").join("\n");
+        assert!(
+            logged.contains(
+                "the logins switch names nas9, which is not a computer in these settings"
+            ),
+            "{logged}"
         );
     }
 }
