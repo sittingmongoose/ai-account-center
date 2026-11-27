@@ -13,6 +13,7 @@
 //! follow the VM's live counts (MEM4: 3,371 Claude transcripts, the agent's peak 66-70 MiB).
 //! `AAC_R4_*` variables change the shape; `AAC_R4_MAX_MIB` turns the printed peak into a check.
 #![cfg(target_os = "linux")]
+#![allow(clippy::unwrap_used)]
 
 use serde_json::{Map, Value, json};
 use std::io::{Read, Write};
