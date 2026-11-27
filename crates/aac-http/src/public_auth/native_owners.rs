@@ -40,6 +40,7 @@ mod lifecycle_registry;
 mod lifecycle_remove;
 mod lifecycle_sessions;
 mod lifecycle_trash;
+mod login_delivery;
 mod logins;
 pub(super) mod recheck;
 
@@ -198,6 +199,28 @@ fn the_logins_read_is_a_lifecycle_route_and_reads_only() {
     assert!(!NativeOwners::owns_lifecycle(
         &Method::PUT,
         "/api/accounts/logins"
+    ));
+}
+
+#[cfg(test)]
+#[test]
+fn the_login_delivery_routes_are_lifecycle_routes() {
+    for (method, path) in [
+        (Method::GET, "/api/accounts/logins/delivery"),
+        (Method::POST, "/api/accounts/logins/delivery/check"),
+        (Method::POST, "/api/accounts/logins/delivery/put"),
+        (Method::POST, "/api/accounts/logins/delivery/copy"),
+        (Method::POST, "/api/accounts/logins/delivery/remove"),
+    ] {
+        assert!(NativeOwners::owns_lifecycle(&method, path), "{path}");
+    }
+    assert!(!NativeOwners::owns_lifecycle(
+        &Method::GET,
+        "/api/accounts/logins/delivery/put"
+    ));
+    assert!(!NativeOwners::owns_lifecycle(
+        &Method::DELETE,
+        "/api/accounts/logins/delivery"
     ));
 }
 
@@ -406,6 +429,7 @@ impl NativeOwners {
             || lifecycle_jobs::route(method, path).is_some()
             || lifecycle_registry::route(method, path)
             || logins::route(method, path)
+            || login_delivery::route(method, path).is_some()
             || lifecycle_keys::route(method, path).is_some()
             || lifecycle_sessions::route(method, path).is_some()
             || lifecycle_remove::route(method, path).is_some()
@@ -607,6 +631,9 @@ impl NativeOwners {
         }
         if logins::route(request.method(), path) {
             return logins::handle(self, request).await;
+        }
+        if let Some(action) = login_delivery::route(request.method(), path) {
+            return login_delivery::handle(self, action, request).await;
         }
         if let Some(jobs) = &self.lifecycle_jobs
             && lifecycle_registry::route(request.method(), path)

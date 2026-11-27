@@ -15,6 +15,7 @@ pub mod auth_owner;
 pub mod codex_identity;
 pub mod codex_registry;
 mod config_recovery;
+pub mod credential;
 pub mod deployed_build;
 #[cfg(unix)]
 pub mod history_snapshots;

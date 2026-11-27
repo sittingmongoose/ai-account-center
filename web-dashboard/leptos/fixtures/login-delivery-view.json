@@ -1,0 +1,52 @@
+{
+ "version": 1,
+ "generatedAt": "2026-11-27T12:00:00.000Z",
+ "checkedAt": "2026-11-27T11:58:00Z",
+ "computers": [
+  {"id": "ubuntu", "label": "Ubuntu"},
+  {"id": "mac", "label": "Mac"},
+  {"id": "nas1", "label": "Nas1"},
+  {"id": "windows", "label": "Windows"}
+ ],
+ "accounts": [
+  {"id": "claude:sam", "provider": "claude", "label": "sam@alpha.example"},
+  {"id": "claude:ops", "provider": "claude", "label": "ops.long-account-name@builders-collective.example"},
+  {"id": "zai:1", "provider": "zai", "label": "Z.ai main"},
+  {"id": "kimi-code:1", "provider": "kimi-code", "label": "Kimi work"}
+ ],
+ "kinds": [
+  {"kind": "claude-token", "label": "Claude setup-token token", "providers": ["claude"]},
+  {"kind": "api-key", "label": "API key", "providers": ["kimi-code", "opencode-go", "zai"]}
+ ],
+ "logins": [
+  {
+   "loginId": "0a1b2c3d", "kind": "claude-token", "provider": "claude", "account": "claude:sam",
+   "accountLabel": "sam@alpha.example", "fingerprint": "sha256:0011223344556677",
+   "expiresAt": "2027-11-20T00:00:00Z", "endsText": "2027-11-20", "health": "ok",
+   "holders": [
+    {"computer": "mac", "deliveredAt": "2026-11-27T11:00:00Z", "state": "ok"},
+    {"computer": "nas1", "deliveredAt": "2026-11-27T11:00:00Z", "state": "changed"},
+    {"computer": "ubuntu", "deliveredAt": "2026-11-27T11:00:00Z", "state": "ok"}
+   ]
+  },
+  {
+   "loginId": "1b2c3d4e", "kind": "claude-token", "provider": "claude", "account": "claude:ops",
+   "accountLabel": "ops.long-account-name@builders-collective.example", "fingerprint": "sha256:8899aabbccddeeff",
+   "expiresAt": "2026-12-10T00:00:00Z", "endsText": "in 12 days", "health": "expiring",
+   "holders": [
+    {"computer": "windows", "deliveredAt": "2025-12-10T09:00:00Z", "state": "unchecked"}
+   ]
+  },
+  {
+   "loginId": "2c3d4e5f", "kind": "api-key", "provider": "zai", "account": "zai:1",
+   "accountLabel": "Z.ai main", "fingerprint": "sha256:a1b2c3d4e5f60718",
+   "expiresAt": null, "endsText": "No set end", "health": "ok",
+   "holders": [
+    {"computer": "mac", "deliveredAt": "2026-11-20T10:00:00Z", "state": "ok"},
+    {"computer": "nas1", "deliveredAt": "2026-11-20T10:00:00Z", "state": "ok"},
+    {"computer": "ubuntu", "deliveredAt": "2026-11-20T10:00:00Z", "state": "ok"},
+    {"computer": "windows", "deliveredAt": "2026-11-20T10:00:00Z", "state": "missing"}
+   ]
+  }
+ ]
+}

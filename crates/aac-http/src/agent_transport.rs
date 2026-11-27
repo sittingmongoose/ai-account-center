@@ -349,6 +349,14 @@ async fn loaded<T>(
     .flatten()
 }
 
+/// Verbs only the dashboard's own routes call, never the private front door.
+pub(crate) fn internal_only(verb: &str) -> bool {
+    matches!(
+        verb,
+        "claude-host" | "login-inventory" | "login-put" | "login-remove" | "login-copy"
+    )
+}
+
 impl Call {
     pub(crate) fn parse(bytes: &[u8]) -> Option<Self> {
         crate::json_object::from_slice::<Call>(
@@ -403,6 +411,10 @@ impl Call {
                 "launch",
                 "claude-host",
                 "signin-session",
+                "login-inventory",
+                "login-put",
+                "login-remove",
+                "login-copy",
             ]
             .contains(&verb)
             && self.deadline_ms != 0
@@ -656,8 +668,9 @@ impl Agents {
         } else {
             verb
         };
-        // Only the in-process host orchestration may use the mutation verb directly.
-        if !(call.valid(verb) || internal_host && verb == "claude-host" && call.bounded(verb)) {
+        // Only the in-process host orchestration may use the mutation verbs directly: the private
+        // front door never reaches a login verb (one of them answers with a secret).
+        if !(call.valid(verb) || internal_host && internal_only(verb) && call.bounded(verb)) {
             return unavailable(&call.call_id, "shape");
         }
         // End before the front door's own `timeoutMs` timer, leaving time to reap the owned child
@@ -767,6 +780,10 @@ impl Agents {
                             request.verb.as_str(),
                             "cursor-open"
                                 | "key-store"
+                                | "login-inventory"
+                                | "login-put"
+                                | "login-remove"
+                                | "login-copy"
                                 | "muse-login-identity"
                                 | "signin-session"
                                 | "claude-host"
@@ -1009,7 +1026,61 @@ pub(crate) enum MutationReply {
     Uncertain,
 }
 
+/// One internal login-verb call's outcome (Central Logins step 2): the agent's value, its
+/// failure's cause, or no answer at all. A failure keeps only its cause, never its detail.
+pub(crate) enum LoginReply {
+    Value(Value),
+    Failed(Cause),
+    NoAnswer,
+}
+
 impl Agents {
+    /// Call one internal login verb on a computer and keep the agent's failure cause, so the
+    /// route can tell an identity mismatch or a changed login from an unreachable computer.
+    pub(crate) async fn call_login(
+        self: &Arc<Self>,
+        verb: &str,
+        computer: &Selector,
+        args: Value,
+        deadline_ms: u64,
+    ) -> LoginReply {
+        if !internal_only(verb) || verb == "claude-host" {
+            return LoginReply::NoAnswer;
+        }
+        let Some(id) = random_call_id() else {
+            return LoginReply::NoAnswer;
+        };
+        let response_cap = if verb == "login-inventory" {
+            64 * 1024
+        } else {
+            4096
+        };
+        let call = json!({
+            "computer":computer,"args":args,"deadlineMs":deadline_ms,"timeoutMs":deadline_ms+2000,
+            "maxBytes":response_cap,"callId":id
+        });
+        let response = self
+            .call_inner(verb, call.to_string().as_bytes(), true)
+            .await;
+        let Ok(bytes) = axum::body::to_bytes(response.into_body(), response_cap).await else {
+            return LoginReply::NoAnswer;
+        };
+        let Ok(mut frame) = serde_json::from_slice::<Value>(&bytes) else {
+            return LoginReply::NoAnswer;
+        };
+        if frame["protocol"] != 1 || frame["id"] != id {
+            return LoginReply::NoAnswer;
+        }
+        match frame["type"].as_str() {
+            Some("result") => LoginReply::Value(frame["value"].take()),
+            Some("failure") => serde_json::from_value::<Failure>(frame["failure"].take())
+                .map_or(LoginReply::NoAnswer, |failure| {
+                    LoginReply::Failed(failure.cause)
+                }),
+            _ => LoginReply::NoAnswer,
+        }
+    }
+
     /// Decide whether the caller can run a reference mutation without repeating an uncertain write.
     pub(crate) async fn call_mutation(
         self: &Arc<Self>,
@@ -1021,7 +1092,7 @@ impl Agents {
         let Some(id) = random_call_id() else {
             return MutationReply::Uncertain;
         };
-        let response_cap = if verb == "claude-history" {
+        let response_cap = if matches!(verb, "claude-history" | "login-inventory") {
             64 * 1024
         } else {
             4096

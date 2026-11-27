@@ -38,6 +38,8 @@ impl Routes {
         for path in [
             "/api/accounts/registry",
             "/api/accounts/logins",
+            "/api/accounts/logins/delivery",
+            "/api/accounts/logins/delivery/{action}",
             "/api/accounts/signin-command",
             "/api/accounts/signin-jobs/{id}",
             "/api/accounts/signin-jobs/{id}/cancel",
