@@ -350,7 +350,8 @@ mod tests {
             .expect("held generation");
         (
             generation.id.clone(),
-            serde_json::from_str(generation.data.get()).expect("dashboard"),
+            serde_json::from_str(generation.data_text().expect("dashboard text"))
+                .expect("dashboard"),
         )
     }
 

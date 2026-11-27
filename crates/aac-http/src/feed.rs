@@ -54,31 +54,72 @@ pub(crate) enum Prepared {
     Status(Result<crate::status_fed::Part, Decline>),
 }
 
-/// One held generation: immutable.
+/// One held generation: immutable. A Status generation whose `prepare` succeeded
+/// retains no raw text (MEM5 Lane C): the composer reads only `prepared`, so the raw
+/// `data`/`facts` bytes are a second live copy of the same JSON. Identity is kept as
+/// `data_len`/`has_facts` plus `data_hash`/`facts_hash`/`digest`, which decide the
+/// immutable-generation checks without storing the bytes.
 #[derive(Debug)]
 pub(crate) struct Generation {
     pub(crate) id: String,
-    pub(crate) data: Box<RawValue>,
-    pub(crate) facts: Box<RawValue>,
+    /// The payload's bytes when no composer reads them yet (`Held`) or `prepare`
+    /// declined; `None` once a Status generation prepared successfully.
+    pub(crate) data: Option<Box<RawValue>>,
+    pub(crate) facts: Option<Box<RawValue>>,
     pub(crate) prepared: Prepared,
     /// R1b: SHA-256 of the generation's data and facts, once: what an answer built from it names in its
     /// `ETag` (Home's tag digests its inputs, not its 200 KB of bytes).
     pub(crate) digest: [u8; 32],
+    /// The data bytes' length: what `/internal/feed` reports as `bytes`, without retaining them.
+    pub(crate) data_len: usize,
+    pub(crate) facts_present: bool,
+    /// SHA-256 of the data and facts bytes, for the immutable-generation check and the
+    /// producer's text digest pairing when the raw text is no longer retained.
+    pub(crate) data_hash: [u8; 32],
+    pub(crate) facts_hash: [u8; 32],
 }
 
 impl Generation {
     fn has_facts(&self) -> bool {
-        self.facts.get().trim() != "null"
+        self.facts_present
+    }
+
+    /// The payload's bytes when they are still retained (`Held`/declined), else `None`.
+    pub(crate) fn data_text(&self) -> Option<&str> {
+        self.data.as_ref().map(|raw| raw.get())
+    }
+
+    pub(crate) fn facts_text(&self) -> Option<&str> {
+        self.facts.as_ref().map(|raw| raw.get())
     }
 }
 
-fn digest(data: &RawValue, facts: &RawValue) -> [u8; 32] {
+fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
+fn digest_bytes(data_len: usize, data: &[u8], facts: &[u8]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
-    hash.update(data.get().len().to_le_bytes());
-    hash.update(data.get().as_bytes());
-    hash.update(facts.get().as_bytes());
+    hash.update(data_len.to_le_bytes());
+    hash.update(data);
+    hash.update(facts);
     hash.finalize().into()
+}
+
+fn digest(data: &RawValue, facts: &RawValue) -> [u8; 32] {
+    digest_bytes(
+        data.get().len(),
+        data.get().as_bytes(),
+        facts.get().as_bytes(),
+    )
+}
+
+/// Whether this generation keeps its raw bytes: a successfully prepared Status
+/// generation drops them (the composer reads only the prepared share).
+fn retain_raw(prepared: &Prepared) -> bool {
+    !matches!(prepared, Prepared::Status(Ok(_)))
 }
 
 /// Sources whose generations never carry facts: no `facts-needed` for them (review L3).
@@ -163,18 +204,19 @@ impl Feeds {
 
     /// Whether generation `id` (with these bytes) may replace what is held for a source:
     /// `Ok(true)` to take it, `Ok(false)` when it or a newer one is held (the reply names it), an
-    /// error when the same id comes with other bytes (a generation is immutable).
+    /// error when the same id comes with other bytes (a generation is immutable). Identity is
+    /// the bytes' SHA-256, so a held generation that dropped its raw text still proves it.
     fn newer(
         held: Option<&Arc<Generation>>,
         id: &str,
-        data: &str,
-        facts: &str,
+        data_hash: [u8; 32],
+        facts_hash: [u8; 32],
     ) -> Result<bool, Decline> {
         let Some(held) = held else {
             return Ok(true);
         };
         if held.id == id {
-            return if held.data.get() == data && held.facts.get() == facts {
+            return if held.data_hash == data_hash && held.facts_hash == facts_hash {
                 Ok(false)
             } else {
                 Err(Decline::Shape)
@@ -233,8 +275,8 @@ impl Feeds {
             if !Self::newer(
                 held.get(source),
                 &put.generation,
-                put.data.get(),
-                put.facts.get(),
+                hash_bytes(put.data.get().as_bytes()),
+                hash_bytes(put.facts.get().as_bytes()),
             )? {
                 let current = held.get(source).ok_or(Decline::Internal)?;
                 return Ok(
@@ -251,12 +293,27 @@ impl Feeds {
                 _ => return Err(Decline::Shape),
             }
         }
+        let data_hash = hash_bytes(put.data.get().as_bytes());
+        let facts_hash = hash_bytes(put.facts.get().as_bytes());
+        let data_len = put.data.get().len();
+        let facts_present = put.facts.get().trim() != "null";
+        let generation_digest = digest(&put.data, &put.facts);
+        let keep = retain_raw(&prepared);
+        let (data, facts) = if keep {
+            (Some(put.data), Some(put.facts))
+        } else {
+            (None, None)
+        };
         let generation = Arc::new(Generation {
             prepared,
-            digest: digest(&put.data, &put.facts),
+            digest: generation_digest,
             id: put.generation.clone(),
-            data: put.data,
-            facts: put.facts,
+            data,
+            facts,
+            data_len,
+            facts_present,
+            data_hash,
+            facts_hash,
         });
         let facts = generation.has_facts();
         let reply = {
@@ -264,8 +321,8 @@ impl Feeds {
             if Self::newer(
                 held.get(source),
                 &generation.id,
-                generation.data.get(),
-                generation.facts.get(),
+                generation.data_hash,
+                generation.facts_hash,
             )? {
                 if held.len() >= SOURCES && !held.contains_key(source) {
                     return Err(Decline::Busy);
@@ -322,12 +379,27 @@ impl Feeds {
         if let Prepared::Status(Ok(part)) = &mut prepared {
             part.scan = scan;
         }
+        let data_hash = hash_bytes(put.data.get().as_bytes());
+        let facts_hash = hash_bytes(put.facts.get().as_bytes());
+        let data_len = put.data.get().len();
+        let facts_present = put.facts.get().trim() != "null";
+        let generation_digest = digest(&put.data, &put.facts);
+        let keep = retain_raw(&prepared);
+        let (data, facts) = if keep {
+            (Some(put.data), Some(put.facts))
+        } else {
+            (None, None)
+        };
         Ok(Arc::new(Generation {
             prepared,
-            digest: digest(&put.data, &put.facts),
+            digest: generation_digest,
             id: put.generation,
-            data: put.data,
-            facts: put.facts,
+            data,
+            facts,
+            data_len,
+            facts_present,
+            data_hash,
+            facts_hash,
         }))
     }
 
@@ -338,19 +410,72 @@ impl Feeds {
         valid: bool,
         scan: crate::status_fed::ScanClock,
     ) -> Result<Arc<Generation>, Decline> {
-        let data = RawValue::from_string(text).map_err(|_| Decline::Shape)?;
-        let facts = RawValue::from_string("{}".to_owned()).map_err(|_| Decline::Internal)?;
+        // `text` is machine-built JSON; the digest/hashes prove identity without
+        // retaining its bytes once the reports prepared (same as `put`).
+        let data_hash = hash_bytes(text.as_bytes());
+        let facts_hash = hash_bytes(b"{}");
+        let data_len = text.len();
+        let generation_digest = digest_bytes(data_len, text.as_bytes(), b"{}");
         let prepared = Prepared::Status(if valid {
             Ok(crate::status_fed::prepared_reports(reports, scan))
         } else {
             Err(Decline::Shape)
         });
+        let (data, facts) = if retain_raw(&prepared) {
+            let data = RawValue::from_string(text).map_err(|_| Decline::Shape)?;
+            let facts = RawValue::from_string("{}".to_owned()).map_err(|_| Decline::Internal)?;
+            (Some(data), Some(facts))
+        } else {
+            (None, None)
+        };
         Ok(Arc::new(Generation {
             id,
-            digest: digest(&data, &facts),
+            digest: generation_digest,
             data,
             facts,
             prepared,
+            data_len,
+            facts_present: true,
+            data_hash,
+            facts_hash,
+        }))
+    }
+
+    /// The owned `status-collected` generation (MEM5 Lane C): `text` is the wire
+    /// bytes the digest proves, `view` the typed shared members the composer reads.
+    pub(crate) fn prepare_collected_owned(
+        id: String,
+        text: String,
+        view: Arc<crate::status_fed::CollectedView>,
+        valid: bool,
+        scan: crate::status_fed::ScanClock,
+    ) -> Result<Arc<Generation>, Decline> {
+        let data_hash = hash_bytes(text.as_bytes());
+        let facts_hash = hash_bytes(b"{}");
+        let data_len = text.len();
+        let generation_digest = digest_bytes(data_len, text.as_bytes(), b"{}");
+        let prepared = Prepared::Status(if valid {
+            Ok(crate::status_fed::prepared_collected(view, scan))
+        } else {
+            Err(Decline::Shape)
+        });
+        let (data, facts) = if retain_raw(&prepared) {
+            let data = RawValue::from_string(text).map_err(|_| Decline::Shape)?;
+            let facts = RawValue::from_string("{}".to_owned()).map_err(|_| Decline::Internal)?;
+            (Some(data), Some(facts))
+        } else {
+            (None, None)
+        };
+        Ok(Arc::new(Generation {
+            id,
+            digest: generation_digest,
+            data,
+            facts,
+            prepared,
+            data_len,
+            facts_present: true,
+            data_hash,
+            facts_hash,
         }))
     }
 
@@ -369,8 +494,8 @@ impl Feeds {
                 if Self::newer(
                     held.get(*source),
                     &generation.id,
-                    generation.data.get(),
-                    generation.facts.get(),
+                    generation.data_hash,
+                    generation.facts_hash,
                 )? && !held.contains_key(*source)
                 {
                     new_sources.insert(*source);
@@ -383,8 +508,8 @@ impl Feeds {
                 if Self::newer(
                     held.get(*source),
                     &generation.id,
-                    generation.data.get(),
-                    generation.facts.get(),
+                    generation.data_hash,
+                    generation.facts_hash,
                 )? {
                     if !generation.has_facts() && !without_facts(source) {
                         need_facts.push(((*source).to_owned(), generation.id.clone()));
@@ -445,7 +570,7 @@ impl Feeds {
             "source": source,
             "generation": feed.id,
             "facts": feed.has_facts(),
-            "bytes": feed.data.get().len(),
+            "bytes": feed.data_len,
             "declined": declined.map(Decline::as_str),
         }))
     }
@@ -590,7 +715,7 @@ mod tests {
                 .is_ok()
         );
         let g = feeds.current(HOME_OPENS, "2").expect("held");
-        assert_eq!(g.data.get(), r#"[["p",{"state":"copying"}]]"#);
+        assert_eq!(g.data_text(), Some(r#"[["p",{"state":"copying"}]]"#));
         assert!(matches!(g.prepared, Prepared::Opens(Ok(_))));
         // Two pushes racing: generation 1 arrives after 2 and is not taken; the reply names 2.
         let late = feeds.put(HOME_OPENS, &opens("1", "[]")).expect("reply");
@@ -684,10 +809,12 @@ mod tests {
             "the first entry must not commit when a later entry is refused"
         );
         assert_eq!(held(&feeds, "status-quota").as_deref(), Some("1"));
-        assert_eq!(
-            feeds.latest("status-quota").unwrap().data.get(),
-            r#"{"quota":{}}"#
-        );
+        // A prepared Status generation retains no raw text (MEM5 Lane C): its identity
+        // is the bytes' hash, and the hash proves the held bytes.
+        let held_quota = feeds.latest("status-quota").unwrap();
+        assert!(held_quota.data_text().is_none());
+        assert_eq!(held_quota.data_hash, hash_bytes(br#"{"quota":{}}"#));
+        assert_eq!(held_quota.data_len, r#"{"quota":{}}"#.len());
     }
 
     /// A commit that would pass the source cap refuses as a whole: neither a brand-new

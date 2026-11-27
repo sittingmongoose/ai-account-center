@@ -2115,7 +2115,8 @@ impl ScoreboardOwned {
             }
             if let Ok(generation) = self.feeds.current("scoreboard-facts", id) {
                 let presentation: Presentation =
-                    serde_json::from_str(generation.facts.get()).map_err(|_| Decline::Shape)?;
+                    serde_json::from_str(generation.facts_text().ok_or(Decline::Shape)?)
+                        .map_err(|_| Decline::Shape)?;
                 let presentation = Arc::new(presentation);
                 *parsed = Some((id.clone(), presentation.clone()));
                 return Ok((presentation, id.clone()));

@@ -2310,7 +2310,7 @@ fn analytics_snapshot(
 ) -> Option<serde_json::Value> {
     crate::analytics_route::snapshot(cache, now).or_else(|| {
         let generation = feeds.latest("analytics-dashboard").ok()?;
-        serde_json::from_str(generation.data.get()).ok()
+        serde_json::from_str(generation.data_text()?).ok()
     })
 }
 

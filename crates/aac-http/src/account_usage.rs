@@ -167,8 +167,8 @@ impl AccountUsageCache {
             Err(Decline::Stale) => return Ok(false),
             Err(reason) => return Err(reason),
         };
-        let mut dashboard: Value =
-            serde_json::from_str(held.data.get()).map_err(|_| Decline::Shape)?;
+        let mut dashboard: Value = serde_json::from_str(held.data_text().ok_or(Decline::Shape)?)
+            .map_err(|_| Decline::Shape)?;
         let settings = dashboard["settings"].clone();
         let accounts = dashboard["accounts"].as_array_mut().ok_or(Decline::Shape)?;
         let replaced = accounts.iter_mut().find(|row| row["id"] == id);

@@ -78,7 +78,7 @@ pub fn open_engine_with(
 ) -> Result<Engine> {
     let mut config = Config::default();
     if let Some(bytes) = cache_bytes {
-        config.cache_bytes = bytes.clamp(8 << 20, 256 << 20);
+        config.cache_bytes = bytes.clamp(2 << 20, 256 << 20);
     }
     if let Some(days) = retention_days {
         config.retention_days = if days == 0 { 0 } else { days.clamp(7, 3650) };

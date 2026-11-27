@@ -298,7 +298,7 @@ impl StatusOwned {
             .feeds
             .latest("owned-pins")
             .ok()
-            .and_then(|generation| serde_json::from_str::<Json>(generation.data.get()).ok())
+            .and_then(|generation| serde_json::from_str::<Json>(generation.data_text()?).ok())
             .and_then(|value| {
                 value.as_array().map(|rows| {
                     rows.iter()

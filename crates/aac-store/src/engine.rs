@@ -138,7 +138,10 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            cache_bytes: 8 << 20,
+            // MEM5 Lane C: 2 MiB redb page cache (Linux page cache backs `aac.redb`).
+            // Shipped only while the Status/Scoreboard/Analytics fixture timings stay
+            // within 10% (see REPORT-MEM5C).
+            cache_bytes: 2 << 20,
             integrity_max_bytes: 512 << 20,
             retention_days: 0,
             activity_retention_days: None,

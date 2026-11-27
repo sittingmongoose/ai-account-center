@@ -47,7 +47,10 @@ impl Part<'_> {
 /// three maps; the cap only evicts test fixtures' entries.
 type MemoMap = HashMap<(String, String), Arc<Owners>>;
 static MEMO: Mutex<Option<MemoMap>> = Mutex::new(None);
-const MEMO_ENTRIES: usize = 32;
+/// One store holds three maps (`LIVE`/`HISTORY`/`HISTORY_MIRRORS`); the memo never
+/// retains a fourth (MEM5 Lane C bounded eviction, was 32): overflow evicts one
+/// entry instead of keeping test fixtures' maps resident beside the service's.
+const MEMO_ENTRIES: usize = 3;
 
 fn memo_lock() -> std::sync::MutexGuard<'static, Option<MemoMap>> {
     MEMO.lock()
@@ -57,8 +60,13 @@ fn memo_lock() -> std::sync::MutexGuard<'static, Option<MemoMap>> {
 fn memo_remember(instance: &str, key: &str, owners: Arc<Owners>) {
     let mut held = memo_lock();
     let map = held.get_or_insert_with(HashMap::new);
-    if map.len() >= MEMO_ENTRIES {
-        map.clear();
+    // Re-`save` of a held key refreshes it without growing the map.
+    if !map.contains_key(&(instance.to_owned(), key.to_owned())) && map.len() >= MEMO_ENTRIES {
+        // Evict one entry (any): the service's three keys stay the steady set,
+        // and an evicted map is simply re-read on demand next pass.
+        if let Some(evict) = map.keys().next().cloned() {
+            map.remove(&evict);
+        }
     }
     map.insert((instance.to_owned(), key.to_owned()), owners);
 }

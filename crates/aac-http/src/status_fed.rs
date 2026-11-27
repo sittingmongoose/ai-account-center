@@ -70,10 +70,25 @@ pub(crate) fn source(name: &str) -> bool {
 /// One prepared generation: its data object, and for `status-facts` the presentation facts.
 pub(crate) type ScanClock = (Arc<AtomicU64>, aac_num::intl::Zone);
 
+/// The `status-collected` members as a typed shared view (MEM5 Lane C): the same five
+/// members the wire `data` object carries, each held once behind an `Arc` the
+/// producer and the composer share, instead of a fresh `Value` tree parsed from the
+/// wire bytes beside the producer's own snapshots. `None` is a member TS did not
+/// write (`JSON.stringify` drops `undefined`); a present `null` stays `Some`.
+#[derive(Debug)]
+pub(crate) struct CollectedView {
+    pub(crate) registry: Option<Arc<Value>>,
+    pub(crate) machines: Option<Arc<Value>>,
+    pub(crate) browsers: Option<Arc<Value>>,
+    pub(crate) simlock: Option<Arc<Value>>,
+    pub(crate) usage: Option<Arc<Value>>,
+}
+
 pub(crate) struct Part {
     pub(crate) scan: Option<ScanClock>,
     data: Value,
     reports: Option<Arc<read_status::ReportView>>,
+    collected: Option<Arc<CollectedView>>,
     facts: Option<Arc<Presentation>>,
 }
 
@@ -117,9 +132,30 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
         }
         None
     };
+    if source == COLLECTED {
+        // Move the members out of the parsed tree into the typed share; the tree
+        // itself is dropped, so the generation holds one copy, not two.
+        let mut object = value.into_object().ok_or(Decline::Shape)?;
+        let take = |key: &str| object.remove(key).map(Arc::new);
+        let view = Arc::new(CollectedView {
+            registry: take("registry"),
+            machines: take("machines"),
+            browsers: take("browsers"),
+            simlock: take("simlock"),
+            usage: take("usage"),
+        });
+        return Ok(Part {
+            data: Value::Object(serde_json::Map::new()),
+            reports: None,
+            collected: Some(view),
+            facts,
+            scan: None,
+        });
+    }
     Ok(Part {
         data: value,
         reports: None,
+        collected: None,
         facts,
         scan: None,
     })
@@ -129,9 +165,40 @@ pub(crate) fn prepared_reports(reports: Arc<read_status::ReportView>, scan: Scan
     Part {
         data: Value::Object(serde_json::Map::new()),
         reports: Some(reports),
+        collected: None,
         scan: Some(scan),
         facts: None,
     }
+}
+
+pub(crate) fn prepared_collected(view: Arc<CollectedView>, scan: ScanClock) -> Part {
+    Part {
+        data: Value::Object(serde_json::Map::new()),
+        reports: None,
+        collected: Some(view),
+        scan: Some(scan),
+        facts: None,
+    }
+}
+
+/// Whether an owned `status-collected` view proves: no key or string in any member is
+/// exactly an `Object.prototype` member name (`fed_part`'s one exact-name rule). The
+/// member names are fixed by the envelope, so checking the member values proves the
+/// same thing as checking the wire object the wire path checks.
+pub(crate) fn collected_proven(view: &CollectedView) -> bool {
+    [
+        &view.registry,
+        &view.machines,
+        &view.browsers,
+        &view.simlock,
+        &view.usage,
+    ]
+    .iter()
+    .all(|member| {
+        member
+            .as_deref()
+            .is_none_or(|value| !aac_status::read_context::proto_named(value))
+    })
 }
 
 /// `read_status::fed_part`: the data is an object and no key or string in it is exactly an
@@ -390,6 +457,25 @@ fn compose_generations(
         }
         if let Some(native) = &part.reports {
             reports = Some(native.as_ref());
+        }
+        if let Some(view) = &part.collected {
+            // The typed share, in the envelope's member order (`members(COLLECTED)`).
+            if let Some(value) = &view.registry {
+                parts.push(("registry", value.as_ref()));
+            }
+            if let Some(value) = &view.machines {
+                parts.push(("machines", value.as_ref()));
+            }
+            if let Some(value) = &view.browsers {
+                parts.push(("browsers", value.as_ref()));
+            }
+            if let Some(value) = &view.simlock {
+                parts.push(("simlock", value.as_ref()));
+            }
+            if let Some(value) = &view.usage {
+                parts.push(("usage", value.as_ref()));
+            }
+            continue;
         }
         let Some(object) = part.data.as_object() else {
             return Err(Decline::Internal);

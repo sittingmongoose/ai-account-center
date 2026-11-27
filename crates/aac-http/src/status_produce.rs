@@ -942,15 +942,20 @@ impl Produce {
                 std::thread::sleep(Duration::from_millis(delay));
             }
         }
+        // The collected members as named values, shared with the typed view below:
+        // `machines`/`browsers`/`simlock` are built once here and moved into the
+        // view's `Arc`s after `build` borrows them, never serialized twice.
         let machines = machines_json(&snap.machines);
+        let browsers = json!(snap.browsers);
+        let simlock = json!(snap.simlock);
         let built = aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
             reports: aac_status::produce::sources::Reports::Native(&reports),
             quota: &snap.quota,
             pinned: &pinned,
             registry: &snap.registry,
             machines: &machines,
-            browsers: &json!(snap.browsers),
-            simlock: &json!(snap.simlock),
+            browsers: &browsers,
+            simlock: &simlock,
             usage: snap.usage.as_deref(),
             answers: &answers,
             time_zone: &zone.name,
@@ -958,7 +963,23 @@ impl Produce {
             offset_minutes: offset,
             zone: &zone.zone,
         });
-        drop(machines);
+        // The one typed shared copy of `status-collected` (MEM5 Lane C): `registry`
+        // is the producer's own `Arc` (no clone of its tree), the other members are
+        // the values just built. The generation holds this `Arc`, never a second
+        // `Value` tree parsed from the wire bytes.
+        let usage_value = snap
+            .usage
+            .as_deref()
+            .map(|usage| serde_json::to_value(usage).unwrap_or(Json::Null))
+            .unwrap_or(Json::Null);
+        let collected_view = Arc::new(crate::status_fed::CollectedView {
+            registry: Some(Arc::clone(&snap.registry)),
+            machines: Some(Arc::new(machines)),
+            browsers: Some(Arc::new(browsers)),
+            simlock: Some(Arc::new(simlock)),
+            usage: Some(Arc::new(usage_value)),
+        });
+        let collected_valid = crate::status_fed::collected_proven(&collected_view);
         let sources = match built {
             Ok(sources) => sources,
             Err(why) => {
@@ -1014,16 +1035,21 @@ impl Produce {
                     reports_valid,
                     (snap.scan_times.reports.clone(), zone.zone.clone()),
                 )
+            } else if source == COLLECTED {
+                // The typed shared copy: the text only proves the digest.
+                Feeds::prepare_collected_owned(
+                    generation_id.to_string(),
+                    text,
+                    Arc::clone(&collected_view),
+                    collected_valid,
+                    (snap.scan_times.registry.clone(), zone.zone.clone()),
+                )
             } else {
                 let body = format!(
                     "{{\"generation\":\"{generation_id}\",\"data\":{text},\"facts\":{facts_text}}}"
                 );
-                self.feeds.prepare_generation_with_scan(
-                    source,
-                    body.as_bytes(),
-                    (source == COLLECTED)
-                        .then(|| (snap.scan_times.registry.clone(), zone.zone.clone())),
-                )
+                self.feeds
+                    .prepare_generation_with_scan(source, body.as_bytes(), None)
             };
             let prepared = match prepared {
                 Ok(generation) => generation,
@@ -1081,10 +1107,9 @@ impl Produce {
                     if Arc::ptr_eq(&held_gen, &prepared) {
                         (text_hash, facts_hash)
                     } else {
-                        (
-                            sha2::Sha256::digest(held_gen.data.get().as_bytes()).into(),
-                            sha2::Sha256::digest(held_gen.facts.get().as_bytes()).into(),
-                        )
+                        // The committed generation may have dropped its raw text
+                        // (prepared Status); its stored hashes are the same digests.
+                        (held_gen.data_hash, held_gen.facts_hash)
                     };
                 cache.held.insert(
                     source,
@@ -2570,7 +2595,9 @@ mod low_tests {
         let produce = Produce::new(feeds.clone(), AnswersOwned::new(ccs.clone(), reports), ccs);
         let now = 1_795_000_000_000_u64;
         produce.after_scan(scan_with_thread("vm.l4", now)).await;
-        let seed_data = feeds.latest(REPORTS).unwrap().data.get().to_owned();
+        // The owned reports generation retains no raw text (MEM5 Lane C): the
+        // external generation uses the minimal proved wire shape instead.
+        let seed_data = r#"{"reports":{"threads":[],"tasks":[],"cards":[],"problems":[]}}"#;
 
         // Pause the next publish just before it commits so an external PUT lands a higher
         // generation first (the PUT outruns Produce's commit).
@@ -2604,9 +2631,8 @@ mod low_tests {
             Arc::ptr_eq(arc, &held_gen),
             "cache holds the committed generation"
         );
-        let expected_hash: [u8; 32] = sha2::Sha256::digest(held_gen.data.get().as_bytes()).into();
         assert_eq!(
-            *text_hash, expected_hash,
+            *text_hash, held_gen.data_hash,
             "L4: cache digest must match the committed generation's data, not Produce's text"
         );
     }
