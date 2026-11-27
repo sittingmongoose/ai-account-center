@@ -117,7 +117,7 @@ pub(crate) fn LoginsPlate(ctx: crate::frame::FrameCtx) -> impl IntoView {
                         let rows = view.rows.clone();
                         let empty = rows.is_empty();
                         view! {
-                            <p class="ac-note lg-lead">"Where each sign-in and key lives, when it ends and who renews it. Read-only; no secret is shown or sent."</p>
+                            <p class="ac-note lg-lead">"Where each sign-in and key lives, when it ends and who renews it. No secret is ever shown."</p>
                             {notes.into_iter().map(|n| view! { <p class="ac-note lg-note">{n}</p> }).collect_view()}
                             {if empty {
                                 view! { <p class="ac-note">"No logins are known yet."</p> }.into_any()
@@ -140,6 +140,7 @@ pub(crate) fn LoginsPlate(ctx: crate::frame::FrameCtx) -> impl IntoView {
                         }.into_any()
                     }
                 })}
+                <super::login_delivery::DeliveryPanel ctx=ctx/>
             </div>
         </section>
     }

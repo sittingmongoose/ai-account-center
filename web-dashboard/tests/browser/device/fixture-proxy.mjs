@@ -41,7 +41,8 @@ const analytics = (url) => {
 };
 // Logins (Central Logins step 1): every kind and health, long names, invented only.
 const logins = () => ({ ...fixture('logins-view.json'), generatedAt: new Date().toISOString() });
-const ANSWERS = { '/api/accounts/logins': logins, '/api/accounts/dashboard': accounts, '/api/claude/desktop-profiles': homeProfiles, '/api/accounts/analytics': analytics, '/api/status': status, '/api/scoreboard': scoreboard };
+const delivery = () => ({ ...fixture('login-delivery-view.json'), generatedAt: new Date().toISOString() });
+const ANSWERS = { '/api/accounts/logins': logins, '/api/accounts/logins/delivery': delivery, '/api/accounts/dashboard': accounts, '/api/claude/desktop-profiles': homeProfiles, '/api/accounts/analytics': analytics, '/api/status': status, '/api/scoreboard': scoreboard };
 const rustHome = process.env.AAC_FIXTURE_RUST_HOME
 	? await (await import('../rust-home-builder.mjs')).startRustBuilder(path.resolve(process.env.AAC_FIXTURE_RUST_HOME), path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..'))
 	: null;

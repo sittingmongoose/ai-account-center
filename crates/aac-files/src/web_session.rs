@@ -1079,7 +1079,7 @@ pub fn summaries(root: &Path) -> BTreeMap<&'static str, Option<SessionMeta>> {
 }
 
 #[cfg(windows)]
-mod dpapi {
+pub(crate) mod dpapi {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -1090,15 +1090,24 @@ mod dpapi {
 
     const ENTROPY: &[u8] = b"AAC/web-session/v1";
 
-    #[allow(unsafe_code)]
     pub(super) fn protect(plain: &[u8]) -> Option<Vec<u8>> {
+        protect_with(ENTROPY, plain)
+    }
+
+    pub(super) fn unprotect(ciphertext: &[u8]) -> Option<Vec<u8>> {
+        unprotect_with(ENTROPY, ciphertext)
+    }
+
+    /// DPAPI `CurrentUser` protection under a caller's entropy (the `credential` class uses its own).
+    #[allow(unsafe_code)]
+    pub(crate) fn protect_with(entropy: &[u8], plain: &[u8]) -> Option<Vec<u8>> {
         let input = CRYPT_INTEGER_BLOB {
             cbData: u32::try_from(plain.len()).ok()?,
             pbData: plain.as_ptr() as *mut u8,
         };
         let entropy = CRYPT_INTEGER_BLOB {
-            cbData: u32::try_from(ENTROPY.len()).ok()?,
-            pbData: ENTROPY.as_ptr() as *mut u8,
+            cbData: u32::try_from(entropy.len()).ok()?,
+            pbData: entropy.as_ptr() as *mut u8,
         };
         let mut output = CRYPT_INTEGER_BLOB {
             cbData: 0,
@@ -1130,15 +1139,16 @@ mod dpapi {
         Some(bytes)
     }
 
+    /// The inverse of [`protect_with`] under the same entropy.
     #[allow(unsafe_code)]
-    pub(super) fn unprotect(ciphertext: &[u8]) -> Option<Vec<u8>> {
+    pub(crate) fn unprotect_with(entropy: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
         let input = CRYPT_INTEGER_BLOB {
             cbData: u32::try_from(ciphertext.len()).ok()?,
             pbData: ciphertext.as_ptr() as *mut u8,
         };
         let entropy = CRYPT_INTEGER_BLOB {
-            cbData: u32::try_from(ENTROPY.len()).ok()?,
-            pbData: ENTROPY.as_ptr() as *mut u8,
+            cbData: u32::try_from(entropy.len()).ok()?,
+            pbData: entropy.as_ptr() as *mut u8,
         };
         let mut output = CRYPT_INTEGER_BLOB {
             cbData: 0,

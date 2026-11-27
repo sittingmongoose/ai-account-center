@@ -19,6 +19,7 @@ mod history;
 mod inventory;
 mod key_store;
 mod launch;
+mod logins;
 mod muse_login;
 mod pins;
 mod proof;
@@ -91,6 +92,13 @@ pub fn app_update_subcommand(flag: &std::ffi::OsStr, args: &[std::ffi::OsString]
 /// `aac-agent --app-update-task`: the Windows interactive-task child (see `apps::updater::windows_task`).
 pub async fn app_update_task() -> i32 {
     apps::updater::windows_task::child().await
+}
+
+/// The Central Logins verbs (`login-inventory`, `login-put`, `login-remove`, `login-copy`) run
+/// in-process, as the dispatcher runs them: the dashboard's delivery tests drive real agent
+/// homes through this.
+pub fn login_verb(verb: &str, args: &serde_json::Value) -> Result<serde_json::Value, Failure> {
+    logins::run(verb, args)
 }
 
 /// Return the exact build identity used by shipping's manifest handshake.
@@ -546,6 +554,10 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
             | "launch"
             | "claude-host"
             | "muse-login-identity"
+            | "login-inventory"
+            | "login-put"
+            | "login-remove"
+            | "login-copy"
     ) {
         let args = request.args.clone();
         let verb = request.verb.clone();
@@ -557,6 +569,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
             "failover-inventory" => failover::run(&args),
             "signin-expiry" => signin::run(&args),
             "muse-login-identity" => muse_login::run(&args),
+            "login-inventory" | "login-put" | "login-remove" | "login-copy" => {
+                logins::run(&verb, &args)
+            }
             _ => history::run(&args),
         })
         .await;

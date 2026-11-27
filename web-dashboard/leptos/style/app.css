@@ -873,6 +873,40 @@ textarea.note::placeholder { color: var(--ink-4); }
   .lg-comp { grid-area: comp; } .lg-tool { grid-area: tool; } .lg-ends { grid-area: ends; text-align: right; }
   .lg-kind { grid-area: kind; color: var(--ink-3); } .lg-renew { grid-area: renew; text-align: right; color: var(--ink-3); }
 }
+/* Static logins (Central Logins step 2): write-only delivery under the Logins list. Rows: account, kind, fingerprint,
+   end, where, actions; narrow: three short lines. The form and its confirmation are plain fields, no tinted boxes. */
+.ld { display: grid; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--rule); }
+.ld-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ld-title { font-size: var(--fs-small); font-weight: 650; font-variation-settings: 'wght' 650; margin: 0; flex: 1 1 auto; }
+.ld-tools { display: flex; gap: 6px; }
+.ld-lead { line-height: 1.4; }
+.ld-out { margin: 0; padding-left: 16px; font-size: var(--fs-small); color: var(--ink-2); }
+.ld-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; padding: 8px 0; }
+.ld-form .field { display: grid; gap: 3px; min-width: 0; }
+.ld-comps { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 14px; border: 0; padding: 0; margin: 0; }
+.ld-comps legend { padding: 0; margin-bottom: 3px; width: 100%; }
+.ld-comp { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-small); }
+.ld-acts { grid-column: 1 / -1; display: flex; gap: 6px; justify-content: flex-end; }
+.ld-confirm { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--rule-2); border-bottom: 1px solid var(--rule-2); font-size: var(--fs-small); }
+.ld-confirm p { margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.ld-rows { display: grid; font-size: var(--fs-small); border-top: 1px solid var(--rule); }
+.ld-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .7fr) minmax(0, 1.1fr) minmax(0, .7fr) minmax(0, 1.3fr) 17rem;
+  gap: 0 10px; padding: 5px 0; border-bottom: 1px solid var(--rule-2); align-items: baseline; }
+.ld-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld-acct { font-weight: 600; font-variation-settings: 'wght' 600; }
+.ld-kind, .ld-where { color: var(--ink-2); }
+.ld-fp { font-family: var(--mono); font-size: var(--fs-tiny); color: var(--ink-3); }
+/* The where line is never cut: it wraps (no hidden text). */
+.ld-row > .ld-where { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.ld-row > .ld-row-acts { display: flex; gap: 4px; justify-content: flex-end; overflow: visible; }
+@container logins (max-width: 719px) {
+  .ld-form { grid-template-columns: minmax(0, 1fr); }
+  .ld-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 1px 8px; font-size: var(--fs-tiny); line-height: 1.3;
+    grid-template-areas: 'acct acct ends' 'kind fp fp' 'where where where' 'acts acts acts'; }
+  .ld-acct { grid-area: acct; font-size: var(--fs-small); } .ld-kind { grid-area: kind; } .ld-fp { grid-area: fp; text-align: right; }
+  .ld-row > .lg-h { grid-area: ends; text-align: right; } .ld-where { grid-area: where; }
+  .ld-row > .ld-row-acts { grid-area: acts; justify-content: flex-start; padding-top: 3px; }
+}
 .ac-card { container: card / inline-size; overflow: hidden; }
 .ac-head h2 { font-size: var(--fs-title); }
 .coming { font-family: var(--mono); font-size: 11px; letter-spacing: .03em; font-stretch: 87.5%; color: var(--ink-3); white-space: nowrap; }

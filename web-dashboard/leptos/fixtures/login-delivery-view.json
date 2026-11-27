@@ -1,0 +1,177 @@
+{
+ "version": 1,
+ "generatedAt": "2026-11-27T12:00:00.000Z",
+ "checkedAt": "2026-11-27T11:58:00Z",
+ "computers": [
+  {
+   "id": "ubuntu",
+   "label": "Ubuntu",
+   "state": "enrolled",
+   "host": "ubuntu-test",
+   "seenKey": ""
+  },
+  {
+   "id": "mac",
+   "label": "Mac",
+   "state": "enrolled",
+   "host": "mac-test",
+   "seenKey": ""
+  },
+  {
+   "id": "nas1",
+   "label": "Nas1",
+   "state": "enrolled",
+   "host": "nas1-test",
+   "seenKey": ""
+  },
+  {
+   "id": "windows",
+   "label": "Windows",
+   "state": "other",
+   "host": "spare-test",
+   "seenKey": "0123456789abcdef0123456789abcdef"
+  },
+  {
+   "id": "odroid",
+   "label": "Odroid",
+   "state": "taken",
+   "host": "ubuntu-test",
+   "seenKey": ""
+  }
+ ],
+ "accounts": [
+  {
+   "id": "claude:sam",
+   "provider": "claude",
+   "label": "sam@alpha.example"
+  },
+  {
+   "id": "claude:ops",
+   "provider": "claude",
+   "label": "ops.long-account-name@builders-collective.example"
+  },
+  {
+   "id": "zai:1",
+   "provider": "zai",
+   "label": "Z.ai main"
+  },
+  {
+   "id": "kimi-code:1",
+   "provider": "kimi-code",
+   "label": "Kimi work"
+  }
+ ],
+ "kinds": [
+  {
+   "kind": "claude-token",
+   "label": "Claude setup-token token",
+   "providers": [
+    "claude"
+   ]
+  },
+  {
+   "kind": "api-key",
+   "label": "API key",
+   "providers": [
+    "kimi-code",
+    "opencode-go",
+    "zai"
+   ]
+  }
+ ],
+ "logins": [
+  {
+   "loginId": "0a1b2c3d",
+   "kind": "claude-token",
+   "provider": "claude",
+   "account": "claude:sam",
+   "accountLabel": "sam@alpha.example",
+   "fingerprint": "sha256:0011223344556677",
+   "expiresAt": "2027-11-20T00:00:00Z",
+   "endsText": "2027-11-20",
+   "health": "ok",
+   "holders": [
+    {
+     "computer": "mac",
+     "deliveredAt": "2026-11-27T11:00:00Z",
+     "fingerprint": "sha256:0011223344556677",
+     "state": "ok"
+    },
+    {
+     "computer": "nas1",
+     "deliveredAt": "2026-11-20T11:00:00Z",
+     "fingerprint": "sha256:5566778899aabbcc",
+     "state": "unchecked"
+    },
+    {
+     "computer": "ubuntu",
+     "deliveredAt": "2026-11-27T11:00:00Z",
+     "fingerprint": "sha256:0011223344556677",
+     "state": "ok"
+    }
+   ]
+  },
+  {
+   "loginId": "1b2c3d4e",
+   "kind": "claude-token",
+   "provider": "claude",
+   "account": "claude:ops",
+   "accountLabel": "ops.long-account-name@builders-collective.example",
+   "fingerprint": "",
+   "expiresAt": null,
+   "endsText": "End not known",
+   "health": "unknown",
+   "holders": [
+    {
+     "computer": "mac",
+     "deliveredAt": "2025-12-10T09:00:00Z",
+     "fingerprint": "sha256:8899aabbccddeeff",
+     "state": "differs"
+    },
+    {
+     "computer": "ubuntu",
+     "deliveredAt": "2025-12-11T09:00:00Z",
+     "fingerprint": "sha256:1122334455667788",
+     "state": "differs"
+    }
+   ]
+  },
+  {
+   "loginId": "2c3d4e5f",
+   "kind": "api-key",
+   "provider": "zai",
+   "account": "zai:1",
+   "accountLabel": "Z.ai main",
+   "fingerprint": "sha256:a1b2c3d4e5f60718",
+   "expiresAt": null,
+   "endsText": "No set end",
+   "health": "ok",
+   "holders": [
+    {
+     "computer": "mac",
+     "deliveredAt": "2026-11-20T10:00:00Z",
+     "fingerprint": "sha256:a1b2c3d4e5f60718",
+     "state": "ok"
+    },
+    {
+     "computer": "nas1",
+     "deliveredAt": "2026-11-20T10:00:00Z",
+     "fingerprint": "sha256:a1b2c3d4e5f60718",
+     "state": "ok"
+    },
+    {
+     "computer": "ubuntu",
+     "deliveredAt": "2026-11-20T10:00:00Z",
+     "fingerprint": "",
+     "state": "unreadable"
+    },
+    {
+     "computer": "windows",
+     "deliveredAt": "2026-11-20T10:00:00Z",
+     "fingerprint": "sha256:a1b2c3d4e5f60718",
+     "state": "wrong-computer"
+    }
+   ]
+  }
+ ]
+}
