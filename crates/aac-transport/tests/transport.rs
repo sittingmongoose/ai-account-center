@@ -949,19 +949,20 @@ async fn close_foreign_masters_exits_live_and_purges_dead() {
     let ssh = dir.path().join("ssh");
     std::fs::write(
         &ssh,
-        format!(
-            "#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n",
-            log.display()
-        ),
+        format!("#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n", log.display()),
     )
     .unwrap();
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     // Live master from another instance.
-    let live_path = dir.path().join("cm-0000000000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let live_path = dir
+        .path()
+        .join("cm-0000000000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     let _live = std::os::unix::net::UnixListener::bind(&live_path).unwrap();
     // Dead master: bind then drop.
-    let dead_path = dir.path().join("cm-1111111111111111-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let dead_path = dir
+        .path()
+        .join("cm-1111111111111111-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     {
         let l = std::os::unix::net::UnixListener::bind(&dead_path).unwrap();
         drop(l);
@@ -970,7 +971,9 @@ async fn close_foreign_masters_exits_live_and_purges_dead() {
     // Age past the 2 s mid-creation guard.
     tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
     // Fresh file, mid-creation: must survive.
-    let fresh_path = dir.path().join("cm-2222222222222222-cccccccccccccccccccccccccccccccccccccccc");
+    let fresh_path = dir
+        .path()
+        .join("cm-2222222222222222-cccccccccccccccccccccccccccccccccccccccc");
     {
         let l = std::os::unix::net::UnixListener::bind(&fresh_path).unwrap();
         drop(l);

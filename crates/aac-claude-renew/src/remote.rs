@@ -410,7 +410,10 @@ mod tests {
                     "{banned} present: {argv:?}"
                 );
             }
-            assert!(!argv.iter().any(|a| a.starts_with("ControlPath=/")), "{argv:?}");
+            assert!(
+                !argv.iter().any(|a| a.starts_with("ControlPath=/")),
+                "{argv:?}"
+            );
         }
     }
 
