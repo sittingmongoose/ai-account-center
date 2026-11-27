@@ -390,6 +390,8 @@ mod tests {
                         Err(_) => return requests,
                     }
                 };
+                // macOS hands an accepted socket the listener non-blocking mode; read blocking.
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .unwrap();
