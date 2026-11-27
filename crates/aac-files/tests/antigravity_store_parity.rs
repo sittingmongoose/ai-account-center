@@ -2,8 +2,8 @@
 //! Antigravity Python workers (`auth_platforms.py`, `native_credential_worker.py`,
 //! `desktop_usage.py:antigravity_oauth_client`, `runtime_health.py`) plus `masked_credential_state`.
 #![allow(clippy::unwrap_used)]
-// Most parity cases need POSIX ownership; Windows runs the rest.
-#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
+// Most parity cases need the Ubuntu credential store; the Mac and Windows run the rest.
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 
 use aac_files::antigravity_store::{
     AuthErrorKind, MaskedCredentialState, PrivateCredential, ProviderCallError, SecureFileStore,

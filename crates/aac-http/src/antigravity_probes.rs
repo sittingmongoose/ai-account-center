@@ -166,6 +166,7 @@ pub(crate) fn current_uid() -> Option<u32> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
     use super::*;
 
     #[cfg(target_os = "linux")]

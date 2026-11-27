@@ -119,6 +119,7 @@ impl Host {
     }
 
     #[cfg(test)]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn install_shared(ccs: &Path, host: Arc<Self>) {
         let key = host_key(ccs);
         hosts()
@@ -128,6 +129,7 @@ impl Host {
     }
 
     #[cfg(test)]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn clear_shared(ccs: &Path) {
         let key = host_key(ccs);
         hosts()
@@ -646,6 +648,7 @@ else:
         )
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     struct SharedHostGuard(PathBuf);
     impl Drop for SharedHostGuard {
         fn drop(&mut self) {
