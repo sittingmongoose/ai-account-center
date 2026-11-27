@@ -349,8 +349,8 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                                     on:input=move |e| { let v = event_target_value(&e); form.update(|f| f.secret = v); }/>
                             </label>
                             <label class="field">
-                                <span class="field-label">"Ends on (optional)"</span>
-                                <input class="field-input" type="date" data-probe="ld-ends" prop:value=move || form.with(|f| f.expires_on.clone())
+                                <span class="field-label">"Ends on (optional, YYYY-MM-DD)"</span>
+                                <input class="field-input" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" maxlength="10" autocomplete="off" data-probe="ld-ends" prop:value=move || form.with(|f| f.expires_on.clone())
                                     on:input=move |e| { let v = event_target_value(&e); form.update(|f| f.expires_on = v); }/>
                             </label>
                             <fieldset class="ld-comps">
