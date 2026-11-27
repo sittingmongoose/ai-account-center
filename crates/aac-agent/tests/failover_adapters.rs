@@ -1782,6 +1782,7 @@ fn jwt_compact(payload: Value) -> String {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "the Muse console capsule store is Unix-only")]
 fn provider_golden_digests_all_eight_providers() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();

@@ -373,9 +373,31 @@ fn write_oauth_metadata(home: &Path, payload: &Value, mode: u32) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if mode & 0o077 == 0 {
+        private_acl(&path);
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = mode;
     path
+}
+
+/// Windows: the owner-only, protected ACL the product's private readers require (the Unix mode
+/// bits above have no effect there).
+#[cfg(windows)]
+fn private_acl(path: &Path) {
+    // The local account name resolves under ssh too (USERDOMAIN may read WORKGROUP there),
+    // and icacls refuses verbatim \\?\ paths.
+    let user = std::env::var("USERNAME").expect("USERNAME");
+    let text = path.to_string_lossy();
+    let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    let status = std::process::Command::new("icacls")
+        .arg(plain)
+        .args(["/inheritance:r", "/grant:r", &format!("{user}:(F)")])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("icacls");
+    assert!(status.success(), "icacls {}", path.display());
 }
 
 // =========================================================================
@@ -1242,6 +1264,10 @@ async fn antigravity_two_services_failover_throttles_budgets_and_neon_derivation
 // =========================================================================
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "the Muse console capsule store is Unix-only, as in muse_console.py"
+)]
 async fn standalone_muse_collect_contract_and_portal_capsule_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
@@ -1376,6 +1402,8 @@ async fn standalone_muse_collect_contract_and_portal_capsule_fallback() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&capsule_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    #[cfg(windows)]
+    private_acl(&capsule_path);
     let portal = MockPortal::new(
         "example@example.com",
         "42",

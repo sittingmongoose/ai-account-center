@@ -1683,8 +1683,12 @@ mod tests {
                 }
                 match aac_agent::login_verb(verb, &args) {
                     Ok(mut value) => {
+                        // The agent answers with the OS this test runs on; the fixture's
+                        // computers are Linux ones, so each answers as its own computer would.
                         if let Some(os) = self.os.get(&target.id) {
                             value["os"] = json!(os);
+                        } else if value.get("os").is_some() {
+                            value["os"] = json!(target.os());
                         }
                         if self.strip.contains(&target.id)
                             && let Some(map) = value.as_object_mut()

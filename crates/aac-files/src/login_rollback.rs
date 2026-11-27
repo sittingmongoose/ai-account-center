@@ -806,9 +806,14 @@ mod tests {
         quarantine(&p, &plan()[..1], None, AT, "restore").unwrap();
         let record = p.folder().join("manifest.json");
         let elsewhere = dir.path().join("elsewhere");
+        // The record holds paths as JSON strings (a Windows path's backslashes are escaped).
+        let json_text = |path: &Path| {
+            let quoted = serde_json::to_string(&path.to_string_lossy()).unwrap();
+            quoted.trim_matches('"').to_owned()
+        };
         let text = std::fs::read_to_string(&record).unwrap().replace(
-            &p.codex_copy("work").unwrap().to_string_lossy().into_owned(),
-            &elsewhere.to_string_lossy(),
+            &json_text(&p.codex_copy("work").unwrap()),
+            &json_text(&elsewhere),
         );
         private_file(&record, text.as_bytes());
         let back = restore(&p).unwrap();
