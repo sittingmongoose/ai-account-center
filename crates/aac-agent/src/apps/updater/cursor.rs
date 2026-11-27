@@ -887,7 +887,7 @@ At line:1 char:28
     /// Python `B13CursorFallback.layout` / `CursorWindowsRegressions.layout`:
     /// Alexis PC's real `%LOCALAPPDATA%\cursor-agent` layout.
     fn windows_layout(root: &Path, launchers: &[&str], versions: &[&str]) -> PathBuf {
-        let root = root.join("home/AppData/Local/cursor-agent");
+        let root = root.join("home/AppData/Local").join("cursor-agent");
         for name in launchers {
             executable(&root.join(name), "launcher fixture\n");
         }

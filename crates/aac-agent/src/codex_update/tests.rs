@@ -58,6 +58,7 @@ fn desktop_rewritten_children_and_node_mode() {
     assert!(!p.desktop());
 }
 #[test]
+#[cfg_attr(windows, ignore = "the Linux Codex runtime joins POSIX folders")]
 fn desktop_recovers_child_display_and_relative_folder_before_terminator() {
     let mut p = desktop(10);
     p.env.clear();

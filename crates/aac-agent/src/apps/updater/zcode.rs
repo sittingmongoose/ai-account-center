@@ -4011,6 +4011,7 @@ mod tests {
 
     /// test_detects_adapters_with_each_part_and_null_for_a_missing_one
     #[tokio::test]
+    #[cfg_attr(windows, ignore = "Ubuntu prefixes are shown with the host separator")]
     async fn adapters_are_detected_with_each_part_and_null_for_a_missing_one() {
         let rig = Rig::start();
         let root = rig.path();
@@ -7629,6 +7630,10 @@ mod tests {
     /// Ubuntu, Mac, and Windows fixtures (skips cleanly once TS3 removes the Python file or when
     /// `python3` is absent on the host).
     #[tokio::test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "the Python oracle is hermetic on Linux only (Windows cannot start it in a temp profile; the Mac reads the real /opt/homebrew)"
+    )]
     async fn python_oracle_parity_across_platforms_and_failure_modes() {
         let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/app-updates");
         if !scripts.join("app_update_zcode.py").is_file() {

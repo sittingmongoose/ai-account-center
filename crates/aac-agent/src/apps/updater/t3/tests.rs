@@ -1165,6 +1165,7 @@ async fn deferred_restart_waits_for_grace_reloads_restarts_and_handles_failures(
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "the Linux restart worker takes POSIX state folders")]
 fn worker_arguments_validates_fields() {
     let args = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
     let ok = WorkerArguments::parse(&args(&[
@@ -1640,7 +1641,7 @@ async fn discover_covers_unix_layouts_server_version_ipv6_windows_and_fail_close
     let home = root.path().join("home");
     let state = home.join(".t3/userdata/server-runtime.json");
     std::fs::create_dir_all(state.parent().expect("ud")).expect("ud");
-    let shim = home.join(".t3/bin/t3");
+    let shim = home.join(".t3").join("bin/t3");
     std::fs::create_dir_all(shim.parent().expect("bin")).expect("bin");
     std::fs::write(&shim, "").expect("shim");
     let rt = create_runtime(&home, "0.1.10-nightly.20261112.4580");

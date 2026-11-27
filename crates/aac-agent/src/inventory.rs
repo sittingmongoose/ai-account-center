@@ -375,6 +375,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "the Mac shell probe runs /bin/sh")]
     fn mac_shell_probe_publishes_memory_only_from_clean_successful_sources() {
         // The checked-in probe runs with stubbed commands, never against a real Mac.
         let run = |memsize: &str, level: &str, pressure: &str| {

@@ -738,7 +738,8 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// Native Codex inventory is qualified on Linux only; elsewhere the request delegates.
+#[cfg(all(test, target_os = "linux"))]
 mod race_tests {
     use super::*;
     struct Fake {
@@ -857,7 +858,8 @@ mod race_tests {
     }
 }
 
-#[cfg(test)]
+// Native Codex inventory is qualified on Linux only; elsewhere the request delegates.
+#[cfg(all(test, target_os = "linux"))]
 mod diagnostics_tests {
     use super::*;
     struct Fake {

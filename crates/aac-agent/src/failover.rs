@@ -1066,7 +1066,8 @@ mod table_tests {
     }
 }
 
-#[cfg(test)]
+// Native Codex inventory is qualified on Linux only; elsewhere the request delegates.
+#[cfg(all(test, target_os = "linux"))]
 mod port_tests {
     use super::*;
     #[test]
@@ -1078,7 +1079,8 @@ mod port_tests {
     }
 }
 
-#[cfg(test)]
+// Native Codex inventory is qualified on Linux only; elsewhere the request delegates.
+#[cfg(all(test, target_os = "linux"))]
 mod inventory_parity_tests {
     use super::*;
     use std::io::Write;
