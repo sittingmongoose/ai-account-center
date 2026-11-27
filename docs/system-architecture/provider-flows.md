@@ -2,18 +2,17 @@
 
 The account dashboard consumes existing authenticated account sources rather
 than provisioning logins or routing AI prompts. Source boundaries are owned by
-the account service,
-additional accounts
-and usage transport.
+the [native producer](../../crates/aac-http/src/account_usage/producer.rs) and
+the [collection bridge](../../crates/aac-http/src/collection.rs).
 
 | Source | Retained owner |
 | --- | --- |
-| Native Codex quota | saved-profile quota collector, usage collectors |
-| Native Claude quota | Claude Desktop live usage with the [Python Claude collector](../../scripts/account-usage/claude_usage.py) |
-| Additional desktop/plan usage | [Python collectors](../../scripts/account-usage/) |
+| Native Codex quota | [Rust failover collector](../../crates/aac-agent/src/failover/core.rs) |
+| Native Claude quota | [Rust Claude reader](../../crates/aac-agent/src/claude_usage/) |
+| Additional desktop/plan usage | [Rust provider adapters](../../crates/aac-agent/src/failover_additional/) |
 | OpenCode/Muse browser session bridge | [bridge source](../../browser-bridge/opencode-muse/) |
 | Qwen browser/native host bridge | [bridge source](../../browser-bridge/qwen/) |
-| Historical observations | [Analytics service](../../crates/aac-http/src/analytics_route.rs) |
+| Historical observations | [Analytics writers](../../crates/aac-http/src/analytics_writers/) |
 
 Credentials, browser sessions and private capsules stay on their configured
 owner host. Existing approved SSH aliases are transport configuration, not an
@@ -34,7 +33,7 @@ collection. Live email, account UUID and organization verification still precede
 quota reads. Canonical path aliases share the selected binding, and a provider's
 rate-limit cooldown survives a folder change even when its quota is discarded.
 
-All quota providers share verified usage fallback.
+All quota providers share [verified usage fallback](../../crates/aac-http/src/account_usage/coordinator.rs).
 The configured primary source is tried first. A failed or unreachable source can
 use an existing sign-in on another configured Mac, Windows, Ubuntu or Nas1
 computer only when its provider account identity matches. Identity includes the
@@ -56,20 +55,17 @@ configuration, never an inference from a matching email or plan. The coordinator
 then accepts the native subscription's complete reading, identifies its source,
 and preserves unknown native counters as unknown. Scope changes, credential
 changes and revocation cannot reuse that grant. See the
-[collector guide](../../scripts/account-usage/README.md) for its bounded format.
+[Rust Muse reader](../../crates/aac-agent/src/failover_additional/muse.rs) for its bounded format.
 
-The transport streams
-the packaged Python bundle over existing SSH aliases and imports it in memory.
-It installs no remote helper and copies no credentials. Each computer reads its
-own supported sign-ins and returns normalized usage plus nonsecret identity and
-revision metadata; the helper verifies them again after collection. Successful
-observations persist under private `account-usage-failover/` storage with their
-original sample times. Temporary source failures can therefore display cached
-usage after restart. Identity changes invalidate the associated reading, and
-fallback never changes which account a program uses. Renewal of credentials for an unchanged verified identity can preserve core
-quota, while Claude browser extras still require their original revision and
-capsule context. Primary sign-in warnings remain visible alongside fallback
-usage. Obsolete observation files are pruned to 256 recognized private records.
+The [native collection bridge](../../crates/aac-http/src/collection.rs) sends
+`failover-inventory` to the pinned agent over existing SSH aliases. The agent reads
+its own supported sign-ins and returns normalized usage plus nonsecret identity and
+revision metadata; it verifies them again after collection. Successful observations
+persist under private `account-usage-failover/` storage with their original sample
+times. Temporary source failures can therefore display cached usage after restart.
+Identity changes invalidate the associated reading, and fallback never changes
+which account a program uses. Primary sign-in warnings remain visible alongside
+fallback usage. Obsolete observation files are pruned to 256 recognized private records.
 
 A provider's HTTP 429 applies one persisted identity cooldown across source
 aliases and computers, including native Codex and Antigravity collectors,
@@ -91,8 +87,8 @@ before changing an existing deployment.
 
 Nas1, the fourth computer, is a second Ubuntu computer and needs no new
 `platform` value. A source runs on Nas1 when it is saved as `platform: "ubuntu"` with
-`sshHost: "nas1-agent"`; the usage bundle runs over SSH with Nas1's existing
-Python runtime, and the dashboard derives the display host from that pair. The persisted
+`sshHost: "nas1-agent"`; the pinned native agent runs over SSH, and the dashboard
+derives the display host from that pair. The persisted
 platform stays `ubuntu`, so the version-1 manifest, registry v2, quota history
 and every earlier package read and collect such a source unchanged. A quota
 reading belongs to a provider account, not to a computer. Nas1 can supply a
@@ -135,10 +131,10 @@ to false, and shows nothing hidden only when it has never read the file. Every
 private store refuses a folder that others can write.
 
 API keys added from the dashboard (Kimi Code, Z.ai, OpenCode Go) are kept by the
-AAC key store in
+[native key store](../../crates/aac-agent/src/key_store.rs) in
 `account-usage/keys/<provider>-<keyId>.json` (0600 in a 0700 folder) on the host that
-collects them; another host is written by `scripts/account-usage/key_store.py` with
-the key on stdin only. The API returns only the last four characters and a
+collects them; another host is written through the pinned agent's `key-store` verb
+with the key on stdin only. The API returns only the last four characters and a
 fingerprint. A new key is checked once by the collector: a rejected key is deleted
 again, a network failure keeps it as unverified. Codex accounts are added or signed
 in again with `codex login --device-auth` in a private staging folder, never in the

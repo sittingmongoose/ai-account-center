@@ -1,8 +1,8 @@
 // Claude sign-in renewal on the dashboard (dashboard payload `claudeSignIns`, written by the
-// renewal runner in scripts/claude-signin): the Claude header says when a person is needed, a
-// notice is raised once, each Claude row names its renewal state, and Details lists the runner,
-// the browser session and every computer's sign-in. In the app frame (ported from the classic
-// canvas when Slint was retired). Synthetic accounts and emails only.
+// Rust renewal job): the Claude header says when a person is needed, a notice is raised once,
+// each Claude row names its renewal state, and Details lists the job, the browser session and
+// every computer's sign-in. In the app frame (ported from the classic canvas when Slint was
+// retired). Synthetic accounts and emails only.
 const NOW = Date.parse('2026-11-03T15:00:00Z');
 const at = (hours) => new Date(NOW + hours * 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 

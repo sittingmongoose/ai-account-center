@@ -373,31 +373,9 @@ fn write_oauth_metadata(home: &Path, payload: &Value, mode: u32) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
     }
-    #[cfg(windows)]
-    if mode & 0o077 == 0 {
-        private_acl(&path);
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     let _ = mode;
     path
-}
-
-/// Windows: the owner-only, protected ACL the product's private readers require (the Unix mode
-/// bits above have no effect there).
-#[cfg(windows)]
-fn private_acl(path: &Path) {
-    // The local account name resolves under ssh too (USERDOMAIN may read WORKGROUP there),
-    // and icacls refuses verbatim \\?\ paths.
-    let user = std::env::var("USERNAME").expect("USERNAME");
-    let text = path.to_string_lossy();
-    let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
-    let status = std::process::Command::new("icacls")
-        .arg(plain)
-        .args(["/inheritance:r", "/grant:r", &format!("{user}:(F)")])
-        .stdout(std::process::Stdio::null())
-        .status()
-        .expect("icacls");
-    assert!(status.success(), "icacls {}", path.display());
 }
 
 // =========================================================================
@@ -1264,10 +1242,6 @@ async fn antigravity_two_services_failover_throttles_budgets_and_neon_derivation
 // =========================================================================
 
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "the Muse console capsule store is Unix-only, as in muse_console.py"
-)]
 async fn standalone_muse_collect_contract_and_portal_capsule_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
@@ -1402,8 +1376,6 @@ async fn standalone_muse_collect_contract_and_portal_capsule_fallback() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&capsule_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
-    #[cfg(windows)]
-    private_acl(&capsule_path);
     let portal = MockPortal::new(
         "example@example.com",
         "42",
@@ -2128,198 +2100,4 @@ async fn antigravity_budget_spans_token_refresh_and_muse_mismatch_inactive_contr
     assert_eq!(inactive["status"], "unavailable");
     assert_eq!(inactive["failureCode"], "inactive_subscription");
     assert_eq!(inactive["windows"], json!([]));
-}
-
-/// Compare Rust numbers/values against Python JSON values (treating integer 0 == float 0.0).
-fn assert_json_num_eq(actual: &Value, expected: &Value, label: &str) {
-    match (actual, expected) {
-        (Value::Number(a), Value::Number(b)) => {
-            let af = a.as_f64().unwrap();
-            let bf = b.as_f64().unwrap();
-            assert!(
-                (af - bf).abs() <= 1e-9,
-                "{label}: number mismatch actual={actual} expected={expected}"
-            );
-        }
-        (Value::Array(a), Value::Array(b)) => {
-            assert_eq!(
-                a.len(),
-                b.len(),
-                "{label}: len actual={actual} expected={expected}"
-            );
-            for (i, (av, bv)) in a.iter().zip(b.iter()).enumerate() {
-                assert_json_num_eq(av, bv, &format!("{label}[{i}]"));
-            }
-        }
-        (Value::Object(a), Value::Object(b)) => {
-            assert_eq!(
-                a.len(),
-                b.len(),
-                "{label}: keys actual={actual} expected={expected}"
-            );
-            for (k, bv) in b {
-                let av = a
-                    .get(k)
-                    .unwrap_or_else(|| panic!("{label}: missing key {k} in {actual}"));
-                assert_json_num_eq(av, bv, &format!("{label}.{k}"));
-            }
-        }
-        _ => assert_eq!(actual, expected, "{label}: mismatch"),
-    }
-}
-
-#[test]
-#[cfg_attr(
-    windows,
-    ignore = "the live Python oracle decodes its pipe in the Windows code page (TS3 retires it)"
-)]
-fn live_python_oracle_exact_parity_across_desktop_helpers_desktop_usage_and_cursor_usage() {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    let dir = tempfile::tempdir().unwrap();
-    let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/account-usage");
-
-    let agy_summary_payload = json!({
-        "response": {"summary": {"groups": [
-            {"displayName": "Claude and GPT models", "buckets": [
-                {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.5, "resetTime": "2026-11-01T15:27:22Z"},
-                {"bucketId": "3p-5h", "window": "5h", "remaining": {"case": "remainingFraction", "value": 0}, "resetTime": "2026-10-25T20:42:30Z"},
-                {"bucketId": "dup", "remainingFraction": 1, "disabled": true},
-                {"bucketId": "dup", "remainingAmount": "100"},
-                {"bucketId": "invalid", "remainingFraction": 5, "resetTime": "2026-10-01T04:00:00Z"}
-            ]},
-            {"displayName": "Gemini 4 Argon", "buckets": [
-                {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 0.93, "resetTime": "2026-11-01T11:10:00Z"}
-            ]}
-        ]}}
-    });
-    let agy_per_model_payload = json!({
-        "buckets": [
-            {"modelId": "gemini-3.8-flash", "remainingFraction": 0.55, "resetTime": "2026-10-25T20:42:34.900Z"},
-            {"modelId": "gemini-4-neon-xhigh", "remainingFraction": 0.4, "resetTime": "2026-10-25T20:42:36.100Z"},
-            {"modelId": "gemini-4-argon-high", "remainingFraction": 0.1, "resetTime": "2026-10-25T20:42:36.100Z"},
-            {"modelId": "gemini-3.1-pro", "resetTime": "2026-11-01T15:27:30Z"},
-            {"modelId": "gemini-sk-task-1", "remainingFraction": 0.9, "resetTime": "2026-11-01T15:27:30Z"},
-            {"modelId": "gemini-3.5-flash", "remainingAmount": "1200", "resetTime": "2026-10-26T09:00:00Z"}
-        ]
-    });
-    let agy_load_payload = json!({
-        "planInfo": {"planType": "pro"},
-        "paidTier": {"id": "g1-pro-tier", "name": "Google AI Pro", "availableCredits": [
-            {"creditAmount": "125.5"}, {"creditAmount": 20}, {"creditAmount": "1e1"}, {"creditAmount": true}
-        ]},
-        "currentTier": {"id": "free-tier", "name": "Antigravity"}
-    });
-    let muse_subs_payload = json!({
-        "subs_usage": {
-            "window": {"used_percent": 5.12345, "resets_at": 1790812800, "window_duration_mins": 240},
-            "weekly": {"used_percent": 0, "resets_at": "2026-10-01T00:00:00-04:00", "window_duration_mins": null}
-        }
-    });
-    let muse_portal_payload = json!({
-        "subscription_quota": {
-            "tier": "High Usage",
-            "window_weighted_used": "0",
-            "window_weighted_limit": "1000",
-            "window_duration_secs": "5400",
-            "window_resets_at": null,
-            "weekly_weighted_used": "1200",
-            "weekly_weighted_limit": "1000",
-            "weekly_resets_at": "1790812800"
-        }
-    });
-    let cursor_legacy_payload = json!({
-        "billingCycleEnd": 0,
-        "endOfMonth": "2026-10-01T00:00:00Z",
-        "isUnlimited": true,
-        "individualUsage": {
-            "plan": {"used": 667, "limit": 2000, "remaining": 1333, "enabled": true, "totalPercentUsed": 1.4461, "autoPercentUsed": 0.36},
-            "onDemand": {"used": 250, "limit": 2000, "remaining": 1750, "enabled": false}
-        }
-    });
-    let cursor_shared_payload = cursor_current(json!(113.5));
-    let cursor_shared_info = cursor_plan_info(json!({"includedUsagePeriod": 2.0}));
-
-    let input = json!({
-        "agySummary": agy_summary_payload,
-        "agyPerModel": agy_per_model_payload,
-        "agyLoad": agy_load_payload,
-        "museSubs": muse_subs_payload,
-        "musePortal": muse_portal_payload,
-        "cursorLegacy": cursor_legacy_payload,
-        "cursorShared": cursor_shared_payload,
-        "cursorInfo": cursor_shared_info,
-        "safeTexts": ["ok", "  trimmed  ", "\x1fhello", "hel\x1flo", "Bearer\u{00a0}tok", "sk-abc123", "eyJ12345678"],
-        "memberships": ["Plus", "UNIFIED_ULTRA", "future_tier", "bad-tier", "", "pro_student"]
-    });
-
-    let py = r#"
-import sys, json
-sys.path.insert(0, sys.argv[1])
-import desktop_helpers as h, desktop_usage as d, cursor_usage as c
-inp = json.load(sys.stdin)
-agy_sum = d.normalize_antigravity(inp["agySummary"])
-plan, reported = d.antigravity_reported_plan(inp["agyLoad"])
-out = {
-    "agySummary": agy_sum,
-    "agyHasGemini": d.antigravity_summary_has_gemini(agy_sum),
-    "agyGemini": d.normalize_antigravity_gemini(inp["agyPerModel"], agy_sum),
-    "agyPlan": plan,
-    "agyReported": reported or None,
-    "agyCredits": d.normalize_antigravity_credits(inp["agyLoad"]),
-    "museSubs": d.normalize_muse(inp["museSubs"]),
-    "musePortal": d.normalize_muse(inp["musePortal"]),
-    "cursorLegacy": c.normalize_legacy(inp["cursorLegacy"]),
-    "cursorShared": c.normalize_shared(inp["cursorShared"], inp["cursorInfo"], "plus"),
-    "cursorAdditional": c.normalize_additional(inp["cursorLegacy"]),
-    "safeTexts": [h.safe_text(s) for s in inp["safeTexts"]],
-    "memberships": [c.membership(m) for m in inp["memberships"]],
-}
-print(json.dumps(out, allow_nan=False))
-"#;
-    let mut child = Command::new("python3")
-        .arg("-c")
-        .arg(py)
-        .arg(&scripts)
-        .env("HOME", dir.path())
-        .env("CCS_HOME", dir.path().join(".ccs"))
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn python3 oracle");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.to_string().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().expect("wait python3 oracle");
-    assert!(
-        output.status.success(),
-        "python oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected: Value = serde_json::from_slice(&output.stdout).expect("parse oracle JSON");
-
-    let rust_agy_sum = du::normalize_antigravity(&input["agySummary"]);
-    let (rust_plan, rust_reported) = du::antigravity_reported_plan(&input["agyLoad"]);
-    let rust_out = json!({
-        "agySummary": rust_agy_sum,
-        "agyHasGemini": du::antigravity_summary_has_gemini(&rust_agy_sum),
-        "agyGemini": du::normalize_antigravity_gemini(&input["agyPerModel"], &rust_agy_sum),
-        "agyPlan": rust_plan,
-        "agyReported": rust_reported,
-        "agyCredits": du::normalize_antigravity_credits(&input["agyLoad"]),
-        "museSubs": du::normalize_muse(&input["museSubs"]),
-        "musePortal": du::normalize_muse(&input["musePortal"]),
-        "cursorLegacy": du::cursor_normalize_legacy(&input["cursorLegacy"]),
-        "cursorShared": du::cursor_normalize_shared(&input["cursorShared"], &input["cursorInfo"], "plus"),
-        "cursorAdditional": du::cursor_normalize_additional(&input["cursorLegacy"]),
-        "safeTexts": input["safeTexts"].as_array().unwrap().iter().map(|s| du::safe_text(s, 160)).collect::<Vec<_>>(),
-        "memberships": input["memberships"].as_array().unwrap().iter().map(du::cursor_membership).collect::<Vec<_>>(),
-    });
-    assert_json_num_eq(&rust_out, &expected, "rust_vs_python_oracle");
 }

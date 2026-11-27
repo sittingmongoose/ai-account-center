@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * Refuses to package helpers with CRLF line endings. The package runs scripts on the Mac, Windows,
- * Nas1 and the VM and pins several of them by SHA-256 (the analytics helper, the Claude history
- * writer, the Antigravity runtime manifest), so a package built from a checkout that converted
- * line endings broke them silently (2026-10-13). `.gitattributes` keeps new checkouts LF; this
- * catches an older working tree. Windows `.cmd` wrappers keep CRLF on purpose.
+ * Refuses to package runtime scripts with CRLF line endings. The retained browser bridges and
+ * native reader launchers run on the Mac, Windows, Nas1 and the VM; `.gitattributes` keeps new
+ * checkouts LF, and this catches an older working tree. Windows `.cmd` wrappers keep CRLF on
+ * purpose.
  *
  * Usage: node scripts/check-line-endings.js [root]   (exit 1 lists the files to re-check out)
  */
@@ -48,7 +47,7 @@ if (require.main === module) {
   const found = crlfFiles(root);
   if (found.length > 0) {
     process.stderr.write(
-      `[X] ${found.length} packaged file(s) have CRLF line endings, which break the helpers' SHA-256 pins:\n` +
+      `[X] ${found.length} packaged file(s) have CRLF line endings, which break runtime scripts:\n` +
         found
           .slice(0, 20)
           .map((file) => `    ${file}\n`)

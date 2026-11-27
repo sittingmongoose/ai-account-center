@@ -33,7 +33,7 @@ test('the installer reads the plan collectors from the package scripts/account-u
 
 test('the package ships the bridge and the collector folder together', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
-  assert.ok(pkg.files.includes('scripts/'), 'package.json files ships scripts/');
+  assert.ok(pkg.files.includes('scripts/account-usage/'), 'package.json files ships scripts/account-usage/');
   assert.ok(pkg.files.includes('browser-bridge/'), 'package.json files ships browser-bridge/');
 });
 

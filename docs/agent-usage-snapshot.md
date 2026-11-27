@@ -55,13 +55,11 @@ readings that sample just recorded:
 - `history.json`: the measured readings of every window over the last 7 days;
 - `locations.json`: the saved locations, rewritten only when they change.
 
-The sign-in renewal runner ([scripts/claude-signin](../scripts/claude-signin/README.md)) writes
-`claude-signins.json` and `claude-signins.md` into the same folder after each of its runs. The
-dashboard reads that file (allowlisted fields only, `src/web-server/services/claude-signin-renewal.ts`)
-into the dashboard response as `claudeSignIns`, into the `signIn` rows of `usage.json` (the runner's
-rows replace the dashboard's own ssh reading for every computer the runner read, so the Mac's
-Keychain sign-ins and Nas1 appear) and into a `signInRenewal` summary: runner, last run, stale, and
-`needsYou`. `usage.md` names anything only a person can do at the top of its sign-in section.
+The server's Rust renewal job writes `claude-signins.json` and `claude-signins.md` into the same
+folder after each run. The dashboard reads that file (allowlisted fields only,
+`crates/aac-snapshot/src/renewal.rs`) into the dashboard response as `claudeSignIns`, into the
+`signIn` rows of `usage.json` and into a `signInRenewal` summary: last run, stale and `needsYou`.
+`usage.md` names anything only a person can do at the top of its sign-in section.
 
 Of the three data files `usage.json` is written last, so its `generatedAt` says that sample's
 `history.json` and `usage.md` are in place. `locations.json` follows when the locations changed; a

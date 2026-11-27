@@ -149,12 +149,12 @@ provider read. The HTTP request settles within the browser's 120-second window.
 If it reaches the server deadline after a send, the pending attempt remains
 available for Check again.
 
-Claude initially uses the manifest's existing Windows profile and credentials,
-locally or through the existing SSH-streamed Python helper. It verifies the same
-account and organization through the existing OAuth profile read. Its private
-collector seam keeps credentials inside that host process and rechecks the exact
-identity and inventory binding before POST. Mac-only logins remain view-only.
-**Queued after first usable landing:** the Mac Keychain credential path (R1).
+Claude uses the manifest's existing Windows profile and credentials through the
+pinned native agent, locally or over SSH. It verifies the same account and
+organization through the OAuth profile read. Its private collector seam keeps
+credentials inside that host process and rechecks the exact identity and inventory
+binding before POST. Mac Keychain logins use the native GUI bridge and remain
+subject to the same identity checks.
 
 Codex uses a short-lived `codex app-server` with `CODEX_HOME` set to the exact
 saved registry profile. It verifies the saved login, account/read identity and

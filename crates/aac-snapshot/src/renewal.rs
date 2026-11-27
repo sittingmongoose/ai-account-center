@@ -1,7 +1,7 @@
-//! The renewal runner's published state (`claude-signin-renewal.ts`): the runner on the Mac
-//! writes `claude-signins.json` into the snapshot folder after every run; this reads it, keeps
-//! only allowlisted fields and marks it stale when the runner stopped writing. Anything shaped
-//! like a link or a token is refused, so the dashboard can never echo one.
+//! The Rust renewal job's published state: the server writes `claude-signins.json` into the
+//! snapshot folder after every run; this reads it, keeps only allowlisted fields and marks it
+//! stale when the job stopped writing. Anything shaped like a link or a token is refused, so
+//! the dashboard can never echo one.
 
 use crate::js::{js_whitespace, member, utf16_len};
 use aac_files::read::{self, Read, ReadPolicy};
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Mutex;
 
-/// The runner's file in the snapshot folder.
+/// The renewal job's file in the snapshot folder.
 pub const RENEWAL_FILE: &str = "claude-signins.json";
 const MAX_BYTES: u64 = 512 * 1024;
 const CACHE_MS: i64 = 30 * 1000;

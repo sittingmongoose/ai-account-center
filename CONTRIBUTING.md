@@ -55,8 +55,8 @@ Oct 20 Muse fallback).
 | CLI, dashboard listener and backend | `crates/` (`aac-http` CLI and listener, native owners) |
 | Leptos browser dashboard | `web-dashboard/` (`leptos/` app, `public/` data layer) |
 | Native bars | `macos-bar/`, `windows-bar/` |
-| Usage collectors | `scripts/account-usage/`, `browser-bridge/` |
-| Explicit app updates | `scripts/app-updates/` |
+| Usage collectors | `crates/aac-agent/`, `crates/aac-providers/`, `browser-bridge/` |
+| Explicit app updates | `crates/aac-agent/src/apps/`, `crates/aac-http/src/app_updates/` |
 | Source-built container | `docker/Dockerfile`, `docker/compose.yaml` |
 | Maintainer guides | [docs/README.md](docs/README.md) |
 

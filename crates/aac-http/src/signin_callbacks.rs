@@ -56,7 +56,7 @@ enum Request {
         meta_account: Option<String>,
         fresh: IdentityInput,
     },
-    /// The fixed Muse remote login and email commands for a config home.
+    /// The fixed Muse remote login command for a config home.
     MuseCommands { home_id: Option<String> },
     /// Validate the Muse login email and map it to the job result.
     MuseValidateEmail { account_id: String, email: String },
@@ -272,8 +272,6 @@ pub(crate) fn codex_prepare(
     }))
 }
 
-/// The fixed remote Python that prints only the Muse login email (`EMAIL_PROGRAM`).
-const MUSE_EMAIL_PROGRAM: &str = r#"import json,os,sys; p=os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"), "muse", "auth.json"); v=json.load(open(p)); m=(v.get("providers") or {}).get("meta") or {}; e=m.get("user_email"); sys.stdout.write(e if isinstance(e, str) and e else "")"#;
 
 fn muse_home_id(home_id: Option<&str>) -> Option<&str> {
     match home_id {
@@ -288,7 +286,7 @@ fn muse_home_id(home_id: Option<&str>) -> Option<&str> {
     }
 }
 
-/// The fixed Muse remote login and email commands (`remoteLoginCommand`/`remoteEmailCommand`).
+/// The fixed Muse remote login command. Identity reads use the native agent verb.
 pub(crate) fn muse_commands(home_id: Option<&str>) -> Option<Value> {
     let id = muse_home_id(home_id)?;
     let prefix = if id.is_empty() {
@@ -297,13 +295,7 @@ pub(crate) fn muse_commands(home_id: Option<&str>) -> Option<Value> {
         format!("env XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/{id}\" ")
     };
     let remote_login = format!("{prefix}PATH=\"$HOME/.local/bin:$PATH\" muse login");
-    let email_prefix = if id.is_empty() {
-        String::new()
-    } else {
-        format!("XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/{id}\" ")
-    };
-    let remote_email = format!("{email_prefix}/usr/bin/python3 -c '{MUSE_EMAIL_PROGRAM}'");
-    Some(json!({"status": "ok", "remoteLogin": remote_login, "remoteEmail": remote_email}))
+    Some(json!({"status": "ok", "remoteLogin": remote_login}))
 }
 
 /// The Muse login email rule: one `@`, non-empty whitespace-free local and domain, a dot inside
@@ -631,20 +623,13 @@ mod tests {
             answer["remoteLogin"],
             "PATH=\"$HOME/.local/bin:$PATH\" muse login"
         );
-        let email = answer["remoteEmail"].as_str().unwrap();
-        assert!(email.starts_with("/usr/bin/python3 -c '"));
-        assert!(email.contains("user_email"));
+        assert!(answer.get("remoteEmail").is_none());
         let home = muse_commands(Some("9f2c41d0")).unwrap();
         assert_eq!(
             home["remoteLogin"],
             "env XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/9f2c41d0\" PATH=\"$HOME/.local/bin:$PATH\" muse login"
         );
-        assert!(
-            home["remoteEmail"]
-                .as_str()
-                .unwrap()
-                .starts_with("XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/9f2c41d0\" /usr/bin/python3")
-        );
+        assert!(home.get("remoteEmail").is_none());
         assert!(muse_commands(Some("BAD")).is_none());
     }
 

@@ -108,7 +108,7 @@ fn fixture_transport_and_service_api() {
     }
 }
 
-/// The installed package's parts the service reads: the computer table and the helper set.
+/// The installed package's computer table; app updates need no helper files.
 fn package(root: &Path) -> PathBuf {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let package = root.join("package");
@@ -118,17 +118,6 @@ fn package(root: &Path) -> PathBuf {
         package.join("web-dashboard/public/computers.json"),
     )
     .expect("package computer table");
-    fs::create_dir_all(package.join("scripts/app-updates")).expect("package helpers");
-    for entry in fs::read_dir(repo.join("scripts/app-updates")).expect("helpers") {
-        let entry = entry.expect("helper");
-        if entry.file_type().expect("helper type").is_file() {
-            fs::copy(
-                entry.path(),
-                package.join("scripts/app-updates").join(entry.file_name()),
-            )
-            .expect("copy helper");
-        }
-    }
     package
 }
 
@@ -159,36 +148,6 @@ async fn service_fixture_child() {
     }
     let fresh = AppUpdates::new(root.clone());
     assert_eq!(fresh.status().await.body["job"], done);
-    // Each computer gets the helper set before its agent is asked to update. The local
-    // computer's helpers are published for real and answer the agent's capability probe.
-    let local = root.join(".ccs/app-updates/app_updates.py");
-    let probe = Command::new("/usr/bin/python3")
-        .arg("-B")
-        .arg(&local)
-        .args(["--platform", "ubuntu", "--agent-capabilities"])
-        .output()
-        .expect("local helper probe");
-    assert_eq!(
-        String::from_utf8_lossy(&probe.stdout),
-        "{\"appWorker\":1}\n"
-    );
-    for (id, host) in hosts() {
-        if id == "ubuntu" {
-            continue;
-        }
-        let events = trace(&root, host);
-        assert_eq!(
-            events.first().map(|v| &v["stage"]),
-            Some(&json!("sync")),
-            "{host}"
-        );
-        let sync = events.iter().position(|v| v["stage"] == "sync");
-        let update = events.iter().position(|v| v["stage"] == "update");
-        assert!(
-            sync < update && update.is_some(),
-            "sync before dispatch on {host}"
-        );
-    }
     for (id, host) in hosts() {
         let events = trace(&root, host);
         assert_eq!(
@@ -324,7 +283,6 @@ async fn service_fixture_child() {
         2
     );
     acp_follow_up(&root, &owner).await;
-    helper_sync_failure(&root, &owner).await;
     retry_failed_rows(&root, &owner).await;
     old_agent_after_admission(&root, &owner).await;
 
@@ -484,49 +442,6 @@ async fn old_agent_after_admission(root: &Path, owner: &std::sync::Arc<AppUpdate
     fs::remove_file(marker).expect("restore the fixture agent");
 }
 
-/// A refused helper set dispatches nothing on that computer and says why on every row.
-async fn helper_sync_failure(root: &Path, owner: &std::sync::Arc<AppUpdates>) {
-    let alias = host_alias("odroid");
-    let updates = |root: &Path| {
-        trace(root, alias)
-            .iter()
-            .filter(|row| row["stage"] == "update")
-            .count()
-    };
-    let before = updates(root);
-    fs::write(root.join(format!("sync-fail-{alias}")), "").expect("refuse the upload");
-    assert_eq!(owner.start().await.status, 202);
-    let done = until(owner, |job| job["state"] == "failed").await;
-    assert_eq!(updates(root), before, "no dispatch after a failed sync");
-    let rows = done["results"].as_array().expect("rows");
-    let odroid: Vec<_> = rows
-        .iter()
-        .filter(|row| row["platform"] == "odroid")
-        .collect();
-    assert_eq!(odroid.len(), 12);
-    for row in odroid {
-        assert_eq!(row["status"], "failed");
-        assert_eq!(row["updateAttempted"], false);
-        assert_eq!(
-            row["message"],
-            "The update helpers could not be synchronized; no apps were updated on this computer."
-        );
-        assert_eq!(
-            row["diagnostics"],
-            json!({"cause":"unknown","reason":"helper_upload_damaged"})
-        );
-    }
-    assert!(
-        rows.iter()
-            .any(|row| row["platform"] == "nas1" && row["status"] == "updated")
-    );
-    assert_eq!(
-        AppUpdates::new(root.to_owned()).status().await.body["job"],
-        done,
-        "the saved job restores the sync cause"
-    );
-    fs::remove_file(root.join(format!("sync-fail-{alias}"))).expect("accept uploads again");
-}
 
 async fn acp_follow_up(root: &Path, owner: &std::sync::Arc<AppUpdates>) {
     fs::remove_file(root.join("old-windows-agent")).expect("restore fixture agent");

@@ -4,7 +4,7 @@
 
 use crate::registered::snapshot_settings as read_settings;
 use aac_snapshot::client::{
-    client_source_folder, computer_registry_file, runner_source_folder, sync_snapshot_client,
+    client_source_folder, computer_registry_file, sync_snapshot_client,
 };
 use aac_snapshot::publisher::{Deps, SnapshotPublisher};
 use aac_snapshot::snapshot::{LongBurnEntry, LongBurnSpan, SampleEvent};
@@ -95,7 +95,6 @@ impl UsageSnapshot {
                     Path::new(directory),
                     &client_source_folder(&client_root),
                     &computer_registry_file(&client_root),
-                    Some(&runner_source_folder(&client_root)),
                 )
             }),
             sign_in: Arc::new(move || {

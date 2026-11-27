@@ -25,25 +25,6 @@ const VERBS: [&str; 4] = [
     "failover-collect",
 ];
 const MAX_PENDING: usize = 16;
-
-/// The agent verb that answers one collection request, or `None` for the managed Python
-/// helper. Claude inventory and collection are native in the agent on every platform (its
-/// `failover-inventory` verb serves both actions), so Claude never reaches the helper.
-fn agent_verb(verb: &str, args: &Value) -> Option<&'static str> {
-    let verb = VERBS.into_iter().find(|v| *v == verb)?;
-    if verb.starts_with("failover-") && args["provider"] == "claude" {
-        return Some("failover-inventory");
-    }
-    // Wallet inventory uses the existing capsule parser, which is not an M2 agent reader.
-    let wallet = verb == "failover-inventory" && args["provider"] == "opencode-wallet";
-    (verb != "failover-collect" && !wallet).then_some(verb)
-}
-
-/// Whether an agent that declines a request (an older agent's `{"fallback":"python"}`) may
-/// hand it to the helper. Claude may not: its answer is the agent's, or honestly none.
-fn helper_may_answer(verb: &str, args: &Value) -> bool {
-    verb == "failover-inventory" && args["provider"] != "claude"
-}
 type Key = [u8; 32];
 enum Collected {
     Value(Value),
@@ -55,7 +36,6 @@ type Pending = watch::Sender<Option<Reply>>;
 pub(crate) struct Collection {
     pending: Mutex<HashMap<Key, Pending>>,
     timers: Semaphore,
-    helpers: Semaphore,
     stop: CancellationToken,
 }
 
@@ -64,14 +44,24 @@ impl Default for Collection {
         Self {
             pending: Mutex::default(),
             timers: Semaphore::new(4),
-            // R5b: one python3 failover helper at a time. Three concurrent interpreters
-            // stacked ~100 MiB of helper RSS on the main process; the deadline-bounded
-            // acquire below keeps the wait honest (a helper that cannot start in time is
-            // "busy", never a stalled pass).
-            helpers: Semaphore::new(1),
             stop: CancellationToken::new(),
         }
     }
+}
+
+/// Every failover action is served by the native agent. `failover-collect` keeps its public
+/// request shape but uses the same agent verb as inventory.
+fn agent_verb(verb: &str) -> Option<&'static str> {
+    VERBS
+        .into_iter()
+        .find(|candidate| *candidate == verb)
+        .map(|verb| {
+            if verb.starts_with("failover-") {
+                "failover-inventory"
+            } else {
+                verb
+            }
+        })
 }
 
 #[derive(Deserialize)]
@@ -98,32 +88,6 @@ impl Collection {
         self.stop.cancel();
     }
 
-    async fn read_helper(
-        &self,
-        agents: &Agents,
-        computer: &crate::agent_transport::Selector,
-        args: &Value,
-        deadline: Instant,
-        cap: usize,
-    ) -> Reply {
-        let client = agents
-            .client(computer, deadline)
-            .await
-            .ok_or("unavailable")?;
-        let _permit = tokio::time::timeout_at(deadline, self.helpers.acquire())
-            .await
-            .map_err(|_| "busy")?
-            .map_err(|_| "busy")?;
-        let result = crate::account_usage::helper::collect(
-            client.computer(),
-            agents.root(),
-            args,
-            deadline,
-            cap,
-        )
-        .await?;
-        Ok(Arc::new(Collected::Value(result)))
-    }
 
     /// The standalone producer uses the same registry, deadline and coalescing as the bridge.
     pub(crate) async fn read_value(
@@ -147,22 +111,9 @@ impl Collection {
         .map_err(|_| "shape")?;
         let call = Call::parse(&bytes).ok_or("shape")?;
         let request = call.collection_request(verb).ok_or("shape")?;
-        let reply = self
-            .collect(agents.clone(), &call, request, Instant::now())
-            .await;
-        let result = match reply {
-            Err("unsupported") if helper_may_answer(verb, args) => {
-                self.read_helper(
-                    &agents,
-                    &call.computer,
-                    args,
-                    Instant::now() + Duration::from_secs(12),
-                    call.max_bytes,
-                )
-                .await?
-            }
-            other => other?,
-        };
+        let result = self
+            .collect(agents, &call, request, Instant::now())
+            .await?;
         match result.as_ref() {
             Collected::Value(value) => Ok(value.clone()),
             Collected::Failure(_) => Err("reply"),
@@ -236,7 +187,7 @@ impl Collection {
                 let collection = self.clone();
                 let computer = call.computer.clone();
                 let cap = call.max_bytes;
-                let route = agent_verb(&request.verb, &request.args);
+                let route = agent_verb(&request.verb);
                 let wire = route.map(|verb| call.wire(verb));
                 tokio::spawn(async move {
                     // A lost dashboard connection does not spawn a second provider read.
@@ -247,11 +198,7 @@ impl Collection {
                             request.verb = verb.into();
                             read_agent(&agents, computer, request, wire, deadline, cap).await
                         }
-                        _ => {
-                            collection
-                                .read_helper(&agents, &computer, &request.args, deadline, cap)
-                                .await
-                        }
+                        _ => Err("shape"),
                     };
                     let mut pending = collection.pending.lock().unwrap_or_else(|e| e.into_inner());
                     sender.send_replace(Some(result));
@@ -275,8 +222,8 @@ impl Collection {
 
 impl Call {
     fn collection_request(&self, verb: &str) -> Option<Request> {
-        let helper = verb == "failover-collect";
-        let (deadline, cap) = if helper {
+        let collect = verb == "failover-collect";
+        let (deadline, cap) = if collect {
             (35_000, MAX_FRAME_BYTES * 2)
         } else {
             (15_000, MAX_FRAME_BYTES)
@@ -310,7 +257,7 @@ async fn read_agent(
     cap: usize,
 ) -> Reply {
     let _permit = agents.permit().ok_or("busy")?;
-    // A local quota/sign-in agent waits for the local-agent gate within its deadline.
+    // R5b: a local quota/sign-in agent waits for the one-at-a-time gate within its deadline.
     let _local_permit = agents
         .local_agent_permit(&computer, deadline)
         .await
@@ -346,35 +293,15 @@ async fn read_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn claude_collection_runs_in_the_agent_and_never_in_the_python_helper() {
-        let claude = json!({"version":1,"action":"collect","provider":"claude"});
-        assert_eq!(
-            agent_verb("failover-collect", &claude),
-            Some("failover-inventory")
-        );
-        let inventory = json!({"version":1,"action":"inventory","provider":"claude"});
-        assert_eq!(
-            agent_verb("failover-inventory", &inventory),
-            Some("failover-inventory")
-        );
-        assert!(!helper_may_answer("failover-inventory", &inventory));
-        assert!(!helper_may_answer("failover-collect", &claude));
-        // Providers without a native collector keep their existing routes.
-        let codex = json!({"version":1,"action":"collect","provider":"codex"});
-        assert_eq!(agent_verb("failover-collect", &codex), None);
-        let wallet = json!({"version":1,"action":"inventory","provider":"opencode-wallet"});
-        assert_eq!(agent_verb("failover-inventory", &wallet), None);
-        let codex = json!({"version":1,"action":"inventory","provider":"codex"});
-        assert_eq!(
-            agent_verb("failover-inventory", &codex),
-            Some("failover-inventory")
-        );
-        assert!(helper_may_answer("failover-inventory", &codex));
-        assert_eq!(agent_verb("quota-read", &json!({})), Some("quota-read"));
-        assert_eq!(agent_verb("unknown", &json!({})), None);
+    fn every_failover_action_uses_the_native_agent_verb() {
+        assert_eq!(agent_verb("failover-inventory"), Some("failover-inventory"));
+        assert_eq!(agent_verb("failover-collect"), Some("failover-inventory"));
+        assert_eq!(agent_verb("quota-read"), Some("quota-read"));
+        assert_eq!(agent_verb("signin-expiry"), Some("signin-expiry"));
+        assert_eq!(agent_verb("unknown"), None);
     }
+
 
     #[tokio::test(start_paused = true)]
     async fn schedules_the_exact_configured_interval_and_releases_waiters_on_stop() {

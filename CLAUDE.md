@@ -49,7 +49,7 @@ or API routing product.
 | Dashboard | `web-dashboard/leptos/`, `web-dashboard/public/` |
 | Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
 | Native clients | `macos-bar/`, `windows-bar/` |
-| Collectors and updates | `scripts/account-usage/`, `scripts/app-updates/` |
+| Collectors and updates | `crates/aac-agent/`, `crates/aac-http/`, `crates/aac-providers/` |
 | Browser bridges | `browser-bridge/` |
 | Container | `docker/Dockerfile`, `docker/compose.yaml` |
 

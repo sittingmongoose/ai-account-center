@@ -37,7 +37,11 @@
   },
   "files": [
     "dist/",
-    "scripts/",
+    "scripts/account-usage/",
+    "scripts/agent-usage/",
+    "scripts/postinstall.js",
+    "scripts/postuninstall.js",
+    "scripts/deploy-lineage.js",
     "browser-bridge/",
     "macos-bar/Package.swift",
     "macos-bar/Scripts/",

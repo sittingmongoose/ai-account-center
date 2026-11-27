@@ -65,8 +65,8 @@ FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c3
 
 SHELL ["/bin/bash", "-lc"]
 
-# Python and SSH support explicitly configured account collectors. Provider
-# logins, desktop applications, and host credentials are not installed here.
+# Python remains only for the native-messaging bridge and sign-in PTY relay;
+# account collection and app updates run in Rust. SSH supports configured hosts.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates python3 openssh-client \
   && rm -rf /var/lib/apt/lists/*
@@ -80,7 +80,11 @@ COPY docker/entrypoint.sh /usr/local/bin/ai-account-center-entrypoint
 RUN chmod +x /usr/local/bin/ai-account-center-entrypoint
 
 COPY --from=build /tmp/aac-package/dist ./dist
-COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/scripts/account-usage ./scripts/account-usage
+COPY --from=build /app/scripts/agent-usage ./scripts/agent-usage
+COPY --from=build /app/scripts/postinstall.js ./scripts/postinstall.js
+COPY --from=build /app/scripts/postuninstall.js ./scripts/postuninstall.js
+COPY --from=build /app/scripts/deploy-lineage.js ./scripts/deploy-lineage.js
 COPY --from=build /app/config/tables ./config/tables
 COPY --from=build /app/config/private-files.json ./config/private-files.json
 COPY --from=build /app/config/agent-artifacts.json ./config/agent-artifacts.json

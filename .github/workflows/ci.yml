@@ -182,11 +182,11 @@ jobs:
       - name: Test
         run: bun run test:all
 
-      - name: Test offline Claude quota collector
+      - name: Test offline Qwen plan collector
         shell: bash
         run: |
           set -euo pipefail
-          TEST_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ai-account-center-claude-ci.XXXXXX")"
+          TEST_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ai-account-center-qwen-ci.XXXXXX")"
           trap 'rm -rf "$TEST_FIXTURE_ROOT"' EXIT
           mkdir -p "$TEST_FIXTURE_ROOT/.ccs" "$TEST_FIXTURE_ROOT/.config" \
             "$TEST_FIXTURE_ROOT/.cache" "$TEST_FIXTURE_ROOT/.state"
@@ -194,7 +194,7 @@ jobs:
             CCS_HOME="$TEST_FIXTURE_ROOT" XDG_CONFIG_HOME="$TEST_FIXTURE_ROOT/.config" \
             XDG_CACHE_HOME="$TEST_FIXTURE_ROOT/.cache" XDG_STATE_HOME="$TEST_FIXTURE_ROOT/.state" \
             TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" TZ=UTC NODE_ENV=test \
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/unit/account-usage/claude_usage_test.py
+            PYTHONDONTWRITEBYTECODE=1 python3 tests/unit/account-usage/plan_usage_test.py
 
   # Single always-reporting status that branch protection requires.
   #

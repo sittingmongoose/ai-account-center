@@ -5,7 +5,6 @@ pub(crate) mod cursor;
 pub(crate) mod cursor_billing;
 pub mod dashboard;
 pub mod failover;
-pub(crate) mod helper;
 pub mod producer;
 pub mod provider_caches;
 mod rows;

@@ -202,38 +202,18 @@ impl Flow {
                     return Err(ErrorCode::WriteFailed);
                 }
                 let computer = Selector::usage("mac", Some(alias));
-                let email = if let Some(reply) = agents
+                let email = agents
                     .call_value(
                         "muse-login-identity",
-                        computer.clone(),
+                        computer,
                         json!({"homeId":home_id}),
                         58_000,
                         60_000,
                         4096,
                     )
                     .await
-                {
-                    reply["email"].as_str().map(str::to_owned)
-                } else {
-                    let command = signin_callbacks::muse_commands(home_id.as_deref())
-                        .and_then(|commands| commands["remoteEmail"].as_str().map(str::to_owned))
-                        .ok_or(ErrorCode::WriteFailed)?;
-                    let output = agents
-                        .reference(
-                            computer,
-                            vec!["/bin/sh".into(), "-c".into(), command.into()],
-                            Vec::new(),
-                            60_000,
-                            4096,
-                        )
-                        .await
-                        .map_err(|_| ErrorCode::WriteFailed)?;
-                    if output.code != Some(0) {
-                        return Err(ErrorCode::WriteFailed);
-                    }
-                    String::from_utf8(output.stdout).ok()
-                }
-                .ok_or(ErrorCode::WriteFailed)?;
+                    .and_then(|reply| reply["email"].as_str().map(str::to_owned))
+                    .ok_or(ErrorCode::WriteFailed)?;
                 let email = email.trim();
                 if jobs.stopped(id) || !signin_callbacks::muse_email_valid(email) {
                     return Err(ErrorCode::WriteFailed);
