@@ -29,8 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         check:
-          - { name: test-inventory, cmd: 'node tests/spec/inventory.mjs' }
-          - { name: personal-details, cmd: 'node scripts/personal-detail-guard.js' }
+          - { name: test-inventory, cmd: 'cargo run --locked -p aac-xtask -- check inventory' }
+          - { name: personal-details, cmd: 'cargo run --locked -p aac-xtask -- check personal' }
     name: ${{ matrix.check.name }}
 
     steps:
@@ -53,6 +53,11 @@ jobs:
           path: |
             ${{ env.BUN_INSTALL_CACHE_DIR }}
           key: ${{ runner.os }}-bun-cache-v3-${{ hashFiles('bun.lock', 'web-dashboard/Cargo.lock') }}
+
+      - name: Setup pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: '1.99.1'
 
       - name: Ensure dependencies
         run: bun install --frozen-lockfile

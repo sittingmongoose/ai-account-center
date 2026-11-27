@@ -39,8 +39,8 @@ compatibility alias. Private `~/.ccs/` data and session/profile aliases remain
 unchanged. Retired runtime/proxy/tooling guides are available in Git history;
 upstream docs are not the current product's deployment instructions.
 
-Verify documentation with `bash tests/docs/quickstart-parity.sh` and
-`node tests/docs/documentation-freshness.js`. Keep relative source links current.
+Verify documentation with `cargo run --locked -p aac-xtask -- check quickstart` and
+`cargo run --locked -p aac-xtask -- check docs`. Keep relative source links current.
 Generated hardening reports must be regenerated from the current source using
 their owning script; old validation totals are not proof of the current build.
 

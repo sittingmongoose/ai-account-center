@@ -49,13 +49,13 @@ COPY . .
 RUN bun run build:all
 
 # Verify the native executables and actual Leptos browser artifacts before packaging.
-# The wasm lives in dist/ui/pkg/<buildId>/; verify-bundle.js checks it against the manifest.
+# The wasm lives in dist/ui/pkg/<buildId>/; aac-xtask checks it against the manifest.
 RUN test -x dist/native/ai-account-center \
   && test -x dist/native/ccs \
   && test -x dist/native/aac-http \
   && test -s dist/ui/app/index.html \
   && test -s dist/ui/ui-build-manifest.json \
-  && node scripts/verify-bundle.js
+  && cargo run --locked -p aac-xtask -- release verify-bundle
 
 # Runtime stage: Rust dashboard and SSH support, without Node, Bun, or Python
 # =============================================================================
