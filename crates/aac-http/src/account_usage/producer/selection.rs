@@ -303,7 +303,25 @@ impl Producer {
         self.failover().collect(&target, &template()).await
     }
 
+    /// The OpenCode Zen console wallet row. Without a pasted session it is a `needs_sign_in`
+    /// row only on a computer that had a wallet source configured: B2 retired the wallet's
+    /// browser bridge, and a computer that never had a wallet gets no invented row.
     pub(super) async fn wallet(&self, now: i64, force: bool) -> Option<Value> {
+        let root = self.root.clone();
+        let wanted = tokio::task::spawn_blocking(move || {
+            matches!(
+                aac_files::web_session::load(
+                    &root,
+                    aac_files::web_session::Surface::OpencodeWallet
+                ),
+                Ok(Some(_))
+            ) || matches!(provider_caches::wallet_source(&root), Ok(Some(_)))
+        })
+        .await
+        .unwrap_or(false);
+        if !wanted {
+            return None;
+        }
         super::web_sessions::collect_opencode_wallet(&self.root, &self.web_sessions, now, force)
             .await
     }
