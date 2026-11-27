@@ -19,6 +19,7 @@ pub mod deployed_build;
 #[cfg(unix)]
 pub mod history_snapshots;
 pub mod history_transaction;
+pub mod kernel;
 pub mod key_sweep;
 pub mod lifecycle_queue;
 pub mod path;

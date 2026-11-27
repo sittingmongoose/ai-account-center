@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! W2 desktop updater tests. Each ports a case of the Python oracle
 //! (`tests/unit/app-updates/app_updates_test.py`) or of the bridge's TypeScript tests
 //! (`tests/unit/app-updates/app-update-codex.test.ts`). Every path is under a
@@ -1782,112 +1783,6 @@ async fn gui_command_names_a_failed_exit_a_lost_session_and_a_failed_cleanup() {
     .await
     .expect_err("fixture");
     assert_eq!(failure.code, "timeout");
-}
-
-// ------------------------------------------------------------------ the confirmed Codex relaunch
-
-fn executable(path: &Path) {
-    std::fs::create_dir_all(path.parent().expect("fixture")).expect("fixture");
-    std::fs::write(path, b"elf").expect("fixture");
-}
-
-#[test]
-fn installed_codex_accepts_only_fixed_layouts() {
-    let root = temp();
-    let host = contract::host(root.path(), Platform::Ubuntu);
-    let standalone = host
-        .home
-        .join(".codex/packages/standalone/releases/0.48.0/bin/codex");
-    executable(&standalone);
-    assert!(confirmed::installed_codex(&host, &standalone).is_some());
-    let npm = host.home.join(".local/lib/node_modules/@openai/codex");
-    std::fs::create_dir_all(&npm).expect("fixture");
-    std::fs::write(npm.join("package.json"), r#"{"name":"@openai/codex"}"#).expect("fixture");
-    let nested =
-        npm.join("node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex");
-    let bundled = npm.join("vendor/aarch64-unknown-linux-musl/codex/codex");
-    executable(&nested);
-    executable(&bundled);
-    assert!(confirmed::installed_codex(&host, &nested).is_some());
-    assert!(confirmed::installed_codex(&host, &bundled).is_some());
-    for refused in [
-        host.home
-            .join(".codex/packages/standalone/releases/beta/bin/codex"),
-        host.home
-            .join(".codex/packages/standalone/releases/0.48.0/codex"),
-        npm.join("vendor/x86_64-pc-windows/bin/codex"),
-        host.home.join(".local/bin/codex"),
-        host.home.join("elsewhere/codex"),
-    ] {
-        executable(&refused);
-        assert!(
-            confirmed::installed_codex(&host, &refused).is_none(),
-            "{}",
-            refused.display()
-        );
-    }
-    std::fs::write(npm.join("package.json"), r#"{"name":"@impostor/codex"}"#).expect("fixture");
-    assert!(confirmed::installed_codex(&host, &nested).is_none());
-}
-
-#[test]
-fn confirmed_context_checks_every_field() {
-    let root = temp();
-    let host = contract::host(root.path(), Platform::Ubuntu);
-    let codex = host
-        .home
-        .join(".codex/packages/standalone/releases/0.48.0/bin/codex");
-    executable(&codex);
-    std::fs::create_dir_all(host.home.join(".codex")).expect("fixture");
-    let cwd = root.path().to_string_lossy().into_owned();
-    let home = host.home.to_string_lossy().into_owned();
-    let good = json!({"exe": codex, "cwd": cwd, "env": {"HOME": home, "TERM": "xterm"}});
-    let context = confirmed::confirmed_context(&host, Platform::Ubuntu, &good);
-    if cfg!(target_os = "linux") {
-        let context = context.expect("fixture");
-        assert_eq!(context.args, [codex.to_string_lossy().into_owned()]);
-        assert_eq!(context.identity, "new");
-    } else {
-        assert!(context.is_none());
-    }
-    assert!(confirmed::confirmed_context(&host, Platform::Mac, &good).is_none());
-    let with = |key: &str, value: Value| {
-        let mut changed = good.clone();
-        changed[key] = value;
-        changed
-    };
-    for refused in [
-        with("args", json!(["--yolo"])),
-        with("cwd", json!("relative")),
-        with("env", json!({"A=B": "x"})),
-        with("env", json!({"A": "x\u{0}y"})),
-        with("env", json!({"CODEX_HOME": "/elsewhere"})),
-        with("extra", json!(1)),
-        json!({"exe": codex, "cwd": cwd}),
-    ] {
-        assert!(
-            confirmed::confirmed_context(&host, Platform::Ubuntu, &refused).is_none(),
-            "{refused}"
-        );
-    }
-    if cfg!(target_os = "linux") {
-        assert!(
-            confirmed::confirmed_context(&host, Platform::Ubuntu, &with("args", json!([])))
-                .is_some()
-        );
-    }
-}
-
-#[tokio::test]
-async fn confirmed_restart_answers_the_fixed_failure_without_a_terminal() {
-    let root = temp();
-    let cx = context(root.path(), Platform::Ubuntu, Fake::silent());
-    let value =
-        confirmed_codex_restart(&cx, &json!({"exe": "/bin/sh", "cwd": "/", "env": {}}), true).await;
-    assert_eq!(
-        value,
-        json!({"success": false, "message": "The confirmed Codex CLI could not reopen in a fresh terminal."})
-    );
 }
 
 // ------------------------------------------------------------------ the Codex bridge (execute)

@@ -10,6 +10,33 @@
       "fs::write:d2e174a5c5c7ba40ff5f8013e770d510e742ad17d91e4aaa626ae6f4cd338da3"
     ]
   },
+  "crates/aac-agent/src/claude_usage/desktop.rs": {
+    "reason": "Claude Desktop's own cache and config files (another app's data) are read as at most 1 MiB of JSON, exactly as claude_usage.py read_json did; a missing or unreadable file is honestly unavailable.",
+    "uses": [
+      "File::open:89ad66b5d26060bda215badb578aaaf3e869257f1e84c6ab473189fb02cf2b79"
+    ]
+  },
+  "crates/aac-agent/src/claude_usage/keychain_bridge.rs": {
+    "reason": "The macOS GUI-session bridge: the parent writes the one-shot request into its own 0700 temporary folder and reads the answer back; the launchd gui/<uid> child writes that answer into the reply file the parent named, 0600 then rename. No AAC store is read or written.",
+    "uses": [
+      "fs::read:e9f154545841c9b71475422cd526b6fee5717ef067942b74b2eaf02aef064fac",
+      "fs::rename:861b261f36ccb810bc862739270572feb39f71a112035aac66f8d1dd42f9825f",
+      "fs::write:c0362d9e9ba3e6607065b058a0eacdbb04a6f40bace828e37ec826d859b11e98",
+      "fs::write:d0ceef8a540a22acab6a2aaa9f9e8e1b860cd793267d00d8cacb4edf669f9205"
+    ]
+  },
+  "crates/aac-agent/src/key_store.rs": {
+    "reason": "The agent key store stages the encrypted dashboard key in its own private key folder (tempfile_in, write_all, sync_all) and persists it over the target, the same atomic replace the Python key store used.",
+    "uses": [
+      "persist:672a3dfb97fcff7b34ae33a661cc29fe0ee74bbfdbda075c3a18df6649a44dc8"
+    ]
+  },
+  "crates/aac-agent/src/quota.rs": {
+    "reason": "Quota credential discovery reads another tool's binary cookie or credential file (Safari binarycookies, OMP) with a byte cap and a regular-file check; it is not an AAC private file.",
+    "uses": [
+      "File::open:2bf0f6ff1351ef3fbe4a250aef37a4e90e6bf0aca20afca1dc93159fed23efb7"
+    ]
+  },
   "crates/aac-http/src/account_usage/coordinator.rs": {
     "reason": "The collection input preflight inspects provider installations and their tool-owned state, separately from account records and credentials.",
     "uses": [
@@ -64,12 +91,6 @@
     "reason": "The Open operation journal preserves the existing job and observation format during a dashboard restart.",
     "uses": [
       "File::open:9017099359a43f33fb003af96c9fb73a59aaaaa45c34b43c9c6e40e63926661d"
-    ]
-  },
-  "crates/aac-http/src/claude_open/remote.rs": {
-    "reason": "The history bridge checks the packaged helper source before passing it to the fixed transport.",
-    "uses": [
-      "fs::read:128e987d162144e5e91c824e84e116b894a738f38de54ef14e6a3ea122f01ed6"
     ]
   },
   "crates/aac-http/src/cli/admin.rs": {

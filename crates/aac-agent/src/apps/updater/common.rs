@@ -89,6 +89,7 @@ pub(crate) struct CommandSpec {
     pub capture: bool,
     pub capture_limit: usize,
     /// Windows: give the child a console window.
+    #[cfg(windows)]
     pub visible: bool,
     /// Python `errors=True`: stderr merged into stdout, kept in the failure's output.
     pub merge_errors: bool,
@@ -120,6 +121,7 @@ impl CommandSpec {
             env_mode: EnvMode::Inherit,
             capture: false,
             capture_limit: 65_536,
+            #[cfg(windows)]
             visible: false,
             merge_errors: false,
             cwd: None,
@@ -145,11 +147,6 @@ impl CommandSpec {
 
     pub(crate) fn capture(mut self) -> Self {
         self.capture = true;
-        self
-    }
-
-    pub(crate) fn capture_limit(mut self, bytes: usize) -> Self {
-        self.capture_limit = bytes;
         self
     }
 
@@ -188,6 +185,7 @@ impl CommandSpec {
         self
     }
 
+    #[cfg(windows)]
     pub(crate) fn visible(mut self) -> Self {
         self.visible = true;
         self

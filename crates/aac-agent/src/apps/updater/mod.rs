@@ -160,7 +160,6 @@ pub(crate) enum Status {
     Failed,
     RestartFailed,
     Unknown,
-    Held,
 }
 
 impl Status {
@@ -174,7 +173,6 @@ impl Status {
             Self::Failed => "failed",
             Self::RestartFailed => "restart_failed",
             Self::Unknown => "unknown",
-            Self::Held => "held",
         }
     }
 }
@@ -182,7 +180,6 @@ impl Status {
 /// The fixed cause classes of a row's diagnostics (Python `CAUSES`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FailureCause {
-    None,
     Shadowed,
     AuthRequired,
     SigninNeeded,
@@ -194,7 +191,6 @@ pub(crate) enum FailureCause {
     T3NotReady,
     T3RestartPending,
     InstallerFailed,
-    InUse,
     Timeout,
     Unknown,
 }
@@ -202,7 +198,6 @@ pub(crate) enum FailureCause {
 impl FailureCause {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::None => "none",
             Self::Shadowed => "shadowed",
             Self::AuthRequired => "auth_required",
             Self::SigninNeeded => "signin_needed",
@@ -214,7 +209,6 @@ impl FailureCause {
             Self::T3NotReady => "t3_not_ready",
             Self::T3RestartPending => "t3_restart_pending",
             Self::InstallerFailed => "installer_failed",
-            Self::InUse => "in_use",
             Self::Timeout => "timeout",
             Self::Unknown => "unknown",
         }
@@ -287,7 +281,6 @@ pub(crate) struct Installed {
     pub identity: Option<String>,
     pub publisher: Option<String>,
     pub package_root: Option<PathBuf>,
-    pub command: Vec<String>,
     pub probe: Probe,
     /// A fixed word naming why the probe failed (`policy_blocked`, `no_version_dir`, ...).
     pub probe_reason: Option<&'static str>,
@@ -318,7 +311,6 @@ impl Installed {
             identity: None,
             publisher: None,
             package_root: None,
-            command: Vec::new(),
             probe: Probe::Ok,
             probe_reason: None,
             strays: Vec::new(),
@@ -609,13 +601,6 @@ impl Context {
         self.deadline.saturating_duration_since(Instant::now())
     }
 
-    /// Python `_clamp(seconds, deadline)`: a step's timeout, never past the deadline, at least one second.
-    pub(crate) fn clamp(&self, seconds: u64) -> Duration {
-        Duration::from_secs(seconds)
-            .min(self.remaining())
-            .max(Duration::from_secs(1))
-    }
-
     /// Run a command with this row's recorder.
     pub(crate) async fn run(&self, spec: &CommandSpec) -> Result<CommandOutput, UpdateFailure> {
         self.system.run(spec, &self.diagnostics).await
@@ -774,32 +759,5 @@ impl Drop for Stage {
         if std::fs::symlink_metadata(&self.directory).is_ok_and(|info| info.is_dir()) {
             let _ = std::fs::remove_dir_all(&self.directory);
         }
-    }
-}
-
-/// An unported app's honest answer: its detection could not run, so the row is
-/// `unknown` / `readiness_unknown` and nothing is installed. Each lane replaces it.
-pub(crate) struct Unported(pub &'static str);
-
-impl AppUpdater for Unported {
-    fn app_id(&self) -> &'static str {
-        self.0
-    }
-
-    fn detect<'a>(&'a self, cx: &'a Context) -> BoxFuture<'a, Detection> {
-        Box::pin(async move {
-            let mut install = Installed::new(self.0, cx.platform, PathBuf::new(), None, "native");
-            install.probe = Probe::Failed;
-            install.probe_reason = Some("not_ported");
-            Detection::Found(Box::new(install))
-        })
-    }
-
-    fn update<'a>(
-        &'a self,
-        _cx: &'a Context,
-        _install: &'a Installed,
-    ) -> BoxFuture<'a, Result<AppRow, UpdateFailure>> {
-        Box::pin(async { Err(UpdateFailure::failed()) })
     }
 }

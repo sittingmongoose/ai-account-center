@@ -658,8 +658,7 @@ fn credential_candidates(
             "expires": null,
         })];
     }
-    if !is_discover
-    {
+    if !is_discover {
         if selector["kind"] == "browser-capsule"
             && provider == "qwen"
             && let Some((cookie, region, gateway)) = qwen_capsule(home, selector)
@@ -1195,92 +1194,16 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
     Ok(result)
 }
 
-struct ClientTransport<'a>(&'a Client);
-
-impl crate::web_session::HttpTransport for ClientTransport<'_> {
-    fn send<'a>(
-        &'a self,
-        method: &'a str,
-        url: &'a str,
-        headers: &'a [(&'a str, &'a str)],
-        body: Option<&'a [u8]>,
-        cap: usize,
-        timeout: Duration,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        crate::web_session::HttpResponse,
-                        crate::web_session::HttpError,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        let method = method.to_owned();
-        let url = url.to_owned();
-        let headers: Vec<(String, String)> = headers
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect();
-        let body = body.map(|b| b.to_vec());
-        Box::pin(async move {
-            let remaining = self.0.deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(crate::web_session::HttpError::Network);
-            }
-            let destination = self.0.endpoint.as_deref().unwrap_or(&url);
-            let mut request = match method.as_str() {
-                "POST" => self.0.client.post(destination),
-                _ => self.0.client.get(destination),
-            }
-            .timeout(remaining.min(timeout));
-            if self.0.endpoint.is_some() {
-                request = request.header("x-aac-fixture-url", &url);
-            }
-            for (name, value) in &headers {
-                request = request.header(name.as_str(), value.as_str());
-            }
-            if let Some(bytes) = body {
-                request = request.body(bytes);
-            }
-            let mut response = request
-                .send()
-                .await
-                .map_err(|_| crate::web_session::HttpError::Network)?;
-            let status = response.status().as_u16();
-            if (300..400).contains(&status) {
-                return Err(crate::web_session::HttpError::Redirect);
-            }
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|h| h.to_str().ok())
-                .map(str::to_owned);
-            let mut out = Vec::new();
-            // Error bodies are deliberately never read, decoded, or logged.
-            if status < 400 {
-                while let Some(chunk) = response
-                    .chunk()
-                    .await
-                    .map_err(|_| crate::web_session::HttpError::Network)?
-                {
-                    let take = chunk
-                        .len()
-                        .min(cap.saturating_add(1).saturating_sub(out.len()));
-                    out.extend_from_slice(&chunk[..take]);
-                    if out.len() > cap {
-                        return Err(crate::web_session::HttpError::TooLarge);
-                    }
-                }
-            }
-            Ok(crate::web_session::HttpResponse {
-                status,
-                retry_after,
-                body: out,
-            })
-        })
+fn form(pairs: &[(&str, String)]) -> String {
+    let mut url =
+        reqwest::Url::parse("http://localhost/").unwrap_or_else(|_| unreachable!("constant URL"));
+    {
+        let mut q = url.query_pairs_mut();
+        for (k, v) in pairs {
+            q.append_pair(k, v);
+        }
     }
+    url.query().unwrap_or("").to_owned()
 }
 fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -1620,7 +1543,10 @@ mod publication_tests {
         .expect("parse");
         aac_files::web_session::save_as_agent(&ccs, aac_files::web_session::Surface::Qwen, &parsed)
             .expect("save");
-        let found = credential("qwen", dir.path(), &json!({"kind": "discover"}), true);
+        let found = credential_candidates("qwen", dir.path(), &json!({"kind": "discover"}), true)
+            .into_iter()
+            .next()
+            .expect("pasted candidate");
         assert_eq!(found["source"], "Pasted Qwen console session");
         assert!(
             found["secret"]

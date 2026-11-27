@@ -2,9 +2,9 @@ use super::*;
 use fs2::FileExt;
 use futures_util::{SinkExt, StreamExt};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Seek, SeekFrom},
-    os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{FileTypeExt, MetadataExt},
     process::Stdio,
     time::{Duration, Instant},
 };
@@ -38,14 +38,7 @@ impl Native {
         self.home.join("app-server-control/app-server-control.sock")
     }
     async fn acquire(&mut self, path: &Path) -> Result<()> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|_| Error::RestartFailed)?;
+        let file = aac_files::kernel::open_lock(path).map_err(|_| Error::RestartFailed)?;
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             match file.try_lock_exclusive() {
@@ -180,7 +173,10 @@ impl Backend for Native {
             env: Some(env),
             log_file: log,
         };
-        if !inside_service_cgroup(&fs::read_to_string("/proc/self/cgroup").unwrap_or_default()) {
+        if !inside_service_cgroup(
+            &aac_files::kernel::read_text(Path::new("/proc/self/cgroup"), PROC_CAP)
+                .unwrap_or_default(),
+        ) {
             let mut command = tokio::process::Command::new(&spec.exe);
             command
                 .args(&spec.args)
@@ -199,7 +195,7 @@ impl Backend for Native {
                 .process_group(0);
             let child = command.spawn().map_err(|_| Error::RestartFailed)?;
             let identity = child.id().and_then(|pid| {
-                fs::read_to_string(format!("/proc/{pid}/stat"))
+                aac_files::kernel::read_text(Path::new(&format!("/proc/{pid}/stat")), PROC_CAP)
                     .ok()
                     .and_then(|stat| {
                         stat.rfind(')').and_then(|at| {
@@ -334,19 +330,10 @@ impl Backend for Native {
     }
 }
 fn prepare_log(path: &Path) -> Result<()> {
-    fs::create_dir_all(path.parent().ok_or(Error::RestartFailed)?)
-        .map_err(|_| Error::RestartFailed)?;
-    if fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 5 * 1024 * 1024) {
-        let _ = fs::rename(path, path.with_extension("log.1"));
-    }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|_| Error::RestartFailed)?;
-    Ok(())
+    aac_files::kernel::prepare_log(path, 5 * 1024 * 1024).map_err(|_| Error::RestartFailed)
 }
+/// Cap for one `/proc` text file (stat, cgroup, cmdline): far above any real one.
+const PROC_CAP: usize = 8 * 1024 * 1024;
 /// Same-user Linux inventory. Errors on unreadable relevant context; never returns partial success.
 pub fn read_processes() -> Result<Vec<Process>> {
     let mut all = vec![];
@@ -361,7 +348,7 @@ pub fn read_processes() -> Result<Vec<Process>> {
             if fs::metadata(&path)?.uid() != nix::unistd::getuid().as_raw() {
                 return Ok(None);
             }
-            let stat = fs::read_to_string(path.join("stat"))?;
+            let stat = aac_files::kernel::read_text(&path.join("stat"), PROC_CAP)?;
             let fields: Vec<_> = stat[stat
                 .rfind(')')
                 .ok_or_else(|| std::io::Error::other("stat"))?
@@ -371,7 +358,7 @@ pub fn read_processes() -> Result<Vec<Process>> {
             if fields.len() < 20 {
                 return Err(std::io::Error::other("stat"));
             }
-            let args: Vec<String> = fs::read_to_string(path.join("cmdline"))?
+            let args: Vec<String> = aac_files::kernel::read_text(&path.join("cmdline"), PROC_CAP)?
                 .split('\0')
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
@@ -387,13 +374,12 @@ pub fn read_processes() -> Result<Vec<Process>> {
                 || exe == "/usr/lib/chatgpt/ChatGPT";
             let mut env = BTreeMap::new();
             if relevant {
-                let mut raw = String::new();
-                File::open(path.join("environ"))?
-                    .take(1_048_577)
-                    .read_to_string(&mut raw)?;
-                if raw.len() > 1_048_576 {
-                    return Err(std::io::Error::other("context"));
-                }
+                let raw = aac_files::kernel::read_text(&path.join("environ"), 1_048_576).map_err(
+                    |e| match e.kind() {
+                        std::io::ErrorKind::Other => std::io::Error::other("context"),
+                        _ => e,
+                    },
+                )?;
                 for item in raw.split('\0') {
                     if let Some((k, v)) = item.split_once('=')
                         && !k.is_empty()
@@ -409,7 +395,7 @@ pub fn read_processes() -> Result<Vec<Process>> {
             } else {
                 String::new()
             };
-            let unit = fs::read_to_string(path.join("cgroup"))
+            let unit = aac_files::kernel::read_text(&path.join("cgroup"), PROC_CAP)
                 .ok()
                 .and_then(|s| systemd_unit_of(&s));
             Ok(Some(Process {
@@ -624,8 +610,9 @@ fn desktop_idle(p: &Process, all: &[Process], home: &Path) -> Result<()> {
             };
             if roots.iter().any(|r| target.starts_with(r))
                 && target.extension().is_some_and(|s| s == "jsonl")
-                && rollout_lifecycle(&mut File::open(fd.path()).map_err(|_| Error::Busy)?)?
-                    != "idle"
+                && rollout_lifecycle(
+                    &mut aac_files::kernel::open_held(&fd.path()).map_err(|_| Error::Busy)?,
+                )? != "idle"
             {
                 return Err(Error::Busy);
             }

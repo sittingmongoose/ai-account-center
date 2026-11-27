@@ -1,4 +1,6 @@
+#![cfg(test)]
 //! Unit, integration, red/green, and Python-oracle parity tests for lane W5 (`t3.rs` + `t3/rpc.rs`).
+use super::rpc::{Endpoint, Origin};
 use super::*;
 use crate::apps::updater::{
     CommandOutput, Diagnostics, Downloaded, Fingerprint, ProcessTable, System, attempt,
@@ -163,14 +165,6 @@ impl MockSystem {
         f: impl Fn(&str, &Path, u64) -> Result<Downloaded, UpdateFailure> + Send + Sync + 'static,
     ) -> Self {
         self.download_fn = Box::new(f);
-        self
-    }
-
-    fn on_processes(
-        mut self,
-        f: impl Fn(Platform) -> Result<ProcessTable, UpdateFailure> + Send + Sync + 'static,
-    ) -> Self {
-        self.processes_fn = Box::new(f);
         self
     }
 

@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Ports of `tests/unit/app-updates/app_updates_test.py` for the CLI updaters:
 //! managed installs and strays, Claude's channel pointers, Muse's quota words,
 //! readiness and the native update flow. Every path lives under a temporary root.

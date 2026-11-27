@@ -32,9 +32,6 @@ use tokio::time::Instant;
 /// `aac-agent --t3-issuer ...`: the gated launcher that starts T3's CLI to issue a session.
 pub(in crate::apps::updater) const ISSUER_FLAG: &str = "--t3-issuer";
 
-/// Python `t3_rpc.READY_SECONDS`: how long a replaced server gets to answer.
-pub(in crate::apps::updater) const READY_SECONDS: Duration = Duration::from_secs(180);
-
 /// Python `SESSION_TTL`: a session outlives a hard termination by no more than this.
 pub(super) const SESSION_TTL: Duration = Duration::from_secs(900);
 const REVOKE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -1645,6 +1642,8 @@ impl Bearer {
         retire_session_with(&self.cli, &self.base, &self.session_id, &revoke, &mut sleep).await
     }
 
+    /// Test seam: [`Self::retire`] with injected revoke and sleep.
+    #[cfg(test)]
     pub(super) async fn retire_with<R, RFut, S, SFut>(
         mut self,
         revoke: R,
@@ -2277,11 +2276,6 @@ impl<'a> Session<'a> {
     /// Close the current WebSocket connection while keeping the bearer session alive.
     pub(in crate::apps::updater) fn disconnect(&mut self) {
         self.inner.disconnect();
-    }
-
-    /// Issue the bearer token (once) and open the WebSocket connection if disconnected.
-    pub(in crate::apps::updater) async fn refresh(&mut self) -> Result<(), UpdateFailure> {
-        self.inner.refresh().await
     }
 
     /// Run one RPC request. Enforces the start-once guard on `provider.install.start` and maps

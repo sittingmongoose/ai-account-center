@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! The Windows task coordinator and child (Python `windows_interactive_apply`,
 //! `read_task_request`, `task_child_progress`), with the scheduler faked: no task
 //! is registered, started or stopped on the machine running the tests.

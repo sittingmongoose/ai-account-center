@@ -91,6 +91,30 @@ export const ALLOWLIST = [
       'an lstat (a race the shared read closes). Follow-up l2-cursor-keys: depend on aac-files.',
   },
   {
+    path: 'crates/aac-agent/src/apps/updater/',
+    reason:
+      'Update all (W1-W6, ported from app_updates.py and its workers): it installs and moves ' +
+      "other apps' files (CLI packages, desktop bundles, ZCode and T3 adapters, the T3 runtime) " +
+      'and reads their manifests, /proc and session files, plus its own worker locks, pending ' +
+      'markers and Windows task request files. None is an AAC private store; moving its own ' +
+      'locks and markers onto aac-files registry rows is follow-up l2-updater-files.',
+  },
+  {
+    path: 'crates/aac-claude-renew/src/',
+    reason:
+      'The Claude renewal service (signin-works) keeps its own settings, state, run lock and log ' +
+      'under ~/.ccs/claude-renew and publishes one status file to the share folder: create_new ' +
+      'lock, 0600 state written then renamed, append-only scrubbed log. Like aac-renewal it is a ' +
+      'separate service crate; moving it onto aac-files registry rows is follow-up l2-renew-files.',
+  },
+  {
+    path: 'crates/aac-snapshot/src/reader/',
+    reason:
+      'The offline usage reader (P3) reads the published usage snapshot files from the share ' +
+      "folder and updates the aac-usage block inside other tools' instruction files in place, so " +
+      'their hard links and line endings survive. Neither is an AAC private file.',
+  },
+  {
     path: 'crates/aac-http/src/identity.rs',
     reason:
       "The service hashes its own executable image at start (L1 build check). That is not a " +

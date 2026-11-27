@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Synthetic native history fixtures, including the optional retained-source oracle.
 
 use super::*;

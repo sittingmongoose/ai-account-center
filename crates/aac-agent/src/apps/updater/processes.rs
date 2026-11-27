@@ -15,6 +15,7 @@ pub(crate) const T3_RUNTIME_VERSIONS: &str = ".t3/runtime/versions";
 pub(crate) const T3_MAC_BUNDLE: &str = "/Applications/T3 Code (Nightly).app";
 pub(crate) const T3_WINDOWS_FOLDER: &str = "Programs/t3code";
 /// Windows keeps the whole process table, at most this many entries, for ancestry only.
+#[cfg(windows)]
 pub(crate) const LINEAGE_LIMIT: usize = 16_384;
 
 static TTY_DEVICE: LazyLock<regex::Regex> = LazyLock::new(|| {

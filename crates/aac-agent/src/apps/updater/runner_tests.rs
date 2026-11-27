@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! The in-agent app run: its lock, cancel and deadline, the U13 row whitelist and
 //! the token scrub (Python `scrub`'s `_SECRET_PATTERNS`, minimal).
 use super::*;

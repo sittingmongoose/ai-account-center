@@ -13,7 +13,6 @@ use super::{
 use std::{path::Path, time::Duration};
 
 mod bridge;
-mod confirmed;
 mod gui;
 mod linux;
 mod mac;
@@ -23,14 +22,7 @@ mod xml;
 #[cfg(test)]
 mod tests;
 
-#[allow(unused_imports, reason = "called by the Codex CLI updater (W6)")]
 pub(super) use bridge::{BridgeMode, codex_bridge};
-#[allow(unused_imports, reason = "called by the Codex CLI updater (W6)")]
-pub(super) use confirmed::confirmed_codex_restart;
-#[allow(
-    unused_imports,
-    reason = "called by the Cursor (W4) and Muse (W6) updaters"
-)]
 pub(super) use gui::{GuiAction, MUSE_WARM_PROMPT, mac_gui_command};
 
 /// Desktop packages are hundreds of megabytes (the Codex MSIX is over 900 MB) and

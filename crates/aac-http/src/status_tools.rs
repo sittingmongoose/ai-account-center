@@ -448,10 +448,13 @@ fn local_backend(
             "p1000"
         };
         let config = Path::new(&format!("/etc/{kind}-agent.json")).to_path_buf();
-        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
-            || Path::new("/run/user").join(aac_files::path::uid().to_string()),
-            PathBuf::from,
-        );
+        // This branch is Linux-only at run time, but it must still compile on Windows, which
+        // has no user id: the fallback there is never reached.
+        #[cfg(unix)]
+        let user_runtime = || Path::new("/run/user").join(aac_files::path::uid().to_string());
+        #[cfg(not(unix))]
+        let user_runtime = || PathBuf::from("/run/user");
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(user_runtime, PathBuf::from);
         let base = runtime.join(format!("{kind}-agent"));
         return Ok((
             config,

@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Contract tests: the generic attempt flow, row wire form and diagnostics match
 //! `app_update_common.result`, `Diagnostics.export` and `app_updates.attempt_one`.
 use super::*;
@@ -428,22 +429,6 @@ fn every_inventory_app_has_an_updater() {
         assert_eq!(updater(app).map(AppUpdater::app_id), Some(app));
     }
     assert!(updater("not-an-app").is_none());
-}
-
-#[tokio::test]
-async fn an_unported_app_reports_readiness_unknown() {
-    let root = tempfile::tempdir().expect("root");
-    let cx = context(
-        root.path(),
-        Platform::Ubuntu,
-        FakeSystem::answering(ok),
-        false,
-    );
-    let row = attempt(&Unported("omp"), &cx).await.to_value();
-    assert_eq!(
-        (row["status"].as_str(), row["messageCode"].as_str()),
-        (Some("unknown"), Some("readiness_unknown"))
-    );
 }
 
 /// W6 red/green: the five CLI updaters are Rust ports, not the `Unported` stub, so an

@@ -13,11 +13,7 @@ mod rpc;
 mod tests;
 
 // Frozen cross-lane exports consumed by W4 (`antigravity.rs`) and W6 (`runner.rs`/`update.rs`).
-#[allow(unused_imports)]
-pub(super) use rpc::{
-    Endpoint, ISSUER_FLAG, Origin, READY_SECONDS, Session, Subscription, discover, session_signals,
-    wait_ready,
-};
+pub(super) use rpc::{ISSUER_FLAG, Session, discover, session_signals, wait_ready};
 
 use super::{
     AppRow, AppUpdater, BoxFuture, CommandSpec, Context, Detection, FailureCause, Installed,
