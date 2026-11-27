@@ -240,6 +240,19 @@ fn response_is_rate_limited(response: &Value) -> bool {
                 && response.get("rateLimited") == Some(&json!(true))))
 }
 
+/// Coordinator reads in flight at once.
+const COORDINATOR_SLOTS: usize = 3;
+
+/// The deadline of one coordinator request, the same budget `Collection::read_value` gives the
+/// helper verb (collect 35 s, inventory 15 s), unless the effects override it for a fixture.
+fn request_deadline_ms(deps: &dyn FailoverDeps, action: &str) -> u64 {
+    deps.request_deadline_ms(action)
+        .filter(|ms| ms.is_finite() && *ms >= 0.0)
+        .map_or(if action == "collect" { 35_000 } else { 15_000 }, |ms| {
+            ms as u64
+        })
+}
+
 fn tracks_verified_plan(target: &UsageFailoverTarget) -> bool {
     target.provider == "muse" || target.provider == "cursor"
 }
@@ -256,8 +269,10 @@ impl FailoverCoordinator {
             inventories: Mutex::new(HashMap::new()),
             sign_in_selectors: Mutex::new(HashMap::new()),
             unread_selectors: Mutex::new(HashMap::new()),
-            // R5b: one coordinator read at a time, so failover reads do not stack helpers.
-            slots: tokio::sync::Semaphore::new(1),
+            // Three coordinator reads at a time (the pre-R5b width). R5b's memory goal stays in
+            // the python3 helper gate (`Collection.helpers`, one at a time); a slot wait is bounded
+            // by the request's own deadline, so one slow computer never stalls the pass.
+            slots: tokio::sync::Semaphore::new(COORDINATOR_SLOTS),
         }
     }
 
@@ -781,7 +796,12 @@ impl FailoverCoordinator {
     }
 
     async fn request(&self, host: &UsageHost, request: &Value) -> Result<Value, ()> {
-        let _permit = self.slots.acquire().await.map_err(|_| ())?;
+        let action = request.get("action").and_then(Value::as_str).unwrap_or("");
+        let wait = std::time::Duration::from_millis(request_deadline_ms(&*self.deps, action));
+        let _permit = tokio::time::timeout(wait, self.slots.acquire())
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
         self.deps.transport(host, request).await
     }
 
@@ -2061,6 +2081,72 @@ mod tests {
         }
         fn now(&self) -> f64 {
             1_791_979_200_000.0
+        }
+    }
+
+    /// Effects whose computer never answers; requests carry a short fixture deadline.
+    struct Hangs;
+
+    impl FailoverDeps for Hangs {
+        fn transport<'a>(
+            &'a self,
+            _host: &'a UsageHost,
+            _request: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, ()>> + Send + 'a>> {
+            Box::pin(std::future::pending())
+        }
+        fn hosts<'a>(&'a self) -> Pin<Box<dyn Future<Output = Vec<UsageHost>> + Send + 'a>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn now(&self) -> f64 {
+            1_791_979_200_000.0
+        }
+        fn request_deadline_ms(&self, _action: &str) -> Option<f64> {
+            Some(20.0)
+        }
+    }
+
+    /// Three coordinator reads run side by side (the pre-R5b width), and a fourth waits for a
+    /// slot only until its own request deadline: a hung computer never stalls the pass.
+    #[tokio::test(start_paused = true)]
+    async fn coordinator_slots_are_three_and_a_slot_wait_ends_at_the_request_deadline() {
+        let coordinator = Arc::new(FailoverCoordinator::new(
+            Arc::new(Hangs),
+            collection_owners(),
+        ));
+        let host = UsageHost {
+            host: "ubuntu".to_owned(),
+            platform: "ubuntu".to_owned(),
+            ssh_host: None,
+        };
+        let request = json!({"version":1,"action":"inventory","provider":"codex"});
+        let mut holders = Vec::new();
+        for _ in 0..COORDINATOR_SLOTS {
+            let coordinator = coordinator.clone();
+            let (host, request) = (host.clone(), request.clone());
+            holders.push(tokio::spawn(async move {
+                coordinator.request(&host, &request).await
+            }));
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(COORDINATOR_SLOTS, 3);
+        assert_eq!(
+            coordinator.slots.available_permits(),
+            0,
+            "three reads in flight at once"
+        );
+        let waiter = tokio::spawn({
+            let coordinator = coordinator.clone();
+            let (host, request) = (host.clone(), request.clone());
+            async move { coordinator.request(&host, &request).await }
+        });
+        tokio::time::advance(std::time::Duration::from_millis(30)).await;
+        assert!(
+            waiter.await.expect("join").is_err(),
+            "the slot wait ends at the deadline"
+        );
+        for holder in holders {
+            holder.abort();
         }
     }
 
