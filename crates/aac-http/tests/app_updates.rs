@@ -30,6 +30,10 @@ fn hosts() -> [(&'static str, &'static str); 7] {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "the fixture is a Linux-hosted dashboard; elsewhere that OS's own computer is the dashboard's (vm-ssh placement), so its aliased Mac is no longer remote"
+)]
 fn fixture_transport_and_service_api() {
     let dir = tempfile::tempdir().expect("fixture root");
     let root = dir.path().canonicalize().expect("canonical fixture root");
@@ -127,6 +131,10 @@ fn package(root: &Path) -> PathBuf {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "the fixture is a Linux-hosted dashboard; elsewhere that OS's own computer is the dashboard's (vm-ssh placement), so its aliased Mac is no longer remote"
+)]
 async fn service_fixture_child() {
     let Some(root) = std::env::var_os("AAC_TEST_UPDATE_SERVICE_ROOT").map(PathBuf::from) else {
         return;

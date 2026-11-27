@@ -42,16 +42,28 @@ async fn json_reply(response: Response, status: StatusCode, no_store: bool) -> V
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "the fixture is a Linux-hosted dashboard; elsewhere that OS's own computer is the dashboard's (vm-ssh placement), so its aliased Mac is no longer remote"
+)]
 async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker() {
     public_transport_fixture(false, false).await;
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "the fixture is a Linux-hosted dashboard; elsewhere that OS's own computer is the dashboard's (vm-ssh placement), so its aliased Mac is no longer remote"
+)]
 async fn the_lifecycle_session_probe_reaches_the_pinned_agent() {
     public_transport_fixture(true, false).await;
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "the fixture is a Linux-hosted dashboard; elsewhere that OS's own computer is the dashboard's (vm-ssh placement), so its aliased Mac is no longer remote"
+)]
 async fn public_usage_reads_populated_history_on_both_hosts() {
     public_transport_fixture(false, true).await;
 }
