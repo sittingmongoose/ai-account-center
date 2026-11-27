@@ -6,10 +6,28 @@ These are browser checks for the web dashboard (the Leptos app frame, compiled t
 browser-check run web-dashboard/tests/browser/checks                  # the whole kit (the shipped native launcher)
 browser-check run web-dashboard/tests/browser/checks --grep smoke
 browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-home   # a prepared CCS_HOME (copied)
+browser-check run web-dashboard/tests/browser/upgrade                 # service-worker upgrade against native aac-http (below)
 ```
 
-The upgrade kit (`upgrade/`) was retired with the TypeScript server: its fixture server served `dist/ui` through
-the TypeScript static helpers. Service-worker upgrade coverage needs a rewrite against the native static server.
+**Upgrade kit** (`upgrade/`): runs against the native Rust dashboard server (`dist/native/ai-account-center` and
+`dist/native/aac-http`, serving the built Leptos UI from `dist/ui` via Rust `StaticUi`) on an isolated temporary
+`CCS_HOME` with real loopback test login (never real account data), with service workers allowed. `native-server.mjs`
+(Node standard library only) sits on one origin so a browser keeps one service-worker scope and session cookie while
+switching between an older build and the newer build (`dist/ui`), replaying the frozen previous release's worker and
+cached classic page (`upgrade/fixtures/previous`, never edited), delaying classic routes, or failing one asset path.
+
+- `reload.check.mjs`: installs an older built Leptos app (a derived copy of `dist/ui` with flipped runtime and shell
+  build ids served by `aac-http --public`), lets the app register `/sw.js`, switches the server to the newer `dist/ui`
+  served by `ai-account-center`, and verifies that "New version · Reload" and automatic resume each hand over once to
+  the waiting worker with no stale shell (online and offline), no reload loop, and session preserved, while a build
+  whose worker cannot install is never offered.
+- `upgrade.check.mjs`: covers a slow first launch from a cached classic start page (moves itself to `/app/<tab>` via
+  `/bridge.js`), updating from the previous worker, closing the last client, an offline launch of the new copy, and a
+  failed download leaving the installed copy in charge.
+- `consistent.check.mjs`: opt-in cross-version regressions taking retained, genuine packaged UIs served unmodified by
+  `aac-http --public` (their wasm SHA-256 is verified against their manifest):
+  `browser-check run web-dashboard/tests/browser/upgrade --set previousUi=/path/to/c281-ui --set fix1Ui=/path/to/fix1-ui`.
+- `captions.check.mjs`: synthetic Analytics KPI caption bounds at 382, 390 and 466 CSS pixels, including the Duo rail.
 
 ## What a run does
 

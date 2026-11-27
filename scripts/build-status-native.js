@@ -23,7 +23,12 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const releaseProfile = require('./release-profile');
+// Thin LTO and sixteen codegen units, as build-dashboard-native.js explains. The profile stays out
+// of Cargo.toml because build-agent.js hashes that file into the agent's source fingerprint.
+const releaseProfile = {
+  CARGO_PROFILE_RELEASE_LTO: 'thin',
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16',
+};
 const CRATE = path.join(ROOT, 'crates', 'aac-status');
 const PREBUILT = path.join(CRATE, 'prebuilt');
 const DIST = path.join(ROOT, 'dist', 'native');

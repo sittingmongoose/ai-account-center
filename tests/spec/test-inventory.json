@@ -3047,9 +3047,10 @@
     },
     {
       "file": "tests/unit/docker/docker-hygiene.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "tests/unit/docker/dockerfile-lifecycle-scripts.test.ts",
@@ -3064,12 +3065,6 @@
       "evidence": [
         "table"
       ]
-    },
-    {
-      "file": "tests/unit/foundation/check-windows-ssh.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/foundation/npm-rust-files.test.ts",
@@ -3120,14 +3115,6 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/scripts/cargo-target-guard.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "helper"
-      ]
     },
     {
       "file": "tests/unit/scripts/check-line-endings.test.ts",
@@ -3188,6 +3175,12 @@
         "HTTP",
         "helper"
       ]
+    },
+    {
+      "file": "tests/unit/scripts/package-scripts.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/scripts/personal-detail-guard.test.ts",
