@@ -658,6 +658,7 @@ async fn activity_pass(
         guard.generation += 1;
         (guard.generation, guard.experiments.clone())
     };
+    let _reclaim = crate::allocator::reclaim_on_drop();
     let clock = PassClock::start(now);
     let computers = agents.usage_hosts().await;
     if computers.is_empty() {
@@ -2563,5 +2564,58 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(source_states(&state).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn activity_pass_reclaims_allocator_only_when_due() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let engine = aac_store::ops::open_engine(
+            dir.path().join("store").to_str().expect("store path"),
+            None,
+            None,
+        )
+        .expect("open engine");
+        let agents = Arc::new(crate::agent_transport::Agents::new(dir.path().to_owned()));
+        let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(dir.path()));
+        let live = Arc::new(crate::analytics_live::Live::default());
+        let now = 1_800_000_000_000;
+        let state = Mutex::new(WriterState {
+            fetched_at: now,
+            ..Default::default()
+        });
+
+        let before = crate::allocator::thread_reclaim_passes();
+        activity_pass(
+            &engine,
+            &agents,
+            &state,
+            dir.path(),
+            &models_dev,
+            &live,
+            now,
+        )
+        .await;
+        assert_eq!(
+            crate::allocator::thread_reclaim_passes(),
+            before,
+            "skipped (not-due) activity_pass must not trigger post-pass reclaim"
+        );
+
+        state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = 0;
+        activity_pass(
+            &engine,
+            &agents,
+            &state,
+            dir.path(),
+            &models_dev,
+            &live,
+            now,
+        )
+        .await;
+        assert_eq!(
+            crate::allocator::thread_reclaim_passes(),
+            before + 1,
+            "due activity_pass must reclaim allocator pages when the pass ends"
+        );
     }
 }

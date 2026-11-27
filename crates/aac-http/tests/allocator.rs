@@ -117,6 +117,67 @@ fn service_binaries_apply_tuned_mimalloc_options_at_runtime()
             Some(0),
             "{name} did not disable eager_commit at runtime:\n{stderr}"
         );
+        assert_eq!(
+            options.get("allow_thp").copied(),
+            Some(0),
+            "{name} did not disable allow_thp at runtime:\n{stderr}"
+        );
+        assert_eq!(
+            options.get("page_reclaim_on_free").copied(),
+            Some(1),
+            "{name} did not set page_reclaim_on_free=1 at runtime:\n{stderr}"
+        );
+        assert_eq!(
+            options.get("page_full_retain").copied(),
+            Some(0),
+            "{name} did not set page_full_retain=0 at runtime:\n{stderr}"
+        );
+        assert_eq!(
+            options.get("generic_collect").copied(),
+            Some(500),
+            "{name} did not set generic_collect=500 at runtime:\n{stderr}"
+        );
     }
     Ok(())
+}
+
+/// On Linux glibc, `zstd-sys` allocates 1.3-2.5 MiB `ZSTD_CCtx` buffers through C `malloc`,
+/// bypassing Rust's global mimalloc allocator. Without `mallopt(M_MMAP_THRESHOLD, 128 KiB)`,
+/// freeing the first 2 MiB buffer raises glibc's dynamic mmap threshold so the second 2 MiB
+/// allocation lands in a 64 MiB glibc heap arena instead of `mmap`.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+#[allow(unsafe_code)]
+fn tune_mimalloc_keeps_glibc_large_buffers_on_mmap() {
+    aac_http::allocator::tune_mimalloc();
+    const TWO_MIB: usize = 2 * 1024 * 1024;
+    // SAFETY: `libc::malloc`, `write_bytes`, `libc::free`, and `libc::mallinfo2` are called
+    // with valid sizes and live non-null pointers returned by `libc::malloc`.
+    unsafe {
+        let first = libc::malloc(TWO_MIB);
+        assert!(!first.is_null(), "first 2 MiB libc::malloc failed");
+        core::ptr::write_bytes(first.cast::<u8>(), 0x5a, TWO_MIB);
+        libc::free(first);
+
+        let before = libc::mallinfo2();
+        let second = libc::malloc(TWO_MIB);
+        assert!(!second.is_null(), "second 2 MiB libc::malloc failed");
+        core::ptr::write_bytes(second.cast::<u8>(), 0xa5, TWO_MIB);
+        let during = libc::mallinfo2();
+        libc::free(second);
+        let after = libc::mallinfo2();
+
+        assert!(
+            during.hblkhd >= before.hblkhd + TWO_MIB,
+            "second 2 MiB C allocation bypassed mmap into a glibc arena (hblkhd before={}, during={})",
+            before.hblkhd,
+            during.hblkhd
+        );
+        assert!(
+            after.hblkhd <= before.hblkhd,
+            "freed 2 MiB C allocation was not unmapped (hblkhd before={}, after={})",
+            before.hblkhd,
+            after.hblkhd
+        );
+    }
 }
