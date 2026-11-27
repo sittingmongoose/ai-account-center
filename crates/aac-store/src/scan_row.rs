@@ -50,7 +50,9 @@ pub fn with_interner<T>(interner: Interner, parse: impl FnOnce() -> T) -> (T, In
     (out, interner)
 }
 
-fn shared(text: &str) -> Arc<str> {
+/// The shared copy of `text` from the interner [`with_interner`] installed, or a fresh one: for
+/// other typed readers (file keys of the scanner's prints) that share the rows' strings.
+pub fn shared(text: &str) -> Arc<str> {
     INTERNER.with(|cell| match cell.borrow_mut().as_mut() {
         Some(interner) => interner.intern(text),
         None => Arc::from(text),

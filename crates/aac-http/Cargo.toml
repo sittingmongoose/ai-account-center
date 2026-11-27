@@ -10,6 +10,8 @@ publish.workspace = true
 [features]
 # Only drill binaries pause inside store operations.
 parity-fixtures = ["aac-store/parity-fixtures"]
+# A counting allocator for the Analytics pass memory twin (tests only).
+memory-twin = []
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 //! The packaged standalone reader, run locally or through the registered, pinned SSH transport.
 use crate::agent_transport::{self, Agents, Selector, UsageHost};
 use aac_core::Cause;
-use serde_json::Value;
+use serde_json::{Value, value::RawValue};
 use std::{ffi::OsString, path::Path};
 
 const SCANNER_MISSING: i32 = 87;
@@ -67,10 +67,10 @@ pub(super) fn eligible(host: &UsageHost) -> bool {
 pub(super) async fn scan(
     agents: &Agents,
     host: &UsageHost,
-    args: &Value,
+    args: &RawValue,
     timeout_ms: u64,
     max_bytes: usize,
-) -> Result<Value, Cause> {
+) -> Result<Vec<u8>, Cause> {
     if !eligible(host) {
         return Err(Cause::AgentMissing);
     }
@@ -89,7 +89,8 @@ pub(super) async fn scan(
     .await
     .map_err(|_| Cause::AgentMissing)?
     .ok_or(Cause::AgentMissing)?;
-    let mut input = serde_json::to_vec(args).map_err(|_| Cause::Refused)?;
+    let mut input = Vec::with_capacity(args.get().len() + 1);
+    input.extend_from_slice(args.get().as_bytes());
     input.push(b'\n');
     let output = agents
         .reference(
@@ -101,9 +102,8 @@ pub(super) async fn scan(
         )
         .await?;
     match output.code {
-        Some(0) if output.stdout.len() <= max_bytes => {
-            serde_json::from_slice(&output.stdout).map_err(|_| Cause::Damaged)
-        }
+        // Read (and so checked) by the caller, as typed data.
+        Some(0) if output.stdout.len() <= max_bytes => Ok(output.stdout),
         Some(0) => Err(Cause::OutputTooLarge),
         Some(SCANNER_MISSING) => Err(Cause::AgentMissing),
         _ => Err(Cause::Damaged),

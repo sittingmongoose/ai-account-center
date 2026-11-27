@@ -3,7 +3,8 @@ use aac_config::{Config, LoadOptions, OperatingSystem, TransportConfig};
 use aac_core::{Cause, Failure};
 use aac_protocol::{Control, Event, Handshake, PROTOCOL_VERSION, Request, frame_cap};
 use aac_transport::{
-    AgentArtifact, AgentClient, CallOptions, CancellationToken, Computer, ProcessOutput, SshPolicy,
+    AgentArtifact, AgentClient, CallOptions, CancellationToken, Computer, ProcessOutput,
+    RawTerminal, SshPolicy,
 };
 use axum::{
     Json,
@@ -900,18 +901,19 @@ impl Agents {
     }
 
     /// G14: an in-process `scan-usage` call for the activity scheduler. Returns the scanner's
-    /// answer value (the v2 response) or a named error. Unlike [`Self::call`], it collects the
-    /// terminal frame instead of streaming NDJSON to the front door: the scheduler owns the
-    /// cadence and reads the rows itself, so no front-door control channel is registered.
+    /// answer (the v2 response) as its JSON text, or a named error. Unlike [`Self::call`], it
+    /// collects the terminal frame instead of streaming NDJSON to the front door: the scheduler
+    /// owns the cadence and reads the rows itself, so no front-door control channel is registered.
+    /// Neither the arguments (megabytes of prints) nor the answer become a value tree here.
     pub(crate) async fn scan_usage(
         self: &Arc<Self>,
         platform: &str,
         ssh_host: Option<&str>,
-        args: &Value,
+        args: &RawValue,
         deadline_ms: u64,
         max_bytes: usize,
         call_id: &str,
-    ) -> Result<Value, Cause> {
+    ) -> Result<Vec<u8>, Cause> {
         let selector = Selector::usage(platform, ssh_host);
         let started = tokio::time::Instant::now();
         let budget = deadline_ms
@@ -930,32 +932,29 @@ impl Agents {
             .checked_client(&selector, deadline)
             .await
             .map_err(|failure| failure.cause)?;
-        // The frame is written once: the arguments serialize straight into it (they can be
-        // megabytes of prints), with no separate copy of their text.
+        // The frame is written once, the arguments' text straight into it.
         let mut wire = format!(
-            "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":"
+            "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":{},\"deadlineMs\":{deadline_ms},\"args\":",
+            json!(call_id)
         )
         .into_bytes();
-        serde_json::to_writer(&mut wire, args).map_err(|_| Cause::Refused)?;
+        wire.extend_from_slice(args.get().as_bytes());
         wire.push(b'}');
-        let request = serde_json::from_slice::<Request>(&wire).map_err(|_| Cause::Refused)?;
         let mut options = CallOptions::new(Duration::ZERO, max_bytes);
         options.deadline = deadline;
         options.scan = true;
         let (_input, controls) = mpsc::channel(8);
         let (progress, _events) = mpsc::channel(4);
         let _permit = permit;
-        let events = client
-            .call_controlled_encoded(&request, &wire, &options, controls, progress)
+        let terminal = client
+            .call_controlled_raw(&wire, &options, controls, progress)
             .await
             .map_err(|failure| failure.cause)?;
-        match events.last() {
-            Some(Event::Result { value, .. }) if value != &json!({"fallback":"python"}) => {
-                Ok(value.clone())
-            }
-            Some(Event::Result { .. }) => Err(Cause::AgentMissing),
-            Some(Event::Failure { failure, .. }) => Err(failure.cause),
-            _ => Err(Cause::Damaged),
+        drop(wire);
+        match terminal {
+            RawTerminal::Result(value) if python_fallback(&value) => Err(Cause::AgentMissing),
+            RawTerminal::Result(value) => Ok(value),
+            RawTerminal::Failure(failure) => Err(failure.cause),
         }
     }
 
@@ -995,6 +994,13 @@ impl Agents {
             Json(json!({"accepted":true})).into_response()
         }
     }
+}
+
+/// The agent's "use the Python helper" answer, `{"fallback":"python"}`.
+fn python_fallback(value: &[u8]) -> bool {
+    value.len() < 64
+        && serde_json::from_slice::<Value>(value)
+            .is_ok_and(|value| value == json!({"fallback":"python"}))
 }
 
 pub(crate) enum MutationReply {

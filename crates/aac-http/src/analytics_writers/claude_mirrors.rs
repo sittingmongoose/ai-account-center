@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 pub(super) use super::claude_owners::Owners;
+pub(super) use super::scan_print::Identities;
 
 pub(super) const LIVE: &str = "live/claude-mirror-owners";
 pub(super) const HISTORY: &str = "history/claude-mirror-owners";
@@ -22,7 +23,8 @@ pub(super) struct Part<'a> {
     pub(super) state_index: usize,
     pub(super) rows: Vec<ScanRow>,
     pub(super) sessions: Vec<ScanRow>,
-    pub(super) fingerprints: Value,
+    /// The Claude identities of the computer's prints, by file key.
+    pub(super) identities: Identities,
 }
 
 impl Part<'_> {
@@ -90,15 +92,11 @@ pub(super) fn save(store: &Engine, key: &str, owners: &Owners) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn identity(print: &Value) -> Option<(&str, bool)> {
-    let name = print["claudeName"]
-        .as_str()
-        .filter(|name| !name.is_empty())?;
-    Some((name, print["claudeMirror"].as_bool()?))
-}
-
-pub(super) fn row_identity<'a>(row: &ScanRow, fingerprints: &'a Value) -> Option<(&'a str, bool)> {
-    identity(fingerprints.get(&*row.file)?)
+pub(super) fn row_identity<'a>(
+    row: &ScanRow,
+    identities: &'a Identities,
+) -> Option<(&'a str, bool)> {
+    identities.get(&row.file)
 }
 
 /// A confirmed original always wins. Otherwise retain a prior owner across failures
@@ -132,7 +130,7 @@ pub(super) fn keep_historical_originals(store: &Engine, part: &mut Part<'_>) -> 
     let mut owners = load(store, HISTORY)?;
     let mut changed = false;
     let mut keep = |row: &ScanRow| {
-        let Some((name, false)) = row_identity(row, &part.fingerprints) else {
+        let Some((name, false)) = row_identity(row, &part.identities) else {
             return false;
         };
         // Copy the shared map only to add a name it lacks.
@@ -174,19 +172,14 @@ pub(super) fn choose(
         ) {
             complete.insert(host);
         }
-        for print in part
-            .fingerprints
-            .as_object()
-            .into_iter()
-            .flat_map(|p| p.values())
-        {
-            if let Some((name, false)) = identity(print) {
+        for identity in part.identities.values() {
+            if let (name, false) = identity {
                 present.insert((host, name));
                 originals.insert_absent(name, host);
             }
         }
         for row in part.rows.iter().chain(&part.sessions) {
-            if let Some((name, true)) = row_identity(row, &part.fingerprints) {
+            if let Some((name, true)) = row_identity(row, &part.identities) {
                 present.insert((host, name));
                 owners.insert_absent(name, host);
             }
@@ -203,7 +196,7 @@ pub(super) fn choose(
     owners.extend_from(&originals);
 
     for part in parts {
-        let keep = |row: &ScanRow| match row_identity(row, &part.fingerprints) {
+        let keep = |row: &ScanRow| match row_identity(row, &part.identities) {
             Some((name, true)) => {
                 !originals.contains_key(name)
                     && owners.get(name).is_some_and(|host| host == part.host)
@@ -247,9 +240,9 @@ mod tests {
             state_index,
             rows: typed(&[row]),
             sessions: typed(&[session]),
-            fingerprints: json!({
+            identities: Identities::from_value(&json!({
                 "fixture-file": {"claudeName": "same-basename-digest", "claudeMirror": mirror}
-            }),
+            })),
         }
     }
 
@@ -356,7 +349,7 @@ mod tests {
                 state_index,
                 rows,
                 sessions: vec![],
-                fingerprints: answer["kinds"]["claude"]["fingerprints"].clone(),
+                identities: Identities::from_value(&answer["kinds"]["claude"]["fingerprints"]),
             }
         };
         let mut parts = [
@@ -365,7 +358,7 @@ mod tests {
         ];
         let name = |part: &Part<'_>| {
             let (name, mirror) =
-                row_identity(&part.rows[0], &part.fingerprints).expect("scanner fingerprint");
+                row_identity(&part.rows[0], &part.identities).expect("scanner fingerprint");
             (name.to_owned(), mirror)
         };
         let (mirror_name, mirror) = name(&parts[0]);
@@ -413,7 +406,7 @@ mod tests {
                 state_index: 0,
                 rows: vec![],
                 sessions: vec![],
-                fingerprints: json!({}),
+                identities: Identities::default(),
             },
             part("mac", 1, true, 0),
         ];

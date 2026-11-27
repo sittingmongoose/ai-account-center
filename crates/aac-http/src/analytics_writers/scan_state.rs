@@ -1,15 +1,26 @@
 //! Per-host incremental scanner state. A scan that was cut short retains unvisited files.
+//!
+//! A computer's live checkpoint is saved in parts (revision 2): a small header with the tools'
+//! read states, and one part per tool and file bucket holding those files' prints and rows. A
+//! pass rewrites only the parts that changed, where the single document (revision 1, 38-70 MB
+//! on a busy computer) was rewritten whole every pass. Revision 1 stays readable, and the
+//! migration leaves its document in place for a rolled-back build (see [`Cache::load`]).
+use super::scan_answer::Answer;
+use super::scan_print::{self, Fingerprints, Identities, Print, Prints};
 use aac_store::scan_row::{Interner, ScanRow, with_interner};
 use aac_store::{analytics_cache, engine::Engine, error::Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
+use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 const REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const CACHE_BYTES: usize = 64 * 1024 * 1024;
 const CACHE_ROWS: usize = 100_000;
+/// File buckets per tool in a saved checkpoint.
+const BUCKETS: u32 = 64;
 pub(super) const REMOTE_ARCHIVE: &str = "legacy/cache/analytics-remote-v1/";
 
 /// A legacy remote cache, read once by the migration and as a first live scan's seed.
@@ -36,13 +47,14 @@ impl LegacyCache {
         Ok(LegacyCache {
             version: stored.version,
             last_scan_at: stored.last_scan_at.clone(),
-            scan: stored.into_cache(None),
+            scan: stored.into_cache(),
         })
     }
 }
 
-/// A checkpoint as saved (`_nativeRevision` 1) or as a legacy cache wrote it, read straight into
-/// typed rows: no whole-document tree, and each repeated string held once.
+/// A checkpoint as one document (`_nativeRevision` 1, the historical scans' form) or as a
+/// legacy cache wrote it, read straight into typed rows and prints: no whole-document tree, and
+/// each repeated string held once.
 #[derive(Deserialize)]
 struct Stored {
     #[serde(rename = "_nativeRevision")]
@@ -50,7 +62,7 @@ struct Stored {
     version: Option<u64>,
     #[serde(rename = "lastScanAt")]
     last_scan_at: Option<String>,
-    fingerprints: Map<String, Value>,
+    fingerprints: Fingerprints,
     rows: Vec<ScanRow>,
     #[serde(default)]
     srows: Vec<ScanRow>,
@@ -68,20 +80,141 @@ impl Stored {
         Ok(stored)
     }
 
-    fn into_cache(self, saved: Option<[u8; 32]>) -> Cache {
-        Cache {
+    fn into_cache(self) -> Cache {
+        let mut cache = Cache {
             fingerprints: self.fingerprints,
             rows: self.rows,
             srows: self.srows,
             states: self.states,
             strings: self.strings,
-            saved,
-        }
+            saved: Saved::default(),
+        };
+        cache.order_rows();
+        cache
     }
 }
 
+/// The header of a checkpoint saved in parts (`_nativeRevision` 2).
+#[derive(Serialize, Deserialize)]
+struct Header {
+    #[serde(rename = "_nativeRevision")]
+    revision: u8,
+    /// The tools with prints, in their order (a tool may have none).
+    #[serde(default)]
+    kinds: Vec<String>,
+    /// (tool, file bucket) of each part, in order.
+    parts: Vec<(String, u32)>,
+    states: Map<String, Value>,
+    /// The digest of the revision 1 document this checkpoint was migrated from (left in place
+    /// for a rolled-back build). A revision 1 document with another digest was written by such a
+    /// build after the migration, and is migrated again.
+    #[serde(rename = "migratedFrom")]
+    migrated_from: Option<String>,
+}
+
+/// One part: the prints and rows of one tool's files in one bucket.
+#[derive(Deserialize)]
+struct Part {
+    #[serde(default)]
+    fingerprints: Prints,
+    #[serde(default)]
+    rows: Vec<ScanRow>,
+    #[serde(default)]
+    srows: Vec<ScanRow>,
+}
+
+#[derive(Serialize)]
+struct PartRef<'a> {
+    fingerprints: PrintRefs<'a>,
+    rows: &'a [&'a ScanRow],
+    srows: &'a [&'a ScanRow],
+}
+
+/// Borrowed prints by file key, written in their order (a part sorts them by key first, so an
+/// unchanged part keeps its bytes).
+struct PrintRefs<'a>(Vec<(&'a Arc<str>, &'a Print)>);
+
+impl Serialize for PrintRefs<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, print) in &self.0 {
+            map.serialize_entry(&***key, print)?;
+        }
+        map.end()
+    }
+}
+
+/// What one save wrote: keys written or removed, and the bytes written.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct Written {
+    pub keys: usize,
+    pub bytes: usize,
+}
+
+/// What the store holds of this cache, by digest.
+#[derive(Default)]
+struct Saved {
+    header: Option<[u8; 32]>,
+    parts: HashMap<String, [u8; 32]>,
+    /// The revision 1 document's digest, carried into the header.
+    migrated_from: Option<String>,
+}
+
+fn legacy_key(host: &str) -> String {
+    format!("live/scanner/{host}")
+}
+
+fn header_key(host: &str) -> String {
+    format!("live/scanner2/{host}")
+}
+
+fn part_key(host: &str, kind: &str, bucket: u32) -> String {
+    format!("live/scanner2/{host}/{kind}/{bucket:02x}")
+}
+
+/// A file's bucket: FNV-1a of its key.
+fn bucket(file: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in file.bytes() {
+        hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
+    }
+    hash % BUCKETS
+}
+
+/// The header (by digest) of each computer whose revision 1 document this process already
+/// compared with it, by (store instance, host): the document is read once per process (a
+/// rolled-back build only writes it while this one is stopped), not every pass. A header this
+/// process did not read or write, such as a restored store's, is compared again.
+type Checked = HashMap<(String, String), [u8; 32]>;
+static CHECKED: Mutex<Option<Checked>> = Mutex::new(None);
+
+fn checked_lock() -> std::sync::MutexGuard<'static, Option<Checked>> {
+    CHECKED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn checked(store: &Engine, host: &str, header: &[u8; 32]) -> bool {
+    checked_lock()
+        .as_ref()
+        .and_then(|map| map.get(&(store.instance_id.clone(), host.to_owned())))
+        == Some(header)
+}
+
+fn mark_checked(store: &Engine, host: &str, header: [u8; 32]) {
+    checked_lock()
+        .get_or_insert_with(HashMap::new)
+        .insert((store.instance_id.clone(), host.to_owned()), header);
+}
+
+/// A restarted process: every revision 1 document is compared again.
+#[cfg(test)]
+fn forget_checked() {
+    *checked_lock() = None;
+}
+
 /// The serialized length of `value`, counted without building its text.
-fn json_len(value: &Value) -> usize {
+fn json_len<T: Serialize + ?Sized>(value: &T) -> usize {
     struct Count(usize);
     impl std::io::Write for Count {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -101,66 +234,226 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-pub(super) fn requests(
-    mut args: Value,
-    kinds: &[String],
-    fingerprints: &Map<String, Value>,
-    settled: &HashMap<String, u64>,
-    now: i64,
-) -> Vec<(Vec<String>, Value)> {
-    let slot = now.max(0) as u64 / aac_usage::collector::SETTLED_CHECK_MS;
-    let settings = json!({ "settledBefore": settled, "settledSlot": slot });
-    args["fingerprints"] = json!(fingerprints);
-    args["fingerprints"]["_store"] = settings.clone();
-    if json_len(&args) <= REQUEST_BYTES {
-        return vec![(kinds.to_vec(), args)];
+fn hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// One scan request's arguments: the frame text, and the tools whose settled prints it packed.
+pub(super) struct ScanArgs {
+    pub text: Box<RawValue>,
+    pub packed: HashSet<String>,
+}
+
+#[cfg(test)]
+impl ScanArgs {
+    pub fn value(&self) -> Value {
+        serde_json::from_str(self.text.get()).unwrap_or(Value::Null)
+    }
+}
+
+impl std::fmt::Debug for ScanArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ScanArgs")
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Display for ScanArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.text.get())
+    }
+}
+
+/// The `fingerprints` argument, written from the borrowed prints.
+enum PrintsArg<'a> {
+    /// Every tool's prints, then the store settings.
+    All(&'a Fingerprints, &'a Value),
+    /// The store settings, then the selected prints of one tool (none yet while sizing).
+    One(&'a Value, &'a str, Option<&'a [(&'a Arc<str>, &'a Print)]>),
+}
+
+impl Serialize for PrintsArg<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        match self {
+            PrintsArg::All(fingerprints, store) => {
+                for (kind, prints) in fingerprints.iter() {
+                    map.serialize_entry(kind, prints)?;
+                }
+                map.serialize_entry("_store", store)?;
+            }
+            PrintsArg::One(store, kind, selected) => {
+                map.serialize_entry("_store", store)?;
+                if let Some(selected) = selected {
+                    map.serialize_entry(*kind, &PrintRefs(selected.to_vec()))?;
+                }
+            }
+        }
+        map.end()
+    }
+}
+
+/// The request arguments with `fingerprints` last, as the scanner reads them.
+struct Frame<'a> {
+    args: &'a Map<String, Value>,
+    prints: PrintsArg<'a>,
+}
+
+impl Serialize for Frame<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        for (key, value) in self.args {
+            map.serialize_entry(key, value)?;
+        }
+        map.serialize_entry("fingerprints", &self.prints)?;
+        map.end()
+    }
+}
+
+fn frame_text(frame: &Frame<'_>) -> Option<Box<RawValue>> {
+    RawValue::from_string(serde_json::to_string(frame).ok()?).ok()
+}
+
+/// Retain the full checkpoint of settled files (`settledPacked`): their prints as one JSON
+/// object, zstd-compressed and base64-encoded as `aac_usage::protocol::pack_settled` writes it,
+/// streamed from the borrowed prints.
+fn pack_settled(settled: &[(&Arc<str>, &Print)]) -> Option<String> {
+    use base64::Engine as _;
+    let prints = PrintRefs(settled.to_vec());
+    let length = json_len(&prints);
+    if length > aac_usage::prior::MAX_SETTLED_BYTES {
+        return None;
+    }
+    let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 1).ok()?;
+    encoder.set_pledged_src_size(Some(length as u64)).ok()?;
+    encoder.include_contentsize(true).ok()?;
+    serde_json::to_writer(&mut encoder, &prints).ok()?;
+    let compressed = encoder.finish().ok()?;
+    Some(base64::engine::general_purpose::STANDARD_NO_PAD.encode(compressed))
+}
+
+/// A computer's scan requests for one pass: one request for every tool when the whole frame
+/// fits, else one per tool. Each request's text is built only when [`Requests::args`] asks for
+/// it, just before its call, from the prints as the pass found them (a tool's prints change only
+/// when its own answer is applied).
+pub(super) struct Requests {
+    args: Map<String, Value>,
+    settings: Value,
+    settled: HashMap<String, u64>,
+    pub batches: Vec<Vec<String>>,
+    whole: bool,
+}
+
+impl Requests {
+    pub fn new(
+        args: Value,
+        kinds: &[String],
+        fingerprints: &Fingerprints,
+        settled: &HashMap<String, u64>,
+        now: i64,
+    ) -> Self {
+        let slot = now.max(0) as u64 / aac_usage::collector::SETTLED_CHECK_MS;
+        let settings = json!({ "settledBefore": settled, "settledSlot": slot });
+        let mut args = match args {
+            Value::Object(args) => args,
+            _ => Map::new(),
+        };
+        args.shift_remove("fingerprints");
+        let whole = json_len(&Frame {
+            args: &args,
+            prints: PrintsArg::All(fingerprints, &settings),
+        }) <= REQUEST_BYTES;
+        let batches = if whole {
+            vec![kinds.to_vec()]
+        } else {
+            kinds.iter().map(|kind| vec![kind.clone()]).collect()
+        };
+        Requests {
+            args,
+            settings,
+            settled: settled.clone(),
+            batches,
+            whole,
+        }
     }
 
-    args["fingerprints"] = json!({"_store":settings});
-    kinds
+    /// The arguments of the request for `batch` (one of [`Self::batches`]), or None when the
+    /// tool's prints cannot be carried within the frame.
+    pub fn args(&self, batch: &[String], fingerprints: &Fingerprints) -> Option<ScanArgs> {
+        if self.whole {
+            return frame_text(&Frame {
+                args: &self.args,
+                prints: PrintsArg::All(fingerprints, &self.settings),
+            })
+            .map(|text| ScanArgs {
+                text,
+                packed: HashSet::new(),
+            });
+        }
+        let kind = batch.first()?;
+        let mut one = self.args.clone();
+        one.insert("kinds".into(), json!([kind]));
+        let mut store = self.settings.clone();
+        let mut packed = HashSet::new();
+        let mut files = Vec::new();
+        if let Some(prints) = fingerprints.get(kind) {
+            let cutoff = self.settled.get(kind).copied().unwrap_or(0) as i64;
+            let mut settled = Vec::new();
+            for (key, print) in prints.iter() {
+                let fields = print.fields();
+                if scan_print::settled(&fields, cutoff) {
+                    settled.push((key, print));
+                } else {
+                    let unfinished = scan_print::text(fields.read_through).is_none();
+                    let mtime = scan_print::as_i64(fields.mtime_ms);
+                    files.push(((unfinished, std::cmp::Reverse(mtime)), key, print));
+                }
+            }
+            if !settled.is_empty() {
+                store["settledPacked"][kind] = json!(pack_settled(&settled)?);
+                packed.insert(kind.clone());
+            }
+            // Carry unfinished cursors first. Other files can be re-read to recover any
+            // fingerprint omitted to fit the existing scanner frame.
+            files.sort_by_key(|(order, _, _)| *order);
+        }
+        let base = json_len(&Frame {
+            args: &one,
+            prints: PrintsArg::One(&store, kind, None),
+        });
+        let mut remaining = REQUEST_BYTES.saturating_sub(base + kind.len() + 12);
+        let mut selected = Vec::new();
+        for (_, key, print) in files {
+            let bytes = json_len(&**key) + print.text().len() + 2;
+            if bytes <= remaining {
+                selected.push((key, print));
+                remaining -= bytes;
+            }
+        }
+        let frame = Frame {
+            args: &one,
+            prints: PrintsArg::One(&store, kind, Some(&selected)),
+        };
+        if json_len(&frame) > REQUEST_BYTES {
+            return None;
+        }
+        frame_text(&frame).map(|text| ScanArgs { text, packed })
+    }
+}
+
+/// Every request of a pass, built at once.
+pub(super) fn requests(
+    args: Value,
+    kinds: &[String],
+    fingerprints: &Fingerprints,
+    settled: &HashMap<String, u64>,
+    now: i64,
+) -> Vec<(Vec<String>, Option<ScanArgs>)> {
+    let requests = Requests::new(args, kinds, fingerprints, settled, now);
+    requests
+        .batches
         .iter()
-        .map(|kind| {
-            let mut one = args.clone();
-            one["kinds"] = json!([kind]);
-            let mut selected = Map::new();
-            if let Some(prints) = fingerprints.get(kind).and_then(Value::as_object) {
-                let cutoff = settled.get(kind).copied().unwrap_or(0) as i64;
-                let (settled, mut files): (Vec<_>, Vec<_>) = prints
-                    .iter()
-                    .partition(|(_, print)| aac_usage::collector::settled_print(print, cutoff));
-                if !settled.is_empty() {
-                    let settled = settled
-                        .into_iter()
-                        .map(|(key, print)| (key.clone(), print.clone()))
-                        .collect();
-                    let Some(packed) = aac_usage::protocol::pack_settled(&settled) else {
-                        return (vec![kind.clone()], Value::Null);
-                    };
-                    one["fingerprints"]["_store"]["settledPacked"][kind] = json!(packed);
-                }
-                // Carry unfinished cursors first. Other files can be re-read to recover any
-                // fingerprint omitted to fit the existing scanner frame.
-                files.sort_by_key(|(_, print)| {
-                    (
-                        print["readThrough"].is_null(),
-                        std::cmp::Reverse(print["mtimeMs"].as_i64()),
-                    )
-                });
-                let mut remaining = REQUEST_BYTES.saturating_sub(json_len(&one) + kind.len() + 12);
-                for (key, print) in files {
-                    let bytes = json!(key).to_string().len() + json_len(print) + 2;
-                    if bytes <= remaining {
-                        selected.insert(key.clone(), print.clone());
-                        remaining -= bytes;
-                    }
-                }
-            }
-            one["fingerprints"][kind] = Value::Object(selected);
-            if json_len(&one) > REQUEST_BYTES {
-                return (vec![kind.clone()], Value::Null);
-            }
-            (vec![kind.clone()], one)
-        })
+        .map(|batch| (batch.clone(), requests.args(batch, fingerprints)))
         .collect()
 }
 
@@ -168,14 +461,13 @@ pub(super) fn requests(
 /// strings shared), and the read state of each tool.
 #[derive(Default)]
 pub(super) struct Cache {
-    pub fingerprints: Map<String, Value>,
+    pub fingerprints: Fingerprints,
     pub rows: Vec<ScanRow>,
     pub srows: Vec<ScanRow>,
     states: Map<String, Value>,
     /// One copy of each row string, for rows this cache reads and gains.
-    strings: Interner,
-    /// The digest of the checkpoint this cache was loaded from or last saved as.
-    saved: Option<[u8; 32]>,
+    pub strings: Interner,
+    saved: Saved,
 }
 
 /// The rows of one tool, borrowed.
@@ -183,21 +475,111 @@ pub(super) fn of_kind<'a>(rows: &'a [ScanRow], kind: &str) -> Vec<&'a ScanRow> {
     rows.iter().filter(|row| &*row.kind == kind).collect()
 }
 
+fn limit(what: &str) -> aac_store::error::Error {
+    aac_store::error::Error::new("source_limit", what)
+}
+
 impl Cache {
+    /// The computer's live checkpoint: its parts, or a revision 1 document (migrated on the next
+    /// save), seeded from a legacy remote cache when it has no current one.
     pub fn load(store: &Engine, host: &str) -> Result<Self> {
-        let bytes = analytics_cache::get(store, &format!("live/scanner/{host}"))?;
+        let header = analytics_cache::get(store, &header_key(host))?
+            .map(|bytes| -> Result<_> {
+                Ok((serde_json::from_slice::<Header>(&bytes)?, digest(&bytes)))
+            })
+            .transpose()?;
+        let legacy = match &header {
+            Some((_, sum)) if checked(store, host, sum) => None,
+            _ => analytics_cache::get(store, &legacy_key(host))?,
+        };
+        let legacy_digest = legacy.as_deref().map(|bytes| hex(&digest(bytes)));
+        if let Some((header, sum)) = header {
+            if legacy_digest.is_none() || legacy_digest == header.migrated_from {
+                drop(legacy);
+                mark_checked(store, host, sum);
+                return Self::load_parts(store, host, header, sum);
+            }
+            // A rolled-back build wrote the revision 1 document after the migration: it is the
+            // newer state. Its parts are replaced on the next save.
+            let mut cache = Self::read_legacy(store, host, legacy.as_deref())?;
+            cache.saved.parts = header
+                .parts
+                .iter()
+                .map(|(kind, bucket)| (part_key(host, kind, *bucket), [0; 32]))
+                .collect();
+            cache.saved.migrated_from = legacy_digest;
+            return Ok(cache);
+        }
+        let mut cache = Self::read_legacy(store, host, legacy.as_deref())?;
+        cache.saved.migrated_from = legacy_digest;
+        Ok(cache)
+    }
+
+    fn load_parts(store: &Engine, host: &str, header: Header, sum: [u8; 32]) -> Result<Self> {
+        let mut cache = Cache {
+            fingerprints: Fingerprints(
+                header
+                    .kinds
+                    .into_iter()
+                    .map(|kind| (kind, Prints::default()))
+                    .collect(),
+            ),
+            states: header.states,
+            saved: Saved {
+                header: Some(sum),
+                migrated_from: header.migrated_from,
+                ..Saved::default()
+            },
+            ..Cache::default()
+        };
+        let keys: Vec<String> = header
+            .parts
+            .iter()
+            .map(|(kind, bucket)| part_key(host, kind, *bucket))
+            .collect();
+        let kinds: HashMap<&str, &str> = keys
+            .iter()
+            .zip(&header.parts)
+            .map(|(key, (kind, _))| (key.as_str(), kind.as_str()))
+            .collect();
+        let mut strings = std::mem::take(&mut cache.strings);
+        analytics_cache::read_each(store, &keys, |key, bytes| {
+            let (part, held) = with_interner(std::mem::take(&mut strings), || {
+                serde_json::from_slice::<Part>(bytes)
+            });
+            strings = held;
+            let part = part?;
+            let kind = kinds.get(key).copied().unwrap_or_default();
+            cache
+                .fingerprints
+                .entry(kind.to_owned())
+                .or_default()
+                .extend(part.fingerprints.0);
+            cache.rows.extend(part.rows);
+            cache.srows.extend(part.srows);
+            cache.saved.parts.insert(key.to_owned(), digest(bytes));
+            Ok(())
+        })?;
+        cache.strings = strings;
+        if cache.saved.parts.len() != keys.len() {
+            return Err(aac_store::error::Error::new(
+                "io",
+                "Analytics scanner state part missing",
+            ));
+        }
+        Ok(cache)
+    }
+
+    /// A revision 1 document, or the legacy remote cache's seed.
+    fn read_legacy(store: &Engine, host: &str, bytes: Option<&[u8]>) -> Result<Self> {
         let saved = bytes
-            .as_deref()
             .map(|bytes| Stored::read(bytes, Interner::default()))
             .transpose()?;
         let mut cache = match saved {
-            Some(stored) if stored.revision == Some(1) => {
-                return Ok(stored.into_cache(bytes.as_deref().map(digest)));
-            }
-            Some(stored) => Some(stored.into_cache(None)),
+            Some(stored) if stored.revision == Some(1) => return Ok(stored.into_cache()),
+            Some(stored) => Some(stored.into_cache()),
             None => None,
         };
-        drop(bytes);
         if let Some(legacy) =
             analytics_cache::archived(store, &format!("{REMOTE_ARCHIVE}{host}.json"))?
                 .and_then(|bytes| LegacyCache::read(&bytes).ok())
@@ -209,8 +591,8 @@ impl Cache {
             scan.rows.retain(|row| !rebuilt.contains(&*row.kind));
             scan.srows.retain(|row| !rebuilt.contains(&*row.kind));
             for tool in rebuilt {
-                scan.fingerprints.remove(tool);
-                scan.states.remove(tool);
+                scan.fingerprints.shift_remove(tool);
+                scan.states.shift_remove(tool);
             }
         }
         Ok(cache.unwrap_or_default())
@@ -218,27 +600,27 @@ impl Cache {
 
     /// A checkpoint's bytes as a cache (any revision; a legacy form's version is not checked).
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        Ok(Stored::read(bytes, Interner::default())?.into_cache(None))
+        Ok(Stored::read(bytes, Interner::default())?.into_cache())
     }
 
-    pub fn encode(&self) -> Result<Vec<u8>> {
-        let prints: usize = self
-            .fingerprints
-            .values()
-            .filter_map(Value::as_object)
-            .map(Map::len)
-            .sum();
-        if self.rows.len() > CACHE_ROWS || self.srows.len() > CACHE_ROWS || prints > CACHE_ROWS {
-            return Err(aac_store::error::Error::new(
-                "source_limit",
-                "Analytics scanner row limit",
-            ));
+    fn check_rows(&self) -> Result<()> {
+        if self.rows.len() > CACHE_ROWS
+            || self.srows.len() > CACHE_ROWS
+            || self.fingerprints.count() > CACHE_ROWS
+        {
+            return Err(limit("Analytics scanner row limit"));
         }
+        Ok(())
+    }
+
+    /// The cache as one document (revision 1): the historical scans' checkpoint.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        self.check_rows()?;
         #[derive(Serialize)]
         struct Checkpoint<'a> {
             #[serde(rename = "_nativeRevision")]
             revision: u8,
-            fingerprints: &'a Map<String, Value>,
+            fingerprints: &'a Fingerprints,
             rows: &'a [ScanRow],
             srows: &'a [ScanRow],
             states: &'a Map<String, Value>,
@@ -251,34 +633,103 @@ impl Cache {
             states: &self.states,
         })?;
         if bytes.len() > CACHE_BYTES {
-            return Err(aac_store::error::Error::new(
-                "source_limit",
-                "Analytics scanner state size limit",
-            ));
+            return Err(limit("Analytics scanner state size limit"));
         }
         Ok(bytes)
     }
 
-    /// Save the encoded checkpoint unless the store already holds these exact bytes. Returns
-    /// whether it wrote.
-    pub fn save_encoded(&mut self, store: &Engine, host: &str, bytes: &[u8]) -> Result<bool> {
-        let sum = digest(bytes);
-        if self.saved == Some(sum) {
-            return Ok(false);
+    /// Save the live checkpoint in parts, writing only the parts (and header) whose bytes
+    /// changed, in one transaction. Returns what it wrote. A `source_limit`
+    /// error leaves the store as it was.
+    pub fn save(&mut self, store: &Engine, host: &str) -> Result<Written> {
+        self.check_rows()?;
+        type Group<'a> = (
+            Vec<(&'a Arc<str>, &'a Print)>,
+            Vec<&'a ScanRow>,
+            Vec<&'a ScanRow>,
+        );
+        let mut groups: BTreeMap<(&str, u32), Group<'_>> = BTreeMap::new();
+        for (kind, prints) in self.fingerprints.iter() {
+            for (key, print) in prints.iter() {
+                groups
+                    .entry((kind, bucket(key)))
+                    .or_default()
+                    .0
+                    .push((key, print));
+            }
         }
-        analytics_cache::put(store, &format!("live/scanner/{host}"), bytes)?;
-        self.saved = Some(sum);
-        Ok(true)
+        for row in &self.rows {
+            groups
+                .entry((&row.kind, bucket(&row.file)))
+                .or_default()
+                .1
+                .push(row);
+        }
+        for row in &self.srows {
+            groups
+                .entry((&row.kind, bucket(&row.file)))
+                .or_default()
+                .2
+                .push(row);
+        }
+        let mut total = 0;
+        let mut writes = Vec::new();
+        let mut parts = HashMap::new();
+        let mut listed = Vec::new();
+        for ((kind, bucket), (mut prints, rows, srows)) in groups {
+            prints.sort_by(|left, right| left.0.cmp(right.0));
+            let bytes = serde_json::to_vec(&PartRef {
+                fingerprints: PrintRefs(prints),
+                rows: &rows,
+                srows: &srows,
+            })?;
+            total += bytes.len();
+            if total > CACHE_BYTES {
+                return Err(limit("Analytics scanner state size limit"));
+            }
+            let key = part_key(host, kind, bucket);
+            let sum = digest(&bytes);
+            if self.saved.parts.get(&key) != Some(&sum) {
+                writes.push((key.clone(), bytes));
+            }
+            parts.insert(key, sum);
+            listed.push((kind.to_owned(), bucket));
+        }
+        let removed: Vec<String> = self
+            .saved
+            .parts
+            .keys()
+            .filter(|key| !parts.contains_key(*key))
+            .cloned()
+            .collect();
+        let header = serde_json::to_vec(&Header {
+            revision: 2,
+            kinds: self.fingerprints.keys().cloned().collect(),
+            parts: listed,
+            states: self.states.clone(),
+            migrated_from: self.saved.migrated_from.clone(),
+        })?;
+        let header_sum = digest(&header);
+        if self.saved.header != Some(header_sum) {
+            writes.push((header_key(host), header));
+        }
+        if writes.is_empty() && removed.is_empty() {
+            return Ok(Written::default());
+        }
+        let written = Written {
+            keys: writes.len() + removed.len(),
+            bytes: writes.iter().map(|(_, bytes)| bytes.len()).sum(),
+        };
+        analytics_cache::replace_many(store, &writes, &removed)?;
+        self.saved.header = Some(header_sum);
+        self.saved.parts = parts;
+        mark_checked(store, host, header_sum);
+        Ok(written)
     }
 
-    #[cfg(test)]
-    fn save(&mut self, store: &Engine, host: &str) -> Result<()> {
-        let bytes = self.encode()?;
-        self.save_encoded(store, host, &bytes).map(|_| ())
-    }
-
-    /// Move one tool's rows and prints out, for a reader that outlives this cache.
-    pub fn take_kind(&mut self, kind: &str) -> (Vec<ScanRow>, Vec<ScanRow>, Value) {
+    /// Move one tool's rows out, with the Claude identities of its prints, for a reader that
+    /// outlives this cache.
+    pub fn take_kind(&mut self, kind: &str) -> (Vec<ScanRow>, Vec<ScanRow>, Identities) {
         let split = |rows: &mut Vec<ScanRow>| {
             let (taken, kept) = std::mem::take(rows)
                 .into_iter()
@@ -288,15 +739,27 @@ impl Cache {
         };
         let rows = split(&mut self.rows);
         let srows = split(&mut self.srows);
-        let prints = self.fingerprints.remove(kind).unwrap_or(Value::Null);
-        (rows, srows, prints)
+        let prints = self.fingerprints.shift_remove(kind).unwrap_or_default();
+        (rows, srows, Identities::of(&prints))
     }
 
-    pub fn apply(&mut self, kind: &str, answer: &Value, mut complete: bool, cutoff: i64) -> bool {
-        let state = &answer["kinds"][kind];
-        let Some(fresh) = state["fingerprints"].as_object() else {
-            return false;
-        };
+    /// Hold the rows in the order a saved checkpoint reads them back (by tool and file bucket,
+    /// each bucket's rows in their order), so the per-cell sums keep their order across passes.
+    fn order_rows(&mut self) {
+        for rows in [&mut self.rows, &mut self.srows] {
+            rows.sort_by_cached_key(|row| (Arc::clone(&row.kind), bucket(&row.file)));
+        }
+    }
+
+    /// Apply one tool's read from the answer, moving its prints and accepted rows into the cache.
+    pub fn apply(
+        &mut self,
+        kind: &str,
+        answer: &mut Answer,
+        mut complete: bool,
+        cutoff: i64,
+    ) -> bool {
+        let state = answer.read(kind);
         if matches!(
             state["state"].as_str(),
             Some("pending" | "error" | "unreadable")
@@ -304,67 +767,91 @@ impl Cache {
         {
             return false;
         }
-        let empty = Map::new();
-        let prior = self
+        let truncated = answer.truncated.clone();
+        let Some(read) = answer.kinds.as_mut().and_then(|kinds| kinds.get_mut(kind)) else {
+            return false;
+        };
+        let Some(fresh) = read.fingerprints.take() else {
+            return false;
+        };
+        let metadata = read.meta.clone();
+        let state = &metadata;
+        let mut prior = self
             .fingerprints
-            .get(kind)
-            .and_then(Value::as_object)
-            .unwrap_or(&empty);
-        let mut replace: HashSet<&str> = state["replacedFiles"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
+            .get_mut(kind)
+            .map(std::mem::take)
+            .unwrap_or_default();
+        let mut replace: HashSet<Arc<str>> = read
+            .replaced
+            .iter()
+            .map(|file| Arc::from(file.as_str()))
             .collect();
-        let mut accepted = HashSet::new();
-        let mut rejected = Vec::new();
-        let mut prints = Map::new();
-        for (key, print) in fresh {
-            let old = prior.get(key);
-            if print["settledConfirmed"] == true {
-                if let Some(mut saved) = old.and_then(Value::as_object).cloned() {
-                    saved.insert(
-                        "settledCheckedSlot".into(),
-                        print["settledCheckedSlot"].clone(),
-                    );
-                    prints.insert(key.clone(), Value::Object(saved));
-                } else {
-                    complete = false;
+        let mut accepted: HashSet<Arc<str>> = HashSet::new();
+        let mut rejected: HashSet<Arc<str>> = HashSet::new();
+        // Accepted files read whole (no `readFrom`): their cached rows are replaced.
+        let mut whole: HashSet<Arc<str>> = HashSet::new();
+        let mut prints = Prints::default();
+        for (key, print) in fresh.0 {
+            let fields = print.fields();
+            let old = prior.get(&key);
+            if scan_print::is_true(fields.settled_confirmed) {
+                let slot = fields.settled_checked_slot.unwrap_or(RawValue::NULL);
+                let edited = match prior.get(&key) {
+                    Some(saved) if saved.is_object() => {
+                        let same = saved.fields().settled_checked_slot.map(RawValue::get)
+                            == Some(slot.get());
+                        (!same).then(|| saved.with("settledCheckedSlot", slot))
+                    }
+                    _ => {
+                        complete = false;
+                        continue;
+                    }
+                };
+                if let Some(saved) = edited.or_else(|| prior.swap_remove(&key)) {
+                    prints.insert(key, saved);
                 }
                 continue;
             }
-            if let Some(from) = print["readFrom"].as_u64() {
+            if let Some(from) = scan_print::as_u64(fields.read_from) {
                 let matches = old.is_some_and(|old| {
-                    (old["readThrough"].as_u64() == Some(from) && same_file(old, print))
-                        || (old["readThrough"].is_null()
-                            && old.get("appendState").is_some()
-                            && old["size"].as_u64() == Some(from)
-                            && print["fileIdentity"].is_string()
-                            && old["fileIdentity"] == print["fileIdentity"])
+                    let old = old.fields();
+                    (scan_print::as_u64(old.read_through) == Some(from)
+                        && scan_print::same_file(&old, &fields))
+                        || (scan_print::text(old.read_through).is_none()
+                            && old.append_state.is_some()
+                            && scan_print::as_u64(old.size) == Some(from)
+                            && scan_print::is_string(fields.file_identity)
+                            && scan_print::same(old.file_identity, fields.file_identity))
                 });
                 if !matches {
-                    rejected.push(key);
+                    replace.remove(&key);
+                    rejected.insert(key);
                     complete = false;
-                    replace.remove(key.as_str());
                     continue;
                 }
-                replace.remove(key.as_str());
-            } else if !old.is_some_and(|old| same_file(old, print)) {
-                replace.insert(key);
+                replace.remove(&key);
+            } else {
+                if !old.is_some_and(|old| scan_print::same_file(&old.fields(), &fields)) {
+                    replace.insert(Arc::clone(&key));
+                }
+                if scan_print::text(fields.read_from).is_none() {
+                    whole.insert(Arc::clone(&key));
+                }
             }
-            accepted.insert(key.as_str());
-            let mut saved = print.clone();
-            if let Some(fields) = saved.as_object_mut() {
-                fields.remove("readFrom");
-            }
-            prints.insert(key.clone(), saved);
+            let saved = if fields.read_from.is_some() {
+                print.without("readFrom")
+            } else {
+                print
+            };
+            accepted.insert(Arc::clone(&key));
+            prints.insert(key, saved);
         }
         // Cursor deduplicates run IDs across every database it reads. With a full
         // inventory, only confirmed paths may contribute, even if some records in
         // those databases were unreadable. A limited inventory keeps missing paths.
         let enumerated = complete
             || kind == "cursor"
-                && answer["truncated"] == false
+                && truncated == false
                 && state["state"] == "ok"
                 && state["unreadableRecords"].as_u64().is_some_and(|n| n > 0)
                 && ["readFailures", "unreadableFolders"]
@@ -373,67 +860,47 @@ impl Cache {
                 && state["searchLimit"].is_null()
                 && state["walUnread"] != true;
         if !enumerated {
-            for (key, old) in prior {
-                if !replace.contains(key.as_str()) && !rejected.contains(&key) {
-                    prints.entry(key.clone()).or_insert_with(|| old.clone());
+            for (key, old) in prior.0 {
+                if !replace.contains(&key) && !rejected.contains(&key) {
+                    prints.entry(key).or_insert(old);
                 }
             }
         }
-        let incoming = |key: &str| {
-            answer[key].as_array().into_iter().flatten().filter(|row| {
-                row["k"] == kind
-                    && row["f"]
-                        .as_str()
-                        .is_some_and(|file| accepted.contains(file))
-            })
-        };
-        for row in incoming("rows").chain(incoming("srows")) {
-            if let Some(file) = row["f"].as_str()
-                && fresh[file]["readFrom"].is_null()
-            {
-                replace.insert(file);
+        let (rows, srows) = answer.take_rows(kind, |file| accepted.contains(file));
+        for row in rows.iter().chain(&srows) {
+            if whole.contains(&row.file) {
+                replace.insert(Arc::clone(&row.file));
             }
         }
         let retain = |row: &ScanRow| {
             &*row.kind != kind
-                || !replace.contains(&*row.file) && (!enumerated || prints.contains_key(&*row.file))
+                || !replace.contains(&row.file) && (!enumerated || prints.contains_key(&row.file))
         };
         let mut window = Window::new(cutoff);
         self.rows
             .retain(|row| retain(row) && window.keeps(row, false));
         self.srows
             .retain(|row| retain(row) && window.keeps(row, true));
-        let strings = &mut self.strings;
-        for (key, rows, session) in [
-            ("rows", &mut self.rows, false),
-            ("srows", &mut self.srows, true),
-        ] {
-            rows.extend(
-                incoming(key)
-                    .map(|row| ScanRow::from_value(row, strings))
-                    .filter(|row| window.keeps(row, session)),
-            );
-        }
+        self.rows
+            .extend(rows.into_iter().filter(|row| window.keeps(row, false)));
+        self.srows
+            .extend(srows.into_iter().filter(|row| window.keeps(row, true)));
         fold(&mut self.rows, false);
         fold(&mut self.srows, true);
+        self.order_rows();
+        self.fingerprints.insert(kind.to_owned(), prints);
         self.strings.prune();
-        self.fingerprints
-            .insert(kind.to_owned(), Value::Object(prints));
-        let mut metadata = state.clone();
-        if let Some(fields) = metadata.as_object_mut() {
-            fields.remove("fingerprints");
-            fields.remove("replacedFiles");
-        }
         self.states.insert(kind.to_owned(), metadata);
         complete
     }
 }
 
-fn same_file(old: &Value, fresh: &Value) -> bool {
-    ["size", "mtimeMs", "head", "tail", "walSize", "walMtimeMs"]
-        .into_iter()
-        .all(|key| old[key] == fresh[key])
-        && (old["fileIdentity"].is_null() || old["fileIdentity"] == fresh["fileIdentity"])
+#[cfg(test)]
+impl Cache {
+    /// [`Cache::apply`] of an answer given as a value.
+    pub fn apply_value(&mut self, kind: &str, answer: &Value, complete: bool, cutoff: i64) -> bool {
+        self.apply(kind, &mut Answer::from_value(answer), complete, cutoff)
+    }
 }
 
 /// The 31-day window: a session row by its last activity, an hour row by its hour (each distinct
@@ -508,6 +975,10 @@ fn fold(rows: &mut Vec<ScanRow>, session: bool) {
 }
 
 #[cfg(test)]
+#[path = "scan_state_oracle.rs"]
+mod oracle;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -565,7 +1036,7 @@ mod tests {
             let request = aac_usage::protocol::parse_request(wire.to_string().as_bytes())
                 .expect("scan request");
             let answer = aac_usage::protocol::scan(&request, home.path(), &env);
-            assert!(!cache.apply("cursor", &answer, false, 0));
+            assert!(!cache.apply_value("cursor", &answer, false, 0));
             assert_eq!(cache.states["cursor"]["unreadableRecords"], 1);
             let worker = collect::worker_from_rows(
                 &of_kind(&cache.rows, "cursor"),
@@ -609,7 +1080,7 @@ mod tests {
             "kinds":{"cursor":{"state":"ok","partial":true,"unreadableRecords":1,
                 "unreadableFolders":1,"fingerprints":{}}},
         });
-        assert!(!cache.apply("cursor", &inaccessible, false, 0));
+        assert!(!cache.apply_value("cursor", &inaccessible, false, 0));
         assert!(cache.rows.iter().any(|row| *row.file == *key));
     }
 
@@ -633,7 +1104,7 @@ mod tests {
         let row = |tokens| json!({"k":"codex","f":"file","m":"model","h":"2026-11-03 03:00","i":tokens,"n":1,"c":0});
         let store = open();
         let mut cache = Cache::default();
-        assert!(cache.apply(
+        assert!(cache.apply_value(
             "codex",
             &answer(json!({"file":first}), vec![row(100)]),
             true,
@@ -644,7 +1115,7 @@ mod tests {
         drop(store);
         let store = open();
         cache = Cache::load(&store, "fixture").expect("load scan cache");
-        assert!(cache.apply(
+        assert!(cache.apply_value(
             "codex",
             &answer(json!({"file":second}), vec![row(50)]),
             true,
@@ -652,12 +1123,12 @@ mod tests {
         ));
         assert_eq!(cache.rows[0].tokens[0], 150);
         assert_eq!(cache.rows[0].events, 2);
-        let prints = cache.fingerprints["codex"].clone();
-        assert!(cache.apply("codex", &answer(prints, vec![]), true, 0));
+        let prints = cache.fingerprints["codex"].to_value();
+        assert!(cache.apply_value("codex", &answer(prints, vec![]), true, 0));
         assert_eq!(cache.rows[0].tokens[0], 150);
-        assert!(!cache.apply("codex", &answer(json!({}), vec![]), false, 0));
+        assert!(!cache.apply_value("codex", &answer(json!({}), vec![]), false, 0));
         assert_eq!(cache.rows[0].tokens[0], 150);
-        assert!(cache.apply(
+        assert!(cache.apply_value(
             "codex",
             &answer(json!({"file":replaced}), vec![row(20)]),
             true,
@@ -666,52 +1137,166 @@ mod tests {
         assert_eq!(cache.rows[0].tokens[0], 20);
     }
 
+    fn fixture_store(home: &std::path::Path) -> Engine {
+        aac_store::ops::open_engine(&home.join("store").to_string_lossy(), None, None)
+            .expect("open fixture store")
+    }
+
+    /// Two files of one tool in different parts, read whole (the second one only when given).
+    fn files(first: u64, second: Option<u64>) -> Value {
+        let (one, two) = two_buckets();
+        let mut prints = Map::new();
+        let mut rows = Vec::new();
+        for (key, size) in [(one, Some(first)), (two, second)] {
+            let Some(size) = size else { continue };
+            prints.insert(
+                key.clone(),
+                json!({"size":size,"mtimeMs":size,"fileIdentity":key,"appendState":{}}),
+            );
+            rows.push(
+                json!({"k":"codex","f":key,"m":"model","h":"2026-11-03 03","i":size,"n":1,"c":0}),
+            );
+        }
+        json!({"kinds":{"codex":{"state":"ok","fingerprints":prints}},"rows":rows})
+    }
+
+    fn two_files(first: u64, second: u64) -> Value {
+        files(first, Some(second))
+    }
+
+    /// The cache's content, print order aside.
+    fn content(cache: &Cache) -> Value {
+        json!({
+            "fingerprints": cache.fingerprints.to_value(),
+            "rows": cache.rows.iter().map(ScanRow::to_value).collect::<Vec<_>>(),
+            "srows": cache.srows.iter().map(ScanRow::to_value).collect::<Vec<_>>(),
+            "states": cache.states,
+        })
+    }
+
+    fn two_buckets() -> (String, String) {
+        let one = "file-0".to_owned();
+        let two = (1..)
+            .map(|n| format!("file-{n}"))
+            .find(|key| bucket(key) != bucket(&one))
+            .expect("a second bucket");
+        (one, two)
+    }
+
     #[test]
     fn an_unchanged_checkpoint_is_not_written_again() {
         let home = tempfile::tempdir().expect("fixture home");
-        let store =
-            aac_store::ops::open_engine(&home.path().join("store").to_string_lossy(), None, None)
-                .expect("open fixture store");
-        let print = json!({"size":100,"mtimeMs":1,"fileIdentity":"9:1","appendState":{}});
-        let answer = json!({"kinds":{"codex":{"state":"ok","fingerprints":{"file":print}}},
-            "rows":[{"k":"codex","f":"file","m":"model","h":"2026-11-03 03","i":5,"n":1,"c":0}]});
+        let store = fixture_store(home.path());
         let mut cache = Cache::default();
-        assert!(cache.apply("codex", &answer, true, 0));
-        let bytes = cache.encode().expect("encode");
-        assert!(
-            cache
-                .save_encoded(&store, "fixture", &bytes)
-                .expect("first save")
-        );
-        assert!(
-            !cache
-                .save_encoded(&store, "fixture", &bytes)
-                .expect("same bytes")
-        );
+        assert!(cache.apply_value("codex", &two_files(5, 7), true, 0));
+        // Two parts and the header.
+        assert_eq!(cache.save(&store, "fixture").expect("first save").keys, 3);
+        assert_eq!(cache.save(&store, "fixture").expect("same bytes").keys, 0);
         // A fresh load knows the stored bytes: an unchanged pass skips its write.
         let mut loaded = Cache::load(&store, "fixture").expect("load");
-        let again = loaded.encode().expect("re-encode");
-        assert_eq!(again, bytes);
-        assert!(
-            !loaded
-                .save_encoded(&store, "fixture", &again)
-                .expect("unchanged")
-        );
-        let more = json!({"kinds":{"codex":{"state":"ok","fingerprints":{"file":
-            {"size":150,"mtimeMs":2,"fileIdentity":"9:1","appendState":{},"readFrom":100}}}},
-            "rows":[{"k":"codex","f":"file","m":"model","h":"2026-11-03 03","i":5,"n":1,"c":0}]});
+        assert_eq!(content(&loaded), content(&cache));
+        assert!(loaded.apply_value("codex", &two_files(5, 7), true, 0));
+        assert_eq!(loaded.save(&store, "fixture").expect("unchanged").keys, 0);
+        // One file changed: only its part is written.
         let mut stored = Cache::load(&store, "fixture").expect("reload");
-        assert!(stored.apply("codex", &more, true, 0));
-        let changed = stored.encode().expect("encode change");
-        assert!(
-            stored
-                .save_encoded(&store, "fixture", &changed)
-                .expect("changed")
-        );
+        assert!(stored.apply_value("codex", &two_files(5, 9), true, 0));
+        assert_eq!(stored.save(&store, "fixture").expect("changed").keys, 1);
+        let reloaded = Cache::load(&store, "fixture").expect("load change");
+        let mut tokens: Vec<u64> = reloaded.rows.iter().map(|row| row.tokens[0]).collect();
+        tokens.sort_unstable();
+        assert_eq!(tokens, [5, 9]);
+        assert_eq!(content(&reloaded), content(&stored));
+        // A file gone from a complete read: its part is removed with it (and the header lists
+        // one part fewer).
+        let (one, _) = two_buckets();
+        let mut fewer = Cache::load(&store, "fixture").expect("reload");
+        assert!(fewer.apply_value("codex", &files(5, None), true, 0));
+        assert_eq!(fewer.save(&store, "fixture").expect("removed").keys, 2);
+        let left = Cache::load(&store, "fixture").expect("load fewer");
+        let keys: Vec<String> = left.fingerprints["codex"]
+            .keys()
+            .map(|k| k.to_string())
+            .collect();
+        assert_eq!(keys, [one]);
+        assert_eq!(left.rows.len(), 1);
+    }
+
+    #[test]
+    fn a_single_document_checkpoint_migrates_to_parts_and_stays_for_a_rollback() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let store = fixture_store(home.path());
+        let mut old = Cache::default();
+        assert!(old.apply_value("codex", &two_files(5, 7), true, 0));
+        let document = old.encode().expect("revision 1 document");
+        analytics_cache::put(&store, &legacy_key("fixture"), &document).expect("old build save");
+
+        // The first load reads the document; the save writes parts and keeps it.
+        forget_checked();
+        let mut migrated = Cache::load(&store, "fixture").expect("migrate");
+        assert_eq!(migrated.encode().expect("encode"), document);
+        assert_eq!(migrated.save(&store, "fixture").expect("parts").keys, 3);
         assert_eq!(
-            Cache::load(&store, "fixture").expect("load change").rows[0].tokens[0],
-            10
+            analytics_cache::get(&store, &legacy_key("fixture")).expect("kept"),
+            Some(document.clone())
         );
+        let header: Header = serde_json::from_slice(
+            &analytics_cache::get(&store, &header_key("fixture"))
+                .expect("header")
+                .expect("saved header"),
+        )
+        .expect("header json");
+        assert_eq!(header.revision, 2);
+        assert_eq!(header.migrated_from, Some(hex(&digest(&document))));
+
+        // The new build moves on; the kept document is not read back.
+        let mut newer = Cache::load(&store, "fixture").expect("parts");
+        assert!(newer.apply_value("codex", &two_files(5, 9), true, 0));
+        assert_eq!(newer.save(&store, "fixture").expect("one part").keys, 1);
+        forget_checked();
+        let restarted = Cache::load(&store, "fixture").expect("restart");
+        assert_eq!(content(&restarted), content(&newer));
+
+        // A rolled-back build reads the kept document (as it saved it) and writes a newer one.
+        let mut rolled_back = Cache::decode(&document).expect("old build load");
+        assert!(rolled_back.apply_value("codex", &two_files(6, 11), true, 0));
+        let rolled_document = rolled_back.encode().expect("old build encode");
+        analytics_cache::put(&store, &legacy_key("fixture"), &rolled_document)
+            .expect("old build save");
+
+        // Rolled forward again: the newer document wins and replaces the parts.
+        forget_checked();
+        let mut forward = Cache::load(&store, "fixture").expect("roll forward");
+        assert_eq!(forward.encode().expect("encode"), rolled_document);
+        assert_eq!(forward.save(&store, "fixture").expect("rewrite").keys, 3);
+        forget_checked();
+        let again = Cache::load(&store, "fixture").expect("after roll forward");
+        assert_eq!(content(&again), content(&rolled_back));
+    }
+
+    #[test]
+    fn rows_keep_one_order_across_save_and_load() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let store = fixture_store(home.path());
+        let mut cache = Cache::default();
+        let prints: Map<String, Value> = (0..40)
+            .map(|n| (format!("f{n}"), json!({"size":n,"mtimeMs":n})))
+            .collect();
+        let rows: Vec<Value> = (0..40)
+            .flat_map(|n| {
+                ["omp", "codex"].map(|kind| {
+                    json!({"k":kind,"f":format!("f{n}"),"m":"m",
+                    "h":"2026-11-03 03","i":n,"n":1,"c":0.1})
+                })
+            })
+            .collect();
+        for kind in ["omp", "codex"] {
+            let answer = json!({"kinds":{(kind):{"state":"ok","fingerprints":prints}},
+                "rows":rows});
+            assert!(cache.apply_value(kind, &answer, true, 0));
+        }
+        cache.save(&store, "fixture").expect("save");
+        let loaded = Cache::load(&store, "fixture").expect("load");
+        assert_eq!(loaded.rows, cache.rows);
     }
 
     #[test]
@@ -721,10 +1306,9 @@ mod tests {
             "pathKey":"settled-path", "size":100, "mtimeMs":1, "newestUsageMs":1,
             "fileIdentity":"9:1", "head":"first", "tail":"last", "appendState":{"model":"fixture"},
         });
-        let fingerprints: Map<String, Value> = serde_json::from_value(json!({
+        let fingerprints = Fingerprints::from_value(&json!({
             "codex":{"settled":print,"too-large-active":{"extra":"a".repeat(REQUEST_BYTES)}},
-        }))
-        .expect("fixture fingerprints");
+        }));
         let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
         let batches = requests(
             args,
@@ -734,7 +1318,7 @@ mod tests {
             600_000,
         );
         assert_eq!(batches.len(), 2);
-        let args = &batches[0].1;
+        let args = batches[0].1.as_ref().expect("codex arguments").value();
         assert_eq!(args["fingerprints"]["codex"], json!({}));
         let request = aac_usage::protocol::parse_request(args.to_string().as_bytes())
             .expect("decode the split scanner frame");
@@ -757,16 +1341,11 @@ mod tests {
         let confirmed = json!({"kinds":{"codex":{"state":"ok","settledPacked":true,
             "fingerprints":{"settled":{"settledConfirmed":true,"settledCheckedSlot":1}}
         }}});
-        assert!(cache.apply("codex", &confirmed, true, 0));
+        assert!(cache.apply_value("codex", &confirmed, true, 0));
         assert_eq!(cache.rows[0].tokens[0], 100);
-        assert_eq!(
-            cache.fingerprints["codex"]["settled"]["appendState"],
-            print["appendState"]
-        );
-        assert_eq!(
-            cache.fingerprints["codex"]["settled"]["settledCheckedSlot"],
-            1
-        );
+        let saved = cache.fingerprints["codex"]["settled"].to_value();
+        assert_eq!(saved["appendState"], print["appendState"]);
+        assert_eq!(saved["settledCheckedSlot"], 1);
     }
 
     #[test]
@@ -812,20 +1391,25 @@ mod tests {
                 requests(args, &kinds, &cache.fingerprints, &HashMap::new(), 0)
                     .try_into()
                     .expect("one scanner request");
-            let mut request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
-                .expect("parse writer request");
+            let mut request = aac_usage::protocol::parse_request(
+                request.expect("writer arguments").to_string().as_bytes(),
+            )
+            .expect("parse writer request");
             request.line_budget = line_budget;
             let answer = aac_usage::protocol::scan(
                 &request,
                 home.path(),
                 &aac_usage::discover::Env::default(),
             );
-            assert!(super::super::valid_scan_answer(&answer, &batch));
+            assert!(super::super::valid_scan_answer(
+                &Answer::from_value(&answer),
+                &batch
+            ));
             answer
         };
         let mut full = Cache::default();
         let full_scan = scan(&full, None);
-        assert!(full.apply("codex", &full_scan, true, 0));
+        assert!(full.apply_value("codex", &full_scan, true, 0));
         assert_eq!(full.rows.len(), 2);
 
         let mut last_cursor = 0;
@@ -842,9 +1426,11 @@ mod tests {
                 assert!(cursor > last_cursor, "pass {pass} returned an old cursor");
                 last_cursor = cursor;
             }
-            let readable = super::super::has_readable_records(&answer, &sliced, "codex");
-            let complete = super::super::scan_state(&answer, "codex", readable).0 == "ok";
-            assert_eq!(sliced.apply("codex", &answer, complete, 0), complete);
+            let readable =
+                super::super::has_readable_records(&Answer::from_value(&answer), &sliced, "codex");
+            let complete =
+                super::super::scan_state(&Answer::from_value(&answer), "codex", readable).0 == "ok";
+            assert_eq!(sliced.apply_value("codex", &answer, complete, 0), complete);
             sliced.save(&store, "fixture").expect("save sliced cache");
             if complete {
                 assert!(pass > 10);
@@ -892,18 +1478,31 @@ mod tests {
                 requests(args, &kinds, &cache.fingerprints, &settled_before, now)
                     .try_into()
                     .expect("one scanner request");
-            let request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
-                .expect("parse writer request");
+            let request = aac_usage::protocol::parse_request(
+                request.expect("writer arguments").to_string().as_bytes(),
+            )
+            .expect("parse writer request");
             let answer = aac_usage::protocol::scan(
                 &request,
                 home.path(),
                 &aac_usage::discover::Env::default(),
             );
-            assert!(super::super::valid_scan_answer(&answer, &batch));
-            let readable = super::super::has_readable_records(&answer, cache, "codex");
-            let (state, cause) = source_state(&answer, "codex", readable);
-            assert!(cache.apply("codex", &answer, state == "ok", cutoff));
-            let source = scan_source_state(&answer, "codex", "mac", now, state, cause);
+            assert!(super::super::valid_scan_answer(
+                &Answer::from_value(&answer),
+                &batch
+            ));
+            let readable =
+                super::super::has_readable_records(&Answer::from_value(&answer), cache, "codex");
+            let (state, cause) = source_state(&Answer::from_value(&answer), "codex", readable);
+            assert!(cache.apply_value("codex", &answer, state == "ok", cutoff));
+            let source = scan_source_state(
+                &Answer::from_value(&answer),
+                "codex",
+                "mac",
+                now,
+                state,
+                cause,
+            );
             let worker = aac_store::collect::worker_from_rows(
                 &of_kind(&cache.rows, "codex"),
                 &of_kind(&cache.srows, "codex"),
@@ -926,12 +1525,9 @@ mod tests {
         let (full, full_report) = pass(&mut cache);
         assert_eq!(full_report["state"], "ok");
         // An older print disclosed an estimated clock: settling must carry the disclosure.
-        for print in cache.fingerprints["codex"]
-            .as_object_mut()
-            .expect("codex prints")
-            .values_mut()
-        {
-            print["estimatedClock"] = json!(true);
+        let disclosed = RawValue::from_string("true".into()).expect("true");
+        for print in cache.fingerprints["codex"].values_mut() {
+            *print = print.with("estimatedClock", &disclosed);
         }
         let (settled, report) = pass(&mut cache);
         let print = settled["kinds"]["codex"]["fingerprints"]

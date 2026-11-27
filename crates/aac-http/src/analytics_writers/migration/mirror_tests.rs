@@ -665,11 +665,12 @@ fn all_mirror_caches_are_staged_before_the_legacy_owner_is_applied() {
         (70, 30),
     );
     let print = mirror["fingerprints"]["claude"].as_object().unwrap();
-    let (name, true) =
-        super::super::claude_mirrors::identity(print.values().next().unwrap()).unwrap()
-    else {
+    let identities =
+        super::super::claude_mirrors::Identities::from_value(&Value::Object(print.clone()));
+    let (name, true) = identities.values().next().unwrap() else {
         panic!("expected a mirror fingerprint");
     };
+    let name = name.to_owned();
     let cache = root.join("cache/analytics-remote-v1");
     fs::create_dir_all(&cache).unwrap();
     let bytes = serde_json::to_vec(&mirror).unwrap();

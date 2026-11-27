@@ -64,7 +64,9 @@ impl Observation {
             state_index,
             rows: rows("rows"),
             sessions: rows("srows"),
-            fingerprints: self.answer["kinds"]["claude"]["fingerprints"].clone(),
+            identities: super::super::claude_mirrors::Identities::from_value(
+                &self.answer["kinds"]["claude"]["fingerprints"],
+            ),
         }
     }
 }
@@ -217,7 +219,7 @@ impl Fixture<'_> {
                 for (source, observation) in sources.iter().zip(observations) {
                     assert!(
                         source
-                            .accept(
+                            .accept_value(
                                 store,
                                 source.load(store).expect("history cache"),
                                 &observation.answer,

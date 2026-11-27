@@ -11,7 +11,7 @@ aac-core.workspace = true
 aac-protocol.workspace = true
 aac-config.workspace = true
 aac-files.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

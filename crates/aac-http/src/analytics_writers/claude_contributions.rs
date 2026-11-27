@@ -55,7 +55,7 @@ fn split<'a>(part: &'a Part<'_>, mirror: bool) -> BTreeMap<Option<&'a str>, Scan
     let mut groups: BTreeMap<_, ScanRows> = BTreeMap::new();
     for (session, rows) in [(false, &part.rows), (true, &part.sessions)] {
         for row in rows {
-            let owner = claude_mirrors::row_identity(row, &part.fingerprints);
+            let owner = claude_mirrors::row_identity(row, &part.identities);
             let group = if mirror {
                 owner
                     .filter(|(_, is_mirror)| *is_mirror)
@@ -83,7 +83,7 @@ pub(super) fn remember(
     pricing: &dyn collect::Pricing,
 ) -> Result<()> {
     if !part.rows.iter().any(|r| {
-        claude_mirrors::row_identity(r, &part.fingerprints).is_some_and(|(_, mirror)| mirror)
+        claude_mirrors::row_identity(r, &part.identities).is_some_and(|(_, mirror)| mirror)
     }) {
         return Ok(());
     }

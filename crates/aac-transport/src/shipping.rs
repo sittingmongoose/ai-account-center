@@ -354,6 +354,83 @@ impl AgentClient {
         self.events(request, output)
     }
 
+    /// [`Self::call_controlled_encoded`] for a request whose arguments and result are large (an
+    /// Analytics scan: megabytes of prints in, up to the frame cap out): the envelope is checked
+    /// without parsing the arguments into a value tree, and the terminal result comes back as its
+    /// JSON text, carved out of the agent's output without a copy or a value tree.
+    pub async fn call_controlled_raw(
+        &self,
+        encoded: &[u8],
+        options: &CallOptions,
+        controls: mpsc::Receiver<Vec<u8>>,
+        progress: mpsc::Sender<Event>,
+    ) -> Result<RawTerminal, Failure> {
+        let request = raw_envelope(encoded)?;
+        self.ensure(options).await?;
+        if encoded.len() >= frame_cap(&request.verb) {
+            return Err(Failure::new(
+                Cause::OutputTooLarge,
+                "agent request cap exceeded",
+            ));
+        }
+        let mut input = Vec::with_capacity(encoded.len() + 1);
+        input.extend_from_slice(encoded);
+        input.push(b'\n');
+        let argv = if matches!(self.computer.config.transport, TransportConfig::Local) {
+            vec![self.artifact.path.as_os_str().into()]
+        } else {
+            self.launcher("run")
+        };
+        let (sender, mut chunks) = mpsc::channel(4);
+        let execute = self
+            .computer
+            .execute_controlled(&argv, &input, options, controls, sender);
+        tokio::pin!(execute);
+        let mut buffer = Vec::new();
+        let mut terminal = false;
+        let mut output = None;
+        loop {
+            tokio::select! {
+                result = &mut execute, if output.is_none() => { output = Some(result?); },
+                chunk = chunks.recv() => {
+                    let Some(chunk) = chunk else { break; };
+                    if terminal {
+                        // Only the terminal line can follow; the output check reads it.
+                        continue;
+                    }
+                    buffer.extend(chunk);
+                    while let Some(n) = buffer.iter().position(|c| *c == b'\n') {
+                        if terminal || n >= frame_cap(&request.verb) { return Err(Failure::new(Cause::AgentMismatch, "invalid agent event ordering or size")); }
+                        let head = RawEvent::read(&buffer[..n])?;
+                        head.check(&request)?;
+                        terminal = head.kind != "progress";
+                        if !terminal {
+                            let event: Event = serde_json::from_slice(&buffer[..n]).map_err(|_| Failure::new(Cause::AgentMismatch, "invalid agent event JSON"))?;
+                            tokio::select! {
+                                _ = options.cancel.cancelled() => return Err(Failure::new(Cause::Cancelled,"agent receiver closed")),
+                                _ = tokio::time::sleep_until(options.deadline) => return Err(Failure::new(Cause::Timeout,"agent progress deadline")),
+                                sent = progress.send(event) => sent.map_err(|_| Failure::new(Cause::Cancelled,"agent receiver closed"))?,
+                            }
+                        }
+                        buffer.drain(..=n);
+                    }
+                    if terminal {
+                        buffer = Vec::new();
+                    } else if buffer.len() >= frame_cap(&request.verb) { return Err(Failure::new(Cause::OutputTooLarge, "agent event cap exceeded")); }
+                }
+            }
+        }
+        drop(buffer);
+        let output = match output {
+            Some(output) => output,
+            None => execute.await?,
+        };
+        if output.code == Some(EXIT_AGENT_MISSING) {
+            *self.ready.lock().await = false;
+        }
+        raw_terminal(&request, output)
+    }
+
     fn events(&self, request: &Request, output: ProcessOutput) -> Result<Vec<Event>, Failure> {
         let cap = frame_cap(&request.verb);
         let mut events = Vec::new();
@@ -448,6 +525,138 @@ if [ '{mode}' = run ]; then exec "$f"; else exec "$f" --version; fi"#
             );
             vec!["sh".into(), "-c".into(), script.into()]
         }
+    }
+}
+
+/// The terminal event of a raw call: the result value's JSON text, or the agent's failure.
+#[derive(Debug)]
+pub enum RawTerminal {
+    /// The `value` of the `result` event, as the agent wrote it.
+    Result(Vec<u8>),
+    /// The agent's terminal failure.
+    Failure(Failure),
+}
+
+/// The envelope of an encoded request, checked as [`Request::validate`] checks a parsed one,
+/// without a value tree of its arguments (only their `action`, which a deadline cap may read).
+fn raw_envelope(encoded: &[u8]) -> Result<Request, Failure> {
+    use serde_json::value::RawValue;
+    use std::collections::BTreeMap;
+    let refused = || Failure::new(Cause::Refused, "invalid request encoding");
+    let fields: BTreeMap<String, &RawValue> =
+        serde_json::from_slice(encoded).map_err(|_| refused())?;
+    if fields.len() != 5 {
+        return Err(refused());
+    }
+    let field = |name: &str| fields.get(name).map(|raw| raw.get()).ok_or_else(refused);
+    let args = field("args")?;
+    if !args.starts_with('{') {
+        return Err(Failure::new(Cause::Refused, "invalid request envelope"));
+    }
+    let entries: BTreeMap<String, &RawValue> = serde_json::from_str(args).map_err(|_| refused())?;
+    let mut reduced = serde_json::Map::new();
+    if let Some(action) = entries.get("action") {
+        reduced.insert(
+            "action".into(),
+            serde_json::from_str(action.get()).map_err(|_| refused())?,
+        );
+    }
+    let request = Request {
+        protocol: serde_json::from_str(field("protocol")?).map_err(|_| refused())?,
+        verb: serde_json::from_str(field("verb")?).map_err(|_| refused())?,
+        id: serde_json::from_str(field("id")?).map_err(|_| refused())?,
+        deadline_ms: serde_json::from_str(field("deadlineMs")?).map_err(|_| refused())?,
+        args: serde_json::Value::Object(reduced),
+    };
+    request.validate()?;
+    Ok(request)
+}
+
+/// One output line's type, protocol and id, its other fields left as text.
+struct RawEvent<'a> {
+    kind: String,
+    protocol: u32,
+    id: String,
+    value: Option<&'a serde_json::value::RawValue>,
+}
+
+impl<'a> RawEvent<'a> {
+    fn read(line: &'a [u8]) -> Result<Self, Failure> {
+        use serde_json::value::RawValue;
+        let invalid = || Failure::new(Cause::AgentMismatch, "invalid agent event JSON");
+        let fields: std::collections::BTreeMap<String, &'a RawValue> =
+            serde_json::from_slice(line).map_err(|_| invalid())?;
+        let text = |name: &str| fields.get(name).map(|raw| raw.get()).ok_or_else(invalid);
+        let kind: String = serde_json::from_str(text("type")?).map_err(|_| invalid())?;
+        if !matches!(kind.as_str(), "progress" | "result" | "failure") {
+            return Err(invalid());
+        }
+        Ok(RawEvent {
+            protocol: serde_json::from_str(text("protocol")?).map_err(|_| invalid())?,
+            id: serde_json::from_str(text("id")?).map_err(|_| invalid())?,
+            value: fields.get("value").copied(),
+            kind,
+        })
+    }
+
+    fn check(&self, request: &Request) -> Result<(), Failure> {
+        if self.protocol != PROTOCOL_VERSION || self.id != request.id {
+            return Err(Failure::new(
+                Cause::AgentMismatch,
+                "agent event correlation mismatch",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// [`AgentClient::events`] for a raw call: the same ordering, size, correlation and exit checks,
+/// with the result value carved out of the output.
+fn raw_terminal(request: &Request, output: ProcessOutput) -> Result<RawTerminal, Failure> {
+    let cap = frame_cap(&request.verb);
+    let mismatch = |detail: &'static str| Failure::new(Cause::AgentMismatch, detail);
+    let stdout = &output.stdout;
+    let mut terminal: Option<Result<(usize, usize), Failure>> = None;
+    for line in stdout
+        .split(|c| *c == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        if terminal.is_some() || line.len() >= cap {
+            return Err(mismatch("invalid agent event ordering or size"));
+        }
+        let event = RawEvent::read(line)?;
+        event.check(request)?;
+        match event.kind.as_str() {
+            "progress" => {
+                serde_json::from_slice::<Event>(line)
+                    .map_err(|_| mismatch("invalid agent event JSON"))?;
+            }
+            "result" => {
+                let value = event
+                    .value
+                    .ok_or_else(|| mismatch("invalid agent event JSON"))?;
+                let start = value.get().as_ptr() as usize - stdout.as_ptr() as usize;
+                terminal = Some(Ok((start, start + value.get().len())));
+            }
+            _ => match serde_json::from_slice::<Event>(line) {
+                Ok(Event::Failure { failure, .. }) => terminal = Some(Err(failure)),
+                _ => return Err(mismatch("invalid agent event JSON")),
+            },
+        }
+    }
+    let failed = matches!(terminal, Some(Err(_)));
+    if terminal.is_none() || !stdout.ends_with(b"\n") || (output.code != Some(0) && !failed) {
+        return Err(mismatch("agent did not complete its request"));
+    }
+    match terminal {
+        Some(Ok((start, end))) => {
+            let mut bytes = output.stdout;
+            bytes.truncate(end);
+            bytes.drain(..start);
+            Ok(RawTerminal::Result(bytes))
+        }
+        Some(Err(failure)) => Ok(RawTerminal::Failure(failure)),
+        None => Err(mismatch("agent did not complete its request")),
     }
 }
 

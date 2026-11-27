@@ -4,7 +4,7 @@ use super::{Failures, Migration};
 use aac_store::error::{Error, Result};
 use aac_store::scan_row::ScanRow;
 use aac_store::{activity, analytics_cache, collect, contract};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -98,23 +98,18 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
         if cache.rebuilds("claude") {
             continue;
         }
-        let prints = cache
-            .scan
-            .fingerprints
-            .remove("claude")
-            .unwrap_or(Value::Null);
-        let mut fingerprints = Map::new();
-        for (file, print) in prints.as_object().into_iter().flatten() {
-            if let Some((name, mirror)) = claude_mirrors::identity(print) {
-                if mirror {
-                    mirrors.insert((name.to_owned(), archive.computer));
-                } else {
-                    originals.insert(name.to_owned());
-                }
-                fingerprints.insert(
-                    file.clone(),
-                    json!({"claudeName":name,"claudeMirror":mirror}),
-                );
+        let prints = claude_mirrors::Identities::of(
+            &cache
+                .scan
+                .fingerprints
+                .shift_remove("claude")
+                .unwrap_or_default(),
+        );
+        for (name, mirror) in prints.values() {
+            if mirror {
+                mirrors.insert((name.to_owned(), archive.computer));
+            } else {
+                originals.insert(name.to_owned());
             }
         }
         let mut files = BTreeSet::new();
@@ -149,7 +144,7 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
                 })
                 .collect(),
             sessions: Vec::new(),
-            fingerprints: Value::Object(fingerprints),
+            identities: prints.clone(),
         });
         let state = if cache.last_scan_at.is_some() {
             "ok"
@@ -211,6 +206,15 @@ fn choose_owners(migration: &Migration<'_>, archives: &[Archive<'_>]) -> Result<
     })
 }
 
+/// The Claude identities of a legacy cache's prints.
+fn claude_identities(cache: &scan_state::Cache) -> claude_mirrors::Identities {
+    cache
+        .fingerprints
+        .get("claude")
+        .map(claude_mirrors::Identities::of)
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Copy)]
 enum ClaudeRows<'a> {
     All,
@@ -224,7 +228,8 @@ fn rows_for(
     computer: &str,
     selection: ClaudeRows<'_>,
 ) -> (Vec<ScanRow>, Vec<ScanRow>) {
-    let prints = cache.fingerprints.get("claude").unwrap_or(&Value::Null);
+    let prints = claude_identities(cache);
+    let prints = &prints;
     let keep = |row: &&ScanRow| {
         &*row.kind == tool
             && (tool != "claude"
@@ -326,7 +331,7 @@ pub(super) fn commit(
         }
         valid.push(archive);
         let scan = &cache.scan;
-        let prints = scan.fingerprints.get("claude").unwrap_or(&Value::Null);
+        let prints = &claude_identities(scan);
         if !cache.rebuilds("claude")
             && scan.rows.iter().chain(&scan.srows).any(|row| {
                 &*row.kind == "claude"
@@ -399,12 +404,7 @@ fn import_independent(
                     state_index: 0,
                     rows: selected.0.clone(),
                     sessions: selected.1.clone(),
-                    fingerprints: cache
-                        .scan
-                        .fingerprints
-                        .get(tool)
-                        .cloned()
-                        .unwrap_or(Value::Null),
+                    identities: claude_identities(&cache.scan),
                 };
                 claude_contributions::reconcile(
                     migration.store,
@@ -459,11 +459,7 @@ fn import_mirrors(
             state_index: 0,
             rows: selected.0.clone(),
             sessions: selected.1.clone(),
-            fingerprints: cache
-                .fingerprints
-                .get("claude")
-                .cloned()
-                .unwrap_or(Value::Null),
+            identities: claude_identities(&cache),
         };
         claude_contributions::remember(
             migration.store,
@@ -489,7 +485,7 @@ fn import_mirrors(
         value["sessions"] = json!([]);
         Ok(serde_json::from_value(value)?)
     };
-    let prints = cache.fingerprints.get("claude").unwrap_or(&Value::Null);
+    let prints = &claude_identities(&cache);
     let retained_sessions: HashSet<_> = repaired
         .1
         .iter()

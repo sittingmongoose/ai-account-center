@@ -1,4 +1,5 @@
 //! One bounded historical source per turn, with a cursor independent of the live 31-day scan.
+use super::scan_answer::Answer;
 use super::{ResolverPricing, claude_mirrors, experiment_roots, fixed_scanner, scan_state};
 use crate::agent_transport::Agents;
 use aac_store::scan_row::ScanRow;
@@ -36,8 +37,8 @@ struct Source<'a> {
 }
 
 /// The scanner's own unreadable-record count for a backfill answer, inside the contract bound.
-pub(super) fn unreadable_records_of(answer: &Value, tool: &str) -> Option<u64> {
-    answer["kinds"][tool]["unreadableRecords"]
+pub(super) fn unreadable_records_of(answer: &Answer, tool: &str) -> Option<u64> {
+    answer.read(tool)["unreadableRecords"]
         .as_u64()
         .filter(|count| (1..=contract::MAX_FILE_COUNT).contains(count))
 }
@@ -94,7 +95,7 @@ impl<'a> Source<'a> {
         &self,
         store: &Engine,
         mut cache: scan_state::Cache,
-        response: &Value,
+        response: &mut Answer,
         complete: bool,
         now: i64,
         pricing: &dyn collect::Pricing,
@@ -152,15 +153,19 @@ impl<'a> Source<'a> {
 
     fn claude_part(
         &self,
-        mut cache: scan_state::Cache,
+        cache: scan_state::Cache,
         state_index: usize,
     ) -> claude_mirrors::Part<'a> {
         claude_mirrors::Part {
             host: self.computer,
             state_index,
+            identities: cache
+                .fingerprints
+                .get("claude")
+                .map(claude_mirrors::Identities::of)
+                .unwrap_or_default(),
             rows: cache.rows,
             sessions: cache.srows,
-            fingerprints: cache.fingerprints.remove("claude").unwrap_or(Value::Null),
         }
     }
 
@@ -383,10 +388,20 @@ impl Job {
             let Some((_, request)) = batches.into_iter().next() else {
                 return;
             };
+            let mut cache = cache;
             let call_id = format!("history-{}-{tool}-{now}", host.id);
-            let answer = super::scan_host(agents, host, &request, TRANSPORT_MS, &call_id).await;
+            let answer = match &request {
+                Some(request) => {
+                    super::scan_host(agents, host, &request.text, TRANSPORT_MS, &call_id).await
+                }
+                None => Err(aac_core::Cause::Refused),
+            }
+            .and_then(|bytes| {
+                Answer::parse(&bytes, &mut cache.strings).map_err(|_| aac_core::Cause::Damaged)
+            });
+            drop(request);
             let mut done = false;
-            if let Ok(answer) = answer
+            if let Ok(mut answer) = answer
                 && super::valid_scan_answer(&answer, &kinds)
             {
                 let readable = super::has_readable_records(&answer, &cache, tool);
@@ -394,7 +409,7 @@ impl Job {
                 let complete = matches!(state, "ok" | "no_usage" | "not_installed")
                     && !overflow.contains(tool)
                     && !experiments.is_some_and(|snapshot| snapshot.limited(tool));
-                match source.accept(store, cache, &answer, complete, now, &pricing) {
+                match source.accept(store, cache, &mut answer, complete, now, &pricing) {
                     Ok(complete) => done = complete,
                     Err(error) => tracing::warn!(
                         code = error.code,
@@ -450,6 +465,29 @@ pub(super) fn commit_report(store: &Engine, value: Value) -> Result<()> {
 mod matrix;
 
 #[cfg(test)]
+impl Source<'_> {
+    /// [`Source::accept`] of an answer given as a value.
+    fn accept_value(
+        &self,
+        store: &Engine,
+        cache: scan_state::Cache,
+        response: &Value,
+        complete: bool,
+        now: i64,
+        pricing: &dyn collect::Pricing,
+    ) -> Result<bool> {
+        self.accept(
+            store,
+            cache,
+            &mut Answer::from_value(response),
+            complete,
+            now,
+            pricing,
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -499,11 +537,9 @@ mod tests {
                 };
                 age(&paths[0]);
                 let scan = |cache: &scan_state::Cache| {
-                    let mut prints = cache.fingerprints.clone();
-                    prints.insert(
-                        "_store".into(),
-                        json!({"settledBefore":{"muse":if settle { at + super::super::DAY } else { 0 }},
-                            "settledSlot":1}),
+                    let mut prints = cache.fingerprints.to_value();
+                    prints["_store"] = json!({"settledBefore":{"muse":if settle { at + super::super::DAY } else { 0 }},
+                            "settledSlot":1}
                     );
                     aac_usage::protocol::scan(
                         &aac_usage::protocol::parse_request(
@@ -517,7 +553,7 @@ mod tests {
                     )
                 };
                 let publish = |store: &Engine, cache: &mut scan_state::Cache| {
-                    assert!(cache.apply("muse", &scan(cache), true, 0));
+                    assert!(cache.apply_value("muse", &scan(cache), true, 0));
                     let source = Source {
                         computer: "nas1",
                         tool: "muse",
@@ -614,8 +650,10 @@ mod tests {
                     .into_iter()
                     .next()
                     .expect("historical scanner request");
-            let mut request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
-                .expect("parse scan request");
+            let mut request = aac_usage::protocol::parse_request(
+                request.expect("scan arguments").to_string().as_bytes(),
+            )
+            .expect("parse scan request");
             request.line_budget = budget;
             aac_usage::protocol::scan(&request, root, &aac_usage::discover::Env::default())
         };
@@ -634,7 +672,7 @@ mod tests {
         let partial = scan(LOOKBACK, &cache, Some(3));
         assert!(
             !source
-                .accept(&store, cache, &partial, false, now, &pricing)
+                .accept_value(&store, cache, &partial, false, now, &pricing)
                 .expect("save first slice")
         );
         assert!(!source.done(&store).expect("read completion marker"));
@@ -646,7 +684,7 @@ mod tests {
         assert_eq!(answer["rows"][0]["i"], 50);
         assert!(
             source
-                .accept(&store, cache, &answer, true, now, &pricing)
+                .accept_value(&store, cache, &answer, true, now, &pricing)
                 .expect("commit historical scan")
         );
         assert!(source.done(&store).expect("committed completion marker"));
@@ -739,7 +777,7 @@ mod tests {
         let submit = |store: &Engine, source: &Source<'_>, answer: &Value| {
             let cache = source.load(store).expect("load source checkpoint");
             source
-                .accept(store, cache, answer, true, now, &pricing)
+                .accept_value(store, cache, answer, true, now, &pricing)
                 .expect("accept Claude scan");
         };
         let store = open();
@@ -860,7 +898,7 @@ mod tests {
         let submit = |store: &Engine, source: &Source<'_>, answer: &Value| {
             let cache = source.load(store).expect("load source checkpoint");
             source
-                .accept(store, cache, answer, true, now, &pricing)
+                .accept_value(store, cache, answer, true, now, &pricing)
                 .expect("accept Claude scan");
         };
         let store = open();
@@ -972,7 +1010,7 @@ mod tests {
         for _ in 0..2 {
             assert!(
                 source
-                    .accept(
+                    .accept_value(
                         &engine,
                         source.load(&engine).expect("checkpoint"),
                         &answer,
@@ -1023,7 +1061,7 @@ mod tests {
         });
         assert!(
             !source
-                .accept(
+                .accept_value(
                     &engine,
                     scan_state::Cache::default(),
                     &response,
@@ -1125,20 +1163,27 @@ mod tests {
             &env,
         );
         assert!(
-            super::super::valid_scan_answer(&answer, &["devin".to_owned()]),
+            super::super::valid_scan_answer(&Answer::from_value(&answer), &["devin".to_owned()]),
             "the backend answer is valid: {answer}"
         );
         assert_eq!(
             super::super::scan_state(
-                &answer,
+                &Answer::from_value(&answer),
                 "devin",
-                super::super::has_readable_records(&answer, &scan_state::Cache::default(), "devin")
+                super::super::has_readable_records(
+                    &Answer::from_value(&answer),
+                    &scan_state::Cache::default(),
+                    "devin"
+                )
             ),
             ("scanning", None),
             "a mixed scan is partial"
         );
         // The validated count rides the backfill report.
-        assert_eq!(unreadable_records_of(&answer, "devin"), Some(2));
+        assert_eq!(
+            unreadable_records_of(&Answer::from_value(&answer), "devin"),
+            Some(2)
+        );
         let report = report::rows_report(&report::RowsReportArgs {
             computer: "ubuntu",
             tool: "devin",
@@ -1146,7 +1191,7 @@ mod tests {
             kind: "backfill",
             read_at: now,
             complete: false,
-            unreadable_records: unreadable_records_of(&answer, "devin"),
+            unreadable_records: unreadable_records_of(&Answer::from_value(&answer), "devin"),
             cause: None,
             now,
         });
@@ -1172,7 +1217,7 @@ mod tests {
         let pricing = ResolverPricing::new(home);
         assert!(
             !source
-                .accept(
+                .accept_value(
                     &engine,
                     source.load(&engine).expect("checkpoint"),
                     &answer,

@@ -91,6 +91,43 @@ pub fn put_many(engine: &Engine, values: &[(String, Vec<u8>)]) -> Result<()> {
     })
 }
 
+/// Read the present keys' bytes in one read transaction, handing each to `each` in turn (one
+/// value held at a time).
+pub fn read_each(engine: &Engine, keys: &[String], mut each: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<()> {
+    engine.with_db(|db| {
+        let txn = db.begin_read()?;
+        let table = txn.open_table(TABLE)?;
+        for key in keys {
+            if let Some(value) = table.get(key.as_str())? {
+                each(key, value.value())?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Write `values` and remove `removed` in one transaction: a checkpoint saved in parts changes
+/// all at once.
+pub fn replace_many(engine: &Engine, values: &[(String, Vec<u8>)], removed: &[String]) -> Result<()> {
+    if values.is_empty() && removed.is_empty() {
+        return Ok(());
+    }
+    engine.with_db(|db| {
+        let txn = engine::begin(db)?;
+        {
+            let mut table = txn.open_table(TABLE)?;
+            for key in removed {
+                table.remove(key.as_str())?;
+            }
+            for (key, bytes) in values {
+                table.insert(key.as_str(), bytes.as_slice())?;
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    })
+}
+
 /// Drop a consumed scanner checkpoint after its completion receipt commits.
 pub fn remove(engine: &Engine, key: &str) -> Result<()> {
     engine.with_db(|db| {

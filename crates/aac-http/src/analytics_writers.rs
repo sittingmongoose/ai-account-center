@@ -13,6 +13,7 @@ use aac_store::activity;
 use aac_store::collect::{self, Pricing, PricingResolution, Rates};
 use aac_store::report::{self, Ingestor, ReportArgs};
 use aac_store::sampler::{self, BackfillSource};
+use scan_answer::Answer;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -30,7 +31,11 @@ mod experiment_signatures;
 mod fixed_scanner;
 mod history;
 mod local_inventory;
+#[cfg(all(test, feature = "memory-twin"))]
+mod memory_twin;
 mod migration;
+mod scan_answer;
+mod scan_print;
 mod scan_state;
 
 /// The job's tick: the activity background's every-15s cadence; each writer checks its own deadline.
@@ -335,14 +340,14 @@ fn activity_due(state: &WriterState, now: i64, refresh_interval_ms: i64) -> bool
 }
 
 /// Validate the scanner's v2 answer: the reader name and the kinds set the request named.
-fn valid_scan_answer(answer: &Value, kinds: &[String]) -> bool {
-    if answer["version"].as_u64() != Some(2) {
+fn valid_scan_answer(answer: &Answer, kinds: &[String]) -> bool {
+    if answer.version.as_u64() != Some(2) {
         return false;
     }
-    if answer["reader"]["name"].as_str() != Some("aac-usage-scan") {
+    if answer.reader["name"].as_str() != Some("aac-usage-scan") {
         return false;
     }
-    let Some(answer_kinds) = answer["kinds"].as_object() else {
+    let Some(answer_kinds) = answer.kinds.as_ref() else {
         return false;
     };
     let mut requested: Vec<&str> = kinds.iter().map(String::as_str).collect();
@@ -396,8 +401,8 @@ fn extra_roots(preferences: Option<&Value>, host: &str) -> (Value, HashSet<&'sta
 /// the answer or rows the cache already holds for it. A few unreadable records beside readable
 /// rows stay partial (the Devin case); only a scan with no readable records, or a read
 /// failure, is unreadable.
-fn scan_state(answer: &Value, kind: &str, readable: bool) -> (&'static str, Option<&'static str>) {
-    let read = &answer["kinds"][kind];
+fn scan_state(answer: &Answer, kind: &str, readable: bool) -> (&'static str, Option<&'static str>) {
+    let read = answer.read(kind);
     let state = read["state"].as_str();
     if read["unreadable"] == true
         || ["readFailures", "unreadableFolders"]
@@ -425,22 +430,19 @@ fn scan_state(answer: &Value, kind: &str, readable: bool) -> (&'static str, Opti
 }
 
 /// Whether the kind has readable rows: in the answer or in the cache's hold.
-fn has_readable_records(answer: &Value, cache: &scan_state::Cache, kind: &str) -> bool {
-    ["rows", "srows"].iter().any(|key| {
-        answer[key]
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["k"].as_str() == Some(kind)))
-    }) || cache
-        .rows
-        .iter()
-        .chain(cache.srows.iter())
-        .any(|row| &*row.kind == kind)
+fn has_readable_records(answer: &Answer, cache: &scan_state::Cache, kind: &str) -> bool {
+    answer.had_rows(kind)
+        || cache
+            .rows
+            .iter()
+            .chain(cache.srows.iter())
+            .any(|row| &*row.kind == kind)
 }
 
 /// Whether the answer itself is incomplete: record-level read errors or a non-final read
 /// state. Such an answer is applied as incomplete, whatever the cache held before (r1 High).
-fn answer_incomplete(answer: &Value, kind: &str) -> bool {
-    let read = &answer["kinds"][kind];
+fn answer_incomplete(answer: &Answer, kind: &str) -> bool {
+    let read = answer.read(kind);
     read["unreadable"] == true
         || ["readFailures", "unreadableFolders", "unreadableRecords"]
             .iter()
@@ -456,14 +458,14 @@ fn answer_incomplete(answer: &Value, kind: &str) -> bool {
 /// the tool's cached rows, read in place from the cache ([`scan_state::of_kind`]).
 /// `flags` are (settled prints packed, source limited, experiment discovery still running).
 fn scanned_kind(
-    answer: &Value,
+    answer: &mut Answer,
     kind: &str,
     host: &str,
     (now, cutoff): (i64, i64),
     (packed, limited, discovering): (bool, bool, bool),
     cache: &mut scan_state::Cache,
 ) -> Value {
-    let settle = |readable: bool| -> (&'static str, Option<&'static str>) {
+    let settle = |answer: &Answer, readable: bool| -> (&'static str, Option<&'static str>) {
         let (state, cause) = source_state(answer, kind, readable);
         if limited {
             ("unreadable", Some("source_limit"))
@@ -473,19 +475,15 @@ fn scanned_kind(
             (state, cause)
         }
     };
-    let state = settle(has_readable_records(answer, cache, kind)).0;
+    let state = settle(answer, has_readable_records(answer, cache, kind)).0;
     let complete = matches!(state, "ok" | "no_usage");
-    let compatible = !packed || answer["kinds"][kind]["settledPacked"] == true;
-    let applied = cache.apply(
-        kind,
-        answer,
-        complete && compatible && !answer_incomplete(answer, kind),
-        cutoff,
-    );
+    let compatible = !packed || answer.read(kind)["settledPacked"] == true;
+    let incomplete = answer_incomplete(answer, kind);
+    let applied = cache.apply(kind, answer, complete && compatible && !incomplete, cutoff);
     // Whether readable usage survives is decided from the cache as the apply left it: a
     // changed file whose cached rows were replaced by none leaves nothing readable, so the
     // scan is a read failure, never "Scanning" with zero published cells (r1 High).
-    let (mut state, mut cause) = settle(has_readable_records(answer, cache, kind));
+    let (mut state, mut cause) = settle(answer, has_readable_records(answer, cache, kind));
     if !applied && complete {
         (state, cause) = ("scanning", None);
     }
@@ -500,7 +498,7 @@ fn scanned_kind(
 }
 
 fn scan_source_state(
-    answer: &Value,
+    answer: &Answer,
     kind: &str,
     host: &str,
     now: i64,
@@ -509,7 +507,7 @@ fn scan_source_state(
 ) -> Value {
     use aac_store::contract::{Counts, Freshness, MAX_FILE_COUNT};
 
-    let discovery = &answer["discovery"]["kinds"][kind];
+    let discovery = &answer.discovery["kinds"][kind];
     let freshness = serde_json::from_value::<Freshness>(discovery["freshness"].clone())
         .ok()
         .filter(Freshness::valid_clocks);
@@ -518,7 +516,7 @@ fn scan_source_state(
         .filter(|count| (1..=MAX_FILE_COUNT).contains(count));
     let unread_usage = (discovery["unreadUsage"] == true).then_some(true);
     let estimated_clock = (discovery["estimatedClock"] == true).then_some(true);
-    let unreadable_records = answer["kinds"][kind]["unreadableRecords"]
+    let unreadable_records = answer.read(kind)["unreadableRecords"]
         .as_u64()
         .filter(|count| (1..=MAX_FILE_COUNT).contains(count));
     let mut source = json!({
@@ -546,8 +544,8 @@ fn scan_source_state(
     source
 }
 
-fn presence_state(answer: &Value, kind: &str) -> Option<(&'static str, Option<&'static str>)> {
-    let tool = answer.get("discovery")?.get("tools")?.get(kind)?;
+fn presence_state(answer: &Answer, kind: &str) -> Option<(&'static str, Option<&'static str>)> {
+    let tool = answer.discovery.get("tools")?.get(kind)?;
     if tool.get("installed") != Some(&Value::Bool(true)) {
         return None;
     }
@@ -559,7 +557,7 @@ fn presence_state(answer: &Value, kind: &str) -> Option<(&'static str, Option<&'
 }
 
 fn source_state(
-    answer: &Value,
+    answer: &Answer,
     kind: &str,
     readable: bool,
 ) -> (&'static str, Option<&'static str>) {
@@ -597,10 +595,10 @@ fn scan_request(
 async fn scan_host(
     agents: &Arc<crate::agent_transport::Agents>,
     host: &crate::agent_transport::UsageHost,
-    args: &Value,
+    args: &serde_json::value::RawValue,
     timeout_ms: u64,
     call_id: &str,
-) -> Result<Value, aac_core::Cause> {
+) -> Result<Vec<u8>, aac_core::Cause> {
     let answer = if host.agent_available {
         agents
             .scan_usage(
@@ -732,27 +730,34 @@ async fn activity_pass(
                 .as_ref(),
         );
         let settled_before = activity::settled_before(engine, host).unwrap_or_default();
-        let batches = scan_state::requests(args, &kinds, &cache.fingerprints, &settled_before, now);
+        let requests =
+            scan_state::Requests::new(args, &kinds, &cache.fingerprints, &settled_before, now);
         let mut scanned = false;
         let mut claude_state = None;
         let start_state = states.len();
-        for (batch, args) in batches {
-            if args.is_null() {
+        for batch in &requests.batches {
+            let batch = batch.clone();
+            let Some(scan_state::ScanArgs { text, packed }) =
+                requests.args(&batch, &cache.fingerprints)
+            else {
                 for kind in batch {
                     states.push(json!({
                         "tool": kind, "host": host, "state": "unreadable", "cause": "source_limit",
                     }));
                 }
                 continue;
-            }
+            };
             let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
-            let answer = scan_host(agents, computer, &args, SCAN_DEADLINE_MS, &call_id).await;
+            let answer = scan_host(agents, computer, &text, SCAN_DEADLINE_MS, &call_id).await;
+            drop(text);
+            let answer = answer.and_then(|bytes| {
+                Answer::parse(&bytes, &mut cache.strings).map_err(|_| aac_core::Cause::Damaged)
+            });
             match answer {
-                Ok(answer) if valid_scan_answer(&answer, &batch) => {
+                Ok(mut answer) if valid_scan_answer(&answer, &batch) => {
                     scanned = true;
                     for kind in &batch {
-                        let packed =
-                            args["fingerprints"]["_store"]["settledPacked"][kind].is_string();
+                        let packed = packed.contains(kind);
                         let limited = overflow.contains(kind.as_str())
                             || experiments.is_some_and(|snapshot| snapshot.limited(kind));
                         let discovering = local
@@ -761,7 +766,7 @@ async fn activity_pass(
                                 |snapshot| snapshot.discovering(kind),
                             );
                         let source = scanned_kind(
-                            &answer,
+                            &mut answer,
                             kind,
                             host,
                             (now, cutoff),
@@ -790,20 +795,21 @@ async fn activity_pass(
                 _ => states.extend(failed_scan_states(host, &batch, false)),
             }
         }
-        if scanned {
-            match cache.encode() {
-                // Saved now, one computer at a time, and only when it changed; a superseded
-                // pass leaves the store to the newer one.
-                Ok(bytes) => {
-                    let current =
-                        state.lock().unwrap_or_else(|p| p.into_inner()).generation == generation;
-                    if current && let Err(error) = cache.save_encoded(engine, host, &bytes) {
-                        tracing::warn!(
-                            code = error.code,
-                            "Analytics scanner state could not be saved"
-                        );
-                    }
-                }
+        // Saved now, one computer at a time, and only the parts that changed; a superseded pass
+        // leaves the store to the newer one.
+        let current =
+            scanned && state.lock().unwrap_or_else(|p| p.into_inner()).generation == generation;
+        if current {
+            match cache.save(engine, host) {
+                Ok(written) => tracing::debug!(
+                    keys = written.keys,
+                    bytes = written.bytes,
+                    "Analytics scanner state saved"
+                ),
+                Err(error) if error.code != "source_limit" => tracing::warn!(
+                    code = error.code,
+                    "Analytics scanner state could not be saved"
+                ),
                 Err(error) => {
                     tracing::warn!(
                         code = error.code,
@@ -819,13 +825,13 @@ async fn activity_pass(
             }
         }
         if let Some(state_index) = claude_state {
-            let (rows, sessions, fingerprints) = cache.take_kind("claude");
+            let (rows, sessions, identities) = cache.take_kind("claude");
             claude.push(claude_mirrors::Part {
                 host,
                 state_index,
                 rows,
                 sessions,
-                fingerprints,
+                identities,
             });
         }
     }
@@ -1161,7 +1167,14 @@ mod tests {
         Vec<serde_json::Value>,
         Vec<serde_json::Value>,
     ) {
-        let source = super::scanned_kind(answer, kind, host, times, flags, cache);
+        let source = super::scanned_kind(
+            &mut super::Answer::from_value(answer),
+            kind,
+            host,
+            times,
+            flags,
+            cache,
+        );
         let values = |rows: &[ScanRow]| {
             super::scan_state::of_kind(rows, kind)
                 .into_iter()
@@ -1300,12 +1313,13 @@ mod tests {
             }}}
         });
         let pass = |answer: &Value, now| {
-            assert!(valid_scan_answer(answer, &["cursor".into()]));
+            let typed = Answer::from_value(answer);
+            assert!(valid_scan_answer(&typed, &["cursor".into()]));
             let readable = answer["rows"]
                 .as_array()
                 .is_some_and(|rows| rows.iter().any(|row| row["k"].as_str() == Some("cursor")));
-            let (state, cause) = scan_state(answer, "cursor", readable);
-            let source = scan_source_state(answer, "cursor", "ubuntu", now, state, cause);
+            let (state, cause) = scan_state(&typed, "cursor", readable);
+            let source = scan_source_state(&typed, "cursor", "ubuntu", now, state, cause);
             let worker = collect::worker_from_scan(
                 answer["rows"].as_array().expect("scanner hourly rows"),
                 &[],
@@ -1475,9 +1489,19 @@ mod tests {
                     "newestActivityMs":data_at, "activityComplete":true}
             }}}
         });
-        assert!(valid_scan_answer(&answer, &["cursor".into()]));
-        let (state, cause) = scan_state(&answer, "cursor", true);
-        let source = scan_source_state(&answer, "cursor", "ubuntu", now, state, cause);
+        assert!(valid_scan_answer(
+            &Answer::from_value(&answer),
+            &["cursor".into()]
+        ));
+        let (state, cause) = scan_state(&Answer::from_value(&answer), "cursor", true);
+        let source = scan_source_state(
+            &Answer::from_value(&answer),
+            "cursor",
+            "ubuntu",
+            now,
+            state,
+            cause,
+        );
         let worker = collect::worker_from_scan(
             answer["rows"].as_array().expect("scanner hourly rows"),
             &[],
@@ -1584,11 +1608,11 @@ mod tests {
             "no_local_usage_records"
         );
         assert_eq!(
-            source_state(&answer, "cursor", false),
+            source_state(&Answer::from_value(&answer), "cursor", false),
             ("no_reader", Some("no_local_usage_records"))
         );
         assert_eq!(
-            scan_state(&answer, "cursor", false),
+            scan_state(&Answer::from_value(&answer), "cursor", false),
             ("not_installed", None)
         );
     }
@@ -1682,11 +1706,13 @@ mod tests {
                 scan_state::requests(args, &kinds, &cache.fingerprints, &HashMap::new(), now)
                     .try_into()
                     .expect("one scanner request");
-            let request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
-                .expect("scanner request");
+            let request = aac_usage::protocol::parse_request(
+                request.expect("scanner arguments").to_string().as_bytes(),
+            )
+            .expect("scanner request");
             let answer =
                 aac_usage::protocol::scan(&request, home, &aac_usage::discover::Env::default());
-            assert!(valid_scan_answer(&answer, &batch));
+            assert!(valid_scan_answer(&Answer::from_value(&answer), &batch));
             for kind in &batch {
                 let (source, rows, srows) = scanned_kind(
                     &answer,
@@ -1702,11 +1728,11 @@ mod tests {
                         state_index: states.len(),
                         rows: typed(&rows),
                         sessions: typed(&srows),
-                        fingerprints: cache
+                        identities: cache
                             .fingerprints
                             .get("claude")
-                            .cloned()
-                            .unwrap_or(Value::Null),
+                            .map(claude_mirrors::Identities::of)
+                            .unwrap_or_default(),
                     });
                 } else {
                     let worker =
@@ -1833,11 +1859,17 @@ mod tests {
             "reader": { "name": "aac-usage-scan" },
             "kinds": { "claude": {}, "codex": {} },
         });
-        assert!(valid_scan_answer(&good, &kinds));
+        assert!(valid_scan_answer(&Answer::from_value(&good), &kinds));
         let wrong_version = json!({ "version": 1, "reader": { "name": "aac-usage-scan" }, "kinds": { "claude": {}, "codex": {} } });
-        assert!(!valid_scan_answer(&wrong_version, &kinds));
+        assert!(!valid_scan_answer(
+            &Answer::from_value(&wrong_version),
+            &kinds
+        ));
         let wrong_kinds = json!({ "version": 2, "reader": { "name": "aac-usage-scan" }, "kinds": { "claude": {} } });
-        assert!(!valid_scan_answer(&wrong_kinds, &kinds));
+        assert!(!valid_scan_answer(
+            &Answer::from_value(&wrong_kinds),
+            &kinds
+        ));
     }
 
     #[test]
@@ -1848,16 +1880,22 @@ mod tests {
             "antigravity": {"state":"unreadable"},
             "omp": {"state":"ok"},
         }});
-        assert_eq!(scan_state(&answer, "claude", true), ("scanning", None));
         assert_eq!(
-            scan_state(&answer, "codex", true),
+            scan_state(&Answer::from_value(&answer), "claude", true),
+            ("scanning", None)
+        );
+        assert_eq!(
+            scan_state(&Answer::from_value(&answer), "codex", true),
             ("unreadable", Some("read_failed"))
         );
         assert_eq!(
-            scan_state(&answer, "antigravity", false),
+            scan_state(&Answer::from_value(&answer), "antigravity", false),
             ("unreadable", Some("read_failed"))
         );
-        assert_eq!(scan_state(&answer, "omp", false), ("ok", None));
+        assert_eq!(
+            scan_state(&Answer::from_value(&answer), "omp", false),
+            ("ok", None)
+        );
     }
 
     /// Some records unreadable beside readable ones: the scan is partial, not a read failure,
@@ -1870,9 +1908,12 @@ mod tests {
             "kinds": {"devin": {"state": "ok", "partial": true, "unreadableRecords": 2}},
             "discovery": {"kinds": {"devin": {}}},
         });
-        assert_eq!(scan_state(&answer, "devin", true), ("scanning", None));
+        assert_eq!(
+            scan_state(&Answer::from_value(&answer), "devin", true),
+            ("scanning", None)
+        );
         let source = scan_source_state(
-            &answer,
+            &Answer::from_value(&answer),
             "devin",
             "ubuntu",
             1_700_000_000_000,
@@ -1907,13 +1948,16 @@ mod tests {
                     "newestActivityMs":data_at, "activityComplete":true}
             }}}
         });
-        assert!(valid_scan_answer(&answer, &["cursor".into()]));
+        assert!(valid_scan_answer(
+            &Answer::from_value(&answer),
+            &["cursor".into()]
+        ));
         assert_eq!(
-            scan_state(&answer, "cursor", true),
+            scan_state(&Answer::from_value(&answer), "cursor", true),
             ("unreadable", Some("read_failed"))
         );
         let source = scan_source_state(
-            &answer,
+            &Answer::from_value(&answer),
             "cursor",
             "ubuntu",
             now,
@@ -2045,7 +2089,7 @@ mod tests {
             &env,
         );
         assert!(
-            valid_scan_answer(&answer, &["devin".into()]),
+            valid_scan_answer(&Answer::from_value(&answer), &["devin".into()]),
             "the backend answer is valid: {answer}"
         );
         assert_eq!(answer["kinds"]["devin"]["unreadableRecords"], json!(1));
@@ -2162,11 +2206,8 @@ mod tests {
             ("PATH".to_string(), String::new()),
         ]);
         let scan = |cache: &scan_state::Cache| {
-            let mut prints = cache.fingerprints.clone();
-            prints.insert(
-                "_store".into(),
-                json!({"settledBefore":{}, "settledSlot": 1}),
-            );
+            let mut prints = cache.fingerprints.to_value();
+            prints["_store"] = json!({"settledBefore":{}, "settledSlot": 1});
             aac_usage::protocol::scan(
                 &aac_usage::protocol::parse_request(
                     json!({"kinds":["devin"],"minDateMs":now - 31 * DAY,"fingerprints":prints})
@@ -2315,7 +2356,7 @@ mod tests {
             "kinds": {"devin": {"state": "ok", "partial": true, "unreadableRecords": 5}},
         });
         assert_eq!(
-            scan_state(&answer, "devin", false),
+            scan_state(&Answer::from_value(&answer), "devin", false),
             ("unreadable", Some("read_failed"))
         );
     }
@@ -2329,7 +2370,7 @@ mod tests {
             "kinds": {"cursor": {"state": "ok", "partial": true, "unreadableRecords": 2, "readFailures": 1}},
         });
         assert_eq!(
-            scan_state(&answer, "cursor", true),
+            scan_state(&Answer::from_value(&answer), "cursor", true),
             ("unreadable", Some("read_failed"))
         );
     }
@@ -2398,11 +2439,8 @@ mod tests {
             ("PATH".to_string(), String::new()),
         ]);
         let scan = |cache: &scan_state::Cache| {
-            let mut prints = cache.fingerprints.clone();
-            prints.insert(
-                "_store".into(),
-                json!({"settledBefore":{}, "settledSlot": 1}),
-            );
+            let mut prints = cache.fingerprints.to_value();
+            prints["_store"] = json!({"settledBefore":{}, "settledSlot": 1});
             aac_usage::protocol::scan(
                 &aac_usage::protocol::parse_request(
                     json!({"kinds":["devin"],"minDateMs":now - DAY,"fingerprints":prints})
