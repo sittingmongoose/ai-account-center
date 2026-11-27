@@ -113,10 +113,10 @@ holds no AI Account Center account state.
 ## Claude Code sign-ins that renew themselves
 
 Every Claude Code sign-in ends about 30 days after it was made, and refreshing it does not move that
-end. The sign-in renewal runner ([scripts/claude-signin](../scripts/claude-signin/README.md)) runs
-every 10 minutes on the computer with the browser (the Mac), reads every sign-in on every computer,
-renews each one about a day before it ends (after an unsolved CAPTCHA it waits 12 hours and asks you once instead of retrying) through a Chrome profile kept signed in to claude.ai
-for that account, and checks the renewal again 9 hours later.
+end. The server's Rust renewal job runs every 10 minutes, reads every sign-in on every computer,
+renews each one about a day before it ends (after an unsolved CAPTCHA it waits 12 hours and asks you
+once instead of retrying) through a Chrome profile kept signed in to claude.ai for that account,
+and checks the renewal again 9 hours later.
 
 - **Home:** each Claude row says "Auto-renews · next end Nov 29", or what needs attention ("Sign-in
   renewal needs you", "Signed out on Windows", "Sign-in renewal stopped" when the runner has not
@@ -333,21 +333,19 @@ rollback.
 starts one allowlisted, asynchronous job for twelve apps: Antigravity CLI,
 Muse Code, OMP, Codex CLI, Codex Desktop, Claude Code, Claude Desktop, ZCode,
 the T3 ACP adapters, T3 Code with its installed server runtime, Cursor CLI and
-Antigravity ACP. The dashboard computer runs its helper locally; each remote
-computer runs its own synced helper over SSH. Every run reports one result row
-per app on every computer (twelve rows per computer). Helper deployment and, on Windows, the
-existing interactive task are required for remote updates. Absent apps are
-skipped; per-app readiness checks tell unknown from failure, and an
-unreachable computer reports Unknown rows. Only CLI instances running in a
-terminal are stopped and reopened idle; background sessions (T3's agents, a
-`claude -p` from a script, services) are never stopped and keep their version
-until they start again, except Windows Codex CLI: when a newer npm version is
+Antigravity ACP. The dashboard computer runs its pinned agent locally; each remote
+computer runs its own pinned agent over SSH. Every run reports one result row
+per app on every computer (twelve rows per computer). A usable pinned agent is
+required for remote updates. Absent apps are skipped; per-app readiness checks
+tell unknown from failure, and an unreachable computer reports Unknown rows.
+Only CLI instances running in a terminal are stopped and reopened idle; background
+sessions (T3's agents, a `claude -p` from a script, services) are never stopped and
+keep their version until they start again, except Windows Codex CLI: when a newer npm version is
 verified, Update apps forces its package processes to stop so locked files can
 be replaced. Background work is not replayed; its result says to start those
 sessions again. The Antigravity CLI is held at the newest reviewed
 build, so the managed runtime never meets an unreviewed version. No update runs merely
-by opening the dashboard or reading its status. See
-[app update setup and behavior](../scripts/app-updates/README.md).
+by opening the dashboard or reading its status.
 
 **Computers run at the same time.** Each computer runs up to four independent
 updates together, with live progress. Shared installers and Codex runtime work
@@ -359,12 +357,12 @@ one stuck computer never holds the others back.
 **Cancel** is offered while a run is going. It is acknowledged at once and
 nothing running is killed: each computer finishes its active apps, then
 reports every app it has not started as skipped ("Skipped: cancelled"). A
-computer still preparing its helper skips all its apps. Cancel never promises
+computer still preparing its agent skips all its apps. Cancel never promises
 an undo.
 
 **Retry failed** is offered when the last finished run left any row failed or
 unknown. It starts a new job for only those rows, on the computers where they
-failed, through the same agent, helper sync and guards as Update apps; every
+failed, through the same native agent and guards as Update apps; every
 other app and computer is left alone. The Update apps line counts the run:
 for example "84 results, 64 updated, 8 current, 3 failed, 1 unknown". A retry
 job's table lists only the computers it reruns.
@@ -374,31 +372,20 @@ job's table lists only the computers it reruns.
 A second Linux computer can take part without AI Account Center installed on
 it and without running a dashboard there. The dashboard reaches it only over
 an SSH alias fixed in source; hosts and aliases are not configurable. The
-dashboard's user needs that alias (reachable without a prompt) and
-`/usr/bin/python3` on that computer.
+dashboard's user needs that alias to be reachable without a prompt.
 
-- **Update apps.** It runs the same fixed helper as the dashboard computer
-  with `--platform ubuntu`. The helpers are synced, checksum-gated, to
-  `~/.ccs/app-updates/` there (a `sha256sum` hash query and a POSIX `tar`
-  extract). The sync also ships a self-contained Codex stop/start runtime, so
-  Codex Desktop and a Codex CLI daemon update there without AI Account Center
-  installed. A T3 Code update there schedules its own deferred restart of the
-  T3 service.
-- **Analytics.** It is scanned with the same pinned, read-only helper that
-  the dashboard streams over SSH to the Mac and Windows (Claude Code, Codex,
-  T3 shadow homes, OMP, Muse Code, zcode and Antigravity), and appears as its
-  own computer in Analytics. Extra usage-log roots can be set for it in
+- **Update apps.** The pinned native agent runs the same Rust updaters with
+  `platform: "ubuntu"`. No helper files are copied or installed.
+- **Analytics.** The pinned agent's read-only `scan-usage` verb scans Claude
+  Code, Codex, T3 shadow homes, OMP, Muse Code, zcode and Antigravity logs and
+  reports them under that computer. Extra usage-log roots can be set in
   Settings (POSIX paths).
 - **Accounts.** A quota source belongs to a provider account. This computer
   can supply a fallback reading from its own existing sign-in when the
   verified account identity matches, without adding a row or moving the
   primary source. An explicit primary source there uses `platform: "ubuntu"`
-  with that computer's `sshHost`. The packaged usage helper runs in memory
-  over SSH; no helper installation or credential copying is required.
-- **Never there.** Key storage, sign-in and Claude desktop flows do not run there. The dashboard
-  computer runs exactly these fixed commands on it: the helper hash query,
-  the helper extract, the update helper, the read-only analytics helper and
-  the read-only usage bundle.
+  with that computer's `sshHost`.
+- **Never there.** Key storage, sign-in and Claude desktop flows do not run there.
 
 ## Antigravity on Ubuntu
 
@@ -459,13 +446,14 @@ Additional provider collectors run on the host that owns the corresponding login
 Their source selection is the private `account-usage-sources.json` configuration,
 or the newer `account-usage-accounts.json` (registry v2, several accounts per
 provider) when that file exists; existing approved SSH aliases select remote
-Mac/Windows collectors, and a source saved as `platform: "ubuntu"` with the
+Mac/Windows agents, and a source saved as `platform: "ubuntu"` with the
 second Linux computer's `sshHost` runs there (see
-[the optional second Linux computer](#the-optional-second-linux-computer)). If a primary source fails, the shared
-coordinator can use an existing sign-in for the exact provider account on another
-configured computer. Credentials stay on their owner host, and the packaged
-helper runs in memory over SSH. Verified readings keep their original timestamps
-in a persistent cache; source outages can show cached usage after restart.
+[the optional second Linux computer](#the-optional-second-linux-computer)). If a
+primary source fails, the shared coordinator can use an existing sign-in for the
+exact provider account on another configured computer. Credentials stay on their
+owner host, and the pinned agent reads them over SSH. Verified readings keep
+their original timestamps in a persistent cache; source outages can show cached
+usage after restart.
 Provider rate limits apply across native collectors and all alternate hosts for
 the same identity. Sign-in warnings stay visible alongside recovered quota.
 A first-ever unavailable source without a known identity stays unavailable.
@@ -474,8 +462,7 @@ OpenCode Zen console wallet and Muse Code portal quota use **Paste session** on
 the Accounts page. AAC verifies the pasted cookie header before storing it with
 owner-only permissions, then reads usage directly over HTTPS. Missing or expired
 sessions show **needs sign-in**; the browser extensions and native hosts are not
-required. Follow the [provider boundaries](system-architecture/provider-flows.md)
-and [collector requirements](../scripts/account-usage/README.md).
+required. Follow the [provider boundaries](system-architecture/provider-flows.md).
 Do not copy account secrets into this repository or container images.
 
 Claude desktop launch mappings use the private `claude-desktop-profiles.json`

@@ -5,7 +5,6 @@ The fake SSH client verifies that L5 reuses the control path. It opens no
 socket and invokes no installer.
 """
 import base64
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -124,26 +123,6 @@ def messages(host, request):
     marker.unlink(missing_ok=True)
 
 
-SYNC = "exec(base64.b64decode(sys.stdin.buffer.readline()))"
-
-
-def helper_sync(host, warm):
-    """The dashboard's helper sync over SSH: check the framed set, answer as the script does."""
-    trace(host, "sync", warm)
-    stream = sys.stdin.buffer
-    script = base64.b64decode(stream.readline())
-    header = json.loads(stream.readline())
-    assert b"aac-helpers-previous" in script and header["platform"] == HOSTS[host][0], header
-    assert len(header["files"]) == 16 and header["files"][0]["name"] == "app_updates.py"
-    for entry in header["files"]:
-        assert hashlib.sha256(stream.read(entry["size"])).hexdigest() == entry["sha256"], entry
-    assert not stream.read(1)
-    if (ROOT / f"sync-fail-{host}").exists():
-        print(json.dumps({"ok": False, "reason": "helper_upload_damaged"}))
-    else:
-        print(json.dumps({"ok": True, "changed": False, "generation": "helpers-" + "0" * 32}))
-
-
 def main():
     if Path(sys.argv[0]).name == "ssh":
         if "-G" in sys.argv[1:]:
@@ -162,17 +141,11 @@ def main():
             assert marker.read_text(encoding="ascii") == control
         if command.startswith("powershell.exe"):
             command = base64.b64decode(command.rsplit(" ", 1)[-1]).decode("utf-16-le")
-            if SYNC in command:
-                assert command.startswith("& 'python.exe' '-B' '-c' "), command
-                return helper_sync(host, warm)
             wrapped = re.search(r"'-EncodedCommand' '([A-Za-z0-9+/=]+)'", command)
             assert wrapped, "missing Windows fixture launcher"
             command = base64.b64decode(wrapped[1]).decode("utf-16-le")
             stage = re.search(r"\$mode='(probe|run)'", command)
         else:
-            if SYNC in command:
-                assert shlex.split(command)[:3] == ["/usr/bin/python3", "-B", "-c"], command
-                return helper_sync(host, warm)
             stage = re.search(r"case '(probe|run)'", shlex.split(command)[-1])
         assert stage, command
         stage = stage.group(1)

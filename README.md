@@ -225,9 +225,9 @@ flowchart LR
   end
   clients --> api
   api --> usage & analytics & updates
-  usage -->|"Python collectors, local and over SSH"| providers[("Provider quota<br/>(existing sign-ins)")]
-  analytics -->|"read-only helper over SSH"| logs[("CLI logs on<br/>each computer")]
-  updates -->|"allowlisted helpers"| apps[("Installed AI apps")]
+  usage -->|"Rust agent, local and over SSH"| providers[("Provider quota<br/>(existing sign-ins)")]
+  analytics -->|"read-only Rust agent over SSH"| logs[("CLI logs on<br/>each computer")]
+  updates -->|"Rust agent updaters"| apps[("Installed AI apps")]
   usage --> snapshot -->|"usage.json · usage.md · history.json"| folder[("Shared folder")] --> agents["Coding agents"]
 ```
 
@@ -237,7 +237,7 @@ flowchart LR
 | Web UI | [Leptos](https://leptos.dev) 0.9 (client-side rendered), compiled from Rust to WebAssembly; installable PWA |
 | Mac app | Swift and SwiftUI menu-bar app |
 | Windows app | C# and WPF on .NET 10 |
-| Collectors and helpers | Python usage collectors, analytics and update helpers over SSH; browser extensions for console sessions |
+| Collectors and helpers | Rust usage, analytics and update agents over SSH; browser extensions for console sessions |
 | Packaging | Bun and npm (local tarball), Docker |
 
 The setup it was built for: a **Linux server** runs the dashboard, and a **Mac** and a **Windows PC** are reached over SSH for Claude desktop profiles, the trays, Analytics and updates. On a single Linux computer you still get the dashboard, Codex and Antigravity usage, local Analytics and every API-key provider. Saved Codex logins and Antigravity profiles need the dashboard on Linux. Deeper reading: [system architecture](docs/system-architecture/index.md).

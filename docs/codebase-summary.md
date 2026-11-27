@@ -12,11 +12,11 @@ the account and private-state contracts from the original CCS fork.
 | Account projection | [native producer](../crates/aac-http/src/account_usage/producer.rs), compatibility collection |
 | Codex saved logins | account service, renewal, quota reader |
 | Analytics | [native routes](../crates/aac-http/src/public_auth/analytics_routes.rs), [native writers](../crates/aac-http/src/analytics_writers.rs) |
-| Explicit app updates | [app-update service](../crates/aac-http/src/app_updates/mod.rs), host invocation and helper sync, [update helpers](../scripts/app-updates/) |
+| Explicit app updates | [app-update service](../crates/aac-http/src/app_updates/mod.rs), [native host updaters](../crates/aac-agent/src/apps/update.rs) |
 | Leptos app frame | [lib.rs](../web-dashboard/leptos/src/lib.rs), [frame.rs](../web-dashboard/leptos/src/frame.rs) and the pages beside them; map of pages, controllers, view models and rules: [UI architecture](../web-dashboard/README-ARCHITECTURE.md) |
 | Browser controllers | [frame-dashboard.mjs](../web-dashboard/public/frame-dashboard.mjs), [frame-session.mjs](../web-dashboard/public/frame-session.mjs), [frame-analytics.mjs](../web-dashboard/public/frame-analytics.mjs) |
 | Native clients | [macos-bar](../macos-bar/), [windows-bar](../windows-bar/) |
-| Existing-host and pasted-session usage | [Python collectors](../scripts/account-usage/), [Rust pasted-session readers](../crates/aac-agent/src/web_session/), remote analytics scan |
+| Existing-host and pasted-session usage | [native producer](../crates/aac-http/src/account_usage/producer.rs), [Rust provider readers](../crates/aac-agent/src/failover.rs), [Rust pasted-session readers](../crates/aac-agent/src/web_session/), remote analytics scan |
 | Private paths | config-manager |
 
 `ai-account-center dashboard` and compatible `ccs config` reach the same

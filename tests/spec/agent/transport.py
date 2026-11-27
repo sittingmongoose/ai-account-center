@@ -633,23 +633,9 @@ def collection_projection(agent, service):
                 server.shutdown()
 
 
-def signin_gates(agent, service):
-    """G5: the private sign-in poll and the settle/merge projection against the TS adapters."""
-    with Service(agent, service, scenario='signin-rows') as fixture:
-        payload = {'root': str(fixture.root), 'socketPath': str(fixture.socket),
-                   'secret': SECRET, 'bootId': BOOT}
-        script = ROOT / 'tests/spec/agent/signin-projection.ts'
-        run = subprocess.run(['bun', str(script)], input=json.dumps(payload), text=True,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=ROOT)
-        print(run.stdout, end='', flush=True)
-        assert run.returncode == 0, 'sign-in projection parity failed'
-    print('PASS G5 sign-in poll, crossed expiry and Claude renewal merge')
 
 def main():
     agent, service = map(lambda p: str(Path(p).resolve()), sys.argv[1:3])
-    if '--signin' in sys.argv:
-        signin_gates(agent, service)
-        return
     collection = '--collection' in sys.argv
     if collection:
         collection_gates(agent, service)
@@ -662,7 +648,7 @@ def main():
         wrapper = Path(tmp)/'agent-proxy'
         wrapper.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,'+repr(str(Path(__file__).parent))+')\nfrom transport import proxy\nsys.exit(proxy('+repr(agent)+','+repr(service)+','+repr(collection)+'))\n')
         wrapper.chmod(0o700)
-        for suite in [('run.py','--part3','--part4'), ('signin_review.py',), ('quota.py',), ('quota-review.py',), ('deadline_review.py',)]:
+        for suite in [('quota.py',), ('quota-review.py',), ('deadline_review.py',)]:
             outputs=[]
             for binary in [agent,str(wrapper)]:
                 run=subprocess.run([sys.executable,str(Path(__file__).parent/suite[0]),binary,*suite[1:]], text=True, stdout=subprocess.PIPE,stderr=subprocess.STDOUT, cwd=ROOT)

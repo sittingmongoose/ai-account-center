@@ -48,7 +48,7 @@ LogLevel ERROR
         assert server.poll() is None, server.stderr.read().decode()
         time.sleep(.01)
     env = {'PATH': os.environ['PATH'], 'HOME': str(root/'home'), 'CCS_HOME': str(root/'home'), 'CCS_DIR': str(root/'home'), 'AAC_NO_LOCAL_RUST_BUILD': '1', 'AAC_TEST_PORT': str(port), 'AAC_AGENT_KNOWN_HOSTS_FILE': str(root/'known_hosts')}
-    p = subprocess.run(['python3', str(pathlib.Path(builder).with_name('history-ssh-fixture.py'))] if kind.startswith('python-') else [bun, builder], env=env, capture_output=True, text=True, timeout=20)
+    p = subprocess.run([bun, builder], env=env, capture_output=True, text=True, timeout=20)
     print(p.stdout); print(p.stderr, file=sys.stderr)
     sys.exit(p.returncode)
 finally:

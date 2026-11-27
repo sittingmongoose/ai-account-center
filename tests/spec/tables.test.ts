@@ -1,25 +1,18 @@
 /**
  * L4 drift tests (DESIGN-M3-COMPLETE 2.4): config/tables/*.json is the one provider, tool and
  * host table. Rust generates its constants from it (crates/aac-providers, whose `cargo test`
- * binds the Rust hand lists outside the workspace). Here: every remaining hand list (the Python
- * fallback helpers, the page's JS and the native bars) equals its projection of the table, so a
- * one-sided edit of either side fails.
+ * binds the Rust hand lists outside the workspace). Here: every remaining hand list (the page's
+ * JS and the native bars) equals its projection of the table, so a one-sided edit of either side
+ * fails.
  */
-import { afterAll, describe, expect, it } from 'bun:test';
-import { execFileSync } from 'child_process';
+import { describe, expect, it } from 'bun:test';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { requirePython3 } from './python3.mjs';
 
 const root = path.resolve(import.meta.dir, '../..');
 const read = (relative: string) => fs.readFileSync(path.join(root, relative), 'utf8');
 const json = (relative: string) => JSON.parse(read(relative));
-
-// LANE-RULES: the Python children get a temporary HOME and CCS_HOME, never the real ones.
-const childHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-tables-home-'));
-afterAll(() => fs.rmSync(childHome, { recursive: true, force: true }));
 
 interface Row {
   label: string;
@@ -79,64 +72,6 @@ describe('the tables themselves', () => {
     // An immutable compatibility list (d5ec0fc64): its readers reject later hosts, so it is
     // pinned rather than derived from the computer registry.
     expect(hostTable.legacyStorageHosts).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
-  });
-});
-
-describe('the Python fallback helpers equal the table', () => {
-  const python3 = requirePython3();
-  const python = (code: string) =>
-    JSON.parse(
-      execFileSync(
-        python3.file,
-        [
-          ...python3.args,
-          // -I ignores PYTHON* variables, so -B keeps bytecode out of scripts/.
-          '-I',
-          '-B',
-          '-c',
-          `import sys,json;sys.path.insert(0,${JSON.stringify(path.join(root, 'scripts/account-usage'))});${code}`,
-        ],
-        { encoding: 'utf8', env: { ...process.env, HOME: childHome, CCS_HOME: childHome } }
-      )
-    );
-
-  it('plan_common providers, key-store providers and Retry-After policy', () => {
-    const got = python(
-      'import plan_common as p;r=p.retry_after_seconds;' +
-        'print(json.dumps([p.PROVIDERS,list(p.KEY_PROVIDERS),r(None),r("1"),r("99999999"),r("120")]))'
-    );
-    const retry = providerTable.planRetryAfter;
-    expect(got).toEqual([
-      Object.fromEntries(ids((row) => row.quota).map((id) => [id, label(id)])),
-      ids((row) => row.keyStore),
-      retry.defaultS,
-      retry.floorS,
-      retry.ceilingS,
-      120,
-    ]);
-  });
-
-  it('failover kinds, labels and the additional helper providers', () => {
-    const got = python(
-      'import failover_usage as u,failover_additional as a;' +
-        'print(json.dumps([{k:sorted(v) for k,v in u.KINDS.items()},u.LABELS,sorted(a.PROVIDERS)]))'
-    );
-    expect(got[0]).toEqual(
-      Object.fromEntries(rows.map(([id, row]) => [id, [...row.failover.kinds].sort()]))
-    );
-    expect(got[1]).toEqual(Object.fromEntries(rows.map(([id, row]) => [id, row.failover.label])));
-    expect(got[2]).toEqual(ids((row) => row.card).sort());
-  });
-
-  it('desktop_helpers providers are a carried capability subset', () => {
-    const got = python(
-      'import desktop_helpers as d;print(json.dumps([sorted(d.PROVIDERS),d.PROVIDERS]))'
-    );
-    // The desktop collector's capability subset, not a table projection: its labels are
-    // its own (config/tables/README.md). Ids must stay dashboard providers.
-    expect(got[0]).toEqual(['antigravity', 'cursor', 'muse']);
-    for (const id of got[0]) expect(dashboard).toContain(id);
-    for (const words of Object.values(got[1]) as string[]) expect(words.length).toBeGreaterThan(0);
   });
 });
 

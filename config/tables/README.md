@@ -28,8 +28,7 @@ met. Words and their order belong to the table, never to the copy.
 | `view-model.mjs` `shortWindowLabel` map, `CARD_PROVIDERS`, `PROVIDER_REGISTRY`, zone constants | Dashboard page (view model) | Same page-build emission; the zone constants stay pinned against `crates/aac-http/src/zone_facts.rs` while both engines exist |
 | `TrayModel.swift` `antigravityKeys`, `antigravityLabel` | Mac bar | The bar package script generates Swift from the table; until then `CCSBarCheck` and the drift test pin the CLI subset |
 | `MainWindow.xaml.cs` `AntigravityKeys` | Windows bar | The bar build generates C# from the table; until then `Checks.cs` and the drift test pin the CLI subset |
-| `plan_common.py` `PROVIDERS`, `KEY_PROVIDERS`; `failover_additional.py` `PROVIDERS` | Python quota/failover collectors | The collectors load `providers.json` at runtime once their packaged path resolution is settled; the pins hold the projections until then |
-| `desktop_helpers.py` `PROVIDERS` (capability subset, own labels) | Desktop collector | Retires with the desktop collector when the Rust agent's `scan-usage` verb owns desktop reads; ids must stay dashboard providers |
+| `plan_common.py` `PROVIDERS`, `KEY_PROVIDERS` | Qwen Windows native-messaging bridge | The bridge still ships this Python collector; the Rust agent owns dashboard quota reads |
 | `account-key-store.ts` `KEY_PROVIDERS` | Key-store service | Derive from `providerIds(row => row.keyStore)` in the next touch of the module |
 | `agent-usage-projection.ts` and `usage-backfill.ts` provider order | Agent-usage projection; store backfill | Derive from the table's Analytics order (codex and claude first) in the next touch of either module |
 | Page provider lists (`account-actions.mjs`, `accounts-controller.mjs`, `analytics-usage.mjs`, `accounts-data.mjs`, `analytics-data.mjs`) | Dashboard page | Same page-build emission as the view model |

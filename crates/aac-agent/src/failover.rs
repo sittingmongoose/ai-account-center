@@ -1048,13 +1048,18 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     if args["provider"] == "claude" {
         return Ok(run_with_adapter(args, claude::Claude));
     }
-    if matches!(args["provider"].as_str(), Some("muse" | "opencode-wallet")) {
+    let provider = args["provider"].as_str().unwrap_or("");
+    if provider == "codex" {
+        return Ok(if args["action"] == "collect" {
+            core::run(args)
+        } else {
+            proof::scope(|| collect(args))
+        });
+    }
+    if crate::failover_additional::handles(provider) || crate::failover_special::handles(provider) {
         return Ok(run_with_adapter(args, console::Console::new()));
     }
-    if args["action"] == "collect" {
-        return Ok(core::run(args));
-    }
-    Ok(proof::scope(|| collect(args)))
+    Ok(proof::fallback())
 }
 
 #[cfg(test)]
@@ -1072,6 +1077,14 @@ mod table_tests {
             "ccsDir": home.join(".ccs").to_string_lossy(),
         }))
         .expect("inventory")
+    }
+
+    #[test]
+    fn antigravity_inventory_uses_the_native_console_adapter() {
+        let home = tempfile::tempdir().expect("home");
+        let answer = inventory("antigravity", home.path());
+        assert_ne!(answer, proof::fallback(), "Antigravity must not delegate");
+        assert!(answer["candidates"].is_array(), "{answer}");
     }
 
     #[test]
@@ -1120,9 +1133,8 @@ mod port_tests {
 #[cfg(all(test, target_os = "linux"))]
 mod inventory_parity_tests {
     use super::*;
-    use std::io::Write;
     #[test]
-    fn core_inventory_matches_python_and_never_publishes_private_rows() {
+    fn core_inventory_never_publishes_private_rows() {
         let home = tempfile::tempdir().expect("synthetic home");
         let claims = json!({"email":"native@example.test","https://api.openai.com/auth":{"chatgpt_account_id":"fixture-account","chatgpt_user_id":"fixture-user","chatgpt_plan_type":"plus"},"sub":"fixture-subject","iss":"fixture-issuer"});
         let encode = |value: &Value| {
@@ -1149,18 +1161,6 @@ mod inventory_parity_tests {
         }
         let request = json!({"version":1,"action":"inventory","provider":"codex","homeDir":home.path(),"ccsDir":home.path().join(".ccs")});
         let native = run(&request).expect("native");
-        let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/account-usage");
-        let mut child=std::process::Command::new("python3").arg("-c").arg("import sys,json;sys.path.insert(0,sys.argv[1]);import failover_usage;print(json.dumps(failover_usage.run(json.load(sys.stdin))))").arg(scripts).env("HOME",home.path()).env("CCS_HOME",home.path().join(".ccs")).env("PYTHONDONTWRITEBYTECODE","1").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().expect("Python oracle");
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(&serde_json::to_vec(&request).expect("request"))
-            .expect("input");
-        let output = child.wait_with_output().expect("oracle");
-        assert!(output.status.success());
-        let expected: Value = serde_json::from_slice(&output.stdout).expect("public oracle");
-        assert_eq!(native, expected);
         assert_eq!(
             native["candidates"].as_array().expect("candidates").len(),
             3

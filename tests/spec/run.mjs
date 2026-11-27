@@ -27,7 +27,7 @@ const python3 = requirePython3();
 // The TypeScript server (src/) and its parity harnesses were retired; what remains checks the
 // shared tables, the vectors and the native binary.
 for (const [program, args] of [
-  [python3.file, [...python3.args, 'tests/spec/parsers.py']],
+  [python3.file, [...python3.args, 'tests/unit/account-usage/plan_usage_test.py']],
   ['node', ['tests/spec/inventory.mjs']],
   ['bun', ['test', 'tests/spec/tables.test.ts']],
   // L2: one file policy (no raw file mechanics outside aac-files).

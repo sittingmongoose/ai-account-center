@@ -81,8 +81,26 @@ fn json_caps_invalid_documents_and_safe_errors() {
 }
 
 /// Source trees deleted after the table was generated; their rows are kept as provenance.
-const RETIRED_SOURCE_ROOTS: &[&str] = &["src/"];
-
+const RETIRED_SOURCE_ROOTS: &[&str] = &[
+    "src/",
+    "scripts/analytics-remote/",
+    "scripts/antigravity/",
+    "scripts/app-updates/",
+    "scripts/claude-history/",
+    "scripts/claude-signin/",
+];
+const RETIRED_SOURCE_FILES: &[&str] = &[
+    "scripts/account-usage/claude_usage.py",
+    "scripts/account-usage/cursor_usage.py",
+    "scripts/account-usage/desktop_helpers.py",
+    "scripts/account-usage/desktop_usage.py",
+    "scripts/account-usage/failover_additional.py",
+    "scripts/account-usage/failover_core.py",
+    "scripts/account-usage/failover_special.py",
+    "scripts/account-usage/failover_usage.py",
+    "scripts/account-usage/muse_native.py",
+    "scripts/account-usage/signin_expiry.py",
+];
 #[test]
 fn every_generated_wire_word_roundtrips_and_keeps_provenance() {
     let table = wire_words().unwrap();
@@ -98,11 +116,10 @@ fn every_generated_wire_word_roundtrips_and_keeps_provenance() {
         );
         for source in &entry.sources {
             let path = source.split_once(':').unwrap().0;
-            // The TypeScript server (src/) was retired; its provenance rows stay as history and
-            // the table is frozen for those words.
             if RETIRED_SOURCE_ROOTS
                 .iter()
                 .any(|root| path.starts_with(root))
+                || RETIRED_SOURCE_FILES.contains(&path)
             {
                 continue;
             }

@@ -9,7 +9,7 @@ fn publishes_the_python_reader_as_aac_usage_and_the_native_launchers_beside_it()
     let computers = dir.join("source-computers.json");
     fs::write(&computers, b"{}").expect("computer registry");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/agent-usage");
-    client::sync_snapshot_client(&dir, &source, &computers, None).expect("native publication");
+    client::sync_snapshot_client(&dir, &source, &computers).expect("native publication");
     // Every computer's agents run `python3 <share>/aac-usage`; most have no native CLI.
     let reader = fs::read_to_string(dir.join("aac-usage")).expect("Python reader");
     assert!(reader.starts_with("#!/usr/bin/env python3\n"));
@@ -39,7 +39,6 @@ fn published_posix_launcher_forwards_its_directory_and_arguments_to_native_reade
         &share,
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/agent-usage"),
         &computers,
-        None,
     )
     .expect("publication");
     fs::write(

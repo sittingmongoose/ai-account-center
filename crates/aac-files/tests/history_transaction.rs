@@ -1,4 +1,4 @@
-//! Real-filesystem parity with the frozen Node create-only history writer.
+//! Real-filesystem checks against frozen legacy history-writer receipts.
 use aac_files::history_transaction::{self as history, Guard, Record};
 use serde_json::Value;
 use std::{
@@ -91,9 +91,9 @@ fn native(scenario: &str) -> Value {
     )
 }
 #[test]
-fn node_oracle_receipts_for_success_and_filesystem_races() {
+fn frozen_receipts_for_success_and_filesystem_races() {
     let corpus: Value = serde_json::from_str(include_str!("fixtures/history-oracle.json"))
-        .expect("frozen Node oracle receipts");
+        .expect("frozen legacy writer receipts");
     for scenario in [
         "success",
         "exists",
@@ -134,7 +134,7 @@ fn invalid_records_never_create_a_snapshot() {
 }
 
 #[test]
-fn portable_snapshot_cleanup_matches_python_and_preserves_foreign_contents() {
+fn portable_snapshot_cleanup_matches_frozen_receipts_and_preserves_foreign_contents() {
     fn snapshots() -> PathBuf {
         let root = tempfile::tempdir().expect("retention root").keep();
         for i in 0..6 {
@@ -149,7 +149,7 @@ fn portable_snapshot_cleanup_matches_python_and_preserves_foreign_contents() {
         root
     }
     let corpus: Value = serde_json::from_str(include_str!("fixtures/history-oracle.json"))
-        .expect("frozen Python cleanup receipt");
+        .expect("frozen legacy cleanup receipt");
     let expected = &corpus["cleanup"];
     let root = snapshots();
     let result = history::cleanup(&root).expect("portable cleanup");

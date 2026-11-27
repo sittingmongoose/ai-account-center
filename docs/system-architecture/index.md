@@ -34,26 +34,21 @@ source; there is no configurable host list.
 | Odroid | Fixed SSH alias `odroid` | App updates, Status, Analytics scan and verified usage sources; no dashboard, account state or builds |
 | 1070ti | Fixed SSH alias `1070ti` | App updates, Status, Analytics scan and verified usage sources; no dashboard, account state or builds |
 
-Nas1, Odroid and 1070ti are extra Ubuntu computers. Their fixed helpers run with
+Nas1, Odroid and 1070ti are extra Ubuntu computers. Their pinned agents run with
 `--platform ubuntu`, and the dashboard files their results under their own
 computer. None runs a dashboard or holds AAC-managed account state: AI Account
 Center is not installed there, and no account switching, Codex or Antigravity
 activation, key storage, sign-in or Claude desktop flow targets them (those APIs
 take host types that exclude them; neither Odroid nor 1070ti builds anything). The dashboard
-computer runs exactly these fixed commands on each of them, each built only from
-fixed strings:
+computer runs native `aac-agent` requests over the authenticated transport:
 
-1. A `sha256sum` hash query of the update helpers in `~/.ccs/app-updates`.
-2. A `tar` extract of the update helpers into that folder, only when a
-   checksum differs.
-3. The update helper, `/usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py"
-   --apply --platform ubuntu`.
-4. The pinned, read-only analytics helper streamed over SSH stdin to
-   `/usr/bin/python3 -c`; it writes nothing on Nas1.
-5. The packaged read-only usage bundle streamed over SSH stdin to
-   `/usr/bin/python3 -c`, for an explicit source or verified fallback. It imports
-   helper code in memory, reads only Nas1's own existing sign-ins and never
-   installs helpers, writes account tokens or changes the selected account.
+1. The pinned agent's app-update verb for explicit Update apps jobs.
+2. The pinned agent's read-only `scan-usage` verb for Analytics.
+3. The pinned agent's `failover-inventory`, `quota-read` or `signin-expiry` verb for
+   an explicit source or verified fallback.
+
+No Python or Node helper is installed on these computers. Each request reads only
+that computer's existing sign-ins or logs and returns normalized, nonsecret data.
 
 A quota reading belongs to a provider account. All providers can recover a
 reading from a matching verified identity on another configured computer;
@@ -122,16 +117,14 @@ scans with per-file checkpoints (each log is read from where the last pass
 stopped; a truncated, rotated or rewritten log is read again from its start).
 A source whose logs, request and price list are all unchanged since its last
 clean pass returns that pass's result without loading a checkpoint or
-aggregating again (`cache/account-activity-passes-v1/`); the Mac, Windows and Nas1 contribute per-model,
-per-hour aggregates through one packaged Python helper streamed over the
-existing ssh channel (remote transport),
-never raw events. Nas1, a second Ubuntu computer, is scanned the same way: the
-same pinned, read-only helper, with nothing installed or written there, through
-its fixed alias (no Claude desktop launcher names it). Each remote computer
-keeps its own scan cache. On Nas1 the helper reads the Claude Code, Codex (T3
-shadow homes included), OMP, Muse, zcode and Antigravity roots under its home
-folder, plus any extra usage-log roots saved for Nas1 (POSIX paths). Beside its
-hourly rows each answer carries per-session aggregates whose key is a digest derived on the host that read the log — the
+aggregating again (`cache/account-activity-passes-v1/`). Remote computers contribute
+per-model, per-hour aggregates through the pinned Rust agent's `scan-usage` verb
+over the existing SSH channel, never raw events. Nas1, a second Ubuntu computer,
+is scanned the same way with nothing installed or written there, through its fixed alias.
+Each remote computer keeps its own scan cache. The agent reads the Claude Code,
+Codex (T3 shadow homes included), OMP, Muse, zcode and Antigravity roots under its
+home folder, plus any extra usage-log roots saved for that computer (POSIX paths).
+Beside its hourly rows each answer carries per-session aggregates whose key is a digest derived on the host that read the log — the
 same key the server's own readers derive at ingest — so sessions from all four
 hosts count in Session stats and Recent sessions while no session id, path or
 directory ever leaves that host.

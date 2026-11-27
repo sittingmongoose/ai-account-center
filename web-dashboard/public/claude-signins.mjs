@@ -1,8 +1,8 @@
 import { HOST_IDS, HOST_LABELS } from './computers.mjs';
-// Claude Code sign-in renewal (dashboard DTO `claudeSignIns`, from scripts/claude-signin).
+// Claude Code sign-in renewal (dashboard DTO `claudeSignIns`, from the Rust renewal job).
 //
-// Every Claude Code sign-in ends about 30 days after it was made; the renewal runner renews each one
-// a few days before. These pure helpers turn the runner's published state into the words the Claude
+// Every Claude Code sign-in ends about 30 days after it was made; the job renews each one
+// a few days before. These pure helpers turn its published state into the words the Claude
 // rows, Details and the "needs you" notice show. They never invent a time: a sign-in whose end was
 // not read says so.
 import { lazyFormat } from './time-format.mjs';

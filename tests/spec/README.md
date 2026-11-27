@@ -13,11 +13,12 @@ AAC_RUST_PUBLIC_BINARY=/path/to/aac-http node tests/spec/run.mjs   # adds the na
 
 `run.mjs` runs, in order:
 
-- `parsers.py`: the offline parser case table (`parser-vectors.json`) against the Python helpers.
+- `tests/unit/account-usage/plan_usage_test.py`: the retained Qwen installer collector fixture;
+  Python remains only for that bridge and the native-messaging bridge, not account fallbacks.
 - `inventory.mjs`: the deterministic test inventory (`test-inventory.json`). After adding or
   removing a test file, run `node tests/spec/inventory.mjs --regenerate` and review the diff.
-- `tables.test.ts`: `config/tables/*.json` against every remaining hand list (the Python helpers,
-  the page's JS, the Antigravity column copies and the native bars).
+- `tables.test.ts`: `config/tables/*.json` against every remaining hand list (the page's JS,
+  the Antigravity column copies and the native bars).
 - `scripts/foundation/one-file-policy.mjs`: no raw file mechanics outside `aac-files`.
 - `read-number-vectors.mjs`: the shared number formatting vectors.
 - With `AAC_RUST_PUBLIC_BINARY`: `m6-tray-parity.ts` and `m6-public-contract.ts`, which replay the
@@ -30,10 +31,11 @@ dashboard launcher) replays one route group through `m6-public-contract.ts`.
 ## Wire vocabulary
 
 `wire-words.json` is embedded by `crates/aac-core` and is part of the agent's pinned source hash,
-so it changes only with an agent rebuild. Rows whose source is the retired `src/` tree are kept as
-frozen provenance. `node scripts/foundation/generate-wire-words.mjs --check` regenerates the table
-from the native reset route and the Python helpers, carries the retired rows forward, and must
-leave `wire-words.json` byte-identical; `wire-source-hashes.json` fingerprints only live sources.
+so it changes only with an agent rebuild. Rows whose source is retired are kept as frozen
+provenance. `node scripts/foundation/generate-wire-words.mjs --check` regenerates the table
+from the native reset route and retained browser-bridge Python ASTs, carries retired rows
+forward, and must leave `wire-words.json` byte-identical; `wire-source-hashes.json` fingerprints
+only live sources.
 
 ## Standalone harnesses
 

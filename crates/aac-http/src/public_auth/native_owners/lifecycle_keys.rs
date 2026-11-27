@@ -1,4 +1,4 @@
-//! Add and replace credentials through the registry lease and the existing collector.
+//! Add and replace credentials through the registry lease and the native host agent.
 use super::{
     NativeOwners,
     lifecycle_label::{
@@ -19,7 +19,6 @@ use crate::{
     },
 };
 use aac_files::{OwnedStore, read, registry};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
@@ -488,56 +487,15 @@ impl KeyStore<'_> {
             .call_mutation("key-store", &selector, args, 20_000)
             .await
         {
-            MutationReply::Result(value) if action != "delete" => return Ok(value),
+            MutationReply::Result(value) if action != "delete" => Ok(value),
             MutationReply::Result(value)
                 if value["ok"] == true && value.as_object().is_some_and(|row| row.len() == 1) =>
             {
-                return Ok(Value::Null);
+                Ok(Value::Null)
             }
-            MutationReply::NotDispatched => {}
-            MutationReply::Result(_) | MutationReply::Uncertain => return Err(Failure::KeyStore),
+            MutationReply::NotDispatched => Err(Failure::KeyStore),
+            MutationReply::Result(_) | MutationReply::Uncertain => Err(Failure::KeyStore),
         }
-        let argv = remote_argv(&self.source.platform, action, &self.source.provider, id);
-        let result = self
-            .native
-            .agents
-            .reference(
-                selector,
-                argv,
-                secret.unwrap_or_default().as_bytes().to_vec(),
-                60_000,
-                4096,
-            )
-            .await
-            .map_err(|_| Failure::KeyStore)?;
-        if result.code != Some(0) {
-            return Err(Failure::KeyStore);
-        }
-        if action == "delete" {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&result.stdout).map_err(|_| Failure::KeyStore)
-    }
-}
-
-fn remote_argv(platform: &str, action: &str, provider: &str, id: &str) -> Vec<std::ffi::OsString> {
-    if platform == "windows" {
-        let script = format!(
-            "$ErrorActionPreference = 'Stop'; $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'; $helper = [IO.Path]::Combine($HOME, '.ccs', 'account-usage', 'key_store.py'); $input | & python.exe $helper {action} --provider '{provider}' --key-id '{id}'; exit $LASTEXITCODE"
-        );
-        let bytes: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        vec![
-            "powershell.exe".into(),
-            "-NoProfile".into(),
-            "-NonInteractive".into(),
-            "-EncodedCommand".into(),
-            STANDARD.encode(bytes).into(),
-        ]
-    } else {
-        let command = format!(
-            r#"/usr/bin/python3 "$HOME/.ccs/account-usage/key_store.py" {action} --provider '{provider}' --key-id '{id}'"#
-        );
-        vec!["/bin/sh".into(), "-c".into(), command.into()]
     }
 }
 

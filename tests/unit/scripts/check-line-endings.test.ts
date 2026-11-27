@@ -20,17 +20,15 @@ function write(relative: string, text: string): void {
 }
 
 describe('packaged line endings', () => {
-  it('finds CRLF helpers and leaves LF files, Windows wrappers and dependencies alone', () => {
-    write('scripts/analytics-remote/helper.py', 'a = 1\r\nb = 2\r\n');
+  it('finds packaged CRLF bridges and leaves LF files, wrappers and dependencies alone', () => {
     write('scripts/agent-usage/aac-usage', '#!/usr/bin/env python3\r\n');
     write('scripts/agent-usage/aac-usage.cmd', '@python "%~dp0aac-usage" %*\r\n');
-    write('scripts/claude-history/writer.cjs', 'module.exports = 1;\n');
     write('scripts/account-usage/native-host/node_modules/dep/index.js', 'x\r\n');
     write('scripts/account-usage/extension/popup.mjs', 'export {};\r\n');
+    write('scripts/account-usage/plan_usage.py', 'value = 1\n');
     expect(crlfFiles(root)).toEqual([
       'scripts/account-usage/extension/popup.mjs',
       'scripts/agent-usage/aac-usage',
-      'scripts/analytics-remote/helper.py',
     ]);
   });
 

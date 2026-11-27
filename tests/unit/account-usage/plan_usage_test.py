@@ -866,7 +866,7 @@ class RegistryV2AccountTests(unittest.TestCase):
 
 
 class SharedCredentialKindFixtureTests(unittest.TestCase):
-    """One fixture pins which credential kinds each helper reads, for the server and the helpers."""
+    """One fixture pins which credential kinds the retained plan collector reads."""
 
     FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "account-usage" / "collected-credential-kinds.json"
 
@@ -898,21 +898,6 @@ class SharedCredentialKindFixtureTests(unittest.TestCase):
             with self.subTest(provider=provider):
                 self.assertEqual(accepted, expected)
 
-    def test_desktop_helper_takes_no_account_arguments(self):
-        table = self.fixture["helpers"]["desktop_usage.py"]
-        self.assertTrue(all(kinds == ["discover"] for kinds in table.values()))
-        with tempfile.TemporaryDirectory() as home:
-            environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": home, "CCS_HOME": home, "USERPROFILE": home,
-                           "PYTHONDONTWRITEBYTECODE": "1"}
-            for provider in table:
-                with self.subTest(provider=provider):
-                    completed = subprocess.run(
-                        [sys.executable, str(HELPERS / "desktop_usage.py"), "--provider", provider, "--platform",
-                         "ubuntu", "--account", "{}:usage".format(provider), "--credential", "discover"],
-                        capture_output=True, text=True, timeout=20, env=environment)
-                    # Exit status 2 is reserved for usage errors (README); nothing was collected.
-                    self.assertEqual(completed.returncode, 2)
-                    self.assertEqual(completed.stdout, "")
 
 
 if __name__ == "__main__":

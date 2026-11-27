@@ -1,5 +1,4 @@
 //! Bind a guarded lifecycle launch to the dashboard's local Lane G journal.
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -51,33 +50,7 @@ fn ascii(value: &str, cap: usize) -> bool {
 }
 
 impl Command {
-    fn bind(mut self, provider: &str) -> Option<Self> {
-        // The dashboard prepares the fixed Antigravity driver as a multiline
-        // Python argument. G admits printable argv only. Preserve the program
-        // and its argv without putting a staged credential on the wire.
-        if provider == "antigravity"
-            && self.file == "/usr/bin/python3"
-            && self.args.first().is_some_and(|arg| arg == "-c")
-            && self
-                .args
-                .get(1)
-                .is_some_and(|program| program.contains('\n'))
-        {
-            let program = STANDARD.encode(&self.args[1]);
-            let chunks: Vec<_> = program
-                .as_bytes()
-                .chunks(3500)
-                .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
-                .collect();
-            let mut args = vec![
-                "-c".into(),
-                "import base64,sys; n=int(sys.argv[1]); body=base64.b64decode(''.join(sys.argv[2:2+n])); sys.argv=['-c',*sys.argv[2+n:]]; exec(compile(body,'<string>','exec'))".into(),
-                chunks.len().to_string(),
-            ];
-            args.extend(chunks);
-            args.extend(self.args.drain(2..));
-            self.args = args;
-        }
+    fn bind(self, provider: &str) -> Option<Self> {
         let driver_ok = match &self.antigravity_driver {
             None => true,
             Some(driver) => {
@@ -192,41 +165,6 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn antigravity_driver_reaches_the_agent_as_printable_argv_without_altering_the_program() {
-        let program = "import sys\nassert sys.argv[1] == 'fixture'\n";
-        let command = Command {
-            file: "/usr/bin/python3".into(),
-            args: vec!["-c".into(), program.into(), "fixture".into()],
-            env: Default::default(),
-            pty: false,
-            antigravity_driver: None,
-        }
-        .bind("antigravity")
-        .expect("driver fits the agent argv");
-        assert!(command.args.iter().all(|arg| ascii(arg, 4096)));
-        assert_eq!(command.args[2], "1");
-        assert_eq!(
-            STANDARD.decode(&command.args[3]).expect("encoded driver"),
-            program.as_bytes()
-        );
-        assert_eq!(command.args[4], "fixture");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn the_unix_antigravity_driver_is_refused_on_windows() {
-        let command = Command {
-            file: "/usr/bin/python3".into(),
-            args: vec!["-c".into(), "import sys\n".into()],
-            env: Default::default(),
-            pty: false,
-            antigravity_driver: None,
-        };
-        assert!(command.bind("antigravity").is_none());
-    }
 
     #[test]
     fn lifecycle_uses_one_boot_scoped_journal_even_for_a_muse_job() {

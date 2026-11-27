@@ -66,21 +66,6 @@ pub(super) fn blank(host: Host, app: &str, status: &str, code: &str) -> Value {
     })
 }
 
-/// A row for a computer whose helpers could not be synced: nothing ran there, and the
-/// diagnostics name why. It restores through `normalize` like a helper's own row.
-pub(super) fn sync_failure(host: Host, app: &str, reason: &str, cause: &str) -> Value {
-    normalize(
-        host,
-        app,
-        &json!({
-            "appId": app, "platform": host.os, "status": "failed",
-            "messageCode": "helper_sync_failed", "updateAttempted": false,
-            "diagnostics": {"cause": cause, "reason": reason},
-        }),
-    )
-    .unwrap_or_else(|| blank(host, app, "failed", "helper_sync_failed"))
-}
-
 pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
     if row["appId"] != app || !app_known(app) || row["platform"] != host.os {
         return None;
@@ -206,6 +191,12 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
         }
         "held_for_review" | "held_unchecked" => held && app == "antigravity-cli",
         "updated_unreviewed" => app == "antigravity-cli" && status == "updated",
+        "runtime_unavailable" | "runtime_paused" | "runtime_paused_blocked" => {
+            app == "antigravity-cli"
+                && host.id == "ubuntu"
+                && status == "failed"
+                && attempted == (code == "runtime_paused")
+        }
         "t3_sessions_kept" | "background_sessions_kept" => is_cli && status == "updated",
         "model_catalog_unrefreshed" => {
             app == "muse-code" && matches!(status, "failed" | "restart_failed")
@@ -595,6 +586,13 @@ pub(super) fn legacy_row(row: &Value) -> Value {
         record.remove("diagnostics");
     }
     let message = &row["message"];
+    for code in ["held_for_review", "held_unchecked", "updated_unreviewed"] {
+        if message == &CONTRACT["messages"][code]
+            && let Some(old) = array(&CONTRACT["legacyMessages"][code]).last()
+        {
+            copy["message"] = old.clone();
+        }
+    }
     if row["appId"] == "muse-code"
         && [
             "model_catalog_unrefreshed",

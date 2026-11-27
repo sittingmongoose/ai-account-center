@@ -21,33 +21,27 @@ impl Adapter for Console {
         if c.claude_profile.is_some() {
             return Err(());
         }
-        match c.provider.as_str() {
-            "muse" => self
-                .additional
-                .inventory_for(&c.provider, c.platform, &c.home, &c.ccs),
-            "opencode-wallet" => {
-                self.special
-                    .inventory_for(&c.provider, c.platform, &c.home, &c.ccs)
-            }
-            _ => Err(()),
+        if crate::failover_additional::handles(&c.provider) {
+            self.additional
+                .inventory_for(&c.provider, c.platform, &c.home, &c.ccs)
+        } else if crate::failover_special::handles(&c.provider) {
+            self.special
+                .inventory_for(&c.provider, c.platform, &c.home, &c.ccs)
+        } else {
+            Err(())
         }
     }
     async fn collect(&mut self, candidate: &Value, c: &Context) -> Value {
-        match c.provider.as_str() {
-            "muse" => {
-                self.additional
-                    .collect_for(candidate, c.platform, &c.home, &c.ccs)
-                    .await
-            }
-            "opencode-wallet" => {
-                self.special
-                    .collect_for(candidate, c.platform, &c.home, &c.ccs)
-                    .await
-            }
-            _ => super::dispatch::failure("unavailable", &Value::Null, &Value::Null),
+        if crate::failover_additional::handles(&c.provider) {
+            self.additional
+                .collect_for(candidate, c.platform, &c.home, &c.ccs)
+                .await
+        } else if crate::failover_special::handles(&c.provider) {
+            self.special
+                .collect_for(candidate, c.platform, &c.home, &c.ccs)
+                .await
+        } else {
+            super::dispatch::failure("unavailable", &Value::Null, &Value::Null)
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

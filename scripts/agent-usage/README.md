@@ -2,13 +2,13 @@
 
 The AI Account Center dashboard writes the quota left on every AI account it tracks into this
 folder after each refresh (every minute by default). Any agent on any computer that can read the
-folder can use it through the native AI Account Center CLI: no key and no network route. AI Account Center keeps every file
+folder can use it: no key, no network route, nothing to install. AI Account Center keeps every file
 here current; edits are overwritten.
 
-Run the published reader from this folder: `<this folder>/aac-usage` on Linux and macOS,
-`<this folder>\aac-usage.cmd` on Windows. The launchers call the installed native
-`ai-account-center usage` command; it must be on PATH. The retained source Python reader is
-an offline test oracle and is not published. `locations.json` lists where each computer finds this
+Run the portable reader from this folder: `python3 <this folder>/aac-usage` on Linux and macOS,
+`<this folder>\aac-usage.cmd` on Windows (Python 3). Computers with the native AI Account Center
+CLI on PATH can use `aac-usage-native` (`aac-usage-native.cmd`), which calls
+`ai-account-center usage`. `locations.json` lists where each computer finds this
 folder, as the dashboard's owner set it, and `aac-usage rules` includes them.
 
 ## Files
@@ -26,10 +26,7 @@ folder, as the dashboard's owner set it, and `aac-usage rules` includes them.
 - `computers.json`: the package-owned computer labels, copied from the shared registry.
 - `claude-signins.json`, `claude-signins.md`: when each Claude Code sign-in on each computer ends,
   how its automatic renewal went and anything only a person can do (a CAPTCHA), written by the
-  sign-in renewal runner after each run (see `claude-signin/README.md`). `staleAfterSeconds` old
-  means the runner stopped.
-- `claude-signin/`: the renewal runner itself, kept current by the dashboard; the installed runner
-  updates itself from here.
+  server's Rust renewal job after each run. `staleAfterSeconds` old means the job stopped.
 
 ## Which account is which
 
