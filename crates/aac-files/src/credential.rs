@@ -601,6 +601,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn root() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = crate::path::node::absolute(dir.path())

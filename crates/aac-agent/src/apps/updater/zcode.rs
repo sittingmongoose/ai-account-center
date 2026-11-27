@@ -4820,12 +4820,14 @@ mod tests {
         assert_eq!(
             rig.system.run_strings(),
             vec![vec![
-                node.to_string_lossy().into_owned(),
-                cli.to_string_lossy().into_owned(),
+                plain(&node).to_string_lossy().into_owned(),
+                plain(&cli).to_string_lossy().into_owned(),
                 "install".into(),
                 "--global".into(),
                 "--prefix".into(),
-                rig.path().join(".local").to_string_lossy().into_owned(),
+                plain(&rig.path().join(".local"))
+                    .to_string_lossy()
+                    .into_owned(),
                 "--allow-scripts=@brokkai/muse-acp".into(),
                 "@brokkai/muse-acp@0.10.1".into(),
             ]]
@@ -5846,12 +5848,12 @@ mod tests {
             assert_eq!(
                 rig.system.run_strings(),
                 vec![vec![
-                    node.to_string_lossy().into_owned(),
-                    cli.to_string_lossy().into_owned(),
+                    plain(&node).to_string_lossy().into_owned(),
+                    plain(&cli).to_string_lossy().into_owned(),
                     "install".into(),
                     "--global".into(),
                     "--prefix".into(),
-                    prefix.to_string_lossy().into_owned(),
+                    plain(&prefix).to_string_lossy().into_owned(),
                     "--allow-scripts=@brokkai/muse-acp".into(),
                     "@brokkai/muse-acp@0.10.1".into(),
                 ]]
@@ -6342,26 +6344,26 @@ mod tests {
             argvs,
             vec![
                 vec![
-                    node.to_string_lossy().into_owned(),
-                    cli.to_string_lossy().into_owned(),
+                    plain(&node).to_string_lossy().into_owned(),
+                    plain(&cli).to_string_lossy().into_owned(),
                     "install".into(),
                     "--global".into(),
                     "--prefix".into(),
-                    prefix.to_string_lossy().into_owned(),
+                    plain(&prefix).to_string_lossy().into_owned(),
                     "--script-shell".into(),
-                    bash.to_string_lossy().into_owned(),
+                    plain(&bash).to_string_lossy().into_owned(),
                     "--allow-scripts=@brokkai/muse-acp".into(),
                     "@brokkai/muse-acp@0.10.1".into(),
                 ],
                 vec![
-                    node.to_string_lossy().into_owned(),
-                    cli.to_string_lossy().into_owned(),
+                    plain(&node).to_string_lossy().into_owned(),
+                    plain(&cli).to_string_lossy().into_owned(),
                     "install".into(),
                     "--global".into(),
                     "--prefix".into(),
-                    prefix.to_string_lossy().into_owned(),
+                    plain(&prefix).to_string_lossy().into_owned(),
                     "--script-shell".into(),
-                    bash.to_string_lossy().into_owned(),
+                    plain(&bash).to_string_lossy().into_owned(),
                     "--allow-scripts=zcode-acp-server".into(),
                     "zcode-acp-server@0.65.1".into(),
                 ],
@@ -6962,7 +6964,8 @@ mod tests {
         // Now second consumer stays at 0.84.2 -> never `updated`, lowest version kept.
         write_package(&first, "zcode-acp-server", "0.84.2");
         write_package(&second, "zcode-acp-server", "0.84.2");
-        let second_prefix = rig.path().join("second-node");
+        // The install names its prefix plainly (a verbatim test folder on Windows).
+        let second_prefix = plain(&rig.path().join("second-node"));
         rig.system.clone().answering(move |spec| {
             let argv: Vec<String> = spec
                 .argv

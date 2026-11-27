@@ -2290,12 +2290,14 @@ mod tests {
         use crate::public_auth::{DashboardEvents, DashboardPrincipal, HubCache};
         use axum::body::{Body, to_bytes};
         let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
         let (native, jobs) = NativeOwners::start(
-            dir.path().canonicalize().unwrap(),
+            root.clone(),
             Default::default(),
             HubCache::default(),
             DashboardEvents(tokio::sync::broadcast::channel(4).0),
             Default::default(),
+            std::sync::Arc::new(crate::agent_transport::Agents::with_default(root, true)),
         )
         .unwrap();
         for (principal, same_origin, secure, expected) in [
