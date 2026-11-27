@@ -38,7 +38,9 @@ fn sync_native_launchers(directory: &Path) -> io::Result<()> {
         ),
         (
             "aac-usage-native.cmd",
-            crlf(include_str!("../../../scripts/agent-usage/aac-usage-native.cmd")),
+            crlf(include_str!(
+                "../../../scripts/agent-usage/aac-usage-native.cmd"
+            )),
             0o644,
         ),
     ] {
