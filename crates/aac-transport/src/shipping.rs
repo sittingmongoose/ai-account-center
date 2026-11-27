@@ -313,9 +313,9 @@ impl AgentClient {
             self.launcher("run")
         };
         let (sender, mut chunks) = mpsc::channel(4);
-        let execute = self
-            .computer
-            .execute_controlled(&argv, &input, options, controls, sender);
+        let execute =
+            self.computer
+                .execute_controlled(&argv, input.into(), options, controls, sender);
         tokio::pin!(execute);
         let mut buffer = Vec::new();
         let mut terminal = false;
@@ -355,27 +355,47 @@ impl AgentClient {
     }
 
     /// [`Self::call_controlled_encoded`] for a request whose arguments and result are large (an
-    /// Analytics scan: megabytes of prints in, up to the frame cap out): the envelope is checked
-    /// without parsing the arguments into a value tree, and the terminal result comes back as its
-    /// JSON text, carved out of the agent's output without a copy or a value tree.
-    pub async fn call_controlled_raw(
+    /// Analytics scan: megabytes of prints in, up to the frame cap out). The envelope is written
+    /// here around the caller's arguments text, which is checked without a value tree and sent
+    /// as a shared part (never copied); the terminal result comes back as its JSON text, carved
+    /// out of the agent's output without a copy or a value tree.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn call_controlled_args(
         &self,
-        encoded: &[u8],
+        verb: &str,
+        id: &str,
+        deadline_ms: u64,
+        args: crate::StdinPart,
         options: &CallOptions,
         controls: mpsc::Receiver<Vec<u8>>,
         progress: mpsc::Sender<Event>,
     ) -> Result<RawTerminal, Failure> {
-        let request = raw_envelope(encoded)?;
+        let request = Request {
+            protocol: PROTOCOL_VERSION,
+            verb: verb.to_owned(),
+            id: id.to_owned(),
+            deadline_ms,
+            args: raw_args((*args).as_ref())?,
+        };
+        request.validate()?;
         self.ensure(options).await?;
-        if encoded.len() >= frame_cap(&request.verb) {
+        let head = format!(
+            "{{\"protocol\":{PROTOCOL_VERSION},\"verb\":{},\"id\":{},\"deadlineMs\":{deadline_ms},\"args\":",
+            serde_json::Value::from(verb),
+            serde_json::Value::from(id),
+        )
+        .into_bytes();
+        let input = crate::Stdin::default()
+            .part(Arc::new(head))
+            .part(args)
+            .part(Arc::new(b"}\n"));
+        // The frame without its line end.
+        if input.len() > frame_cap(&request.verb) {
             return Err(Failure::new(
                 Cause::OutputTooLarge,
                 "agent request cap exceeded",
             ));
         }
-        let mut input = Vec::with_capacity(encoded.len() + 1);
-        input.extend_from_slice(encoded);
-        input.push(b'\n');
         let argv = if matches!(self.computer.config.transport, TransportConfig::Local) {
             vec![self.artifact.path.as_os_str().into()]
         } else {
@@ -384,7 +404,7 @@ impl AgentClient {
         let (sender, mut chunks) = mpsc::channel(4);
         let execute = self
             .computer
-            .execute_controlled(&argv, &input, options, controls, sender);
+            .execute_controlled(&argv, input, options, controls, sender);
         tokio::pin!(execute);
         let mut buffer = Vec::new();
         let mut terminal = false;
@@ -539,21 +559,17 @@ pub enum RawTerminal {
 
 /// The envelope of an encoded request, checked as [`Request::validate`] checks a parsed one,
 /// without a value tree of its arguments (only their `action`, which a deadline cap may read).
-fn raw_envelope(encoded: &[u8]) -> Result<Request, Failure> {
+/// A large request's arguments, checked as a JSON object without a value tree: only its
+/// `action` (which bounds the deadline) is read.
+fn raw_args(args: &[u8]) -> Result<serde_json::Value, Failure> {
     use serde_json::value::RawValue;
     use std::collections::BTreeMap;
     let refused = || Failure::new(Cause::Refused, "invalid request encoding");
-    let fields: BTreeMap<String, &RawValue> =
-        serde_json::from_slice(encoded).map_err(|_| refused())?;
-    if fields.len() != 5 {
-        return Err(refused());
-    }
-    let field = |name: &str| fields.get(name).map(|raw| raw.get()).ok_or_else(refused);
-    let args = field("args")?;
-    if !args.starts_with('{') {
+    if !args.starts_with(b"{") {
         return Err(Failure::new(Cause::Refused, "invalid request envelope"));
     }
-    let entries: BTreeMap<String, &RawValue> = serde_json::from_str(args).map_err(|_| refused())?;
+    let entries: BTreeMap<String, &RawValue> =
+        serde_json::from_slice(args).map_err(|_| refused())?;
     let mut reduced = serde_json::Map::new();
     if let Some(action) = entries.get("action") {
         reduced.insert(
@@ -561,15 +577,7 @@ fn raw_envelope(encoded: &[u8]) -> Result<Request, Failure> {
             serde_json::from_str(action.get()).map_err(|_| refused())?,
         );
     }
-    let request = Request {
-        protocol: serde_json::from_str(field("protocol")?).map_err(|_| refused())?,
-        verb: serde_json::from_str(field("verb")?).map_err(|_| refused())?,
-        id: serde_json::from_str(field("id")?).map_err(|_| refused())?,
-        deadline_ms: serde_json::from_str(field("deadlineMs")?).map_err(|_| refused())?,
-        args: serde_json::Value::Object(reduced),
-    };
-    request.validate()?;
-    Ok(request)
+    Ok(serde_json::Value::Object(reduced))
 }
 
 /// One output line's type, protocol and id, its other fields left as text.

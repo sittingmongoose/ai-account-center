@@ -681,6 +681,45 @@ impl CallOptions {
     }
 }
 
+/// One part of a command's stdin: any shared bytes.
+pub type StdinPart = Arc<dyn AsRef<[u8]> + Send + Sync>;
+
+/// What a command reads on stdin: parts written in order, each shared rather than copied, so a
+/// large request (an Analytics scan's megabytes of prints) is held once while its call runs and
+/// each part is let go as soon as it is written.
+#[derive(Clone, Default)]
+pub struct Stdin(Vec<StdinPart>);
+
+impl Stdin {
+    /// Add a part after the others.
+    pub fn part(mut self, part: StdinPart) -> Self {
+        self.0.push(part);
+        self
+    }
+
+    /// The bytes of every part.
+    pub fn len(&self) -> usize {
+        self.0.iter().map(|part| (**part).as_ref().len()).sum()
+    }
+
+    /// Whether there are no bytes to write.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl From<Vec<u8>> for Stdin {
+    fn from(bytes: Vec<u8>) -> Self {
+        Stdin(vec![Arc::new(bytes)])
+    }
+}
+
+impl std::fmt::Debug for Stdin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stdin({} bytes)", self.len())
+    }
+}
+
 /// Captured bounded child output. Raw bytes may be private; they are never copied into Failure
 /// diagnostics or Debug output. A nonzero application status is distinct from transport failure.
 pub struct ProcessOutput {
@@ -765,6 +804,17 @@ impl Computer {
         stdin: &[u8],
         options: &CallOptions,
     ) -> Result<ProcessOutput, Failure> {
+        self.execute_stdin(argv, stdin.to_vec().into(), options)
+            .await
+    }
+
+    /// [`Self::execute`] with stdin given as shared parts, written without a copy.
+    pub async fn execute_stdin(
+        &self,
+        argv: &[OsString],
+        stdin: Stdin,
+        options: &CallOptions,
+    ) -> Result<ProcessOutput, Failure> {
         let (command, launch) = self.command(argv, options).await?;
         self.run_command(command, launch, stdin, options, None)
             .await
@@ -775,7 +825,7 @@ impl Computer {
     pub async fn execute_controlled(
         &self,
         argv: &[OsString],
-        stdin: &[u8],
+        stdin: Stdin,
         options: &CallOptions,
         controls: mpsc::Receiver<Vec<u8>>,
         output: mpsc::Sender<Vec<u8>>,
@@ -916,7 +966,7 @@ impl Computer {
         );
         command.arg("--").arg(local).arg(destination);
         self.set_path(&mut command);
-        self.run_command(command, Some(invocation), &[], options, None)
+        self.run_command(command, Some(invocation), Stdin::default(), options, None)
             .await
     }
 
@@ -967,18 +1017,17 @@ impl Computer {
         &self,
         command: Command,
         launch: Option<Invocation>,
-        stdin: &[u8],
+        stdin: Stdin,
         options: &CallOptions,
         pipes: Option<Pipes>,
     ) -> Result<ProcessOutput, Failure> {
         // This task owns completion and breaker accounting even if the HTTP receiver goes away.
         let computer = self.clone();
-        let input = stdin.to_vec();
         let options = options.clone();
         let mut completion = CancelOnDrop(Some(options.cancel.clone()));
         let result = tokio::spawn(async move {
             computer
-                .run_command_owned(command, launch, &input, &options, pipes)
+                .run_command_owned(command, launch, stdin, &options, pipes)
                 .await
         })
         .await
@@ -991,7 +1040,7 @@ impl Computer {
         &self,
         mut command: Command,
         launch: Option<Invocation>,
-        stdin: &[u8],
+        stdin: Stdin,
         options: &CallOptions,
         pipes: Option<Pipes>,
     ) -> Result<ProcessOutput, Failure> {
@@ -1081,7 +1130,7 @@ impl Computer {
     async fn capture(
         &self,
         command: &mut Command,
-        stdin: &[u8],
+        stdin: Stdin,
         options: &CallOptions,
         pipes: Option<Pipes>,
     ) -> Result<ProcessOutput, Failure> {
@@ -1110,7 +1159,10 @@ impl Computer {
                     None => (None, None),
                 };
                 let send = async {
-                    input.write_all(stdin).await?;
+                    // Each part is let go once written.
+                    for part in stdin.0 {
+                        input.write_all((*part).as_ref()).await?;
+                    }
                     if let Some(controls) = controls.as_mut() {
                         let mut total = 0usize;
                         while let Some(frame) = controls.recv().await {

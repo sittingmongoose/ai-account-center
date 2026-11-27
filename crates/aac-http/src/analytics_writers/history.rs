@@ -392,7 +392,14 @@ impl Job {
             let call_id = format!("history-{}-{tool}-{now}", host.id);
             let answer = match &request {
                 Some(request) => {
-                    super::scan_host(agents, host, &request.text, TRANSPORT_MS, &call_id).await
+                    super::scan_host(
+                        agents,
+                        host,
+                        Arc::clone(&request.text),
+                        TRANSPORT_MS,
+                        &call_id,
+                    )
+                    .await
                 }
                 None => Err(aac_core::Cause::Refused),
             }

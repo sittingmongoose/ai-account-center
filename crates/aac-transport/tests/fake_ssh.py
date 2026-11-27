@@ -67,7 +67,10 @@ elif mode == "shipping":
     if hashlib.sha256((root / "installed").read_bytes()).hexdigest() != scenario["hash"]:
         sys.exit(87)
     if stage == "run":
-        request = json.loads(sys.stdin.buffer.readline())
+        line = sys.stdin.buffer.readline()
+        if scenario.get("recordStdin"):
+            (root / "stdin.bin").write_bytes(line)
+        request = json.loads(line)
         if scenario.get("wrongEventId"):
             request["id"] = "wrong"
         event = {"type": "result", "protocol": 1, "id": request["id"], "value": scenario.get("value", {"status": "ok"})}

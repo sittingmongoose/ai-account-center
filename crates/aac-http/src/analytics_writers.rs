@@ -592,10 +592,12 @@ fn scan_request(
     request
 }
 
+/// One scan request. The arguments' text is held once: shared with the transport, and kept
+/// past the agent's call only for the fixed scanner's fallback.
 async fn scan_host(
     agents: &Arc<crate::agent_transport::Agents>,
     host: &crate::agent_transport::UsageHost,
-    args: &serde_json::value::RawValue,
+    args: Arc<crate::agent_transport::ArgsText>,
     timeout_ms: u64,
     call_id: &str,
 ) -> Result<Vec<u8>, aac_core::Cause> {
@@ -604,7 +606,7 @@ async fn scan_host(
             .scan_usage(
                 host.platform,
                 host.alias.as_deref(),
-                args,
+                Arc::clone(&args),
                 timeout_ms,
                 SCAN_MAX_BYTES,
                 call_id,
@@ -693,7 +695,7 @@ async fn activity_pass(
     let mut mapped: Vec<Value> = Vec::new();
     let mut mapped_state = false;
     let mut mapped_complete = false;
-    for computer in &computers {
+    'computers: for computer in &computers {
         let host = computer.id.as_str();
         let mut cache = match scan_state::Cache::load(engine, host) {
             Ok(cache) => cache,
@@ -736,6 +738,7 @@ async fn activity_pass(
         let mut scanned = false;
         let mut claude_state = None;
         let start_state = states.len();
+        let start_remote = remote.len();
         for batch in &requests.batches {
             let batch = batch.clone();
             let Some(scan_state::ScanArgs { text, packed }) =
@@ -749,8 +752,29 @@ async fn activity_pass(
                 continue;
             };
             let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
-            let answer = scan_host(agents, computer, &text, SCAN_DEADLINE_MS, &call_id).await;
-            drop(text);
+            // The checkpoint is not held while the call waits: what this pass changed stays,
+            // compressed, and the rest is read back from the store after it.
+            let parked = cache.park();
+            let answer = scan_host(agents, computer, text, SCAN_DEADLINE_MS, &call_id).await;
+            cache = match parked.restore(engine, host) {
+                Ok(cache) => cache,
+                Err(error) => {
+                    tracing::warn!(
+                        code = error.code,
+                        "Stored Analytics scanner state could not be read back"
+                    );
+                    // Nothing of this computer's pass is kept or saved.
+                    states.truncate(start_state);
+                    remote.truncate(start_remote);
+                    states.extend(requests.batches.iter().flatten().map(|kind| {
+                        json!({
+                            "tool": kind, "host": host, "state": "unreadable",
+                            "cause": "store_unavailable",
+                        })
+                    }));
+                    continue 'computers;
+                }
+            };
             let answer = answer.and_then(|bytes| {
                 Answer::parse(&bytes, &mut cache.strings).map_err(|_| aac_core::Cause::Damaged)
             });
