@@ -3047,9 +3047,10 @@
     },
     {
       "file": "tests/unit/docker/docker-hygiene.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "tests/unit/docker/dockerfile-lifecycle-scripts.test.ts",
