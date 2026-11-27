@@ -7,6 +7,7 @@ use crate::hostcmd::{self, Scan};
 use crate::plan::{self, Due, Reading, SignIn, Verification};
 use crate::remote::Remote;
 use crate::state::State;
+use crate::step3::Step3;
 use crate::{HOUR_MS, scrub};
 use std::time::Duration;
 
@@ -240,6 +241,17 @@ pub fn tick(
     }
     let skip: std::collections::HashSet<&str> = cfg.skip.iter().map(String::as_str).collect();
     let within = Config::ms(cfg.renew_within_hours);
+    let renewed_here = renewal_set(cfg, &scans);
+    if let Some(keys) = &renewed_here {
+        deps.say(&match &cfg.step3 {
+            Step3::RenewOnly(host) => format!(
+                "step 3: renewing only {host}'s sign-ins, one per account ({} kept)",
+                keys.len()
+            ),
+            _ => "step 3: the logins switch cannot be read; no sign-in is renewed".to_owned(),
+        });
+    }
+    let mut cut: Vec<(String, String)> = vec![];
     let mut due: Vec<(Host, String, Reading, Due)> = vec![];
     for (host, scan) in &scans {
         let Some(claude) = scan.claude.clone() else {
@@ -249,6 +261,16 @@ pub fn tick(
             if let Some((h, p)) = only
                 && (h != host.name || p != r.profile)
             {
+                continue;
+            }
+            if let Some(keys) = &renewed_here
+                && !keys.contains(&r.key())
+            {
+                // Step 3: this computer runs on a static token (or the switch is unreadable);
+                // a forced request says so instead of making a full sign-in there again.
+                if only.is_some() {
+                    cut.push((r.key(), "not_renewed_step3".into()));
+                }
                 continue;
             }
             let saved = st.profiles.get(&r.key()).cloned().unwrap_or_default();
@@ -269,7 +291,7 @@ pub fn tick(
         }
     }
     due.sort_by(|a, b| (a.2.email.as_deref(), &a.0.name).cmp(&(b.2.email.as_deref(), &b.0.name)));
-    let mut report = Report::default();
+    let mut report = Report { outcomes: cut };
     if !due.is_empty() {
         deps.say(&format!(
             "renewing {} sign-in(s): {}",
@@ -281,10 +303,9 @@ pub fn tick(
         ));
     }
     if dry_run {
-        report.outcomes = due
-            .iter()
-            .map(|d| (d.2.key(), "planned".to_owned()))
-            .collect();
+        report
+            .outcomes
+            .extend(due.iter().map(|d| (d.2.key(), "planned".to_owned())));
         return report;
     }
     let mut blocked: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -349,6 +370,18 @@ pub fn tick(
     }
     st.last_tick_at = Some((deps.now)());
     report
+}
+
+/// Step 3: the `host/profile` keys of these scans that may be renewed (`None`: every one).
+fn renewal_set(cfg: &Config, scans: &[(Host, Scan)]) -> Option<std::collections::HashSet<String>> {
+    crate::step3::renewed(
+        &cfg.step3,
+        scans.iter().flat_map(|(_, scan)| {
+            scan.readings
+                .iter()
+                .map(|r| (r.host.as_str(), r.profile.as_str(), r.email.as_deref()))
+        }),
+    )
 }
 
 /// Signs an account's plain profile in to claude.ai by mail.
@@ -467,6 +500,8 @@ mod tests {
     #[derive(Default)]
     struct World {
         renewed: bool,
+        /// A second profile of the same account on the Windows computer.
+        twin: bool,
         code_seen: Option<String>,
         logins: u32,
         presses: u32,
@@ -508,8 +543,16 @@ mod tests {
                 } else {
                     NOW + 3 * HOUR_MS
                 };
+                let twin = if w.twin {
+                    format!(
+                        "AACROW\taaa\tC:\\Users\\s\\.claude-t3\\aaa\t0\t{}\n",
+                        status(ends)
+                    )
+                } else {
+                    String::new()
+                };
                 return ok(format!(
-                    "AACCLAUDE\tC:\\Users\\s\\.local\\bin\\claude.exe\nAACROW\tparty\tC:\\Users\\s\\.claude-t3\\party\t0\t{}\n",
+                    "AACCLAUDE\tC:\\Users\\s\\.local\\bin\\claude.exe\nAACROW\tparty\tC:\\Users\\s\\.claude-t3\\party\t0\t{}\n{twin}",
                     status(ends)
                 ));
             }
@@ -685,5 +728,61 @@ mod tests {
             vec![("windows/party".to_owned(), "planned".to_owned())]
         );
         assert_eq!(world.lock().expect("lock").logins, 0);
+    }
+
+    fn run_with(step3: Step3, twin: bool, only: Option<(&str, &str)>) -> (Report, u32) {
+        let world = Arc::new(Mutex::new(World {
+            twin,
+            ..World::default()
+        }));
+        let fake = Fake(world.clone());
+        let log = |_: &str| {};
+        let now = || NOW;
+        let deps = Deps {
+            remote: &fake,
+            now: &now,
+            log: &log,
+            waits: fast(),
+        };
+        let mut config = cfg();
+        config.step3 = step3;
+        let mut st = State::default();
+        let report = tick(&config, &mut st, &deps, only, only.is_some(), false);
+        let logins = world.lock().expect("lock").logins;
+        (report, logins)
+    }
+
+    /// Step 3: only the renewal computer's sign-ins are renewed; a due sign-in on another
+    /// computer (now on a static token) gets no login, even when asked for by name.
+    #[test]
+    fn step3_renews_only_the_renewal_computer() {
+        let (report, logins) = run_with(Step3::RenewOnly("mac".into()), false, None);
+        assert_eq!((report, logins), (Report::default(), 0));
+        let (report, logins) = run_with(
+            Step3::RenewOnly("mac".into()),
+            false,
+            Some(("windows", "party")),
+        );
+        assert_eq!(logins, 0);
+        assert_eq!(
+            report.outcomes,
+            vec![("windows/party".to_owned(), "not_renewed_step3".to_owned())]
+        );
+        let (_, paused) = run_with(Step3::Paused, false, None);
+        assert_eq!(paused, 0, "an unreadable switch renews nothing");
+    }
+
+    /// Step 3: one full sign-in per account on the renewal computer; without the switch, both
+    /// profiles of the account are renewed as before.
+    #[test]
+    fn step3_renews_one_sign_in_per_account() {
+        let (before, logins) = run_with(Step3::Off, true, None);
+        assert_eq!(logins, 2, "{before:?}");
+        let (report, logins) = run_with(Step3::RenewOnly("windows".into()), true, None);
+        assert_eq!(logins, 1);
+        assert_eq!(
+            report.outcomes,
+            vec![("windows/aaa".to_owned(), "renewed".to_owned())]
+        );
     }
 }

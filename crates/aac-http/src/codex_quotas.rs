@@ -115,18 +115,32 @@ fn empty_envelope(data: Value) -> aac_status::read_context::Envelope {
 /// The saved profiles as the quota view reads them: name and login validity.
 /// A missing registry is an empty list; any other read or shape fault is `Err`, the same
 /// distinction the reader and the profile summary make.
+///
+/// Central Logins step 3: with the switch on, a profile is connected when its account is pinned
+/// (the row itself says whether a T3 login answered); a switch that cannot be read leaves the
+/// row's own unavailable state to speak. Saved copies are not looked at then.
 pub(crate) fn saved_profiles(root: &Path) -> Result<Vec<Value>, ()> {
     let (_, records) = read_codex_profile_registry(root)?;
+    let switch = aac_files::login_rollback::read_switch(root);
     Ok(records
         .iter()
         .map(|record| {
-            let identity = read_auth(
-                &root
-                    .join("codex-instances")
-                    .join(&record.name)
-                    .join("auth.json"),
-            );
-            json!({"name": record.name, "authValid": identity.valid})
+            let valid = match &switch {
+                Ok(Some(aac_files::login_rollback::Switch {
+                    codex: Some(pins), ..
+                })) => pins.contains_key(&record.name),
+                Err(_) => true,
+                Ok(_) => {
+                    read_auth(
+                        &root
+                            .join("codex-instances")
+                            .join(&record.name)
+                            .join("auth.json"),
+                    )
+                    .valid
+                }
+            };
+            json!({"name": record.name, "authValid": valid})
         })
         .collect())
 }
@@ -254,5 +268,34 @@ mod tests {
         );
         std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600))
             .expect("restore for cleanup");
+    }
+
+    /// Step 3: with the saved copies retired, a pinned profile is still connected (its row says
+    /// whether a T3 login answered) and an unpinned one is not; no saved copy is looked at.
+    #[test]
+    fn the_switch_decides_connected_without_saved_copies() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let root = directory.path();
+        std::fs::write(
+            root.join("codex-profiles.yaml"),
+            "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n  spare:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+        )
+        .expect("registry");
+        let before = saved_profiles(root).expect("profiles");
+        assert_eq!(before[0]["authValid"], false, "no saved copy, no switch");
+        let switch = format!(
+            "{{\"version\":1,\"since\":\"2026-11-27T18:00:00Z\",\"codex\":{{\"work\":{{\"identity\":\"{}\",\"email\":\"work@example.test\"}}}}}}",
+            "a".repeat(64)
+        );
+        let path = root.join("logins-step3.json");
+        std::fs::write(&path, switch).expect("switch");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+        }
+        let after = saved_profiles(root).expect("profiles");
+        assert_eq!(after[0], json!({"name":"work","authValid":true}));
+        assert_eq!(after[1], json!({"name":"spare","authValid":false}));
     }
 }

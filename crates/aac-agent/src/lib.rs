@@ -24,6 +24,7 @@ mod muse_login;
 mod pins;
 mod proof;
 mod quota;
+mod rollback;
 mod scan;
 mod signin;
 /// Interactive sign-in session state machine, PTY driver, journal and verb.
@@ -99,6 +100,12 @@ pub async fn app_update_task() -> i32 {
 /// homes through this.
 pub fn login_verb(verb: &str, args: &serde_json::Value) -> Result<serde_json::Value, Failure> {
     logins::run(verb, args)
+}
+
+/// `aac-agent --logins-quarantine ...`, `--logins-restore`, `--logins-status`: Central Logins
+/// step 3 on this computer (see `rollback`); `None` when `flag` is none of them.
+pub fn logins_subcommand(flag: &std::ffi::OsStr, args: &[std::ffi::OsString]) -> Option<i32> {
+    rollback::subcommand(flag.to_str()?, args)
 }
 
 /// Return the exact build identity used by shipping's manifest handshake.

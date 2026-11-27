@@ -65,6 +65,28 @@ different account is refused (`identity_mismatch`), and Remove still refuses the
 live profile (`account_active`). Restart a Codex app that is open on Ubuntu so it
 reads the renewed login.
 
+## Central Logins step 3: T3 logins only
+
+Step 3 retires AAC's saved Codex copies without deleting them. On the dashboard
+computer, `aac-agent --logins-quarantine --codex --claude-renewal-host <name>`
+records each saved profile's account identity (a digest of the workspace and
+person binding, never a token) in `logins-step3.json`, then moves every
+`codex-instances/<name>/auth.json` into `disabled-rollback/` (0700, neutral file
+names, so no reader or refresher finds it). From then on each Codex row is read
+only through a login a tool owns on that computer, a T3 instance's own home or
+`~/.codex`, whose identity is the recorded one. A login of another account is
+never used, and neither is a saved copy or the local session files. A profile
+with no such login shows **unavailable** with the reason; nothing renews the T3
+logins (Codex does that itself).
+
+The same switch cuts Claude renewal to that computer's sign-ins, one per
+account. On every other computer, `aac-agent --logins-quarantine --claude
+<profiles>` moves the Claude sign-in files of profiles that already run on a
+static `claude setup-token` token. `aac-agent --logins-status` shows what is
+held, and `aac-agent --logins-restore` (the exact command is printed by the
+quarantine) puts every file back, never over a newer one, and turns the switch
+off. A purge of `disabled-rollback/` is a separate, later action.
+
 The retained account tests, dashboard service and native clients own validation.
 Use offline fixtures and isolated private paths; signing in or live provider
 requests are separately authorized actions.

@@ -48,6 +48,7 @@ pub mod publish;
 pub mod remote;
 pub mod service;
 pub mod state;
+pub mod step3;
 pub mod tick;
 
 /// Milliseconds in an hour.

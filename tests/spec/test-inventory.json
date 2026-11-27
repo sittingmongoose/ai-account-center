@@ -238,6 +238,12 @@
       ]
     },
     {
+      "file": "crates/aac-agent/src/rollback.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-agent/src/signin_session/jobs.rs",
       "kind": "safety",
       "evidence": [
@@ -414,6 +420,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-claude-renew/src/step3.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-claude-renew/src/tick.rs",
       "kind": "internal",
       "evidence": [],
@@ -496,6 +508,12 @@
     },
     {
       "file": "crates/aac-files/src/lib.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/src/login_rollback.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -644,6 +662,12 @@
     },
     {
       "file": "crates/aac-http/src/account_usage/producer/claude.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/account_usage/producer/codex_instances.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1717,6 +1741,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-renewal/src/renewal.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "crates/aac-renewal/src/service.rs",

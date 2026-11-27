@@ -120,7 +120,7 @@ impl Default for CodexProfileRenewalOptions {
 
 /// The disable switch as this call sees it (process env when not injected).
 pub fn renewal_enabled(options: &CodexProfileRenewalOptions) -> bool {
-    match &options.env_map {
+    let by_environment = match &options.env_map {
         Some(map) => is_codex_profile_renewal_enabled(map),
         None => {
             let mut map = HashMap::new();
@@ -129,6 +129,58 @@ pub fn renewal_enabled(options: &CodexProfileRenewalOptions) -> bool {
             }
             is_codex_profile_renewal_enabled(&map)
         }
+    };
+    by_environment && !saved_copies_retired(&options.env.ccs_dir)
+}
+
+/// Central Logins step 3: when the switch names the Codex accounts (or cannot be read), AAC's
+/// saved Codex copies are retired and never renewed, including a copy made after the switch by a
+/// sign-in: the dashboard reads T3's own logins, which Codex renews itself.
+pub fn saved_copies_retired(ccs_dir: &std::path::Path) -> bool {
+    ccs_dir.is_absolute()
+        && !matches!(
+            aac_files::login_rollback::read_switch(ccs_dir),
+            Ok(None | Some(aac_files::login_rollback::Switch { codex: None, .. }))
+        )
+}
+
+#[cfg(test)]
+mod step3_tests {
+    use super::*;
+
+    /// The switch with Codex pins, or one that cannot be read, turns renewal off; without it,
+    /// the environment decides as before.
+    #[test]
+    fn the_step3_switch_retires_saved_copy_renewal() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut options = CodexProfileRenewalOptions {
+            env_map: Some(HashMap::new()),
+            ..Default::default()
+        };
+        options.env.ccs_dir = dir.path().to_path_buf();
+        assert!(renewal_enabled(&options), "no switch: on by default");
+        let switch = dir.path().join("logins-step3.json");
+        let write = |text: &str| {
+            std::fs::write(&switch, text).expect("switch");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&switch, std::fs::Permissions::from_mode(0o600))
+                    .expect("mode");
+            }
+        };
+        write(r#"{"version":1,"since":"2026-11-27T18:00:00Z","codex":{}}"#);
+        assert!(!renewal_enabled(&options), "codex pins: retired");
+        write(r#"{"version":1,"since":"2026-11-27T18:00:00Z","claudeRenewalHost":"ubuntu"}"#);
+        assert!(
+            renewal_enabled(&options),
+            "a Claude-only switch leaves Codex alone"
+        );
+        write("not json");
+        assert!(
+            !renewal_enabled(&options),
+            "an unreadable switch fails closed"
+        );
     }
 }
 

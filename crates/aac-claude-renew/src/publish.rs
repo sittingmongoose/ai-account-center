@@ -24,6 +24,14 @@ fn t(ms: Option<i64>) -> Value {
 pub fn document(cfg: &Config, st: &State, runner: &str, now: i64) -> Value {
     let skip: std::collections::HashSet<&str> = cfg.skip.iter().map(String::as_str).collect();
     let within = Config::ms(cfg.renew_within_hours);
+    // Step 3: a computer cut from renewal runs on a static token; its sign-in is not renewed.
+    let renewed = crate::step3::renewed(
+        &cfg.step3,
+        st.profiles.iter().filter_map(|(key, p)| {
+            let (host, profile) = key.split_once('/')?;
+            Some((host, profile, p.email.as_deref()))
+        }),
+    );
     let rows: Vec<Value> = st
         .profiles
         .iter()
@@ -42,7 +50,8 @@ pub fn document(cfg: &Config, st: &State, runner: &str, now: i64) -> Value {
                 "signInEndsAt": t(p.ends_at),
                 "logoutAt": t(p.ends_at),
                 "renewFrom": t(p.ends_at.map(|e| e - within)),
-                "autoRenew": !skip.contains(key.as_str()),
+                "autoRenew": !skip.contains(key.as_str())
+                    && renewed.as_ref().is_none_or(|keys| keys.contains(key)),
                 "lastRenewAt": t(p.last_renew_at),
                 "lastResult": p.last_result,
                 "nextVerifyAt": t(p.verify.iter().min().copied()),
@@ -221,6 +230,18 @@ mod tests {
         assert_eq!(
             rows.iter().find(|r| r["profile"] == "old").expect("old")["autoRenew"],
             false
+        );
+        // Step 3: the Mac is cut from renewal (another computer renews), so the Logins screen
+        // stops calling its sign-in auto-renewed.
+        let mut cut = cfg.clone();
+        cut.step3 = crate::step3::Step3::RenewOnly("ubuntu".into());
+        let rows = document(&cut, &st, "ubuntu", now)["signIns"].clone();
+        assert!(
+            rows.as_array()
+                .expect("rows")
+                .iter()
+                .all(|r| r["autoRenew"] == false),
+            "{rows}"
         );
         assert_eq!(doc["needsYou"][0]["reason"], "captcha");
         assert_eq!(doc["browserSessions"][0]["signedIn"], true);

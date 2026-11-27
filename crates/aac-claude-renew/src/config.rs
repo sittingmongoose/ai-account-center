@@ -112,6 +112,10 @@ pub struct Config {
     /// `agent-desktop` on the browser computer.
     #[serde(default = "default_agent_desktop")]
     pub agent_desktop: String,
+    /// Central Logins step 3, read from `<CCS dir>/logins-step3.json` at each run (never from
+    /// this file, which refuses the key).
+    #[serde(skip)]
+    pub step3: crate::step3::Step3,
 }
 
 /// Why settings were refused.

@@ -1,5 +1,6 @@
 //! Read the installed account sources and publish a complete Accounts generation.
 mod claude;
+mod codex_instances;
 mod codex_local;
 mod failover;
 mod history;
@@ -343,6 +344,17 @@ impl Producer {
         if profiles.is_empty() {
             return vec![];
         }
+        // Central Logins step 3: with the switch on, only tool-owned logins are read.
+        let switch = {
+            let root = self.root.clone();
+            tokio::task::spawn_blocking(move || aac_files::login_rollback::read_switch(&root))
+                .await
+                .ok()
+        };
+        match codex_instances::mode(switch) {
+            codex_instances::Mode::Saved => {}
+            mode => return self.instance_codex_rows(profiles, mode, now).await,
+        }
         let platform = if cfg!(target_os = "macos") {
             "mac"
         } else if cfg!(windows) {
@@ -421,6 +433,71 @@ impl Producer {
                     sample.as_ref(),
                     note.as_ref(),
                 )
+            })
+            .buffered(3)
+            .collect()
+            .await
+    }
+
+    /// Step 3: each profile read through the tool-owned login with its pinned identity, or
+    /// unavailable with the reason. No saved copy, no local session file, no renewal note.
+    async fn instance_codex_rows(
+        &self,
+        profiles: Vec<SavedCodex>,
+        mode: codex_instances::Mode,
+        now: i64,
+    ) -> Vec<Value> {
+        use codex_instances::{Mode, Unavailable};
+        use futures_util::{StreamExt, stream};
+        let Mode::Instance(pins) = mode else {
+            return profiles
+                .iter()
+                .map(|p| codex_instances::unavailable_row(&p.name, Unavailable::Damaged, None))
+                .collect();
+        };
+        let platform = if cfg!(target_os = "macos") {
+            "mac"
+        } else if cfg!(windows) {
+            "windows"
+        } else {
+            "ubuntu"
+        };
+        let args = json!({"version":1,"action":"inventory","provider":"codex","ccsDir":self.root});
+        let inventory = self
+            .ask(platform, None, "failover-inventory", &args)
+            .await
+            .ok();
+        let active = codex_instances::active(
+            &inventory,
+            &pins,
+            profiles
+                .iter()
+                .map(|p| (p.name.as_str(), p.last_used.as_str())),
+        );
+        let inventory = &inventory;
+        let pins = &pins;
+        let active = active.as_deref();
+        stream::iter(profiles)
+            .map(move |profile| async move {
+                let name = profile.name;
+                let Some(pin) = pins.get(&name) else {
+                    return codex_instances::unavailable_row(&name, Unavailable::Unpinned, None);
+                };
+                match codex_instances::own_login(inventory, pin) {
+                    Err(why) => codex_instances::unavailable_row(&name, why, Some(pin)),
+                    Ok(login) => {
+                        let (sample, failure) = self
+                            .read_primary_reply(platform, None, "codex", login, now)
+                            .await;
+                        codex_instances::read_row(
+                            &name,
+                            active == Some(name.as_str()),
+                            login,
+                            sample.as_ref(),
+                            failure.as_deref(),
+                        )
+                    }
+                }
             })
             .buffered(3)
             .collect()

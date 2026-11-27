@@ -33,6 +33,11 @@ fn main() {
         .and_then(|flag| aac_agent::app_update_subcommand(flag, &args[1..]))
     {
         code
+    } else if let Some(code) = args
+        .first()
+        .and_then(|flag| aac_agent::logins_subcommand(flag, &args[1..]))
+    {
+        code
     } else if args.len() == 1 && args[0] == "--app-update-task" {
         block_on(aac_agent::app_update_task())
     } else if args.first().is_some_and(|arg| arg == "--terminal-child") {

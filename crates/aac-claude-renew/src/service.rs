@@ -95,10 +95,11 @@ pub fn run(ccs_dir: &Path, publish_default: Option<PathBuf>, options: RunOptions
     if !cfg_path.exists() {
         return Ran::NotSetUp;
     }
-    let cfg = match Config::load(&cfg_path) {
+    let mut cfg = match Config::load(&cfg_path) {
         Ok(cfg) => cfg,
         Err(e) => return Ran::BadSettings(e.to_string()),
     };
+    cfg.step3 = crate::step3::read(ccs_dir);
     if options.scheduled && !cfg.enabled {
         return Ran::Off;
     }
