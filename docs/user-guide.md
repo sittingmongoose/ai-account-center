@@ -469,11 +469,13 @@ in a persistent cache; source outages can show cached usage after restart.
 Provider rate limits apply across native collectors and all alternate hosts for
 the same identity. Sign-in warnings stay visible alongside recovered quota.
 A first-ever unavailable source without a known identity stays unavailable.
-Explicit source and lifecycle configuration is unchanged. Follow the
-[provider boundaries](system-architecture/provider-flows.md),
-[collector requirements](../scripts/account-usage/README.md),
-[OpenCode/Muse bridge](../browser-bridge/opencode-muse/README.md) and
-[Qwen bridge](../browser-bridge/qwen/README.md) for the applicable existing source.
+Explicit source and lifecycle configuration is unchanged. Qwen Token Plan,
+OpenCode Zen console wallet and Muse Code portal quota use **Paste session** on
+the Accounts page. AAC verifies the pasted cookie header before storing it with
+owner-only permissions, then reads usage directly over HTTPS. Missing or expired
+sessions show **needs sign-in**; the browser extensions and native hosts are not
+required. Follow the [provider boundaries](system-architecture/provider-flows.md)
+and [collector requirements](../scripts/account-usage/README.md).
 Do not copy account secrets into this repository or container images.
 
 Claude desktop launch mappings use the private `claude-desktop-profiles.json`
