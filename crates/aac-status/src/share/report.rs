@@ -714,7 +714,7 @@ pub fn section(value: &Json, field: &str) -> Valid<Json> {
                 "items".to_string(),
                 Json::Array(items(20, &|item, at| {
                     let r = obj(Some(item), at)?;
-                    Ok(json!({
+                    let mut projected = json!({
                         "text": text(r.get("text"), &format!("{at}.text"), 4000)?,
                         "where": opt_text(r.get("where"), &format!("{at}.where"), 300)?,
                         "context": list(r.get("context"), &format!("{at}.context"), 10, |value, cell_at| {
@@ -726,9 +726,32 @@ pub fn section(value: &Json, field: &str) -> Valid<Json> {
                             Some(other) => block_link(other, &format!("{at}.link"))?,
                         },
                         "version": opt_text(r.get("version"), &format!("{at}.version"), 60)?,
-                    }))
+                    });
+                    // Key-quote metadata is additive: cards without it project byte-identically, while a writer that
+                    // names deciding quotes keeps the quote ids and the optional per-quote key flag.
+                    if let Some(id) = opt_text(r.get("item"), &format!("{at}.item"), 80)? {
+                        projected["item"] = json!(id);
+                    }
+                    match r.get("key") {
+                        None | Some(Json::Null) => {}
+                        Some(Json::Bool(key)) => projected["key"] = json!(key),
+                        _ => return Err(fail(&format!("{at}.key"))),
+                    }
+                    Ok(projected)
                 })?),
             );
+            match raw.get("key") {
+                None | Some(Json::Null) => {}
+                Some(value) => {
+                    let keys = list(Some(value), &format!("{field}.key"), 3, |item, at| {
+                        Ok(json!(text(Some(item), at, 80)?))
+                    })?;
+                    if keys.is_empty() {
+                        return Err(fail(&format!("{field}.key")));
+                    }
+                    out.insert("key".to_string(), Json::Array(keys));
+                }
+            }
         }
         "planChange" => {
             out.insert(
@@ -1058,5 +1081,57 @@ pub fn parse_report_file(kind: &str, bytes: &[u8], writer: &str, card_id: &str) 
     match projected {
         Ok(doc) => Ok((doc, super::sha256_hex(bytes))),
         Err(Invalid(reason)) => Err(reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quote_section(items: Vec<Json>) -> Json {
+        json!({"type":"quote","title":"In their words","fold":false,"items":items})
+    }
+
+    #[test]
+    fn quote_sections_without_key_metadata_keep_their_exact_projection() {
+        let input = quote_section(vec![json!({
+            "text":"verbatim", "where":"docs", "context":["agreed"], "source":"Mem0",
+            "link":{"label":"page","url":"https://example.com/rule"}, "version":"v1"
+        })]);
+        assert_eq!(
+            section(&input, "section").expect("quote section"),
+            json!({
+                "title":"In their words","fold":false,"type":"quote",
+                "items":[{
+                    "text":"verbatim","where":"docs","context":["agreed"],"source":"Mem0",
+                    "link":{"label":"page","url":"https://example.com/rule"},"version":"v1"
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn quote_key_metadata_is_optional_bounded_and_passed_through() {
+        let input = json!({
+            "type":"quote", "key":["q2"],
+            "items":[
+                {"item":"q1","text":"rest","source":"Mem0"},
+                {"item":"q2","text":"deciding","source":"Mem0","key":true}
+            ]
+        });
+        let projected = section(&input, "section").expect("keyed quote section");
+        assert_eq!(projected["key"], json!(["q2"]));
+        assert_eq!(projected["items"][0]["item"], json!("q1"));
+        assert!(projected["items"][0].get("key").is_none());
+        assert_eq!(projected["items"][1]["key"], json!(true));
+
+        for key in [json!([]), json!(["q1", "q2", "q3", "q4"])] {
+            let mut bad = input.clone();
+            bad["key"] = key;
+            assert!(section(&bad, "section").is_err());
+        }
+        let mut bad = input.clone();
+        bad["items"][0]["key"] = json!("yes");
+        assert!(section(&bad, "section").is_err());
     }
 }

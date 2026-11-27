@@ -673,6 +673,59 @@ export const tests = {
     );
   },
 
+  // Decision-card option quotes: the deciding quote stays on the card, the rest fold behind a real button
+  // naming their count and products. On a 402x874 phone the line wraps without sideways scroll, and the expanded
+  // quotes keep card order and their page links.
+  async 'status decision option quotes fold on a phone'(t) {
+    await t.newContext({ viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+    await openStatus(t, fixture('server-view.json'), '?safe=0,0,34,0');
+    await t.page.waitForSelector(CARD);
+    let at = '';
+    for (let i = 0; i < 10 && at !== 'F-Q4'; i++) {
+      at = (await t.page.textContent(`${CARD} .q-title .q-label`))?.trim() || '';
+      if (at !== 'F-Q4') await t.page.click(NEXT);
+    }
+    await t.equal('the toast card is open', at, 'F-Q4');
+    const fold = `${CARD} .quote-fold`;
+    await t.page.waitForSelector(fold);
+    await t.equal('the fold control is a button', await t.page.evaluate(() => document.querySelector('.quote-fold')?.tagName), 'BUTTON');
+    await t.text(fold, /3 more quotes from Mem0, GitHub Copilot/);
+    await t.equal('the fold starts closed', await t.page.getAttribute(fold, 'aria-expanded'), 'false');
+    await t.count(`${CARD} .option-quotes > .quote`, 1);
+    await t.count(`${CARD} .quote-fold-list`, 0);
+    await t.check('the visible quote is the deciding one', async () =>
+      t.page.evaluate(() => document.querySelector('.option-quotes > .quote')?.textContent.includes('The newest message belongs at the top'))
+    );
+    await t.page.locator(fold).scrollIntoViewIfNeeded();
+    await t.check('folded: no sideways scroll', async () =>
+      t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)
+    );
+    await t.shot('quote-fold-phone-folded', '402x874 folded option quotes: deciding quote visible, count and product fold line readable');
+
+    await t.page.click(fold);
+    await t.equal('the tap expands the fold', await t.page.getAttribute(fold, 'aria-expanded'), 'true');
+    await t.count(`${CARD} .quote-fold-list .quote`, 3);
+    await t.equal(
+      'expanded quotes keep card order',
+      await t.page.evaluate(() =>
+        [...document.querySelectorAll('.quote-fold-list .quote')].map((q) => q.textContent.slice(0, 28))
+      ),
+      [
+        'A toast that interrupts the ',
+        'A reverse chronological stac',
+        'Transient interface messages',
+      ]
+    );
+    await t.equal('expanded quotes keep their page links', await t.page.locator(`${CARD} .quote-fold-list .quote a`).count(), 3);
+    await t.check('expanded: no sideways scroll', async () =>
+      t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)
+    );
+    await t.shot('quote-fold-phone-expanded', '402x874 expanded option quotes: folded quotes in card order with page links');
+    await t.page.click(fold);
+    await t.equal('a second tap collapses the fold', await t.page.getAttribute(fold, 'aria-expanded'), 'false');
+    await t.count(`${CARD} .quote-fold-list`, 0);
+  },
+
   // The design's formats, standalone (the page's own chrome), with the insets measured on the simulators
   // (DUO-MEASURED.md) given through ?safe=. WebKit itself is checked on the simulators.
   async 'status layout in each format'(t) {
