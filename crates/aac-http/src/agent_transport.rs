@@ -97,6 +97,10 @@ pub(crate) struct Agents {
     /// as wide as the transport's own slots (the pre-R5b width: no extra limit). R5b's memory
     /// goal stays in the python3 helper gate. Remote agents are not gated here.
     local_agent: Arc<Semaphore>,
+    /// The single local work slot shared by the `python3 -c` collection helper and the local
+    /// `aac-agent` scan, so the two heavy local children never sit beside each other (MEM5
+    /// helpers (d)). Remote work is not gated here.
+    local_work: Arc<Semaphore>,
     active: Mutex<BTreeMap<String, Active>>,
 }
 
@@ -457,6 +461,27 @@ impl Agents {
         Ok(Some(permit))
     }
 
+    /// The single-work slot for a local child: the collection `python3 -c` helper and the local
+    /// scan child both hold it, so they never overlap (MEM5 helpers (d)). Acquired after the
+    /// wider gates (`slots`, `local_agent`) on the scan side and after `helpers` on the helper
+    /// side, so lock order is always widest-first and neither side can wait on the other while
+    /// holding the slot; the wait is deadline-bounded and an expiry is the caller's timeout.
+    /// A remote selector holds no slot (the child runs on the remote machine).
+    pub(crate) async fn local_work_permit(
+        &self,
+        computer: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, Cause> {
+        if computer.ssh_host.is_some() {
+            return Ok(None);
+        }
+        let permit = tokio::time::timeout_at(deadline, self.local_work.clone().acquire_owned())
+            .await
+            .map_err(|_| Cause::Timeout)?
+            .map_err(|_| Cause::Busy)?;
+        Ok(Some(permit))
+    }
+
     pub(crate) fn new(root: PathBuf) -> Self {
         Self::with_default(root, false)
     }
@@ -470,6 +495,7 @@ impl Agents {
             loading: AtomicBool::new(false),
             slots: Arc::new(Semaphore::new(AGENT_SLOTS)),
             local_agent: Arc::new(Semaphore::new(AGENT_SLOTS)),
+            local_work: Arc::new(Semaphore::new(1)),
             active: Mutex::new(BTreeMap::new()),
         }
     }
@@ -926,8 +952,10 @@ impl Agents {
             .try_acquire_owned()
             .map_err(|_| Cause::Busy)?;
         let deadline = started + Duration::from_millis(budget);
-        // The activity scheduler's local scan waits for the local-agent gate.
+        // The activity scheduler's local scan waits for the local-agent gate, then for the
+        // single local-work slot it shares with the collection helper (MEM5 helpers (d)).
         let _local_permit = self.local_agent_permit(&selector, deadline).await?;
+        let _local_work = self.local_work_permit(&selector, deadline).await?;
         let client = self
             .checked_client(&selector, deadline)
             .await
@@ -1223,5 +1251,54 @@ mod tests {
             .await
             .expect("next local permit");
         assert!(next.is_some());
+    }
+
+    /// MEM5 helpers (d): the local-work slot is one permit shared by the `python3 -c`
+    /// collection helper and the local scan child, so the two never overlap. A second local
+    /// acquirer waits only until its own deadline (timeout, never a stall); a remote
+    /// acquirer never waits (the child runs remotely).
+    #[tokio::test(start_paused = true)]
+    async fn the_local_work_slot_serializes_local_children_and_never_gates_remote() {
+        use super::{Agents, Selector};
+        use aac_core::Cause;
+        let agents = std::sync::Arc::new(Agents::new(std::path::PathBuf::from(
+            "/tmp/aac-local-work-test",
+        )));
+        let local = Selector::usage("ubuntu", None);
+        let remote = Selector::usage("mac", Some("mac-ssh"));
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        let held = agents
+            .local_work_permit(&local, deadline)
+            .await
+            .expect("first local permit")
+            .expect("a local child holds the slot");
+        // A remote child is not gated, even while the slot is held.
+        assert!(
+            agents
+                .local_work_permit(&remote, deadline)
+                .await
+                .expect("remote permit")
+                .is_none(),
+            "a remote child is not gated"
+        );
+        // A second local child times out rather than overlapping.
+        let short = tokio::time::Instant::now() + std::time::Duration::from_millis(20);
+        let blocked = tokio::spawn({
+            let agents = std::sync::Arc::clone(&agents);
+            let local = local.clone();
+            async move { agents.local_work_permit(&local, short).await }
+        });
+        tokio::time::advance(std::time::Duration::from_millis(30)).await;
+        assert!(matches!(blocked.await.expect("join"), Err(Cause::Timeout)));
+        // Releasing the slot admits the next local child.
+        drop(held);
+        assert!(
+            agents
+                .local_work_permit(&local, deadline)
+                .await
+                .expect("next local permit")
+                .is_some()
+        );
     }
 }

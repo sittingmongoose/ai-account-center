@@ -114,6 +114,12 @@ impl Collection {
             .await
             .map_err(|_| "busy")?
             .map_err(|_| "busy")?;
+        // MEM5 helpers (d): a local helper holds the single local-work slot, so it never
+        // overlaps a local scan; a remote helper runs on the remote machine and holds none.
+        let _local_work = agents
+            .local_work_permit(computer, deadline)
+            .await
+            .map_err(|_| "busy")?;
         let result = crate::account_usage::helper::collect(
             client.computer(),
             agents.root(),

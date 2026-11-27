@@ -106,7 +106,7 @@ pub fn run(ccs_dir: &Path, publish_default: Option<PathBuf>, options: RunOptions
         return Ran::Busy;
     };
     let state_path = dir.join("state.json");
-    let remote = SshRemote::with_private_control();
+    let remote = SshRemote::plain();
     let log = logger(&dir, options.echo);
     let now = now_ms;
     let deps = Deps {

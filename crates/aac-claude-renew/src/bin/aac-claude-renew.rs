@@ -82,7 +82,7 @@ fn main() {
     match command.as_str() {
         "status" => {
             let _ = std::fs::create_dir_all(&dir);
-            let remote = SshRemote::with_private_control();
+            let remote = SshRemote::plain();
             let log = service::logger(&dir, true);
             let now = now_ms;
             let deps = Deps {
@@ -153,7 +153,7 @@ fn main() {
                 std::process::exit(3);
             };
             let state_path = dir.join("state.json");
-            let remote = SshRemote::with_private_control();
+            let remote = SshRemote::plain();
             let log = service::logger(&dir, true);
             let now = now_ms;
             let deps = Deps {

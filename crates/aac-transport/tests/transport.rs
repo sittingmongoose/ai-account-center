@@ -936,3 +936,74 @@ async fn s3_stale_cm_sockets_are_purged_and_live_kept() {
     );
     assert!(other.exists());
 }
+
+/// MEM5 helpers (c): a live master from an older instance (still accepting connects, so S3's
+/// stale purge must keep it) is asked to exit at startup; a dead one's file is purged; fresh
+/// (mid-creation) files, non-sockets and non-`cm-*` files are untouched. The exit for each live
+/// master is `ssh -S <sock> -O exit` (no other ssh flags).
+#[tokio::test]
+async fn close_foreign_masters_exits_live_and_purges_dead() {
+    let dir = tempfile::tempdir().unwrap();
+    // Fake ssh: records each invocation line, exits 0.
+    let log = dir.path().join("calls.log");
+    let ssh = dir.path().join("ssh");
+    std::fs::write(
+        &ssh,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    // Live master from another instance.
+    let live_path = dir.path().join("cm-0000000000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let _live = std::os::unix::net::UnixListener::bind(&live_path).unwrap();
+    // Dead master: bind then drop.
+    let dead_path = dir.path().join("cm-1111111111111111-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    {
+        let l = std::os::unix::net::UnixListener::bind(&dead_path).unwrap();
+        drop(l);
+    }
+    assert!(dead_path.exists());
+    // Age past the 2 s mid-creation guard.
+    tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+    // Fresh file, mid-creation: must survive.
+    let fresh_path = dir.path().join("cm-2222222222222222-cccccccccccccccccccccccccccccccccccccccc");
+    {
+        let l = std::os::unix::net::UnixListener::bind(&fresh_path).unwrap();
+        drop(l);
+    }
+    // Non-socket and non-cm-* entries: untouched.
+    let not_socket = dir.path().join("cm-notasocket");
+    std::fs::write(&not_socket, b"x").unwrap();
+    let other = dir.path().join("not-a-mux");
+    std::fs::write(&other, b"x").unwrap();
+
+    SshPolicy::close_foreign_masters(dir.path(), &ssh, None);
+
+    assert!(!live_path.exists(), "live foreign master socket survived");
+    assert!(!dead_path.exists(), "dead cm-* socket survived");
+    assert!(fresh_path.exists(), "fresh cm-* removed");
+    assert!(not_socket.exists());
+    assert!(other.exists());
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "only the live master is asked to exit: {calls}"
+    );
+    assert!(
+        calls.contains(&format!("-S {} -O exit", live_path.display())),
+        "exit argv: {calls}"
+    );
+}
+
+/// The sweep never fails the boot: no directory, no ssh binary, no masters — still returns.
+#[test]
+fn close_foreign_masters_is_best_effort() {
+    let dir = tempfile::tempdir().unwrap();
+    SshPolicy::close_foreign_masters(dir.path(), dir.path().join("missing-ssh").as_path(), None);
+    SshPolicy::close_foreign_masters(dir.path(), Path::new("/nonexistent-ssh"), None);
+}

@@ -1,5 +1,6 @@
 //! Running fixed scripts on the covered computers: this one directly, the others over plain
-//! OpenSSH (`BatchMode`, a shared control connection). Output stays in memory; it may carry a
+//! OpenSSH (`BatchMode`, never a control connection: renew is not the transport that owns
+//! multiplexers, so it holds no SSH master of its own). Output stays in memory; it may carry a
 //! link or a code and is never logged.
 
 use crate::config::Host;
@@ -91,50 +92,17 @@ fn encoded(script: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(utf16)
 }
 
-#[cfg(unix)]
-fn private_control_dir() -> Option<std::path::PathBuf> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-    let uid = std::fs::metadata("/proc/self")
-        .map(|m| m.uid())
-        .ok()
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .and_then(|h| std::fs::metadata(h).ok())
-                .map(|m| m.uid())
-        })?;
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .map(|p| p.join("aac-claude-renew"))
-        .unwrap_or_else(|| std::path::PathBuf::from(format!("/tmp/aac-claude-renew-{uid}")));
-    let _ = std::fs::DirBuilder::new().mode(0o700).create(&base);
-    let meta = std::fs::symlink_metadata(&base).ok()?;
-    if !meta.is_dir() || meta.uid() != uid || meta.permissions().mode() & 0o077 != 0 {
-        return None;
-    }
-    (base.as_os_str().len() <= 48).then_some(base)
-}
-
-#[cfg(not(unix))]
-fn private_control_dir() -> Option<std::path::PathBuf> {
-    None
-}
-
-/// Plain OpenSSH, as the operator's own ssh config resolves the aliases.
+/// Plain OpenSSH, as the operator's own ssh config resolves the aliases. Never a control
+/// connection: renewal runs a handful of short commands per host every ten minutes, so a fresh
+/// connection each time costs a handshake and holds no master; the dashboard transport owns
+/// multiplexing (MEM5 helpers).
 #[derive(Clone, Debug)]
-pub struct SshRemote {
-    /// A private folder for the shared control sockets, if any.
-    pub control_dir: Option<std::path::PathBuf>,
-}
+pub struct SshRemote;
 
 impl SshRemote {
-    /// A remote with shared control connections in a short private folder (`$XDG_RUNTIME_DIR`
-    /// or `/tmp/aac-claude-renew-<uid>`): a socket path must stay under about 100 bytes. Without
-    /// a folder that is provably this user's own and private, connections are not shared.
-    pub fn with_private_control() -> Self {
-        SshRemote {
-            control_dir: private_control_dir(),
-        }
+    /// Plain OpenSSH without any multiplexing.
+    pub fn plain() -> Self {
+        SshRemote
     }
 
     /// The argv that runs this script on this host.
@@ -153,22 +121,19 @@ impl SshRemote {
             };
         };
         let mut argv: Vec<String> = vec!["ssh".into(), if tty { "-tt" } else { "-T" }.into()];
+        // No multiplexing, ever: renew opens its own connection per command and holds no master
+        // (the dashboard transport's multiplexers are the only ones), so an operator's `~/.ssh/config`
+        // ControlMaster cannot resurrect one here. Same words the reset route pins.
         for option in [
             "BatchMode=yes",
             "ConnectTimeout=8",
             "ServerAliveInterval=15",
             "UpdateHostKeys=no",
+            "ControlMaster=no",
+            "ControlPath=none",
         ] {
             argv.push("-o".into());
             argv.push(option.into());
-        }
-        if let Some(dir) = &self.control_dir {
-            argv.push("-o".into());
-            argv.push("ControlMaster=auto".into());
-            argv.push("-o".into());
-            argv.push(format!("ControlPath={}/%C", dir.display()));
-            argv.push("-o".into());
-            argv.push("ControlPersist=120".into());
         }
         argv.push("--".into());
         argv.push(alias.clone());
@@ -400,7 +365,7 @@ mod tests {
 
     #[test]
     fn ssh_argv_quotes_the_script_and_never_takes_options_from_the_alias() {
-        let remote = SshRemote { control_dir: None };
+        let remote = SshRemote::plain();
         let host = Host {
             name: "nas1".into(),
             os: Os::Linux,
@@ -418,10 +383,41 @@ mod tests {
         assert_eq!(tty.last().map(String::as_str), Some("dir"));
     }
 
+    /// MEM5 helpers (b): renew never multiplexes. One master per remote host already belongs to
+    /// the dashboard transport; a second set of renew masters doubled that (6 extra, 22.9 MiB
+    /// RSS peak in MEM4). The pins are explicit, like the reset route's, so an operator's
+    /// `~/.ssh/config` cannot resurrect one either.
+    #[test]
+    fn ssh_argv_never_multiplexes() {
+        let remote = SshRemote::plain();
+        let host = Host {
+            name: "nas1".into(),
+            os: Os::Linux,
+            ssh: Some("nas1-agent".into()),
+            claude: None,
+        };
+        for tty in [false, true] {
+            let argv = remote.argv(&host, &Script::Sh("echo hi".into()), tty);
+            for pinned in ["ControlMaster=no", "ControlPath=none"] {
+                assert!(
+                    argv.iter().any(|a| a == pinned),
+                    "{pinned} missing (tty={tty})"
+                );
+            }
+            for banned in ["ControlMaster=auto", "ControlPersist"] {
+                assert!(
+                    !argv.iter().any(|a| a.starts_with(banned)),
+                    "{banned} present: {argv:?}"
+                );
+            }
+            assert!(!argv.iter().any(|a| a.starts_with("ControlPath=/")), "{argv:?}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn runs_with_input_and_times_out() {
-        let remote = SshRemote { control_dir: None };
+        let remote = SshRemote::plain();
         let out = remote
             .run(
                 &local(),
@@ -444,7 +440,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn session_reads_and_takes_a_line() {
-        let remote = SshRemote { control_dir: None };
+        let remote = SshRemote::plain();
         let mut s = remote
             .start(
                 &local(),

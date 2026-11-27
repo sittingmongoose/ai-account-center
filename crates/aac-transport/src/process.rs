@@ -191,6 +191,17 @@ impl SshPolicy {
         // every launch, so the first call after a dashboard restart is the
         // startup cleanup the lane asks for; later calls are cheap (few files).
         Self::cleanup_stale_sockets(&self.control_directory());
+        // MEM5 helpers (c): on the first launch of this process, close any SSH
+        // ControlMaster whose socket predates this process. A master holding a
+        // `cm-<old hash>` socket outlives its dashboard instance (KillMode
+        // drop-in), and `cleanup_stale_sockets` cannot see it (it accepts the
+        // connect). One sweep per process: no master of this process exists yet
+        // on that first launch, so every `cm-*` socket in the directory is
+        // foreign by construction.
+        static STARTUP_SWEEP: OnceLock<()> = OnceLock::new();
+        STARTUP_SWEEP.get_or_init(|| {
+            Self::close_foreign_masters(&self.control_directory(), &self.ssh, self.path.as_deref());
+        });
         Ok(())
     }
 
@@ -234,6 +245,66 @@ impl SshPolicy {
     /// Windows has no SSH control sockets to clean.
     #[cfg(not(unix))]
     pub fn cleanup_stale_sockets(_directory: &Path) {}
+
+    /// Asks every live foreign master in `directory` to exit, and removes every dead
+    /// `cm-*` socket. Best effort: one `ssh -S <sock> -O exit` per live socket, in parallel,
+    /// each bounded to 2 s; fresh files (<2 s, possibly mid-creation) and non-socket entries
+    /// are left alone, as in [`cleanup_stale_sockets`](Self::cleanup_stale_sockets). An
+    /// `ssh` that is missing or slow only costs that socket its attempt: the sweep returns.
+    /// Public for the startup sweep and for tests.
+    #[cfg(unix)]
+    pub fn close_foreign_masters(
+        directory: &Path,
+        ssh: &Path,
+        child_path: Option<&std::ffi::OsStr>,
+    ) {
+        use std::os::unix::fs::FileTypeExt;
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        let mut sockets = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("cm-") {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !metadata.file_type().is_socket() {
+                continue;
+            }
+            if let Ok(modified) = metadata.modified()
+                && modified.elapsed().is_ok_and(|d| d < Duration::from_secs(2))
+            {
+                continue;
+            }
+            sockets.push(path);
+        }
+        std::thread::scope(|scope| {
+            for socket in sockets {
+                let ssh = ssh.to_owned();
+                let child_path = child_path.map(std::ffi::OsStr::to_owned);
+                scope.spawn(move || {
+                    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+                        ask_master_exit(&ssh, &socket, child_path.as_deref());
+                    }
+                    let _ = std::fs::remove_file(&socket);
+                });
+            }
+        });
+    }
+
+    /// Windows has no SSH control sockets to close.
+    #[cfg(not(unix))]
+    pub fn close_foreign_masters(
+        _directory: &Path,
+        _ssh: &Path,
+        _child_path: Option<&std::ffi::OsStr>,
+    ) {
+    }
 
     fn prepare_directory(directory: &Path) -> Result<(), Failure> {
         if !directory.exists() {
@@ -497,6 +568,42 @@ struct Invocation {
     program: PathBuf,
     identity: String,
     argv: Vec<OsString>,
+}
+
+/// Asks one live control master to exit (`ssh -S <sock> -O exit`), bounded to 2 s. Best
+/// effort: a missing `ssh`, a non-master socket or a hung reply only cost that one socket.
+#[cfg(unix)]
+fn ask_master_exit(ssh: &Path, socket: &Path, child_path: Option<&std::ffi::OsStr>) {
+    let mut command = std::process::Command::new(ssh);
+    let socket = socket.to_string_lossy();
+    command
+        .arg("-S")
+        .arg(&*socket)
+        .arg("-O")
+        .arg("exit")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(path) = child_path {
+        command.env("PATH", path);
+    }
+    let Ok(mut child) = command.spawn() else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
 }
 
 /// Only connection/authentication environment reaches SSH or SCP; Local verbs keep theirs.
