@@ -442,7 +442,6 @@ async fn old_agent_after_admission(root: &Path, owner: &std::sync::Arc<AppUpdate
     fs::remove_file(marker).expect("restore the fixture agent");
 }
 
-
 async fn acp_follow_up(root: &Path, owner: &std::sync::Arc<AppUpdates>) {
     fs::remove_file(root.join("old-windows-agent")).expect("restore fixture agent");
     fs::write(root.join("defer-acp"), "").expect("defer Linux ACP rows");

@@ -272,7 +272,6 @@ pub(crate) fn codex_prepare(
     }))
 }
 
-
 fn muse_home_id(home_id: Option<&str>) -> Option<&str> {
     match home_id {
         None => Some(""),

@@ -499,7 +499,6 @@ impl KeyStore<'_> {
     }
 }
 
-
 async fn probe(native: &NativeOwners, source: &Source) -> Value {
     if let Some(usage) = &native.usage {
         return usage.producer.probe_key(source, now()).await;

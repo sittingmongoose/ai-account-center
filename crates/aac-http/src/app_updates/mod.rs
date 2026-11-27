@@ -208,7 +208,6 @@ impl Job {
         }
     }
 
-
     fn event(&mut self, host: Host, data: &Value) {
         match data["event"].as_str() {
             Some("app") => {
@@ -798,7 +797,6 @@ impl AppUpdates {
             self.change(|job| job.finish_acp(host, &call)).await;
         }
     }
-
 
     async fn call_host(
         &self,

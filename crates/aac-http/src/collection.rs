@@ -88,7 +88,6 @@ impl Collection {
         self.stop.cancel();
     }
 
-
     /// The standalone producer uses the same registry, deadline and coalescing as the bridge.
     pub(crate) async fn read_value(
         self: &Arc<Self>,
@@ -111,9 +110,7 @@ impl Collection {
         .map_err(|_| "shape")?;
         let call = Call::parse(&bytes).ok_or("shape")?;
         let request = call.collection_request(verb).ok_or("shape")?;
-        let result = self
-            .collect(agents, &call, request, Instant::now())
-            .await?;
+        let result = self.collect(agents, &call, request, Instant::now()).await?;
         match result.as_ref() {
             Collected::Value(value) => Ok(value.clone()),
             Collected::Failure(_) => Err("reply"),
@@ -301,7 +298,6 @@ mod tests {
         assert_eq!(agent_verb("signin-expiry"), Some("signin-expiry"));
         assert_eq!(agent_verb("unknown"), None);
     }
-
 
     #[tokio::test(start_paused = true)]
     async fn schedules_the_exact_configured_interval_and_releases_waiters_on_stop() {
