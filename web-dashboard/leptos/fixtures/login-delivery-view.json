@@ -30,6 +30,13 @@
    "state": "other",
    "host": "spare-test",
    "seenKey": "0123456789abcdef0123456789abcdef"
+  },
+  {
+   "id": "odroid",
+   "label": "Odroid",
+   "state": "taken",
+   "host": "ubuntu-test",
+   "seenKey": ""
   }
  ],
  "accounts": [

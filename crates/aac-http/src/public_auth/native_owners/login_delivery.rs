@@ -513,10 +513,21 @@ async fn probe(
             logins,
             unreadable,
             key,
-        } => Probe::Ready {
-            held: held(entry, &logins, &unreadable),
-            key,
-        },
+        } => {
+            // It answers as itself again: an old refusal no longer holds.
+            registry.note(&target.id, None);
+            if let Some(pin) = registry
+                .computers
+                .iter_mut()
+                .find(|p| p.computer == target.id)
+            {
+                pin.seen = None;
+            }
+            Probe::Ready {
+                held: held(entry, &logins, &unreadable),
+                key,
+            }
+        }
         Inventory::New(_) => Probe::Stop("unenrolled"),
         Inventory::Unreachable => Probe::Stop("unreachable"),
         refused => {
@@ -960,14 +971,26 @@ pub(super) async fn copy(
             held: Held::Has(fp, _),
             key,
         } if fp == source_fp => key,
+        // What the source turned out to hold is recorded before answering, so the page never
+        // shows it "ok" with Copy offered again.
         Probe::Ready {
             held: Held::Unreadable,
             ..
-        } => return Ok(one("unreadable")),
+        } => {
+            let mut seen = entry.clone();
+            seen.hold(source_id, None, &stamp(at)?, "unreadable");
+            registry.put_entry(seen);
+            return Ok(one("unreadable"));
+        }
         Probe::Ready {
             held: Held::OtherAccount,
             ..
-        } => return Ok(one("mismatch")),
+        } => {
+            let mut seen = entry.clone();
+            seen.hold(source_id, None, &stamp(at)?, "other-account");
+            registry.put_entry(seen);
+            return Ok(one("mismatch"));
+        }
         Probe::Ready { .. } => return Ok(one("changed")),
         Probe::Stop(state) => return Ok(one(state)),
     };
@@ -1170,14 +1193,13 @@ pub(super) async fn check(calls: &dyn Calls, registry: &mut Registry, known: &[T
                 }
             }
         }
-        // A recorded value no computer holds any more (every holder read) is dropped with its
-        // end, so it is never shown as current.
+        // A recorded value and end that no computer holds together any more (every holder
+        // read) are dropped, so neither is shown as current; the agreed pair is adopted below.
         if entry.fingerprint.is_some()
             && entry.holders.iter().all(|h| h.seen == "seen")
-            && !entry
-                .holders
+            && !ends
                 .iter()
-                .any(|h| h.fingerprint == entry.fingerprint)
+                .any(|(fp, end)| Some(fp) == entry.fingerprint.as_ref() && end == &entry.expires_at)
         {
             entry.fingerprint = None;
             entry.expires_at = None;
@@ -2619,6 +2641,139 @@ mod tests {
         assert_eq!(
             ends(Kind::ClaudeToken, Some(&at(3 * DAY_MS + 5)), AT).0,
             "in 3 days"
+        );
+    }
+
+    // ---- Fix round 3 (recheck 2): each test failed on 6e1e09a0c. ----
+
+    fn replace_with_end(
+        id: &str,
+        secret: &str,
+        list: &[(&str, &str)],
+        end: &str,
+    ) -> Map<String, Value> {
+        let mut b = replace_body(id, secret, list);
+        b.insert("expiresOn".into(), json!(end));
+        b
+    }
+
+    /// Recheck 2 M3: when every read computer holds the recorded value but none with the recorded
+    /// end, a check takes the end they hold (or keeps none when they disagree).
+    #[tokio::test]
+    async fn fix3_m3_a_check_takes_the_end_the_computers_hold() {
+        let mut fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        let mut b = put_body(TOKEN, &["ubuntu", "nas1"]);
+        b.insert("expiresOn".into(), json!("2026-11-19"));
+        let put = parse_put(&b, &accounts(), &known).unwrap();
+        deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        let id = reg.logins[0].login_id.clone();
+        // Same token, later end, on ubuntu only; then ubuntu's copy is removed.
+        fake.down.push("nas1".into());
+        let put = parse_put(
+            &replace_with_end(&id, TOKEN, &[("ubuntu", &fp(TOKEN))], "2028-11-19"),
+            &accounts(),
+            &known,
+        )
+        .unwrap();
+        assert_eq!(
+            states(&deliver(&fake, &mut reg, &known, put, AT).await.unwrap()),
+            ["delivered"]
+        );
+        fake.down.clear();
+        remove(
+            &fake,
+            &mut reg,
+            &known,
+            &body(json!({"loginId":id,
+            "targets":targets(&[("ubuntu",&fp(TOKEN))]),"confirm":"remove"})),
+        )
+        .await
+        .unwrap();
+        check(&fake, &mut reg, &known, AT).await;
+        assert_eq!(
+            reg.logins[0].expires_at.as_deref(),
+            Some("2026-11-19T00:00:00Z")
+        );
+        assert_ne!(view(&reg, &known, accounts(), AT).logins[0].health, "ok");
+        // Interrupted commit of an end-only change on one computer: the check takes the disk's end.
+        let fake = Fake::new(&["ubuntu", "nas1"]);
+        let mut reg = enrolled(&fake, &known).await;
+        let mut b = put_body(TOKEN, &["ubuntu"]);
+        b.insert("expiresOn".into(), json!("2026-11-19"));
+        let put = parse_put(&b, &accounts(), &known).unwrap();
+        deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        let id = reg.logins[0].login_id.clone();
+        let mut lost = reg.clone();
+        let put = parse_put(
+            &replace_with_end(&id, TOKEN, &[("ubuntu", &fp(TOKEN))], "2028-11-19"),
+            &accounts(),
+            &known,
+        )
+        .unwrap();
+        deliver(&fake, &mut lost, &known, put, AT).await.unwrap();
+        drop(lost);
+        check(&fake, &mut reg, &known, AT).await;
+        assert_eq!(
+            reg.logins[0].expires_at.as_deref(),
+            Some("2028-11-19T00:00:00Z")
+        );
+    }
+
+    /// Recheck 2 M4: a copy whose source turns out unreadable records that, so the view never
+    /// shows that computer "ok" with Copy offered again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fix3_m4_a_copy_records_an_unreadable_source() {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        let entry = first(&fake, &mut reg, &known, &["ubuntu"]).await;
+        std::fs::set_permissions(
+            fake.file("ubuntu", &entry.login_id),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let receipt = copy(
+            &fake,
+            &mut reg,
+            &known,
+            &body(json!({"loginId":entry.login_id,
+            "from":{"computer":"ubuntu","fingerprint":fp(TOKEN)},
+            "to":targets(&[("nas1","absent")]),"confirm":"copy"})),
+            AT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(states(&receipt), ["unreadable"]);
+        let v = view(&reg, &known, accounts(), AT);
+        assert_eq!(v.logins[0].holders[0].state, "unreadable");
+    }
+
+    /// Recheck 2 L2: a computer answering as itself again clears an old refusal note.
+    #[tokio::test]
+    async fn fix3_l2_a_recovered_computer_clears_its_note() {
+        let mut fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        fake.os.insert("nas1".into(), "macos".into());
+        let put = parse_put(&put_body(TOKEN, &["nas1"]), &accounts(), &known).unwrap();
+        assert_eq!(
+            states(&deliver(&fake, &mut reg, &known, put, AT).await.unwrap()),
+            ["wrong-computer"]
+        );
+        fake.os.clear();
+        let put = parse_put(&put_body(TOKEN, &["nas1"]), &accounts(), &known).unwrap();
+        assert_eq!(
+            states(&deliver(&fake, &mut reg, &known, put, AT).await.unwrap()),
+            ["delivered"]
+        );
+        let v = view(&reg, &known, accounts(), AT);
+        assert_eq!(
+            v.computers.iter().find(|c| c.id == "nas1").unwrap().state,
+            "enrolled"
         );
     }
 }

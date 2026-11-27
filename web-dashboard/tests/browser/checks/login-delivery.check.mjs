@@ -57,6 +57,8 @@ export const tests = {
 		await t.check('a login whose computers disagree says so and offers no copy', /Computers disagree/.test(await t.page.locator(ROWS).nth(1).innerText()) && await t.page.locator(ROWS).nth(1).locator('[data-probe="ld-copy"]').count() === 0);
 		await t.check('an unreadable file is named', /Ubuntu unreadable file/.test(await t.page.locator(ROWS).nth(2).innerText()));
 		await t.check('another computer answering is said, with Trust it', await t.page.locator('[data-probe="ld-other:windows"] [data-probe="ld-trust"]').count() === 1);
+		await t.check('a computer answering with another computer\'s key is said, with nothing to press', /Odroid: answers as ubuntu-test, already pinned to another computer/.test(await t.page.locator('[data-probe="ld-other:odroid"]').innerText()) && await t.page.locator('[data-probe="ld-other:odroid"] button').count() === 0);
+		await t.check('a long where line wraps instead of being cut', await t.page.locator(`${ROWS} .ld-where`).nth(2).evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).whiteSpace === 'normal'));
 		await t.page.locator('.ld').scrollIntoViewIfNeeded();
 		await t.crop('delivery-desktop', '.ld', 'Static logins at 1920: three rows (account, kind, fingerprint, end, where, actions), the expiring one in amber, Copy to the rest only where a computer lacks it');
 		await noSideways(t, 'no sideways scroll at 1920');
@@ -66,7 +68,13 @@ export const tests = {
 		await t.check('the reason is shown', /Nas1.*check computers first/.test(await t.page.locator('.ld-comps').innerText()));
 		await t.check('enrolled computers show their host name', /Ubuntu · ubuntu-test/.test(await t.page.locator('.ld-comps').innerText()));
 		await t.crop('delivery-replace-unchecked', '.ld', 'Replace form: Nas1 cannot be ticked (not read at the last check: check computers first); Ubuntu and Mac ticked with host names; Windows refused (another computer answered)');
-		await t.page.getByRole('button', { name: 'Cancel' }).click();
+		// Switching to Deliver while Replace is open draws a fresh form: Kind and Account can be chosen again.
+		await t.page.locator('[data-probe="ld-new"]').click();
+		await t.check('switching forms rebuilds the form', !(await t.page.locator('[data-probe="ld-kind"]').isDisabled()) && !(await t.page.locator('[data-probe="ld-comp:nas1"]').isDisabled()));
+		// Check computers closes an open form (nothing secret is kept), so a stale form is never sent.
+		await t.page.route((u) => new URL(u).pathname === '/api/accounts/logins/delivery/check', (r) => r.fulfill({ json: { ...FIXTURE, generatedAt: new Date().toISOString() } }));
+		await t.page.locator('[data-probe="ld-check"]').click();
+		await t.until('Check computers closes the open form', () => !document.querySelector('.ld-form'));
 		// Deliver a new token to Mac.
 		await t.page.locator('[data-probe="ld-new"]').click();
 		await t.check('the secret field is a password field', await t.page.locator('[data-probe="ld-secret"]').getAttribute('type') === 'password');

@@ -363,6 +363,8 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
     let form = RwSignal::new(Form::default());
     let open = RwSignal::new(false);
     let pending = RwSignal::new(None::<Pending>);
+    // Bumped each time a form is opened, so the open form is drawn again from the current view.
+    let form_gen = RwSignal::new(0u32);
     let busy = RwSignal::new(false);
     let outcome = RwSignal::new(None::<Result<Vec<String>, String>>);
     let read = move || {
@@ -389,6 +391,10 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
     let run = move |action: &'static str, body: String| {
         busy.set(true);
         pending.set(None);
+        // Any action (Check computers included) closes an open form and forgets what it held, so a
+        // form built from an older view is never shown or sent; it is opened again from the new one.
+        open.set(false);
+        form.set(Form::default());
         leptos::task::spawn_local(async move {
             let answer = post(action, body).await;
             let lines = answer.map(|r| {
@@ -412,6 +418,7 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
         form.set(f);
         outcome.set(None);
         pending.set(None);
+        form_gen.update(|g| *g = g.wrapping_add(1));
         open.set(true);
     };
     let confirm_deliver = move |_| {
@@ -437,7 +444,15 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                 Err(msg) => view! { <p class="ac-note crit" data-probe="ld-refused">{msg}</p> }.into_any(),
             })}
             {move || state.with(|s| match s {
-                Some(Ok(v)) => v.computers.iter().filter(|c| c.state == "other").map(|c| {
+                Some(Ok(v)) => v.computers.iter().filter(|c| matches!(c.state.as_str(), "other" | "other-os" | "taken")).map(|c| {
+                    if c.state != "other" {
+                        // Refused with no trust step: say so plainly, nothing to press.
+                        let line = match c.state.as_str() {
+                            "taken" => format!("{}: answers as {}, already pinned to another computer. Nothing is sent to it.", c.label, c.host),
+                            _ => format!("{}: another operating system answered. Nothing is sent to it.", c.label),
+                        };
+                        return view! { <p class="ac-note crit ld-other" data-probe=format!("ld-other:{}", c.id)>{line}</p> }.into_any();
+                    }
                     let body = json!({"computer": c.id, "key": c.seen_key, "confirm": "trust"}).to_string();
                     let text = format!("Trust the computer answering as {} (host {}) from now on? Only if it was rebuilt or renamed: until then nothing is sent to it.", c.label, c.host);
                     let line = format!("{}: another computer answered (host {}). Nothing is sent to it.", c.label, c.host);
@@ -445,12 +460,12 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                         <p class="ac-note crit ld-other" data-probe=format!("ld-other:{}", c.id)>{line}" "
                             <button type="button" class="btn sm" data-probe="ld-trust" on:click=move |_| pending.set(Some(Pending::Trust(body.clone(), text.clone())))>"Trust it"</button>
                         </p>
-                    }
+                    }.into_any()
                 }).collect_view().into_any(),
                 _ => ().into_any(),
             })}
             <Show when=move || open.get()>
-                {move || state.with(|s| s.as_ref().and_then(|s| s.as_ref().ok()).cloned()).map(|view_now| {
+                {move || { form_gen.track(); state.with(|s| s.as_ref().and_then(|s| s.as_ref().ok()).cloned()) }.map(|view_now| {
                     let replace = form.with_untracked(|f| f.login_id.is_some());
                     let kinds = view_now.kinds.clone();
                     let accounts = view_now.accounts.clone();

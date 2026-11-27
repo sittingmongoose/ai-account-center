@@ -896,6 +896,8 @@ textarea.note::placeholder { color: var(--ink-4); }
 .ld-acct { font-weight: 600; font-variation-settings: 'wght' 600; }
 .ld-kind, .ld-where { color: var(--ink-2); }
 .ld-fp { font-family: var(--mono); font-size: var(--fs-tiny); color: var(--ink-3); }
+/* The where line is never cut: it wraps (no hidden text). */
+.ld-row > .ld-where { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .ld-row > .ld-row-acts { display: flex; gap: 4px; justify-content: flex-end; overflow: visible; }
 @container logins (max-width: 719px) {
   .ld-form { grid-template-columns: minmax(0, 1fr); }
