@@ -26,6 +26,8 @@ pub(crate) struct Form {
     /// `YYYY-MM-DD` or empty.
     pub expires_on: String,
     pub computers: Vec<String>,
+    /// Computers that cannot be ticked, each with the reason the page shows.
+    pub blocked: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for Form {
@@ -56,7 +58,83 @@ fn targets(list: &[(String, String)]) -> serde_json::Value {
     )
 }
 
+/// Why a computer cannot be written now (it is not enrolled, or another computer answered), if so.
+pub(crate) fn computer_blocked(c: &aac_api::login_delivery::DeliveryComputer) -> Option<String> {
+    match c.state.as_str() {
+        "enrolled" => None,
+        "new" => Some("check computers first".into()),
+        "other" => Some("another computer answered".into()),
+        "other-os" => Some("another operating system answered".into()),
+        "taken" => Some(format!("answers as {}, another computer's", c.host)),
+        _ => Some("not known".into()),
+    }
+}
+
+/// Why a holder of the login being replaced cannot be confirmed, if so: only a value the last check read there can.
+fn holder_blocked(state: &str) -> Option<&'static str> {
+    match state {
+        "ok" | "differs" => None,
+        "unreadable" => Some("its file cannot be read: fix it, then check computers"),
+        "other-account" => Some("another account is there"),
+        "wrong-computer" => Some("another computer answered"),
+        _ => Some("not read at the last check: check computers first"),
+    }
+}
+
 impl Form {
+    /// A new login: every enrolled computer can be ticked.
+    pub(crate) fn new_login(computers: &[aac_api::login_delivery::DeliveryComputer]) -> Self {
+        Self {
+            kind: "claude-token".into(),
+            blocked: computers
+                .iter()
+                .filter_map(|c| computer_blocked(c).map(|r| (c.id.clone(), r)))
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    /// A replace: each computer whose value the last check read is ticked and named; a computer that holds this
+    /// login in a state nobody can confirm (not read, unreadable, wrong computer), or that is not enrolled, cannot be
+    /// ticked, with the reason.
+    pub(crate) fn replacing(
+        login: &DeliveredLogin,
+        computers: &[aac_api::login_delivery::DeliveryComputer],
+    ) -> Self {
+        let mut blocked: Vec<(String, String)> = computers
+            .iter()
+            .filter_map(|c| computer_blocked(c).map(|r| (c.id.clone(), r)))
+            .collect();
+        for h in &login.holders {
+            if let Some(reason) = holder_blocked(&h.state)
+                && !blocked.iter().any(|(c, _)| c == &h.computer)
+            {
+                blocked.push((h.computer.clone(), reason.into()));
+            }
+        }
+        let shown: Vec<(String, String)> = login
+            .holders
+            .iter()
+            .filter(|h| holder_blocked(&h.state).is_none() && !h.fingerprint.is_empty())
+            .map(|h| (h.computer.clone(), h.fingerprint.clone()))
+            .collect();
+        let computers = shown
+            .iter()
+            .filter(|(c, _)| !blocked.iter().any(|(b, _)| b == c))
+            .map(|(c, _)| c.clone())
+            .collect();
+        Self {
+            login_id: Some(login.login_id.clone()),
+            shown,
+            kind: login.kind.clone(),
+            provider: login.provider.clone(),
+            account: login.account.clone(),
+            computers,
+            blocked,
+            ..Self::default()
+        }
+    }
+
     /// Ready to review: every field the server needs.
     pub(crate) fn ready(&self) -> bool {
         !self.kind.is_empty()
@@ -64,6 +142,10 @@ impl Form {
             && !self.provider.is_empty()
             && (8..=512).contains(&self.secret.trim().len())
             && !self.computers.is_empty()
+            && !self
+                .computers
+                .iter()
+                .any(|c| self.blocked.iter().any(|(b, _)| b == c))
     }
 
     /// Each ticked computer with what the page showed there: the copy it holds, else `absent`.
@@ -118,7 +200,10 @@ pub(crate) fn copy_body(login: &DeliveredLogin, computers: &[String]) -> Option<
     if login.fingerprint.is_empty() {
         return None;
     }
-    let from = login.holders.iter().find(|h| h.state == "ok")?;
+    let from = login
+        .holders
+        .iter()
+        .find(|h| h.state == "ok" && computers.contains(&h.computer))?;
     let to = missing(login, computers);
     (!to.is_empty()).then(|| {
         json!({"loginId": login.login_id,
@@ -128,12 +213,16 @@ pub(crate) fn copy_body(login: &DeliveredLogin, computers: &[String]) -> Option<
     })
 }
 
-/// The body that removes a login from every computer where the page knows its value.
-pub(crate) fn remove_body(login: &DeliveredLogin) -> Option<String> {
+/// The body that removes a login from every enrolled computer where the last check read its value.
+pub(crate) fn remove_body(login: &DeliveredLogin, computers: &[String]) -> Option<String> {
     let list: Vec<(String, String)> = login
         .holders
         .iter()
-        .filter(|h| matches!(h.state.as_str(), "ok" | "differs") && !h.fingerprint.is_empty())
+        .filter(|h| {
+            matches!(h.state.as_str(), "ok" | "differs")
+                && !h.fingerprint.is_empty()
+                && computers.contains(&h.computer)
+        })
         .map(|h| (h.computer.clone(), h.fingerprint.clone()))
         .collect();
     (!list.is_empty()).then(|| {
@@ -312,25 +401,14 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
         });
     };
     let start = move |login: Option<DeliveredLogin>| {
-        let mut f = Form::default();
-        if let Some(l) = login {
-            f.login_id = Some(l.login_id.clone());
-            // What the page shows on each computer; a replace confirms exactly these.
-            f.shown = l
-                .holders
-                .iter()
-                .filter(|h| {
-                    matches!(h.state.as_str(), "ok" | "differs") && !h.fingerprint.is_empty()
-                })
-                .map(|h| (h.computer.clone(), h.fingerprint.clone()))
-                .collect();
-            f.kind = l.kind.clone();
-            f.provider = l.provider.clone();
-            f.account = l.account.clone();
-            f.computers = f.shown.iter().map(|(c, _)| c.clone()).collect();
-        } else {
-            f.kind = "claude-token".into();
-        }
+        let computers = state.with_untracked(|s| match s {
+            Some(Ok(v)) => v.computers.clone(),
+            _ => vec![],
+        });
+        let f = match login {
+            Some(l) => Form::replacing(&l, &computers),
+            None => Form::new_login(&computers),
+        };
         form.set(f);
         outcome.set(None);
         pending.set(None);
@@ -429,22 +507,21 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                                 {computers.into_iter().map(|c| {
                                     let id = c.id.clone();
                                     let id2 = c.id.clone();
-                                    let enrolled = c.state == "enrolled";
-                                    let note = match c.state.as_str() {
-                                        "enrolled" => "",
-                                        "new" => " (check computers first)",
-                                        _ => " (another computer answered)",
-                                    };
+                                    let reason = form.with_untracked(|f| f.blocked.iter().find(|(b, _)| b == &c.id).map(|(_, r)| r.clone()));
+                                    let open_box = reason.is_none();
+                                    // The enrolled computer's own host name, so the owner sees which machine answers.
+                                    let host = if c.state == "enrolled" && !c.host.is_empty() { format!(" · {}", c.host) } else { String::new() };
+                                    let note = reason.map(|r| format!(" ({r})")).unwrap_or_default();
                                     view! {
-                                        <label class="check ld-comp" class:off=!enrolled>
-                                            <input type="checkbox" data-probe=format!("ld-comp:{}", c.id) disabled=!enrolled
+                                        <label class="check ld-comp" class:off=!open_box>
+                                            <input type="checkbox" data-probe=format!("ld-comp:{}", c.id) disabled=!open_box
                                                 prop:checked=move || form.with(|f| f.computers.contains(&id))
                                                 on:change=move |e| {
                                                     let on = event_target_checked(&e);
                                                     let id = id2.clone();
                                                     form.update(|f| { f.computers.retain(|x| x != &id); if on { f.computers.push(id); } });
                                                 }/>
-                                            <span>{format!("{}{note}", c.label)}</span>
+                                            <span>{format!("{}{host}{note}", c.label)}</span>
                                         </label>
                                     }
                                 }).collect_view()}
@@ -516,7 +593,7 @@ pub(crate) fn DeliveryPanel(ctx: crate::frame::FrameCtx) -> impl IntoView {
                                 let copy = copy_body(&login, &all);
                                 let missing_n = missing(&login, &all).len();
                                 let holders = holders_line(&login, &labels_now);
-                                let remove = remove_body(&login);
+                                let remove = remove_body(&login, &all);
                                 let fp = if login.fingerprint.is_empty() { "Computers disagree".to_owned() } else { login.fingerprint.clone() };
                                 let fp_short = short(&login.fingerprint).to_owned();
                                 let replace_login = login.clone();
@@ -627,6 +704,7 @@ mod tests {
             secret: SECRET.into(),
             expires_on: "2027-11-01".into(),
             computers: vec!["ubuntu".into(), "mac".into(), "nas1".into()],
+            blocked: vec![],
         };
         let body: serde_json::Value = serde_json::from_str(&form.take_body()).expect("test value");
         assert_eq!(body["confirm"], "replace");
@@ -659,7 +737,8 @@ mod tests {
         );
         assert_eq!(copy["confirm"], "copy");
         let remove: serde_json::Value =
-            serde_json::from_str(&remove_body(&login()).expect("test value")).expect("test value");
+            serde_json::from_str(&remove_body(&login(), &all).expect("test value"))
+                .expect("test value");
         assert_eq!(
             remove["targets"],
             json!([{"computer":"ubuntu","expect":A},{"computer":"mac","expect":B}])
@@ -721,5 +800,83 @@ mod tests {
             parse_view(r#"{"version":2}"#),
             Err(FetchError::Version(2))
         ));
+    }
+
+    fn computer(id: &str, state: &str, host: &str) -> DeliveryComputer {
+        DeliveryComputer {
+            id: id.into(),
+            label: id.into(),
+            state: state.into(),
+            host: host.into(),
+            seen_key: String::new(),
+        }
+    }
+
+    /// Recheck M3: a replace never names a holder the last check did not read: it cannot be ticked, the reason is
+    /// shown, and a form that ticks it is not ready (so the secret is never sent and lost to a refusal).
+    #[test]
+    fn fix2_m3_a_replace_blocks_an_unchecked_or_unreadable_holder() {
+        let mut l = login();
+        l.holders = vec![
+            holder("ubuntu", A, "ok"),
+            holder("nas1", A, "unchecked"),
+            holder("win", "", "unreadable"),
+        ];
+        let computers = vec![
+            computer("ubuntu", "enrolled", "u-host"),
+            computer("nas1", "enrolled", "n-host"),
+            computer("win", "enrolled", "w-host"),
+        ];
+        let mut form = Form::replacing(&l, &computers);
+        assert_eq!(form.computers, ["ubuntu"]);
+        let reason = |c: &str| {
+            form.blocked
+                .iter()
+                .find(|(b, _)| b == c)
+                .map(|(_, r)| r.clone())
+        };
+        assert!(reason("nas1").unwrap().contains("check computers first"));
+        assert!(reason("win").unwrap().contains("cannot be read"));
+        form.secret = SECRET.into();
+        assert!(form.ready());
+        form.computers.push("nas1".into());
+        assert!(
+            !form.ready(),
+            "a blocked computer ticked anyway is not sent"
+        );
+        assert!(
+            !form
+                .expects()
+                .iter()
+                .any(|(c, e)| c == "nas1" && e == "absent")
+                || !form.ready()
+        );
+    }
+
+    /// Recheck M4 and H1: a computer another one answered for is never pre-ticked or used as a copy source or a
+    /// removal target; a computer refused for answering with another target's key says which host answered.
+    #[test]
+    fn fix2_m4_h1_only_enrolled_computers_are_ticked_or_used() {
+        let mut l = login();
+        l.holders = vec![holder("ubuntu", A, "ok"), holder("mac", A, "ok")];
+        let computers = vec![
+            computer("ubuntu", "other", "x"),
+            computer("mac", "enrolled", "m-host"),
+            computer("nas1", "taken", "u-host"),
+        ];
+        let form = Form::replacing(&l, &computers);
+        assert_eq!(form.computers, ["mac"]);
+        let all = writable(&computers);
+        let copy: serde_json::Value =
+            serde_json::from_str(&copy_body(&l, &all).unwrap_or_default()).unwrap_or_default();
+        assert_ne!(copy["from"]["computer"], "ubuntu");
+        let remove: serde_json::Value =
+            serde_json::from_str(&remove_body(&l, &all).expect("test value")).expect("test value");
+        assert_eq!(remove["targets"], json!([{"computer":"mac","expect":A}]));
+        assert_eq!(
+            computer_blocked(&computers[2]).unwrap(),
+            "answers as u-host, another computer's"
+        );
+        assert_eq!(Form::new_login(&computers).blocked.len(), 2);
     }
 }

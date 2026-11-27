@@ -267,8 +267,14 @@ fn put(args: &Value) -> Result<Value, Failure> {
         (Some(current), _) if !same(&current.summary, &wanted) => {
             Err(Failure::new(Cause::IdentityMismatch, IDENTITY))
         }
-        // A repeat of the same delivery (its answer was lost) is not a change.
-        (Some(current), "absent") if current.summary.fingerprint == fingerprint => Ok(()),
+        // A repeat of the same delivery (its answer was lost) is not a change; a stale repeat
+        // that would change the end (and rotate the backup) is.
+        (Some(current), "absent")
+            if current.summary.fingerprint == fingerprint
+                && current.summary.expires_at == record.summary.expires_at =>
+        {
+            Ok(())
+        }
         (Some(current), expect) if current.summary.fingerprint == expect => Ok(()),
         (Some(_), _) => Err(Failure::new(Cause::ConfirmationInvalid, CHANGED)),
     })?;
@@ -627,5 +633,37 @@ mod tests {
                 .cause,
             Cause::ConfirmationInvalid
         );
+    }
+
+    /// Recheck M5 (agent side): a stale `absent` retry of the same value with another end is
+    /// refused; the end on disk and the previous generation stay.
+    #[test]
+    fn a_stale_absent_retry_with_another_end_is_refused() {
+        let home = home();
+        run("login-put", &put_args(&home, TOKEN, "absent")).unwrap();
+        let mut second = put_args(&home, OTHER, &credential::fingerprint(TOKEN));
+        second["expiresAt"] = json!("2028-11-19T00:00:00Z");
+        run("login-put", &second).unwrap();
+        let path = home
+            .path()
+            .join(".ccs/logins/previous/claude-0a1b2c3d.json");
+        let before = std::fs::read(&path).unwrap();
+        let mut stale = put_args(&home, OTHER, "absent");
+        stale["expiresAt"] = Value::Null;
+        assert_eq!(
+            run("login-put", &stale).unwrap_err().cause,
+            Cause::ConfirmationInvalid
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let inventory = run(
+            "login-inventory",
+            &json!({"home": home.path().to_str().unwrap()}),
+        )
+        .unwrap();
+        assert_eq!(inventory["logins"][0]["expiresAt"], "2028-11-19T00:00:00Z");
+        // The same value with the same end is a no-op, not a refusal.
+        let mut same = put_args(&home, OTHER, "absent");
+        same["expiresAt"] = json!("2028-11-19T00:00:00Z");
+        assert_eq!(run("login-put", &same).unwrap()["written"], "unchanged");
     }
 }

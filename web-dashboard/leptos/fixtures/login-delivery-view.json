@@ -94,7 +94,7 @@
      "computer": "nas1",
      "deliveredAt": "2026-11-20T11:00:00Z",
      "fingerprint": "sha256:5566778899aabbcc",
-     "state": "differs"
+     "state": "unchecked"
     },
     {
      "computer": "ubuntu",

@@ -52,13 +52,21 @@ export const tests = {
 		await t.until('every delivered login is drawn', (n) => document.querySelectorAll(n).length > 0, ROWS, { timeout: 30000 });
 		await t.check('one row per delivered login', await t.page.locator(ROWS).count() === FIXTURE.logins.length);
 		await t.check('a fingerprint is shown, never a secret', /sha256:0011223344556677/.test(await t.page.locator(ROWS).first().innerText()));
-		await t.check('a computer holding another value names it', /Nas1 other value 55667788/.test(await t.page.locator(ROWS).first().innerText()));
+		await t.check('a computer not read at the last check says so', /Nas1 not checked/.test(await t.page.locator(ROWS).first().innerText()));
+		await t.check('a computer holding another value names it', /Mac other value 8899aabb/.test(await t.page.locator(ROWS).nth(1).innerText()));
 		await t.check('a login whose computers disagree says so and offers no copy', /Computers disagree/.test(await t.page.locator(ROWS).nth(1).innerText()) && await t.page.locator(ROWS).nth(1).locator('[data-probe="ld-copy"]').count() === 0);
 		await t.check('an unreadable file is named', /Ubuntu unreadable file/.test(await t.page.locator(ROWS).nth(2).innerText()));
 		await t.check('another computer answering is said, with Trust it', await t.page.locator('[data-probe="ld-other:windows"] [data-probe="ld-trust"]').count() === 1);
 		await t.page.locator('.ld').scrollIntoViewIfNeeded();
 		await t.crop('delivery-desktop', '.ld', 'Static logins at 1920: three rows (account, kind, fingerprint, end, where, actions), the expiring one in amber, Copy to the rest only where a computer lacks it');
 		await noSideways(t, 'no sideways scroll at 1920');
+		// Replace on a login with an unchecked holder: that computer cannot be ticked, and says why; hosts are shown.
+		await t.page.locator(ROWS).first().locator('[data-probe="ld-replace"]').click();
+		await t.check('an unchecked holder cannot be ticked in a replace', await t.page.locator('[data-probe="ld-comp:nas1"]').isDisabled());
+		await t.check('the reason is shown', /Nas1.*check computers first/.test(await t.page.locator('.ld-comps').innerText()));
+		await t.check('enrolled computers show their host name', /Ubuntu · ubuntu-test/.test(await t.page.locator('.ld-comps').innerText()));
+		await t.crop('delivery-replace-unchecked', '.ld', 'Replace form: Nas1 cannot be ticked (not read at the last check: check computers first); Ubuntu and Mac ticked with host names; Windows refused (another computer answered)');
+		await t.page.getByRole('button', { name: 'Cancel' }).click();
 		// Deliver a new token to Mac.
 		await t.page.locator('[data-probe="ld-new"]').click();
 		await t.check('the secret field is a password field', await t.page.locator('[data-probe="ld-secret"]').getAttribute('type') === 'password');

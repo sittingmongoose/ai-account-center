@@ -165,7 +165,21 @@ pub(super) struct Registry {
     /// Each computer's pinned identity (enrolled when the owner checks the computers).
     #[serde(default)]
     pub(super) computers: Vec<Pin>,
+    /// Targets refused at the last contact with a reason that has no trust step: another
+    /// operating system answered, or a computer already pinned to another target answered.
+    #[serde(default)]
+    pub(super) notes: Vec<Note>,
     pub(super) logins: Vec<Entry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct Note {
+    pub(super) computer: String,
+    /// `other-os` or `taken`.
+    pub(super) state: String,
+    /// For `taken`: the host name of the computer that answered.
+    pub(super) host: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,6 +230,12 @@ impl Registry {
                 .computers
                 .iter()
                 .all(|p| credential::valid_computer_key(&p.key) && credential::valid_host(&p.host))
+            // One computer is pinned to one target: a key or a target never appears twice.
+            && doc.computers.iter().enumerate().all(|(i, p)| {
+                doc.computers[i + 1..]
+                    .iter()
+                    .all(|q| q.key != p.key && q.computer != p.computer)
+            })
             && doc.logins.iter().all(|e| {
                 credential::valid_login_id(&e.login_id)
                     && credential::valid_provider(&e.provider)
@@ -233,6 +253,25 @@ impl Registry {
 
     fn pin(&self, computer: &str) -> Option<&Pin> {
         self.computers.iter().find(|p| p.computer == computer)
+    }
+
+    /// Say (or stop saying) why a target was refused without a trust step.
+    fn note(&mut self, computer: &str, state: Option<(&str, &str)>) {
+        self.notes.retain(|n| n.computer != computer);
+        if let Some((state, host)) = state {
+            self.notes.push(Note {
+                computer: computer.to_owned(),
+                state: state.to_owned(),
+                host: host.to_owned(),
+            });
+        }
+    }
+
+    /// Another target already owns this key.
+    fn taken(&self, computer: &str, key: &str) -> bool {
+        self.computers
+            .iter()
+            .any(|p| p.computer != computer && p.key == key)
     }
 
     fn put_entry(&mut self, entry: Entry) {
@@ -351,8 +390,12 @@ enum Inventory {
     },
     /// It answered, but has never been enrolled.
     New(credential::ComputerId),
-    /// Another computer answered (another key or host, or another operating system).
-    Other(Option<credential::ComputerId>),
+    /// Another computer of the same operating system answered (another key or host).
+    Other(credential::ComputerId),
+    /// A computer already pinned to another target answered.
+    Taken(credential::ComputerId),
+    /// A computer with another operating system answered: never trusted, nothing read from it.
+    WrongOs,
     /// No usable answer.
     Unreachable,
 }
@@ -361,18 +404,21 @@ async fn inventory(calls: &dyn Calls, registry: &Registry, target: &Target) -> I
     let LoginReply::Value(value) = calls.call(target, "login-inventory", json!({})).await else {
         return Inventory::Unreachable;
     };
-    let id = serde_json::from_value::<credential::ComputerId>(value["computer"].clone()).ok();
     if value["os"].as_str() != Some(target.os()) {
-        return Inventory::Other(id);
+        return Inventory::WrongOs;
     }
+    let id = serde_json::from_value::<credential::ComputerId>(value["computer"].clone()).ok();
     let Some(id) =
         id.filter(|id| credential::valid_computer_key(&id.key) && credential::valid_host(&id.host))
     else {
         return Inventory::Unreachable;
     };
+    if registry.taken(&target.id, &id.key) {
+        return Inventory::Taken(id);
+    }
     match registry.pin(&target.id) {
         None => Inventory::New(id),
-        Some(pin) if pin.key != id.key || pin.host != id.host => Inventory::Other(Some(id)),
+        Some(pin) if pin.key != id.key || pin.host != id.host => Inventory::Other(id),
         Some(pin) => {
             let logins =
                 serde_json::from_value::<Vec<credential::Summary>>(value["logins"].clone());
@@ -392,7 +438,8 @@ async fn inventory(calls: &dyn Calls, registry: &Registry, target: &Target) -> I
 /// What one pinned computer holds under one login id.
 enum Held {
     Absent,
-    Has(String),
+    /// Its fingerprint and end.
+    Has(String, Option<String>),
     OtherAccount,
     Unreadable,
 }
@@ -413,7 +460,7 @@ fn held(entry: &Entry, logins: &[credential::Summary], unreadable: &[String]) ->
         {
             Held::OtherAccount
         }
-        Some(s) => Held::Has(s.fingerprint.clone()),
+        Some(s) => Held::Has(s.fingerprint.clone(), s.expires_at.clone()),
     }
 }
 
@@ -471,18 +518,37 @@ async fn probe(
             key,
         },
         Inventory::New(_) => Probe::Stop("unenrolled"),
-        Inventory::Other(seen) => {
+        Inventory::Unreachable => Probe::Stop("unreachable"),
+        refused => {
+            answered_wrong(registry, &target.id, refused);
+            Probe::Stop("wrong-computer")
+        }
+    }
+}
+
+/// Record that the wrong computer answered for a target: every login there says so. Only a
+/// same-OS computer with a key no other target owns may be trusted later (`pin.seen`).
+fn answered_wrong(registry: &mut Registry, computer: &str, answer: Inventory) {
+    match answer {
+        Inventory::Other(id) => {
+            registry.note(computer, None);
             if let Some(pin) = registry
                 .computers
                 .iter_mut()
-                .find(|p| p.computer == target.id)
+                .find(|p| p.computer == computer)
             {
-                pin.seen = seen;
+                pin.seen = Some(id);
             }
-            Probe::Stop("wrong-computer")
         }
-        Inventory::Unreachable => Probe::Stop("unreachable"),
+        Inventory::Taken(id) => registry.note(computer, Some(("taken", &id.host))),
+        Inventory::WrongOs => registry.note(computer, Some(("other-os", ""))),
+        Inventory::Unreachable => {
+            mark_all(registry, computer, "unchecked");
+            return;
+        }
+        Inventory::New(_) | Inventory::Ours { .. } => return,
     }
+    mark_all(registry, computer, "wrong-computer");
 }
 
 /// Write one login to one computer. `expect` is what the page showed for that computer
@@ -501,19 +567,25 @@ async fn put_one(
         Probe::Ready { held, key } => (held, key),
         Probe::Stop(state) => return state,
     };
-    let on_disk = match held {
+    let (on_disk, disk_end) = match held {
         Held::Unreadable => return "unreadable",
         Held::OtherAccount => return "mismatch",
-        Held::Absent => "absent".to_owned(),
-        Held::Has(fp) => fp,
+        Held::Absent => ("absent".to_owned(), None),
+        Held::Has(fp, end) => (fp, end),
     };
-    if on_disk != expect && on_disk != fingerprint {
-        return "changed";
+    if on_disk != expect {
+        // Only an exact repeat (same value, same end) already there is fine; anything else
+        // differs from what the page confirmed and is refused, never rewritten.
+        return if on_disk == fingerprint && disk_end.as_deref() == expires_at {
+            "unchanged"
+        } else {
+            "changed"
+        };
     }
     let mut args = entry.args();
     args["secret"] = json!(secret);
     args["expiresAt"] = json!(expires_at);
-    args["expect"] = json!(on_disk);
+    args["expect"] = json!(expect);
     args["computer"] = json!(key);
     match calls.call(target, "login-put", args).await {
         LoginReply::Value(value)
@@ -604,7 +676,9 @@ fn target_list(
 fn agrees(entry: Option<&Entry>, computer: &str, expect: &str) -> bool {
     match entry.and_then(|e| e.holder(computer)) {
         None => expect == "absent",
-        Some(h) => h.fingerprint.as_deref() == Some(expect),
+        // Only a value the last contact actually read there can be confirmed: an unchecked,
+        // unreadable or wrong-computer holder needs a check first.
+        Some(h) => h.seen == "seen" && h.fingerprint.as_deref() == Some(expect),
     }
 }
 
@@ -883,7 +957,7 @@ pub(super) async fn copy(
     };
     let key = match probe(calls, registry, source, &entry).await {
         Probe::Ready {
-            held: Held::Has(fp),
+            held: Held::Has(fp, _),
             key,
         } if fp == source_fp => key,
         Probe::Ready {
@@ -965,8 +1039,8 @@ pub(super) async fn remove(
                 Held::Unreadable => "unreadable",
                 Held::OtherAccount => "mismatch",
                 Held::Absent => "absent",
-                Held::Has(fp) if &fp != expect => "changed",
-                Held::Has(fp) => {
+                Held::Has(fp, _) if &fp != expect => "changed",
+                Held::Has(fp, _) => {
                     let mut args = entry.args();
                     args["expect"] = json!(fp);
                     args["computer"] = json!(key);
@@ -1020,6 +1094,7 @@ pub(super) async fn check(calls: &dyn Calls, registry: &mut Registry, known: &[T
     for target in known {
         match inventory(calls, registry, target).await {
             Inventory::New(id) => {
+                registry.note(&target.id, None);
                 registry.computers.retain(|p| p.computer != target.id);
                 registry.computers.push(Pin {
                     computer: target.id.clone(),
@@ -1051,19 +1126,10 @@ pub(super) async fn check(calls: &dyn Calls, registry: &mut Registry, known: &[T
                 {
                     pin.seen = None;
                 }
+                registry.note(&target.id, None);
                 answers.push((target.id.clone(), logins, unreadable));
             }
-            Inventory::Other(seen) => {
-                if let Some(pin) = registry
-                    .computers
-                    .iter_mut()
-                    .find(|p| p.computer == target.id)
-                {
-                    pin.seen = seen;
-                }
-                mark_all(registry, &target.id, "wrong-computer");
-            }
-            Inventory::Unreachable => mark_all(registry, &target.id, "unchecked"),
+            refused => answered_wrong(registry, &target.id, refused),
         }
     }
     // Logins on the computers that the registry does not know: rebuild them from the files.
@@ -1093,7 +1159,7 @@ pub(super) async fn check(calls: &dyn Calls, registry: &mut Registry, known: &[T
                 Held::Absent => entry.drop_holder(computer),
                 Held::Unreadable => entry.hold(computer, None, &now, "unreadable"),
                 Held::OtherAccount => entry.hold(computer, None, &now, "other-account"),
-                Held::Has(fp) => {
+                Held::Has(fp, _) => {
                     let written = logins
                         .iter()
                         .find(|s| s.login_id == entry.login_id)
@@ -1103,6 +1169,18 @@ pub(super) async fn check(calls: &dyn Calls, registry: &mut Registry, known: &[T
                     ends.push((fp, expires_at));
                 }
             }
+        }
+        // A recorded value no computer holds any more (every holder read) is dropped with its
+        // end, so it is never shown as current.
+        if entry.fingerprint.is_some()
+            && entry.holders.iter().all(|h| h.seen == "seen")
+            && !entry
+                .holders
+                .iter()
+                .any(|h| h.fingerprint == entry.fingerprint)
+        {
+            entry.fingerprint = None;
+            entry.expires_at = None;
         }
         // With no current generation, adopt one only when every computer read agrees on it.
         if entry.fingerprint.is_none()
@@ -1144,10 +1222,12 @@ pub(super) async fn trust(
         .and_then(|p| p.seen.clone())
         .filter(|seen| seen.key == key)
         .ok_or(Refuse::Confirm)?;
+    // Only a same-OS computer still answering, whose key no other target owns.
     match inventory(calls, registry, target).await {
-        Inventory::Other(Some(now_seen)) if now_seen == shown => {}
+        Inventory::Other(now_seen) if now_seen == shown => {}
         _ => return Err(Refuse::Confirm),
     }
+    registry.note(&target.id, None);
     registry.computers.retain(|p| p.computer != target.id);
     registry.computers.push(Pin {
         computer: target.id.clone(),
@@ -1176,13 +1256,15 @@ fn ends(kind: Kind, expires_at: Option<&str>, at: i64) -> (String, String) {
         };
     };
     let days = (ms - at).div_euclid(DAY_MS);
+    let plural = |n: i64, unit: &str| format!("in {n} {unit}{}", if n == 1 { "" } else { "s" });
     if ms <= at {
         ("Ended".into(), "ended".into())
+    } else if days == 0 {
+        // Under a day: whole hours, at least one.
+        let hours = ((ms - at) / 3_600_000).max(1);
+        (plural(hours, "hour"), "expiring".into())
     } else if days <= EXPIRING_DAYS {
-        (
-            format!("in {} day{}", days.max(1), if days == 1 { "" } else { "s" }),
-            "expiring".into(),
-        )
+        (plural(days, "day"), "expiring".into())
     } else {
         (
             expires_at
@@ -1289,6 +1371,21 @@ pub(super) fn view(
             .map(|t| {
                 let pin = registry.pin(&t.id);
                 let seen = pin.and_then(|p| p.seen.clone());
+                let pinned = pin.map(|p| p.host.clone()).unwrap_or_default();
+                // A refusal without a trust step wins: nothing is offered to trust there.
+                if let Some(note) = registry.notes.iter().find(|n| n.computer == t.id) {
+                    return DeliveryComputer {
+                        id: t.id.clone(),
+                        label: computer_label(&t.id),
+                        state: note.state.clone(),
+                        host: if note.host.is_empty() {
+                            pinned
+                        } else {
+                            note.host.clone()
+                        },
+                        seen_key: String::new(),
+                    };
+                }
                 DeliveryComputer {
                     id: t.id.clone(),
                     label: computer_label(&t.id),
@@ -1298,11 +1395,7 @@ pub(super) fn view(
                         (Some(_), None) => "enrolled",
                     }
                     .into(),
-                    host: seen
-                        .as_ref()
-                        .map(|s| s.host.clone())
-                        .or_else(|| pin.map(|p| p.host.clone()))
-                        .unwrap_or_default(),
+                    host: seen.as_ref().map(|s| s.host.clone()).unwrap_or(pinned),
                     seen_key: seen.map(|s| s.key).unwrap_or_default(),
                 }
             })
@@ -1524,6 +1617,8 @@ mod tests {
         os: BTreeMap<String, String>,
         routes: BTreeMap<String, String>,
         down: Vec<String>,
+        /// Computers whose inventory answer leaves out `computer`.
+        strip: Vec<String>,
     }
 
     impl Fake {
@@ -1536,6 +1631,7 @@ mod tests {
                 os: BTreeMap::new(),
                 routes: BTreeMap::new(),
                 down: vec![],
+                strip: vec![],
             }
         }
         fn home(&self, id: &str) -> PathBuf {
@@ -1567,6 +1663,11 @@ mod tests {
                     Ok(mut value) => {
                         if let Some(os) = self.os.get(&target.id) {
                             value["os"] = json!(os);
+                        }
+                        if self.strip.contains(&target.id)
+                            && let Some(map) = value.as_object_mut()
+                        {
+                            map.remove("computer");
                         }
                         LoginReply::Value(value)
                     }
@@ -1959,7 +2060,12 @@ mod tests {
         check(&fake, &mut reg, &known, AT + 2000).await;
         let holder = reg.logins[0].holder("ubuntu").unwrap().clone();
         assert_eq!(holder.fingerprint.as_deref(), Some(fp(OTHER).as_str()));
-        assert_eq!(reg.logins[0].state(&holder), "differs");
+        // No computer holds the recorded value any more: the check adopts what is there.
+        assert_eq!(reg.logins[0].state(&holder), "ok");
+        assert_eq!(
+            reg.logins[0].fingerprint.as_deref(),
+            Some(fp(OTHER).as_str())
+        );
         let copied = copy(
             &fake,
             &mut reg,
@@ -2269,5 +2375,250 @@ mod tests {
         assert_eq!(ends(Kind::ClaudeToken, Some(&past), AT).1, "ended");
         let far = storage::iso(AT + 200 * DAY_MS).unwrap();
         assert_eq!(ends(Kind::ClaudeToken, Some(&far), AT).1, "ok");
+    }
+
+    // ---- Fix round 2 (recheck 1): each test failed on 4c89ff8f1. ----
+
+    fn file_exists(fake: &Fake, home: &str) -> bool {
+        fake.home(home).join(".ccs/logins").exists()
+    }
+
+    /// Recheck H1: one computer's key can never be pinned to two targets. A target that answers
+    /// with a key pinned to another target is refused at check and at trust, and nothing meant for
+    /// it is written on the other computer; a registry holding a duplicate is refused.
+    #[tokio::test]
+    async fn fix2_h1_a_key_pinned_to_one_target_is_never_pinned_to_another() {
+        let mut fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        // nas1 misrouted to ubuntu at its very first check.
+        fake.routes.insert("nas1".into(), "ubuntu".into());
+        let mut reg = registry();
+        check(&fake, &mut reg, &known, AT).await;
+        let keys: Vec<_> = reg.computers.iter().map(|p| p.key.clone()).collect();
+        assert_eq!(keys.len(), 1, "one key pinned twice: {:?}", reg.computers);
+        let put = parse_put(&put_body(TOKEN, &["nas1"]), &accounts(), &known).unwrap();
+        let receipt = deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        assert_ne!(states(&receipt), ["delivered"]);
+        assert!(!file_exists(&fake, "ubuntu"));
+        // Enrolled correctly, then swapped: trusting the other computer's key is refused.
+        fake.routes.clear();
+        let mut reg = enrolled(&fake, &known).await;
+        fake.routes.insert("nas1".into(), "ubuntu".into());
+        let put = parse_put(&put_body(TOKEN, &["nas1"]), &accounts(), &known).unwrap();
+        let swapped = deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        assert_eq!(states(&swapped), ["wrong-computer"]);
+        assert!(!file_exists(&fake, "ubuntu"));
+        // Ubuntu's key is pinned to ubuntu: nas1 is refused as taken, with nothing to trust.
+        assert!(reg.pin("nas1").unwrap().seen.is_none());
+        let v = view(&reg, &known, accounts(), AT);
+        let nas1 = v.computers.iter().find(|c| c.id == "nas1").unwrap();
+        assert_eq!((nas1.state.as_str(), nas1.seen_key.as_str()), ("taken", ""));
+        let shown = reg.pin("ubuntu").unwrap().key.clone();
+        assert_eq!(
+            trust(
+                &fake,
+                &mut reg,
+                &known,
+                &body(json!({"computer":"nas1","key":shown,"confirm":"trust"})),
+                AT
+            )
+            .await,
+            Err(Refuse::Confirm)
+        );
+        let mut dup = reg.clone();
+        let ubuntu_key = dup.pin("ubuntu").unwrap().key.clone();
+        dup.computers
+            .iter_mut()
+            .for_each(|p| p.key = ubuntu_key.clone());
+        assert_eq!(Registry::parse(&serde_json::to_vec(&dup).unwrap()), None);
+    }
+
+    /// Recheck M1: a computer answering with another operating system is never trusted and never
+    /// changes a pin; an answer without `computer` never clears what was seen.
+    #[tokio::test]
+    async fn fix2_m1_a_wrong_os_answer_is_never_trusted() {
+        let mut fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        let pinned = reg.pin("nas1").unwrap().clone();
+        fake.os.insert("nas1".into(), "macos".into());
+        check(&fake, &mut reg, &known, AT).await;
+        let v = view(&reg, &known, accounts(), AT);
+        let nas1 = v.computers.iter().find(|c| c.id == "nas1").unwrap().clone();
+        assert_ne!(nas1.state, "enrolled");
+        assert_eq!(nas1.seen_key, "", "no Trust for another operating system");
+        let key = reg.pin("nas1").unwrap().key.clone();
+        assert!(
+            trust(
+                &fake,
+                &mut reg,
+                &known,
+                &body(json!({"computer":"nas1","key":key,"confirm":"trust"})),
+                AT
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(reg.pin("nas1").unwrap().key, pinned.key);
+        // Same OS, another computer, then answers without `computer`: still "other".
+        fake.os.clear();
+        fake.routes.insert("nas1".into(), "ubuntu".into());
+        let mut reg = enrolled(&Fake::new(&["ubuntu", "nas1"]), &known).await;
+        check(&fake, &mut reg, &known, AT).await;
+        fake.strip.push("nas1".into());
+        fake.os.insert("nas1".into(), "macos".into());
+        check(&fake, &mut reg, &known, AT).await;
+        let v = view(&reg, &known, accounts(), AT);
+        assert_ne!(
+            v.computers.iter().find(|c| c.id == "nas1").unwrap().state,
+            "enrolled"
+        );
+    }
+
+    /// Recheck M2: when no computer holds the recorded value, a check drops it and its end and
+    /// adopts what every computer read agrees on, so Copy is offered again.
+    #[tokio::test]
+    async fn fix2_m2_a_check_drops_a_value_no_computer_holds() {
+        let mut fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        let mut b = put_body(TOKEN, &["ubuntu", "nas1"]);
+        b.insert("expiresOn".into(), json!("2026-11-19"));
+        let put = parse_put(&b, &accounts(), &known).unwrap();
+        deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        let id = reg.logins[0].login_id.clone();
+        fake.down.push("nas1".into());
+        let mut b = replace_body(&id, OTHER, &[("ubuntu", &fp(TOKEN)), ("nas1", &fp(TOKEN))]);
+        b.insert("expiresOn".into(), json!("2028-11-19"));
+        let put = parse_put(&b, &accounts(), &known).unwrap();
+        deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        fake.down.clear();
+        remove(
+            &fake,
+            &mut reg,
+            &known,
+            &body(json!({"loginId":id,
+            "targets":targets(&[("ubuntu",&fp(OTHER))]),"confirm":"remove"})),
+        )
+        .await
+        .unwrap();
+        check(&fake, &mut reg, &known, AT).await;
+        let e = reg.logins[0].clone();
+        assert_eq!(e.fingerprint.as_deref(), Some(fp(TOKEN).as_str()));
+        assert_eq!(e.expires_at.as_deref(), Some("2026-11-19T00:00:00Z"));
+        let v = view(&reg, &known, accounts(), AT);
+        assert_eq!(v.logins[0].holders[0].state, "ok");
+        assert_ne!(v.logins[0].health, "ok");
+    }
+
+    /// Recheck M3: a holder not read at the last check (or unreadable) cannot be confirmed: the
+    /// server refuses a target naming its stale value, so the page must ask for a check first.
+    #[tokio::test]
+    async fn fix2_m3_an_unchecked_holder_needs_a_check_first() {
+        let mut fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        let entry = first(&fake, &mut reg, &known, &["ubuntu", "nas1"]).await;
+        fake.down.push("nas1".into());
+        check(&fake, &mut reg, &known, AT).await;
+        fake.down.clear();
+        let put = parse_put(
+            &replace_body(&entry.login_id, OTHER, &[("nas1", &fp(TOKEN))]),
+            &accounts(),
+            &known,
+        )
+        .unwrap();
+        assert_eq!(
+            deliver(&fake, &mut reg, &known, put, AT).await.err(),
+            Some(Refuse::Confirm)
+        );
+    }
+
+    /// Recheck M4: when another computer answers for a target, every login on that target says so.
+    #[tokio::test]
+    async fn fix2_m4_a_wrong_computer_marks_every_login_there() {
+        let mut fake = Fake::new(&["ubuntu", "nas1", "other"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        let one = first(&fake, &mut reg, &known, &["ubuntu", "nas1"]).await;
+        let mut b = put_body(OTHER, &["nas1"]);
+        b.insert("kind".into(), json!("claude-token"));
+        let put = parse_put(&b, &accounts(), &known).unwrap();
+        deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        fake.routes.insert("nas1".into(), "other".into());
+        let put = parse_put(
+            &replace_body(&one.login_id, THIRD, &[("nas1", &fp(TOKEN))]),
+            &accounts(),
+            &known,
+        )
+        .unwrap();
+        assert_eq!(
+            states(&deliver(&fake, &mut reg, &known, put, AT).await.unwrap()),
+            ["wrong-computer"]
+        );
+        let v = view(&reg, &known, accounts(), AT);
+        for login in &v.logins {
+            let nas1 = login.holders.iter().find(|h| h.computer == "nas1").unwrap();
+            assert_eq!(nas1.state, "wrong-computer", "{}", login.login_id);
+        }
+    }
+
+    /// Recheck M5: a stale request never rewrites the confirmed value: when a computer already
+    /// holds the new value with another end, the request is refused and its end and backup stay.
+    #[tokio::test]
+    async fn fix2_m5_a_stale_retry_keeps_the_end_and_the_backup() {
+        let fake = Fake::new(&["ubuntu", "nas1"]);
+        let known = known();
+        let mut reg = enrolled(&fake, &known).await;
+        let entry = first(&fake, &mut reg, &known, &["ubuntu"]).await;
+        let mut lost = reg.clone();
+        let mut b = replace_body(&entry.login_id, OTHER, &[("ubuntu", &fp(TOKEN))]);
+        b.insert("expiresOn".into(), json!("2028-11-19"));
+        let put = parse_put(&b, &accounts(), &known).unwrap();
+        deliver(&fake, &mut lost, &known, put, AT).await.unwrap();
+        drop(lost);
+        let previous = fake.home("ubuntu").join(format!(
+            ".ccs/logins/previous/claude-{}.json",
+            entry.login_id
+        ));
+        let backup = std::fs::read(&previous).unwrap();
+        // Retry against the old registry with the end left empty.
+        let put = parse_put(
+            &replace_body(&entry.login_id, OTHER, &[("ubuntu", &fp(TOKEN))]),
+            &accounts(),
+            &known,
+        )
+        .unwrap();
+        let receipt = deliver(&fake, &mut reg, &known, put, AT).await.unwrap();
+        assert_eq!(states(&receipt), ["changed"]);
+        assert_eq!(std::fs::read(&previous).unwrap(), backup);
+        let disk = aac_agent::login_verb(
+            "login-inventory",
+            &json!({"home": fake.home("ubuntu").to_str().unwrap()}),
+        )
+        .unwrap();
+        assert_eq!(disk["logins"][0]["expiresAt"], "2028-11-19T00:00:00Z");
+    }
+
+    /// Recheck L1: under a day says hours; one day is singular.
+    #[test]
+    fn fix2_l1_ends_read_right_under_a_day() {
+        let at = |ms: i64| storage::iso(AT + ms).unwrap();
+        assert_eq!(
+            ends(Kind::ClaudeToken, Some(&at(13 * 3_600_000)), AT).0,
+            "in 13 hours"
+        );
+        assert_eq!(
+            ends(Kind::ClaudeToken, Some(&at(3_600_000)), AT).0,
+            "in 1 hour"
+        );
+        assert_eq!(
+            ends(Kind::ClaudeToken, Some(&at(DAY_MS + 5)), AT).0,
+            "in 1 day"
+        );
+        assert_eq!(
+            ends(Kind::ClaudeToken, Some(&at(3 * DAY_MS + 5)), AT).0,
+            "in 3 days"
+        );
     }
 }
