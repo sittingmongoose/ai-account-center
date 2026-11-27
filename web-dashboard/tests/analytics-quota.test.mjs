@@ -285,6 +285,64 @@ test('Compare end labels on a phone: one per account, clear of every other label
   }
 });
 
+test('Compare end labels: two lines at nearly the same value stay apart', () => {
+  const ASC = 11, DESC = 2.2, GAP = 2;
+  const close = (used) => [{ ...win('seven_day', 'Weekly usage', used, { resetAt: iso(now + 50 * H) }), points: [point(now - 12 * H, used - 2), point(now - H, used)] }];
+  const pair = {
+    history: { oldestSampleAt: iso(now - 40 * H) },
+    accounts: [
+      account('claude:close-one', 'claude', 'close.one@example.invalid', close(20)),
+      account('claude:close-two', 'claude', 'close.two@example.invalid', close(20.1)),
+    ],
+  };
+  const board = { accounts: pair.accounts.map(({ id, provider, email, windows }) => account(id, provider, email, windows.map(({ points, ...w }) => w))) };
+  const accounts = quotaAccounts(pair, { now, dashboard: board });
+  const f = focusChart(accounts[0], pair, { now, width: 375, height: 180, compare: true, accounts });
+  const ends = f.labels.filter(l => l.color === 'series-ink');
+  assert.equal(ends.length, 2, `both end labels: ${ends.map(l => l.text).join(' | ')}`);
+  const box = l => ({ x0: l.x, x1: l.x + l.w, y0: l.y - ASC, y1: l.y + DESC });
+  const apart = (a, b) => a.x1 + GAP <= b.x0 || b.x1 + GAP <= a.x0 || a.y1 + GAP <= b.y0 || b.y1 + GAP <= a.y0;
+  assert.ok(apart(box(ends[0]), box(ends[1])), `${ends[0].text} at ${ends[0].y} is too close to ${ends[1].text} at ${ends[1].y}`);
+});
+
+test('Compare end labels use the free vertical space before dropping one', () => {
+  const ASC = 11, DESC = 2.2, GAP = 2;
+  const spread = [5, 23, 41, 59, 77, 95];
+  const six = {
+    history: { oldestSampleAt: iso(now - 40 * H) },
+    accounts: spread.map((used, i) => account(`claude:spread-${i}`, 'claude', `spread${i}@example.invalid`, [
+      { ...win('seven_day', 'Weekly usage', used, { resetAt: iso(now + 50 * H) }), points: [point(now - 30 * H, Math.max(0, used - 8)), point(now - 12 * H, Math.max(0, used - 3)), point(now - H, used)] },
+    ])),
+  };
+  const board = { accounts: six.accounts.map(({ id, provider, email, windows }) => account(id, provider, email, windows.map(({ points, ...w }) => w))) };
+  const accounts = quotaAccounts(six, { now, dashboard: board });
+  const f = focusChart(accounts[0], six, { now, width: 600, height: 220, compare: true, accounts });
+  const ends = f.labels.filter(l => l.color === 'series-ink');
+  assert.equal(ends.length, spread.length, `one end label per account: ${ends.map(l => l.text).join(' | ')}`);
+  const box = l => ({ x0: l.x, x1: l.x + l.w, y0: l.y - ASC, y1: l.y + DESC });
+  const apart = (a, b) => a.x1 + GAP <= b.x0 || b.x1 + GAP <= a.x0 || a.y1 + GAP <= b.y0 || b.y1 + GAP <= a.y0;
+  for (const e of ends) for (const o of f.labels) {
+    if (o === e) continue;
+    assert.ok(apart(box(e), box(o)), `"${e.text}" at ${e.y} is too close to "${o.text}" at ${o.y}`);
+  }
+});
+
+test('Compare end labels keep the line order when close values crowd the bottom', () => {
+  const close = [20, 20.1, 20.2, 20.3, 20.4, 20.5];
+  const six = {
+    history: { oldestSampleAt: iso(now - 40 * H) },
+    accounts: close.map((used, i) => account(`claude:close-${i}`, 'claude', `close${i}@example.invalid`, [
+      { ...win('seven_day', 'Weekly usage', used, { resetAt: iso(now + 50 * H) }), points: [point(now - 12 * H, used - 2), point(now - H, used)] },
+    ])),
+  };
+  const board = { accounts: six.accounts.map(({ id, provider, email, windows }) => account(id, provider, email, windows.map(({ points, ...w }) => w))) };
+  const accounts = quotaAccounts(six, { now, dashboard: board });
+  const f = focusChart(accounts[0], six, { now, width: 600, height: 220, compare: true, accounts });
+  const ends = f.labels.filter(l => l.color === 'series-ink');
+  assert.equal(ends.length, close.length, `one end label per account: ${ends.map(l => `${l.text}@${l.y}`).join(' | ')}`);
+  for (let n = 1; n < ends.length; n++) assert.ok(ends[n].y > ends[n - 1].y, `${ends[n - 1].text} at ${ends[n - 1].y} stays above ${ends[n].text} at ${ends[n].y}`);
+});
+
 test('scoped weeklies: model names in rows and agenda, binding considers aggregate plus scoped', async () => {
   const { bindingWeekly } = await import('../public/analytics-quota.mjs');
   const scopedDash = { accounts: [account('claude:scoped', 'claude', 's@example.test', [

@@ -5,22 +5,16 @@ import { describe, expect, it } from 'bun:test';
 const dockerfile = readFileSync('docker/Dockerfile', 'utf8');
 const entrypoint = readFileSync('docker/entrypoint.sh', 'utf8');
 
-describe('source-built dashboard Docker lifecycle', () => {
-  it('installs locked build dependencies without package lifecycle side effects', () => {
-    const installCommands = dockerfile.match(/\bbun install[^\n]*/g) ?? [];
-
-    expect(installCommands.length).toBe(1);
-    for (const command of installCommands) {
-      expect(command).toContain('--frozen-lockfile');
-      expect(command).toContain('--ignore-scripts');
-    }
-    // No runtime npm dependencies remain, so the runtime stage carries no node_modules.
+describe('release-packaged dashboard Docker lifecycle', () => {
+  it('unpacks the gated Linux release without package manager installs or runtime interpreters', () => {
+    expect(dockerfile).not.toMatch(/\bbun install\b/);
     expect(dockerfile).not.toContain('--production');
     expect(dockerfile).not.toContain('COPY --from=build /app/node_modules');
-    expect(dockerfile).toContain('bun run build:all');
-    // The wasm moved to dist/ui/pkg/<buildId>/; the manifest-driven check finds it.
-    expect(dockerfile).toContain('test -s dist/ui/ui-build-manifest.json');
-    expect(dockerfile).toContain('node scripts/verify-bundle.js');
+    expect(dockerfile).not.toContain('COPY --from=unpack /stage/node_modules');
+    expect(dockerfile).toContain('tar --no-same-owner -xzf');
+    expect(dockerfile).toContain('test -s /stage/dist/ui/ui-build-manifest.json');
+    expect(dockerfile).toContain('test -s /stage/dist/build-info.json');
+    expect(dockerfile).toContain('rm -f /stage/dist/native/aac-store.*.node');
     expect(dockerfile).toContain('CMD ["curl"');
     expect(dockerfile).not.toMatch(/\bpython3\b/);
     expect(dockerfile).not.toContain('dist/ui/pkg/ccs_account_dashboard_bg.wasm');

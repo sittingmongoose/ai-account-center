@@ -1,5 +1,7 @@
-# AI Account Center: build and run this checkout's Rust dashboard and Leptos UI.
-# From the repository root: docker compose -f docker/compose.yaml up -d --build
+# AI Account Center: package and run a gated Linux release tarball in Docker.
+# From the repository root:
+#   AAC_RELEASE_DIR=/path/to/release/linux AAC_BUILD_COMMIT=<40-hex-sha> \
+#     docker compose -f docker/compose.yaml up -d --build
 # Port 3000 is published on loopback by default. Host credentials and SSH
 # configuration require explicit mounts; this file does not import host logins.
 services:
@@ -9,8 +11,12 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      additional_contexts:
+        release: ${AAC_RELEASE_DIR:?Set AAC_RELEASE_DIR to the directory containing the gated Linux release .tgz}
       args:
-        AAC_BUILD_COMMIT: ${AAC_BUILD_COMMIT:?Set AAC_BUILD_COMMIT to the checkout HEAD, e.g. AAC_BUILD_COMMIT=$(git rev-parse HEAD)}
+        AAC_BUILD_COMMIT: ${AAC_BUILD_COMMIT:?Set AAC_BUILD_COMMIT to the gated release commit SHA}
+        AAC_RELEASE_TGZ: ${AAC_RELEASE_TGZ:-sittingmongoose-ai-account-center-8.10.0.tgz}
+        AAC_RELEASE_SHA256: ${AAC_RELEASE_SHA256:-}
     restart: unless-stopped
     init: true
     ports:
