@@ -6,15 +6,18 @@
 //! and `GET /internal/status/inputs` can project their JSON on demand. Scan clocks can
 //! advance without changing the content generation or sending a `status-changed` event.
 
+use crate::compact_share::check::CompactReadersCheckWriter;
+use crate::compact_share::primitives::CompactSha;
+use crate::compact_share::quota::CompactQuotaReader;
+use crate::compact_share::registry::{CompactRegistryReader, CompactRegistrySnapshot};
+use crate::compact_share::reports::{CompactAgentReportsReader, CompactAgentReportsState};
+use crate::compact_share::status_docs::{CompactStatusDocsReader, CompactStatusDocsState};
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
 use aac_files::registry::{Owners, Role};
 use aac_status::share::NodeFs;
-use aac_status::share::check::ReadersCheckWriter;
-use aac_status::share::quota::{self, QuotaReportReader};
-use aac_status::share::registry::PmMailRegistryReader;
-use aac_status::share::reports::{self, AgentReportsReader, AgentReportsState, Limits};
-use aac_status::share::status_docs::{self, StatusDocsReader, StatusDocsState};
+use aac_status::share::reports::Limits;
+use aac_status::share::status_docs;
 use indexmap::IndexMap;
 use serde_json::{Value as Json, json};
 use std::path::PathBuf;
@@ -26,19 +29,18 @@ pub(crate) const SCAN_EVERY_MS: u64 = 10_000;
 const REGISTRY_EVERY_PASSES: u64 = 3;
 
 struct Readers {
-    reports: AgentReportsReader,
-    quota: QuotaReportReader,
-    registry: PmMailRegistryReader,
-    docs: StatusDocsReader,
+    reports: CompactAgentReportsReader,
+    quota: CompactQuotaReader,
+    registry: CompactRegistryReader,
+    docs: CompactStatusDocsReader,
 }
 
-#[derive(Default)]
 struct OwnedState {
     generation: u64,
-    reports_rows: Option<Arc<AgentReportsState>>,
+    reports_rows: Option<Arc<CompactAgentReportsState>>,
     quota: Arc<Json>,
-    registry: Arc<Json>,
-    docs_rows: Option<Arc<StatusDocsState>>,
+    registry: Arc<CompactRegistrySnapshot>,
+    docs_rows: Option<Arc<CompactStatusDocsState>>,
     times: ScanTimes,
 }
 
@@ -46,20 +48,20 @@ struct OwnedState {
 /// /internal/status/inputs` still reads the JSON lazily from the held rows; the producers read these.
 #[cfg(test)]
 pub(crate) struct Scan {
-    pub reports: AgentReportsState,
-    pub docs: StatusDocsState,
+    pub reports: CompactAgentReportsState,
+    pub docs: CompactStatusDocsState,
     pub quota: Json,
-    pub registry: Json,
+    pub registry: CompactRegistrySnapshot,
 }
 
 /// One pass's outcome: the shared typed snapshots the check writer rows and producers read.
 struct Outcome {
     changed: bool,
     times: ScanTimes,
-    reports: Arc<AgentReportsState>,
-    docs: Arc<StatusDocsState>,
+    reports: Arc<CompactAgentReportsState>,
+    docs: Arc<CompactStatusDocsState>,
     quota: Arc<Json>,
-    registry: Arc<Json>,
+    registry: Arc<CompactRegistrySnapshot>,
 }
 
 /// Freshness is independent of a content generation. An old published snapshot keeps
@@ -72,11 +74,11 @@ pub(crate) struct ScanTimes {
 
 pub(crate) struct StatusOwned {
     readers: Mutex<Readers>,
-    check: Arc<Mutex<ReadersCheckWriter>>,
+    check: Arc<Mutex<CompactReadersCheckWriter>>,
     state: Mutex<OwnedState>,
-    /// Accepted report revisions, by `[kind, writer, objectId]` text (the DB deduplicates
-    /// across restarts; this map only skips the calls).
-    accepted: Mutex<IndexMap<String, String>>,
+    /// Accepted report revisions, by compact `kind\0writer[\0cardId]` key -> binary SHA-256
+    /// (the DB deduplicates across restarts; this map only skips store capture calls).
+    accepted: Mutex<IndexMap<Box<str>, CompactSha>>,
     store: Option<Arc<StoreHost>>,
     feeds: Feeds,
     owners: Owners,
@@ -98,20 +100,20 @@ impl StatusOwned {
         store: Option<Arc<StoreHost>>,
         feeds: Feeds,
         owners: Owners,
-        check: Arc<Mutex<ReadersCheckWriter>>,
+        check: Arc<Mutex<CompactReadersCheckWriter>>,
         flushing: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             check,
             flushing,
             readers: Mutex::new(Readers {
-                reports: AgentReportsReader::new(reports_root.clone(), Limits::default()),
-                quota: QuotaReportReader::new(reports_root.clone()),
-                registry: PmMailRegistryReader::new(registry_dir),
-                docs: StatusDocsReader::new(reports_root, status_docs::STATUS_DOCS_LIMITS),
+                reports: CompactAgentReportsReader::new(reports_root.clone(), Limits::default()),
+                quota: CompactQuotaReader::new(reports_root.clone()),
+                registry: CompactRegistryReader::new(registry_dir),
+                docs: CompactStatusDocsReader::new(reports_root, status_docs::STATUS_DOCS_LIMITS),
             }),
             state: Mutex::new(OwnedState {
-                registry: Arc::new(json!({"data": null, "asOf": null, "error": null})),
+                registry: Arc::new(CompactRegistrySnapshot::initial()),
                 reports_rows: None,
                 quota: Arc::new(Json::Null),
                 docs_rows: None,
@@ -161,30 +163,19 @@ impl StatusOwned {
         if registry_due {
             match readers.registry.scan_changes(&fs, now) {
                 Ok(changed) => {
-                    registry_changed = changed
-                        || !state.registry["error"].is_null()
-                        || state.registry["asOf"].is_null();
+                    registry_changed =
+                        changed || state.registry.has_error() || state.registry.as_of.is_none();
                     if registry_changed {
-                        let scan = readers.registry.snapshot(changed);
-                        state.registry = Arc::new(json!({
-                            "data": scan.threads,
-                            "asOf": now,
-                            "error": null,
-                            "problems": scan.problems.iter().map(|p| json!({"item": p.item, "reason": p.reason, "since": p.since})).collect::<Vec<_>>(),
-                        }));
+                        state.registry = Arc::new(readers.registry.snapshot(now));
                         state.times.registry = Arc::new(AtomicU64::new(now));
                     } else {
                         state.times.registry.store(now, Ordering::Release);
                     }
                 }
                 Err(reason) => {
-                    if state.registry["error"]["reason"].as_str() != Some(reason) {
-                        let mut failed = failed_registry(&state.registry, reason, now);
+                    if state.registry.error_reason() != Some(reason) {
                         let last_good = state.times.registry.load(Ordering::Acquire);
-                        if last_good != 0 {
-                            failed["asOf"] = json!(last_good);
-                        }
-                        state.registry = Arc::new(failed);
+                        state.registry = Arc::new(state.registry.failed(reason, now, last_good));
                         registry_changed = true;
                     }
                 }
@@ -201,7 +192,7 @@ impl StatusOwned {
             state.docs_rows = Some(Arc::new(readers.docs.snapshot()));
         }
         if first || quota_changed {
-            state.quota = Arc::new(quota::state_json(&readers.quota.snapshot()));
+            state.quota = Arc::new(readers.quota.state_json());
         }
         let changed = reports_changed || quota_changed || docs_changed || registry_changed;
         if !first && !changed {
@@ -264,20 +255,17 @@ impl StatusOwned {
         };
         let mut reports = reports_rows
             .as_deref()
-            .map(reports::state_json)
+            .map(|r| r.state_json(None))
             .unwrap_or(Json::Null);
         if reports.is_object() {
             let stamp = times.reports.load(Ordering::Acquire);
             reports["scannedAt"] = if stamp == 0 { Json::Null } else { json!(stamp) };
         }
-        let mut registry = Json::clone(&registry);
         let stamp = times.registry.load(Ordering::Acquire);
-        if stamp != 0 {
-            registry["asOf"] = json!(stamp);
-        }
+        let registry = registry.to_json((stamp != 0).then_some(stamp));
         let docs = docs_rows
             .as_deref()
-            .map(status_docs::state_json)
+            .map(CompactStatusDocsState::to_state_json)
             .unwrap_or(Json::Null);
         json!({
             "generation": generation,
@@ -290,7 +278,12 @@ impl StatusOwned {
 
     /// The readers-check rows, when the R4 groups own that row: the status scan's rows with
     /// the pins the front door last pushed (`owned-pins`), written through the leased writer.
-    fn flush_check(&self, reports: &AgentReportsState, docs: &StatusDocsState, now: u64) {
+    fn flush_check(
+        &self,
+        reports: &CompactAgentReportsState,
+        docs: &CompactStatusDocsState,
+        now: u64,
+    ) {
         if self.owners.owner("readers-check") != Some(Role::RustService) {
             return;
         }
@@ -322,65 +315,73 @@ impl StatusOwned {
     }
 
     /// Report captures into the hosted store (`StatusService.captureReportHistory`): check
-    /// `self.accepted` BEFORE cloning any report doc, and send batches of 64 instead of 4.
-    async fn capture(&self, reports: &AgentReportsState, docs: &StatusDocsState) {
+    /// `self.accepted` BEFORE materializing any report doc JSON, and send batches of 64.
+    async fn capture(&self, reports: &CompactAgentReportsState, docs: &CompactStatusDocsState) {
         let Some(store) = &self.store else {
             return;
         };
-        let (captures, keys) = {
+        let (captures, keys, shas) = {
             let accepted = self.accepted.lock().unwrap_or_else(|p| p.into_inner());
             let mut captures: Vec<Json> = Vec::new();
-            let mut keys: Vec<String> = Vec::new();
-            let mut push_if_new = |kind: &str,
-                                   writer: &str,
-                                   doc: &Json,
-                                   written_at_ms: i64,
-                                   first_seen_at: u64,
-                                   sha: &str| {
-                let object_id = if kind == "card" {
-                    doc["id"].as_str().unwrap_or_default()
-                } else {
-                    writer
-                };
-                let key = json!([kind, writer, object_id]).to_string();
-                if accepted.get(&key).map(String::as_str) == Some(sha) {
-                    return;
-                }
-                let agent = doc
-                    .get("agent")
-                    .filter(|a| a.is_object())
-                    .cloned()
-                    .unwrap_or(json!({}));
-                let machine = writer.split('.').next().unwrap_or_default();
-                let t3_thread = doc
-                    .get("t3Thread")
-                    .filter(|v| !v.is_null())
-                    .or_else(|| agent.get("t3Thread").filter(|v| !v.is_null()))
-                    .cloned()
-                    .unwrap_or(Json::Null);
-                let project = doc
-                    .get("project")
-                    .filter(|v| v.is_string())
-                    .map(|v| json!({"source": "agent-report", "id": v}));
-                let stream = doc
-                    .get("stream")
-                    .filter(|v| v.is_string())
-                    .map(|v| json!({"source": "agent-report", "id": v}));
-                let mut doc = doc.clone();
-                if let Some(object) = doc.as_object_mut() {
-                    object.insert(
-                        "schema".to_string(),
-                        json!(format!("agent-reports/{kind}@1")),
-                    );
-                }
-                captures.push(json!({
+            let mut keys: Vec<Box<str>> = Vec::new();
+            let mut shas: Vec<CompactSha> = Vec::new();
+            let mut key_buf = String::new();
+            let mut push_if_new =
+                |kind: &str,
+                 kind_tag: char,
+                 writer: &str,
+                 object_id: &str,
+                 written_at_ms: i64,
+                 first_seen_at: u64,
+                 sha: &CompactSha,
+                 materialize_doc: &mut dyn FnMut() -> Json| {
+                    key_buf.clear();
+                    key_buf.push(kind_tag);
+                    key_buf.push('\0');
+                    key_buf.push_str(writer);
+                    if kind == "card" {
+                        key_buf.push('\0');
+                        key_buf.push_str(object_id);
+                    }
+                    if accepted.get(key_buf.as_str()) == Some(sha) {
+                        return;
+                    }
+                    let mut doc = materialize_doc();
+                    let agent = doc
+                        .get("agent")
+                        .filter(|a| a.is_object())
+                        .cloned()
+                        .unwrap_or(json!({}));
+                    let machine = writer.split('.').next().unwrap_or_default();
+                    let t3_thread = doc
+                        .get("t3Thread")
+                        .filter(|v| !v.is_null())
+                        .or_else(|| agent.get("t3Thread").filter(|v| !v.is_null()))
+                        .cloned()
+                        .unwrap_or(Json::Null);
+                    let project = doc
+                        .get("project")
+                        .filter(|v| v.is_string())
+                        .map(|v| json!({"source": "agent-report", "id": v}));
+                    let stream = doc
+                        .get("stream")
+                        .filter(|v| v.is_string())
+                        .map(|v| json!({"source": "agent-report", "id": v}));
+                    if let Some(object) = doc.as_object_mut() {
+                        object.insert(
+                            "schema".to_string(),
+                            json!(format!("agent-reports/{kind}@1")),
+                        );
+                    }
+                    let sha_hex = sha.to_hex_string();
+                    captures.push(json!({
                     "kind": kind,
                     "writer": writer,
                     "objectId": object_id,
                     "seq": doc["seq"],
                     "writtenAtMs": written_at_ms,
                     "observedAtMs": first_seen_at,
-                    "sourceSha256": sha,
+                    "sourceSha256": sha_hex,
                     "ids": {
                         "computer": if machine == "vm" { "ubuntu" } else { machine },
                         "writer": writer,
@@ -397,68 +398,75 @@ impl StatusOwned {
                     },
                     "doc": doc,
                 }));
-                keys.push(key);
-            };
+                    keys.push(key_buf.as_str().into());
+                    shas.push(sha.clone());
+                };
             for row in &reports.threads {
+                let mut make = || row.doc.to_json();
                 push_if_new(
                     "thread",
+                    '0',
                     &row.writer,
-                    &row.doc,
+                    &row.writer,
                     row.written_at_ms,
                     row.first_seen_at,
                     &row.sha256,
+                    &mut make,
                 );
             }
             for row in &reports.tasks {
+                let mut make = || row.doc.to_json();
                 push_if_new(
                     "tasks",
+                    '1',
                     &row.writer,
-                    &row.doc,
+                    &row.writer,
                     row.written_at_ms,
                     row.first_seen_at,
                     &row.sha256,
+                    &mut make,
                 );
             }
             for row in &reports.cards {
+                let id = row.card_id().unwrap_or_default();
+                let mut make = || row.doc.to_json();
                 push_if_new(
                     "card",
+                    '2',
                     &row.writer,
-                    &row.doc,
+                    id,
                     row.written_at_ms,
                     row.first_seen_at,
                     &row.sha256,
+                    &mut make,
                 );
             }
             for row in &docs.docs {
-                let sha = row["sha256"].as_str().unwrap_or_default();
-                if sha.is_empty() {
-                    continue;
-                }
+                let mut make = || row.doc.to_json();
                 push_if_new(
                     "status",
-                    row["writer"].as_str().unwrap_or_default(),
-                    &row["doc"],
-                    row["writtenAtMs"].as_i64().unwrap_or(0),
-                    row["firstSeenAt"].as_u64().unwrap_or(0),
-                    sha,
+                    '3',
+                    &row.writer,
+                    &row.writer,
+                    row.written_at_ms,
+                    row.first_seen_at,
+                    &row.sha256,
+                    &mut make,
                 );
             }
-            (captures, keys)
+            (captures, keys, shas)
         };
         const BATCH: usize = 64;
         let mut index = 0;
         while index < captures.len() {
             let end = captures.len().min(index + BATCH);
             let batch: Vec<Json> = captures[index..end].to_vec();
-            let batch_keys: Vec<String> = keys[index..end].to_vec();
-            let batch_shas: Vec<String> = batch
-                .iter()
-                .map(|row| row["sourceSha256"].as_str().unwrap_or_default().to_string())
-                .collect();
+            let batch_keys = &keys[index..end];
+            let batch_shas = &shas[index..end];
             index = end;
             let args = Json::Array(batch.clone()).to_string();
             match store.call("captureReports".to_string(), args).await {
-                Ok(_) => acknowledge(&self.accepted, &batch_keys, &batch_shas),
+                Ok(_) => acknowledge(&self.accepted, batch_keys, batch_shas),
                 Err(error) => {
                     if error_code(&error) != "invalid" {
                         break; // A storage outage is different from a per-document refusal.
@@ -466,8 +474,7 @@ impl StatusOwned {
                     if batch.len() == 1 {
                         continue;
                     }
-                    for (row, key) in batch.iter().zip(&batch_keys) {
-                        let sha = row["sourceSha256"].as_str().unwrap_or_default().to_string();
+                    for ((row, key), sha) in batch.iter().zip(batch_keys).zip(batch_shas) {
                         if store
                             .call(
                                 "captureReports".to_string(),
@@ -479,7 +486,7 @@ impl StatusOwned {
                             acknowledge(
                                 &self.accepted,
                                 std::slice::from_ref(key),
-                                std::slice::from_ref(&sha),
+                                std::slice::from_ref(sha),
                             );
                         }
                     }
@@ -493,7 +500,11 @@ impl StatusOwned {
     }
 }
 
-fn acknowledge(accepted: &Mutex<IndexMap<String, String>>, keys: &[String], shas: &[String]) {
+fn acknowledge(
+    accepted: &Mutex<IndexMap<Box<str>, CompactSha>>,
+    keys: &[Box<str>],
+    shas: &[CompactSha],
+) {
     let mut accepted = accepted.lock().unwrap_or_else(|p| p.into_inner());
     for (key, sha) in keys.iter().zip(shas) {
         accepted.insert(key.clone(), sha.clone());
@@ -507,44 +518,6 @@ fn error_code(error: &str) -> &str {
         code
     } else {
         "unknown"
-    }
-}
-
-/// The registry's collected wrapper on a failed scan: the last good rows with their own time,
-/// the named error since it began, and whether the folder is missing.
-fn failed_registry(before: &Json, reason: &str, now: u64) -> Json {
-    let missing = reason.contains("missing");
-    let since = before["error"]["reason"]
-        .as_str()
-        .filter(|held| *held == reason)
-        .and(before["error"]["since"].as_u64())
-        .unwrap_or(now);
-    let mut out = serde_json::Map::new();
-    out.insert("data".to_string(), before["data"].clone());
-    out.insert("asOf".to_string(), before["asOf"].clone());
-    out.insert(
-        "error".to_string(),
-        json!({"reason": reason, "since": since}),
-    );
-    out.insert("missing".to_string(), json!(missing));
-    if let Some(problems) = before.get("problems") {
-        out.insert("problems".to_string(), problems.clone());
-    }
-    Json::Object(out)
-}
-
-#[allow(dead_code)]
-fn empty_reports() -> AgentReportsState {
-    AgentReportsState {
-        root: String::new(),
-        state: "missing",
-        scanned_at: None,
-        complete: false,
-        threads: Vec::new(),
-        tasks: Vec::new(),
-        cards: Vec::new(),
-        problems: Vec::new(),
-        boards: serde_json::Map::new(),
     }
 }
 
@@ -683,7 +656,7 @@ mod tests {
             None,
             Feeds::new(),
             Owners::defaults(rows),
-            Arc::new(Mutex::new(ReadersCheckWriter::new(reports_root))),
+            Arc::new(Mutex::new(CompactReadersCheckWriter::new(reports_root))),
             Arc::new(AtomicBool::new(false)),
         );
         let first = owner

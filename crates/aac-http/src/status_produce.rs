@@ -25,8 +25,12 @@
 //! answers with its own producers, which it restarts on the first decline.
 
 use crate::answers_owned::AnswersOwned;
+use crate::compact_share::registry::CompactRegistrySnapshot;
+use crate::compact_share::reports::CompactAgentReportsState;
+use crate::compact_share::status_docs::CompactStatusDocsState;
 use crate::feed::{Feeds, Generation};
 use crate::limits::Limits;
+use crate::status_compose::{OwnedReportsView, RegistrySource};
 use crate::status_fed::StatusCompose;
 #[cfg(test)]
 use crate::status_owned::Scan;
@@ -42,6 +46,7 @@ use aac_status::produce::machines::{self as machines_produce, HostOs, Platform, 
 use aac_status::produce::pinned_input;
 use aac_status::produce::simlock::{self, Status as SimlockStatus};
 pub(crate) use aac_status::produce::usage::UsageInput;
+use aac_status::share::js_text;
 use sha2::Digest;
 
 /// The Status usage input uses the same snapshot projection as the share publisher.
@@ -77,8 +82,6 @@ impl UsageSamples {
     }
 }
 use aac_status::produce::{Collected, ReadProblem, next_problem};
-use aac_status::share::reports::AgentReportsState;
-use aac_status::share::status_docs::StatusDocsState;
 use aac_views::decline::Decline;
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, HashMap};
@@ -180,10 +183,10 @@ impl PublishedState {
 /// Never held across I/O, answers refresh, pinned composition, source building, or feed puts.
 struct State {
     quota: Arc<Json>,
-    registry: Arc<Json>,
-    reports_rows: Arc<AgentReportsState>,
+    registry: Arc<CompactRegistrySnapshot>,
+    reports_rows: Arc<CompactAgentReportsState>,
     scan_times: crate::status_owned::ScanTimes,
-    docs_rows: Arc<StatusDocsState>,
+    docs_rows: Arc<CompactStatusDocsState>,
     machines: BTreeMap<String, Collected<Sample>>,
     browsers: Collected<Vec<BrowserMachine>>,
     simlock: Collected<SimlockStatus>,
@@ -208,10 +211,10 @@ struct State {
 /// completely outside `Produce::state` and `Produce::published`.
 struct PublishSnapshot {
     quota: Arc<Json>,
-    registry: Arc<Json>,
-    reports_rows: Arc<AgentReportsState>,
+    registry: Arc<CompactRegistrySnapshot>,
+    reports_rows: Arc<CompactAgentReportsState>,
     scan_times: crate::status_owned::ScanTimes,
-    docs_rows: Arc<StatusDocsState>,
+    docs_rows: Arc<CompactStatusDocsState>,
     machines: BTreeMap<String, Collected<Sample>>,
     browsers: Collected<Vec<BrowserMachine>>,
     simlock: Collected<SimlockStatus>,
@@ -233,11 +236,10 @@ type HeldSource = ([u8; 32], [u8; 32], Arc<Generation>);
 type ChangedSource = (usize, &'static str, [u8; 32], [u8; 32], Arc<Generation>);
 
 /// Owned exclusively by the serialized publisher (`Produce::publisher`); readers never touch it.
-/// Stores SHA-256 digests of the last published text & facts instead of raw multi-MB Strings.
+/// Stores SHA-256 digests of the last published sources instead of raw multi-MB Strings or ReportView.
 #[derive(Default)]
 struct PublisherCache {
     held: HashMap<&'static str, HeldSource>,
-    reports: Option<Arc<aac_status::read_status::ReportView>>,
 }
 
 struct CollectingGuard<'a>(&'a AtomicBool);
@@ -259,18 +261,12 @@ impl Drop for PublishRunningGuard<'_> {
 
 impl State {
     fn new(default_zone: Option<RequestZone>) -> Self {
-        let empty = empty_reports();
         Self {
-            reports_rows: Arc::new(empty),
+            reports_rows: Arc::new(CompactAgentReportsState::empty()),
             scan_times: crate::status_owned::ScanTimes::default(),
             quota: Arc::new(Json::Null),
-            registry: Arc::new(json!({"data": null, "asOf": null, "error": null})),
-            docs_rows: Arc::new(StatusDocsState {
-                state: "missing",
-                scanned_at: None,
-                docs: Vec::new(),
-                problems: Vec::new(),
-            }),
+            registry: Arc::new(CompactRegistrySnapshot::initial()),
+            docs_rows: Arc::new(CompactStatusDocsState::empty()),
             machines: aac_status::computers::machine_ids()
                 .into_iter()
                 .map(|machine| (machine.to_owned(), Collected::empty()))
@@ -325,18 +321,9 @@ impl State {
     }
 }
 
-fn empty_reports() -> AgentReportsState {
-    AgentReportsState {
-        root: String::new(),
-        state: "missing",
-        scanned_at: None,
-        complete: false,
-        threads: Vec::new(),
-        tasks: Vec::new(),
-        cards: Vec::new(),
-        problems: Vec::new(),
-        boards: serde_json::Map::new(),
-    }
+#[cfg(test)]
+fn empty_reports() -> CompactAgentReportsState {
+    CompactAgentReportsState::empty()
 }
 
 fn default_request_zone(ccs_dir: &Path, now: u64) -> Option<RequestZone> {
@@ -776,10 +763,10 @@ impl Produce {
 
     pub(crate) async fn after_scan_shared(
         self: &Arc<Self>,
-        reports: Arc<AgentReportsState>,
-        docs: Arc<StatusDocsState>,
+        reports: Arc<CompactAgentReportsState>,
+        docs: Arc<CompactStatusDocsState>,
         quota: Arc<Json>,
-        registry: Arc<Json>,
+        registry: Arc<CompactRegistrySnapshot>,
         emit_hint: bool,
         scan_times: crate::status_owned::ScanTimes,
     ) {
@@ -929,12 +916,10 @@ impl Produce {
         if !need_sources && matches_published {
             return false;
         }
-        let reports = Arc::new(aac_status::read_status::ReportView::new(
+        let owned_reports = Arc::new(OwnedReportsView::new(
             Arc::clone(&snap.reports_rows),
             &closing_card_versions(&answers.answers),
-            cache.reports.as_deref(),
         ));
-        cache.reports = Some(Arc::clone(&reports));
         #[cfg(test)]
         {
             let delay = self.publish_delay_ms.load(Ordering::SeqCst);
@@ -942,46 +927,18 @@ impl Produce {
                 std::thread::sleep(Duration::from_millis(delay));
             }
         }
-        // The collected members as named values, shared with the typed view below:
-        // `machines`/`browsers`/`simlock` are built once here and moved into the
-        // view's `Arc`s after `build` borrows them, never serialized twice.
-        let machines = machines_json(&snap.machines);
-        let browsers = json!(snap.browsers);
-        let simlock = json!(snap.simlock);
-        let built = aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
-            reports: aac_status::produce::sources::Reports::Native(&reports),
-            quota: &snap.quota,
-            pinned: &pinned,
-            registry: &snap.registry,
-            machines: &machines,
-            browsers: &browsers,
-            simlock: &simlock,
-            usage: snap.usage.as_deref(),
-            answers: &answers,
-            time_zone: &zone.name,
-            now: clamp_i64(now),
-            offset_minutes: offset,
-            zone: &zone.zone,
-        });
-        // The one typed shared copy of `status-collected` (MEM5 Lane C): `registry`
-        // is the producer's own `Arc` (no clone of its tree), the other members are
-        // the values just built. The generation holds this `Arc`, never a second
-        // `Value` tree parsed from the wire bytes.
-        let usage_value = snap
-            .usage
-            .as_deref()
-            .map(|usage| serde_json::to_value(usage).unwrap_or(Json::Null))
-            .unwrap_or(Json::Null);
-        let collected_view = Arc::new(crate::status_fed::CollectedView {
-            registry: Some(Arc::clone(&snap.registry)),
-            machines: Some(Arc::new(machines)),
-            browsers: Some(Arc::new(browsers)),
-            simlock: Some(Arc::new(simlock)),
-            usage: Some(Arc::new(usage_value)),
-        });
-        let collected_valid = crate::status_fed::collected_proven(&collected_view);
-        let sources = match built {
-            Ok(sources) => sources,
+        let spend_panel = match crate::status_compose::spend_by_stream_compact(
+            &snap.quota,
+            &snap.reports_rows.tasks,
+            &zone.zone,
+            clamp_i64(now),
+            offset,
+            snap.usage
+                .as_deref()
+                .map(UsageInput::account_order)
+                .unwrap_or_default(),
+        ) {
+            Ok(panel) => panel,
             Err(why) => {
                 let reason = match why {
                     "zone" => Decline::Locale,
@@ -1000,24 +957,120 @@ impl Produce {
                 return false;
             }
         };
-        // The producer ranks every word once, with the total collation (a middle-dot usage
-        // label is compared): the facts publish as built, with no completing second sort.
-        let reports_valid = sources.reports_valid;
-        let pushed = [
-            (REPORTS, sources.reports, None),
-            (QUOTA, sources.quota, None),
-            (PINNED, sources.pinned, None),
-            (COLLECTED, sources.collected, None),
-            (ANSWERS, sources.answers, None),
-            (FACTS, sources.facts_data, Some(sources.facts)),
+        let quota_text = js_text(&json!({
+            "quota": snap.quota.as_ref(),
+            "spendByStream": spend_panel,
+        }));
+        let pinned_text = js_text(&json!({"pinned": pinned.as_ref()}));
+        let answers_text = js_text(&answers.to_json());
+        let facts_data = aac_status::produce::sources::facts_data(&zone.name);
+        let facts_data_text = js_text(&facts_data);
+
+        // The collected members as named values, shared with the typed view below:
+        // `registry` stays in its compact typed snapshot (never serialized to multi-MB JSON).
+        let machines = machines_json(&snap.machines);
+        let browsers = json!(snap.browsers);
+        let simlock = json!(snap.simlock);
+        let usage_value = snap
+            .usage
+            .as_deref()
+            .map(|usage| serde_json::to_value(usage).unwrap_or(Json::Null))
+            .unwrap_or(Json::Null);
+        let collected_hash: [u8; 32] = {
+            let mut h = sha2::Sha256::new();
+            h.update(b"compact-collected-v1:");
+            h.update(snap.registry.content_hash);
+            for val in [&machines, &browsers, &simlock, &usage_value] {
+                let encoded = js_text(val);
+                h.update((encoded.len() as u64).to_le_bytes());
+                h.update(encoded.as_bytes());
+            }
+            h.finalize().into()
+        };
+        let collected_view = Arc::new(crate::status_fed::CollectedView {
+            registry: Some(RegistrySource::Compact(Arc::clone(&snap.registry))),
+            machines: Some(Arc::new(machines)),
+            browsers: Some(Arc::new(browsers)),
+            simlock: Some(Arc::new(simlock)),
+            usage: Some(Arc::new(usage_value)),
+        });
+        let collected_valid = crate::status_fed::collected_proven(&collected_view);
+        let reports_valid = snap.reports_rows.is_valid_wire();
+        let reports_hash = snap.reports_rows.content_hash(&owned_reports.cleared);
+        let empty_facts_hash: [u8; 32] = sha2::Sha256::digest(b"{}").into();
+        let zone_facts_hash: [u8; 32] = {
+            let mut h = sha2::Sha256::new();
+            h.update(b"owned-zone-v1:");
+            h.update(format!("{:?}", zone.zone).as_bytes());
+            h.finalize().into()
+        };
+        let reports_count = snap.reports_rows.threads.len()
+            + snap.reports_rows.tasks.len()
+            + snap.reports_rows.cards.len();
+        let registry_count = snap.registry.data.as_deref().map_or(0, <[_]>::len);
+
+        enum SourceSpec {
+            CompactReports {
+                hash: [u8; 32],
+                len: usize,
+            },
+            CompactCollected {
+                hash: [u8; 32],
+                len: usize,
+            },
+            OwnedFacts {
+                text: String,
+                data: Json,
+                facts_hash: [u8; 32],
+            },
+            WireJson {
+                text: String,
+            },
+        }
+
+        let specs = [
+            (
+                REPORTS,
+                SourceSpec::CompactReports {
+                    hash: reports_hash,
+                    len: reports_count,
+                },
+            ),
+            (QUOTA, SourceSpec::WireJson { text: quota_text }),
+            (PINNED, SourceSpec::WireJson { text: pinned_text }),
+            (
+                COLLECTED,
+                SourceSpec::CompactCollected {
+                    hash: collected_hash,
+                    len: registry_count,
+                },
+            ),
+            (ANSWERS, SourceSpec::WireJson { text: answers_text }),
+            (
+                FACTS,
+                SourceSpec::OwnedFacts {
+                    text: facts_data_text,
+                    data: facts_data,
+                    facts_hash: zone_facts_hash,
+                },
+            ),
         ];
+
         // Prepare every changed source completely outside `Feeds::held`, then commit atomically.
         let mut existing: [Option<Arc<Generation>>; 6] = [None, None, None, None, None, None];
         let mut changed_meta: Vec<ChangedSource> = Vec::new();
-        for (index, (source, text, facts)) in pushed.into_iter().enumerate() {
-            let facts_text = facts.unwrap_or_else(|| "{}".to_owned());
-            let text_hash: [u8; 32] = sha2::Sha256::digest(text.as_bytes()).into();
-            let facts_hash: [u8; 32] = sha2::Sha256::digest(facts_text.as_bytes()).into();
+        for (index, (source, spec)) in specs.into_iter().enumerate() {
+            let (text_hash, facts_hash) = match &spec {
+                SourceSpec::CompactReports { hash, .. } => (*hash, empty_facts_hash),
+                SourceSpec::CompactCollected { hash, .. } => (*hash, empty_facts_hash),
+                SourceSpec::OwnedFacts {
+                    text, facts_hash, ..
+                } => (sha2::Sha256::digest(text.as_bytes()).into(), *facts_hash),
+                SourceSpec::WireJson { text } => (
+                    sha2::Sha256::digest(text.as_bytes()).into(),
+                    empty_facts_hash,
+                ),
+            };
             if let Some((held_text, held_facts, held_gen)) = cache.held.get(source)
                 && *held_text == text_hash
                 && *held_facts == facts_hash
@@ -1027,29 +1080,43 @@ impl Produce {
                 continue;
             }
             let generation_id = self.next_generation(now);
-            let prepared = if source == REPORTS {
-                Feeds::prepare_owned_reports(
+            let prepared = match spec {
+                SourceSpec::CompactReports { hash, len } => Feeds::prepare_owned_reports_compact(
                     generation_id.to_string(),
-                    text,
-                    Arc::clone(&reports),
+                    hash,
+                    len,
+                    Arc::clone(&owned_reports),
                     reports_valid,
                     (snap.scan_times.reports.clone(), zone.zone.clone()),
-                )
-            } else if source == COLLECTED {
-                // The typed shared copy: the text only proves the digest.
-                Feeds::prepare_collected_owned(
-                    generation_id.to_string(),
+                ),
+                SourceSpec::CompactCollected { hash, len } => {
+                    Feeds::prepare_collected_owned_compact(
+                        generation_id.to_string(),
+                        hash,
+                        len,
+                        Arc::clone(&collected_view),
+                        collected_valid,
+                        (snap.scan_times.registry.clone(), zone.zone.clone()),
+                    )
+                }
+                SourceSpec::OwnedFacts {
                     text,
-                    Arc::clone(&collected_view),
-                    collected_valid,
-                    (snap.scan_times.registry.clone(), zone.zone.clone()),
-                )
-            } else {
-                let body = format!(
-                    "{{\"generation\":\"{generation_id}\",\"data\":{text},\"facts\":{facts_text}}}"
-                );
-                self.feeds
-                    .prepare_generation_with_scan(source, body.as_bytes(), None)
+                    data,
+                    facts_hash,
+                } => Feeds::prepare_owned_facts(
+                    generation_id.to_string(),
+                    &text,
+                    data,
+                    zone.zone.clone(),
+                    facts_hash,
+                ),
+                SourceSpec::WireJson { text } => {
+                    let body = format!(
+                        "{{\"generation\":\"{generation_id}\",\"data\":{text},\"facts\":{{}}}}"
+                    );
+                    self.feeds
+                        .prepare_generation_with_scan(source, body.as_bytes(), None)
+                }
             };
             let prepared = match prepared {
                 Ok(generation) => generation,
@@ -2042,9 +2109,11 @@ fn machines_json(machines: &BTreeMap<String, Collected<Sample>>) -> Json {
 }
 
 /// The pinned panel for these readings, or `None` when the projection refuses a document.
+/// Materializes transient `AgentReportsState` / `StatusDocsState` ONLY when `pins.collected`
+/// is true and drops them immediately on return (zero retained DOM trees).
 fn pinned_panel(
-    reports_rows: &AgentReportsState,
-    docs_rows: &StatusDocsState,
+    reports_rows: &CompactAgentReportsState,
+    docs_rows: &CompactStatusDocsState,
     pins: &Pins,
     answers: &AnswersFeed,
     now: i64,
@@ -2054,8 +2123,10 @@ fn pinned_panel(
     if !pins.collected {
         return None;
     }
+    let transient_reports = reports_rows.to_agent_reports_state();
+    let transient_docs = docs_rows.to_status_docs_state();
     let closed = closing_card_versions(&answers.answers);
-    let cards: Vec<aac_status::produce::answered::CardRow<'_>> = reports_rows
+    let cards: Vec<aac_status::produce::answered::CardRow<'_>> = transient_reports
         .cards
         .iter()
         .map(|row| aac_status::produce::answered::CardRow {
@@ -2066,8 +2137,8 @@ fn pinned_panel(
         .collect();
     let waits: ResolvedWaits = resolved_card_waits(&cards, &closed);
     let input = pinned_input::compose_input(
-        reports_rows,
-        docs_rows,
+        &transient_reports,
+        &transient_docs,
         &pins.merged,
         &pins.problems,
         now,
@@ -2082,8 +2153,9 @@ fn pinned_panel(
 #[allow(clippy::unwrap_used)]
 mod flicker_tests {
     use super::*;
+    use crate::compact_share::primitives::CompactSha;
+    use crate::compact_share::reports::{CompactSeenReport, ReportKind};
     use crate::limits::Limits;
-    use aac_status::share::reports::SeenReport;
 
     /// Wait for a real event (a counter, a flag) with a deadline guard. The condition is the
     /// barrier; no fixed sleep assumes how long the event takes under load.
@@ -2108,15 +2180,38 @@ mod flicker_tests {
         }
     }
 
-    pub(super) fn scan_with_thread(writer: &str, now: u64) -> Scan {
+    pub(super) fn scan_with_thread_doc(writer: &str, now: u64, doc: Json) -> Scan {
         let mut reports = empty_reports();
         reports.state = "ok";
         reports.scanned_at = Some(now);
         reports.complete = true;
-        reports.threads.push(Arc::new(SeenReport {
-            file: format!("writers/{writer}/thread.json"),
-            writer: writer.to_owned(),
-            doc: std::sync::Arc::new(json!({
+        reports.threads = vec![Arc::new(CompactSeenReport::from_projected(
+            ReportKind::Thread,
+            &format!("writers/{writer}/thread.json"),
+            writer,
+            &doc,
+            CompactSha::from_hex_or_str(&"a".repeat(64)),
+            now,
+            clamp_i64(now),
+            None,
+        ))]
+        .into_boxed_slice();
+        let mut docs = CompactStatusDocsState::empty();
+        docs.state = "ok";
+        docs.scanned_at = Some(now);
+        Scan {
+            reports,
+            docs,
+            quota: Json::Null,
+            registry: CompactRegistrySnapshot::initial(),
+        }
+    }
+
+    pub(super) fn scan_with_thread(writer: &str, now: u64) -> Scan {
+        scan_with_thread_doc(
+            writer,
+            now,
+            json!({
                 "schema": "agent-reports/thread@1",
                 "writer": writer,
                 "seq": 1,
@@ -2128,23 +2223,8 @@ mod flicker_tests {
                 "blockedOn": null,
                 "ttlSeconds": 3600,
                 "links": [],
-            })),
-            sha256: "a".repeat(64),
-            first_seen_at: now,
-            written_at_ms: clamp_i64(now),
-            problem: None,
-        }));
-        Scan {
-            reports,
-            docs: StatusDocsState {
-                state: "ok",
-                scanned_at: Some(now),
-                docs: Vec::new(),
-                problems: Vec::new(),
-            },
-            quota: Json::Null,
-            registry: json!({"data": null, "asOf": null, "error": null}),
-        }
+            }),
+        )
     }
 
     /// Reproduces the live 503 flicker: a slow producer pass (`publish`) must not block
@@ -2445,9 +2525,23 @@ mod flicker_tests {
 
         // An unprovable report containing an exact `Object.prototype` member name declines `shape`
         // once published (never silently masked by the earlier good generation).
-        let mut bad_scan = scan_with_thread("vm.bad", now + 1000);
-        Arc::make_mut(&mut Arc::make_mut(&mut bad_scan.reports.threads[0]).doc)["summary"] =
-            json!("constructor");
+        let bad_scan = scan_with_thread_doc(
+            "vm.bad",
+            now + 1000,
+            json!({
+                "schema": "agent-reports/thread@1",
+                "writer": "vm.bad",
+                "seq": 1,
+                "writtenAt": "2026-11-24T00:00:00.000Z",
+                "project": "aac",
+                "stream": "status",
+                "state": "active",
+                "summary": "constructor",
+                "blockedOn": null,
+                "ttlSeconds": 3600,
+                "links": [],
+            }),
+        );
         produce.after_scan(bad_scan).await;
         assert_eq!(
             produce
@@ -2710,14 +2804,9 @@ mod low_tests {
         let (_scratch, ccs, reports) = scratch();
         let produce = Produce::new(Feeds::new(), AnswersOwned::new(ccs.clone(), reports), ccs);
         let reports_rows = Arc::new(empty_reports());
-        let docs_rows = Arc::new(StatusDocsState {
-            state: "missing",
-            scanned_at: None,
-            docs: Vec::new(),
-            problems: Vec::new(),
-        });
+        let docs_rows = Arc::new(CompactStatusDocsState::empty());
         let quota = Arc::new(json!({"state": "ok"}));
-        let registry = Arc::new(json!({"data": null, "asOf": null, "error": null}));
+        let registry = Arc::new(CompactRegistrySnapshot::initial());
         produce
             .after_scan_shared(
                 Arc::clone(&reports_rows),

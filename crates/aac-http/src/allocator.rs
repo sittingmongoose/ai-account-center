@@ -118,8 +118,18 @@ pub fn tune_mimalloc() {
     }
 }
 
-/// Force mimalloc collection (`mi_collect(true)`) on the calling thread plus process-wide
-/// arena purging, and trim glibc C-allocator arenas (`malloc_trim(0)`) on Linux GNU.
+/// Force mimalloc collection on the calling thread and trim glibc C-allocator arenas
+/// (`malloc_trim(0)`) on Linux GNU.
+///
+/// `mi_collect(true)` collects only the calling thread's `theap` (`theap.c`: "cannot
+/// really collect process wide, just a theap") — there is no public API to collect
+/// other threads' heaps without a new crate. The arena purge it triggers *is*
+/// process-wide (`_mi_arenas_collect(force_purge=true, visit_all=true)`), and
+/// cross-thread abandoned-page reclaim happens on the free path
+/// (`page_reclaim_on_free=1`, `generic_collect=500`). Starving new abandonments via
+/// the bounded, 10s-keep-alive Tokio blocking pool (MEM6: 233 TIDs/30min) is the
+/// lever Lane 1a ships; a broadcast collect cannot reach `aac-store` or `reqwest`
+/// theaps through the public `mi_collect` surface.
 #[allow(unsafe_code)]
 pub fn reclaim_after_pass() {
     // SAFETY: `mi_collect` is thread-safe (collects the calling thread's theap and purges

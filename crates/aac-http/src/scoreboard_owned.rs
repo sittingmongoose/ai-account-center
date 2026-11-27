@@ -14,6 +14,9 @@
 //! from a bounded, validated share scan: history filters stay off, and the runs state names
 //! that share read.
 
+use crate::compact_share::catalog::CompactCatalogReader;
+use crate::compact_share::check::{CompactReadersCheckWriter, CompactRunReceipt};
+use crate::compact_share::primitives::CompactSha;
 use crate::compress::{CachedBody, MIN_COMPRESS_BYTES, SpliceGzip};
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
@@ -21,8 +24,7 @@ use crate::view_reply::EncodedView;
 use aac_files::registry::{Owners, Role};
 use aac_status::model_identity::{AliasTable, Model, normalize_model};
 use aac_status::read_context::{Date, Presentation};
-use aac_status::share::catalog::{self, CatalogReader};
-use aac_status::share::check::{ReadersCheckWriter, RunRow};
+use aac_status::share::check::RunRow;
 use aac_status::share::{NodeFs, Problem, ReadError, ShareFs, is_missing, showable, stat_key};
 use aac_status::validate;
 use aac_views::decline::Decline;
@@ -529,8 +531,6 @@ struct HeldRuns {
     accepted: Option<Vec<Json>>,
     /// Each row's composer preparation over the catalog with this hash (made on first use).
     docs: Mutex<Option<(String, Arc<PreparedDocs>)>>,
-    /// The readers-check rows of the snapshot's receipts (made on first use).
-    accepted_rows: std::sync::OnceLock<Vec<RunRow>>,
     /// Present when this snapshot came from the share, not the store.
     share: Option<ShareRead>,
     /// Engine incarnation that produced `store_history`, when store-backed.
@@ -567,7 +567,6 @@ impl HeldRuns {
             problems,
             accepted,
             docs: Mutex::new(None),
-            accepted_rows: std::sync::OnceLock::new(),
             share: None,
             store_incarnation: None,
             store_history: None,
@@ -586,23 +585,6 @@ impl HeldRuns {
 
     fn has_accepted_receipts(&self) -> bool {
         self.store_history.is_some() || self.accepted.is_some()
-    }
-
-    fn build_accepted_run_rows(&self) -> Vec<RunRow> {
-        if let Some(history) = &self.store_history {
-            history
-                .accepted_facts()
-                .iter()
-                .map(|r| RunRow {
-                    file: r.file.to_string(),
-                    seq: r.seq,
-                    sha256: r.sha256_hex(),
-                    first_seen_at: r.first_seen_at,
-                })
-                .collect()
-        } else {
-            check_rows(self.accepted.as_deref().unwrap_or(&[]))
-        }
     }
 
     /// Accepted receipts as JSON (only materialized if legacy `state_rows(..., receipts=true)` asks).
@@ -1139,7 +1121,7 @@ pub(crate) struct ScoreboardOwned {
     root: PathBuf,
     store: Option<Arc<StoreHost>>,
     feeds: Feeds,
-    catalog: Mutex<CatalogReader>,
+    catalog: Mutex<CompactCatalogReader>,
     catalog_state: Mutex<Json>,
     pass: Mutex<PassState>,
     /// Paths this server has seen, by their hash, for naming a refused file (memory only,
@@ -1191,7 +1173,7 @@ pub(crate) struct ScoreboardOwned {
     /// When the share snapshot in `held_runs` was taken (the 60 s reuse window).
     share_held_at: AtomicU64,
     /// The readers-check rows this owner shares with the Status owner (one file per writer).
-    check: Arc<Mutex<ReadersCheckWriter>>,
+    check: Arc<Mutex<CompactReadersCheckWriter>>,
     owners: Owners,
     flushing: Arc<AtomicBool>,
     /// Number of store-backed aggregate composes run by this owner (no timer recomputes).
@@ -1214,12 +1196,12 @@ impl ScoreboardOwned {
         root: PathBuf,
         store: Option<Arc<StoreHost>>,
         feeds: Feeds,
-        check: Arc<Mutex<ReadersCheckWriter>>,
+        check: Arc<Mutex<CompactReadersCheckWriter>>,
         owners: Owners,
         flushing: Arc<AtomicBool>,
     ) -> Arc<Self> {
         let owner = Arc::new(Self {
-            catalog: Mutex::new(CatalogReader::new(root.clone())),
+            catalog: Mutex::new(CompactCatalogReader::new(root.clone())),
             catalog_state: Mutex::new(Json::Null),
             root,
             store,
@@ -1309,29 +1291,35 @@ impl ScoreboardOwned {
                 if held.key.0 > newest.0 {
                     *newest = (held.key.0, 0);
                 }
-                let made: Vec<RunRow>;
-                let rows: &[RunRow] = match &picked {
-                    None => held
-                        .accepted_rows
-                        .get_or_init(|| held.build_accepted_run_rows()),
-                    Some(picked) => {
-                        made = picked
-                            .iter()
-                            .map(|&index| {
-                                let entry = &held.rows[index];
-                                RunRow {
-                                    file: entry.file().to_string(),
-                                    seq: entry.seq(),
-                                    sha256: entry.sha256().into_owned(),
-                                    first_seen_at: entry.first_seen_at(),
-                                }
-                            })
-                            .collect();
-                        &made
-                    }
-                };
                 let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
-                check.record_runs(rows, &problems);
+                match &picked {
+                    None => {
+                        if let Some(history) = &held.store_history {
+                            let iter = history.accepted_facts().iter().map(|r| CompactRunReceipt {
+                                file: &r.file,
+                                seq: r.seq,
+                                sha256: CompactSha::from_hex_or_str(&r.sha256_hex()),
+                                first_seen_at: r.first_seen_at,
+                            });
+                            check.record_run_receipts(iter, &problems);
+                        } else {
+                            let rows = check_rows(held.accepted.as_deref().unwrap_or(&[]));
+                            check.record_runs(&rows, &problems);
+                        }
+                    }
+                    Some(picked) => {
+                        let iter = picked.iter().map(|&index| {
+                            let entry = &held.rows[index];
+                            CompactRunReceipt {
+                                file: entry.file(),
+                                seq: entry.seq(),
+                                sha256: CompactSha::from_hex_or_str(&entry.sha256()),
+                                first_seen_at: entry.first_seen_at(),
+                            }
+                        });
+                        check.record_run_receipts(iter, &problems);
+                    }
+                }
             }
             if flushing.swap(true, Ordering::Relaxed) {
                 return;
@@ -1397,17 +1385,14 @@ impl ScoreboardOwned {
                     // Advance watermark only to the coherent snapshot for which `check_probs` was
                     // built so a concurrent newer write is not suppressed by stale problems.
                     *newest = (generation, file_rev);
-                    let rows: Vec<RunRow> = receipts
-                        .into_iter()
-                        .map(|r| RunRow {
-                            file: r.file.into_string(),
-                            seq: r.seq,
-                            sha256: r.sha256.into_string(),
-                            first_seen_at: r.first_seen_at,
-                        })
-                        .collect();
                     let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
-                    check.record_runs(&rows, &check_probs);
+                    let iter = receipts.iter().map(|r| CompactRunReceipt {
+                        file: &r.file,
+                        seq: r.seq,
+                        sha256: CompactSha::from_hex_or_str(&r.sha256),
+                        first_seen_at: r.first_seen_at,
+                    });
+                    check.record_run_receipts(iter, &check_probs);
                 }
                 {
                     let mut last = recorded_store.lock().unwrap_or_else(|p| p.into_inner());
@@ -1424,14 +1409,21 @@ impl ScoreboardOwned {
         });
     }
 
-    /// The catalog scan (30 s): the reader holds the last good copies; the snapshot is what
-    /// the view composes over.
+    /// The catalog scan (30 s): the reader holds compact last-good bytes; `catalog_state` is
+    /// rebuilt only on content/state/problem change (quiet ticks update `scannedAt` in place).
     pub(crate) fn catalog_pass(&self, now: u64) {
         let fs = NodeFs;
         let mut catalog = self.catalog.lock().unwrap_or_else(|p| p.into_inner());
-        catalog.scan(&fs, now);
-        *self.catalog_state.lock().unwrap_or_else(|p| p.into_inner()) =
-            catalog::state_json(&catalog.snapshot());
+        let changed = catalog.scan(&fs, now);
+        let mut state = self.catalog_state.lock().unwrap_or_else(|p| p.into_inner());
+        if changed || state.is_null() {
+            *state = catalog.snapshot_json();
+        } else if let Some(obj) = state.as_object_mut() {
+            obj.insert(
+                "scannedAt".to_owned(),
+                catalog.scanned_at().map(Json::from).unwrap_or(Json::Null),
+            );
+        }
     }
 
     #[cfg(not(unix))]
@@ -4254,9 +4246,9 @@ mod tests {
         CACHE_BYTES, CACHE_ENTRIES, CachedView, HeldRuns, ScoreboardOwned, scan_share_runs,
         scan_share_runs_cached,
     };
+    use crate::compact_share::check::CompactReadersCheckWriter;
     use crate::store_host::{StoreBoot, StoreHost};
     use aac_files::registry::Owners;
-    use aac_status::share::check::ReadersCheckWriter;
     use serde_json::json;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -4299,7 +4291,7 @@ mod tests {
             root.clone(),
             store,
             crate::feed::Feeds::new(),
-            Arc::new(Mutex::new(ReadersCheckWriter::new(root))),
+            Arc::new(Mutex::new(CompactReadersCheckWriter::new(root))),
             Owners::defaults(rows),
             Arc::new(AtomicBool::new(false)),
         )
@@ -7285,7 +7277,7 @@ mod tests {
             root.clone(),
             store,
             crate::feed::Feeds::new(),
-            Arc::new(Mutex::new(ReadersCheckWriter::new(root))),
+            Arc::new(Mutex::new(CompactReadersCheckWriter::new(root))),
             owners,
             Arc::new(AtomicBool::new(false)),
         )

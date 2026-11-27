@@ -521,6 +521,10 @@ mod tests {
             HubCache::default(),
             DashboardEvents(tx),
             Weak::new(),
+            std::sync::Arc::new(crate::agent_transport::Agents::with_default(
+                root.clone(),
+                true,
+            )),
         )
         .unwrap();
 

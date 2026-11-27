@@ -487,11 +487,22 @@ impl Agents {
         if computer.ssh_host.is_some() {
             return Ok(None);
         }
-        let permit = tokio::time::timeout_at(deadline, self.local_work.clone().acquire_owned())
+        Ok(Some(self.local_work_acquire(deadline).await?))
+    }
+
+    /// An unconditional hold on the single local-work slot, for the Claude sign-in renewal
+    /// scan, which runs `claude auth status` per profile outside any `Selector`. The whole
+    /// renewal run holds it, so a local `claude auth status` never overlaps a local helper
+    /// or another renewal scan (MEM6): max concurrency 1. Deadline-bounded; the caller skips
+    /// the tick on expiry and the schedule retries in ten minutes.
+    pub(crate) async fn local_work_acquire(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, Cause> {
+        tokio::time::timeout_at(deadline, self.local_work.clone().acquire_owned())
             .await
             .map_err(|_| Cause::Timeout)?
-            .map_err(|_| Cause::Busy)?;
-        Ok(Some(permit))
+            .map_err(|_| Cause::Busy)
     }
 
     pub(crate) fn new(root: PathBuf) -> Self {
@@ -1371,5 +1382,76 @@ mod tests {
                 .expect("next local permit")
                 .is_some()
         );
+    }
+
+    /// MEM7 lane 2 (red-first): the public pool and the private pool hold clones of one
+    /// `Arc<Agents>`, so a `local_work` hold on either call site blocks the other. The helper
+    /// side uses `local_work_permit` (local selector); the Claude renewal scan side holds the
+    /// same slot unconditionally with `local_work_acquire`. Two distinct `Agents` instances
+    /// would each hold a different slot and could overlap (MEM6: 23 shared samples).
+    #[tokio::test(start_paused = true)]
+    async fn the_two_local_call_sites_share_one_local_work_slot() {
+        use super::{Agents, Selector};
+        use aac_core::Cause;
+        let agent = std::sync::Arc::new(Agents::new(std::path::PathBuf::from(
+            "/tmp/aac-mem7-lane2-test",
+        )));
+        let helper_site = std::sync::Arc::clone(&agent);
+        let scan_site = std::sync::Arc::clone(&agent);
+        assert!(std::sync::Arc::ptr_eq(&helper_site, &scan_site));
+        let local = Selector::usage("ubuntu", None);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        // Helper side holds the slot.
+        let helper_held = helper_site
+            .local_work_permit(&local, deadline)
+            .await
+            .expect("helper permit")
+            .expect("a local helper holds the slot");
+        // Scan side (renewal `claude auth status`) times out rather than overlapping.
+        let short = tokio::time::Instant::now() + std::time::Duration::from_millis(20);
+        let blocked = tokio::spawn({
+            let scan_site = std::sync::Arc::clone(&scan_site);
+            async move { scan_site.local_work_acquire(short).await }
+        });
+        tokio::time::advance(std::time::Duration::from_millis(30)).await;
+        assert!(matches!(blocked.await.expect("join"), Err(Cause::Timeout)));
+        // Releasing admits the renewal scan.
+        drop(helper_held);
+        assert!(
+            scan_site
+                .local_work_acquire(deadline)
+                .await
+                .is_ok(),
+            "the released slot admits the next local child"
+        );
+    }
+
+    /// The bug this lane fixes, pinned as a control: two independently constructed
+    /// `Agents` instances have independent slots, so two local helpers can overlap.
+    #[tokio::test(start_paused = true)]
+    async fn distinct_agents_instances_can_overlap() {
+        use super::{Agents, Selector};
+        let first =
+            std::sync::Arc::new(Agents::new(std::path::PathBuf::from("/tmp/aac-mem7-a")));
+        let second =
+            std::sync::Arc::new(Agents::new(std::path::PathBuf::from("/tmp/aac-mem7-b")));
+        assert!(!std::sync::Arc::ptr_eq(&first, &second));
+        let local = Selector::usage("ubuntu", None);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let held = first
+            .local_work_permit(&local, deadline)
+            .await
+            .expect("first permit")
+            .expect("a local child holds the slot");
+        assert!(
+            second
+                .local_work_permit(&local, deadline)
+                .await
+                .expect("second permit while first is held")
+                .is_some(),
+            "distinct instances do not share the slot"
+        );
+        drop(held);
     }
 }

@@ -48,10 +48,13 @@ fn main() {
     }
     // Two async workers; at most 24 blocking threads: the 8 read, 4 store, 4 fed-Status and
     // 4 reset-claims permits, plus spare. The permits, not this cap, are the bound the routes
-    // rely on.
+    // rely on. `thread_keep_alive` is pinned to Tokio's 10s default: longer keep-alive
+    // retains idle theaps (MEM4 M7: +19 MiB) and shorter churns harder (M15: 78 vs 25
+    // theaps), so the default is the churn optimum (MEM6 live: 233 blocking TIDs/30min).
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(24)
+        .thread_keep_alive(std::time::Duration::from_secs(10))
         .enable_all()
         .build();
     let Ok(runtime) = runtime else {

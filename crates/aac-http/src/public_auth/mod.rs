@@ -522,14 +522,26 @@ pub(crate) async fn run_public_at(
     let composed = backend.is_some();
     let owner_host =
         (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    // The boot's one `Agents` pool, shared by the public owners and the embedded
+    // private service so the `local_work` gate is not split (MEM7 lane 2). The
+    // canonicalized root matches what `NativeOwners::start` used for its pool.
+    let agents = std::sync::Arc::new(crate::agent_transport::Agents::with_default(
+        root.canonicalize().unwrap_or_else(|_| root.clone()),
+        true,
+    ));
     #[cfg(unix)]
     if let Some(host) = owner_host.as_ref().filter(|_| cut) {
-        host.start_cut(adopted.clone(), groups.is_some_and(|groups| groups.renewal))
-            .await?;
+        host.start_cut(
+            adopted.clone(),
+            groups.is_some_and(|groups| groups.renewal),
+            std::sync::Arc::clone(&agents),
+        )
+        .await?;
     }
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
-        if let Err(error) = host.start_public(groups, hub.clone(), auth.events()) {
+        let started = host.start_public(groups, hub.clone(), auth.events(), agents.clone());
+        if let Err(error) = started {
             host.stop().await;
             return Err(error);
         }

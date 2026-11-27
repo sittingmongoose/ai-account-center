@@ -683,6 +683,10 @@ mod tests {
             HubCache::default(),
             DashboardEvents(tokio::sync::broadcast::channel(4).0),
             Default::default(),
+            std::sync::Arc::new(crate::agent_transport::Agents::with_default(
+                root.clone(),
+                true,
+            )),
         )
         .unwrap();
         let provider = "zai";

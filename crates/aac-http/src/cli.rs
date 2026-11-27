@@ -343,9 +343,12 @@ fn launch(args: &[String], root: Option<PathBuf>) -> Result<(), String> {
     let root = root
         .filter(|path| path.is_absolute())
         .ok_or("Rust dashboard mode requires an absolute CCS_DIR, CCS_HOME or --config-dir.")?;
+    // Pinned 10s keep-alive: MEM4 M7/M15 showed both longer and shorter regress; the
+    // bounded pool (8) caps concurrency and the 10s window is the churn optimum.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(8)
+        .thread_keep_alive(std::time::Duration::from_secs(10))
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;

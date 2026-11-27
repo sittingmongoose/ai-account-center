@@ -19,10 +19,13 @@
 //! written by `aac_views::js_json` as Node writes it, with the revalidated-view ETag. Anything unproven declines
 //! with a named reason, and TS answers.
 use crate::feed::{Feeds, Generation, Prepared};
-use crate::status_cache::CachedStatusBody;
+use crate::status_cache::{CachedStatusBody, StatusTrace};
+use crate::status_compose::{
+    DateTriple, FactsSource, OwnedReportsView, RegistryInput, RegistrySource, ReportsInput,
+};
 use crate::view_reply::EncodedView;
 use aac_status::read_context::{Date, Presentation};
-use aac_status::read_status::{self, FedTrace, Unproven};
+use aac_status::read_status::{self, Unproven};
 use aac_views::decline::Decline;
 use aac_views::js_json::Writer;
 use axum::body::Bytes;
@@ -70,14 +73,13 @@ pub(crate) fn source(name: &str) -> bool {
 /// One prepared generation: its data object, and for `status-facts` the presentation facts.
 pub(crate) type ScanClock = (Arc<AtomicU64>, aac_num::intl::Zone);
 
-/// The `status-collected` members as a typed shared view (MEM5 Lane C): the same five
-/// members the wire `data` object carries, each held once behind an `Arc` the
-/// producer and the composer share, instead of a fresh `Value` tree parsed from the
-/// wire bytes beside the producer's own snapshots. `None` is a member TS did not
-/// write (`JSON.stringify` drops `undefined`); a present `null` stays `Some`.
+/// The `status-collected` members as a typed shared view (MEM5 Lane C / MEM7 Lane 4a):
+/// `registry` holds either the compact typed snapshot (owned path) or a wire JSON `Value`.
+/// `None` is a member TS did not write (`JSON.stringify` drops `undefined`); a present `null`
+/// stays `Some`.
 #[derive(Debug)]
 pub(crate) struct CollectedView {
-    pub(crate) registry: Option<Arc<Value>>,
+    pub(crate) registry: Option<RegistrySource>,
     pub(crate) machines: Option<Arc<Value>>,
     pub(crate) browsers: Option<Arc<Value>>,
     pub(crate) simlock: Option<Arc<Value>>,
@@ -87,9 +89,9 @@ pub(crate) struct CollectedView {
 pub(crate) struct Part {
     pub(crate) scan: Option<ScanClock>,
     data: Value,
-    reports: Option<Arc<read_status::ReportView>>,
+    reports: Option<Arc<OwnedReportsView>>,
     collected: Option<Arc<CollectedView>>,
-    facts: Option<Arc<Presentation>>,
+    facts: Option<FactsSource>,
 }
 
 impl std::fmt::Debug for Part {
@@ -125,7 +127,7 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
     let facts = if source == FACTS {
         let presentation: Presentation =
             serde_json::from_str(facts.get()).map_err(|_| Decline::Shape)?;
-        Some(Arc::new(presentation))
+        Some(FactsSource::Wire(Arc::new(presentation)))
     } else {
         if facts.get().trim() != "{}" {
             return Err(Decline::Shape);
@@ -140,7 +142,7 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
         };
         let mut take = |key: &str| object.remove(key).map(Arc::new);
         let view = Arc::new(CollectedView {
-            registry: take("registry"),
+            registry: take("registry").map(RegistrySource::Wire),
             machines: take("machines"),
             browsers: take("browsers"),
             simlock: take("simlock"),
@@ -163,7 +165,7 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
     })
 }
 
-pub(crate) fn prepared_reports(reports: Arc<read_status::ReportView>, scan: ScanClock) -> Part {
+pub(crate) fn prepared_reports(reports: Arc<OwnedReportsView>, scan: ScanClock) -> Part {
     Part {
         data: Value::Object(serde_json::Map::new()),
         reports: Some(reports),
@@ -183,24 +185,33 @@ pub(crate) fn prepared_collected(view: Arc<CollectedView>, scan: ScanClock) -> P
     }
 }
 
+pub(crate) fn prepared_facts(data: Value, zone: aac_num::intl::Zone) -> Part {
+    Part {
+        data,
+        reports: None,
+        collected: None,
+        scan: None,
+        facts: Some(FactsSource::OwnedZone(zone)),
+    }
+}
+
 /// Whether an owned `status-collected` view proves: no key or string in any member is
-/// exactly an `Object.prototype` member name (`fed_part`'s one exact-name rule). The
-/// member names are fixed by the envelope, so checking the member values proves the
-/// same thing as checking the wire object the wire path checks.
+/// exactly an `Object.prototype` member name (`fed_part`'s one exact-name rule).
 pub(crate) fn collected_proven(view: &CollectedView) -> bool {
-    [
-        &view.registry,
-        &view.machines,
-        &view.browsers,
-        &view.simlock,
-        &view.usage,
-    ]
-    .iter()
-    .all(|member| {
-        member
-            .as_deref()
-            .is_none_or(|value| !aac_status::read_context::proto_named(value))
-    })
+    if view
+        .registry
+        .as_ref()
+        .is_some_and(RegistrySource::proto_unsafe)
+    {
+        return false;
+    }
+    [&view.machines, &view.browsers, &view.simlock, &view.usage]
+        .iter()
+        .all(|member| {
+            member
+                .as_deref()
+                .is_none_or(|value| !aac_status::read_context::proto_named(value))
+        })
 }
 
 /// `read_status::fed_part`: the data is an object and no key or string in it is exactly an
@@ -298,7 +309,7 @@ struct Composed {
     composed_iso: String,
     etag: String,
     at: Option<usize>,
-    trace: Option<FedTrace>,
+    trace: Option<StatusTrace>,
     composed_now: i64,
 }
 
@@ -447,23 +458,28 @@ fn compose_generations(
     let mut parts: Vec<(&str, &Value)> = Vec::with_capacity(20);
     let now = Value::from(now_ms);
     parts.push(("now", &now));
-    let mut presentation = None;
-    let mut reports = None;
+    let mut facts_source: Option<&FactsSource> = None;
+    let mut owned_reports: Option<&OwnedReportsView> = None;
+    let mut wire_reports: Option<&Value> = None;
+    let mut registry_source: Option<&RegistrySource> = None;
     for generation in held {
         let Prepared::Status(part) = &generation.prepared else {
             return Err(Decline::Internal);
         };
         let part = part.as_ref().map_err(|d| *d)?;
         if let Some(facts) = &part.facts {
-            presentation = Some(facts.clone());
+            facts_source = Some(facts);
         }
         if let Some(native) = &part.reports {
-            reports = Some(native.as_ref());
+            owned_reports = Some(native.as_ref());
         }
         if let Some(view) = &part.collected {
             // The typed share, in the envelope's member order (`members(COLLECTED)`).
-            if let Some(value) = &view.registry {
-                parts.push(("registry", value.as_ref()));
+            if let Some(reg) = &view.registry {
+                registry_source = Some(reg);
+                if let RegistrySource::Wire(value) = reg {
+                    parts.push(("registry", value.as_ref()));
+                }
             }
             if let Some(value) = &view.machines {
                 parts.push(("machines", value.as_ref()));
@@ -483,28 +499,83 @@ fn compose_generations(
             return Err(Decline::Internal);
         };
         for (key, value) in object {
+            if key == "reports" {
+                wire_reports = Some(value);
+            }
             parts.push((key.as_str(), value));
         }
     }
-    let presentation = presentation.ok_or(Decline::Internal)?;
+    let facts_source = facts_source.ok_or(Decline::Internal)?;
     let iso = date.iso_text().to_owned();
-    let scan_dates = std::array::from_fn(|slot| {
-        let index = CLOCK_PARTS[slot];
-        let stamp = stamps[slot];
-        if stamp == 0 {
-            return None;
-        }
-        let stamp = i64::try_from(stamp).ok()?;
-        let (_, zone) = scan_clock(&held[index])?;
-        let (clock, day) = zone.words(stamp)?;
-        Some((stamp, Date::of_now(stamp, clock, day)?))
-    });
-    let (view, traced) =
-        read_status::compose_with_reports(parts, reports, presentation, (now_ms, date), scan_dates)
-            .map_err(|reason| match reason {
-                Unproven::Facts => Decline::Date,
-                Unproven::Input => Decline::Unsupported,
-            })?;
+    let use_compact = owned_reports.is_some()
+        || matches!(registry_source, Some(RegistrySource::Compact(_)))
+        || matches!(facts_source, FactsSource::OwnedZone(_));
+    let (view, traced): (Value, StatusTrace) = if use_compact {
+        let scan_triples = std::array::from_fn(|slot| {
+            let index = CLOCK_PARTS[slot];
+            let stamp = stamps[slot];
+            if stamp == 0 {
+                return None;
+            }
+            let stamp = i64::try_from(stamp).ok()?;
+            let (_, zone) = scan_clock(&held[index])?;
+            let (c, d) = zone.words(stamp)?;
+            Some((stamp, DateTriple::of_now(stamp, c, d)?))
+        });
+        static NULL_VAL: Value = Value::Null;
+        let reports_in = match (owned_reports, wire_reports) {
+            (Some(owned), _) => ReportsInput::Compact(owned),
+            (None, Some(wire)) => ReportsInput::Wire(wire),
+            (None, None) => ReportsInput::Wire(&NULL_VAL),
+        };
+        let registry_in = match registry_source {
+            Some(RegistrySource::Compact(snap)) => RegistryInput::Compact(snap.as_ref()),
+            Some(RegistrySource::Wire(val)) => RegistryInput::Wire(val.as_ref()),
+            None => RegistryInput::Wire(&NULL_VAL),
+        };
+        let (view, trace) = crate::status_compose::compose_compact(
+            parts,
+            reports_in,
+            registry_in,
+            facts_source,
+            now_ms,
+            clock.clone(),
+            day.clone(),
+            scan_triples,
+        )
+        .map_err(|reason| match reason {
+            Unproven::Facts => Decline::Date,
+            Unproven::Input => Decline::Unsupported,
+        })?;
+        (view, StatusTrace::from(trace))
+    } else {
+        let FactsSource::Wire(presentation) = facts_source else {
+            return Err(Decline::Internal);
+        };
+        let scan_dates = std::array::from_fn(|slot| {
+            let index = CLOCK_PARTS[slot];
+            let stamp = stamps[slot];
+            if stamp == 0 {
+                return None;
+            }
+            let stamp = i64::try_from(stamp).ok()?;
+            let (_, zone) = scan_clock(&held[index])?;
+            let (c, d) = zone.words(stamp)?;
+            Some((stamp, Date::of_now(stamp, c, d)?))
+        });
+        let (view, trace) = read_status::compose_with_reports(
+            parts,
+            None,
+            Arc::clone(presentation),
+            (now_ms, date),
+            scan_dates,
+        )
+        .map_err(|reason| match reason {
+            Unproven::Facts => Decline::Date,
+            Unproven::Input => Decline::Unsupported,
+        })?;
+        (view, StatusTrace::from(trace))
+    };
     let mut writer = Writer::with_capacity(256 * 1024);
     writer.value(&view);
     let (bytes, identity) = writer.finish();

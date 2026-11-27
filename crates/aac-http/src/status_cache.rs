@@ -16,11 +16,48 @@
 //! [`SpliceGzip`] so gzip clients stitch `generatedAt` with zero recompression and cache memory
 //! stays ~10x smaller.
 use crate::compress::{MIN_COMPRESS_BYTES, SpliceGzip};
+use crate::status_compose::CompactFedTrace;
 use crate::view_reply::EncodedView;
 use aac_status::read_status::FedTrace;
 use axum::body::Bytes;
 use std::collections::VecDeque;
 use std::sync::Arc;
+
+/// Unified decision trace for `status_cache`: covers both wire `FedTrace` and owned
+/// `CompactFedTrace` with identical invalidation semantics.
+#[derive(Clone, Debug)]
+pub(crate) enum StatusTrace {
+    External(FedTrace),
+    Compact(CompactFedTrace),
+}
+
+impl StatusTrace {
+    pub(crate) fn keep(&self) -> bool {
+        match self {
+            Self::External(trace) => trace.keep(),
+            Self::Compact(trace) => trace.keep(),
+        }
+    }
+
+    pub(crate) fn matches(&self, now: i64) -> bool {
+        match self {
+            Self::External(trace) => trace.matches(now),
+            Self::Compact(trace) => trace.matches(now),
+        }
+    }
+}
+
+impl From<FedTrace> for StatusTrace {
+    fn from(trace: FedTrace) -> Self {
+        Self::External(trace)
+    }
+}
+
+impl From<CompactFedTrace> for StatusTrace {
+    fn from(trace: CompactFedTrace) -> Self {
+        Self::Compact(trace)
+    }
+}
 
 /// Generation-sets kept at once.
 pub(crate) const GENERATIONS: usize = 2;
@@ -117,7 +154,7 @@ impl CachedStatusBody {
 struct Slot {
     clock: String,
     day: String,
-    trace: FedTrace,
+    trace: StatusTrace,
     body: Arc<CachedStatusBody>,
     etag: String,
 }
@@ -158,7 +195,7 @@ pub(crate) fn remember_body(
     ids: [String; 6],
     clock: String,
     day: String,
-    trace: FedTrace,
+    trace: StatusTrace,
     body: Arc<CachedStatusBody>,
     etag: String,
 ) {
@@ -213,7 +250,14 @@ impl Cache {
             return;
         }
         let (body, _) = CachedStatusBody::from_raw_and_keep(bytes, at);
-        self.store_body(ids, clock, day, trace, Arc::new(body), etag);
+        self.store_body(
+            ids,
+            clock,
+            day,
+            StatusTrace::from(trace),
+            Arc::new(body),
+            etag,
+        );
     }
 
     /// Keep `body` for this generation identity and these clock and day words. A trace that must
@@ -223,7 +267,7 @@ impl Cache {
         ids: [String; 6],
         clock: String,
         day: String,
-        trace: FedTrace,
+        trace: StatusTrace,
         body: Arc<CachedStatusBody>,
         etag: String,
     ) {
