@@ -772,9 +772,10 @@ fn tool_ids_are_fixed_words() {
     assert_eq!(common::tool_id(&[], None), "unlisted");
     assert!(
         common::TOOLS
-            .iter()
+            .split(' ')
             .all(|tool| common::REASON.is_match(tool))
     );
+    assert_eq!(common::TOOLS.split(' ').count(), 37);
 }
 
 #[test]

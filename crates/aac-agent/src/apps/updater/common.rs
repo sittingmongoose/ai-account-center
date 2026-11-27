@@ -20,46 +20,11 @@ pub(crate) const NO_AUTO_UPDATE: [(&str, &str); 5] = [
     ("CODEX_NON_INTERACTIVE", "1"),
 ];
 
-/// Python `TOOLS`: the only words a row's `diagnostics.tool` can hold.
-pub(crate) const TOOLS: [&str; 37] = [
-    "agy",
-    "antigravity",
-    "apt",
-    "apt-cache",
-    "apt-get",
-    "bun",
-    "claude",
-    "codesign",
-    "codex",
-    "cursor",
-    "cursor-agent",
-    "ditto",
-    "dpkg",
-    "dpkg-query",
-    "hdiutil",
-    "launchctl",
-    "lsof",
-    "msiexec",
-    "muse",
-    "node",
-    "npm",
-    "npx",
-    "omp",
-    "open",
-    "pnpm",
-    "powershell",
-    "ps",
-    "pwsh",
-    "python",
-    "spctl",
-    "sudo",
-    "systemctl",
-    "systemd-run",
-    "t3",
-    "winget",
-    "wt",
-    "zcode",
-];
+/// Python `TOOLS`: the only words a row's `diagnostics.tool` can hold. These are executable
+/// names (one space-separated vocabulary), not a provider table.
+pub(crate) const TOOLS: &str = "agy antigravity apt apt-cache apt-get bun claude codesign codex cursor cursor-agent \
+     ditto dpkg dpkg-query hdiutil launchctl lsof msiexec muse node npm npx omp open pnpm \
+     powershell ps pwsh python spctl sudo systemctl systemd-run t3 winget wt zcode";
 
 /// Python `REASON`: a fixed reason or note word.
 pub(crate) static REASON: LazyLock<regex::Regex> =
@@ -424,8 +389,7 @@ pub(crate) fn tool_id(argv: &[OsString], label: Option<&str>) -> &'static str {
         .replace(&SUFFIX.replace(&word, ""), "")
         .to_lowercase();
     TOOLS
-        .iter()
-        .copied()
+        .split(' ')
         .find(|tool| *tool == word)
         .unwrap_or("unlisted")
 }
