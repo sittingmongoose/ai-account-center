@@ -18,11 +18,14 @@ cd ai-account-center
 From a checkout of [AI Account Center](https://github.com/sittingmongoose/ai-account-center):
 
 ```bash
-docker compose -f docker/compose.yaml up -d --build
+AAC_BUILD_COMMIT=$(git rev-parse HEAD) docker compose -f docker/compose.yaml up -d --build
 ```
 
 Open `http://localhost:3000`. This builds the local source image;
 it does not download the upstream CCS package or start a CLIProxy service.
+The Rust build stamps the checkout HEAD into the image (`AAC_BUILD_COMMIT`); Docker
+contexts exclude `.git`, so the build must pass it explicitly. Without it the
+image carries `unknown` and the dashboard refuses to start its private owner.
 Existing host credentials and usage-collector connections require explicit
 configuration; see the Docker deployment guide in this checkout.
 <!-- quickstart-snippet-end -->
@@ -77,7 +80,7 @@ to the authenticated dashboard endpoint independently.
 docker compose -f docker/compose.yaml ps
 docker compose -f docker/compose.yaml logs --follow ccs
 docker compose -f docker/compose.yaml stop
-docker compose -f docker/compose.yaml up -d --build
+AAC_BUILD_COMMIT=$(git rev-parse HEAD) docker compose -f docker/compose.yaml up -d --build
 ```
 
 Health checks use `curl` against the public `/api/health` endpoint on port

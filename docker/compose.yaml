@@ -9,6 +9,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        AAC_BUILD_COMMIT: ${AAC_BUILD_COMMIT:?Set AAC_BUILD_COMMIT to the checkout HEAD, e.g. AAC_BUILD_COMMIT=$(git rev-parse HEAD)}
     restart: unless-stopped
     init: true
     ports:

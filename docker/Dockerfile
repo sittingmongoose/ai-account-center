@@ -12,6 +12,12 @@ SHELL ["/bin/bash", "-lc"]
 ARG BUN_VERSION=1.4.4
 ARG RUST_VERSION=1.99.1
 ARG WASM_PACK_VERSION=0.15.1
+# The Rust build stamps AAC_BUILD_COMMIT from this arg (or a git checkout).
+# Docker contexts exclude .git, so the build entry points must pass the
+# checkout HEAD; without it the image carries "unknown" and the dashboard
+# refuses to start its private owner.
+ARG AAC_BUILD_COMMIT
+ENV AAC_BUILD_COMMIT=${AAC_BUILD_COMMIT}
 ENV BUN_INSTALL=/usr/local/bun
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
@@ -33,6 +39,10 @@ WORKDIR /app
 # Dependency install layer (avoid running install scripts inside the image build)
 COPY package.json bun.lock bunfig.toml ./
 RUN bun install --frozen-lockfile --ignore-scripts
+
+# Fail fast when the build arg is missing: an "unknown" stamp builds but the
+# dashboard refuses to start, so a broken image must never be produced.
+RUN bash -c '[[ "$AAC_BUILD_COMMIT" =~ ^[0-9a-f]{7,40}$ ]]'
 
 COPY . .
 

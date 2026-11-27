@@ -92,6 +92,18 @@ describe('the image builds Rust and keeps interpreters out of the runtime', () =
     expect(dockerfile).not.toContain('bun run status:build');
   });
 
+  it('stamps the checkout HEAD into the build so the dashboard starts', () => {
+    expect(dockerfile).toContain('ARG AAC_BUILD_COMMIT');
+    expect(dockerfile).toContain('ENV AAC_BUILD_COMMIT=${AAC_BUILD_COMMIT}');
+    expect(dockerfile).toContain('AAC_BUILD_COMMIT');
+  });
+
+  it('passes the checkout HEAD into the Docker build', () => {
+    const smoke = readFileSync('docker/smoke-test.sh', 'utf8');
+    expect(smoke).toContain('--build-arg "AAC_BUILD_COMMIT=$(git rev-parse HEAD)"');
+    expect(compose).toContain('AAC_BUILD_COMMIT');
+  });
+
   it('uses a non-Node runtime with SSH and no Python interpreter', () => {
     expect(runtime).toMatch(/^FROM debian:bookworm-slim@sha256:/m);
     expect(runtime).toContain('ca-certificates curl openssh-client');

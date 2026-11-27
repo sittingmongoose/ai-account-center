@@ -58,7 +58,7 @@ if [ -n "${AAC_D1_BASELINE_IMAGE:-}" ]; then
 fi
 
 echo "[1/8] Building $IMAGE"
-docker build --pull -f docker/Dockerfile -t "$IMAGE" .
+docker build --pull --build-arg "AAC_BUILD_COMMIT=$(git rev-parse HEAD)" -f docker/Dockerfile -t "$IMAGE" .
 docker image inspect "$IMAGE" --format 'Rewritten image size: {{.Size}} bytes'
 
 echo "[2/8] Creating empty test volume and SSH mount"
