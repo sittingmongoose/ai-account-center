@@ -6,7 +6,7 @@
   "scripts/account-usage/desktop_usage.py": "21716466b3defc9356524c7b9cd1e453437f2c43f3ef3755296e4d119738d5df",
   "scripts/account-usage/failover_additional.py": "ea2b1f639e04705eaa3339a414372e020994d50c10dcf24f22b996193c5653c7",
   "scripts/account-usage/failover_core.py": "561372a59eccc6968f02f32aa6d1c055169bb0979e2d3e202db86ded30726934",
-  "scripts/account-usage/failover_special.py": "16dbc2544c5d318ce7d72a99de3de30b3f4bafb74284833804d978df2d4f303b",
+  "scripts/account-usage/failover_special.py": "faf29361e75d3b46710444f7d797b370ae2c57dfb67434a47876db264924fd60",
   "scripts/account-usage/failover_usage.py": "8551cc916214eb7f0aeb372bd3ccf67fbaa7cb7a578535503b260581d341ea14",
   "scripts/account-usage/muse_console.py": "201f860539c55252ab2b623f93a4e10ea6970a00165292a7425917128cff790b",
   "scripts/account-usage/muse_native.py": "bebf4dcde1eeb08ce5338a7b9016ea6faf111b09b8ea3e836c194c6bb6079f74",

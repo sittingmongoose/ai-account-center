@@ -1247,7 +1247,6 @@
     "cause": "identity_mismatch",
     "sources": [
       "scripts/account-usage/failover_core.py:Failure",
-      "scripts/account-usage/failover_special.py:failure",
       "scripts/account-usage/failover_special.py:failureCode",
       "scripts/account-usage/failover_usage.py:FAILURES",
       "src/codex-auth/codex-renewal-tokens.ts:reason",
@@ -1924,7 +1923,6 @@
     "sources": [
       "scripts/account-usage/desktop_usage.py:error.code",
       "scripts/account-usage/failover_additional.py:_failure",
-      "scripts/account-usage/failover_special.py:failure",
       "scripts/account-usage/failover_usage.py:FAILURES",
       "scripts/account-usage/muse_console.py:MuseError",
       "scripts/account-usage/muse_console.py:error.code",
@@ -2882,10 +2880,8 @@
       "scripts/account-usage/failover_core.py:error.status",
       "scripts/account-usage/failover_core.py:hold.get('failureCode')",
       "scripts/account-usage/failover_special.py:failed['failureCode']",
-      "scripts/account-usage/failover_special.py:failure.get('code')",
       "scripts/account-usage/failover_special.py:failureCode",
       "scripts/account-usage/failover_special.py:result.get('failureCode')",
-      "scripts/account-usage/failover_special.py:result['failureCode']",
       "scripts/account-usage/failover_special.py:service['status']",
       "scripts/account-usage/failover_usage.py:FAILURES",
       "scripts/account-usage/failover_usage.py:_failure",
@@ -4498,13 +4494,6 @@
       "src/web-server/status/report-schema.ts:ITEM_STATES",
       "src/web-server/status/report-schema.ts:THREAD_STATES",
       "src/web-server/status/status-view.ts:t.state"
-    ]
-  },
-  {
-    "word": "workspace_mismatch",
-    "cause": null,
-    "sources": [
-      "scripts/account-usage/failover_special.py:failure"
     ]
   },
   {
