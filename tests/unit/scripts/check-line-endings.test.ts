@@ -20,17 +20,15 @@ function write(relative: string, text: string): void {
 }
 
 describe('packaged line endings', () => {
-  it('finds CRLF helpers and leaves LF files, Windows wrappers and dependencies alone', () => {
-    write('scripts/account-usage/plan_usage.py', 'a = 1\r\nb = 2\r\n');
-    write('scripts/agent-usage/aac-usage-native.sh', '#!/bin/sh\r\n');
-    write('scripts/agent-usage/aac-usage.cmd', '@echo off\r\n');
-    write('browser-bridge/opencode-muse/native-host/host.py', 'print(1)\n');
+  it('finds packaged CRLF bridges and leaves LF files, wrappers and dependencies alone', () => {
+    write('scripts/agent-usage/aac-usage', '#!/usr/bin/env python3\r\n');
+    write('scripts/agent-usage/aac-usage.cmd', '@python "%~dp0aac-usage" %*\r\n');
     write('browser-bridge/qwen/native-host/node_modules/dep/index.js', 'x\r\n');
     write('browser-bridge/qwen/extension/popup.mjs', 'export {};\r\n');
+    write('scripts/account-usage/plan_usage.py', 'value = 1\n');
     expect(crlfFiles(root)).toEqual([
       'browser-bridge/qwen/extension/popup.mjs',
-      'scripts/agent-usage/aac-usage-native.sh',
-      'scripts/account-usage/plan_usage.py',
+      'scripts/agent-usage/aac-usage',
     ]);
   });
 
