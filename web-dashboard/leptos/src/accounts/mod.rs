@@ -12,6 +12,7 @@
 mod actions;
 mod flow;
 pub(crate) mod layout;
+mod logins;
 pub mod model;
 mod provider;
 mod settings;
@@ -173,6 +174,9 @@ pub fn AccountsPage(ctx: FrameCtx) -> impl IntoView {
                         }
                     }/>
             </div>
+            <Show when=move || view.with(|v| v.is_some())>
+                <logins::LoginsPlate ctx=ctx/>
+            </Show>
         </div>
     }
 }

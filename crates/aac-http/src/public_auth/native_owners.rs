@@ -39,6 +39,7 @@ mod lifecycle_open;
 mod lifecycle_registry;
 mod lifecycle_remove;
 mod lifecycle_trash;
+mod logins;
 pub(super) mod recheck;
 
 #[derive(Clone, Copy, Default)]
@@ -176,6 +177,27 @@ fn signin_health_cache_uses_the_earlier_of_crossed_expiry_and_ttl() {
     health.since = 2_001;
     assert!(health.current(30_999));
     assert!(!health.current(31_000));
+}
+
+#[cfg(test)]
+#[test]
+fn the_logins_read_is_a_lifecycle_route_and_reads_only() {
+    assert!(NativeOwners::owns_lifecycle(
+        &Method::GET,
+        "/api/accounts/logins"
+    ));
+    assert!(NativeOwners::owns_lifecycle(
+        &Method::HEAD,
+        "/api/accounts/logins/"
+    ));
+    assert!(!NativeOwners::owns_lifecycle(
+        &Method::POST,
+        "/api/accounts/logins"
+    ));
+    assert!(!NativeOwners::owns_lifecycle(
+        &Method::PUT,
+        "/api/accounts/logins"
+    ));
 }
 
 struct PublicSampling {
@@ -381,6 +403,7 @@ impl NativeOwners {
             || lifecycle_label::route(method, path).is_some()
             || lifecycle_jobs::route(method, path).is_some()
             || lifecycle_registry::route(method, path)
+            || logins::route(method, path)
             || lifecycle_keys::route(method, path).is_some()
             || lifecycle_remove::route(method, path).is_some()
             || lifecycle_login::route(method, path).is_some()
@@ -573,6 +596,9 @@ impl NativeOwners {
         {
             let id = id.to_owned();
             return lifecycle_keys::handle(self, action, &id, request).await;
+        }
+        if logins::route(request.method(), path) {
+            return logins::handle(self, request).await;
         }
         if let Some(jobs) = &self.lifecycle_jobs
             && lifecycle_registry::route(request.method(), path)

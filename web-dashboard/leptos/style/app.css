@@ -848,6 +848,31 @@ textarea.note::placeholder { color: var(--ink-4); }
 .ac-cols { display: grid; grid-template-columns: repeat(var(--ac-cols, 1), minmax(0, 1fr)); gap: 10px; align-items: start; }
 .ac-col { display: grid; gap: 10px; min-width: 0; align-content: start; }
 @container content (min-width: 1200px) { .ac-cols { gap: 20px; } .ac-col { gap: 16px; } }
+/* Logins (Central Logins step 1): a read-only list, full width. Wide: one aligned line per login. Narrow (a phone):
+   three short lines per login in three columns, no header, small text; long names end with an ellipsis. */
+.lg-plate { container: logins / inline-size; min-width: 0; }
+.lg-plate .plate-body { display: grid; gap: 6px; }
+.lg-lead, .lg-note { line-height: 1.4; }
+.lg-rows { display: grid; font-size: var(--fs-small); border-top: 1px solid var(--rule); }
+.lg-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .65fr) minmax(0, 1.1fr) minmax(0, .8fr) minmax(0, .85fr) minmax(0, 1.1fr) minmax(0, .9fr);
+  gap: 0 10px; padding: 5px 0; border-bottom: 1px solid var(--rule-2); align-items: baseline; font-variant-numeric: tabular-nums; }
+.lg-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lg-headrow { color: var(--ink-3); padding: 5px 0 4px; }
+.lg-acct { font-weight: 600; font-variation-settings: 'wght' 600; }
+.lg-comp, .lg-tool, .lg-kind, .lg-ends, .lg-renew { color: var(--ink-2); }
+.lg-row > .lg-h { white-space: normal; overflow-wrap: anywhere; color: var(--ink-2); }
+.lg-h.good { color: var(--good-text); }
+.lg-h.warn { color: var(--warn-text); font-weight: 600; font-variation-settings: 'wght' 600; }
+.lg-h.crit { color: var(--crit-text); font-weight: 600; font-variation-settings: 'wght' 600; }
+@container logins (max-width: 719px) {
+  .lg-headrow { display: none; }
+  .lg-row { grid-template-columns: minmax(0, .8fr) minmax(0, 1.25fr) minmax(0, .95fr); gap: 1px 8px; padding: 5px 0;
+    grid-template-areas: 'acct acct health' 'comp tool ends' 'kind renew renew'; font-size: var(--fs-tiny); line-height: 1.3; }
+  .lg-acct { grid-area: acct; font-size: var(--fs-small); }
+  .lg-row > .lg-h { grid-area: health; text-align: right; white-space: nowrap; overflow-wrap: normal; }
+  .lg-comp { grid-area: comp; } .lg-tool { grid-area: tool; } .lg-ends { grid-area: ends; text-align: right; }
+  .lg-kind { grid-area: kind; color: var(--ink-3); } .lg-renew { grid-area: renew; text-align: right; color: var(--ink-3); }
+}
 .ac-card { container: card / inline-size; overflow: hidden; }
 .ac-head h2 { font-size: var(--fs-title); }
 .coming { font-family: var(--mono); font-size: 11px; letter-spacing: .03em; font-stretch: 87.5%; color: var(--ink-3); white-space: nowrap; }
