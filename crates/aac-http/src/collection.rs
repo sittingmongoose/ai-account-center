@@ -237,7 +237,7 @@ impl Call {
         let request = serde_json::from_str::<Request>(&self.wire(verb)).ok()?;
         request.validate().ok()?;
         if (verb == "failover-inventory" && request.args["action"] != "inventory")
-            || (helper && request.args["action"] != "collect")
+            || (verb == "failover-collect" && request.args["action"] != "collect")
         {
             return None;
         }

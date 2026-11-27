@@ -84,6 +84,9 @@ fn json_caps_invalid_documents_and_safe_errors() {
 const RETIRED_SOURCE_ROOTS: &[&str] = &[
     "src/",
     "scripts/analytics-remote/",
+    "scripts/antigravity/",
+    "scripts/app-updates/",
+    "scripts/claude-history/",
     "scripts/claude-signin/",
 ];
 const RETIRED_SOURCE_FILES: &[&str] = &[
