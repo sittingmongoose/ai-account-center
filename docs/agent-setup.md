@@ -27,12 +27,12 @@ computer (most of it one Rust compile), with four toolchains.
    `brew install node@22` still works when you want the older end of that range. A fresh Mac needs the Command Line
    Tools first, and Homebrew asks for the person's password in a terminal: those are their steps.
 2. **Build:** the README's **Get started** step 1 (clone, `bun install`, `bun run build:all`).
-3. **Install:** `./scripts/dev-install.sh --npm`. It runs AAC's own checks before installing (typecheck, lint and
-   about 4,500 tests: a few minutes). They pass on a clean Linux or macOS account with no AI tools installed. If one
+3. **Install:** `./scripts/dev-install.sh --npm`. It runs AAC's own checks before installing (`ui:validate` and
+   the fast test bucket: a few minutes). They pass on a clean Linux or macOS account with no AI tools installed. If one
    fails anyway, don't change AAC to get past it: report the failing test names to the person (and as an issue on the
    repository), and use the next item meanwhile.
-4. **Without installing:** start the dashboard from the checkout with
-   `node scripts/run-dashboard-native.js --host localhost --port 3000 --no-open`.
+4. **Without installing:** build with `bun run build:all`, then start the dashboard from the checkout with
+   `dist/native/ai-account-center dashboard --host localhost --port 3000 --no-open`.
 
 Docker is the alternative (`docker/README.md`). It builds the same source.
 

@@ -12,9 +12,11 @@ for (const receipt of ['missing', 'stale']) {
     try {
       for (const dir of ['scripts', 'crates/aac-status/prebuilt', 'web-dashboard/public'])
         fs.mkdirSync(path.join(fixture, dir), { recursive: true });
-      // The builder loads its release-profile sibling, so the fixture carries both build scripts.
-      for (const name of ['build-status-native.js', 'release-profile.js'])
-        fs.copyFileSync(path.join(root, 'scripts', name), path.join(fixture, 'scripts', name));
+      // The builder stands alone: the fixture carries only the builder, with its inlined release profile.
+      fs.copyFileSync(
+        path.join(root, 'scripts', 'build-status-native.js'),
+        path.join(fixture, 'scripts', 'build-status-native.js')
+      );
       for (const name of ['Cargo.toml', 'build.rs', 'rust-toolchain.toml', 'src'])
         fs.cpSync(
           path.join(root, 'crates/aac-status', name),

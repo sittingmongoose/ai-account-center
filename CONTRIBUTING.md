@@ -23,15 +23,13 @@ git clone --branch feat/activate-in-place https://github.com/sittingmongoose/ai-
 cd ai-account-center
 bun install --frozen-lockfile
 bun run build
-node dist/ccs.js dashboard
+dist/native/ai-account-center dashboard
 ```
 
 The installed command is `ai-account-center dashboard`; `ccs config` remains
 compatible. Source builds do not require the upstream npm package.
 `scripts/dev-install.sh` packages this checkout and installs its local tarball
 into the prefix that already holds `ai-account-center`.
-`dev:symlink`/`dev:unlink` temporarily replace and restore an existing local
-`ai-account-center` command for development.
 
 ### Deployment lineage
 
@@ -98,14 +96,14 @@ dashboard's node tests, the source and shell fingerprints and the packaged WASM.
 native binaries and modules into `dist/native/` and records the build lineage; it does
 not refresh dashboard assets.
 
-The shipped native binaries build with the release profile in
-`scripts/release-profile.js` (thin LTO, 16 codegen units), applied as
-`CARGO_PROFILE_RELEASE_*` overrides by the native build scripts. The root
-`Cargo.toml` keeps its pinned profile: `scripts/build-agent.js` hashes that file
-into the agent source fingerprint, so a profile edit there breaks the approved
-agent pins. `build-dashboard-native.js` builds the `aac-http` service and one
-`ccs` CLI binary; every compatibility name (`ai-account-center`, the retired
-bins) is staged from `ccs`, whose `cli::run` dispatches on `argv[0]`.
+The shipped native binaries build with thin LTO and 16 codegen units, applied
+as `CARGO_PROFILE_RELEASE_*` overrides that each native build script sets
+(`build-dashboard-native.js`, `build-native.js`, `build-status-native.js`).
+The root `Cargo.toml` keeps its pinned profile: `scripts/build-agent.js` hashes
+that file into the agent source fingerprint, so a profile edit there breaks the
+approved agent pins. `build-dashboard-native.js` builds the `aac-http` service
+and one `ccs` CLI binary; every compatibility name (`ai-account-center`, the
+retired bins) is staged from `ccs`, whose `cli::run` dispatches on `argv[0]`.
 
 For documentation:
 

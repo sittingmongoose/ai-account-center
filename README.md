@@ -277,7 +277,8 @@ ai-account-center dashboard --host localhost --port 3000 --no-open
 ```
 
 Open `http://localhost:3000` and use the first-run setup code to set the dashboard username and password.
-To run from the checkout, use `node scripts/run-dashboard-native.js --no-open`.
+To run from the checkout, use `bun run dev` (builds first, then starts
+`dist/native/ai-account-center dashboard --no-open`).
 
 ### 3️⃣ Add accounts
 

@@ -19,8 +19,6 @@ are retired.
 - [dev-install.sh](../scripts/dev-install.sh) builds and validates this checkout,
   creates a local package tarball and installs it on explicit invocation. It
   keeps the tarball for local reinstall/rollback.
-- dev-symlink.sh temporarily points an existing
-  command at the local build and retains/restores its backup.
 - [Docker](../docker/README.md) builds the local dashboard-only image.
 - [Mac packaging workflow](../.github/workflows/bar-release.yml) runs manually
   against the repository's current default branch and uploads a source-built
@@ -37,10 +35,10 @@ build/unit jobs use GitHub-hosted Ubuntu runners. Linux runs source/unit checks,
 while dashboard browser verification is scoped to Mac and Windows.
 Cache inputs are root `bun.lock` and `web-dashboard/Cargo.lock`.
 
-There is no active semantic-release or npm publication lane. The compatibility
-[dev-release.sh](../scripts/dev-release.sh) entry prints retirement guidance and
-performs no release mutation. Publishing packages, registry images or external
-releases requires separate review/authorization and an actual product target.
+There is no active semantic-release or npm publication lane, and the retired
+upstream development publication lane has no script entry. Publishing packages,
+registry images or external releases requires separate
+review/authorization and an actual product target.
 
 ## Migration and recovery
 

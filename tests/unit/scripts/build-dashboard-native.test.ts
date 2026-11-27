@@ -8,17 +8,19 @@ const root = path.resolve(import.meta.dir, '../../..');
 // The fake cargo is a POSIX shell script; Windows has no /bin/sh contract here.
 const itPosix = process.platform === 'win32' ? it.skip : it;
 
-/** A fixture checkout with the builder, its release-profile sibling and a fake cargo on PATH. */
+/** A fixture checkout with the builder and a fake cargo on PATH that logs its arguments and profile. */
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-dashboard-native-'));
   fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
-  for (const name of ['build-dashboard-native.js', 'release-profile.js'])
-    fs.copyFileSync(path.join(root, 'scripts', name), path.join(dir, 'scripts', name));
+  fs.copyFileSync(
+    path.join(root, 'scripts', 'build-dashboard-native.js'),
+    path.join(dir, 'scripts', 'build-dashboard-native.js')
+  );
   fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
   const cargoLog = path.join(dir, 'cargo.log');
   fs.writeFileSync(
     path.join(dir, 'bin', 'cargo'),
-    `#!/bin/sh\necho "$@" >> "${cargoLog}"\nexit 0\n`,
+    `#!/bin/sh\necho "$@" >> "${cargoLog}"\necho "$CARGO_PROFILE_RELEASE_LTO/$CARGO_PROFILE_RELEASE_CODEGEN_UNITS" >> "${cargoLog}"\nexit 0\n`,
     { mode: 0o755 }
   );
   return { dir, cargoLog };
@@ -78,7 +80,10 @@ itPosix('still builds with cargo when the opt-out is not set', () => {
     releaseArtifacts(dir);
     const result = run(dir, {});
     expect(result.status).toBe(0);
-    expect(fs.readFileSync(cargoLog, 'utf8')).toContain('build --release --locked');
+    const cargo = fs.readFileSync(cargoLog, 'utf8');
+    expect(cargo).toContain('build --release --locked');
+    // The builder stands alone: the thin-LTO, 16-unit profile still reaches cargo as overrides.
+    expect(cargo).toContain('thin/16');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

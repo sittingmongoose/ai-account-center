@@ -33,6 +33,9 @@ describe('push ci workflow', () => {
     expect(workflow).not.toContain('bun run format:check');
     expect(workflow).toContain("cmd: 'node scripts/personal-detail-guard.js'");
     expect(workflow).toContain("cmd: 'node tests/spec/inventory.mjs'");
+    // Every job installs straight from the lockfile: there is no dependency wrapper script.
+    expect(workflow).not.toContain('scripts/ensure-deps.sh');
+    expect(workflow.split('run: bun install --frozen-lockfile').length - 1).toBe(3);
     expect(workflow).toContain('run: bun run build:all');
     expect(workflow).toContain("FAST_TEST_BUDGET_SECONDS: '90'");
     expect(workflow).toContain('name: Test fast bucket with perf budget');

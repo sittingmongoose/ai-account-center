@@ -6,7 +6,16 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
-const releaseProfile = require('./release-profile');
+// The release profile for the shipped native binaries, applied as cargo's CARGO_PROFILE_RELEASE_*
+// overrides. It stays out of Cargo.toml on purpose: build-agent.js hashes the root manifest into
+// the agent's source fingerprint, so any Cargo.toml edit (even a comment) moves the approved agent
+// pins and the release staging then refuses the package. Thin LTO keeps cross-crate inlining and
+// is parallel (fat LTO single-threaded the whole-program link); sixteen units parallelise the
+// pre-LTO codegen. build-native.js and build-status-native.js carry the same two values.
+const releaseProfile = {
+  CARGO_PROFILE_RELEASE_LTO: 'thin',
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16',
+};
 const tools = ['aac-http', 'ai-account-center', 'ccs'];
 const retired = ['ccs-droid', 'ccsd', 'ccs-codex', 'ccsx', 'ccsxp'];
 const extension = process.platform === 'win32' ? '.exe' : '';
