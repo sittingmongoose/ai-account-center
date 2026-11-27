@@ -316,8 +316,8 @@ fn fixture_is_byte_identical_to_js_oracle_and_has_no_personal_details() {
         hashes.insert(rel.clone(), Json::String(aac_core::sha256_hex(&norm_a)));
     }
 
-    // Verify exact individual key oracle file digests and combined 193-file digest from
-    // `node scripts/perf/memory-fixture.mjs` at origin/main bc96aecf5:
+    // Verify exact individual key oracle file digests, which do not follow the Scoreboard
+    // catalog, from `node scripts/perf/memory-fixture.mjs` at origin/main bc96aecf5:
     assert_eq!(
         hashes["home/.ccs/status/answer-key.pem"].as_str(),
         Some("c3e6a7f3d4a367bef9dd68a4541d5cf2579aad93b495fd8fc4d38f94dbdfda3b")
@@ -342,12 +342,85 @@ fn fixture_is_byte_identical_to_js_oracle_and_has_no_personal_details() {
         hashes["usage-logs/activity-claude.jsonl"].as_str(),
         Some("ce22a4ea066e84d70da50244d59de7a015aa8af744d1a47b6e1e50f28f9c41ce")
     );
-    let all_digest =
-        aac_core::sha256_hex(serde_json::to_string(&Json::Object(hashes)).expect("json"));
-    assert_eq!(
-        all_digest,
-        "bd8e870ee3bfcdb639f6e928c5c250ec5f33a524c9a70d21448b7345fa2fc5aa"
+    // The fixture follows the live Scoreboard catalog (docs/agent-reports/catalog), which
+    // changes with every model pin, so a frozen whole-fixture digest goes stale on each catalog
+    // change. Compare every file against the retained JS oracle on the same tree instead. The
+    // oracle's command line has no pricing flags, so call its exported generator directly.
+    let tmp_js = tempfile::tempdir().expect("tempdir js");
+    let out = Command::new("node")
+        .args([
+            "--input-type=module",
+            "-e",
+            "import { generateMemoryFixture } from './scripts/perf/memory-fixture.mjs';
+const m = await generateMemoryFixture(process.argv[1], {
+  seed: 424242, now: 1795608000000, writers: 16, runWriters: 4, runs: 110, registryEntries: 15,
+  days: 3, accounts: 9, quotaSamplesPerDay: 2, activitySessions: 8,
+  pricingProviders: 4, pricingModelsPerProvider: 3, skipStore: true,
+});
+console.log(JSON.stringify(m.counts));",
+        ])
+        .arg(tmp_js.path())
+        .current_dir(repo_root())
+        .output()
+        .expect("node oracle");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    let js_files: Vec<String> = walk_files(tmp_js.path())
+        .into_iter()
+        .filter(|f| f != "fixture-manifest.json")
+        .collect();
+    assert_eq!(js_files, files_a, "file list differs from the JS oracle");
+    let js_root = tmp_js.path().to_string_lossy().to_string();
+    for rel in &files_a {
+        let js = fs::read(tmp_js.path().join(rel)).expect("read js");
+        let rust = fs::read(tmp_a.path().join(rel)).expect("read rust");
+        let is_text = [".json", ".jsonl", ".md", ".pub", ".pem"]
+            .iter()
+            .any(|ext| rel.ends_with(ext));
+        if is_text {
+            let js = String::from_utf8_lossy(&js).replace(&js_root, "<ROOT>");
+            let rust = String::from_utf8_lossy(&rust).replace(&root_a_str, "<ROOT>");
+            assert_eq!(js, rust, "JS oracle mismatch in {rel}");
+        } else {
+            assert_eq!(js, rust, "JS oracle byte mismatch in {rel}");
+        }
+    }
+    let counts: Json = serde_json::from_slice(&out.stdout).expect("oracle counts");
+    for (key, value) in [
+        ("writers", manifest_a.counts.writers),
+        ("runs", manifest_a.counts.runs),
+        ("registryEntries", manifest_a.counts.registry_entries),
+        ("providers", manifest_a.counts.providers),
+        ("accounts", manifest_a.counts.accounts),
+        (
+            "legacySourceAccounts",
+            manifest_a.counts.legacy_source_accounts,
+        ),
+        ("days", manifest_a.counts.days),
+        ("quotaObservations", manifest_a.counts.quota_observations),
+        ("activityEvents", manifest_a.counts.activity_events),
+        ("activitySessions", manifest_a.counts.activity_sessions),
+        ("pricingProviders", manifest_a.counts.pricing_providers),
+        ("pricingModels", manifest_a.counts.pricing_models),
+    ] {
+        assert_eq!(counts[key], json!(value), "JS oracle count {key}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let key_mode = |dir: &Path| {
+            fs::metadata(dir.join("home/.ccs/status/answer-key.pem"))
+                .expect("answer key")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(key_mode(tmp_a.path()), 0o600);
+        assert_eq!(key_mode(tmp_js.path()), 0o600);
+    }
 }
 
 #[test]
