@@ -138,7 +138,7 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
         let Value::Object(mut object) = value else {
             return Err(Decline::Shape);
         };
-        let take = |key: &str| object.remove(key).map(Arc::new);
+        let mut take = |key: &str| object.remove(key).map(Arc::new);
         let view = Arc::new(CollectedView {
             registry: take("registry"),
             machines: take("machines"),
