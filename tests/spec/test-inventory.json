@@ -429,6 +429,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-api/src/logins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-claude-renew/src/browser.rs",
       "kind": "internal",
       "evidence": [],
@@ -1250,6 +1256,13 @@
     },
     {
       "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_trash.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/logins.rs",
       "kind": "safety",
       "evidence": [
         "safety"
@@ -2455,6 +2468,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-views/src/logins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-views/src/pricing/models_dev.rs",
       "kind": "HTTP",
       "evidence": [
@@ -3250,6 +3269,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "web-dashboard/leptos/src/accounts/logins.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "web-dashboard/leptos/src/accounts/settings.rs",
       "kind": "internal",
       "evidence": [],
@@ -3632,6 +3658,13 @@
     },
     {
       "file": "web-dashboard/tests/browser/checks/live-updates.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/logins.check.mjs",
       "kind": "HTTP",
       "evidence": [
         "HTTP"

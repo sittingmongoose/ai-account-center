@@ -25,6 +25,7 @@ const MI_OPTION_EAGER_COMMIT: c_int = 3;
 const MI_OPTION_ARENA_EAGER_COMMIT: c_int = 4;
 const MI_OPTION_PURGE_DECOMMITS: c_int = 5;
 const MI_OPTION_PURGE_DELAY: c_int = 15;
+const MI_OPTION_ALLOW_THP: c_int = 43;
 
 /// Tuned `purge_delay` (ms): purge freed pages back to the OS immediately.
 pub const TUNED_PURGE_DELAY_MS: c_long = 0;
@@ -32,6 +33,10 @@ pub const TUNED_PURGE_DELAY_MS: c_long = 0;
 pub const TUNED_EAGER_COMMIT: c_long = 0;
 /// Tuned `purge_decommits`: decommit purged pages (`MADV_DONTNEED` / `MEM_DECOMMIT`, `1`).
 pub const TUNED_PURGE_DECOMMITS: c_long = 1;
+/// Tuned `allow_thp`: no transparent huge pages (`0`). mimalloc marks its 1 GiB arena
+/// `MADV_HUGEPAGE`, so each touched 2 MiB stretch becomes one resident huge page, and a 4 KiB
+/// purge inside it cannot hand memory back (live r32: 76-108 MiB `AnonHugePages`).
+pub const TUNED_ALLOW_THP: c_long = 0;
 
 #[allow(unsafe_code)]
 unsafe extern "C" {
@@ -58,6 +63,14 @@ pub fn tune_mimalloc() {
         mi_option_set(MI_OPTION_ARENA_EAGER_COMMIT, TUNED_EAGER_COMMIT);
         mi_option_set(MI_OPTION_PURGE_DECOMMITS, TUNED_PURGE_DECOMMITS);
         mi_option_set(MI_OPTION_PURGE_DELAY, TUNED_PURGE_DELAY_MS);
+        // The option stops mimalloc's later `MADV_HUGEPAGE` calls; the arena reserved before
+        // `main` already carries the flag, so also disable THP for the whole process (what
+        // mimalloc itself does when `MIMALLOC_ALLOW_THP=0` is set in the environment).
+        mi_option_set(MI_OPTION_ALLOW_THP, TUNED_ALLOW_THP);
+        #[cfg(target_os = "linux")]
+        {
+            let _ = libc::prctl(libc::PR_SET_THP_DISABLE, 1, 0, 0, 0);
+        }
         if mi_option_is_enabled(MI_OPTION_VERBOSE) {
             mi_options_print();
         }
@@ -75,6 +88,8 @@ pub struct TunedOptions {
     pub purge_decommits: c_long,
     /// Delay in milliseconds before purging freed pages (`mi_option_purge_delay`).
     pub purge_delay: c_long,
+    /// Whether transparent huge pages are allowed (`mi_option_allow_thp`).
+    pub allow_thp: c_long,
 }
 
 /// Read back the current runtime values of the tuned mimalloc options.
@@ -87,6 +102,7 @@ pub fn current_options() -> TunedOptions {
             arena_eager_commit: mi_option_get(MI_OPTION_ARENA_EAGER_COMMIT),
             purge_decommits: mi_option_get(MI_OPTION_PURGE_DECOMMITS),
             purge_delay: mi_option_get(MI_OPTION_PURGE_DELAY),
+            allow_thp: mi_option_get(MI_OPTION_ALLOW_THP),
         }
     }
 }
@@ -105,7 +121,19 @@ mod tests {
                 arena_eager_commit: TUNED_EAGER_COMMIT,
                 purge_decommits: TUNED_PURGE_DECOMMITS,
                 purge_delay: TUNED_PURGE_DELAY_MS,
+                allow_thp: TUNED_ALLOW_THP,
             }
         );
+    }
+
+    /// The process runs without transparent huge pages after tuning (Linux).
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(unsafe_code)]
+    fn tune_mimalloc_disables_transparent_huge_pages() {
+        tune_mimalloc();
+        // SAFETY: PR_GET_THP_DISABLE takes no pointers.
+        let disabled = unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) };
+        assert_eq!(disabled, 1);
     }
 }

@@ -503,11 +503,25 @@ fn div_ceil(a: i64, b: i64) -> i64 {
     a.div_euclid(b) + i64::from(a.rem_euclid(b) != 0)
 }
 
-fn digest(value: &Value) -> String {
+/// A report part's SHA-1, kept as 20 bytes: the remembered digests are compared, never shown, and
+/// a hex `String` per day and session was one more heap allocation each pass kept until the next.
+type PartDigest = [u8; 20];
+
+fn digest<T: serde::Serialize + ?Sized>(value: &T) -> PartDigest {
+    // Streamed into the hasher: the same bytes `serde_json::to_vec` would make, without the copy.
+    struct Hash<'a>(&'a mut Sha1);
+    impl std::io::Write for Hash<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
     let mut hasher = Sha1::new();
-    hasher.update(serde_json::to_vec(value).expect("report JSON"));
-    let out = hasher.finalize();
-    out.iter().map(|b| format!("{b:02x}")).collect()
+    serde_json::to_writer(Hash(&mut hasher), value).expect("report JSON");
+    hasher.finalize().into()
 }
 
 /// Hands reports to the store leaving out each source's days and sessions it already sent
@@ -515,8 +529,8 @@ fn digest(value: &Value) -> String {
 /// sent, so the next pass sends everything again. Ported from `ActivityIngestor`.
 #[derive(Default)]
 pub struct Ingestor {
-    days: HashMap<String, HashMap<i64, String>>,
-    sessions: HashMap<String, HashMap<String, String>>,
+    days: HashMap<String, HashMap<i64, PartDigest>>,
+    sessions: HashMap<String, HashMap<String, PartDigest>>,
 }
 
 impl Ingestor {
@@ -537,7 +551,8 @@ impl Ingestor {
                 report["tool"].as_str().unwrap_or(""),
                 report["kind"].as_str().unwrap_or("live")
             );
-            let mut by_day: HashMap<i64, Vec<Value>> = HashMap::new();
+            // Borrowed cells: a `Vec<&Value>` serializes to the same bytes as the cloned array.
+            let mut by_day: HashMap<i64, Vec<&Value>> = HashMap::new();
             let mut day_order: Vec<i64> = Vec::new();
             if let Some(cells) = report["cells"].as_array() {
                 for cell in cells {
@@ -549,12 +564,12 @@ impl Ingestor {
                     if !by_day.contains_key(&day) {
                         day_order.push(day);
                     }
-                    by_day.entry(day).or_default().push(cell.clone());
+                    by_day.entry(day).or_default().push(cell);
                 }
             }
             let mut day_digests = HashMap::new();
             for day in &day_order {
-                day_digests.insert(*day, digest(&Value::Array(by_day[day].clone())));
+                day_digests.insert(*day, digest(&by_day[day]));
             }
             let before = self.days.get(&key);
             let same: Vec<i64> = day_order
@@ -564,14 +579,27 @@ impl Ingestor {
                 .collect();
             let same_set: HashSet<i64> = same.iter().copied().collect();
             let empty = Vec::new();
-            let session_digests: HashMap<String, String> = report["sessions"]
+            let session_digests: HashMap<String, PartDigest> = report["sessions"]
                 .as_array()
                 .unwrap_or(&empty)
                 .iter()
                 .filter_map(|s| s["sessionKey"].as_str().map(|k| (k.to_string(), digest(s))))
                 .collect();
             let before_sessions = self.sessions.get(&key);
-            let mut out = report.as_object().cloned().unwrap_or_default();
+            // Every field, with the two rebuilt below held as null in their places (cloning the
+            // whole report first copied all of its cells and sessions once more).
+            let mut out: Map<String, Value> = report
+                .as_object()
+                .map(|fields| {
+                    fields
+                        .iter()
+                        .map(|(name, value)| match name.as_str() {
+                            "cells" | "sessions" => (name.clone(), Value::Null),
+                            _ => (name.clone(), value.clone()),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             out.insert(
                 "cells".into(),
                 Value::Array(
@@ -644,11 +672,12 @@ impl Ingestor {
 /// One report's digests to remember once the store accepts it.
 pub struct Remember {
     key: String,
-    days: HashMap<i64, String>,
-    sessions: HashMap<String, String>,
+    days: HashMap<i64, PartDigest>,
+    sessions: HashMap<String, PartDigest>,
 }
 
 /// Deserialize shaped reports into the typed contract reports the store ingests.
 pub fn contract_reports(reports: &[Value]) -> Result<Vec<crate::contract::Report>, serde_json::Error> {
-    reports.iter().map(|r| serde_json::from_value(r.clone())).collect()
+    use serde::Deserialize;
+    reports.iter().map(crate::contract::Report::deserialize).collect()
 }

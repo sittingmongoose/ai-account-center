@@ -1,5 +1,6 @@
 //! Portable HTTP DTOs for the strangler routes. No filesystem or runtime dependencies.
 pub mod home;
+pub mod logins;
 
 use serde::{Deserialize, Serialize};
 
