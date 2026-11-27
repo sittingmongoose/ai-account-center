@@ -6,12 +6,17 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      additional_contexts:
+        release: ${AAC_RELEASE_DIR:?Set AAC_RELEASE_DIR to the directory containing the gated Linux release .tgz}
+      args:
+        AAC_BUILD_COMMIT: ${AAC_BUILD_COMMIT:?Set AAC_BUILD_COMMIT to the gated release commit SHA}
+        AAC_RELEASE_TGZ: ${AAC_RELEASE_TGZ:-sittingmongoose-ai-account-center-8.10.0.tgz}
+        AAC_RELEASE_SHA256: ${AAC_RELEASE_SHA256:-}
     restart: unless-stopped
     init: true
     ports:
       - "${CCS_DOCKER_BIND_HOST:-127.0.0.1}:${CCS_DASHBOARD_PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
       - CCS_DEBUG
       - NO_COLOR
       - CCS_DASHBOARD_AUTH_ENABLED
