@@ -29,12 +29,21 @@ fn main() {
             .enable_all()
             .build();
         match runtime {
-            Ok(runtime) => runtime
-                .block_on(aac_agent::run(
-                    BufReader::new(tokio::io::stdin()),
-                    tokio::io::stdout(),
-                ))
-                .unwrap_or(1),
+            Ok(runtime) => {
+                let code = runtime
+                    .block_on(aac_agent::run(
+                        BufReader::new(tokio::io::stdin()),
+                        tokio::io::stdout(),
+                    ))
+                    .unwrap_or(1);
+                // Never drop the runtime normally: tokio's stdin reader is a blocking-pool
+                // thread parked in read(0), and `Runtime::drop` waits for it until the parent
+                // closes stdin. The transport keeps stdin open for cancel frames until this
+                // process exits, so a normal drop holds every controlled call to its deadline.
+                // The old `#[tokio::main]` body exited inside the runtime for the same reason.
+                runtime.shutdown_background();
+                code
+            }
             Err(_) => 1,
         }
     } else {

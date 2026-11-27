@@ -547,3 +547,53 @@ fn scan_usage_live_shaped_settled_packed_stays_under_50_mib_vmhwm() {
         "aac-agent VmHWM exceeded 50 MiB budget: {max_rss_mib:.2} MiB ({max_rss_kib} KiB)"
     );
 }
+
+/// The agent exits after its terminal frame even while the parent keeps stdin open, as the
+/// controlled transport does (it holds stdin for cancel frames until the child exits). Release
+/// 31 dropped the runtime before `process::exit`, and the drop waited on the blocking stdin
+/// read, so every controlled call ran to its deadline and failed as a timeout.
+#[test]
+fn the_agent_exits_after_its_terminal_frame_with_stdin_still_open() {
+    use std::io::{BufRead, Write};
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_aac-agent"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
+        .write_all(b"{\"protocol\":1,\"verb\":\"health\",\"id\":\"fixture\",\"deadlineMs\":1000,\"args\":{}}\n")
+        .unwrap();
+    stdin.flush().unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<Event>(&line).unwrap(),
+            Event::Result { .. }
+        ),
+        "{line}"
+    );
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if started.elapsed() > Duration::from_secs(3) {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    drop(stdin);
+    assert!(
+        status.is_some(),
+        "aac-agent stayed alive after its terminal frame while stdin was open"
+    );
+}
