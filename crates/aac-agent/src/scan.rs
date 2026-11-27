@@ -68,7 +68,10 @@ pub(crate) async fn run_frame(frame_bytes: Vec<u8>) -> Result<Box<RawValue>, Fai
         let home = home
             .filter(|home| home.is_dir())
             .ok_or_else(|| Failure::new(Cause::NotInstalled, "scan home is unavailable"))?;
-        let bytes = protocol::scan_persistent_owned_bytes(request, &home, &env);
+        let mut bytes = protocol::scan_persistent_owned_bytes(request, &home, &env);
+        // `RawValue::from_string` copies a text whose capacity exceeds its length; shrinking
+        // first keeps the answer in one buffer (R4).
+        bytes.shrink_to_fit();
         let text = String::from_utf8(bytes)
             .map_err(|_| Failure::new(Cause::Bug, "scan encoding failed"))?;
         RawValue::from_string(text).map_err(|_| Failure::new(Cause::Bug, "scan encoding failed"))

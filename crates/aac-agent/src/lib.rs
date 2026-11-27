@@ -34,7 +34,7 @@ use aac_protocol::{
     Control, Event, Handshake, MAX_FRAME_BYTES, MAX_HISTORY_FRAME_BYTES, MAX_SCAN_FRAME_BYTES,
     PROTOCOL_VERSION, Request, frame_cap, max_deadline_ms,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::value::RawValue;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -398,28 +398,20 @@ async fn write_raw_result(
     value: Box<RawValue>,
     cap: usize,
 ) -> Result<(), Failure> {
-    #[derive(Serialize)]
-    struct RawResultEvent<'a> {
-        #[serde(rename = "type")]
-        kind: &'static str,
-        protocol: u32,
-        id: &'a str,
-        value: Box<RawValue>,
-    }
-    let event = RawResultEvent {
-        kind: "result",
-        protocol: PROTOCOL_VERSION,
-        id,
-        value,
-    };
-    let mut bytes = serde_json::to_vec(&event)
-        .map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
-    drop(event);
-    if bytes.len() >= cap {
+    // The result event `{"type":"result","protocol":1,"id":..,"value":..}` is written in three
+    // parts around the answer's own text, so a scan answer is never copied into a second
+    // buffer (R4). The bytes are exactly those of the serialized event.
+    let id =
+        serde_json::to_string(id).map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
+    let head =
+        format!("{{\"type\":\"result\",\"protocol\":{PROTOCOL_VERSION},\"id\":{id},\"value\":");
+    if head.len() + value.get().len() + 1 >= cap {
         return Err(Failure::new(Cause::OutputTooLarge, "event cap exceeded"));
     }
-    bytes.push(b'\n');
-    writer.write_all(&bytes).await?;
+    writer.write_all(head.as_bytes()).await?;
+    writer.write_all(value.get().as_bytes()).await?;
+    drop(value);
+    writer.write_all(b"}\n").await?;
     writer.flush().await?;
     Ok(())
 }
@@ -602,4 +594,57 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     }
     let identity = handshake();
     Ok(serde_json::json!({ "status": "ok", "observedAt": UtcMs::now()?, "agent": identity }))
+}
+
+#[cfg(test)]
+mod raw_result_tests {
+    use super::*;
+    use serde::Serialize;
+
+    /// R4: the three-part write is byte for byte the event the agent serialized before, and the
+    /// event cap still counts the whole line without its newline.
+    #[tokio::test]
+    async fn a_raw_result_is_written_exactly_as_the_serialized_event() {
+        #[derive(Serialize)]
+        struct RawResultEvent<'a> {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            protocol: u32,
+            id: &'a str,
+            value: Box<RawValue>,
+        }
+        for (id, value) in [
+            (
+                "r4-scan",
+                r#"{"kinds":{"claude":{"state":"ok"}},"rows":[]}"#,
+            ),
+            ("", "{}"),
+            (
+                "a.b:c_d-1",
+                r#"{"text":"caf\u00e9 \"quoted\" \n","n":[1,2.5,-3e9]}"#,
+            ),
+        ] {
+            let raw = RawValue::from_string(value.to_string()).unwrap();
+            let mut expected = serde_json::to_vec(&RawResultEvent {
+                kind: "result",
+                protocol: PROTOCOL_VERSION,
+                id,
+                value: raw.clone(),
+            })
+            .unwrap();
+            let exact = expected.len();
+            expected.push(b'\n');
+            let mut written = Vec::new();
+            write_raw_result(&mut written, id, raw.clone(), exact + 1)
+                .await
+                .unwrap();
+            assert_eq!(written, expected);
+            let mut refused = Vec::new();
+            let failure = write_raw_result(&mut refused, id, raw, exact)
+                .await
+                .unwrap_err();
+            assert_eq!(failure.cause, Cause::OutputTooLarge);
+            assert!(refused.is_empty());
+        }
+    }
 }

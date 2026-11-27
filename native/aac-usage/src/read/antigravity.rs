@@ -7,7 +7,7 @@ use crate::collector::Collector;
 use crate::discover::{AGY_DIRS, Env};
 use crate::fsx::{self, is_link, link_inside, same_or_inside};
 use crate::util::{self, abspath, path_text, realpath};
-use rusqlite::{Connection, OpenFlags, types::Value as Sql};
+use rusqlite::{Connection, OpenFlags, types::ValueRef as SqlRef};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn model_by_id(id: u64) -> Option<&'static str> {
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum AgyError {
     /// T3 refuses the database as a whole: it contributes nothing.
     Invalid,
@@ -176,7 +176,11 @@ fn nested<'a>(f: &Fields<'a>, key: u64) -> Result<Fields<'a>, AgyError> {
 }
 
 fn text(f: &Fields, key: u64) -> Result<String, AgyError> {
-    match bytes(f, key) {
+    text_of(bytes(f, key))
+}
+
+fn text_of(data: Option<&[u8]>) -> Result<String, AgyError> {
+    match data {
         None => Ok(String::new()),
         Some(data) => {
             let text = std::str::from_utf8(data).map_err(|_| AgyError::Invalid)?;
@@ -257,15 +261,50 @@ fn model_name(name: &str, model_id: u64) -> String {
     }
 }
 
-struct Meta<'a> {
+/// The fields of one usage record the candidates read: numbers 1-5, 9, 10 and ids 11, 12, 7, owned,
+/// so the row's blob is dropped as soon as it is parsed (R4).
+#[derive(Clone, Debug, PartialEq)]
+struct Usage {
+    numbers: [u64; 7],
+    ids: [Option<Box<[u8]>>; 3],
+}
+
+const USAGE_NUMBERS: [u64; 7] = [1, 2, 3, 4, 5, 9, 10];
+const USAGE_IDS: [u64; 3] = [11, 12, 7];
+
+impl Usage {
+    fn of(f: &Fields) -> Usage {
+        Usage {
+            numbers: USAGE_NUMBERS.map(|key| number(f, key)),
+            ids: USAGE_IDS.map(|key| bytes(f, key).map(Box::from)),
+        }
+    }
+
+    fn number(&self, key: u64) -> u64 {
+        USAGE_NUMBERS
+            .iter()
+            .position(|k| *k == key)
+            .map_or(0, |i| self.numbers[i])
+    }
+
+    fn text(&self, key: u64) -> Result<String, AgyError> {
+        let id = USAGE_IDS
+            .iter()
+            .position(|k| *k == key)
+            .and_then(|i| self.ids[i].as_deref());
+        text_of(id)
+    }
+}
+
+struct Meta {
     model: String,
     model_id: u64,
     named: bool,
     stamp: Option<f64>,
-    usages: Vec<Fields<'a>>,
+    usages: Vec<Usage>,
 }
 
-fn metadata(blob: &[u8], step: bool) -> Result<Meta<'_>, AgyError> {
+fn metadata(blob: &[u8], step: bool) -> Result<Meta, AgyError> {
     let root = fields(blob)?;
     if !step && bytes(&root, 1).is_none() {
         return Err(AgyError::Invalid);
@@ -274,7 +313,7 @@ fn metadata(blob: &[u8], step: bool) -> Result<Meta<'_>, AgyError> {
     let model = if step { nested(&data, 24)? } else { data.clone() };
     let mut usages = Vec::new();
     if let Some(usage) = bytes(&data, if step { 9 } else { 4 }) {
-        usages.push(fields(usage)?);
+        usages.push(Usage::of(&fields(usage)?));
     }
     for retry in data
         .get(&(if step { 28 } else { 17 }))
@@ -286,7 +325,7 @@ fn metadata(blob: &[u8], step: bool) -> Result<Meta<'_>, AgyError> {
         };
         let retry = fields(retry)?;
         if let Some(retry_usage) = bytes(&retry, 2) {
-            usages.push(fields(retry_usage)?);
+            usages.push(Usage::of(&fields(retry_usage)?));
         }
     }
     let primary = text(&model, if step { 12 } else { 19 })?;
@@ -345,6 +384,7 @@ fn closed_wal(path: &Path) -> bool {
     &data[..16] == b"SQLite format 3\x00" && data[18..20] == [2, 2]
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct Candidate {
     keys: Vec<String>,
     stamp: f64,
@@ -355,15 +395,64 @@ struct Candidate {
     ids: (u64, u64),
 }
 
-type Rows = Vec<(Sql, Option<Vec<u8>>)>;
 /// Usage candidates and the (model id, name) pairs the database names.
 type DbRead = (Vec<Candidate>, Vec<(u64, String)>);
+
+/// The first failure met while parsing rows, in read order. The reads go on (every SQL error
+/// still surfaces first, and a moved database still answers Retry), as when every row was read
+/// before any was parsed.
+type Parsed = Option<AgyError>;
+
+/// One table's `(idx, blob)` rows, each parsed as SQLite steps to it and its blob dropped (R4:
+/// the reader used to hold every blob of the database before parsing the first).
+fn read_entries(
+    connection: &Connection,
+    sql: &str,
+    step: bool,
+    deadline: Instant,
+    failed: &mut Parsed,
+) -> Result<Vec<(f64, Meta)>, AgyError> {
+    let mut found = Vec::new();
+    let mut statement = connection.prepare(sql)?;
+    let mut rows = statement.query([])?;
+    let mut index = 0usize;
+    while let Some(row) = rows.next()? {
+        let (idx, data) = (row.get_ref(0)?, row.get_ref(1)?);
+        if failed.is_some() {
+            continue;
+        }
+        let entry = if index % 256 == 255 && Instant::now() >= deadline {
+            Err(AgyError::Deadline)
+        } else {
+            entry(idx, data, step)
+        };
+        index += 1;
+        match entry {
+            Ok(entry) => found.push(entry),
+            Err(error) => *failed = Some(error),
+        }
+    }
+    Ok(found)
+}
+
+fn entry(idx: SqlRef<'_>, data: SqlRef<'_>, step: bool) -> Result<(f64, Meta), AgyError> {
+    let idx = match idx {
+        SqlRef::Integer(v) => v as f64,
+        SqlRef::Real(v) => v,
+        _ => return Err(AgyError::Invalid),
+    };
+    let SqlRef::Blob(data) = data else {
+        return Err(AgyError::Invalid);
+    };
+    Ok((idx, metadata(data, step)?))
+}
 
 /// T3's `readDatabase`: one short read transaction with a 100 ms busy wait; never writes.
 fn read_db(path: &Path, fallback_ms: f64, deadline: Instant) -> Result<DbRead, AgyError> {
     let closed = closed_wal(path);
     let before = if closed { identity(path) } else { None };
-    let (generations, trajectory_rows, steps): (Rows, Vec<Option<Vec<u8>>>, Rows) = {
+    let mut failed: Parsed = None;
+    let (generations, trajectory, steps) = {
         let connection = Connection::open_with_flags(
             uri(path, closed),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -380,31 +469,45 @@ fn read_db(path: &Path, fallback_ms: f64, deadline: Instant) -> Result<DbRead, A
         if !tables.contains("gen_metadata") && !tables.contains("steps") {
             return Err(AgyError::NotConversation);
         }
-        let blob = |value: Sql| match value {
-            Sql::Blob(b) => Some(b),
-            _ => None,
-        };
-        let read_pairs = |sql: &str| -> rusqlite::Result<Rows> {
-            let mut statement = connection.prepare(sql)?;
-            statement
-                .query_map([], |row| Ok((row.get::<_, Sql>(0)?, blob(row.get::<_, Sql>(1)?))))?
-                .collect()
-        };
         let generations = if tables.contains("gen_metadata") {
-            read_pairs("SELECT idx, data FROM gen_metadata ORDER BY idx")?
+            read_entries(
+                &connection,
+                "SELECT idx, data FROM gen_metadata ORDER BY idx",
+                false,
+                deadline,
+                &mut failed,
+            )?
         } else {
             Vec::new()
         };
-        let trajectory: Vec<Option<Vec<u8>>> = if tables.contains("trajectory_metadata_blob") {
+        // The first row with a timestamp dates the conversation; a missing blob before it refuses it.
+        let mut trajectory = None;
+        if tables.contains("trajectory_metadata_blob") {
             let mut statement = connection.prepare("SELECT data FROM trajectory_metadata_blob")?;
-            statement
-                .query_map([], |row| Ok(blob(row.get::<_, Sql>(0)?)))?
-                .collect::<Result<_, _>>()?
-        } else {
-            Vec::new()
-        };
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let data = row.get_ref(0)?;
+                if failed.is_some() || trajectory.is_some() {
+                    continue;
+                }
+                let SqlRef::Blob(data) = data else {
+                    failed = Some(AgyError::Invalid);
+                    continue;
+                };
+                match fields(data).and_then(|f| nested(&f, 2).map(|n| timestamp(&n))) {
+                    Ok(stamp) => trajectory = stamp,
+                    Err(error) => failed = Some(error),
+                }
+            }
+        }
         let steps = if tables.contains("steps") {
-            read_pairs("SELECT idx, metadata FROM steps WHERE metadata IS NOT NULL ORDER BY idx")?
+            read_entries(
+                &connection,
+                "SELECT idx, metadata FROM steps WHERE metadata IS NOT NULL ORDER BY idx",
+                true,
+                deadline,
+                &mut failed,
+            )?
         } else {
             Vec::new()
         };
@@ -413,17 +516,9 @@ fn read_db(path: &Path, fallback_ms: f64, deadline: Instant) -> Result<DbRead, A
     if closed && (wal_exists(path) || identity(path) != before) {
         return Err(AgyError::Retry);
     }
-    let generations = entries(&generations, false, deadline)?;
-    let mut trajectory = None;
-    for data in &trajectory_rows {
-        if trajectory.is_none() {
-            let Some(data) = data else {
-                return Err(AgyError::Invalid);
-            };
-            trajectory = timestamp(&nested(&fields(data)?, 2)?);
-        }
+    if let Some(error) = failed {
+        return Err(error);
     }
-    let steps = entries(&steps, true, deadline)?;
     let mut names = Vec::new();
     for (_, meta) in steps.iter().chain(generations.iter()) {
         if meta.named && meta.model_id > 0 {
@@ -438,19 +533,19 @@ fn read_db(path: &Path, fallback_ms: f64, deadline: Instant) -> Result<DbRead, A
     for (step, listed) in [(true, &steps), (false, &generations)] {
         for (idx, meta) in listed {
             for usage in &meta.usages {
-                let output = number(usage, 3).max(number(usage, 9) + number(usage, 10));
-                let tokens = [number(usage, 2), number(usage, 5), number(usage, 4), output];
+                let output = usage.number(3).max(usage.number(9) + usage.number(10));
+                let tokens = [usage.number(2), usage.number(5), usage.number(4), output];
                 if tokens.iter().sum::<u64>() == 0 {
                     continue;
                 }
                 let mut keys = Vec::new();
                 for key in [11u64, 12, 7] {
-                    let value = text(usage, key)?;
+                    let value = usage.text(key)?;
                     if !value.is_empty() {
                         keys.push(format!("antigravity:{key}:{value}"));
                     }
                 }
-                let usage_id = number(usage, 1);
+                let usage_id = usage.number(1);
                 let positional_model = if step {
                     positional.get(&idx.to_bits()).cloned().unwrap_or_default()
                 } else {
@@ -490,25 +585,6 @@ fn read_db(path: &Path, fallback_ms: f64, deadline: Instant) -> Result<DbRead, A
         }
     }
     Ok((candidates, names))
-}
-
-fn entries(rows: &Rows, step: bool, deadline: Instant) -> Result<Vec<(f64, Meta<'_>)>, AgyError> {
-    let mut found = Vec::new();
-    for (index, (idx, data)) in rows.iter().enumerate() {
-        if index % 256 == 255 && Instant::now() >= deadline {
-            return Err(AgyError::Deadline);
-        }
-        let idx = match idx {
-            Sql::Integer(v) => *v as f64,
-            Sql::Real(v) => *v,
-            _ => return Err(AgyError::Invalid),
-        };
-        let Some(data) = data else {
-            return Err(AgyError::Invalid);
-        };
-        found.push((idx, metadata(data, step)?));
-    }
-    Ok(found)
 }
 
 fn pick_model(candidate: &Candidate, learned: &HashMap<u64, String>) -> String {
@@ -1022,6 +1098,10 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
 }
 
 #[cfg(test)]
+#[path = "antigravity_oracle.rs"]
+mod oracle;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1041,5 +1121,222 @@ mod tests {
         assert!(matches!(varint(&big, 0).unwrap().0, Field::Big));
         assert!(matches!(varint(&[0x96, 0x01], 0).unwrap().0, Field::Int(150)));
         assert!(varint(&[0x80], 0).is_err());
+    }
+
+    fn varint_bytes(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    fn int(field: u64, value: u64) -> Vec<u8> {
+        [varint_bytes(field * 8), varint_bytes(value)].concat()
+    }
+
+    fn blob(field: u64, value: &[u8]) -> Vec<u8> {
+        [
+            varint_bytes(field * 8 + 2),
+            varint_bytes(value.len() as u64),
+            value.to_vec(),
+        ]
+        .concat()
+    }
+
+    /// A small deterministic generator, so every case is the same on every run.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    fn usage(rng: &mut Rng, damaged: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        for key in [1u64, 2, 3, 4, 5, 9, 10] {
+            if rng.below(4) != 0 {
+                let value = match rng.below(10) {
+                    0 => 0,
+                    1 => (1 << 53) + 5, // past 2^53: no number
+                    _ => rng.below(5000),
+                };
+                out.extend(int(key, value));
+            }
+        }
+        for key in [11u64, 12, 7] {
+            match rng.below(6) {
+                0 if damaged => out.extend(blob(key, &[0xff, 0xfe])), // not UTF-8
+                1 => out.extend(blob(key, " \u{a0}padded id\t".as_bytes())),
+                2 | 3 => out.extend(blob(key, format!("id-{}", rng.below(40)).as_bytes())),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn stamp(rng: &mut Rng) -> Vec<u8> {
+        [
+            int(1, 1_790_000_000 + rng.below(1_000_000)),
+            int(2, rng.below(999_999_999)),
+        ]
+        .concat()
+    }
+
+    /// One `steps.metadata` (step) or `gen_metadata.data` blob; sometimes damaged.
+    fn record(rng: &mut Rng, step: bool, damaged: bool) -> Vec<u8> {
+        if damaged && rng.below(40) == 0 {
+            return vec![0x80]; // a varint cut short
+        }
+        let mut data = Vec::new();
+        if rng.below(5) != 0 {
+            data.extend(blob(if step { 9 } else { 4 }, &usage(rng, damaged)));
+        }
+        for _ in 0..rng.below(3) {
+            data.extend(blob(if step { 28 } else { 17 }, &blob(2, &usage(rng, damaged))));
+        }
+        let names = ["Claude Sonnet 4.5 (Thinking)", "Gemini 3.1 Pro", "", "GPT 6 (High)"];
+        let name = names[rng.below(4) as usize];
+        let mut model = Vec::new();
+        if step {
+            if !name.is_empty() {
+                model.extend(blob(if rng.below(2) == 0 { 12 } else { 8 }, name.as_bytes()));
+            }
+            model.extend(int(1, [0, 246, 1035, 9999][rng.below(4) as usize]));
+            data.extend(blob(24, &model));
+            match rng.below(3) {
+                0 => data.extend(blob(8, &stamp(rng))),
+                1 => data.extend(blob(1, &stamp(rng))),
+                _ => {}
+            }
+            data
+        } else {
+            if !name.is_empty() {
+                data.extend(blob(if rng.below(2) == 0 { 19 } else { 21 }, name.as_bytes()));
+            }
+            data.extend(int(3, [0, 246, 1016, 777][rng.below(4) as usize]));
+            if rng.below(2) == 0 {
+                data.extend(blob(9, &blob(4, &stamp(rng))));
+            }
+            if damaged && rng.below(30) == 0 {
+                return data; // no field 1: refused
+            }
+            blob(1, &data)
+        }
+    }
+
+    fn database(path: &Path, rng: &mut Rng) {
+        let connection = Connection::open(path).unwrap();
+        connection.execute_batch("BEGIN").unwrap();
+        let shape = rng.below(4);
+        let damaged = rng.below(3) == 0;
+        if shape != 1 {
+            connection
+                .execute_batch("CREATE TABLE gen_metadata (idx, data)")
+                .unwrap();
+            for i in 0..rng.below(300) {
+                let idx: rusqlite::types::Value = match if damaged { rng.below(60) } else { 99 } {
+                    0 => rusqlite::types::Value::Text("x".into()),
+                    1 => rusqlite::types::Value::Real(i as f64 + 0.5),
+                    _ => rusqlite::types::Value::Integer(i as i64),
+                };
+                let data: rusqlite::types::Value = match if damaged { rng.below(80) } else { 99 } {
+                    0 => rusqlite::types::Value::Null,
+                    1 => rusqlite::types::Value::Text("text".into()),
+                    _ => rusqlite::types::Value::Blob(record(rng, false, damaged)),
+                };
+                connection
+                    .execute("INSERT INTO gen_metadata VALUES (?1, ?2)", (idx, data))
+                    .unwrap();
+            }
+        }
+        if shape != 2 {
+            connection
+                .execute_batch("CREATE TABLE steps (idx, metadata, content)")
+                .unwrap();
+            for i in 0..rng.below(600) {
+                let metadata: rusqlite::types::Value = match if damaged { rng.below(70) } else { 99 } {
+                    0 => rusqlite::types::Value::Null,
+                    1 => rusqlite::types::Value::Text("text".into()),
+                    _ => rusqlite::types::Value::Blob(record(rng, true, damaged)),
+                };
+                connection
+                    .execute(
+                        "INSERT INTO steps VALUES (?1, ?2, ?3)",
+                        (i as i64, metadata, "conversation text"),
+                    )
+                    .unwrap();
+            }
+        }
+        if shape == 3 || rng.below(2) == 0 {
+            connection
+                .execute_batch("CREATE TABLE trajectory_metadata_blob (data)")
+                .unwrap();
+            for _ in 0..rng.below(4) {
+                let data: rusqlite::types::Value = match if damaged { rng.below(5) } else { 2 + rng.below(3) } {
+                    0 => rusqlite::types::Value::Null,
+                    1 => rusqlite::types::Value::Blob(vec![0x80]),
+                    2 => rusqlite::types::Value::Blob(Vec::new()),
+                    _ => rusqlite::types::Value::Blob(blob(2, &stamp(rng))),
+                };
+                connection
+                    .execute("INSERT INTO trajectory_metadata_blob VALUES (?1)", [data])
+                    .unwrap();
+            }
+        }
+        if shape == 0 && rng.below(8) == 0 {
+            connection
+                .execute_batch("DROP TABLE gen_metadata; DROP TABLE IF EXISTS steps")
+                .unwrap();
+        }
+        connection.execute_batch("COMMIT").unwrap();
+    }
+
+    /// R4: the streaming reader answers exactly as the reader that held every blob first: the same
+    /// candidates and names in the same order, or the same refusal, over 400 generated databases
+    /// (damaged blobs, missing and non-blob rows, non-UTF-8 ids on counted and uncounted usages,
+    /// timestamps in either place, a trajectory row before or after a damaged one, no usage tables).
+    #[test]
+    fn the_streaming_reader_answers_as_the_reader_that_held_every_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(600);
+        let (mut ok, mut refused) = (0, 0);
+        for case in 0..400u64 {
+            let mut rng = Rng(case.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+            let path = dir.path().join(format!("case-{case}.db"));
+            database(&path, &mut rng);
+            let streamed = read_db(&path, 1_790_000_000_000.0, deadline);
+            let held = oracle::read_db(&path, 1_790_000_000_000.0, deadline);
+            match (&streamed, &held) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(a.0, b.0, "case {case}: candidates");
+                    assert_eq!(a.1, b.1, "case {case}: names");
+                    ok += 1;
+                }
+                (Err(a), Err(b)) => {
+                    assert_eq!(a, b, "case {case}: refusal");
+                    refused += 1;
+                }
+                _ => panic!(
+                    "case {case}: streamed {streamed:?} but held {held:?}",
+                    streamed = streamed.as_ref().map(|r| r.0.len()),
+                    held = held.as_ref().map(|r| r.0.len())
+                ),
+            }
+        }
+        // Both outcomes are exercised.
+        assert!(ok > 100 && refused > 50, "ok {ok}, refused {refused}");
     }
 }
