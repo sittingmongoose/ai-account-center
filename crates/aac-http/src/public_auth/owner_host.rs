@@ -126,17 +126,21 @@ impl OwnerHost {
         &self.root
     }
 
+    /// `agents` is the boot's one `Agents` pool, shared with the embedded private
+    /// service so the local-work gate is not split (MEM7 lane 2).
     #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn start_cut(
         &self,
         adopted: Option<ServiceLink>,
         renewal: bool,
+        agents: std::sync::Arc<crate::agent_transport::Agents>,
     ) -> std::io::Result<()> {
         let mut embedded = self.embedded.lock().await;
         let link = if let Some(link) = adopted {
             link
         } else {
-            let boot = self.start_embedded(renewal).await.ok_or_else(|| {
+            let boot = self.start_embedded(renewal, agents).await.ok_or_else(|| {
                 std::io::Error::other("could not start the private dashboard owner")
             })?;
             let link = boot.link.clone();
@@ -283,12 +287,15 @@ impl OwnerHost {
     }
 
     /// Start the platform's public owners (the same `NativeOwners` the direct call site used).
-    /// The host is then the one place that owns them and their jobs.
+    /// The host is then the one place that owns them and their jobs. `agents` is the boot's
+    /// one `Agents` pool, shared with the private service (MEM7 lane 2).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start_public(
         self: &std::sync::Arc<Self>,
         groups: native_owners::Groups,
         hub: HubCache,
         events: DashboardEvents,
+        agents: std::sync::Arc<crate::agent_transport::Agents>,
     ) -> std::io::Result<()> {
         let (native, jobs) = native_owners::NativeOwners::start(
             self.root.clone(),
@@ -296,6 +303,7 @@ impl OwnerHost {
             hub,
             events,
             std::sync::Arc::downgrade(self),
+            agents,
         )?;
         *self.public.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(PublicOwners { native, jobs });
@@ -769,7 +777,11 @@ impl OwnerHost {
     }
 
     #[cfg(unix)]
-    async fn start_embedded(&self, renewal: bool) -> Option<Embedded> {
+    async fn start_embedded(
+        &self,
+        renewal: bool,
+        agents: std::sync::Arc<crate::agent_transport::Agents>,
+    ) -> Option<Embedded> {
         use std::os::unix::fs::{FileTypeExt, MetadataExt};
         let mut config = self.boot_config()?;
         if renewal && let Some(home) = renewal_home() {
@@ -802,6 +814,7 @@ impl OwnerHost {
                     let _ = stopped.await;
                 },
                 ready_tx,
+                agents,
             )
             .await
             {
@@ -1268,7 +1281,15 @@ mod tests {
         std::os::unix::fs::symlink(&target, ccs.join("run")).unwrap();
         let host = OwnerHost::new(ccs.clone(), true);
         assert!(
-            host.start_embedded(false).await.is_none(),
+            host.start_embedded(
+                false,
+                std::sync::Arc::new(crate::agent_transport::Agents::with_default(
+                    ccs.clone(),
+                    true,
+                )),
+            )
+            .await
+            .is_none(),
             "a symlinked run refuses the boot"
         );
         let meta = std::fs::symlink_metadata(&target).unwrap();
@@ -1283,8 +1304,14 @@ mod tests {
         let ccs = scratch.path().join("ccs");
         std::fs::create_dir(&ccs).unwrap();
         std::fs::set_permissions(&ccs, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let host = OwnerHost::new(ccs, true);
-        host.start_cut(None, false).await.expect("embedded boot");
+        let host = OwnerHost::new(ccs.clone(), true);
+        host.start_cut(
+            None,
+            false,
+            std::sync::Arc::new(crate::agent_transport::Agents::with_default(ccs, true)),
+        )
+        .await
+        .expect("embedded boot");
         let link = host.published_link().expect("embedded link");
         assert!(
             link.is_in_process(),
@@ -1419,6 +1446,10 @@ mod windows_tests {
             groups,
             HubCache::for_collection(collection),
             DashboardEvents(tokio::sync::broadcast::channel(8).0),
+            std::sync::Arc::new(crate::agent_transport::Agents::with_default(
+                root.to_path_buf(),
+                true,
+            )),
         )
         .unwrap();
         host

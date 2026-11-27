@@ -260,15 +260,19 @@ fn lifecycle_facts() -> crate::account_usage::dashboard::Lifecycle {
 }
 
 impl NativeOwners {
+    /// The boot's one `Agents` pool, shared with the private service (`unix`) so the
+    /// collection helper and the local scan hold the same `local_work` slot and never
+    /// overlap (MEM6: two instances, 23 overlap samples).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start(
         root: PathBuf,
         groups: Groups,
         hub: HubCache,
         events: DashboardEvents,
         status: std::sync::Weak<super::owner_host::OwnerHost>,
+        agents: Arc<Agents>,
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
-        let agents = Arc::new(Agents::with_default(root.clone(), true));
         let cancel = CancellationToken::new();
         let mut jobs = Jobs {
             cancel: cancel.clone(),

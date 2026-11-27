@@ -1768,16 +1768,19 @@ pub async fn serve(
         None,
         configured_claude_open_package(),
         None,
+        None,
     )
     .await
 }
 
 /// Start the embedded private service for the public front door and deliver a direct
 /// [`LocalService`] router handle so in-process calls skip the Unix socket hop.
+/// `agents` is the boot's one `Agents` pool, shared with the public owners (MEM7 lane 2).
 pub(crate) async fn serve_embedded(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     ready: tokio::sync::oneshot::Sender<LocalService>,
+    agents: Arc<crate::agent_transport::Agents>,
 ) -> io::Result<()> {
     serve_inner(
         boot,
@@ -1788,6 +1791,7 @@ pub(crate) async fn serve_embedded(
         None,
         configured_claude_open_package(),
         Some(ready),
+        Some(agents),
     )
     .await
 }
@@ -1804,6 +1808,7 @@ pub async fn serve_with_app_update_jobs(
         Some(jobs),
         false,
         Default::default(),
+        None,
         None,
         None,
         None,
@@ -1825,6 +1830,7 @@ pub async fn serve_composed(
         None,
         configured_claude_open_package(),
         None,
+        None,
     )
     .await
 }
@@ -1835,7 +1841,7 @@ pub async fn serve_with_account_usage_cache(
     shutdown: impl Future<Output = ()> + Send + 'static,
     cache: crate::account_usage::AccountUsageCache,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, cache, None, None, None).await
+    serve_inner(boot, shutdown, None, false, cache, None, None, None, None).await
 }
 
 /// Native owner callbacks share the dashboard with the public listener, hub and store.
@@ -1873,6 +1879,7 @@ pub async fn serve_with_native_account_usage(
         Some(native),
         configured_claude_open_package(),
         None,
+        None,
     )
     .await
 }
@@ -1892,6 +1899,7 @@ pub async fn serve_with_claude_open(
         Default::default(),
         None,
         Some(package_root),
+        None,
         None,
     )
     .await
@@ -1913,6 +1921,7 @@ async fn serve_inner(
     native: Option<NativeAccountUsage>,
     claude_open_package: Option<PathBuf>,
     in_process: Option<tokio::sync::oneshot::Sender<LocalService>>,
+    shared_agents: Option<Arc<crate::agent_transport::Agents>>,
 ) -> io::Result<()> {
     boot.validate()?;
     let owners = boot.owners()?;
@@ -1960,10 +1969,15 @@ async fn serve_inner(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let cut_boot = boot.embedded_dashboard || native.is_some();
-    let agents = Arc::new(crate::agent_transport::Agents::with_default(
-        boot.ccs_dir.clone(),
-        cut_boot,
-    ));
+    // The embedded boot shares the public boot's one `Agents` pool (MEM7 lane 2); a
+    // standalone private service creates its own single pool here.
+    let agents = match shared_agents {
+        Some(shared) => shared,
+        None => Arc::new(crate::agent_transport::Agents::with_default(
+            boot.ccs_dir.clone(),
+            cut_boot,
+        )),
+    };
     let feeds = cache.feeds.clone();
     let app_update_jobs = app_update_jobs.or_else(|| {
         native_app_updates.then(|| {
@@ -2205,10 +2219,13 @@ async fn serve_inner(
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { crate::answers_owned::jobs(jobs, stop).await });
     }
-    // Claude sign-in renewal: dormant until its settings exist.
+    // Claude sign-in renewal: dormant until its settings exist. Holds the boot's
+    // single `local_work` slot, so `claude auth status` never overlaps a local helper
+    // (MEM7 lane 2: max concurrency 1).
     tokio::spawn(crate::claude_renew_job::jobs(
         state.0.boot.ccs_dir.clone(),
         Arc::clone(&jobs_stop),
+        agents.clone(),
     ));
     if let Some(owner) = &scoreboard_owned {
         owner.seed().await;
