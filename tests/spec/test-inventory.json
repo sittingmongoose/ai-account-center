@@ -4,10 +4,9 @@
   "tests": [
     {
       "file": "crates/aac-agent/src/apps/tests.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-agent/src/apps/update.rs",
@@ -50,8 +49,7 @@
       "file": "crates/aac-agent/src/apps/updater/t3/tests.rs",
       "kind": "HTTP",
       "evidence": [
-        "HTTP",
-        "helper"
+        "HTTP"
       ]
     },
     {
@@ -71,8 +69,7 @@
       "file": "crates/aac-agent/src/apps/updater/zcode.rs",
       "kind": "HTTP",
       "evidence": [
-        "HTTP",
-        "helper"
+        "HTTP"
       ]
     },
     {
@@ -143,23 +140,15 @@
     },
     {
       "file": "crates/aac-agent/src/failover.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-agent/src/failover/claude.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "crates/aac-agent/src/failover/console/tests.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
     },
     {
       "file": "crates/aac-agent/src/failover/core.rs",
@@ -187,10 +176,9 @@
     },
     {
       "file": "crates/aac-agent/src/history/native_tests.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-agent/src/history/transcript.rs",
@@ -207,6 +195,12 @@
     },
     {
       "file": "crates/aac-agent/src/launch.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/src/lib.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -309,16 +303,14 @@
     },
     {
       "file": "crates/aac-agent/tests/apps_update.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-agent/tests/desktop_usage_parity.rs",
-      "kind": "helper",
+      "kind": "table",
       "evidence": [
-        "helper",
         "table"
       ]
     },
@@ -330,6 +322,12 @@
     },
     {
       "file": "crates/aac-agent/tests/launch_exec.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/tests/scan_memory.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -843,13 +841,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "crates/aac-http/src/antigravity_host.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
       "file": "crates/aac-http/src/antigravity_probes.rs",
       "kind": "internal",
       "evidence": [],
@@ -857,9 +848,8 @@
     },
     {
       "file": "crates/aac-http/src/antigravity_quota.rs",
-      "kind": "helper",
+      "kind": "table",
       "evidence": [
-        "helper",
         "table"
       ]
     },
@@ -881,13 +871,6 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "crates/aac-http/src/app_updates/helper_tests.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
     },
     {
       "file": "crates/aac-http/src/app_updates/tests.rs",
@@ -1013,10 +996,9 @@
     },
     {
       "file": "crates/aac-http/src/collection.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/compress.rs",
@@ -1081,10 +1063,9 @@
     },
     {
       "file": "crates/aac-http/src/lifecycle_signin.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/limits.rs",
@@ -1193,8 +1174,7 @@
       "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_keys.rs",
       "kind": "safety",
       "evidence": [
-        "safety",
-        "helper"
+        "safety"
       ]
     },
     {
@@ -1349,10 +1329,9 @@
     },
     {
       "file": "crates/aac-http/src/signin_callbacks.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/signins.rs",
@@ -1464,10 +1443,9 @@
     },
     {
       "file": "crates/aac-http/tests/app_updates.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/tests/boot_files.rs",
@@ -2071,13 +2049,6 @@
     },
     {
       "file": "crates/aac-status/tests/reset_any_usage.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "crates/aac-status/tests/reset_claude_source.rs",
       "kind": "helper",
       "evidence": [
         "helper"
@@ -2727,105 +2698,12 @@
     },
     {
       "file": "tests/spec/tables.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/claude_dynamic_e2e_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/claude_usage_test.py",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/cursor_usage_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/desktop_usage_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/failover_additional_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/failover_core_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/failover_special_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/failover_usage_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/key_store_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/muse_failover_budget_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/muse_native_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/opencode_go_failure_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/account-usage/plan_usage_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/account-usage/signin_expiry_test.py",
       "kind": "helper",
       "evidence": [
         "helper"
@@ -2836,247 +2714,6 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/agent-usage/aac_usage_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_native_worker_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_oauth_metadata_test.py",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_quota_pool_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_runtime_health_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/production_status_transport_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/quota_adapter_plan_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/quota_adapter_sign_in_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app-update-codex.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_acp_followup_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_agent_worker_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_antigravity_native_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_cursor_acp_macos_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_fix_round1_test.py",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_fix_round2_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_lane_d_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_parity_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_robustness_test.py",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_session_test.py",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_t3_rpc_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_t3_self_update_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_t3_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_terminal_mac_ssh_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_update_zcode_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_updates_parallel_test.py",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_updates_review_r2_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/app-updates/app_updates_test.py",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/claude-history/atomic-writer.test.cjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/claude-history/history-policy.test.cjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/claude-history/microbatch-sync.test.cjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/claude-history/node-bridge.test.cjs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/claude-history/pending-marker.test.cjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/claude-history/test_history_remote.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/claude-signin/claude_signin_test.py",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
     },
     {
       "file": "tests/unit/docker/docker-hygiene.test.ts",
@@ -3206,6 +2843,13 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/no-python-runtime-helpers.test.ts",
+      "kind": "helper",
+      "evidence": [
         "helper"
       ]
     },
