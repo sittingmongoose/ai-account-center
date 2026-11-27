@@ -389,9 +389,10 @@
     },
     {
       "file": "crates/aac-http/src/account_usage/coordinator.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-http/src/account_usage/cursor.rs",
@@ -467,9 +468,10 @@
     },
     {
       "file": "crates/aac-http/src/agent_transport.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-http/src/allocator.rs",
