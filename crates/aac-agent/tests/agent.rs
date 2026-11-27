@@ -278,7 +278,8 @@ fn aac_agent_runs_on_tuned_mimalloc() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("mimalloc: process init: 0x"),
+        // Linux prints a process-init banner; the Mac prints only the option table.
+        stderr.contains("mimalloc: process init: 0x") || stderr.contains("option 'purge_delay'"),
         "aac-agent did not start on mimalloc:\n{stderr}"
     );
     let mut options = std::collections::BTreeMap::new();

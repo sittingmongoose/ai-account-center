@@ -88,13 +88,13 @@ fn write_private(root: &Path, relative: &str, bytes: &[u8]) -> PathBuf {
 /// bits above have no effect there).
 #[cfg(windows)]
 fn private_acl(path: &Path) {
-    let user = format!(
-        "{}\\{}",
-        std::env::var("USERDOMAIN").expect("USERDOMAIN"),
-        std::env::var("USERNAME").expect("USERNAME")
-    );
+    // The local account name resolves under ssh too (USERDOMAIN may read WORKGROUP there),
+    // and icacls refuses verbatim \\?\ paths.
+    let user = std::env::var("USERNAME").expect("USERNAME");
+    let text = path.to_string_lossy();
+    let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
     let status = std::process::Command::new("icacls")
-        .arg(path)
+        .arg(plain)
         .args(["/inheritance:r", "/grant:r", &format!("{user}:(F)")])
         .stdout(std::process::Stdio::null())
         .status()

@@ -77,7 +77,8 @@ fn service_binaries_run_on_mimalloc() -> Result<(), Box<dyn std::error::Error>> 
     for (name, path, flag) in BINARIES {
         let stderr = run_verbose(path, flag, home.path())?;
         assert!(
-            stderr.contains(STARTED),
+            // Linux prints a process-init banner; the Mac prints only the option table.
+            stderr.contains(STARTED) || stderr.contains("option 'purge_delay'"),
             "{name} did not start on mimalloc (no {STARTED:?} on stderr):\n{stderr}"
         );
     }
