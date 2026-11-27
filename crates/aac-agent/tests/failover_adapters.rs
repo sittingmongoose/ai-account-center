@@ -79,7 +79,27 @@ fn write_private(root: &Path, relative: &str, bytes: &[u8]) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    #[cfg(windows)]
+    private_acl(&file);
     file
+}
+
+/// Windows: the owner-only, protected ACL the product's private readers require (the Unix mode
+/// bits above have no effect there).
+#[cfg(windows)]
+fn private_acl(path: &Path) {
+    let user = format!(
+        "{}\\{}",
+        std::env::var("USERDOMAIN").expect("USERDOMAIN"),
+        std::env::var("USERNAME").expect("USERNAME")
+    );
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("{user}:(F)")])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("icacls");
+    assert!(status.success(), "icacls {}", path.display());
 }
 
 fn write_saved_agy_profile(
