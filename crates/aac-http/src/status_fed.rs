@@ -135,7 +135,9 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
     if source == COLLECTED {
         // Move the members out of the parsed tree into the typed share; the tree
         // itself is dropped, so the generation holds one copy, not two.
-        let mut object = value.into_object().ok_or(Decline::Shape)?;
+        let Value::Object(mut object) = value else {
+            return Err(Decline::Shape);
+        };
         let take = |key: &str| object.remove(key).map(Arc::new);
         let view = Arc::new(CollectedView {
             registry: take("registry"),
