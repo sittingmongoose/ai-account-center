@@ -422,10 +422,80 @@ export function focusChart(acc, payload, ctx) {
     for (let n = 1; n < ys.length; n++) ys[n] = Math.max(ys[n], ys[n - 1] + LH);
     ys[ys.length - 1] = Math.min(ys[ys.length - 1], lo);
     for (let n = ys.length - 2; n >= 0; n--) ys[n] = Math.min(ys[n], ys[n + 1] - LH);
+    const x = obsEnd - 10, texts = ends.map(e => fit(e.s.tag, ` ${valueText(e.cur)}%`));
+    const beforeLabels = labels.length, beforePlaced = placed.length;
     ends.forEach((e, n) => {
-      const txt = fit(e.s.tag, ` ${valueText(e.cur)}%`);
-      put(txt, [{ x: obsEnd - 10, y: ys[n], a: 'end' }, { x: obsEnd - 10, y: ys[n] + LH, a: 'end' }, { x: obsEnd - 10, y: ys[n] - LH, a: 'end' }], 'series-ink', OBS, { shade: e.s.shade, clear: CLEAR });
+      const cands = [0, LH, -LH].map(dy => ({ x, y: ys[n] + dy, a: 'end' }));
+      // Keep the three historical places whenever one fits. Only when another label or the plot edge takes all three
+      // (a low line has the edge below it and another label above it, for example), use the nearest free place anywhere
+      // in the plot before dropping the line's name.
+      const w = TW(texts[n]);
+      const oneFits = cands.some(c => {
+        const b = lbox(c.x, c.y, w, c.a);
+        return inside(b, OBS) && !hits(b, placed);
+      });
+      if (!oneFits) {
+        for (let dy = 1; dy <= Math.ceil(plotH); dy++) {
+          if (dy === LH) continue;
+          cands.push({ x, y: ys[n] + dy, a: 'end' }, { x, y: ys[n] - dy, a: 'end' });
+        }
+      }
+      put(texts[n], cands, 'series-ink', OBS, { shade: e.s.shade, clear: CLEAR });
     });
+    const greedyEnds = labels.slice(beforeLabels);
+    const ordered = greedyEnds.every((l, n) => n === 0 || l.y > greedyEnds[n - 1].y);
+    if (greedyEnds.length < ends.length || !ordered) {
+      // A nearest-free greedy place can swap two close lines or leave the last one out even when one ordered column fits.
+      // Replan just that column top-to-bottom: exact spacing is hard, a data line costs as much as a 10 px move, and the
+      // smallest squared move from the line's own height wins. If there is still no column, keep the greedy result.
+      const greedyPlaced = placed.slice(beforePlaced);
+      labels.length = beforeLabels;
+      placed.length = beforePlaced;
+      const firstY = Math.ceil(hi), lastY = Math.floor(lo), rows = lastY - firstY + 1;
+      const costs = texts.map((txt, n) => {
+        const w = TW(txt), row = [];
+        for (let k = 0; k < rows; k++) {
+          const y = firstY + k, b = lbox(x, y, w, 'end');
+          const move = y - ys[n];
+          row.push(!inside(b, OBS) || hits(b, placed) ? Infinity : move * move + (hits(b, obst) ? 100 : 0));
+        }
+        return row;
+      });
+      let dp = costs[0].slice();
+      const parents = [null];
+      for (let n = 1; n < costs.length; n++) {
+        const bestBefore = [], bestAt = [];
+        let best = Infinity, at = -1;
+        for (let k = 0; k < rows; k++) {
+          if (dp[k] < best) { best = dp[k]; at = k; }
+          bestBefore.push(best);
+          bestAt.push(at);
+        }
+        const parent = new Array(rows).fill(-1), next = new Array(rows).fill(Infinity);
+        for (let k = LH; k < rows; k++) {
+          const before = k - LH;
+          if (costs[n][k] < Infinity && bestBefore[before] < Infinity) {
+            next[k] = costs[n][k] + bestBefore[before];
+            parent[k] = bestAt[before];
+          }
+        }
+        parents.push(parent);
+        dp = next;
+      }
+      let at = -1, total = Infinity;
+      for (let k = 0; k < rows; k++) if (dp[k] < total) { total = dp[k]; at = k; }
+      if (total < Infinity) {
+        const column = new Array(ends.length);
+        for (let n = ends.length - 1; n >= 0; n--) {
+          column[n] = firstY + at;
+          at = n ? parents[n][at] : at;
+        }
+        column.forEach((y, n) => put(texts[n], [{ x, y, a: 'end' }], 'series-ink', OBS, { shade: ends[n].s.shade, clear: CLEAR }));
+      } else {
+        labels.push(...greedyEnds);
+        placed.push(...greedyPlaced);
+      }
+    }
   }
   for (const r of runouts) {
     const yr = Y(100), txt = `RUNS OUT ${timeTxt(r.at).toUpperCase()}`;

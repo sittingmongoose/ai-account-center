@@ -473,7 +473,10 @@ export const tests = {
 			account('claude-beta', 'claude', 'sam@beta.example', 'max', [quota('seven_day', 'Weekly usage', 20, 10080, 3000)]),
 			account('claude-long', 'claude', 'a.very.long.example.name@example.invalid', 'pro', [quota('seven_day', 'Weekly usage', 93, 10080, 3500)]),
 		];
-		for (const f of FORMATS.filter((x) => ['iphone', 'duo-folded', 'desktop-1440'].includes(x.name))) {
+		const compareFormats = FORMATS.filter((x) => ['iphone', 'duo-folded', 'desktop-1440'].includes(x.name));
+		const iphone = compareFormats.find((x) => x.name === 'iphone');
+		compareFormats.splice(compareFormats.indexOf(iphone) + 1, 0, { ...iphone, name: 'iphone-874', height: 874 });
+		for (const f of compareFormats) {
 			await t.step(f.name, async () => {
 				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, serviceWorkers: 'block' });
 				await t.app.signIn();
@@ -512,6 +515,7 @@ export const tests = {
 				await t.equal(`${f.name}: every end label is clear of the other chart labels`, got.near, []);
 				await t.page.locator('.focus-box').scrollIntoViewIfNeeded();
 				await t.crop(`analytics-compare-${f.name}`, await t.page.evaluate(() => { const r = document.querySelector('.focus').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 10), width: innerWidth, height: Math.min(innerHeight - Math.max(0, r.y - 10), r.height + 20) }; }), `${f.name}: Compare weekly across four Claude accounts, end labels`);
+				if (f.name === 'iphone-874') await t.shot('analytics-compare-iphone-874-full', 'Compare weekly across four Claude accounts in a 402x874 iPhone viewport, end labels clear');
 			});
 		}
 	},

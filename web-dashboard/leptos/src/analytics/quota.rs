@@ -117,6 +117,60 @@ fn stop_at(f: &Focus, x: f64, sx: f64) -> i32 {
     f.lut[i]
 }
 
+/// Keep compare end labels apart in screen pixels. Their x and y scale with the chart, but the text and its plate do
+/// not, so a briefly compressed chart can otherwise overlap two labels that were clear at the model's own size. This is
+/// only a display safeguard: analytics-quota.mjs still chooses the labels' line-aware positions.
+fn separate_end_labels(labels: &[Label], sy: f64, chart_h: f64) -> Vec<Label> {
+    let mut out = labels.to_vec();
+    let mut ends = out
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.color == "series-ink")
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    if ends.len() < 2 {
+        return out;
+    }
+    ends.sort_by(|a, b| {
+        out[*a]
+            .y
+            .partial_cmp(&out[*b].y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let pitch = 16.0 / sy.max(0.01);
+    if ends.windows(2).all(|w| out[w[1]].y - out[w[0]].y >= pitch) {
+        return out;
+    }
+    let top = ends
+        .iter()
+        .map(|i| out[*i].y - out[*i].py)
+        .fold(0.0, f64::max);
+    let bottom = chart_h
+        - ends
+            .iter()
+            .map(|i| out[*i].py + out[*i].ph - out[*i].y)
+            .fold(0.0, f64::max);
+    let mut ys = ends.iter().map(|i| out[*i].y).collect::<Vec<_>>();
+    ys[0] = ys[0].max(top);
+    for n in 1..ys.len() {
+        ys[n] = ys[n].max(ys[n - 1] + pitch);
+    }
+    let last = ys.len() - 1;
+    ys[last] = ys[last].min(bottom);
+    for n in (0..last).rev() {
+        ys[n] = ys[n].min(ys[n + 1] - pitch);
+    }
+    if ys[0] < top || ys.windows(2).any(|w| w[1] - w[0] < pitch - 0.01) {
+        return out;
+    }
+    for (n, i) in ends.iter().enumerate() {
+        let dy = ys[n] - out[*i].y;
+        out[*i].y += dy;
+        out[*i].py += dy;
+    }
+    out
+}
+
 /// The legend sample of a focus series (its dash), the projection and the threshold.
 fn legend_path(kind: &str, dash: i32) -> &'static str {
     match (kind, dash) {
@@ -228,7 +282,8 @@ fn FocusPanel(f: Focus) -> impl IntoView {
                             let paper = d.fill == "paper";
                             view! { <circle cx=d.x * sx cy=d.y * sy r=d.r fill=if paper { "var(--paper)".to_string() } else { c.clone() } stroke=if paper { c } else { "none".to_string() } stroke-width="2"/> }
                         }).collect_view();
-                        let labels = f.labels.iter().map(|l| view! {
+                        let separated = separate_end_labels(&f.labels, sy, f.h);
+                        let labels = separated.iter().map(|l| view! {
                             {l.plate.then(|| view! { <rect x=l.px * sx y=l.py * sy width=l.pw height=l.ph rx="3" class="fl-plate"/> })}
                             <text x=l.px * sx + (l.x - l.px) y=l.py * sy + (l.y - l.py) class="ax-t" fill=theme_key(&l.color, &f.provider, l.shade)>{l.text.clone()}</text>
                         }).collect_view();
@@ -324,5 +379,30 @@ mod tests {
         assert_eq!(stop_at(&f, 400.0, 1.0), 2);
         assert_eq!(stop_at(&f, 18.0, 2.0), 1);
         assert_eq!(stop_at(&Focus::default(), 5.0, 1.0), -1);
+    }
+
+    #[test]
+    fn compare_end_labels_at_nearly_the_same_value_are_separated() {
+        let label = |y: f64, text: &str| Label {
+            x: 300.0,
+            y,
+            w: 100.0,
+            text: text.into(),
+            color: "series-ink".into(),
+            plate: true,
+            px: 200.0,
+            py: y - 10.0,
+            pw: 106.0,
+            ph: 13.2,
+            ..Default::default()
+        };
+        let labels = vec![label(100.0, "one 20%"), label(100.1, "two 20.1%")];
+        let separated = separate_end_labels(&labels, 1.0, 220.0);
+        assert!(separated[1].y - separated[0].y >= 15.9);
+        assert!(
+            separated
+                .iter()
+                .all(|l| l.py >= 0.0 && l.py + l.ph <= 220.0)
+        );
     }
 }
