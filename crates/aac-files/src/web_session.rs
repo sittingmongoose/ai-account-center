@@ -1082,10 +1082,10 @@ pub fn summaries(root: &Path) -> BTreeMap<&'static str, Option<SessionMeta>> {
 mod dpapi {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
+        Foundation::LocalFree,
         Security::Cryptography::{
             CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
         },
-        System::Memory::LocalFree,
     };
 
     const ENTROPY: &[u8] = b"AAC/web-session/v1";
