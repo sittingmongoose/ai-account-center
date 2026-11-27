@@ -1,4 +1,6 @@
 //! Parity and end-to-end integration tests for `aac-xtask perf`.
+// The fake-dashboard harness and its poll types serve the Linux-only process tests below.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
 use aac_xtask::perf::budget::{
     PollRoute, RouteRecord, RunOptions, assert_no_symlinks, assert_resolved_inside,

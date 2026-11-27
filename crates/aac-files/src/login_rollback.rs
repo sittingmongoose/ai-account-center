@@ -559,17 +559,7 @@ pub fn restore(places: &Places) -> Result<Restored, Failure> {
         let made = from.parent().is_some_and(|parent| {
             parent.is_dir()
                 || std::fs::create_dir_all(parent)
-                    .and_then(|()| {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            std::fs::set_permissions(
-                                parent,
-                                std::fs::Permissions::from_mode(0o700),
-                            )?;
-                        }
-                        Ok(())
-                    })
+                    .and_then(|()| owner_only_folder(parent))
                     .is_ok()
         });
         if !made || std::fs::rename(&source, &from).is_err() {
@@ -605,6 +595,18 @@ pub fn restore(places: &Places) -> Result<Restored, Failure> {
         }
     }
     Ok(out)
+}
+
+/// A folder restore had to make again: owner-only on Unix (Windows folders inherit their ACL).
+fn owner_only_folder(folder: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    let _ = folder;
+    Ok(())
 }
 
 #[cfg(test)]

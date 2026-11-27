@@ -631,25 +631,25 @@ mod raw_result_tests {
                 r#"{"text":"caf\u00e9 \"quoted\" \n","n":[1,2.5,-3e9]}"#,
             ),
         ] {
-            let raw = RawValue::from_string(value.to_string()).unwrap();
+            let raw = RawValue::from_string(value.to_string()).expect("raw value");
             let mut expected = serde_json::to_vec(&RawResultEvent {
                 kind: "result",
                 protocol: PROTOCOL_VERSION,
                 id,
                 value: raw.clone(),
             })
-            .unwrap();
+            .expect("written");
             let exact = expected.len();
             expected.push(b'\n');
             let mut written = Vec::new();
             write_raw_result(&mut written, id, raw.clone(), exact + 1)
                 .await
-                .unwrap();
+                .expect("written");
             assert_eq!(written, expected);
             let mut refused = Vec::new();
             let failure = write_raw_result(&mut refused, id, raw, exact)
                 .await
-                .unwrap_err();
+                .expect_err("refused at the cap");
             assert_eq!(failure.cause, Cause::OutputTooLarge);
             assert!(refused.is_empty());
         }
