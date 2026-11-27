@@ -1,7 +1,7 @@
 //! Private Unix service and the explicitly enabled public TCP front door.
 
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: aac_http::allocator::Selected = aac_http::allocator::SELECTED;
 
 #[cfg(unix)]
 mod provider_write;
@@ -9,7 +9,7 @@ mod provider_write;
 mod registered_write;
 
 fn main() {
-    aac_http::allocator::tune_mimalloc();
+    aac_http::allocator::tune();
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--build-commit")) {
         println!("{}", env!("AAC_BUILD_COMMIT"));
         return;

@@ -1,17 +1,24 @@
-//! The shipped service binaries must run on mimalloc as their global allocator
-//! with our tuned memory-return options applied in code at startup:
-//! under glibc malloc, freed compose transients stayed resident as multi-GB of
-//! arena RSS (service-memory lane, measured on the 54c363fa7 build), and under
-//! untuned mimalloc, eager arena commit and 1000 ms purge delay held ~100+ MiB
-//! of avoidable RSS.
+//! The shipped service binaries must run on their selected global allocator with our tuned
+//! memory-return options applied at startup.
 //!
-//! A byte scan for the word "mimalloc" would pass on any string that names it, so
-//! this asks the running allocator itself: with `MIMALLOC_VERBOSE=1`, mimalloc
-//! reports its process start on stderr, and `tune_mimalloc()` prints mimalloc's
-//! own post-tuning option table (`mi_options_print`).
+//! Linux (MEM7 lane 1): tuned jemalloc. Release 38 on tuned mimalloc v3 kept ~220-245 MiB of
+//! freed pages resident or swapped above a ~85-110 MiB live heap; the MEM6 twin on jemalloc
+//! (two arenas, 1 s dirty decay, no muzzy stage, background purging) held a flat trough.
+//! macOS / Windows (and Linux without `linux-jemalloc`): tuned mimalloc. Under glibc malloc,
+//! freed compose transients stayed resident as multi-GB of arena RSS (service-memory lane,
+//! measured on the 54c363fa7 build), and under untuned mimalloc, eager arena commit and
+//! 1000 ms purge delay held ~100+ MiB of avoidable RSS.
+//!
+//! A byte scan for an allocator's name would pass on any string that names it, so this asks
+//! the running allocator itself: jemalloc through `mallctl` (`AAC_ALLOCATOR_REPORT=1` prints
+//! its version, options and whether a Rust allocation moved its counters), mimalloc through
+//! `MIMALLOC_VERBOSE=1` (its process start line and post-tuning option table).
 
 use std::collections::BTreeMap;
 use std::process::Command;
+
+/// Whether this build selects jemalloc (Linux with the default `linux-jemalloc` feature).
+const JEMALLOC: bool = cfg!(all(target_os = "linux", feature = "linux-jemalloc"));
 
 /// mimalloc's own start line (`_mi_verbose_message("process init: ...")`).
 const STARTED: &str = "mimalloc: process init: 0x";
@@ -34,7 +41,8 @@ fn run_verbose(path: &str, flag: &str, home: &std::path::Path) -> Result<String,
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("CCS_HOME", home.join(".ccs"))
-        .env("MIMALLOC_VERBOSE", "1");
+        .env("MIMALLOC_VERBOSE", "1")
+        .env("AAC_ALLOCATOR_REPORT", "1");
     for kept in ["PATH", "SystemRoot"] {
         if let Some(value) = std::env::var_os(kept) {
             command.env(kept, value);
@@ -71,8 +79,60 @@ fn parse_final_options(stderr: &str) -> BTreeMap<String, i64> {
     options
 }
 
+/// The `key=value` fields of the binary's `aac-allocator: <name> ...` report line.
+fn parse_report(stderr: &str) -> Option<(String, BTreeMap<String, String>)> {
+    let line = stderr
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("aac-allocator: "))?;
+    let mut words = line.split_whitespace();
+    let name = words.next()?.to_owned();
+    let fields = words
+        .filter_map(|word| word.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    Some((name, fields))
+}
+
+#[test]
+fn service_binaries_run_on_tuned_jemalloc_on_linux() -> Result<(), Box<dyn std::error::Error>> {
+    if !JEMALLOC {
+        return Ok(());
+    }
+    let home = tempfile::tempdir()?;
+    for (name, path, flag) in BINARIES {
+        let stderr = run_verbose(path, flag, home.path())?;
+        let Some((allocator, fields)) = parse_report(&stderr) else {
+            panic!("{name} printed no allocator report:\n{stderr}");
+        };
+        assert_eq!(allocator, "jemalloc", "{name}:\n{stderr}");
+        let field = |key: &str| fields.get(key).map(String::as_str);
+        assert!(
+            field("version").is_some_and(|v| v.starts_with("5.")),
+            "{name} did not report a jemalloc 5 version:\n{stderr}"
+        );
+        // A 4 MiB Rust allocation moved jemalloc's own per-thread counter: Rust's global
+        // allocator is jemalloc, not just linked.
+        assert_eq!(field("rust_heap"), Some("yes"), "{name}:\n{stderr}");
+        assert_eq!(field("narenas"), Some("2"), "{name}:\n{stderr}");
+        assert_eq!(field("dirty_decay_ms"), Some("1000"), "{name}:\n{stderr}");
+        assert_eq!(field("muzzy_decay_ms"), Some("0"), "{name}:\n{stderr}");
+        assert_eq!(
+            field("background_thread"),
+            Some("true"),
+            "{name}:\n{stderr}"
+        );
+        // mimalloc may still print its start line in debug builds: the `aac-agent` library
+        // (agent closure, unchanged) keeps its own `tune_mimalloc`, which links mimalloc
+        // without making it the allocator; `rust_heap=yes` above is the allocator check.
+    }
+    Ok(())
+}
+
 #[test]
 fn service_binaries_run_on_mimalloc() -> Result<(), Box<dyn std::error::Error>> {
+    if JEMALLOC {
+        return Ok(());
+    }
     let home = tempfile::tempdir()?;
     for (name, path, flag) in BINARIES {
         let stderr = run_verbose(path, flag, home.path())?;
@@ -88,6 +148,9 @@ fn service_binaries_run_on_mimalloc() -> Result<(), Box<dyn std::error::Error>> 
 #[test]
 fn service_binaries_apply_tuned_mimalloc_options_at_runtime()
 -> Result<(), Box<dyn std::error::Error>> {
+    if JEMALLOC {
+        return Ok(());
+    }
     let home = tempfile::tempdir()?;
     for (name, path, flag) in BINARIES {
         let stderr = run_verbose(path, flag, home.path())?;
@@ -142,14 +205,14 @@ fn service_binaries_apply_tuned_mimalloc_options_at_runtime()
 }
 
 /// On Linux glibc, `zstd-sys` allocates 1.3-2.5 MiB `ZSTD_CCtx` buffers through C `malloc`,
-/// bypassing Rust's global mimalloc allocator. Without `mallopt(M_MMAP_THRESHOLD, 128 KiB)`,
-/// freeing the first 2 MiB buffer raises glibc's dynamic mmap threshold so the second 2 MiB
+/// bypassing Rust's global allocator (jemalloc's symbols are prefixed, so C stays on glibc).
+/// Without `mallopt(M_MMAP_THRESHOLD, 128 KiB)`, freeing the first 2 MiB buffer raises glibc's dynamic mmap threshold so the second 2 MiB
 /// allocation lands in a 64 MiB glibc heap arena instead of `mmap`.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[test]
 #[allow(unsafe_code)]
-fn tune_mimalloc_keeps_glibc_large_buffers_on_mmap() {
-    aac_http::allocator::tune_mimalloc();
+fn tune_keeps_glibc_large_buffers_on_mmap() {
+    aac_http::allocator::tune();
     const TWO_MIB: usize = 2 * 1024 * 1024;
     // SAFETY: `libc::malloc`, `write_bytes`, `libc::free`, and `libc::mallinfo2` are called
     // with valid sizes and live non-null pointers returned by `libc::malloc`.
