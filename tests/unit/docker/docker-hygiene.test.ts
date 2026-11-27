@@ -1,8 +1,7 @@
 /**
  * Static Docker hygiene: the healthcheck probes the public /api/health
- * endpoint everywhere, the build context excludes private and rebuilt
- * trees, and the image build fails loudly when a native module is missing.
- * No image is built here; these are the file-level contracts.
+ * endpoint with a native HTTP client, the build context excludes private and
+ * rebuilt trees, and the runtime ships no Node or Python interpreter.
  */
 import { readFileSync } from 'fs';
 import path from 'path';
@@ -21,8 +20,9 @@ const ROOT_PROBE = /http\.get\('http:\/\/127\.0\.0\.1:3000\/'/;
 describe('the healthcheck targets the public /api/health endpoint', () => {
   it('in the canonical Dockerfile', () => {
     const block = dockerfile.match(/^HEALTHCHECK[\s\S]*?(?=\n\n|\nENTRYPOINT)/m);
-    expect(block).not.toBeNull();
     expect(block![0]).toContain(HEALTH_URL);
+    expect(block![0]).toContain('curl');
+    expect(block![0]).not.toMatch(/\bnode\b/);
     expect(block![0]).not.toMatch(ROOT_PROBE);
   });
 
@@ -46,8 +46,11 @@ describe('the healthcheck targets the public /api/health endpoint', () => {
   });
 
   it('in every compose file that defines one', () => {
+    const healthcheck = compose.match(/^\s+healthcheck:[\s\S]*?(?=\n\nvolumes:)/m)?.[0] ?? '';
     expect(compose).toContain('healthcheck:');
     expect(compose).toContain(HEALTH_URL);
+    expect(compose).toContain('curl');
+    expect(healthcheck).not.toMatch(/\bnode\b/);
     expect(compose).not.toMatch(ROOT_PROBE);
     // The compatibility files inherit the canonical image healthcheck.
     for (const file of [legacyCompose, integratedCompose]) {
@@ -77,16 +80,25 @@ describe('the build context excludes private and rebuilt trees', () => {
   });
 });
 
-describe('the image build fails loudly when a native module is missing', () => {
-  it('builds both native modules for the image platform', () => {
-    expect(dockerfile).toContain('bun run store:build');
-    expect(dockerfile).toContain('bun run status:build');
+describe('the image builds Rust and keeps interpreters out of the runtime', () => {
+  const runtime = dockerfile.match(/^FROM .* AS runtime$[\s\S]*$/m)?.[0] ?? '';
+
+  it('builds the native dashboard and browser bundle in the build stage', () => {
+    expect(dockerfile).toContain('bun run build:all');
+    expect(dockerfile).toContain('test -x dist/native/aac-http');
+    expect(dockerfile).toContain('test -s dist/ui/ui-build-manifest.json');
+    expect(dockerfile).toContain('node scripts/verify-bundle.js');
+    expect(dockerfile).not.toContain('bun run store:build');
+    expect(dockerfile).not.toContain('bun run status:build');
   });
 
-  it('gates packaging on a shell test -f for each prebuilt module, not a listing', () => {
-    expect(dockerfile).toMatch(/test -f crates\/aac-store\/prebuilt\/\*\.node/);
-    expect(dockerfile).toMatch(/test -f crates\/aac-status\/prebuilt\/\*\.node/);
-    expect(dockerfile).not.toMatch(/^\s*(RUN\s+)?ls\s+native\//m);
+  it('uses a non-Node runtime with SSH and no Python interpreter', () => {
+    expect(runtime).toMatch(/^FROM debian:bookworm-slim@sha256:/m);
+    expect(runtime).toContain('ca-certificates curl openssh-client');
+    expect(runtime).not.toMatch(/^FROM node:/m);
+    expect(runtime).not.toMatch(/\bpython3\b/);
+    expect(runtime).not.toMatch(/\bNODE_ENV\b/);
+    expect(dockerfile).toMatch(/^USER node$/m);
   });
 });
 

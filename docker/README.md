@@ -1,10 +1,9 @@
 # AI Account Center in Docker
 
-The canonical image builds this checkout's TypeScript backend and pinned
-Leptos 0.9 dashboard, and compiles both native modules (history store and
-status readers) for the image's platform; the build fails loudly if either
-module is missing. It starts the dashboard only, with no upstream npm
-installation, AI runtime installation or CLIProxy process.
+The canonical image builds this checkout's Rust dashboard and pinned Leptos
+0.9 browser UI. Node and Bun run only in the builder; the runtime contains the
+Rust executables, an SSH client, and a native HTTP healthcheck. It ships no
+Node, Bun, or Python interpreter and starts no CLIProxy process.
 
 These instructions use the `main` branch:
 
@@ -53,16 +52,20 @@ state directory and enforces the same cookie, session and origin checks.
 
 ## Existing host accounts
 
-The image includes Python and an SSH client for existing configured usage
-collectors. It does not import host credentials, logins, SSH keys, browser
-sessions or desktop applications. A new container cannot see those sessions
-by itself.
+The image includes an SSH client for existing configured computers. It does
+not import host credentials, logins, SSH keys, browser sessions or desktop
+applications. A new container cannot see those sessions by itself.
 
 If account sources already use approved SSH aliases, supply the corresponding
 existing private configuration and necessary narrowly scoped mounts through
-your own Compose override. Review mount permissions and the container user
-before connecting private files. Do not mount a whole host home directory,
-add credential grants or assume every provider is supported by the image.
+your own Compose override. Mount SSH configuration at `/home/node/.ssh` and
+review mount permissions and the container's UID 1000 before connecting
+private files. Do not mount a whole host home directory, add credential grants
+or assume every provider is supported by the image.
+
+Update apps helper synchronization still invokes Python on each managed host
+over its admitted transport. Python is a managed-host prerequisite, not a
+container runtime dependency.
 
 Claude/Codex activity analytics refers to the configured Ubuntu source logs;
 container activity is not a substitute for those host logs. Native bars connect
@@ -77,10 +80,10 @@ docker compose -f docker/compose.yaml stop
 docker compose -f docker/compose.yaml up -d --build
 ```
 
-Health checks request the public `/api/health` endpoint on port 3000. They do
-not probe port 8317 or retired health APIs. Use the dashboard's authenticated
-account views to assess provider availability; an HTTP healthcheck does not
-prove live provider collection.
+Health checks use `curl` against the public `/api/health` endpoint on port
+3000. They do not probe port 8317 or retired health APIs. Use the dashboard's
+authenticated account views to assess provider availability; an HTTP healthcheck
+does not prove live provider collection.
 
 The default image tag is `ai-account-center:local`. It is built from source;
 these instructions do not claim a published registry image. `CCS_IMAGE` may

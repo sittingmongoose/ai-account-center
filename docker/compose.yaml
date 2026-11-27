@@ -1,4 +1,4 @@
-# AI Account Center: build and run this checkout's Leptos dashboard.
+# AI Account Center: build and run this checkout's Rust dashboard and Leptos UI.
 # From the repository root: docker compose -f docker/compose.yaml up -d --build
 # Port 3000 is published on loopback by default. Host credentials and SSH
 # configuration require explicit mounts; this file does not import host logins.
@@ -14,7 +14,6 @@ services:
     ports:
       - "${CCS_DOCKER_BIND_HOST:-127.0.0.1}:${CCS_DASHBOARD_PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
       - CCS_DEBUG
       - NO_COLOR
       # Unset values stay unset, preserving authentication saved in .ccs.
@@ -29,13 +28,15 @@ services:
     healthcheck:
       test:
         - CMD
-        - node
-        - -e
-        - >-
-          const http=require('http');
-          const req=http.get('http://127.0.0.1:3000/api/health',res=>{res.resume();process.exit(res.statusCode===200?0:1);});
-          req.on('error',()=>process.exit(1));
-          req.setTimeout(4500,()=>{req.destroy();process.exit(1);});
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --max-time
+        - "4"
+        - http://127.0.0.1:3000/api/health
       interval: 30s
       timeout: 5s
       start_period: 30s

@@ -21,6 +21,8 @@ describe('source-built dashboard Docker lifecycle', () => {
     // The wasm moved to dist/ui/pkg/<buildId>/; the manifest-driven check finds it.
     expect(dockerfile).toContain('test -s dist/ui/ui-build-manifest.json');
     expect(dockerfile).toContain('node scripts/verify-bundle.js');
+    expect(dockerfile).toContain('CMD ["curl"');
+    expect(dockerfile).not.toMatch(/\bpython3\b/);
     expect(dockerfile).not.toContain('dist/ui/pkg/ccs_account_dashboard_bg.wasm');
     expect(dockerfile).not.toMatch(/\b(?:npm|bun)\s+(?:install|add)[^\n]*@kaitranntt\/ccs/);
   });
@@ -40,7 +42,7 @@ describe('source-built dashboard Docker lifecycle', () => {
     expect(dockerfile).toMatch(/^USER node$/m);
     expect(dockerfile).toMatch(/^EXPOSE 3000$/m);
     expect(dockerfile).not.toMatch(/^EXPOSE[^\n]*8317/m);
-    expect(dockerfile).toContain('http://127.0.0.1:3000/');
+    expect(dockerfile).toContain('http://127.0.0.1:3000/api/health');
     expect(entrypoint).toContain('exec "$@"');
   });
 

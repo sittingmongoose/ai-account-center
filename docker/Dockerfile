@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 # =============================================================================
-# Build the checked-out AI Account Center source and pinned Leptos browser UI.
-# Both build and runtime dependencies resolve from the committed bun.lock.
+# Node and Bun are build-only tools for the pinned Leptos browser bundle.
+# The runtime contains the Rust dashboard, SSH support, and no JS/Python runtime.
 # =============================================================================
 FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS build
 
@@ -38,48 +38,37 @@ COPY . .
 
 RUN bun run build:all
 
-# The image ships both native modules. The prebuilt directories are
-# machine-specific and never committed, so build them for this platform here,
-# then fail loudly if either module is missing: a dashboard without stored
-# history is not a shippable image.
-RUN bun run store:build && bun run status:build
-RUN test -f crates/aac-store/prebuilt/*.node \
-  && test -f crates/aac-status/prebuilt/*.node \
-  && test -f dist/native/aac-store.*.node \
-  && test -f dist/native/aac-status.*.node
-
-# Verify the executable and actual Leptos browser artifacts before packaging.
+# Verify the native executables and actual Leptos browser artifacts before packaging.
 # The wasm lives in dist/ui/pkg/<buildId>/; verify-bundle.js checks it against the manifest.
 RUN test -x dist/native/ai-account-center \
   && test -x dist/native/ccs \
   && test -x dist/native/aac-http \
   && test -s dist/ui/app/index.html \
   && test -s dist/ui/ui-build-manifest.json \
-  && node scripts/verify-bundle.js \
-  && node scripts/stage-dashboard-package.js /tmp/aac-package
+  && node scripts/verify-bundle.js
 
+# Runtime stage: Rust dashboard and SSH support, without Node, Bun, or Python
 # =============================================================================
-# Runtime stage: dashboard server and collector prerequisites, without Bun
-# =============================================================================
-FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS runtime
+FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e AS runtime
 
 SHELL ["/bin/bash", "-lc"]
 
-# Python and SSH support explicitly configured account collectors. Provider
-# logins, desktop applications, and host credentials are not installed here.
+# SSH supports configured computers; provider logins and desktop applications
+# remain on their owners. Python helpers run on those managed hosts, not here.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates python3 openssh-client \
-  && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends bash ca-certificates curl openssh-client \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --gid 1000 node \
+  && useradd --uid 1000 --gid 1000 --create-home --home-dir /home/node --shell /usr/sbin/nologin node
 
 WORKDIR /app
 
-# The package has no runtime npm dependencies since the TypeScript server was deleted.
 COPY --from=build /app/package.json ./
 
 COPY docker/entrypoint.sh /usr/local/bin/ai-account-center-entrypoint
 RUN chmod +x /usr/local/bin/ai-account-center-entrypoint
 
-COPY --from=build /tmp/aac-package/dist ./dist
+COPY --from=build /app/dist ./dist
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/config/tables ./config/tables
 COPY --from=build /app/config/private-files.json ./config/private-files.json
@@ -97,13 +86,13 @@ COPY --from=build /app/LICENSE ./LICENSE
 
 RUN ln -s /app/dist/native/ai-account-center /usr/local/bin/ai-account-center \
   && ln -s /app/dist/native/ccs /usr/local/bin/ccs \
-  && install -d -m 0700 -o node -g node /home/node/.ccs
+  && install -d -m 0700 -o node -g node /home/node/.ccs /home/node/.ssh
 
-ENV CCS_HOME=/home/node NODE_ENV=production
+ENV CCS_HOME=/home/node
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "const http=require('http');const req=http.get('http://127.0.0.1:3000/api/health',res=>{res.resume();process.exit(res.statusCode===200?0:1);});req.on('error',()=>process.exit(1));req.setTimeout(4500,()=>{req.destroy();process.exit(1);});"
+  CMD ["curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "--max-time", "4", "http://127.0.0.1:3000/api/health"]
 
 ENTRYPOINT ["/usr/local/bin/ai-account-center-entrypoint"]
 USER node
