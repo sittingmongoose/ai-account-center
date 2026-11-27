@@ -59,8 +59,9 @@ def messages(host, request):
     if action == "acp-follow-up":
         assert os_name == "ubuntu" and (ROOT / "defer-acp").exists()
         saved = json.loads((ROOT / "app-updates/dashboard-job-expanded.json").read_text())["job"]
+        # The VM is read in place (trace name "ubuntu") although it has an alias.
         machine = next(key for key, value in COMPUTERS.items()
-                       if (value.get("sshAlias") or "ubuntu") == host)
+                       if ("ubuntu" if key == "ubuntu" else value.get("sshAlias")) == host)
         assert saved["hosts"][machine]["state"] == "done" and saved["state"] == "running"
         marker.touch()
         if (ROOT / "hold-acp").exists():

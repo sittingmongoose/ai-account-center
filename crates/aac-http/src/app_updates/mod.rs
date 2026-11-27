@@ -46,16 +46,22 @@ static LEGACY: LazyLock<Value> = LazyLock::new(|| {
 });
 
 fn hosts() -> impl Iterator<Item = Host> {
+    hosts_at(crate::dashboard_host::this_computer())
+}
+
+/// Every computer in table order; the one this dashboard runs on (`here`) is updated in place,
+/// every other one over its packaged alias (the VM's `ubuntu-vm` when the dashboard is elsewhere).
+fn hosts_at(here: Option<&'static str>) -> impl Iterator<Item = Host> {
     TABLE
         .as_object()
         .into_iter()
         .flatten()
-        .filter_map(|(id, row)| {
+        .filter_map(move |(id, row)| {
             let native = row["os"].as_str()?;
             Some(Host {
                 id,
                 os: if native == "linux" { "ubuntu" } else { native },
-                alias: row["sshAlias"].as_str(),
+                alias: crate::dashboard_host::route_from(here, id, row["sshAlias"].as_str()),
                 legacy: LEGACY["legacyStorageHosts"]
                     .as_array()
                     .is_some_and(|rows| rows.iter().any(|row| row == id)),

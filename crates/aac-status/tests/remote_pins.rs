@@ -202,7 +202,8 @@ fn valid_lineages_include_children_and_wrong_shapes_are_refused() {
 
 #[test]
 fn only_the_remote_machines_are_accepted() {
-    assert_eq!(parse_remote_pins("vm", "[]").unwrap_err().code, "invalid");
+    // The VM has an ssh route (`ubuntu-vm`) for a dashboard that runs elsewhere.
+    assert!(parse_remote_pins("vm", "[]").unwrap().pinned.is_empty());
     assert_eq!(parse_remote_pins("laptop", "[]").unwrap_err().code, "invalid");
 }
 

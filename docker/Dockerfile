@@ -98,6 +98,9 @@ RUN ln -s /app/dist/native/ai-account-center /usr/local/bin/ai-account-center \
   && install -d -m 0700 -o node -g node /home/node/.ccs /home/node/.ssh
 
 ENV CCS_HOME=/home/node
+# A container is none of the registered computers: it reads only its own CCS state in place and
+# reaches every computer, the Ubuntu VM included, over SSH through the pinned agent.
+ENV AAC_DASHBOARD_COMPUTER=none
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

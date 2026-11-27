@@ -456,3 +456,19 @@ async fn retry_refuses_when_the_last_job_has_nothing_to_retry() {
     assert_eq!(reply.body["error"], "There is nothing to retry.");
     assert_eq!(reply.body["job"]["id"], job.id);
 }
+
+/// Update apps runs on the dashboard's own computer in place and reaches the VM over its
+/// packaged alias when the dashboard runs elsewhere.
+#[test]
+fn update_apps_reaches_the_vm_over_ssh_only_when_the_dashboard_is_elsewhere() {
+    let alias = |here: Option<&'static str>, id: &str| {
+        hosts_at(here)
+            .find(|host| host.id == id)
+            .expect("registered host")
+            .alias
+    };
+    assert_eq!(alias(Some("ubuntu"), "ubuntu"), None);
+    assert_eq!(alias(Some("ubuntu"), "nas1"), Some("nas1-agent"));
+    assert_eq!(alias(None, "ubuntu"), Some("ubuntu-vm"));
+    assert_eq!(hosts_at(None).count(), 7);
+}

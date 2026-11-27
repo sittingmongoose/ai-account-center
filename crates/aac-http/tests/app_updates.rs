@@ -11,7 +11,12 @@ use std::{
 };
 
 const SOURCE: &str = include_str!("../../../tests/spec/agent/app-update-transport-fixture.py");
+/// The trace name of a computer: its packaged alias, or `ubuntu` for the VM, which this test's
+/// dashboard (no `AAC_DASHBOARD_COMPUTER`) reads in place even though it has an alias.
 fn host_alias(machine: &str) -> &'static str {
+    if machine == "ubuntu" {
+        return "ubuntu";
+    }
     aac_status::computers::registry()[machine]["sshAlias"]
         .as_str()
         .unwrap_or("ubuntu")

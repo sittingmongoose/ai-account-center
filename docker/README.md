@@ -59,6 +59,12 @@ The image includes an SSH client for existing configured computers. It does
 not import host credentials, logins, SSH keys, browser sessions or desktop
 applications. A new container cannot see those sessions by itself.
 
+The image sets `AAC_DASHBOARD_COMPUTER=none`: the container is none of the
+registered computers, so it reads only its own CCS state in place and reaches
+every computer in `computers.json`, the Ubuntu VM included (`ubuntu-vm`), over
+SSH through the pinned agent. A dashboard installed on a registered computer
+leaves it unset (the VM) or names that computer's id.
+
 If account sources already use approved SSH aliases, supply the corresponding
 existing private configuration and necessary narrowly scoped mounts through
 your own Compose override. Mount SSH configuration at `/home/node/.ssh` and

@@ -73,6 +73,51 @@ impl Selector {
             ssh_host: alias.map(str::to_owned),
         }
     }
+
+    /// Whether this selector runs on the dashboard's own computer: no SSH host, or the packaged
+    /// alias of the computer the dashboard runs on (`ubuntu-vm` on the VM).
+    pub(crate) fn is_local(&self) -> bool {
+        self.ssh_host.as_deref().is_none_or(|alias| {
+            crate::dashboard_host::names(crate::dashboard_host::this_computer(), alias)
+        })
+    }
+}
+
+/// The metadata mark of the entry for a dashboard that runs on no registered computer.
+const DASHBOARD_ONLY: &str = "dashboardOnly";
+
+/// The configured computers as this dashboard reaches them. The computer it runs on (`here`) is
+/// read in place even when it has an SSH alias. A dashboard on no registered computer (`here`
+/// is none) still reads its own `~/.ccs` (saved keys) in place: it gets one extra local entry of
+/// its own OS that no reader lists as a computer, and every registered computer keeps its SSH
+/// route, the VM included.
+fn placed(
+    definitions: &[aac_config::ComputerConfig],
+    here: Option<&str>,
+    os: &str,
+) -> Vec<aac_config::ComputerConfig> {
+    let mut placed: Vec<_> = definitions
+        .iter()
+        .cloned()
+        .map(|mut definition| {
+            if here == Some(definition.id.as_str()) {
+                definition.transport = TransportConfig::Local;
+            }
+            definition
+        })
+        .collect();
+    if here.is_none()
+        && !placed
+            .iter()
+            .any(|definition| matches!(definition.transport, TransportConfig::Local))
+        && let Ok(own) = serde_json::from_value(json!({
+            "id": "dashboard", "label": "This dashboard", "os": os,
+            "transport": {"kind": "local"}, DASHBOARD_ONLY: true,
+        }))
+    {
+        placed.push(own);
+    }
+    placed
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -236,8 +281,11 @@ impl Registry {
             return Err(refused());
         }
         let mut entries = Vec::new();
-        for definition in config.computers() {
-            let mut definition = definition.clone();
+        for mut definition in placed(
+            config.computers(),
+            crate::dashboard_host::this_computer(),
+            crate::dashboard_host::this_os(),
+        ) {
             let mut admitted = true;
             if let TransportConfig::Ssh { key, .. } = &mut definition.transport {
                 if key.as_os_str().is_empty() {
@@ -311,11 +359,13 @@ impl Registry {
             "windows" => OperatingSystem::Windows,
             _ => return None,
         };
+        // An alias names its computer however it is reached: the VM's `ubuntu-vm` is the local
+        // entry on the VM and an SSH entry elsewhere. No alias is the dashboard's own computer.
         let mut matches = self.entries.iter().enumerate().filter(|(_, entry)| {
             entry.config.os == os
                 && match &selector.ssh_host {
                     Some(alias) => {
-                        matches!(entry.config.transport, TransportConfig::Ssh { .. })
+                        !entry.config.metadata.contains_key(DASHBOARD_ONLY)
                             && (entry.config.id.as_str() == alias
                                 || entry
                                     .config
@@ -335,6 +385,7 @@ impl Registry {
         self.entries
             .iter()
             .enumerate()
+            .filter(|(_, entry)| !entry.config.metadata.contains_key(DASHBOARD_ONLY))
             .map(|(index, entry)| {
                 let platform = match entry.config.os {
                     OperatingSystem::Linux => "ubuntu",
@@ -486,7 +537,7 @@ impl Agents {
         computer: &Selector,
         deadline: tokio::time::Instant,
     ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, Cause> {
-        if computer.ssh_host.is_some() {
+        if !computer.is_local() {
             return Ok(None);
         }
         let permit = tokio::time::timeout_at(deadline, self.local_agent.clone().acquire_owned())
@@ -507,7 +558,7 @@ impl Agents {
         computer: &Selector,
         deadline: tokio::time::Instant,
     ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, Cause> {
-        if computer.ssh_host.is_some() {
+        if !computer.is_local() {
             return Ok(None);
         }
         Ok(Some(self.local_work_acquire(deadline).await?))
@@ -681,7 +732,7 @@ impl Agents {
             deadline_ms,
             args,
         };
-        if selector.ssh_host.is_none() {
+        if selector.is_local() {
             options.local_app_update_state_dir = Some(self.root.join("app-updates"));
         }
         let wire = serde_json::to_vec(&request).map_err(|_| refused())?;
@@ -764,7 +815,7 @@ impl Agents {
         options.deadline = deadline;
         options.scan = verb == "scan-usage";
         if verb == "apps"
-            && call.computer.ssh_host.is_none()
+            && call.computer.is_local()
             && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
         {
             options.local_app_update_state_dir = Some(self.root.join("app-updates"));
@@ -1312,6 +1363,105 @@ mod tests {
             hosts
                 .iter()
                 .all(|host| !host.agent_available && !host.fixed_ssh_available)
+        );
+    }
+
+    /// The packaged table as aac-config seeds it: every computer with an alias is SSH.
+    fn packaged_definitions() -> Vec<aac_config::ComputerConfig> {
+        let table = aac_status::computers::registry()
+            .as_object()
+            .expect("packaged table")
+            .clone();
+        table
+            .into_iter()
+            .map(|(id, mut row)| {
+                row["id"] = json!(id);
+                row["transport"] = match row["sshAlias"].as_str() {
+                    Some(alias) => {
+                        json!({"kind": "ssh", "host": alias, "user": null, "port": null, "key": ""})
+                    }
+                    None => json!({"kind": "local"}),
+                };
+                serde_json::from_value(row).expect("computer config")
+            })
+            .collect()
+    }
+
+    fn registry_at(here: Option<&str>) -> Registry {
+        Registry {
+            entries: super::placed(&packaged_definitions(), here, "linux")
+                .into_iter()
+                .map(|config| Entry {
+                    config,
+                    computer: None,
+                })
+                .collect(),
+            package: Default::default(),
+            agent_enabled: false,
+        }
+    }
+
+    fn picked(registry: &Registry, selector: &super::Selector) -> Option<String> {
+        registry
+            .selected(selector)
+            .map(|index| registry.entries[index].config.id.as_str().to_owned())
+    }
+
+    /// Blocker 3: the dashboard's own computer is local; the VM is an SSH computer, reached
+    /// through the agent like the other six, when the dashboard runs elsewhere.
+    #[test]
+    fn the_dashboard_host_is_local_and_the_vm_is_remote_elsewhere() {
+        use super::Selector;
+        use aac_config::TransportConfig;
+        let local = Selector::usage("ubuntu", None);
+        let vm = Selector::usage("ubuntu", Some("ubuntu-vm"));
+
+        // On the VM: today's behaviour, the VM read in place.
+        let on_vm = registry_at(Some("ubuntu"));
+        assert!(matches!(
+            on_vm.entries[0].config.transport,
+            TransportConfig::Local
+        ));
+        assert_eq!(picked(&on_vm, &local).as_deref(), Some("ubuntu"));
+        assert_eq!(picked(&on_vm, &vm).as_deref(), Some("ubuntu"));
+        let hosts = on_vm.usage_hosts(None);
+        assert_eq!(hosts.len(), 7);
+        assert_eq!(hosts[0].id, "ubuntu");
+        assert_eq!(hosts[0].alias, None);
+        assert!(hosts[1..].iter().all(|host| host.alias.is_some()));
+
+        // On a dashboard that runs on no registered computer (the Unraid container).
+        let elsewhere = registry_at(None);
+        let ubuntu = elsewhere
+            .entries
+            .iter()
+            .find(|entry| entry.config.id.as_str() == "ubuntu")
+            .expect("the VM entry");
+        assert!(matches!(
+            &ubuntu.config.transport,
+            TransportConfig::Ssh { host, .. } if host == "ubuntu-vm"
+        ));
+        assert_eq!(picked(&elsewhere, &vm).as_deref(), Some("ubuntu"));
+        assert_eq!(
+            picked(&elsewhere, &Selector::usage("ubuntu", Some("ubuntu"))).as_deref(),
+            Some("ubuntu")
+        );
+        // Its own `~/.ccs` (saved keys) is still read in place, by an entry no reader lists.
+        assert_eq!(picked(&elsewhere, &local).as_deref(), Some("dashboard"));
+        let hosts = elsewhere.usage_hosts(None);
+        assert_eq!(
+            hosts
+                .iter()
+                .map(|host| host.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "ubuntu", "mac", "windows", "nas1", "alexis", "odroid", "1070ti"
+            ]
+        );
+        assert!(hosts.iter().all(|host| host.alias.is_some()));
+        assert_eq!(
+            picked(&elsewhere, &Selector::usage("ubuntu", Some("dashboard"))),
+            None
         );
     }
 

@@ -437,9 +437,11 @@ fn analytics_status(observation: &Value) -> Value {
         observation["cause"].as_str(),
         Some("signin_needed" | "events_not_visible" | "events_unverified")
     ) {
-        let hostname = aac_files::process::hostname().unwrap_or_default();
-        let computer = crate::reset_source_route::local_computer(&hostname);
-        status["computer"] = aac_status::computers::registry()[computer]["label"].clone();
+        // The computer this dashboard runs on; none names no computer (`null`).
+        status["computer"] = crate::dashboard_host::this_computer()
+            .map_or(Value::Null, |computer| {
+                aac_status::computers::registry()[computer]["label"].clone()
+            });
     }
     status
 }

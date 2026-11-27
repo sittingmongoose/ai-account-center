@@ -66,6 +66,7 @@ pub(crate) async fn jobs(ccs_dir: PathBuf, stop: Arc<AtomicBool>, agents: Arc<Ag
                 publish,
                 aac_claude_renew::service::RunOptions {
                     scheduled: true,
+                    here: renewal_here(crate::dashboard_host::this_computer()),
                     ..Default::default()
                 },
             )
@@ -76,5 +77,27 @@ pub(crate) async fn jobs(ccs_dir: PathBuf, stop: Arc<AtomicBool>, agents: Arc<Ag
         if !pause(EVERY, &stop).await {
             return;
         }
+    }
+}
+
+/// The renewal's place: the computer this dashboard runs on renews in place; a dashboard on no
+/// registered computer reaches every computer (the VM included) over its `ssh` alias.
+fn renewal_here(here: Option<&str>) -> aac_claude_renew::config::Here {
+    here.map_or(aac_claude_renew::config::Here::Elsewhere, |name| {
+        aac_claude_renew::config::Here::Computer(name.to_owned())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use aac_claude_renew::config::Here;
+
+    #[test]
+    fn the_renewal_place_follows_the_dashboard_host() {
+        assert_eq!(
+            super::renewal_here(Some("ubuntu")),
+            Here::Computer("ubuntu".into())
+        );
+        assert_eq!(super::renewal_here(None), Here::Elsewhere);
     }
 }

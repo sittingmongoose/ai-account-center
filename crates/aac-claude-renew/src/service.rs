@@ -100,6 +100,7 @@ pub fn run(ccs_dir: &Path, publish_default: Option<PathBuf>, options: RunOptions
         Err(e) => return Ran::BadSettings(e.to_string()),
     };
     cfg.step3 = crate::step3::read(ccs_dir);
+    let left_out = cfg.place(&options.here);
     if options.scheduled && !cfg.enabled {
         return Ran::Off;
     }
@@ -109,6 +110,11 @@ pub fn run(ccs_dir: &Path, publish_default: Option<PathBuf>, options: RunOptions
     let state_path = dir.join("state.json");
     let remote = SshRemote::plain();
     let log = logger(&dir, options.echo);
+    for name in &left_out {
+        log(&format!(
+            "{name}: left out, no ssh target and this server is not that computer"
+        ));
+    }
     let now = now_ms;
     let deps = Deps {
         remote: &remote,
@@ -160,6 +166,9 @@ pub struct RunOptions {
     pub scheduled: bool,
     /// Echo log lines to stdout.
     pub echo: bool,
+    /// Where this server is ([`config::Here`]); the standalone command keeps the settings as
+    /// written.
+    pub here: config::Here,
 }
 
 #[cfg(test)]

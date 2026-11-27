@@ -183,6 +183,37 @@ fn signin_health_cache_uses_the_earlier_of_crossed_expiry_and_ttl() {
 
 #[cfg(test)]
 #[test]
+fn signins_read_the_dashboard_host_in_place_and_the_vm_over_ssh_elsewhere() {
+    let table = aac_status::computers::registry();
+    let route = |hosts: &[crate::signins::poll::Host]| -> Vec<(String, Option<String>)> {
+        hosts
+            .iter()
+            .map(|host| (host.host.clone(), host.ssh_host.clone()))
+            .collect()
+    };
+    let on_vm = signin_hosts(table, Some("ubuntu"));
+    assert_eq!(route(&on_vm)[0], ("ubuntu".to_owned(), None));
+    assert_eq!(on_vm.len(), 7);
+    assert!(on_vm[1..].iter().all(|host| host.ssh_host.is_some()));
+    let elsewhere = signin_hosts(table, None);
+    assert_eq!(
+        elsewhere.len(),
+        7,
+        "all seven computers, none read in place"
+    );
+    assert!(elsewhere.iter().all(|host| host.ssh_host.is_some()));
+    assert_eq!(
+        route(&elsewhere)[0],
+        ("ubuntu".to_owned(), Some("ubuntu-vm".to_owned()))
+    );
+    assert_eq!(elsewhere[0].platform, "ubuntu");
+    let on_nas1 = signin_hosts(table, Some("nas1"));
+    assert_eq!(route(&on_nas1)[0], ("nas1".to_owned(), None));
+    assert!(route(&on_nas1).contains(&("ubuntu".to_owned(), Some("ubuntu-vm".to_owned()))));
+}
+
+#[cfg(test)]
+#[test]
 fn the_logins_read_is_a_lifecycle_route_and_reads_only() {
     assert!(NativeOwners::owns_lifecycle(
         &Method::GET,
@@ -914,64 +945,42 @@ impl Usage {
     }
 }
 
-/// The computers a sign-in poll reads, in the account collectors' order: this one, then every
-/// remote whose packaged alias is set (`configuredUsageHosts`). The same packaged registry
-/// (`web-dashboard/public/computers.json`) the collectors and the coordinator read.
+/// The computers a sign-in poll reads, in the account collectors' order: the computer this
+/// dashboard runs on, read in place, then every other computer whose packaged alias is set
+/// (`configuredUsageHosts`), the VM included when the dashboard runs elsewhere. The same
+/// packaged registry (`web-dashboard/public/computers.json`) the collectors and the
+/// coordinator read.
 fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
-    static COMPUTERS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
-        serde_json::from_str(include_str!(
-            "../../../../web-dashboard/public/computers.json"
-        ))
-        .unwrap_or(Value::Null)
-    });
-    let entries = COMPUTERS.as_object().cloned().unwrap_or_default();
-    let hostname = std::env::var(if cfg!(windows) {
-        "COMPUTERNAME"
-    } else {
-        "HOSTNAME"
-    })
-    .ok()
-    .or_else(|| {
-        aac_files::read_bounded(std::path::Path::new("/proc/sys/kernel/hostname"), 256)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .map(|text| text.trim().to_owned())
-    })
-    .unwrap_or_default()
-    .to_lowercase();
+    signin_hosts(
+        aac_status::computers::registry(),
+        crate::dashboard_host::this_computer(),
+    )
+}
+
+/// [`configured_signin_hosts`] for a given table and dashboard computer (`None`: it runs on no
+/// registered computer, so nothing is read in place).
+fn signin_hosts(table: &Value, here: Option<&str>) -> Vec<crate::signins::poll::Host> {
+    let entries = table.as_object().cloned().unwrap_or_default();
     let platform = |id: &str| -> String {
         match entries
             .get(id)
             .and_then(|row| row.get("os"))
             .and_then(Value::as_str)
         {
-            Some("linux") => "ubuntu".to_owned(),
+            Some("linux") | None => "ubuntu".to_owned(),
             Some(other) => other.to_owned(),
-            None => "ubuntu".to_owned(),
         }
     };
-    // `localComputer`: a known name of this platform, else its generic platform host.
-    let local = entries
-        .iter()
-        .find(|(id, row)| {
-            let names = row.get("names").and_then(Value::as_array);
-            let alias = row.get("sshAlias").and_then(Value::as_str);
-            [Some(id.as_str()), alias]
-                .into_iter()
-                .flatten()
-                .chain(names.into_iter().flatten().filter_map(Value::as_str))
-                .any(|name| name.to_lowercase() == hostname)
-        })
-        .map(|(id, _)| id.clone())
-        .filter(|id| platform(id) == instance_platform())
-        .unwrap_or_else(instance_platform);
-    let mut hosts = vec![crate::signins::poll::Host {
-        host: local.clone(),
-        platform: platform(&local),
-        ssh_host: None,
-    }];
+    let mut hosts = Vec::new();
+    if let Some(local) = here.filter(|id| entries.contains_key(*id)) {
+        hosts.push(crate::signins::poll::Host {
+            host: local.to_owned(),
+            platform: platform(local),
+            ssh_host: None,
+        });
+    }
     for (id, row) in &entries {
-        if *id == local || *id == "ubuntu" {
+        if Some(id.as_str()) == here {
             continue;
         }
         let Some(alias) = row.get("sshAlias").and_then(Value::as_str) else {
@@ -987,17 +996,6 @@ fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
         });
     }
     hosts
-}
-
-/// This service's own helper platform (`helperPlatform(localComputer())`).
-fn instance_platform() -> String {
-    if cfg!(windows) {
-        "windows".to_owned()
-    } else if cfg!(target_os = "macos") {
-        "mac".to_owned()
-    } else {
-        "ubuntu".to_owned()
-    }
 }
 
 pub(super) fn json_content(request: &Request) -> bool {
