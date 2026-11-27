@@ -25,10 +25,10 @@ describe('packaged line endings', () => {
     write('scripts/agent-usage/aac-usage', '#!/usr/bin/env python3\r\n');
     write('scripts/agent-usage/aac-usage.cmd', '@python "%~dp0aac-usage" %*\r\n');
     write('scripts/claude-history/writer.cjs', 'module.exports = 1;\n');
-    write('browser-bridge/qwen/native-host/node_modules/dep/index.js', 'x\r\n');
-    write('browser-bridge/qwen/extension/popup.mjs', 'export {};\r\n');
+    write('scripts/account-usage/native-host/node_modules/dep/index.js', 'x\r\n');
+    write('scripts/account-usage/extension/popup.mjs', 'export {};\r\n');
     expect(crlfFiles(root)).toEqual([
-      'browser-bridge/qwen/extension/popup.mjs',
+      'scripts/account-usage/extension/popup.mjs',
       'scripts/agent-usage/aac-usage',
       'scripts/analytics-remote/helper.py',
     ]);

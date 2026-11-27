@@ -41,7 +41,7 @@ function hits(list, pattern) {
 }
 
 const PRODUCT = files('scripts', 'crates', 'native', 'web-dashboard/public', 'web-dashboard/leptos/src',
-  'macos-bar/Sources', 'windows-bar', 'browser-bridge', 'docs', 'README.md', 'CONTRIBUTING.md');
+  'macos-bar/Sources', 'windows-bar', 'docs', 'README.md', 'CONTRIBUTING.md');
 const PAGE = files('web-dashboard/public', 'web-dashboard/leptos/src');
 
 test('the scan reads the product sources it guards', () => {

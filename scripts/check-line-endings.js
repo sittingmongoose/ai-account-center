@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const FOLDERS = ['scripts', 'browser-bridge', 'lib', 'config'];
+const FOLDERS = ['scripts', 'lib', 'config'];
 const SKIP_DIRECTORIES = new Set(['node_modules', '__pycache__', '.git', 'target', 'bin', 'obj']);
 const TEXT = /\.(py|js|cjs|mjs|ts|json|md|sh|ps1|cs|txt|toml|yaml|yml|html|css|svg)$|^[^.]+$/;
 const KEEP_CRLF = /\.cmd$/i;

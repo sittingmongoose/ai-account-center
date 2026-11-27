@@ -16,7 +16,7 @@ the account and private-state contracts from the original CCS fork.
 | Leptos app frame | [lib.rs](../web-dashboard/leptos/src/lib.rs), [frame.rs](../web-dashboard/leptos/src/frame.rs) and the pages beside them; map of pages, controllers, view models and rules: [UI architecture](../web-dashboard/README-ARCHITECTURE.md) |
 | Browser controllers | [frame-dashboard.mjs](../web-dashboard/public/frame-dashboard.mjs), [frame-session.mjs](../web-dashboard/public/frame-session.mjs), [frame-analytics.mjs](../web-dashboard/public/frame-analytics.mjs) |
 | Native clients | [macos-bar](../macos-bar/), [windows-bar](../windows-bar/) |
-| Existing-host usage | [Python collectors](../scripts/account-usage/), [browser bridges](../browser-bridge/), remote analytics scan |
+| Existing-host and pasted-session usage | [Python collectors](../scripts/account-usage/), [Rust pasted-session readers](../crates/aac-agent/src/web_session/), remote analytics scan |
 | Private paths | config-manager |
 
 `ai-account-center dashboard` and compatible `ccs config` reach the same

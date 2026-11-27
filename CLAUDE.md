@@ -50,7 +50,6 @@ or API routing product.
 | Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
 | Native clients | `macos-bar/`, `windows-bar/` |
 | Collectors and updates | `scripts/account-usage/`, `scripts/app-updates/` |
-| Browser bridges | `browser-bridge/` |
 | Container | `docker/Dockerfile`, `docker/compose.yaml` |
 
 `dist/` and `dist/ui/` are generated. Keep the Leptos and wasm-bindgen manifest/lock pins

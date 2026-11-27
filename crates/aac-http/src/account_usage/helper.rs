@@ -35,12 +35,6 @@ fn source() -> &'static str {
                 module!("muse_console"),
                 module!("muse_native"),
                 module!("claude_usage"),
-                (
-                    "opencode_console",
-                    include_str!(
-                        "../../../../browser-bridge/opencode-muse/native-host/opencode_console.py"
-                    ),
-                ),
             ]
             .into_iter()
             .map(|(key, value)| (key.to_owned(), Value::String(value.to_owned()))),

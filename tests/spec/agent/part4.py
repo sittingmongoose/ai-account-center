@@ -157,7 +157,6 @@ def cases():
     add('qwen-safari-cookies', 'qwen', lambda h: safari_cookies(h, True), fallback=True)
     add('qwen-safari-unreadable', 'qwen', lambda h: safari_cookies(h, False), fallback=True)
     add('antigravity-native','antigravity',lambda h: write(h,'.gemini/antigravity-cli/antigravity-oauth-token',{'auth_method':'consumer','token':{'access_token':'synthetic'},'email':'one@example.test','subject':'123'}),fallback=True,nonempty=True)
-    add('opencode-wallet','opencode-wallet',lambda h: write(h,'scope/account-usage/opencode-console-session.json',{}),fallback=True)
     for kwargs in [{'version':2},{'fingerprint':'wrong'},{'secret':'short'},{'unknown':'ignored?' }]:
         add('invalid-key-' + next(iter(kwargs)),'zai',lambda h,kw=kwargs:key(h,**kw),fallback=True)
     add('unsafe-key-mode','zai',lambda h:key(h).chmod(0o644),fallback=True)
@@ -176,12 +175,6 @@ def cases():
         identity=special._identity('one@example.test','123')
         write(h,'scope/antigravity-profiles/registry-000000000001.json',{'version':1,'revision':1,'profiles':[{'id':'saved','email':'one@example.test','identityKey':identity[1],'plan':'Pro','credential':{'fingerprint':fingerprint,'identity':{'email':'one@example.test','subject':'123','source':'provider-userinfo','verifiedAt':'2026-01-01T00:00:00Z'}}}]})
     add('antigravity-saved','antigravity',saved_antigravity,fallback=True,nonempty=True)
-    def wallet(h):
-        sys.path.insert(0,str(ROOT/'browser-bridge/opencode-muse/native-host'))
-        import opencode_console as console
-        p=write(h,'scope/account-usage/opencode-console-session.json',{'schemaVersion':1,'origin':console.ORIGIN,'source':'browser-native-cookie-api','workspaceId':'wrk_fixture','capturedAt':console.now_iso(),'cookies':[{'name':'auth','value':'synthetic-wallet','domain':'opencode.ai','path':'/','secure':True,'hostOnly':True}]})
-        p.parent.chmod(0o700)
-    add('wallet-valid-capsule','opencode-wallet',wallet,fallback=True,nonempty=True)
     for n in [7,8,512,513]:
         add('saved-secret-bound-' + str(n),'zai',lambda h,n=n:key(h,secret='k'*n),fallback=n in [7,513],nonempty=n in [8,512])
     for n in [32767,32768,32769]:

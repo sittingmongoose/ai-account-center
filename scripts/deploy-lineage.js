@@ -37,7 +37,6 @@ const PACKAGE_INPUTS = [
   'Cargo.lock',
   'rust-toolchain.toml',
   'web-dashboard',
-  'browser-bridge',
   'macos-bar',
   'windows-bar',
   'package.json',

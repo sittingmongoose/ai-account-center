@@ -1,5 +1,5 @@
 //! Select the installed quota, API key and console readers for each configured source.
-use super::{Producer, pick, source_host};
+use super::{Producer, source_host};
 use crate::account_usage::coordinator::{Discovered, UsageIdentity};
 use crate::account_usage::{
     cursor::Command,
@@ -304,60 +304,8 @@ impl Producer {
     }
 
     pub(super) async fn wallet(&self, now: i64, force: bool) -> Option<Value> {
-        if let Some(row) =
-            super::web_sessions::collect_opencode_wallet(&self.root, &self.web_sessions, now, force)
-                .await
-        {
-            return Some(row);
-        }
-        let root = self.root.clone();
-        let binding = tokio::task::spawn_blocking(move || provider_caches::wallet_source(&root))
+        super::web_sessions::collect_opencode_wallet(&self.root, &self.web_sessions, now, force)
             .await
-            .ok()?
-            .ok()??;
-        let alias = binding["sshHost"].as_str()?;
-        let inventory = self
-            .ask(
-                "mac",
-                Some(alias),
-                "failover-inventory",
-                &json!({"version":1,"action":"inventory","provider":"opencode-wallet"}),
-            )
-            .await
-            .ok();
-        let candidate = pick(&inventory, "opencode-wallet", "wallet")?;
-        let key = candidate["identity"]["key"].as_str()?;
-        let account = format!("plan-opencode-go-console-mac-{}", &key[..12]);
-        let hash = aac_core::sha256_hex(aac_views::js_json::write(&binding));
-        let pointer = json!({"version":1,"binding":hash,"accountId":account});
-        let _ = crate::collection_cache::write(
-            &self.owners,
-            &self.root,
-            provider_caches::WALLET_ACCOUNT,
-            &hash,
-            &aac_views::js_json::write(&pointer),
-        );
-        let reading = self
-            .read_primary("mac", Some(alias), "opencode-wallet", candidate, now)
-            .await?;
-        let windows = rows::windows(&reading["windows"], 4);
-        if !matches!(reading["status"].as_str(), Some("ok" | "cached"))
-            || !windows.iter().any(|w| {
-                w["key"] == "zen-balance"
-                    && w["kind"] == "balance"
-                    && w["unit"] == "USD"
-                    && w["remaining"].is_number()
-            })
-        {
-            return None;
-        }
-        Some(json!({
-            "id":account,"provider":"opencode-go","providerLabel":"OpenCode Go","label":"OpenCode console wallet",
-            "email":null,"plan":reading["plan"],"platform":"mac","source":"Authenticated OpenCode console workspace on Mac",
-            "status":reading["status"],"message":"Console workspace; API-key account identity has not been linked.",
-            "fetchedAt":rows::stamp(&reading["fetchedAt"]),"sampledAt":rows::stamp(&reading["sampledAt"]),
-            "isActive":false,"windows":windows,"capabilities":rows::capabilities(),
-        }))
     }
 
     async fn cursor_quota(&self, now: i64, mut row: Value, force: bool) -> Option<Value> {

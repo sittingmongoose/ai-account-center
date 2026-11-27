@@ -11,14 +11,13 @@ and usage transport.
 | Native Codex quota | saved-profile quota collector, usage collectors |
 | Native Claude quota | Claude Desktop live usage with the [Python Claude collector](../../scripts/account-usage/claude_usage.py) |
 | Additional desktop/plan usage | [Python collectors](../../scripts/account-usage/) |
-| OpenCode/Muse browser session bridge | [bridge source](../../browser-bridge/opencode-muse/) |
-| Qwen browser/native host bridge | [bridge source](../../browser-bridge/qwen/) |
+| Pasted Qwen/OpenCode/Muse web sessions | [Rust readers](../../crates/aac-agent/src/web_session/) and [write-only store](../../crates/aac-files/src/web_session.rs) |
 | Historical observations | [Analytics service](../../crates/aac-http/src/analytics_route.rs) |
 
 Credentials, browser sessions and private capsules stay on their configured
 owner host. Existing approved SSH aliases are transport configuration, not an
 invitation to create new grants or move raw credentials to the dashboard.
-Browser/native messaging host IDs remain compatible with current installations.
+Retired browser extensions and native-messaging hosts are no longer shipped or installed.
 
 Claude Desktop on Windows now keeps its Store default profile under
 `AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc`. Both the live reader and verified
@@ -155,11 +154,12 @@ app's own `Claude` folder, in any case) is never removed from the dashboard: Rem
 answers 409 `account_protected` whether the host steps are on or off.
 
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
-the existing profile IDs. The optional
-`opencode-console-wallet-source.json` selects a distinct workspace wallet source.
-These configuration files contain private deployment state and are not shipped
-with the package. Bridges for [Muse/OpenCode](../../browser-bridge/opencode-muse/README.md)
-and [Qwen](../../browser-bridge/qwen/README.md) describe their own browser/host setup.
+the existing profile IDs. Qwen Token Plan, OpenCode Zen console wallet and Muse
+Code portal quota use the dashboard's write-only **Paste session** flow. The
+verified cookie header is stored by `aac-files` with owner-only permissions and
+read directly over HTTPS by Rust; no browser extension or native-messaging host
+participates. Expired or missing sessions report `needs_sign_in` and retain only
+an already verified cached reading.
 Native companions store dashboard connections as described in the
 [Mac](../../macos-bar/README.md) and [Windows](../../windows-bar/README.md) guides.
 
@@ -173,10 +173,10 @@ later retries cannot restore it. Identity changes cannot inherit another
 account's cache.
 
 Muse refresh/backoff and Qwen/OpenCode projections are tested offline in their
-bridge/collector source roots. A fixture proves parser/guard behavior, not live
-availability. [Analytics](index.md) uses observed snapshots without invented
-points; local Ubuntu Claude/Codex token totals cannot be assigned to the current
-active account or treated as subscription charges.
+Rust reader and collector source roots. A fixture proves parser/guard behavior,
+not live availability. [Analytics](index.md) uses observed snapshots without
+invented points; local Ubuntu Claude/Codex token totals cannot be assigned to the
+current active account or treated as subscription charges.
 
 Old API profile routing, proxy rotation and managed web-search/image tools belong
 to upstream history. The current dashboard and Docker entrypoint do not start
