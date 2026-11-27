@@ -66,8 +66,7 @@ impl Producer {
             self.claude_pair(&display, &private, history.as_ref(), force)
                 .await
         })
-        // R5b: one profile pair at a time; the helper/agent gates serialize the children.
-        .buffered(1)
+        .buffered(3)
         .collect()
         .await
     }

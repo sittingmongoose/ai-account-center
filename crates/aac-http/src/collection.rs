@@ -310,7 +310,7 @@ async fn read_agent(
     cap: usize,
 ) -> Reply {
     let _permit = agents.permit().ok_or("busy")?;
-    // R5b: a local quota/sign-in agent waits for the one-at-a-time gate within its deadline.
+    // A local quota/sign-in agent waits for the local-agent gate within its deadline.
     let _local_permit = agents
         .local_agent_permit(&computer, deadline)
         .await

@@ -24,8 +24,7 @@ impl Producer {
     ) -> Vec<Option<Value>> {
         stream::iter(profiles.to_vec())
             .map(|profile| async move { self.mac_history(&profile, now).await })
-            // R5b: one remote history read at a time.
-            .buffered(1)
+            .buffered(3)
             .collect()
             .await
     }

@@ -57,7 +57,15 @@ fn block_on(future: impl std::future::Future<Output = i32>) -> i32 {
         .enable_all()
         .build()
     {
-        Ok(runtime) => runtime.block_on(future),
+        Ok(runtime) => {
+            let code = runtime.block_on(future);
+            // Never drop the runtime normally: tokio's stdin reader is a blocking-pool thread
+            // parked in read(0), and `Runtime::drop` waits for it until the parent closes
+            // stdin. The transport keeps stdin open for cancel frames until this process
+            // exits, so a normal drop holds every controlled call to its deadline (AR4b).
+            runtime.shutdown_background();
+            code
+        }
         Err(_) => 1,
     }
 }
