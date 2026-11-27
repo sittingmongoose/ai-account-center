@@ -1419,10 +1419,7 @@ mod tests {
         // Releasing admits the renewal scan.
         drop(helper_held);
         assert!(
-            scan_site
-                .local_work_acquire(deadline)
-                .await
-                .is_ok(),
+            scan_site.local_work_acquire(deadline).await.is_ok(),
             "the released slot admits the next local child"
         );
     }
@@ -1432,10 +1429,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn distinct_agents_instances_can_overlap() {
         use super::{Agents, Selector};
-        let first =
-            std::sync::Arc::new(Agents::new(std::path::PathBuf::from("/tmp/aac-mem7-a")));
-        let second =
-            std::sync::Arc::new(Agents::new(std::path::PathBuf::from("/tmp/aac-mem7-b")));
+        let first = std::sync::Arc::new(Agents::new(std::path::PathBuf::from("/tmp/aac-mem7-a")));
+        let second = std::sync::Arc::new(Agents::new(std::path::PathBuf::from("/tmp/aac-mem7-b")));
         assert!(!std::sync::Arc::ptr_eq(&first, &second));
         let local = Selector::usage("ubuntu", None);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
