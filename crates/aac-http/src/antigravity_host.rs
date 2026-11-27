@@ -1,14 +1,13 @@
-//! Antigravity profile host: the live login proof, the quota worker and the registry reads,
-//! behind one host. `profile_reads.rs` answers `/api/antigravity/profiles(/quotas)` from here.
+//! Native Antigravity profile host: live login proof, quota collection and registry reads.
+//! `profile_reads.rs` answers `/api/antigravity/profiles(/quotas)` from here.
 //!
-//! Fixture tests use invented homes and fake worker scripts; nothing here spawns the real CLI,
-//! reads a real credential or reaches a provider.
+//! Fixture tests use invented homes; production reads no script and starts no Python worker.
 
-use crate::antigravity_quota::{Cooldowns, QuotaRequest, QuotaService, Worker, public_quotas};
+use crate::antigravity_quota::{Cooldowns, QuotaRequest, QuotaService, public_quotas};
 use crate::antigravity_runtime::{
     LiveIdentity, RegistryRead, empty_inventory, inventory_from_state, read_registry, sha256_hex,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -27,22 +26,6 @@ struct State {
     cooldowns: Cooldowns,
 }
 
-/// The trusted installed paths one host reads and runs.
-pub(crate) struct Paths<'a> {
-    /// The CCS scope (`<ccs>`).
-    pub ccs: &'a Path,
-    /// The live user's home (the saved CLI login).
-    pub home: &'a Path,
-    /// The system interpreter.
-    pub python: &'a Path,
-    /// `scripts/antigravity/quota_worker.py`.
-    pub quota: &'a Path,
-    /// `scripts/antigravity/native_credential_worker.py`.
-    pub native: &'a Path,
-    /// `scripts/account-usage`.
-    pub collectors: &'a Path,
-}
-
 /// The process's one Antigravity host per CCS root (Accounts and Profiles share it).
 fn hosts() -> &'static Mutex<HashMap<PathBuf, Arc<Host>>> {
     static HOSTS: OnceLock<Mutex<HashMap<PathBuf, Arc<Host>>>> = OnceLock::new();
@@ -53,45 +36,19 @@ fn host_key(ccs: &Path) -> PathBuf {
     ccs.canonicalize().unwrap_or_else(|_| ccs.to_path_buf())
 }
 
-enum Backend {
-    Native { home: PathBuf },
-    Script { quota: Worker, native: Worker },
-}
-
 /// The Antigravity profile host for one CCS scope.
 pub struct Host {
     ccs: PathBuf,
     home: PathBuf,
-    backend: Backend,
     state: Mutex<State>,
 }
 
 impl Host {
-    /// A host over explicit trusted script paths (used by fixture tests and `AAC_ANTIGRAVITY_SCRIPTS`).
-    /// Construction reads no credential and spawns nothing.
-    pub(crate) fn new(paths: &Paths<'_>) -> Option<Self> {
-        let quota = Worker::new(paths.python, paths.quota, paths.collectors)?;
-        let native = Worker::new(paths.python, paths.native, paths.collectors)?;
-        Some(Self {
-            ccs: paths.ccs.to_path_buf(),
-            home: paths.home.to_path_buf(),
-            backend: Backend::Script { quota, native },
-            state: Mutex::new(State {
-                identity: None,
-                service: QuotaService::default(),
-                cooldowns: Cooldowns::default(),
-            }),
-        })
-    }
-
     /// Native Rust host for one CCS scope and live user home (zero Python workers).
     pub fn native(ccs: &Path, home: &Path) -> Self {
         Self {
             ccs: ccs.to_path_buf(),
             home: home.to_path_buf(),
-            backend: Backend::Native {
-                home: home.to_path_buf(),
-            },
             state: Mutex::new(State {
                 identity: None,
                 service: QuotaService::default(),
@@ -118,49 +75,11 @@ impl Host {
         Some(host)
     }
 
-    #[cfg(test)]
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(crate) fn install_shared(ccs: &Path, host: Arc<Self>) {
-        let key = host_key(ccs);
-        hosts()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .insert(key, host);
-    }
-
-    #[cfg(test)]
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(crate) fn clear_shared(ccs: &Path) {
-        let key = host_key(ccs);
-        hosts()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .remove(&key);
-    }
-
-    /// The service's own construction: native Rust by default (no Python workers or scripts
-    /// directory required). If `AAC_ANTIGRAVITY_SCRIPTS` is explicitly set (test override),
-    /// delegates to those explicit script paths.
+    /// The service's own construction: the native Rust host for this CCS scope and home.
     pub fn from_root(ccs: &Path) -> Option<Self> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))?;
-        if let Some(explicit) =
-            std::env::var_os("AAC_ANTIGRAVITY_SCRIPTS").filter(|v| !v.is_empty())
-        {
-            let scripts = PathBuf::from(explicit);
-            let python = std::env::var_os("AAC_ANTIGRAVITY_PYTHON")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/usr/bin/python3"));
-            return Self::new(&Paths {
-                ccs,
-                home: &home,
-                python: &python,
-                quota: &scripts.join("antigravity/quota_worker.py"),
-                native: &scripts.join("antigravity/native_credential_worker.py"),
-                collectors: &scripts.join("account-usage"),
-            });
-        }
         Some(Self::native(ccs, &home))
     }
 
@@ -193,84 +112,37 @@ impl Host {
 
     /// Read and verify the native credential for a lifecycle operation without cache reuse.
     pub(crate) fn read_native_credential(&self) -> Option<(Vec<u8>, String)> {
-        match &self.backend {
-            Backend::Native { home } => {
-                let snap = aac_files::antigravity_store::UbuntuFileStore::new(home)
-                    .read_current()
-                    .ok()?;
-                let raw = snap.credential.raw().to_vec();
-                let rev = snap.credential.revision().to_owned();
-                if raw.is_empty() || raw.len() > 16_384 || sha256_hex(&raw) != rev {
-                    return None;
-                }
-                Some((raw, rev))
-            }
-            Backend::Script { native, .. } => {
-                let read = native.invoke_with(
-                    &["--home", self.home.to_str()?],
-                    &json!({"operation": "read"}),
-                )?;
-                if read.get("format").and_then(Value::as_str) != Some("antigravity-consumer-json") {
-                    return None;
-                }
-                let revision = read.get("revision").and_then(Value::as_str)?;
-                let credential =
-                    base64_decode(read.get("credentialBase64").and_then(Value::as_str)?)?;
-                if credential.is_empty()
-                    || credential.len() > 16_384
-                    || sha256_hex(&credential) != revision
-                {
-                    return None;
-                }
-                Some((credential, revision.to_owned()))
-            }
+        let snap = aac_files::antigravity_store::UbuntuFileStore::new(&self.home)
+            .read_current()
+            .ok()?;
+        let raw = snap.credential.raw().to_vec();
+        let rev = snap.credential.revision().to_owned();
+        if raw.is_empty() || raw.len() > 16_384 || sha256_hex(&raw) != rev {
+            return None;
         }
+        Some((raw, rev))
     }
 
     pub(crate) fn validate_credential(&self, credential: &[u8]) -> Option<LiveIdentity> {
-        match &self.backend {
-            Backend::Native { home } => {
-                crate::antigravity_worker::validate_credential_live(home, credential)
-            }
-            Backend::Script { quota, .. } => quota.validate_credential(credential),
-        }
+        crate::antigravity_worker::validate_credential_live(&self.home, credential)
     }
 
     pub(crate) fn install_native_credential(&self, credential: &[u8], expected: &str) -> bool {
-        match &self.backend {
-            Backend::Native { home } => {
-                let store = aac_files::antigravity_store::UbuntuFileStore::new(home);
-                let Ok(before) = store.read_current() else {
-                    return false;
-                };
-                if before.credential.revision() != expected {
-                    return false;
-                }
-                let Ok(replacement) =
-                    aac_files::antigravity_store::PrivateCredential::new(credential.to_vec())
-                else {
-                    return false;
-                };
-                store
-                    .install(&replacement, &before)
-                    .is_ok_and(|r| r.installed.credential.revision() == sha256_hex(credential))
-            }
-            Backend::Script { native, .. } => {
-                use base64::{Engine, engine::general_purpose::STANDARD};
-                self.home
-                    .to_str()
-                    .and_then(|home| {
-                        native.invoke_with(
-                            &["--home", home],
-                            &json!({"operation":"install","credentialBase64":STANDARD.encode(credential),
-                        "expectedFingerprint":expected}),
-                        )
-                    })
-                    .is_some_and(|receipt| {
-                        receipt["installedFingerprint"].as_str() == Some(&sha256_hex(credential))
-                    })
-            }
+        let store = aac_files::antigravity_store::UbuntuFileStore::new(&self.home);
+        let Ok(before) = store.read_current() else {
+            return false;
+        };
+        if before.credential.revision() != expected {
+            return false;
         }
+        let Ok(replacement) =
+            aac_files::antigravity_store::PrivateCredential::new(credential.to_vec())
+        else {
+            return false;
+        };
+        store
+            .install(&replacement, &before)
+            .is_ok_and(|r| r.installed.credential.revision() == sha256_hex(credential))
     }
 
     /// The public inventory for this CCS scope.
@@ -301,7 +173,6 @@ impl Host {
         let live = self.live_identity(now);
         let mut guard = self.state.lock().ok()?;
         let guard = &mut *guard;
-        let backend = &self.backend;
         let registry = &state;
         let mut collect = |profile_id: &str| -> Option<Value> {
             let record = registry.profile(profile_id)?;
@@ -315,12 +186,7 @@ impl Host {
                 credential_format: "antigravity-consumer-json",
                 credential_bytes: &bytes,
             };
-            match backend {
-                Backend::Native { home } => {
-                    crate::antigravity_worker::collect_quota_live(home, &request)
-                }
-                Backend::Script { quota, .. } => quota.collect_quota(&request),
-            }
+            crate::antigravity_worker::collect_quota_live(&self.home, &request)
         };
         let read = crate::antigravity_quota::Read {
             ccs: &self.ccs,
@@ -334,11 +200,6 @@ impl Host {
                 .get_accounts(&read, &mut collect, &mut guard.cooldowns, refresh),
         )
     }
-}
-
-fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.decode(text).ok()
 }
 
 fn read_credential_bytes(
@@ -428,360 +289,4 @@ fn file_identity(home: &Path) -> Option<String> {
         identities.push(format!("{}:{}", meta.is_dir(), meta.len()));
     }
     Some(identities.join("/"))
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use crate::antigravity_runtime::LiveIdentity;
-    use base64::Engine as _;
-    use serde_json::json;
-
-    const CREDENTIAL: &[u8] = b"fixture private credential bytes";
-
-    fn write(path: &Path, bytes: &[u8], mode: u32) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
-            }
-        }
-        std::fs::write(path, bytes).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-        }
-        let _ = mode;
-    }
-
-    fn python() -> Option<PathBuf> {
-        if let Some(path) = std::env::var_os("AAC_TEST_PYTHON") {
-            return Some(PathBuf::from(path));
-        }
-        let paths = std::env::var_os("PATH")?;
-        for directory in std::env::split_paths(&paths) {
-            for name in ["python3", "python"] {
-                for candidate in [directory.join(name), directory.join(format!("{name}.exe"))] {
-                    if candidate.is_file() {
-                        return Some(candidate);
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let file = dir.join(name);
-        write(&file, body.as_bytes(), 0o600);
-        file
-    }
-
-    /// The identity's own key, computed the way the fixtures' Python worker does.
-    fn identity_script(email: &str, subject: &str) -> String {
-        format!(
-            r#"import base64,hashlib,json,sys
-request = json.load(sys.stdin)
-credential = base64.b64decode(request["credentialBase64"]) if "credentialBase64" in request else b""
-fingerprint = hashlib.sha256(credential).hexdigest()
-if request.get("operation") == "identity":
-    identity = {{"email":"{email}","subject":"{subject}","plan":"Google AI Pro",
-                "verifiedAt":"2026-10-01T17:00:00.000Z","source":"provider-userinfo"}}
-    key = hashlib.sha256(json.dumps(["antigravity", identity["email"], identity["subject"]],
-                                    separators=(",", ":")).encode()).hexdigest()
-    print(json.dumps({{**identity, "credentialRevision": fingerprint, "identityKey": key}}))
-else:
-    print(json.dumps({{"profileId":"gmail","identityKey":request["identityKey"],
-        "credentialRevision":request["credentialRevision"],"email":"{email}","plan":"Google AI Pro",
-        "status":"fresh","fetchedAt":"2026-10-01T17:00:00.000Z","sampledAt":"2026-10-01T17:00:00.000Z",
-        "windows":[{{"key":"seven_day","label":"Weekly","usedPercent":40,
-                     "resetAt":"2026-10-08T17:00:00.000Z","windowMinutes":10080}}],
-        "source":"native-consumer","identityVerified":True,"identityValidation":"verified"}}))
-"#
-        )
-    }
-
-    #[test]
-    fn the_host_answers_both_routes_from_the_installed_runtime() {
-        let Some(python) = python() else {
-            return;
-        };
-        let temp = tempfile::tempdir().unwrap();
-        let ccs = temp.path().join(".ccs");
-        let home = temp.path().join("home");
-        std::fs::create_dir_all(&ccs).unwrap();
-        // The home folder itself is one of the identity's four paths: owner-only, like a real one.
-        std::fs::create_dir_all(&home).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        // The saved profile the registry holds, and its credential file.
-        let identity_value = json!({
-            "email": "gmail@example.com",
-            "subject": "fixture-authoritative-subject-gmail",
-            "plan": "Google AI Pro",
-            "verifiedAt": "2026-10-01T16:40:00.000Z",
-            "source": "provider-userinfo",
-        });
-        let identity = LiveIdentity::from_value(&identity_value).unwrap();
-        let revision = sha256_hex(CREDENTIAL);
-        write(
-            &ccs.join("antigravity-profiles/registry-000000000001.json"),
-            json!({
-                "version": 1, "revision": 1,
-                "profiles": [{
-                    "id": "gmail", "email": "gmail@example.com",
-                    "identityKey": identity.identity_key(), "plan": "Google AI Pro",
-                    "credential": {"fingerprint": revision, "format": "fake-native-json",
-                                   "identity": identity_value,
-                                   "savedAt": "2026-10-01T16:40:00.000Z"},
-                }],
-                "active": {"profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z"},
-                "transaction": null,
-            })
-            .to_string()
-            .as_bytes(),
-            0o600,
-        );
-        write(
-            &ccs.join("antigravity-instances/gmail/ubuntu")
-                .join(format!("credential-{revision}.bin")),
-            CREDENTIAL,
-            0o600,
-        );
-        // The live login the native worker reads, and its identity proof.
-        write(
-            &home.join(".gemini/antigravity-cli/antigravity-oauth-token"),
-            CREDENTIAL,
-            0o600,
-        );
-        // `write` fixes the file's own folder; the identity also reads `.gemini`, so make it private.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(home.join(".gemini"), std::fs::Permissions::from_mode(0o700))
-                .unwrap();
-        }
-        let native = script(
-            temp.path(),
-            "native.py",
-            &format!(
-                r#"import base64,hashlib,json,sys
-request = json.load(sys.stdin)
-print(json.dumps({{"format":"antigravity-consumer-json",
-    "credentialBase64":"{}",
-    "revision":"{}"}}))
-"#,
-                base64::engine::general_purpose::STANDARD.encode(CREDENTIAL),
-                revision
-            ),
-        );
-        let quota = script(
-            temp.path(),
-            "quota.py",
-            &identity_script("gmail@example.com", "fixture-authoritative-subject-gmail"),
-        );
-        let collectors = temp.path().join("collectors");
-        std::fs::create_dir_all(&collectors).unwrap();
-        let host = Host::new(&Paths {
-            ccs: &ccs,
-            home: &home,
-            python: &python,
-            quota: &quota,
-            native: &native,
-            collectors: &collectors,
-        })
-        .unwrap();
-        let now = crate::antigravity_runtime::js_date("2026-10-01T17:00:00.000Z").unwrap();
-        let inventory = host.inventory(now).unwrap();
-        assert_eq!(inventory["profiles"][0]["id"], json!("gmail"));
-        assert_eq!(inventory["profiles"][0]["selected"], json!(true));
-        assert_eq!(inventory["profiles"][0]["available"], json!(true));
-        assert!(inventory.get("runtimeServiceProblem").is_none());
-        let quotas = host.quotas(true, now);
-        assert_eq!(quotas["accounts"][0]["status"], json!("ok"));
-        assert_eq!(quotas["accounts"][0]["isActive"], json!(true));
-        assert_eq!(
-            quotas["accounts"][0]["windows"][0]["usedPercent"],
-            json!(40)
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    fn counting_quota_script(email: &str, subject: &str) -> String {
-        format!(
-            r#"import base64,hashlib,json,os,sys
-request = json.load(sys.stdin)
-credential = base64.b64decode(request["credentialBase64"]) if "credentialBase64" in request else b""
-fingerprint = hashlib.sha256(credential).hexdigest()
-here = os.path.dirname(os.path.abspath(__file__))
-if request.get("operation") == "identity":
-    identity = {{"email":"{email}","subject":"{subject}","plan":"Google AI Pro",
-                "verifiedAt":"2026-10-01T17:00:00.000Z","source":"provider-userinfo"}}
-    key = hashlib.sha256(json.dumps(["antigravity", identity["email"], identity["subject"]],
-                                    separators=(",", ":")).encode()).hexdigest()
-    print(json.dumps({{**identity, "credentialRevision": fingerprint, "identityKey": key}}))
-else:
-    count_file = os.path.join(here, "quota-count")
-    services_file = os.path.join(here, "quota-services")
-    try:
-        n = int(open(count_file).read().strip() or "0") + 1
-    except Exception:
-        n = 1
-    open(count_file, "w").write(str(n))
-    open(services_file, "a").write("app\nt3\n")
-    pct = 30 + n
-    window = lambda key: {{"key": key, "label": "Weekly", "usedPercent": pct,
-        "resetAt": "2026-10-08T17:00:00.000Z", "windowMinutes": 10080}}
-    print(json.dumps({{"profileId":"gmail","identityKey":request["identityKey"],
-        "credentialRevision":request["credentialRevision"],"email":"{email}","plan":"Google AI Pro",
-        "status":"fresh","fetchedAt":"2026-10-01T17:00:00.000Z","sampledAt":"2026-10-01T17:00:00.000Z",
-        "windows":[window("gemini-weekly"), window("cli-gemini-weekly")],
-        "source":"native-consumer","identityVerified":True,"identityValidation":"verified"}}))
-"#
-        )
-    }
-
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    struct SharedHostGuard(PathBuf);
-    impl Drop for SharedHostGuard {
-        fn drop(&mut self) {
-            Host::clear_shared(&self.0);
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn accounts_and_profiles_share_one_quota_owner_per_profile() {
-        let Some(python) = python() else {
-            return;
-        };
-        let temp = tempfile::tempdir().unwrap();
-        let ccs = temp.path().join(".ccs");
-        let home = temp.path().join("home");
-        std::fs::create_dir_all(&ccs).unwrap();
-        std::fs::create_dir_all(&home).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let identity_value = json!({
-            "email": "gmail@example.com",
-            "subject": "fixture-authoritative-subject-gmail",
-            "plan": "Google AI Pro",
-            "verifiedAt": "2026-10-01T16:40:00.000Z",
-            "source": "provider-userinfo",
-        });
-        let identity = LiveIdentity::from_value(&identity_value).unwrap();
-        let revision = sha256_hex(CREDENTIAL);
-        write(
-            &ccs.join("antigravity-profiles/registry-000000000001.json"),
-            json!({
-                "version": 1, "revision": 1,
-                "profiles": [{
-                    "id": "gmail", "email": "gmail@example.com",
-                    "identityKey": identity.identity_key(), "plan": "Google AI Pro",
-                    "credential": {"fingerprint": revision, "format": "fake-native-json",
-                                   "identity": identity_value,
-                                   "savedAt": "2026-10-01T16:40:00.000Z"},
-                }],
-                "active": {"profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z"},
-                "transaction": null,
-            })
-            .to_string()
-            .as_bytes(),
-            0o600,
-        );
-        write(
-            &ccs.join("antigravity-instances/gmail/ubuntu")
-                .join(format!("credential-{revision}.bin")),
-            CREDENTIAL,
-            0o600,
-        );
-        write(
-            &home.join(".gemini/antigravity-cli/antigravity-oauth-token"),
-            CREDENTIAL,
-            0o600,
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(home.join(".gemini"), std::fs::Permissions::from_mode(0o700))
-                .unwrap();
-        }
-        let native = script(
-            temp.path(),
-            "native.py",
-            &format!(
-                r#"import json
-print(json.dumps({{"format":"antigravity-consumer-json",
-    "credentialBase64":"{}",
-    "revision":"{}"}}))
-"#,
-                base64::engine::general_purpose::STANDARD.encode(CREDENTIAL),
-                revision
-            ),
-        );
-        let quota = script(
-            temp.path(),
-            "quota.py",
-            &counting_quota_script("gmail@example.com", "fixture-authoritative-subject-gmail"),
-        );
-        let collectors = temp.path().join("collectors");
-        std::fs::create_dir_all(&collectors).unwrap();
-        let host = std::sync::Arc::new(
-            Host::new(&Paths {
-                ccs: &ccs,
-                home: &home,
-                python: &python,
-                quota: &quota,
-                native: &native,
-                collectors: &collectors,
-            })
-            .unwrap(),
-        );
-        Host::install_shared(&ccs, std::sync::Arc::clone(&host));
-        let _guard = SharedHostGuard(ccs.clone());
-        let now = crate::antigravity_runtime::js_date("2026-10-01T17:00:00.000Z").unwrap();
-        let accounts = host.accounts(false, now).expect("accounts quota");
-        let profiles =
-            crate::profile_reads::antigravity_quotas(&ccs, false, now).expect("profiles quota");
-        let count = std::fs::read_to_string(temp.path().join("quota-count")).unwrap();
-        let services = std::fs::read_to_string(temp.path().join("quota-services")).unwrap();
-        assert_eq!(count.trim(), "1");
-        assert_eq!(services, "app\nt3\n");
-        let accounts_pct = &accounts[0]["windows"][0]["usedPercent"];
-        let profiles_pct = &profiles["accounts"][0]["windows"][0]["usedPercent"];
-        assert_eq!(accounts_pct, profiles_pct);
-        assert_eq!(accounts_pct.as_f64(), Some(31.0));
-        let keys: Vec<_> = accounts[0]["windows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|window| window["key"].as_str())
-            .collect();
-        assert_eq!(keys, ["gemini-weekly", "cli-gemini-weekly"]);
-        let profile_keys: Vec<_> = profiles["accounts"][0]["windows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|window| window["key"].as_str())
-            .collect();
-        assert_eq!(profile_keys, keys);
-        let again = host.accounts(false, now).expect("cached accounts");
-        assert_eq!(again[0]["windows"][0]["usedPercent"].as_f64(), Some(31.0));
-        assert_eq!(
-            std::fs::read_to_string(temp.path().join("quota-count"))
-                .unwrap()
-                .trim(),
-            "1"
-        );
-    }
 }

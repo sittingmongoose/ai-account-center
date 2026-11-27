@@ -4,12 +4,12 @@ use aac_snapshot::client;
 use serde_json::json;
 use std::{fs, path::Path};
 #[test]
-fn publishes_native_launchers_and_keeps_the_python_oracle_out_of_the_share() {
+fn publishes_native_launchers_without_python_or_renewal_helpers() {
     let dir = tempfile::tempdir().expect("share fixture").keep();
     let computers = dir.join("source-computers.json");
     fs::write(&computers, b"{}").expect("computer registry");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/agent-usage");
-    client::sync_snapshot_client(&dir, &source, &computers, None).expect("native publication");
+    client::sync_snapshot_client(&dir, &source, &computers).expect("native publication");
     let posix = fs::read_to_string(dir.join("aac-usage")).expect("POSIX launcher");
     assert!(posix.starts_with("#!/bin/sh\n"));
     assert!(posix.contains("ai-account-center usage"));
@@ -34,7 +34,6 @@ fn published_posix_launcher_forwards_its_directory_and_arguments_to_native_reade
         &share,
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/agent-usage"),
         &computers,
-        None,
     )
     .expect("publication");
     fs::write(

@@ -487,14 +487,14 @@ impl KeyStore<'_> {
             .call_mutation("key-store", &selector, args, 20_000)
             .await
         {
-            MutationReply::Result(value) if action != "delete" => return Ok(value),
+            MutationReply::Result(value) if action != "delete" => Ok(value),
             MutationReply::Result(value)
                 if value["ok"] == true && value.as_object().is_some_and(|row| row.len() == 1) =>
             {
-                return Ok(Value::Null);
+                Ok(Value::Null)
             }
-            MutationReply::NotDispatched => return Err(Failure::KeyStore),
-            MutationReply::Result(_) | MutationReply::Uncertain => return Err(Failure::KeyStore),
+            MutationReply::NotDispatched => Err(Failure::KeyStore),
+            MutationReply::Result(_) | MutationReply::Uncertain => Err(Failure::KeyStore),
         }
     }
 }

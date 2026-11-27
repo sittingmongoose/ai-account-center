@@ -1,5 +1,5 @@
 #![cfg(test)]
-//! Synthetic native history fixtures, including the optional retained-source oracle.
+//! Synthetic native history fixtures for collection, append and candidate guards.
 
 use super::*;
 fn fixture(platform: &str) -> Value {
@@ -33,39 +33,6 @@ fn fixture(platform: &str) -> Value {
     let endpoint =
         json!({"alias":"fixture","hostname":"fixture.invalid","username":"fixture","port":22});
     json!({"mode":"collect","profileId":profile,"platform":platform,"policy":{"version":1,"enabled":true,"sourcePlatform":if profile=="platyr"{"mac"}else{"windows"},"identity":{"accountUuid":account,"organizationUuid":org},"project":{"cwd":"/mnt/Cursor/PuppetMaster","originCwd":"/mnt/Cursor/PuppetMaster","transcriptRoot":"/fixture/transcripts"},"ssh":{"mac":endpoint,"windows":endpoint}},"_historyFixture":{"home":home,"closed":true,"native":{"warmGuardVerified":true,"autoResumeGuardVerified":true},"transcriptsVerified":true}})
-}
-#[test]
-#[ignore = "requires the retained Python oracle; run explicitly before legacy source deletion"]
-fn python_snapshot_byte_parity() {
-    use std::io::Write;
-    for platform in ["mac", "windows"] {
-        let args = fixture(platform);
-        let native = run(&args).expect("native snapshot");
-        let script =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/history-collection-oracle.py");
-        let mut child =
-            std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
-                .arg(script)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .expect("offline Python oracle");
-        child
-            .stdin
-            .take()
-            .expect("oracle input")
-            .write_all(args.to_string().as_bytes())
-            .expect("fixture request");
-        let output = child.wait_with_output().expect("oracle result");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let expected: Value = serde_json::from_slice(&output.stdout).expect("oracle snapshot");
-        assert_eq!(native, expected, "{platform}");
-    }
 }
 #[test]
 fn native_append_and_candidate_guard_run_on_both_platform_fixtures() {

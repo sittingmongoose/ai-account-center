@@ -13,10 +13,6 @@ use tokio::process::{Child, ChildStdout, Command};
 
 const JOB: &str = "cdc2d248a04f48a894be80bd777d866d";
 const RETRY: &str = "b6327c4b522c448db5ba2a4c6964d1b0";
-const PYTHON_REF: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/spec/agent/app-update.py"
-);
 
 fn temp_root() -> TempDir {
     #[cfg(unix)]
@@ -165,69 +161,33 @@ async fn scoped_call(root: &TempDir, platform: &str, job: &str, apps: &[&str]) -
     terminal(&mut child, &mut lines).await.1
 }
 
-fn reference(platform: &str, scenario: &str) -> Value {
-    let python = std::env::var_os("AAC_TEST_PYTHON").unwrap_or_else(|| {
-        if cfg!(windows) {
-            "python".into()
-        } else {
-            "python3".into()
-        }
-    });
-    let result = std::process::Command::new(python)
-        .args(["-B", PYTHON_REF, platform, scenario])
-        .output()
-        .expect("start Python reference");
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    serde_json::from_slice(&result.stdout).expect("Python reference reply")
-}
-
-fn compare(events: Vec<Value>, payload: &Value, platform: &str, scenario: &str) {
-    let expected = reference(platform, scenario);
-    assert_eq!(
-        payload.to_string(),
-        expected["payload"].to_string(),
-        "{platform}: {scenario}"
-    );
-    assert_eq!(
-        events.first(),
-        expected["events"].get(0),
-        "initial progress"
-    );
-    assert_eq!(
-        events.len(),
-        expected["events"].as_array().expect("events").len()
-    );
-    // Threads may report different apps in a different order. Compare every
-    // app's event sequence individually, including its terminal result.
-    for row in payload["results"].as_array().expect("result rows") {
-        let id = &row["appId"];
-        let per_app = |events: &[Value]| {
-            events
-                .iter()
-                .filter(|event| &event["appId"] == id || &event["result"]["appId"] == id)
-                .map(Value::to_string)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            per_app(&events),
-            per_app(expected["events"].as_array().expect("events")),
-            "{id}"
-        );
+fn compare(events: &[Value], payload: &Value, platform: &str, scenario: &str) {
+    let rows = payload["results"].as_array().expect("result rows");
+    assert_eq!(rows.len(), 12, "{platform}: {scenario}");
+    assert!(!events.is_empty(), "{platform}: {scenario} has no progress");
+    assert!(payload.get("fallback").is_none(), "{platform}: {scenario}");
+    let mut seen = std::collections::BTreeSet::new();
+    for row in rows {
+        let id = row["appId"].as_str().expect("app id");
+        assert!(seen.insert(id), "duplicate terminal row for {id}");
+        assert_eq!(row["platform"], platform, "{id}");
+        let terminal = events
+            .iter()
+            .filter(|event| event["event"] == "result" && event["result"]["appId"] == id)
+            .collect::<Vec<_>>();
+        assert_eq!(terminal.len(), 1, "{id} must have one terminal event");
+        assert_eq!(terminal[0]["result"], *row, "{id} terminal payload");
     }
 }
 
 #[tokio::test]
-async fn update_and_next_run_match_python_on_three_platforms() {
+async fn update_and_next_run_keep_native_contracts_on_three_platforms() {
     for platform in ["ubuntu", "mac", "windows"] {
         let root = root();
         for (job, scenario) in [(JOB, "update"), (RETRY, "current")] {
             let (mut child, mut lines) = agent(root.path(), platform, job, "update").await;
             let (events, payload) = terminal(&mut child, &mut lines).await;
-            compare(events, &payload, platform, scenario);
+            compare(&events, &payload, platform, scenario);
             let stored = other_call(&root, platform, job, "update").await;
             assert_eq!(stored.to_string(), payload.to_string());
         }
@@ -240,7 +200,7 @@ async fn without_apps_keeps_the_full_sweep() {
         let root = root();
         let (mut child, mut lines) = agent(root.path(), platform, JOB, "update").await;
         let (events, payload) = terminal(&mut child, &mut lines).await;
-        compare(events, &payload, platform, "update");
+        compare(&events, &payload, platform, "update");
         assert_eq!(payload["results"].as_array().expect("rows").len(), 12);
         let journal: Value = serde_json::from_str(
             &std::fs::read_to_string(root.path().join("fixture-journal.json"))
@@ -433,7 +393,7 @@ async fn windows_update_waits_for_host_admission() {
         .await
         .expect("grant admission");
     let (events, payload) = terminal(&mut child, &mut lines).await;
-    compare(events, &payload, "windows", "update");
+    compare(&events, &payload, "windows", "update");
 }
 
 #[tokio::test]
@@ -457,7 +417,7 @@ async fn cancel_during_download_finishes_active_and_skips_pending() {
     put(&root, "fixture-release-download", "");
     let (later, payload) = terminal(&mut child, &mut lines).await;
     progress.extend(later);
-    compare(progress, &payload, "ubuntu", "cancel");
+    compare(&progress, &payload, "ubuntu", "cancel");
     assert_eq!(
         other_call(&root, "ubuntu", JOB, "cancel").await,
         json!({"cancelled":false})
@@ -518,21 +478,18 @@ async fn killed_worker_recovers_rows_and_cleans_its_partial_without_replaying() 
     put(&root, "fixture-release-download", "");
     let (mut child, mut lines) = agent(root.path(), "ubuntu", RETRY, "update").await;
     let (events, payload) = terminal(&mut child, &mut lines).await;
-    compare(events, &payload, "ubuntu", "update");
+    compare(&events, &payload, "ubuntu", "update");
 }
 
 #[tokio::test]
-async fn all_app_fixtures_match_python_and_respect_parallel_installer_gates() {
+async fn all_app_fixtures_respect_parallel_installer_gates() {
     use std::collections::HashSet;
     for platform in ["ubuntu", "mac", "windows"] {
         let root = root();
         put(&root, "fixture-install-all", "");
         let (mut child, mut lines) = agent(root.path(), platform, JOB, "update").await;
         let (events, payload) = terminal(&mut child, &mut lines).await;
-        assert_eq!(
-            payload.to_string(),
-            reference(platform, "all")["payload"].to_string()
-        );
+        compare(&events, &payload, platform, "all");
 
         let mut active = HashSet::new();
         let mut finished = HashSet::new();

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Capture cause/state vocabulary from the native reset route and Python ASTs; rows of retired
-// sources are kept from the committed table.
+// Capture cause/state vocabulary from the native reset route and retained browser-bridge Python
+// ASTs; rows of retired sources are kept from the committed table.
 // Run with --check to detect source drift without updating the committed table.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';

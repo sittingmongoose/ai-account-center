@@ -66,7 +66,6 @@ pub(super) fn blank(host: Host, app: &str, status: &str, code: &str) -> Value {
     })
 }
 
-
 pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
     if row["appId"] != app || !app_known(app) || row["platform"] != host.os {
         return None;
@@ -192,6 +191,12 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
         }
         "held_for_review" | "held_unchecked" => held && app == "antigravity-cli",
         "updated_unreviewed" => app == "antigravity-cli" && status == "updated",
+        "runtime_unavailable" | "runtime_paused" | "runtime_paused_blocked" => {
+            app == "antigravity-cli"
+                && host.id == "ubuntu"
+                && status == "failed"
+                && attempted == (code == "runtime_paused")
+        }
         "t3_sessions_kept" | "background_sessions_kept" => is_cli && status == "updated",
         "model_catalog_unrefreshed" => {
             app == "muse-code" && matches!(status, "failed" | "restart_failed")
@@ -581,6 +586,13 @@ pub(super) fn legacy_row(row: &Value) -> Value {
         record.remove("diagnostics");
     }
     let message = &row["message"];
+    for code in ["held_for_review", "held_unchecked", "updated_unreviewed"] {
+        if message == &CONTRACT["messages"][code]
+            && let Some(old) = array(&CONTRACT["legacyMessages"][code]).last()
+        {
+            copy["message"] = old.clone();
+        }
+    }
     if row["appId"] == "muse-code"
         && [
             "model_catalog_unrefreshed",
