@@ -229,12 +229,12 @@ fn read(path: &Path) -> Option<Value> {
         return raw
             .as_str()
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
-            .and_then(|b| crate::proof::json(&b, 65536, false));
+            .and_then(|b| crate::proof::lenient_json(&b, 65536, false));
     }
     // Python's `_read_regular_bytes`: only an oversized file is unproved; anything else that is
     // not one ordinary file reads as absent.
     match crate::files::read_regular(path, 65536) {
-        crate::files::Regular::Read(bytes, _) => crate::proof::json(&bytes, 65536, false),
+        crate::files::Regular::Read(bytes, _) => crate::proof::lenient_json(&bytes, 65536, false),
         crate::files::Regular::TooLarge => {
             crate::proof::reject();
             None
@@ -275,7 +275,7 @@ fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
             crate::proof::reject();
             return None;
         }
-        Read::Bytes(bytes, _) => crate::proof::json(&bytes, CAP, true),
+        Read::Bytes(bytes, _) => crate::proof::lenient_json(&bytes, CAP, true),
         // Present but not one ordinary file of this user, or the leaf itself unreadable:
         // Python's `read_failed()` — discovery incomplete, the inventory still answers
         // (qwen lane 2 recheck L1).
@@ -291,7 +291,7 @@ fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
     value
 }
 fn json_bytes(bytes: &[u8]) -> Option<Value> {
-    crate::proof::json(bytes, 65536, false)
+    crate::proof::lenient_json(bytes, 65536, false)
 }
 fn display(path: &Path, home: &Path) -> String {
     match path.strip_prefix(home) {

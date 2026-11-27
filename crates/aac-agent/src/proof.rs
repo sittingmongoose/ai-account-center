@@ -46,6 +46,24 @@ pub(crate) fn json(bytes: &[u8], cap: usize, bom: bool) -> Option<Value> {
         None
     }
 }
+/// Another program's JSON file (Claude Code, Codex, T3 Code, Muse): plain JSON under the byte
+/// cap, floats and non-ASCII text included, because those programs write both and nothing
+/// stands behind a rejection any more (LIVE r34). Callers read and prove only the fields they
+/// use. Bytes that are not JSON still reject: unread, never guessed.
+pub(crate) fn lenient_json(bytes: &[u8], cap: usize, bom: bool) -> Option<Value> {
+    let bytes = if bom {
+        bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)
+    } else {
+        bytes
+    };
+    let value = (bytes.len() <= cap)
+        .then(|| serde_json::from_slice::<Value>(bytes).ok())
+        .flatten();
+    if value.is_none() {
+        reject();
+    }
+    value
+}
 pub(crate) fn decimal(raw: &str) -> bool {
     if raw.is_empty() {
         return true;

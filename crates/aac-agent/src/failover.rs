@@ -160,21 +160,20 @@ fn present(path: &Path, cap: usize, private: bool) -> Option<Vec<u8>> {
 /// grammar would reject them and take the whole Claude inventory down, and since U1b nothing
 /// stands behind that rejection. Callers read only the fields they need and prove those. A file
 /// that is not a JSON object still rejects (unread, never guessed).
-fn foreign(path: &Path) -> Option<Value> {
-    let bytes = present(path, CORE_CAP, false)?;
-    let raw = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
-    match serde_json::from_slice::<Value>(raw) {
-        Ok(value) if value.is_object() => Some(value),
-        _ => {
-            proof::reject();
-            None
-        }
+fn foreign(path: &Path, cap: usize) -> Option<Value> {
+    let bytes = present(path, cap, false)?;
+    let value = proof::lenient_json(&bytes, cap, true)?;
+    if value.is_object() {
+        Some(value)
+    } else {
+        proof::reject();
+        None
     }
 }
 /// The `oauthAccount` identity of Claude Code's own state file (`.claude.json`), as
 /// `{"oauthAccount":{..}}` with only the three fields `uuid` and `email` prove.
 fn claude_metadata(path: &Path) -> Value {
-    let Some(Value::Object(mut document)) = foreign(path) else {
+    let Some(Value::Object(mut document)) = foreign(path, CORE_CAP) else {
         return Value::Null;
     };
     let account = document.remove("oauthAccount").unwrap_or(Value::Null);
@@ -395,14 +394,9 @@ fn roots(home: &Path, ccs: &Path, provider: &str) -> Vec<(PathBuf, Vec<String>)>
         );
     }
     // T3 Code's settings carry non-ASCII display names; only `driver` and `config.homePath`
-    // are read below, and those are proven there. Codex keeps the strict read (and its helper).
-    let settings_path = home.join(".t3/userdata/settings.json");
-    let settings = if provider == "claude" {
-        foreign(&settings_path)
-    } else {
-        read(&settings_path, CORE_CAP, true)
-    }
-    .unwrap_or(Value::Null);
+    // are read below, and those are proven there.
+    let settings =
+        foreign(&home.join(".t3/userdata/settings.json"), CORE_CAP).unwrap_or(Value::Null);
     if let Some(instances) = settings.get("providerInstances").filter(|v| !v.is_null()) {
         if let Some(instances) = instances.as_object() {
             if instances.len() > 64 {
@@ -493,7 +487,7 @@ fn core_candidates(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
         }
         let (storage, binding, revision, address, plan, private) = if provider == "codex" {
             let storage = root.join("auth.json");
-            let raw = read(&storage, CORE_CAP, true).unwrap_or(Value::Null);
+            let raw = foreign(&storage, CORE_CAP).unwrap_or(Value::Null);
             let tokens = &raw["tokens"];
             let claims = jwt(&tokens["id_token"]);
             let auth = &claims["https://api.openai.com/auth"];
@@ -589,7 +583,7 @@ fn core_candidates(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
                 continue;
             };
             let storage = root.join(".credentials.json");
-            let credentials = read(&storage, CORE_CAP, true).unwrap_or(Value::Null);
+            let credentials = foreign(&storage, CORE_CAP).unwrap_or(Value::Null);
             let oauth = &credentials["claudeAiOauth"];
             if secret(&oauth["accessToken"]).is_none() {
                 continue;
@@ -845,7 +839,7 @@ fn additional(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
         }
         let mut result = Vec::new();
         for (path, locator, selectors) in paths.into_iter().take(129) {
-            let raw = read(&path, DESKTOP_CAP, true).unwrap_or(Value::Null);
+            let raw = foreign(&path, DESKTOP_CAP).unwrap_or(Value::Null);
             let meta = &raw["providers"]["meta"];
             if let Some(access) = secret(&meta["access_token"]).filter(|s| s.starts_with("dca:")) {
                 result.push(additional_candidate(
@@ -1170,6 +1164,46 @@ mod inventory_parity_tests {
         assert_eq!(
             native["candidates"].as_array().expect("candidates").len(),
             3
+        );
+        assert!(!native.to_string().contains("private-fixture-access"));
+    }
+
+    /// AR5b: Codex CLI's auth.json and T3 Code's settings may carry floats and non-ASCII text;
+    /// the native inventory still reads the login instead of declining to a helper.
+    #[test]
+    fn codex_auth_and_t3_settings_with_floats_and_non_ascii_text_stay_native() {
+        let home = tempfile::tempdir().expect("synthetic home");
+        let claims = json!({"email":"native@example.test","https://api.openai.com/auth":{"chatgpt_account_id":"fixture-account","chatgpt_user_id":"fixture-user","chatgpt_plan_type":"plus"},"sub":"fixture-subject","iss":"fixture-issuer"});
+        let encode = |value: &Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(value).expect("JWT"))
+        };
+        let id_token = format!(
+            "{}.{}.c2ln",
+            encode(&json!({"alg":"none"})),
+            encode(&claims)
+        );
+        let auth = json!({"tokens":{"id_token":id_token,"access_token":"private-fixture-access","account_id":"fixture-account"},"last_refresh_ratio":0.5,"note":"caf\u{e9}"});
+        fs::create_dir_all(home.path().join(".codex")).expect("root");
+        fs::write(
+            home.path().join(".codex/auth.json"),
+            serde_json::to_vec(&auth).expect("auth"),
+        )
+        .expect("write");
+        fs::create_dir_all(home.path().join(".t3/userdata")).expect("t3");
+        fs::write(
+            home.path().join(".t3/userdata/settings.json"),
+            "{\"ratio\": 0.5, \"providerInstances\": {\"codex_me\": {\"driver\": \"codex\", \"displayName\": \"Codex \u{b7} me\"}}}",
+        )
+        .expect("settings");
+        let request = json!({"version":1,"action":"inventory","provider":"codex","homeDir":home.path(),"ccsDir":home.path().join(".ccs")});
+        let native = run(&request).expect("native");
+        assert_ne!(native, proof::fallback(), "{native}");
+        assert!(native.get("failed").is_none(), "{native}");
+        assert_eq!(
+            native["candidates"].as_array().map(Vec::len),
+            Some(1),
+            "{native}"
         );
         assert!(!native.to_string().contains("private-fixture-access"));
     }

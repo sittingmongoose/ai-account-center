@@ -79,7 +79,7 @@ fn mac_keychain(home: &Path) -> Vec<Value> {
     let Ok(raw) = crate::claude_usage::keychain::read("Claude Code-credentials", "", false) else {
         return vec![];
     };
-    let Some(credentials) = proof::json(&raw, desktop::MAX_BYTES, false) else {
+    let Some(credentials) = proof::lenient_json(&raw, desktop::MAX_BYTES, false) else {
         return vec![];
     };
     let oauth = &credentials["claudeAiOauth"];
@@ -723,6 +723,24 @@ mod tests {
             .collect();
         assert!(emails.contains(&"me@example.test".to_owned()), "{out}");
         assert!(emails.contains(&"user@example.test".to_owned()), "{out}");
+    }
+
+    /// AR5b: Claude Code may add floats and non-ASCII text to `.credentials.json` too; only
+    /// the token and plan are read, so the inventory still finds the login.
+    #[test]
+    fn claude_credentials_with_floats_and_non_ascii_text_still_give_the_login() {
+        let dir = fixture();
+        std::fs::write(
+            dir.path().join(".claude/.credentials.json"),
+            "{\"claudeAiOauth\":{\"accessToken\":\"synthetic-token\",\"expiresAt\":1,\"subscriptionType\":\"max\",\"ratio\":0.25,\"label\":\"caf\u{e9}\"}}",
+        )
+        .unwrap();
+        let home = dir.path().to_string_lossy().to_string();
+        let out =
+            run(&json!({"version":1,"action":"inventory","provider":"claude","homeDir":home}))
+                .expect("inventory");
+        assert!(out.get("failed").is_none(), "{out}");
+        assert_eq!(out["candidates"].as_array().map(Vec::len), Some(1), "{out}");
     }
 
     /// A state file that is not JSON stays unread: the inventory says so instead of guessing.

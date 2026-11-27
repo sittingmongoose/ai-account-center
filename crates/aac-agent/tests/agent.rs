@@ -152,6 +152,37 @@ async fn signin_fixture_is_read_only_and_reports_existing_expiry() {
     );
 }
 
+/// AR5b (LIVE r34): T3 Code's settings name instances in non-ASCII and Claude Code's
+/// credentials may carry floats. signin-expiry has no helper behind it, so neither may
+/// decline the verb.
+#[tokio::test]
+async fn signin_expiry_reads_t3_settings_and_credentials_with_non_ascii_and_floats() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".claude");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join(".credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"fixture-access\",\"refreshToken\":\"fixture-refresh\",\"expiresAt\":1800007200123,\"refreshTokenExpiresAt\":1800108000123,\"ratio\":0.5,\"label\":\"caf\u{e9}\"}}",
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.path().join(".t3/userdata")).unwrap();
+    std::fs::write(
+        home.path().join(".t3/userdata/settings.json"),
+        "{\"ratio\": 0.5, \"providerInstances\": {\"claude_me\": {\"driver\": \"claudeAgent\", \"displayName\": \"Claude \u{b7} me\"}}}",
+    )
+    .unwrap();
+    let payload = json!({"protocol":1,"verb":"signin-expiry","id":"expiry","deadlineMs":1000,"args":{"home":home.path(),"nowMs":1800000000123_i64}}).to_string()+"\n";
+    let mut output = Vec::new();
+    let code = aac_agent::run(tokio::io::BufReader::new(payload.as_bytes()), &mut output)
+        .await
+        .unwrap();
+    assert_eq!(code, 0);
+    let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(event["value"].get("fallback").is_none(), "{event}");
+    assert_eq!(event["value"]["profiles"][0]["state"], "ok", "{event}");
+    assert!(!event.to_string().contains("fixture-access"));
+}
+
 /// An unreadable settings.json leaf is Python's `read_failed()`: discovery is incomplete,
 /// the inventory still answers. Only a denied ancestor chain (or a platform without a
 /// search-capable descriptor) may decline the whole verb (qwen lane 2 recheck L1).
