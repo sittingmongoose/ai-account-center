@@ -6,7 +6,6 @@
 //! pass, and the sign-in deadline recheck converges both files before it lands.
 
 use crate::history::RecentReadings;
-use crate::js::stringify;
 use crate::markdown::render_snapshot_markdown;
 use crate::settings::{SnapshotSettings, render_snapshot_locations};
 use crate::snapshot::{
@@ -207,12 +206,11 @@ impl SnapshotPublisher {
             renewal.as_ref(),
         );
         drop(recent);
-        (deps.write)(
-            directory,
-            SNAPSHOT_HISTORY,
-            &format!("{}\n", stringify(&history)),
-        )
-        .map_err(|_| ())?;
+        let mut history_text = history.to_json();
+        drop(history);
+        history_text.push('\n');
+        (deps.write)(directory, SNAPSHOT_HISTORY, &history_text).map_err(|_| ())?;
+        drop(history_text);
         // Rechecked against publication time, not the sample's, as late as the writes allow.
         if let Some(sign_in) = snapshot.get("signIn").and_then(Value::as_array) {
             let downgraded =

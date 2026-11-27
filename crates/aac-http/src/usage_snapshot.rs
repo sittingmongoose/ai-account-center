@@ -275,7 +275,9 @@ fn parse_event(value: &Value) -> Option<SampleEvent> {
     let history = if value["history"].is_null() {
         None
     } else {
-        Some(value["history"].clone())
+        Some(aac_snapshot::history::QuotaHistory::from_value(
+            &value["history"],
+        ))
     };
     let long_burn = value["longBurn"].as_array().map(|entries| {
         entries
@@ -329,25 +331,17 @@ fn enrich(store: Option<&crate::store_host::StoreHost>, event: &mut SampleEvent)
         return;
     };
     if event.history.is_none() {
-        let query = json!({
-            "fromMs": event.sampled_at.saturating_sub(SNAPSHOT_HISTORY_MS).max(0),
-            "toMs": event.sampled_at.max(0),
-            "nowMs": event.sampled_at.max(0),
-            "thinning": { "kind": "history" },
-        });
-        if let Ok(records) = aac_store::ops::call(&engine, "historyRecords", &query.to_string()) {
-            let collected = records
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("sampledAt"))
-                .cloned()
-                .or_else(|| aac_num::ecma::to_iso_string(event.sampled_at).map(Value::String))
-                .unwrap_or(Value::Null);
-            event.history = Some(json!({
-                "schemaVersion": 1,
-                "collectedSince": collected,
-                "records": records,
-            }));
+        // Read straight into typed records: the store's 7-day thinned history once held the whole
+        // range as a JSON tree here, and the publisher built a second one for history.json.
+        let query = aac_store::usage::HistoryQuery {
+            from_ms: event.sampled_at.saturating_sub(SNAPSHOT_HISTORY_MS).max(0) as u64,
+            to_ms: event.sampled_at.max(0) as u64,
+            now_ms: event.sampled_at.max(0) as u64,
+            thinning: aac_store::usage::Thinning::History,
+            identities: None,
+        };
+        if let Ok(history) = aac_snapshot::history::QuotaHistory::from_store(&engine, &query) {
+            event.history = Some(history);
         }
     }
     if event.long_burn.is_none()

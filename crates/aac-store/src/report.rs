@@ -299,43 +299,143 @@ fn host_of(entry: &Value) -> Option<&str> {
 
 /// One report per computer and tool of a published pass.
 pub fn build_activity_reports(args: &ReportArgs<'_>) -> Vec<Value> {
+    build_activity_reports_owned(OwnedReportArgs {
+        local: args.local.clone(),
+        remote: args.remote.to_vec(),
+        states: args.states,
+        window_from_ms: args.window_from_ms,
+        now: args.now,
+        local_complete: args.local_complete,
+        scanner_owned: args.scanner_owned,
+    })
+}
+
+/// [`ReportArgs`] with the worker results handed over: the reports take their cells and sessions
+/// instead of copying them, and the results are gone once the reports are built.
+pub struct OwnedReportArgs<'a> {
+    /// Tool to the local collector's worker results.
+    pub local: HashMap<String, Vec<Value>>,
+    /// Scanner/remote reads: `{tool, host?, data}` (host falls back to `data.host`).
+    pub remote: Vec<Value>,
+    /// The grid's source states (`AccountAnalyticsSource`).
+    pub states: &'a [Value],
+    /// The start of the window the readers read (31 days before the pass).
+    pub window_from_ms: i64,
+    /// The pass clock.
+    pub now: i64,
+    /// Tools whose local read finished this pass.
+    pub local_complete: &'a HashSet<String>,
+    /// Tools the usage scanner owns on this computer.
+    pub scanner_owned: &'a HashSet<String>,
+}
+
+/// Which worker results one source's report reads.
+enum ReportData {
+    /// The scanner/remote entries at these indexes (each entry's `data`).
+    Remote(Vec<usize>),
+    /// The local collector's results for the source's tool.
+    Local,
+}
+
+/// One worker result's cells and sessions into a report's reads. The last report to read a result
+/// takes its arrays; an earlier one (a source listed twice) copies them, as every read once did.
+fn read_worker(
+    entry: &mut Value,
+    last: bool,
+    read: &mut Vec<Value>,
+    session_rows: &mut Vec<Value>,
+    derived: &mut bool,
+) -> u64 {
+    if let Some(cells) = entry.get_mut("cells").and_then(Value::as_array_mut) {
+        if last {
+            read.append(cells);
+        } else {
+            read.extend(cells.iter().cloned());
+        }
+    } else if let Some(hourly) = entry["hourly"].as_array()
+        && !hourly.is_empty()
+    {
+        *derived = true;
+        read.extend(cells_from_hourly(hourly));
+    }
+    if let Some(session) = entry.get_mut("session").and_then(Value::as_array_mut) {
+        if last {
+            session_rows.append(session);
+        } else {
+            session_rows.extend(session.iter().cloned());
+        }
+    }
+    count(&entry["futureDated"])
+}
+
+/// [`build_activity_reports`] over handed-over worker results: the same reports, byte for byte.
+pub fn build_activity_reports_owned(args: OwnedReportArgs<'_>) -> Vec<Value> {
+    let OwnedReportArgs {
+        mut local,
+        mut remote,
+        states,
+        window_from_ms,
+        now,
+        local_complete,
+        scanner_owned,
+    } = args;
     let mut reports = Vec::new();
-    let cover_from = div_ceil(args.window_from_ms, HOUR) * HOUR;
-    let limit = args.now + FUTURE_SLACK_MS;
-    for source in args.states {
+    let cover_from = div_ceil(window_from_ms, HOUR) * HOUR;
+    let limit = now + FUTURE_SLACK_MS;
+    // First which results each source reads, so the last reader of each can take its arrays.
+    let mut remote_reads = vec![0usize; remote.len()];
+    let mut local_reads: HashMap<&str, usize> = HashMap::new();
+    let plans: Vec<(ReportData, bool)> = states
+        .iter()
+        .map(|source| {
+            let tool = source["tool"].as_str().unwrap_or("");
+            let host = source["host"].as_str().unwrap_or("");
+            let scanner_rows: Vec<usize> = remote
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry["tool"].as_str() == Some(tool) && host_of(entry) == Some(host))
+                .map(|(index, _)| index)
+                .collect();
+            let scanner_here = host == "ubuntu"
+                && (SCANNER_ONLY_TOOLS.contains(&tool) || !scanner_rows.is_empty() || scanner_owned.contains(tool));
+            if host != "ubuntu" || scanner_here {
+                for index in &scanner_rows {
+                    remote_reads[*index] += 1;
+                }
+                (ReportData::Remote(scanner_rows), scanner_here)
+            } else {
+                *local_reads.entry(tool).or_default() += 1;
+                (ReportData::Local, scanner_here)
+            }
+        })
+        .collect();
+    for (source, (plan, scanner_here)) in states.iter().zip(plans) {
         let tool = source["tool"].as_str().unwrap_or("");
         let host = source["host"].as_str().unwrap_or("");
-        let scanner_rows: Vec<Value> = args
-            .remote
-            .iter()
-            .filter(|entry| entry["tool"].as_str() == Some(tool) && host_of(entry) == Some(host))
-            .map(|entry| entry["data"].clone())
-            .collect();
-        let scanner_here = host == "ubuntu"
-            && (SCANNER_ONLY_TOOLS.contains(&tool) || !scanner_rows.is_empty() || args.scanner_owned.contains(tool));
-        let empty = Vec::new();
-        let data: Vec<Value> = if host != "ubuntu" || scanner_here {
-            scanner_rows
-        } else {
-            args.local.get(tool).unwrap_or(&empty).clone()
-        };
         let mut derived = false;
         let mut read: Vec<Value> = Vec::new();
         let mut session_rows: Vec<Value> = Vec::new();
         let mut future_dated = 0u64;
-        for entry in &data {
-            if let Some(cells) = entry["cells"].as_array() {
-                read.extend(cells.iter().cloned());
-            } else if let Some(hourly) = entry["hourly"].as_array()
-                && !hourly.is_empty()
-            {
-                derived = true;
-                read.extend(cells_from_hourly(hourly));
+        match plan {
+            ReportData::Remote(indexes) => {
+                for index in indexes {
+                    remote_reads[index] -= 1;
+                    let last = remote_reads[index] == 0;
+                    let mut missing = Value::Null;
+                    let entry = remote[index].get_mut("data").unwrap_or(&mut missing);
+                    future_dated += read_worker(entry, last, &mut read, &mut session_rows, &mut derived);
+                }
             }
-            if let Some(session) = entry["session"].as_array() {
-                session_rows.extend(session.iter().cloned());
+            ReportData::Local => {
+                let reads = local_reads.get_mut(tool).expect("planned local read");
+                *reads -= 1;
+                let last = *reads == 0;
+                if let Some(entries) = local.get_mut(tool) {
+                    for entry in entries.iter_mut() {
+                        future_dated += read_worker(entry, last, &mut read, &mut session_rows, &mut derived);
+                    }
+                }
             }
-            future_dated += count(&entry["futureDated"]);
         }
         let (cells, future) = past_cells(read, limit);
         future_dated += future;
@@ -360,10 +460,10 @@ pub fn build_activity_reports(args: &ReportArgs<'_>) -> Vec<Value> {
             .filter_map(|c| c["hour"].as_str().and_then(parse_instant))
             .fold(0i64, i64::max);
         let scanned = source["lastScanAt"].as_str().and_then(parse_instant);
-        let read_at = args.now.min(scanned.unwrap_or(args.now).max(newest_cell));
+        let read_at = now.min(scanned.unwrap_or(now).max(newest_cell));
         let complete = (state == "ok" || state == "no_usage")
             && !derived
-            && (host != "ubuntu" || scanner_here || args.local_complete.contains(tool));
+            && (host != "ubuntu" || scanner_here || local_complete.contains(tool));
         let report_state_word = if complete {
             state.clone()
         } else if state == "ok" {

@@ -3,7 +3,7 @@
 //! from the same TS code the golden test pins. Every case rebuilds the sample in Rust and must
 //! match the TypeScript bytes exactly.
 
-use aac_snapshot::history::RecentReadings;
+use aac_snapshot::history::{QuotaHistory, RecentReadings};
 use aac_snapshot::js::{stringify, stringify_pretty};
 use aac_snapshot::markdown::render_snapshot_markdown;
 use aac_snapshot::snapshot::{LongBurnEntry, LongBurnSpan, SampleEvent, build_snapshot_files};
@@ -63,7 +63,7 @@ fn event(value: &Value) -> SampleEvent {
         history: if value["history"].is_null() {
             None
         } else {
-            Some(value["history"].clone())
+            Some(QuotaHistory::from_value(&value["history"]))
         },
         sampled_at: value["sampledAt"].as_i64().expect("sampledAt"),
         long_burn,
@@ -126,7 +126,9 @@ fn golden_files_match_byte_for_byte() {
     let markdown =
         render_snapshot_markdown(&snapshot, input["signInNow"].as_i64().expect("signInNow"));
     let json = format!("{}\n", stringify_pretty(&snapshot));
-    let history_text = format!("{}\n", stringify(&history));
+    let history_text = format!("{}\n", history.to_json());
+    // The streamed text is the value's own text.
+    assert_eq!(history.to_json(), stringify(&history.value()));
     let read_golden =
         |name: &str| std::fs::read_to_string(golden_dir().join(name)).expect("golden file");
     assert_bytes("golden", "usage.md", &read_golden("usage.md"), &markdown);
@@ -164,7 +166,9 @@ fn corpus_matches_the_typescript_writer() {
         let markdown =
             render_snapshot_markdown(&snapshot, case["signInNow"].as_i64().expect("signInNow"));
         let json = format!("{}\n", stringify_pretty(&snapshot));
-        let history_text = format!("{}\n", stringify(&history));
+        let history_text = format!("{}\n", history.to_json());
+        // The streamed text is the value's own text.
+        assert_eq!(history.to_json(), stringify(&history.value()));
         assert_bytes(
             &label,
             "usage.json",

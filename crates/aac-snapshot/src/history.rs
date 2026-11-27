@@ -9,8 +9,10 @@ use crate::js::{
 };
 use crate::projection::ProjectedAccount;
 use aac_num::ecma;
+use aac_views::js_json::Writer;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 const HOUR_MS: i64 = 3_600_000;
 /// A larger fall than this between two readings is a reset, not noise.
@@ -192,25 +194,301 @@ impl HistorySeries {
             ("points", Value::Array(points)),
         ])
     }
+
+    /// The series written straight to `history.json` text: the bytes `stringify(&self.value())`
+    /// makes, without building the value.
+    pub fn write(&self, writer: &mut Writer) {
+        let mut object = writer.object();
+        object.member("accountId", |w| w.string(&self.account_id));
+        object.member("provider", |w| w.string(&self.provider));
+        object.member("label", |w| w.string(&self.label));
+        object.member("email", |w| write_opt_str(w, self.email.as_deref()));
+        object.member("profile", |w| write_opt_str(w, self.profile.as_deref()));
+        object.member("hidden", |w| {
+            w.raw(if self.hidden { b"true" } else { b"false" })
+        });
+        object.member("window", |w| w.string(&self.window));
+        object.member("windowLabel", |w| w.string(&self.window_label));
+        object.member("pool", |w| write_opt_str(w, self.pool.as_deref()));
+        object.member("kind", |w| w.string(&self.kind));
+        object.member("unit", |w| write_opt_str(w, self.unit.as_deref()));
+        object.member("points", |w| {
+            w.raw(b"[");
+            for (index, (at, used, remaining, reset)) in self.points.iter().enumerate() {
+                if index > 0 {
+                    w.raw(b",");
+                }
+                w.raw(b"[");
+                w.string(at);
+                w.raw(b",");
+                write_opt_number(w, *used);
+                w.raw(b",");
+                write_opt_number(w, *remaining);
+                w.raw(b",");
+                write_opt_str(w, reset.as_deref());
+                w.raw(b"]");
+            }
+            w.raw(b"]");
+        });
+        object.end();
+    }
 }
 
-/// `recordsByIdentity`: each account's records, oldest first, keyed by the history identity.
-pub fn records_by_identity(history: Option<&Value>) -> IndexMap<String, Vec<&Value>> {
-    let mut result: IndexMap<String, Vec<&Value>> = IndexMap::new();
-    if let Some(records) = history.and_then(|h| member(h, "records").as_array()) {
-        for record in records {
-            let identity = member(record, "identity").as_str().unwrap_or("").to_owned();
-            result.entry(identity).or_default().push(record);
+/// `js::opt_str` as text.
+fn write_opt_str(writer: &mut Writer, value: Option<&str>) {
+    match value {
+        Some(text) => writer.string(text),
+        None => writer.raw(b"null"),
+    }
+}
+
+/// `js::opt_number` as text: a non-finite number is null, as `js::number` screens it.
+fn write_opt_number(writer: &mut Writer, value: Option<f64>) {
+    match value.and_then(serde_json::Number::from_f64) {
+        Some(number) => writer.number(&number),
+        None => writer.raw(b"null"),
+    }
+}
+
+/// `history.json` for one sample: its time and series, written straight to text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryFile {
+    /// The sample time as ISO text.
+    pub generated_at: String,
+    /// Every published series.
+    pub series: Vec<HistorySeries>,
+}
+
+impl HistoryFile {
+    /// The file as a value (tests and callers that read members).
+    pub fn value(&self) -> Value {
+        js::object(vec![
+            ("version", json!(1)),
+            ("generatedAt", json!(self.generated_at)),
+            ("hours", json!(crate::HISTORY_HOURS)),
+            (
+                "series",
+                Value::Array(self.series.iter().map(HistorySeries::value).collect()),
+            ),
+        ])
+    }
+
+    /// `stringify(&self.value())`, byte for byte, without a value tree for the series.
+    pub fn to_json(&self) -> String {
+        let points: usize = self.series.iter().map(|s| s.points.len()).sum();
+        let mut writer = Writer::plain(256 + self.series.len() * 256 + points * 64);
+        let mut object = writer.object();
+        object.member("version", |w| w.raw(b"1"));
+        object.member("generatedAt", |w| w.string(&self.generated_at));
+        object.member("hours", |w| w.value(&json!(crate::HISTORY_HOURS)));
+        object.member("series", |w| {
+            w.raw(b"[");
+            for (index, series) in self.series.iter().enumerate() {
+                if index > 0 {
+                    w.raw(b",");
+                }
+                series.write(w);
+            }
+            w.raw(b"]");
+        });
+        object.end();
+        String::from_utf8(writer.into_bytes()).unwrap_or_default()
+    }
+}
+
+/// What a stored history record says about one window, read once: the identities it is
+/// matched by and the fields a published series names.
+#[derive(Debug, PartialEq)]
+pub struct WindowInfo {
+    identity: String,
+    boundary: String,
+    key: String,
+    label: String,
+    pool_label: Option<String>,
+    kind: String,
+    unit: Option<String>,
+}
+
+impl WindowInfo {
+    /// The window's identities and series fields, read the way the value-based reader read them.
+    pub fn of(window: &Value) -> Self {
+        WindowInfo {
+            identity: crate::js::window_identity(window),
+            boundary: boundary_identity(window),
+            key: member(window, "key").as_str().unwrap_or("").to_owned(),
+            label: member(window, "label").as_str().unwrap_or("").to_owned(),
+            pool_label: member(window, "poolLabel").as_str().map(str::to_owned),
+            kind: member(window, "kind")
+                .as_str()
+                .unwrap_or("rate_limit")
+                .to_owned(),
+            unit: member(window, "unit").as_str().map(str::to_owned),
         }
     }
-    for list in result.values_mut() {
-        list.sort_by(|a, b| {
-            let left = date_parse(member(a, "sampledAt")).unwrap_or(0);
-            let right = date_parse(member(b, "sampledAt")).unwrap_or(0);
-            left.cmp(&right)
-        });
+}
+
+/// One window of one stored record: its shared window fields and the reading it carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredWindow {
+    info: Arc<WindowInfo>,
+    /// `observedAt`: a retained optional window keeps its own sample time.
+    observed_at: Option<i64>,
+    used: Option<f64>,
+    remaining: Option<f64>,
+    reset_at: Option<i64>,
+}
+
+/// One stored account record: its sample time and windows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredRecord {
+    sampled_at: Option<i64>,
+    windows: Vec<StoredWindow>,
+}
+
+/// The quota history a sample is published with, typed: each account's records, oldest first,
+/// keyed by the history identity (`recordsByIdentity`). Read from the store, it never holds the
+/// whole range as a JSON tree.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QuotaHistory {
+    by_identity: IndexMap<String, Vec<StoredRecord>>,
+}
+
+impl QuotaHistory {
+    /// The typed history of a `{records: [...]}` value (a pushed sample's history).
+    pub fn from_value(history: &Value) -> Self {
+        let mut by_identity: IndexMap<String, Vec<StoredRecord>> = IndexMap::new();
+        if let Some(records) = member(history, "records").as_array() {
+            for record in records {
+                let identity = member(record, "identity").as_str().unwrap_or("").to_owned();
+                let record_time = member(record, "sampledAt");
+                let windows = member(record, "windows")
+                    .as_array()
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .map(|window| StoredWindow {
+                                info: Arc::new(WindowInfo::of(window)),
+                                observed_at: observed_at(window, record_time),
+                                used: finite(member(window, "usedPercent")),
+                                remaining: finite(member(window, "remaining")),
+                                reset_at: date_parse(member(window, "resetAt")),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                by_identity.entry(identity).or_default().push(StoredRecord {
+                    sampled_at: date_parse(record_time),
+                    windows,
+                });
+            }
+        }
+        for list in by_identity.values_mut() {
+            list.sort_by_key(|record| record.sampled_at.unwrap_or(0));
+        }
+        QuotaHistory { by_identity }
     }
-    result
+
+    /// The store's thinned history (`historyRecords`), read straight into typed records: the
+    /// same history `from_value` reads from that call's JSON answer.
+    pub fn from_store(
+        engine: &aac_store::engine::Engine,
+        query: &aac_store::usage::HistoryQuery,
+    ) -> Result<Self, aac_store::error::Error> {
+        let mut by_identity: IndexMap<String, Vec<(u64, StoredRecord)>> = IndexMap::new();
+        let mut infos: Vec<Arc<WindowInfo>> = Vec::new();
+        let mut current: Option<usize> = None;
+        aac_store::usage::visit_history_records(engine, query, |visit| {
+            if current != Some(visit.account_index) {
+                current = Some(visit.account_index);
+                infos = visit
+                    .windows
+                    .iter()
+                    .map(|(_, window, series, _)| Arc::new(stored_window_info(window, series)))
+                    .collect();
+            }
+            let record_time = store_instant(visit.at as i64);
+            let windows = visit
+                .readings
+                .iter()
+                .map(|(index, row)| {
+                    let vals = &row.vals;
+                    StoredWindow {
+                        info: Arc::clone(&infos[*index]),
+                        observed_at: match vals.cached_sampled_at {
+                            Some(cached) => store_instant(cached),
+                            None => record_time,
+                        },
+                        used: vals.used_pct.filter(|x| x.is_finite()),
+                        remaining: vals.remaining.filter(|x| x.is_finite()),
+                        reset_at: vals.reset_at.and_then(store_instant),
+                    }
+                })
+                .collect();
+            by_identity
+                .entry(visit.account.identity.clone())
+                .or_default()
+                .push((
+                    visit.at,
+                    StoredRecord {
+                        sampled_at: record_time,
+                        windows,
+                    },
+                ));
+        })?;
+        // `historyRecords` sorts every record by time; the reader then orders each identity's
+        // records by their parsed time. Both sorts are stable, so this is the same order.
+        let by_identity = by_identity
+            .into_iter()
+            .map(|(identity, mut list)| {
+                list.sort_by_key(|(at, _)| *at);
+                list.sort_by_key(|(_, record)| record.sampled_at.unwrap_or(0));
+                (
+                    identity,
+                    list.into_iter().map(|(_, record)| record).collect(),
+                )
+            })
+            .collect();
+        Ok(QuotaHistory { by_identity })
+    }
+
+    /// One account's records, oldest first.
+    fn records(&self, identity: &str) -> &[StoredRecord] {
+        self.by_identity.get(identity).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The window fields `historyRecords` writes for a series, read as `WindowInfo::of` reads them.
+fn stored_window_info(
+    window: &aac_store::usage::WindowMeta,
+    series: &aac_store::usage::SeriesMeta,
+) -> WindowInfo {
+    let mut fields = serde_json::Map::new();
+    fields.insert("key".into(), json!(window.key));
+    fields.insert("label".into(), json!(series.label));
+    fields.insert("unit".into(), json!(window.unit));
+    if let Some(kind) = &window.kind {
+        fields.insert("kind".into(), json!(kind));
+    }
+    if let Some(pool) = &window.pool_id {
+        fields.insert("poolId".into(), json!(pool));
+    }
+    if let Some(label) = &series.pool_label {
+        fields.insert("poolLabel".into(), json!(label));
+    }
+    WindowInfo::of(&Value::Object(fields))
+}
+
+/// The last instant the store's ISO text writes with a four-digit year.
+const STORE_ISO_MAX_MS: i64 = 253_402_300_799_999;
+
+/// `Date.parse` of the store's ISO text for `ms`: the instant itself across the four-digit years
+/// after 1970 (the text and the parser round-trip there), else through the text.
+fn store_instant(ms: i64) -> Option<i64> {
+    if (0..=STORE_ISO_MAX_MS).contains(&ms) {
+        Some(ms)
+    } else {
+        js::date_parse_str(&aac_store::usage::iso(ms))
+    }
 }
 
 /// `observedAt`: a retained optional window keeps its own original sample time.
@@ -225,37 +503,32 @@ fn observed_at(window: &Value, record_time: &Value) -> Option<i64> {
     date_parse(source)
 }
 
-/// `windowReadings`: the window's readings, oldest first, one per observation time.
-pub fn window_readings(records: &[&Value], window: &Value, since: i64) -> Vec<Reading> {
-    let identity = crate::js::window_identity(window);
+/// `windowReadings`: the window's readings, oldest first, one per observation time. `identity`
+/// is the window's `analyticsWindowIdentity`.
+fn window_readings(records: &[StoredRecord], identity: &str, since: i64) -> Vec<Reading> {
     let mut readings: Vec<Reading> = Vec::new();
     for record in records {
-        let Some(entries) = member(record, "windows").as_array() else {
-            continue;
-        };
-        let Some(matched) = entries
+        let Some(matched) = record
+            .windows
             .iter()
-            .find(|entry| crate::js::window_identity(entry) == identity)
+            .find(|entry| entry.info.identity == identity)
         else {
             continue;
         };
-        let Some(at) = observed_at(matched, member(record, "sampledAt")) else {
+        let Some(at) = matched.observed_at else {
             continue;
         };
         if at < since {
             continue;
         }
-        let used = finite(member(matched, "usedPercent"));
-        let remaining = finite(member(matched, "remaining"));
-        let reset = date_parse(member(matched, "resetAt"));
-        if used.is_none() && remaining.is_none() && reset.is_none() {
+        if matched.used.is_none() && matched.remaining.is_none() && matched.reset_at.is_none() {
             continue;
         }
         readings.push(Reading {
             at,
-            used,
-            remaining,
-            reset_at: reset,
+            used: matched.used,
+            remaining: matched.remaining,
+            reset_at: matched.reset_at,
         });
     }
     let mut by_time: IndexMap<i64, Reading> = IndexMap::new();
@@ -300,25 +573,21 @@ pub fn row_reading(row: &Value, window: &Value) -> Option<Reading> {
 }
 
 /// `storedBoundaries`: every reset time the stored history reports for this window, whatever
-/// unit each reading had.
-pub fn stored_boundaries(records: &[&Value], window: &Value, since: i64) -> Vec<i64> {
-    let identity = boundary_identity(window);
+/// unit each reading had. `boundary` is the window's `boundaryIdentity`.
+fn stored_boundaries(records: &[StoredRecord], boundary: &str, since: i64) -> Vec<i64> {
     let mut found: Vec<i64> = Vec::new();
     for record in records {
-        let Some(entries) = member(record, "windows").as_array() else {
-            continue;
-        };
-        for entry in entries {
-            if boundary_identity(entry) != identity {
+        for entry in &record.windows {
+            if entry.info.boundary != boundary {
                 continue;
             }
-            let Some(at) = observed_at(entry, member(record, "sampledAt")) else {
+            let Some(at) = entry.observed_at else {
                 continue;
             };
             if at < since {
                 continue;
             }
-            if let Some(reset) = date_parse(member(entry, "resetAt"))
+            if let Some(reset) = entry.reset_at
                 && !found.contains(&reset)
             {
                 found.push(reset);
@@ -391,6 +660,14 @@ impl RecentReadings {
     pub fn get(&self, row: &Value, window: &Value) -> Vec<Reading> {
         self.series
             .get(&long_burn_key(row, window))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// `get` by the account's history identity and the window's identity (`longBurnKey`'s parts).
+    fn get_identity(&self, account: &str, window: &str) -> Vec<Reading> {
+        self.series
+            .get(&js::stringify(&json!([account, window])))
             .cloned()
             .unwrap_or_default()
     }
@@ -540,19 +817,61 @@ pub fn burn_rate(
     rates
 }
 
+/// A window `usageHistory` publishes: the current reading's own, or the newest stored one's.
+enum HistoryWindow<'a> {
+    Live(&'a Value),
+    Stored(&'a WindowInfo),
+}
+
+impl HistoryWindow<'_> {
+    fn key(&self) -> &str {
+        match self {
+            HistoryWindow::Live(window) => member(window, "key").as_str().unwrap_or(""),
+            HistoryWindow::Stored(info) => &info.key,
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            HistoryWindow::Live(window) => member(window, "label").as_str().unwrap_or(""),
+            HistoryWindow::Stored(info) => &info.label,
+        }
+    }
+
+    fn pool_label(&self) -> Option<&str> {
+        match self {
+            HistoryWindow::Live(window) => member(window, "poolLabel").as_str(),
+            HistoryWindow::Stored(info) => info.pool_label.as_deref(),
+        }
+    }
+
+    fn kind(&self) -> &str {
+        match self {
+            HistoryWindow::Live(window) => member(window, "kind").as_str().unwrap_or("rate_limit"),
+            HistoryWindow::Stored(info) => &info.kind,
+        }
+    }
+
+    fn unit(&self) -> Option<&str> {
+        match self {
+            HistoryWindow::Live(window) => member(window, "unit").as_str(),
+            HistoryWindow::Stored(info) => info.unit.as_deref(),
+        }
+    }
+}
+
 /// `usageHistory`: burn rates for every percent window of the projected accounts, plus the
 /// rolling history series for every window (percent or amount).
 pub fn usage_history(
     rows: &[Value],
     accounts: &[ProjectedAccount],
-    history: Option<&Value>,
+    history: Option<&QuotaHistory>,
     now: i64,
     recent: Option<&RecentReadings>,
 ) -> (
     IndexMap<String, IndexMap<String, BurnRate>>,
     Vec<HistorySeries>,
 ) {
-    let by_identity = records_by_identity(history);
     let since = now - crate::HISTORY_HOURS * HOUR_MS;
     let mut row_by_id: IndexMap<String, &Value> = IndexMap::new();
     for row in rows {
@@ -578,56 +897,64 @@ pub fn usage_history(
         let Some(row) = row_by_id.get(&account.id).copied() else {
             continue;
         };
-        let empty: Vec<&Value> = Vec::new();
-        let records = by_identity
-            .get(&crate::js::account_identity(row))
-            .unwrap_or(&empty);
+        let account_identity = crate::js::account_identity(row);
+        let records = history.map_or(&[][..], |h| h.records(&account_identity));
         let mut per_window: IndexMap<String, BurnRate> = IndexMap::new();
         // Every window measured in the last 7 days keeps its history; only windows in the
         // current reading get a reading and a pace.
-        let mut windows: IndexMap<String, Value> = IndexMap::new();
+        let mut windows: IndexMap<String, HistoryWindow<'_>> = IndexMap::new();
         for record in records {
-            if date_parse(member(record, "sampledAt")).is_some_and(|at| at >= since)
-                && let Some(entries) = member(record, "windows").as_array()
-            {
-                for window in entries {
-                    windows.insert(crate::js::window_identity(window), window.clone());
+            if record.sampled_at.is_some_and(|at| at >= since) {
+                for window in &record.windows {
+                    windows.insert(
+                        window.info.identity.clone(),
+                        HistoryWindow::Stored(&window.info),
+                    );
                 }
             }
         }
-        let mut current_ids: Vec<String> = Vec::new();
         if let Some(entries) = member(row, "windows").as_array() {
             for window in entries {
-                let id = crate::js::window_identity(window);
-                current_ids.push(id.clone());
-                windows.insert(id, window.clone());
+                windows.insert(
+                    crate::js::window_identity(window),
+                    HistoryWindow::Live(window),
+                );
             }
         }
         for (id, window) in &windows {
-            let live = current_ids.contains(id);
-            let current = if live { row_reading(row, window) } else { None };
-            let mut recent_readings = recent.map(|ring| ring.get(row, window)).unwrap_or_default();
+            // A current window always replaced the stored one under its identity.
+            let live = match window {
+                HistoryWindow::Live(live) => Some(*live),
+                HistoryWindow::Stored(_) => None,
+            };
+            let current = live.and_then(|live| row_reading(row, live));
+            let mut recent_readings = recent
+                .map(|ring| ring.get_identity(&account_identity, id))
+                .unwrap_or_default();
             if let Some(reading) = current {
                 recent_readings.push(reading);
             }
             let readings: Vec<Reading> =
-                merge_readings(window_readings(records, window, since), recent_readings)
+                merge_readings(window_readings(records, id, since), recent_readings)
                     .into_iter()
                     .filter(|reading| reading.at >= since && reading.at <= now)
                     .collect();
-            let kind = member(window, "kind").as_str().unwrap_or("rate_limit");
-            if live && finite(member(window, "usedPercent")).is_some() && kind == "rate_limit" {
-                let mut boundaries = stored_boundaries(records, window, since);
+            let kind = window.kind();
+            if let Some(live) = live
+                && finite(member(live, "usedPercent")).is_some()
+                && kind == "rate_limit"
+            {
+                let mut boundaries = stored_boundaries(records, &boundary_identity(live), since);
                 if let Some(ring) = recent {
-                    boundaries.extend(ring.boundaries(row, window));
+                    boundaries.extend(ring.boundaries(row, live));
                 }
                 per_window.insert(
                     burn_key(
-                        member(window, "key").as_str().unwrap_or(""),
-                        member(window, "unit").as_str(),
-                        member(window, "poolId").as_str(),
+                        member(live, "key").as_str().unwrap_or(""),
+                        member(live, "unit").as_str(),
+                        member(live, "poolId").as_str(),
                     ),
-                    burn_rate(&readings, member(window, "resetAt").as_str(), &boundaries),
+                    burn_rate(&readings, member(live, "resetAt").as_str(), &boundaries),
                 );
             }
             let measured: Vec<&Reading> = readings
@@ -655,11 +982,11 @@ pub fn usage_history(
                 email: account.email.clone(),
                 profile: account.profile.clone(),
                 hidden: account.hidden,
-                window: member(window, "key").as_str().unwrap_or("").to_owned(),
-                window_label: member(window, "label").as_str().unwrap_or("").to_owned(),
-                pool: member(window, "poolLabel").as_str().map(str::to_owned),
+                window: window.key().to_owned(),
+                window_label: window.label().to_owned(),
+                pool: window.pool_label().map(str::to_owned),
                 kind: kind.to_owned(),
-                unit: member(window, "unit").as_str().map(str::to_owned),
+                unit: window.unit().map(str::to_owned),
                 points,
             });
         }
@@ -681,6 +1008,40 @@ mod tests {
             used: Some(used),
             remaining: None,
             reset_at,
+        }
+    }
+
+    #[test]
+    fn store_instant_is_the_parsed_store_text() {
+        let mut cases = vec![
+            0,
+            1,
+            999,
+            NOW,
+            NOW + 123,
+            STORE_ISO_MAX_MS - 1,
+            STORE_ISO_MAX_MS,
+            STORE_ISO_MAX_MS + 1,
+            STORE_ISO_MAX_MS + 86_400_000,
+            -1,
+            -1_000,
+            -86_400_000,
+            -62_167_219_200_000,
+            -62_167_219_200_001,
+            1_000_000_000_000_000,
+            -1_000_000_000_000_000,
+        ];
+        let mut ms = -70_000_000_000_000_i64;
+        while ms < 260_000_000_000_000 {
+            cases.push(ms);
+            ms += 1_234_567_890_123;
+        }
+        for ms in cases {
+            assert_eq!(
+                store_instant(ms),
+                js::date_parse_str(&aac_store::usage::iso(ms)),
+                "{ms}"
+            );
         }
     }
 

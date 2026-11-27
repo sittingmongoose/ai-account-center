@@ -11,7 +11,7 @@
 use crate::store_host::StoreHost;
 use aac_store::activity;
 use aac_store::collect::{self, Pricing, PricingResolution, Rates};
-use aac_store::report::{self, Ingestor, ReportArgs};
+use aac_store::report::{self, Ingestor, OwnedReportArgs};
 use aac_store::sampler::{self, BackfillSource};
 use scan_answer::Answer;
 use serde_json::{Map, Value, json};
@@ -868,18 +868,22 @@ async fn activity_pass(
         }
     }
     let scanner_owned: HashSet<String> = kinds.into_iter().collect();
-    let args = ReportArgs {
-        local: &local,
-        remote: &remote,
+    // The worker results are handed over: the reports take their cells and sessions instead of
+    // copying them, and each copy is dropped as soon as the next one is made.
+    let reports = report::build_activity_reports_owned(OwnedReportArgs {
+        local,
+        remote,
         states: &states,
         window_from_ms: cutoff,
         now,
         local_complete: &local_complete,
         scanner_owned: &scanner_owned,
-    };
-    let reports = report::build_activity_reports(&args);
+    });
     let (trimmed, remember) = guard.ingestor.trim(&reports);
-    if let Ok(typed) = report::contract_reports(&trimmed)
+    drop(reports);
+    let typed = report::contract_reports(&trimmed);
+    drop(trimmed);
+    if let Ok(typed) = typed
         && !typed.is_empty()
     {
         match activity::ingest(engine, &typed) {
@@ -1225,6 +1229,7 @@ mod tests {
     }
 
     use super::*;
+    use aac_store::report::ReportArgs;
 
     #[tokio::test]
     async fn analytics_writer_failure_leaves_a_later_quota_pass_running() {

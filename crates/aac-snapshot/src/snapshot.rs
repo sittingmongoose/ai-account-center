@@ -3,10 +3,10 @@
 //! (`downgradeCrossedSignInRows`). A pace is published only for a current reading: not after a
 //! passed reset, not for a failed or sign-in-needed account, and not older than the stale limit.
 
-use crate::history::{LongBurn, usage_history};
+use crate::SNAPSHOT_JSON;
+use crate::history::{HistoryFile, LongBurn, QuotaHistory, usage_history};
 use crate::js::{self, burn_key, date_parse, long_burn_key, member};
 use crate::projection::{ProjectedAccount, ProjectedWindow, project_agent_usage};
-use crate::{HISTORY_HOURS, SNAPSHOT_JSON};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -39,7 +39,7 @@ pub struct SampleEvent {
     /// The dashboard rows the sample recorded.
     pub accounts: Vec<Value>,
     /// The quota history, or null while it cannot be read.
-    pub history: Option<Value>,
+    pub history: Option<QuotaHistory>,
     /// The sample time, epoch milliseconds.
     pub sampled_at: i64,
     /// Each live window's 7- and 30-day burn, absent without the store.
@@ -98,14 +98,15 @@ fn null_str(value: &Value) -> Option<String> {
     value.as_str().map(str::to_owned)
 }
 
-/// The snapshot and history files for one sample, as the values the publisher writes.
+/// The snapshot and history files for one sample: the snapshot value and the history file the
+/// publisher writes straight to text.
 pub fn build_snapshot_files(
     event: &SampleEvent,
     refresh_seconds: f64,
     recent: Option<&crate::history::RecentReadings>,
     sign_in: &[Value],
     sign_in_renewal: Option<&Value>,
-) -> (Value, Value) {
+) -> (Value, HistoryFile) {
     let now = event.sampled_at;
     let projected = project_agent_usage(&event.accounts, now, None, true);
     let (rates, series) = usage_history(
@@ -156,7 +157,7 @@ pub fn build_snapshot_files(
     let mut snapshot = js::object(vec![
         ("version", json!(1)),
         ("source", json!("AI Account Center")),
-        ("generatedAt", json!(generated_at)),
+        ("generatedAt", json!(&generated_at)),
         ("refreshSeconds", js::number(refresh_seconds)),
         (
             "staleAfterSeconds",
@@ -172,15 +173,10 @@ pub fn build_snapshot_files(
     {
         snapshot["signInRenewal"] = renewal.clone();
     }
-    let history = js::object(vec![
-        ("version", json!(1)),
-        ("generatedAt", json!(generated_at)),
-        ("hours", json!(HISTORY_HOURS)),
-        (
-            "series",
-            Value::Array(series.iter().map(|s| s.value()).collect()),
-        ),
-    ]);
+    let history = HistoryFile {
+        generated_at,
+        series,
+    };
     (snapshot, history)
 }
 
@@ -272,10 +268,10 @@ mod tests {
     fn writes_identity_readings_burn_and_history() {
         let event = SampleEvent {
             accounts: vec![row()],
-            history: Some(
-                json!({"schemaVersion": 1, "collectedSince": "2026-10-01T00:00:00.000Z",
+            history: Some(QuotaHistory::from_value(
+                &json!({"schemaVersion": 1, "collectedSince": "2026-10-01T00:00:00.000Z",
                                   "records": [record(60, 10.0), record(30, 20.0), record(10, 25.0)]}),
-            ),
+            )),
             sampled_at: NOW,
             long_burn: None,
         };
@@ -284,6 +280,7 @@ mod tests {
         assert_eq!(member(&snapshot, "staleAfterSeconds").as_f64(), Some(300.0));
         let window = &member(&snapshot, "accounts")[0]["windows"][0];
         assert_eq!(member(window, "burn")["last15Minutes"].as_f64(), Some(30.0));
+        let history = history.value();
         let series = member(&history, "series").as_array().expect("series");
         assert_eq!(series.len(), 1);
         let points: Vec<f64> = series[0]["points"]
@@ -331,7 +328,7 @@ mod tests {
                 weekly(original, t35, 39.0, Some(next_reset)),
                 weekly("opencode-go:new-1", t35, 12.0, Some(next_reset)),
             ],
-            history: Some(json!({"records": [older]})),
+            history: Some(QuotaHistory::from_value(&json!({"records": [older]}))),
             sampled_at: js::date_parse_str(t35).expect("latest sample time"),
             long_burn: None,
         };

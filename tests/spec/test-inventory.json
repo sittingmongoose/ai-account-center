@@ -1886,6 +1886,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-snapshot/tests/store_history.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-status/src/answer_delivery.rs",
       "kind": "helper",
       "evidence": [

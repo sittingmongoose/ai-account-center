@@ -3005,6 +3005,67 @@ pub fn history_records_with_provider(engine: &Engine, query: &HistoryQuery) -> R
 }
 
 fn read_history_records(engine: &Engine, query: &HistoryQuery, include_provider: bool) -> Result<Json> {
+    let mut records: Vec<(i64, Json)> = Vec::new();
+    visit_history_records(engine, query, |visit| {
+        let wins: Vec<Json> = visit
+            .readings
+            .iter()
+            .map(|(index, row)| {
+                let (_, wmeta, smeta, _) = &visit.windows[*index];
+                window_json(wmeta, smeta, row)
+            })
+            .collect();
+        let state = visit.state;
+        let mut record = json!({
+            "identity": visit.account.identity,
+            "accountId": visit.account.account_id,
+            "sampledAt": iso(visit.at as i64),
+            "observedAt": iso(visit.observed),
+            "platform": state.platform,
+            "source": state.source,
+            "status": state.status,
+            "isActive": state.is_active,
+            "windows": wins,
+        });
+        if include_provider {
+            record["provider"] = json!(visit.account.provider);
+        }
+        records.push((visit.at as i64, record));
+    })?;
+    records.sort_by_key(|(t, _)| *t);
+    Ok(Json::Array(records.into_iter().map(|(_, r)| r).collect()))
+}
+
+/// One series of an account's history: its window id, window and series metadata, and its
+/// readings (span start, row) over the queried range.
+pub type HistoryWindowRows = (u32, WindowMeta, SeriesMeta, Vec<(u64, Row)>);
+
+/// One rebuilt account record, as `historyRecords` would write it, before any JSON is made.
+pub struct HistoryVisit<'a> {
+    /// The account's position in the visit order: a new value starts a new account.
+    pub account_index: usize,
+    /// The account.
+    pub account: &'a AccountMeta,
+    /// The account's series, in the order a record writes its windows.
+    pub windows: &'a [HistoryWindowRows],
+    /// The record time (`sampledAt`), epoch milliseconds.
+    pub at: u64,
+    /// The account state the record falls in.
+    pub state: &'a AccountState,
+    /// The rebuilt observation time (`observedAt`), epoch milliseconds.
+    pub observed: i64,
+    /// Each series with a reading at `at`: its index in `windows` and the reading, in order.
+    pub readings: &'a [(usize, &'a Row)],
+}
+
+/// Rebuilds the account records `history_records` returns and hands each one to `visit`, in
+/// each account's bucket order (accounts in table order). `history_records` sorts them by time;
+/// a typed reader can do the same without building a JSON tree for the whole range.
+pub fn visit_history_records(
+    engine: &Engine,
+    query: &HistoryQuery,
+    mut visit: impl FnMut(HistoryVisit<'_>),
+) -> Result<()> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let accounts = read.open_table(db::ACCOUNT)?;
@@ -3016,7 +3077,6 @@ fn read_history_records(engine: &Engine, query: &HistoryQuery, include_provider:
         let latest_table = read.open_table(db::ACCOUNT_LATEST)?;
         let latest_rows = read.open_table(db::LATEST)?;
         let (from, to) = (query.from_ms, query.to_ms);
-        let mut records: Vec<(i64, Json)> = Vec::new();
         // Named accounts through `dict_rev`; otherwise every account.
         let selected: Vec<(u32, AccountMeta)> = match &query.identities {
             Some(ids) => {
@@ -3037,7 +3097,7 @@ fn read_history_records(engine: &Engine, query: &HistoryQuery, include_provider:
                 out
             }
         };
-        for (a, meta) in selected {
+        for (account_index, (a, meta)) in selected.into_iter().enumerate() {
             // Account state spans overlapping the range: the span open at `from` (one reverse
             // seek; spans do not overlap, so no earlier one reaches it), then those starting in it.
             let mut spans: Vec<(u64, AccountState)> = Vec::new();
@@ -3078,7 +3138,7 @@ fn read_history_records(engine: &Engine, query: &HistoryQuery, include_provider:
                 series_meta.push((w, db::unpack::<SeriesMeta>(v.value())?));
             }
             let open = open_spans_for(&latest_rows, series_meta.iter().map(|(w, _)| (a, *w)))?;
-            let mut window_rows: Vec<(u32, WindowMeta, SeriesMeta, Vec<(u64, Row)>)> = Vec::new();
+            let mut window_rows: Vec<HistoryWindowRows> = Vec::new();
             for w in order {
                 let Some((_, smeta)) = series_meta.iter().find(|(id, _)| *id == w) else {
                     continue;
@@ -3191,36 +3251,29 @@ fn read_history_records(engine: &Engine, query: &HistoryQuery, include_provider:
                     );
                     (tau as i64 + offset).clamp(low, high)
                 };
-                let mut wins = Vec::new();
-                for (_, wmeta, smeta, rows) in &window_rows {
+                let mut wins: Vec<(usize, &Row)> = Vec::new();
+                for (index, (_, _, _, rows)) in window_rows.iter().enumerate() {
                     let end = rows.partition_point(|(t, _)| *t <= tau);
                     if let Some((_, row)) = end
                         .checked_sub(1)
                         .and_then(|i| rows.get(i))
                         .filter(|(_, r)| tau <= r.last_seen)
                     {
-                        wins.push(window_json(wmeta, smeta, row));
+                        wins.push((index, row));
                     }
                 }
-                let mut record = json!({
-                    "identity": meta.identity,
-                    "accountId": meta.account_id,
-                    "sampledAt": iso(tau as i64),
-                    "observedAt": iso(observed),
-                    "platform": state.platform,
-                    "source": state.source,
-                    "status": state.status,
-                    "isActive": state.is_active,
-                    "windows": wins,
+                visit(HistoryVisit {
+                    account_index,
+                    account: &meta,
+                    windows: &window_rows,
+                    at: tau,
+                    state,
+                    observed,
+                    readings: &wins,
                 });
-                if include_provider {
-                    record["provider"] = json!(meta.provider);
-                }
-                records.push((tau as i64, record));
             }
         }
-        records.sort_by_key(|(t, _)| *t);
-        Ok(Json::Array(records.into_iter().map(|(_, r)| r).collect()))
+        Ok(())
     })
 }
 

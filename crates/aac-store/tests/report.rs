@@ -145,3 +145,67 @@ fn ingestor_trims_unchanged_days_and_sessions() {
     assert!(fourth_cells > 0, "refused source resent");
     let _ = third;
 }
+
+/// MEM5 B #5: the pass hands its worker results over and the reports take their cells and
+/// sessions. A source listed twice must still read everything both times (the earlier reader
+/// copies, the last one takes), so every report is the one the borrowing builder makes.
+#[test]
+fn handed_over_results_build_the_same_reports_even_for_a_repeated_source() {
+    let doc = vectors();
+    let mut moved = 0usize;
+    for case in doc["passes"].as_array().expect("passes") {
+        let input = &case["input"];
+        let local = local_map(&input["local"]);
+        let remote = input["remote"].as_array().cloned().unwrap_or_default();
+        let states = input["states"].as_array().cloned().unwrap_or_default();
+        let local_complete = string_set(&input["localComplete"]);
+        let scanner_owned = string_set(&input["scannerOwned"]);
+        let window_from_ms = input["windowFromMs"].as_i64().expect("windowFromMs");
+        let now = input["now"].as_i64().expect("now");
+        let borrowed = report::build_activity_reports(&ReportArgs {
+            local: &local,
+            remote: &remote,
+            states: &states,
+            window_from_ms,
+            now,
+            local_complete: &local_complete,
+            scanner_owned: &scanner_owned,
+        });
+        let name = case["name"].as_str().unwrap_or("?");
+        let owned = report::build_activity_reports_owned(report::OwnedReportArgs {
+            local: local.clone(),
+            remote: remote.clone(),
+            states: &states,
+            window_from_ms,
+            now,
+            local_complete: &local_complete,
+            scanner_owned: &scanner_owned,
+        });
+        assert_eq!(
+            serde_json::to_string(&owned).unwrap(),
+            serde_json::to_string(&borrowed).unwrap(),
+            "pass {name}"
+        );
+        let twice: Vec<Value> = states.iter().chain(states.iter()).cloned().collect();
+        let repeated = report::build_activity_reports_owned(report::OwnedReportArgs {
+            local: local.clone(),
+            remote: remote.clone(),
+            states: &twice,
+            window_from_ms,
+            now,
+            local_complete: &local_complete,
+            scanner_owned: &scanner_owned,
+        });
+        let expected: Vec<&Value> = borrowed.iter().chain(borrowed.iter()).collect();
+        assert_eq!(
+            serde_json::to_string(&repeated).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+            "pass {name} with every source listed twice"
+        );
+        moved += borrowed
+            .iter()
+            .map(|r| r["cells"].as_array().map_or(0, Vec::len) + r["sessions"].as_array().map_or(0, Vec::len))
+            .sum::<usize>();
+    }
+    assert!(moved > 0, "the vectors carry cells and sessions to move");
+}
