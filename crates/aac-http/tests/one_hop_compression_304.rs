@@ -246,29 +246,37 @@ async fn start_fixture_server() -> RunningServer {
         }
         assert!(ready, "route {path} did not become ready");
     }
-    // A rescan that lands after the warm-up (the start-up passes finish on their own clock)
-    // serves the Scoreboard's cached view once marked stale and refreshing, then fresh. Wait
-    // for the settled view so the byte and ETag comparisons below compare one view.
-    let mut settled = false;
-    for _ in 0..40 {
-        let body: Value = client
-            .get(format!("{base}/api/scoreboard"))
-            .header(header::COOKIE, &cookie)
-            .header(header::ORIGIN, &origin)
-            .send()
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .map(|b| serde_json::from_slice(&b).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null);
-        if body["refreshing"] == false {
-            settled = true;
-            break;
+    // A start-up pass that lands after the warm-up (they finish on their own clock) serves a
+    // cached view once marked stale and `refreshing`, then fresh. Wait until every measured
+    // route answers settled so the byte and ETag comparisons below compare one view.
+    for path in [
+        "/api/status",
+        "/api/scoreboard",
+        "/api/accounts/analytics?platform=mac&range=7d&tz=UTC",
+        "/api/views/home?platform=mac&refresh=false",
+        "/api/accounts/dashboard?platform=mac&refresh=false",
+    ] {
+        let mut settled = false;
+        for _ in 0..80 {
+            let body: Value = client
+                .get(format!("{base}{path}"))
+                .header(header::COOKIE, &cookie)
+                .header(header::ORIGIN, &origin)
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .map(|b| serde_json::from_slice(&b).unwrap_or(Value::Null))
+                .unwrap_or(Value::Null);
+            if body["refreshing"] != true {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(settled, "route {path} never settled");
     }
-    assert!(settled, "the Scoreboard view never settled");
 
     RunningServer {
         _fixture: fixture,
