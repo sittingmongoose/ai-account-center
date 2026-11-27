@@ -106,7 +106,7 @@
   ],
   "preferGlobal": true,
   "scripts": {
-    "postuninstall": "cargo run --locked -p aac-xtask -- release postuninstall",
+    "postuninstall": "node scripts/postuninstall.js",
     "build": "bun run build:all",
     "build:server": "cargo run --locked -p aac-xtask -- build dashboard && node scripts/build-native.js --copy-only && node scripts/build-status-native.js --copy-only && cargo run --locked -p aac-xtask -- build usage-scan --stage && cargo run --locked -p aac-xtask -- build agent --copy-only && cargo run --locked -p aac-xtask -- build cursor-account --copy-only && cargo run --locked -p aac-xtask -- release lineage record-build",
     "build:all": "bun run ui:build && bun run build:server",
@@ -141,7 +141,7 @@
     "prepack": "cargo run --locked -p aac-xtask -- check line-endings && bun run build:all",
 
     "prepare": "husky",
-    "postinstall": "cargo run --locked -p aac-xtask -- release postinstall",
+    "postinstall": "node scripts/postinstall.js",
     "perf:memory": "cargo run --locked -p aac-xtask -- perf memory-budget"
   },
   "devDependencies": {
