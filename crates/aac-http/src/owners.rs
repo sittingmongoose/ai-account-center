@@ -91,9 +91,9 @@ impl Owners {
             None => Registry::defaults(rows),
         };
         let store = config.store.map(StoreHost::new);
-        // Status and Scoreboard share one readers-check writer and one in-flight flush.
+        // Status and Scoreboard share one compact readers-check writer and one in-flight flush.
         let check = Arc::new(Mutex::new(
-            aac_status::share::check::ReadersCheckWriter::new(
+            crate::compact_share::check::CompactReadersCheckWriter::new(
                 config
                     .owned
                     .as_ref()

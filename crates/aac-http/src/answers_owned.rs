@@ -151,10 +151,13 @@ impl AnswersOwned {
     /// G16c: the feed's answer history. The cards' shared copies are scanned into the store first
     /// (`scanSharedAnswers`), then the journal's records and the verified share copies are merged
     /// (`mergeSharedAnswers`), the sends with them and the share map pruned to the open cards.
+    /// Non-open cards pass lightweight 3-field stubs (`id`, `seq`, `state`) so closed card docs
+    /// are never deserialized.
     pub(crate) fn feed(
         &self,
-        cards: &[Arc<aac_status::share::reports::SeenReport>],
+        cards: &[Arc<crate::compact_share::reports::CompactSeenReport>],
     ) -> AnswersFeed {
+        use crate::compact_share::reports::CardState;
         let mut engine = lock(&self.engine);
         let history = engine.list().map(|entries| entries.to_vec());
         let sends = engine.send_list();
@@ -162,9 +165,25 @@ impl AnswersOwned {
             .as_ref()
             .map(|entries| closing_card_versions(entries))
             .unwrap_or_default();
-        let versions: Vec<_> = cards
+        let owned_versions: Vec<(Json, String)> = cards
             .iter()
-            .map(|row| (row.doc.as_ref(), row.sha256.as_str()))
+            .filter_map(|row| {
+                let card = row.card()?;
+                let doc = if card.state == CardState::Open {
+                    card.to_json()
+                } else {
+                    json!({
+                        "id": card.id.as_ref(),
+                        "seq": card.seq,
+                        "state": card.state.as_str(),
+                    })
+                };
+                Some((doc, row.sha256.to_hex_string()))
+            })
+            .collect();
+        let versions: Vec<(&Json, &str)> = owned_versions
+            .iter()
+            .map(|(doc, sha)| (doc, sha.as_str()))
             .collect();
         engine.scan_shared_answers(&versions, &closed);
         let shared = engine.shared_answers_for(&versions);

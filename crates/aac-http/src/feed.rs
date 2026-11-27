@@ -403,36 +403,28 @@ impl Feeds {
         }))
     }
 
-    pub(crate) fn prepare_owned_reports(
+    /// Compact owned `status-reports` generation (MEM7 Lane 4a): hashes the typed snapshot
+    /// directly without building a multi-MB wire JSON string or `ReportView` cache.
+    pub(crate) fn prepare_owned_reports_compact(
         id: String,
-        text: String,
-        reports: Arc<aac_status::read_status::ReportView>,
+        data_hash: [u8; 32],
+        data_len: usize,
+        reports: Arc<crate::status_compose::OwnedReportsView>,
         valid: bool,
         scan: crate::status_fed::ScanClock,
     ) -> Result<Arc<Generation>, Decline> {
-        // `text` is machine-built JSON; the digest/hashes prove identity without
-        // retaining its bytes once the reports prepared (same as `put`).
-        let data_hash = hash_bytes(text.as_bytes());
         let facts_hash = hash_bytes(b"{}");
-        let data_len = text.len();
-        let generation_digest = digest_bytes(data_len, text.as_bytes(), b"{}");
+        let generation_digest = digest_bytes(data_len, &data_hash, &facts_hash);
         let prepared = Prepared::Status(if valid {
             Ok(crate::status_fed::prepared_reports(reports, scan))
         } else {
             Err(Decline::Shape)
         });
-        let (data, facts) = if retain_raw(&prepared) {
-            let data = RawValue::from_string(text).map_err(|_| Decline::Shape)?;
-            let facts = RawValue::from_string("{}".to_owned()).map_err(|_| Decline::Internal)?;
-            (Some(data), Some(facts))
-        } else {
-            (None, None)
-        };
         Ok(Arc::new(Generation {
             id,
             digest: generation_digest,
-            data,
-            facts,
+            data: None,
+            facts: None,
             prepared,
             data_len,
             facts_present: true,
@@ -441,36 +433,60 @@ impl Feeds {
         }))
     }
 
-    /// The owned `status-collected` generation (MEM5 Lane C): `text` is the wire
-    /// bytes the digest proves, `view` the typed shared members the composer reads.
-    pub(crate) fn prepare_collected_owned(
+    /// Compact owned `status-collected` generation (MEM7 Lane 4a): shares the typed
+    /// `CompactRegistrySnapshot` and small collected panels directly without serializing
+    /// thousands of registry entries to JSON.
+    pub(crate) fn prepare_collected_owned_compact(
         id: String,
-        text: String,
+        data_hash: [u8; 32],
+        data_len: usize,
         view: Arc<crate::status_fed::CollectedView>,
         valid: bool,
         scan: crate::status_fed::ScanClock,
     ) -> Result<Arc<Generation>, Decline> {
-        let data_hash = hash_bytes(text.as_bytes());
         let facts_hash = hash_bytes(b"{}");
-        let data_len = text.len();
-        let generation_digest = digest_bytes(data_len, text.as_bytes(), b"{}");
+        let generation_digest = digest_bytes(data_len, &data_hash, &facts_hash);
         let prepared = Prepared::Status(if valid {
             Ok(crate::status_fed::prepared_collected(view, scan))
         } else {
             Err(Decline::Shape)
         });
-        let (data, facts) = if retain_raw(&prepared) {
-            let data = RawValue::from_string(text).map_err(|_| Decline::Shape)?;
-            let facts = RawValue::from_string("{}".to_owned()).map_err(|_| Decline::Internal)?;
-            (Some(data), Some(facts))
-        } else {
-            (None, None)
-        };
         Ok(Arc::new(Generation {
             id,
             digest: generation_digest,
-            data,
-            facts,
+            data: None,
+            facts: None,
+            prepared,
+            data_len,
+            facts_present: true,
+            data_hash,
+            facts_hash,
+        }))
+    }
+
+    /// Compact owned `status-facts` generation (MEM7 Lane 4a): holds the display `Zone`
+    /// directly (~200 bytes) instead of building and retaining a multi-MB `Presentation` map.
+    pub(crate) fn prepare_owned_facts(
+        id: String,
+        data_text: &str,
+        data: serde_json::Value,
+        zone: aac_num::intl::Zone,
+        facts_hash: [u8; 32],
+    ) -> Result<Arc<Generation>, Decline> {
+        let data_hash = hash_bytes(data_text.as_bytes());
+        let data_len = data_text.len();
+        let generation_digest = digest_bytes(data_len, &data_hash, &facts_hash);
+        let valid = crate::status_fed::fed_part(&data).is_some();
+        let prepared = Prepared::Status(if valid {
+            Ok(crate::status_fed::prepared_facts(data, zone))
+        } else {
+            Err(Decline::Shape)
+        });
+        Ok(Arc::new(Generation {
+            id,
+            digest: generation_digest,
+            data: None,
+            facts: None,
             prepared,
             data_len,
             facts_present: true,

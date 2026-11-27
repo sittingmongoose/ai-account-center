@@ -1065,6 +1065,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/compact_share/parity_tests.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/compress.rs",
       "kind": "internal",
       "evidence": [],
