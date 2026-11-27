@@ -100,6 +100,10 @@ fn stamping_and_wasm_strip_match_node() {
     assert!(ui::strip_names(&[0, 97, 115, 109, 1, 0, 0, 0, 1, 127]).is_err());
 }
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "byte parity with Node's zlib is the Linux build's (CI and the gate); macOS arm64 zlib output differs"
+)]
 fn compression_matches_node_bytes() {
     let dir = tempfile::tempdir().expect("temp");
     let bytes = "const repeated = 'abcdefghijklmnopqrstuvwxyz';\n".repeat(100);
@@ -130,6 +134,10 @@ fn corrupted_catalog_pin_is_rejected() {
     assert!(build::verify_dist(r.path(), Kind::Agent, &dir).is_err());
 }
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "off Linux the build lock is the legacy owner file, which another process's flock does not hold"
+)]
 fn build_lock_refuses_concurrent_holder() {
     use fs2::FileExt;
     let dir = tempfile::tempdir().expect("temp");
@@ -186,6 +194,10 @@ fn ui_fingerprint_rejects_parent_symlink() {
     assert!(ui::fingerprint_inputs(dir.path(), &[".cargo/config.toml".into()]).is_err());
 }
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "byte parity with Node's zlib is the Linux build's (CI and the gate); macOS arm64 zlib output differs"
+)]
 fn whole_ui_package_matches_node() {
     let fixture = tempfile::tempdir().expect("fixture");
     let r = fixture.path();

@@ -575,6 +575,10 @@ fn computes_steady_median_peaks_and_evaluates_thresholds() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "memory-budget requires Linux /proc sampling and refuses first elsewhere"
+)]
 fn rejects_misspelled_missing_non_finite_and_unknown_limit_keys() {
     let summary = summarize_samples(
         &[
@@ -784,6 +788,10 @@ fn refuses_steady_fallback_and_insufficient_steady_samples_in_check_mode() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "memory-budget requires Linux /proc sampling and refuses first elsewhere"
+)]
 fn validates_run_options_cli_zero_duration_and_route_failures_including_last_poll() {
     let plan = default_poll_plan();
     let mut opts = RunOptions::default_for(&repo_root());
@@ -977,6 +985,10 @@ fn detects_sigkilled_child_isolates_env_and_drops_node_artifact_check() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "memory-budget requires Linux /proc sampling and refuses first elsewhere"
+)]
 fn tool_batch_1126_guards_pss_interval_symlinks_sampling_note_and_http_decoders() {
     // 1. RSS fallback marks PSS unavailable
     let fallback = parse_proc_status_rss("VmRSS: 78156 kB\nVmSwap: 0 kB\n");
