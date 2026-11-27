@@ -219,13 +219,17 @@ function shouldVerifyRunFileCount(run) {
 }
 
 // A machine that opts out of local Rust/WebAssembly builds (AAC_NO_LOCAL_RUST_BUILD=1)
-// gets only the TypeScript server build, so a missing dist/ never starts a UI compile.
+// gets only the server build, so a missing dist/ never starts a UI compile.
 function slowBucketBuildScript(env = process.env) {
   return env.AAC_NO_LOCAL_RUST_BUILD === '1' ? 'build:server' : 'build';
 }
 
+// dist/build-info.json is the last step of every build (deploy-lineage record-build, the
+// tail of build:server) and ships in the CI dist artifact, so its presence means dist/
+// is built. (dist/ccs.js was the pre-TS1 marker; the src-free build never produces it,
+// and checking for it made every CI test job rebuild - and fail on the absent wasm-pack.)
 function ensureBuildForSlowBucket() {
-  if (fs.existsSync(path.join(rootDir, 'dist', 'ccs.js'))) {
+  if (fs.existsSync(path.join(rootDir, 'dist', 'build-info.json'))) {
     return 0;
   }
 

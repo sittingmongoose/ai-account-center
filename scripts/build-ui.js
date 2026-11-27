@@ -74,8 +74,20 @@ function commandRunner(command, args, options = {}) {
     windowsHide: true,
   });
   if (result.error || result.status !== 0) {
+    const details = [];
+    if (result.error) details.push(`could not start (${result.error.message})`);
+    if (result.signal) details.push(`stopped by signal ${result.signal}`);
+    else if (result.status !== null && result.status !== undefined)
+      details.push(`with exit ${result.status}`);
+    // Captured output (toolchain checks run with capture) must not be swallowed: a
+    // missing wasm-pack used to surface only as "wasm-pack failed." with no cause.
+    const output = [result.stderr, result.stdout]
+      .map((text) => (typeof text === 'string' ? text.trim() : ''))
+      .filter(Boolean)
+      .join('\n');
+    if (output) details.push(`output:\n${output.split(/\r?\n/).slice(-20).join('\n')}`);
     const error = new Error(
-      `${path.basename(command)} failed${result.status === null ? '' : ` with exit ${result.status}`}.`
+      `${path.basename(command)} failed${details.length ? ` (${details.join('; ')})` : ''}.`
     );
     error.status = result.status;
     throw error;
