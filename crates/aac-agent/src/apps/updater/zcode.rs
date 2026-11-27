@@ -1703,14 +1703,47 @@ fn npm_argv(
     shell: Option<&Path>,
     version: &str,
 ) -> Vec<OsString> {
-    let mut argv: Vec<OsString> = [node, cli].map(|path| path.as_os_str().to_owned()).to_vec();
+    let mut argv: Vec<OsString> = [node, cli]
+        .map(|path| plain(path).into_os_string())
+        .to_vec();
     argv.extend(["install", "--global", "--prefix"].map(OsString::from));
-    argv.push(prefix.as_os_str().to_owned());
+    argv.push(plain(prefix).into_os_string());
     if let Some(shell) = shell {
-        argv.extend(["--script-shell".into(), shell.as_os_str().to_owned()]);
+        argv.extend(["--script-shell".into(), plain(shell).into_os_string()]);
     }
+    // npm 11 skips a package's install scripts unless the install allows them by name; the
+    // adapters' postinstall is part of their install.
+    argv.push(format!("--allow-scripts={}", PACKAGES[adapter].1).into());
     argv.push(format!("{}@{version}", PACKAGES[adapter].1).into());
     argv
+}
+
+/// A Windows verbatim path written the plain way, as `dunce::simplified` does: `\\?\C:\..`
+/// becomes `C:\..` and `\\?\UNC\server\share\..` becomes `\\server\share\..`. npm 11
+/// cannot install into a verbatim `--prefix` (it exits 1 with "Maximum call stack size
+/// exceeded"). Any other path, and a verbatim one with no plain spelling (a volume or device
+/// path, or one past the 260-character limit), is returned unchanged.
+fn plain(path: &Path) -> PathBuf {
+    const MAX_PATH: usize = 260;
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        if !rest.is_empty() && rest.len() + 2 < MAX_PATH {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'\\'
+            && rest.len() < MAX_PATH
+        {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Git for Windows' bash.exe, the POSIX shell the adapters' postinstall scripts are
@@ -1877,13 +1910,10 @@ fn install_command(
             let mut argv: Vec<OsString> =
                 pnpm_argv(host, vars)?.into_iter().map(Into::into).collect();
             argv.extend(["add", "--global", "--global-dir"].map(OsString::from));
-            argv.push(owner.prefix.as_os_str().to_owned());
+            argv.push(plain(&owner.prefix).into_os_string());
             argv.push(package.into());
             // pnpm refuses a global install without its bin folder (PNPM_HOME) on PATH.
-            let bin_dir = owner
-                .bin_dir
-                .as_deref()
-                .unwrap_or(&owner.prefix)
+            let bin_dir = plain(owner.bin_dir.as_deref().unwrap_or(&owner.prefix))
                 .to_string_lossy()
                 .into_owned();
             let path = format!(
@@ -1913,7 +1943,7 @@ fn install_command(
                 argv,
                 extra: vec![(
                     "BUN_INSTALL_GLOBAL_DIR".into(),
-                    owner.prefix.to_string_lossy().into_owned(),
+                    plain(&owner.prefix).to_string_lossy().into_owned(),
                 )],
                 label: "bun add --global",
             })
@@ -2768,7 +2798,10 @@ async fn install_owned(
                     cx.record(|record| record.blame(FailureCause::NotWritable, Some("npm_denied")));
                 }
             }
-            Err(error) => failures.push((step, error.code)),
+            Err(error) => {
+                cx.record(|record| record.installer_output(&error.output));
+                failures.push((step, error.code));
+            }
         }
     }
     for (step, code) in failures {
@@ -4793,6 +4826,7 @@ mod tests {
                 "--global".into(),
                 "--prefix".into(),
                 rig.path().join(".local").to_string_lossy().into_owned(),
+                "--allow-scripts=@brokkai/muse-acp".into(),
                 "@brokkai/muse-acp@0.10.1".into(),
             ]]
         );
@@ -5818,6 +5852,7 @@ mod tests {
                     "--global".into(),
                     "--prefix".into(),
                     prefix.to_string_lossy().into_owned(),
+                    "--allow-scripts=@brokkai/muse-acp".into(),
                     "@brokkai/muse-acp@0.10.1".into(),
                 ]]
             );
@@ -6315,6 +6350,7 @@ mod tests {
                     prefix.to_string_lossy().into_owned(),
                     "--script-shell".into(),
                     bash.to_string_lossy().into_owned(),
+                    "--allow-scripts=@brokkai/muse-acp".into(),
                     "@brokkai/muse-acp@0.10.1".into(),
                 ],
                 vec![
@@ -6326,6 +6362,7 @@ mod tests {
                     prefix.to_string_lossy().into_owned(),
                     "--script-shell".into(),
                     bash.to_string_lossy().into_owned(),
+                    "--allow-scripts=zcode-acp-server".into(),
                     "zcode-acp-server@0.65.1".into(),
                 ],
             ]
@@ -7622,6 +7659,122 @@ mod tests {
             let at = run.iter().position(|w| w == "--prefix").expect("prefix");
             assert_eq!(PathBuf::from(&run[at + 1]), rig.path().join(".local"));
         }
+    }
+
+    // ------------------------------------------------- Windows ACP adapters (tools-lead 2026-11-27)
+
+    /// npm 11.20 exits 1 ("Maximum call stack size exceeded") for a verbatim `--prefix`; the
+    /// install is spelled with the plain path, and npm 11 runs the adapter's own postinstall
+    /// only when the install names it in `--allow-scripts`.
+    #[test]
+    fn a_verbatim_owner_prefix_installs_with_a_plain_prefix_and_allows_the_adapter_script() {
+        let argv: Vec<String> = npm_argv(
+            Path::new(r"\\?\C:\Program Files\nodejs\node.exe"),
+            Path::new(r"\\?\C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js"),
+            Path::new(r"\\?\C:\Users\someone\AppData\Roaming\npm"),
+            ACP,
+            Some(Path::new(r"\\?\C:\Program Files\Git\bin\bash.exe")),
+            "0.96.3",
+        )
+        .iter()
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+        assert_eq!(
+            argv,
+            [
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js",
+                "install",
+                "--global",
+                "--prefix",
+                r"C:\Users\someone\AppData\Roaming\npm",
+                "--script-shell",
+                r"C:\Program Files\Git\bin\bash.exe",
+                "--allow-scripts=zcode-acp-server",
+                "zcode-acp-server@0.96.3",
+            ]
+        );
+        let muse: Vec<String> = npm_argv(
+            Path::new("/usr/bin/node"),
+            Path::new("/usr/lib/node_modules/npm/bin/npm-cli.js"),
+            Path::new("/usr/local"),
+            MUSE,
+            None,
+            "0.26.0",
+        )
+        .iter()
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+        assert!(muse.contains(&"--allow-scripts=@brokkai/muse-acp".to_owned()));
+        assert!(muse.contains(&"/usr/local".to_owned()));
+    }
+
+    /// `dunce::simplified`'s rule: a verbatim drive or UNC path is written plainly; anything
+    /// else (a plain path, a device or volume path, one too long for the plain form) stays.
+    #[test]
+    fn verbatim_paths_are_simplified_only_when_a_plain_spelling_exists() {
+        for (given, plain_form) in [
+            (r"\\?\C:\Users\someone\npm", r"C:\Users\someone\npm"),
+            (r"\\?\d:\agent-scratch", r"d:\agent-scratch"),
+            (r"\\?\UNC\server\share\npm", r"\\server\share\npm"),
+            (r"C:\Users\someone\npm", r"C:\Users\someone\npm"),
+            ("/home/someone/.npm-global", "/home/someone/.npm-global"),
+            (r"\\?\Volume{0b1a}\npm", r"\\?\Volume{0b1a}\npm"),
+            (r"\\.\pipe\npm", r"\\.\pipe\npm"),
+            (r"\\?\C:", r"\\?\C:"),
+            (r"\\?\UNC\", r"\\?\UNC\"),
+        ] {
+            assert_eq!(
+                plain(Path::new(given)),
+                PathBuf::from(plain_form),
+                "{given}"
+            );
+        }
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(plain(Path::new(&long)), PathBuf::from(&long));
+    }
+
+    /// A failed install keeps npm's deciding line (scrubbed, bounded) in the row's diagnostics,
+    /// so the next failure says why instead of only "installer_failed".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_adapter_install_keeps_the_npm_error_line() {
+        let mut rig = Rig::start();
+        let prefix = write_npm_prefix_adapter(rig.path(), "opt/homebrew", "0.95.1");
+        write_t3_consumers(rig.path(), &[prefix.join("zcode-acp-server/dist/cli.js")]);
+        let (node, _) = write_npm_pair(&rig.path().join("node"), Platform::Mac);
+        rig.search_path
+            .push(node.parent().expect("bin").to_path_buf());
+        rig.system.clone().lookup(feed(None, None, Some("0.96.3")));
+        rig.system.clone().answering(|_| {
+            Err(UpdateFailure {
+                output: [
+                    "npm warn config something harmless",
+                    "npm error Maximum call stack size exceeded",
+                    "npm error A complete log of this run can be found in: /x/_logs/debug-0.log",
+                    "npm error token=sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789",
+                    "",
+                ]
+                .join("\n"),
+                exit_code: Some(1),
+                ..UpdateFailure::failed()
+            })
+        });
+        let row = rig.adapters(Platform::Mac).await;
+        assert_eq!(row["status"], "failed", "{row}");
+        let output = row["diagnostics"]["output"]
+            .as_str()
+            .expect("npm output kept");
+        assert!(
+            output.contains("Maximum call stack size exceeded"),
+            "{output}"
+        );
+        assert!(
+            !output.contains("abcdefghijklmnopqrstuvwxyz0123456789"),
+            "{output}"
+        );
+        assert!(!output.contains("harmless"), "{output}");
+        assert!(output.chars().count() <= 300, "{output}");
     }
 
     // W3-TESTS-END

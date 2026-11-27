@@ -441,6 +441,10 @@ fn diagnostics(value: &Value) -> Option<Value> {
     if !notes.is_empty() {
         row["notes"] = json!(notes);
     }
+    // A failed installer's deciding line, scrubbed again here like adapter paths.
+    if let Some(output) = display_path(&value["output"]) {
+        row["output"] = json!(output);
+    }
     Some(row)
 }
 

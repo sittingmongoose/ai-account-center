@@ -202,6 +202,8 @@ pub(crate) struct Diagnostics {
     cause: Option<FailureCause>,
     reason: Option<String>,
     notes: Vec<String>,
+    /// The deciding lines of a failed installer's output, scrubbed and bounded.
+    output: Option<String>,
 }
 
 impl Diagnostics {
@@ -270,6 +272,37 @@ impl Diagnostics {
         }
     }
 
+    /// Keep the lines of a failed installer's output that say why: its error lines (npm's
+    /// `npm error ...`, `ERR!`), else its last line; token-like text scrubbed, at most 300
+    /// characters, and a line holding anything token-like is dropped. Never the whole output.
+    pub(crate) fn installer_output(&mut self, output: &str) {
+        // A line the shared scrubber would change may carry a credential: it is left out whole.
+        let lines: Vec<&str> = output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && aac_core::scrub(line).as_str() == *line)
+            .collect();
+        let errors: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|line| {
+                let lower = line.to_ascii_lowercase();
+                lower.contains("error") || lower.contains("err!")
+            })
+            .filter(|line| !line.contains("A complete log of this run"))
+            .collect();
+        let chosen = if errors.is_empty() {
+            lines.last().map(|line| vec![*line]).unwrap_or_default()
+        } else {
+            errors.into_iter().take(3).collect()
+        };
+        let text = chosen.join(" | ");
+        if text.is_empty() {
+            return;
+        }
+        self.output = Some(text.chars().take(300).collect());
+    }
+
     /// The row's `diagnostics` object (Python `export`).
     pub(crate) fn export(&mut self, row: &Value) -> Value {
         self.phase(None);
@@ -314,6 +347,9 @@ impl Diagnostics {
         }
         if !self.notes.is_empty() {
             value.insert("notes".into(), json!(self.notes));
+        }
+        if let Some(output) = &self.output {
+            value.insert("output".into(), output.clone().into());
         }
         Value::Object(value)
     }
