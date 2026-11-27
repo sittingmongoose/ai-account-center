@@ -1980,6 +1980,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/share/report.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/src/share/reports.rs",
       "kind": "internal",
       "evidence": [],
@@ -3023,6 +3029,12 @@
     },
     {
       "file": "web-dashboard/leptos/src/api.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/blocks.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
