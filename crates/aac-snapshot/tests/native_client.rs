@@ -4,20 +4,25 @@ use aac_snapshot::client;
 use serde_json::json;
 use std::{fs, path::Path};
 #[test]
-fn publishes_native_launchers_and_keeps_the_python_oracle_out_of_the_share() {
+fn publishes_the_python_reader_as_aac_usage_and_the_native_launchers_beside_it() {
     let dir = tempfile::tempdir().expect("share fixture").keep();
     let computers = dir.join("source-computers.json");
     fs::write(&computers, b"{}").expect("computer registry");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/agent-usage");
     client::sync_snapshot_client(&dir, &source, &computers, None).expect("native publication");
-    let posix = fs::read_to_string(dir.join("aac-usage")).expect("POSIX launcher");
+    // Every computer's agents run `python3 <share>/aac-usage`; most have no native CLI.
+    let reader = fs::read_to_string(dir.join("aac-usage")).expect("Python reader");
+    assert!(reader.starts_with("#!/usr/bin/env python3\n"));
+    let windows = fs::read_to_string(dir.join("aac-usage.cmd")).expect("Windows reader launcher");
+    assert!(windows.contains("python"));
+    assert!(windows.contains("\r\n"));
+    let posix = fs::read_to_string(dir.join("aac-usage-native")).expect("POSIX native launcher");
     assert!(posix.starts_with("#!/bin/sh\n"));
     assert!(posix.contains("ai-account-center usage"));
-    assert!(!posix.contains("python"));
-    let windows = fs::read_to_string(dir.join("aac-usage.cmd")).expect("Windows launcher");
-    assert!(windows.contains("ai-account-center usage"));
-    assert!(windows.contains("\r\n"));
-    assert!(!windows.contains("python"));
+    let native_cmd =
+        fs::read_to_string(dir.join("aac-usage-native.cmd")).expect("Windows native launcher");
+    assert!(native_cmd.contains("ai-account-center usage"));
+    assert!(native_cmd.contains("\r\n"));
 }
 #[cfg(unix)]
 #[test]
@@ -50,7 +55,7 @@ fn published_posix_launcher_forwards_its_directory_and_arguments_to_native_reade
     )
     .expect("native command double");
     fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).expect("executable");
-    let output = Command::new(share.join("aac-usage"))
+    let output = Command::new(share.join("aac-usage-native"))
         .args(["--provider", "openai", "--json"])
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
         .env("AAC_READER_BIN", env!("CARGO_BIN_EXE_aac-usage"))
@@ -73,7 +78,7 @@ fn published_posix_launcher_forwards_its_directory_and_arguments_to_native_reade
         json!({"accounts":[{"provider":"codex","id":"configured","windows":[]}]}).to_string(),
     )
     .expect("configured snapshot");
-    let output = Command::new(share.join("aac-usage"))
+    let output = Command::new(share.join("aac-usage-native"))
         .args(["--json"])
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
         .env("AAC_READER_BIN", env!("CARGO_BIN_EXE_aac-usage"))
