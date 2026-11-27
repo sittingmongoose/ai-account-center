@@ -1838,9 +1838,10 @@
     },
     {
       "file": "crates/aac-snapshot/tests/native_client.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-snapshot/tests/parity.rs",
