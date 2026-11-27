@@ -110,9 +110,12 @@ fn small_json(path: &Path, cap: u64) -> Result<Option<Value>, ()> {
     serde_json::from_slice(&bytes).map(Some).map_err(|_| ())
 }
 
+/// The renewal computers (name, whether it is this computer) and the profiles left alone.
+type RenewalSettings = (Vec<(String, bool)>, Vec<String>);
+
 /// The computers in the Claude renewal settings (`<ccs>/claude-renew/config.json`): each name and
 /// whether it is this computer (no `ssh`), plus the profile names the renewal leaves alone.
-fn renewal_settings(places: &Places) -> Result<(Vec<(String, bool)>, Vec<String>), String> {
+fn renewal_settings(places: &Places) -> Result<RenewalSettings, String> {
     let value = match small_json(
         &places.ccs.join("claude-renew").join("config.json"),
         1 << 20,
@@ -918,7 +921,8 @@ mod tests {
                 codex: true,
                 claude: vec![],
                 renewal_host: Some("ubuntu".into()),
-                dry_run: false
+                dry_run: false,
+                ..Request::default()
             }
         );
         assert_eq!(

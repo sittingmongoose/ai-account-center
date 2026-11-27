@@ -80,9 +80,20 @@ with no such login shows **unavailable** with the reason; nothing renews the T3
 logins (Codex does that itself).
 
 The same switch cuts Claude renewal to that computer's sign-ins, one per
-account. On every other computer, `aac-agent --logins-quarantine --claude
-<profiles>` moves the Claude sign-in files of profiles that already run on a
-static `claude setup-token` token. `aac-agent --logins-status` shows what is
+account. The name must be a computer in the Claude renewal settings, or the
+command refuses (a wrong name would pause renewal everywhere). The dry run and
+the switch-on list the profiles that stay renewed there and every second
+profile of an account, which is not renewed; switch-on is refused until each
+such profile runs on a static token or is listed with `--claude` in the same
+run (only on the renewal computer itself). On every other computer,
+`aac-agent --logins-quarantine --claude <profiles>` moves the Claude sign-in
+files of profiles that already run on a static `claude setup-token` token. A
+profile is refused, and named, unless that computer holds a delivered Claude
+token for its account that reads cleanly, and, where the static logins
+registry lives, the registry shows it delivered there with one clean read. The
+account is `claude:<profile>` or the Claude account signed in with the same
+email; name it as `<profile>=<account>` when neither fits (such as
+`default=jmtashjian`). `aac-agent --logins-status` shows what is
 held, and `aac-agent --logins-restore` (the exact command is printed by the
 quarantine) puts every file back, never over a newer one, and turns the switch
 off. A purge of `disabled-rollback/` is a separate, later action.
