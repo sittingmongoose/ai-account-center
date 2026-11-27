@@ -1092,11 +1092,11 @@ mod dpapi {
 
     #[allow(unsafe_code)]
     pub(super) fn protect(plain: &[u8]) -> Option<Vec<u8>> {
-        let mut input = CRYPT_INTEGER_BLOB {
+        let input = CRYPT_INTEGER_BLOB {
             cbData: u32::try_from(plain.len()).ok()?,
             pbData: plain.as_ptr() as *mut u8,
         };
-        let mut entropy = CRYPT_INTEGER_BLOB {
+        let entropy = CRYPT_INTEGER_BLOB {
             cbData: u32::try_from(ENTROPY.len()).ok()?,
             pbData: ENTROPY.as_ptr() as *mut u8,
         };
@@ -1108,9 +1108,9 @@ mod dpapi {
         // allocated by Windows and released via LocalFree before returning.
         let ok = unsafe {
             CryptProtectData(
-                &mut input,
+                &input,
                 null(),
-                &mut entropy,
+                &entropy,
                 null_mut(),
                 null(),
                 CRYPTPROTECT_UI_FORBIDDEN,
@@ -1132,11 +1132,11 @@ mod dpapi {
 
     #[allow(unsafe_code)]
     pub(super) fn unprotect(ciphertext: &[u8]) -> Option<Vec<u8>> {
-        let mut input = CRYPT_INTEGER_BLOB {
+        let input = CRYPT_INTEGER_BLOB {
             cbData: u32::try_from(ciphertext.len()).ok()?,
             pbData: ciphertext.as_ptr() as *mut u8,
         };
-        let mut entropy = CRYPT_INTEGER_BLOB {
+        let entropy = CRYPT_INTEGER_BLOB {
             cbData: u32::try_from(ENTROPY.len()).ok()?,
             pbData: ENTROPY.as_ptr() as *mut u8,
         };
@@ -1147,9 +1147,9 @@ mod dpapi {
         // SAFETY: input and entropy point to valid buffers; output is released via LocalFree.
         let ok = unsafe {
             CryptUnprotectData(
-                &mut input,
+                &input,
                 null_mut(),
-                &mut entropy,
+                &entropy,
                 null_mut(),
                 null(),
                 CRYPTPROTECT_UI_FORBIDDEN,

@@ -763,6 +763,8 @@ where
 // ---------------------------------------------------------------------------
 
 /// Ubuntu's verified native fallback file store (`auth_platforms.py:SecureFileStore`).
+// Windows never reads the file: the adapter needs POSIX ownership checks.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub struct SecureFileStore {
     home: PathBuf,
     path: PathBuf,
