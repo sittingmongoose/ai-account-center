@@ -36,6 +36,7 @@ dependencies = [
  "aac-num",
  "base64",
  "fs2",
+ "getrandom 0.4.3",
  "libc",
  "rustix",
  "serde",
