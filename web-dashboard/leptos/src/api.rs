@@ -808,6 +808,9 @@ pub struct Block {
     pub items: Vec<serde_json::Value>,
     #[serde(deserialize_with = "nullable")]
     pub rows: Vec<serde_json::Value>,
+    /// A quote block's deciding quote ids, when the asker names them.
+    #[serde(deserialize_with = "nullable")]
+    pub key: Vec<String>,
     /// planChange: the document, the unit in it, its words now and the proposed words.
     pub doc: Option<String>,
     pub unit: Option<String>,

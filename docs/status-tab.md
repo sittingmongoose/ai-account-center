@@ -263,9 +263,12 @@ share):
   | null, version } ] }`, `notCopying { items: [ { what, why } ] }`, `unknowns { items }`, `terms { items: [ { term,
   meaning } ] }`, `callout { tone: "info" | "warn" | "crit", body }`, `links { items: [ { label, url } ] }` (an http(s)
   URL opens in a new tab; a share path is shown to copy; anything else is refused), `media { items: [ Media ] }`,
-  `quote { items: [ { text, where, context: [], source, link: { label, url } | null, version } ] }` (verbatim words
-  copied by code, never reworded; `where` is the heading path, `context` nearby status notes such as "Superseded
-  2026-10-09") and `planChange { doc, unit, now, proposed }`. Order on a phone: title, now, options, recommendation,
+  `quote { key: [quote-id] | null, items: [ { item, key, text, where, context: [], source, link: { label, url } | null,
+  version } ] }` (verbatim words copied by code, never reworded; `where` is the heading path, `context` nearby status
+  notes such as "Superseded 2026-10-09"). The quote metadata is optional: `item` is a quote id, the block's `key`
+  names one to three deciding quote ids, and an item's boolean `key` can mark one directly. In an option, deciding
+  quotes stay visible and the rest fold behind their count and product names; without key metadata the whole quote
+  list starts folded. `planChange { doc, unit, now, proposed }`. Order on a phone: title, now, options, recommendation,
   then the folded sections.
   Known types are validated strictly (a bad one makes the card file unreadable, by name); a type this server does not
   know arrives as `{ type, title, fold, unknown: true }` and the page says it has a section it cannot show yet. The

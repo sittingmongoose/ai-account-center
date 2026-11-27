@@ -540,7 +540,53 @@
             "gets": "The latest message is where the eye lands first.",
             "costs": null,
             "media": [],
-            "sections": [],
+            "sections": [
+              {
+                "title": "Rule quotes",
+                "fold": false,
+                "type": "quote",
+                "key": ["toast-q2"],
+                "items": [
+                  {
+                    "item": "toast-q1",
+                    "text": "A toast that interrupts the current task should be rare. System notifications are strongest when they answer the action the person just took, not when they compete with the work already on the screen.",
+                    "where": "notification guidance",
+                    "context": [],
+                    "source": "Mem0",
+                    "link": {"label": "page 18", "url": "https://example.com/mem0/notifications#page=18"},
+                    "version": "2026-11"
+                  },
+                  {
+                    "item": "toast-q2",
+                    "text": "The newest message belongs at the top when the list is read as a queue of fresh state: the eye starts there, and older messages remain below in the order they arrived.",
+                    "where": "toast ordering rule",
+                    "context": ["deciding quote"],
+                    "source": "Claude",
+                    "link": {"label": "page 7", "url": "https://example.com/claude/toasts#page=7"},
+                    "version": "2026-11",
+                    "key": true
+                  },
+                  {
+                    "item": "toast-q3",
+                    "text": "A reverse chronological stack avoids hiding the newest event behind stale ones. When several messages arrive together, the most recent change should not require a scroll or a second scan.",
+                    "where": "event ordering",
+                    "context": [],
+                    "source": "Mem0",
+                    "link": {"label": "page 22", "url": "https://example.com/mem0/events#page=22"},
+                    "version": "2026-11"
+                  },
+                  {
+                    "item": "toast-q4",
+                    "text": "Transient interface messages should preserve recency without changing the rest of the surface. The control that dismisses or expands the message must remain keyboard reachable.",
+                    "where": "transient messages",
+                    "context": [],
+                    "source": "GitHub Copilot",
+                    "link": {"label": "page 11", "url": "https://example.com/copilot/transient#page=11"},
+                    "version": "2026-11"
+                  }
+                ]
+              }
+            ],
             "stance": null
           },
           {
