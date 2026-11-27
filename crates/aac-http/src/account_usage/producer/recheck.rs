@@ -941,18 +941,10 @@ mod tests {
                     )
                 })
                 .collect();
-            let mut want: Vec<(String, String, Option<f64>)> = expected
+            let want: Vec<(String, String, Option<f64>)> = expected
                 .iter()
                 .map(|(id, label, _, used)| ((*id).to_owned(), (*label).to_owned(), Some(*used)))
                 .collect();
-            // Retired bridge: with no pasted session stored, the wallet
-            // collector reports needs_sign_in instead of falling back, so the
-            // wallet row follows the three key rows.
-            want.push((
-                "plan-opencode-go-console-web-000000000000".to_owned(),
-                "OpenCode console wallet".to_owned(),
-                None,
-            ));
             assert_eq!(got, want, "{mode}: sampling rows");
             let mut sampled = deps
                 .collected
@@ -1039,11 +1031,7 @@ mod tests {
                     .iter()
                     .filter_map(|row| row["id"].as_str())
                     .collect::<Vec<_>>(),
-                // The wallet needs_sign_in row rides along whatever the store does.
-                [
-                    "opencode-go:usage",
-                    "plan-opencode-go-console-web-000000000000"
-                ],
+                ["opencode-go:usage"],
                 "{mode}: unreadable store keeps bare entry"
             );
             assert!(

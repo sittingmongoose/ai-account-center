@@ -246,6 +246,29 @@ async fn start_fixture_server() -> RunningServer {
         }
         assert!(ready, "route {path} did not become ready");
     }
+    // A rescan that lands after the warm-up (the start-up passes finish on their own clock)
+    // serves the Scoreboard's cached view once marked stale and refreshing, then fresh. Wait
+    // for the settled view so the byte and ETag comparisons below compare one view.
+    let mut settled = false;
+    for _ in 0..40 {
+        let body: Value = client
+            .get(format!("{base}/api/scoreboard"))
+            .header(header::COOKIE, &cookie)
+            .header(header::ORIGIN, &origin)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .map(|b| serde_json::from_slice(&b).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null);
+        if body["refreshing"] == false {
+            settled = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(settled, "the Scoreboard view never settled");
 
     RunningServer {
         _fixture: fixture,
