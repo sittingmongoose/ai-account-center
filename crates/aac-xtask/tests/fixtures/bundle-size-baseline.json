@@ -1,9 +1,17 @@
 {
   "fixture": "release_parity::bundle_complete_fixture_oracle",
   "compressionLevel": 6,
-  "rustGzipBytes": 2234,
-  "legacyNodeGzipBytes": 2229,
+  "rustGzipBytes": 2324,
+  "legacyNodeGzipBytes": 2321,
   "wholeBundleLimitBytes": 4194304,
-  "firstLoadLimitBytes": { "html": 65536, "css": 262144, "font": 131072, "js": 524288, "wasm": 3145728 },
+  "firstLoadLimitBytes": {
+    "html": 65536,
+    "css": 262144,
+    "font": 131072,
+    "js": 524288,
+    "wasm": 3145728,
+    "status-bar.css": 32768,
+    "frame-session.mjs": 65536
+  },
   "decision": "AAC lead approved Rust encoder baseline; retain every threshold"
 }

@@ -240,6 +240,9 @@ pub fn verify(dir: &Path) -> Result<Value> {
         ("app/MartianMono.ttf".into(), 128 * 1024),
         (format!("pkg/{id}/aac_web.js"), 512 * 1024),
         (format!("pkg/{id}/aac_web_bg.wasm"), 3 * 1024 * 1024),
+        // First-load shell files outside app/ and pkg/: today's sizes with headroom.
+        ("status-bar.css".into(), 32 * 1024),
+        ("frame-session.mjs".into(), 64 * 1024),
     ] {
         let n = gzip(&fs::read(dir.join(&f))?)?;
         require(

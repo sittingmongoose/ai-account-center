@@ -44,7 +44,6 @@ pub fn installed_dashboard(root: &Path) -> Result<()> {
         .collect::<Vec<_>>();
     paths.extend([
         format!("dist/native/aac-http{}", suffix()),
-        "dist/antigravity/terminal-signin-entry.js".into(),
         "dist/ui/app/index.html".into(),
     ]);
     for p in paths {

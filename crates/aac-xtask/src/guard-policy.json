@@ -13,6 +13,18 @@
     "crates/aac-agent/src/history.rs": {
       "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 3
     },
+    "crates/aac-agent/src/history/native.rs": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 1
+    },
+    "crates/aac-agent/src/history/native_tests.rs": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 2
+    },
+    "crates/aac-agent/tests/fixtures/windows-processes.json": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 8
+    },
+    "crates/aac-agent/tests/generate-history-fixtures.py": {
+      "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 1
+    },
     "crates/aac-http/src/claude_open/sync.rs": {
       "0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08": 2
     },
@@ -53,6 +65,9 @@
     "docs/activate-in-place.md",
     "docs/system-architecture/index.md",
     "docs/system-architecture/provider-flows.md",
+    "crates/aac-http/src/cli.rs",
+    "crates/aac-http/src/public_auth/mod.rs",
+    "config/rust-service-routes.json",
     "web-dashboard/leptos/Cargo.toml",
     "web-dashboard/leptos/Cargo.lock",
     "web-dashboard/leptos/src/frame.rs",
@@ -65,12 +80,7 @@
     "windows-bar/scripts/Install.ps1",
     "docker/Dockerfile",
     "docker/compose.yaml",
-    "docker/entrypoint.sh",
-    "crates/aac-http/src/cli.rs",
-    "crates/aac-http/src/lib.rs",
-    "crates/aac-http/src/public_auth/mod.rs",
-    "crates/aac-http/src/cli/config_write.rs",
-    "crates/aac-http/src/cli/codex_auth.rs"
+    "docker/entrypoint.sh"
   ],
   "requirements": [
     [
@@ -84,6 +94,10 @@
     [
       "docs/release-process.md",
       ".github/workflows/bar-release.yml"
+    ],
+    [
+      "docs/system-architecture/index.md",
+      "CCS_HOME"
     ],
     [
       "docs/system-architecture/index.md",

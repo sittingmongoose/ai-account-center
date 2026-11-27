@@ -294,6 +294,11 @@ pub fn without_code(text: &str) -> String {
 pub fn docs(root: &Path) -> Result<Vec<String>> {
     let p = policy();
     let mut failures = Vec::new();
+    // The TypeScript server tree (src/) was deleted; its retired paths must not come back.
+    if root.join("src").exists() {
+        failures
+            .push("src/ is retired; the product is Rust, Leptos and the native bars".to_owned());
+    }
     for f in p["removed"].as_array().ok_or("removed")? {
         let f = f.as_str().ok_or("path")?;
         if root.join(f).exists() {

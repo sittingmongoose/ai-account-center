@@ -31,6 +31,32 @@ fn node(code: &str, args: &[&str]) -> Value {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     serde_json::from_slice(&o.stdout).expect("fixture")
 }
+/// Run a Node module and parse the JSON it prints.
+fn node_module(code: &str) -> Value {
+    let o = Command::new("node")
+        .current_dir(root())
+        .args(["--input-type=module", "-e", code])
+        .output()
+        .expect("fixture");
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    serde_json::from_slice(&o.stdout).expect("fixture")
+}
+/// Run CommonJS code that must throw; return the message it prints on stderr.
+fn node_failure(code: &str, args: &[&str]) -> String {
+    let o = Command::new("node")
+        .current_dir(root())
+        .arg("-e")
+        .arg(code)
+        .args(args)
+        .output()
+        .expect("fixture");
+    assert!(
+        !o.status.success(),
+        "the oracle accepted this input: {}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
 #[test]
 fn lineage_parser_oracle() {
     for v in [
@@ -197,7 +223,7 @@ fn bundle_complete_fixture_oracle() {
     let id = sha(&[0, 97, 115, 109, 1, 0, 0, 0]);
     let id = &id[..12];
     let shell = "123456789abc";
-    let assets=[("bridge.js",fs::read(root().join("web-dashboard/public/bridge.js")).expect("fixture")),("app/index.html",format!("<html>/pkg/{id}/aac_web.js /pkg/{id}/aac_web_bg.wasm</html>").into_bytes()),("app/app.css",b"body{}".to_vec()),("app/MartianMono.ttf",b"font".to_vec()),("app/OFL-MartianMono.txt",b"license".to_vec()),("sw-route.js",b"route".to_vec()),("icon.png",b"png".to_vec()),("manifest.webmanifest",json!({"name":"AI Account Center","short_name":"AAC","start_url":"/","display":"standalone","icons":[{"src":"/icon.png","sizes":"192x192"}]}).to_string().into_bytes())];
+    let assets=[("bridge.js",fs::read(root().join("web-dashboard/public/bridge.js")).expect("fixture")),("app/index.html",format!("<html>/pkg/{id}/aac_web.js /pkg/{id}/aac_web_bg.wasm</html>").into_bytes()),("app/app.css",b"body{}".to_vec()),("app/MartianMono.ttf",b"font".to_vec()),("app/OFL-MartianMono.txt",b"license".to_vec()),("sw-route.js",b"route".to_vec()),("status-bar.css",b"body{}".to_vec()),("frame-session.mjs",b"export const frame = 0;".to_vec()),("icon.png",b"png".to_vec()),("manifest.webmanifest",json!({"name":"AI Account Center","short_name":"AAC","start_url":"/","display":"standalone","icons":[{"src":"/icon.png","sizes":"192x192"}]}).to_string().into_bytes())];
     for (f, b) in assets {
         let p = dir.join(f);
         fs::create_dir_all(p.parent().expect("fixture")).expect("fixture");
@@ -242,8 +268,15 @@ fn bundle_complete_fixture_oracle() {
     assert_eq!(actual["manifest"], expected["manifest"]);
     let baseline: Value =
         serde_json::from_str(include_str!("fixtures/bundle-size-baseline.json")).expect("fixture");
-    assert_eq!(actual["totalSize"], baseline["rustGzipBytes"]);
-    assert_eq!(expected["totalSize"], baseline["legacyNodeGzipBytes"]);
+    // Measured gzipped bytes of the whole fixture bundle: the Rust encoder, then the old Node encoder.
+    assert_eq!(
+        (actual["totalSize"].clone(), expected["totalSize"].clone()),
+        (
+            baseline["rustGzipBytes"].clone(),
+            baseline["legacyNodeGzipBytes"].clone()
+        ),
+        "whole-bundle gzipped bytes (Rust, Node)"
+    );
     let mut seed = 123456789u32;
     let css = (0..600_000)
         .map(|_| {
@@ -275,6 +308,53 @@ fn bundle_complete_fixture_oracle() {
             .starts_with("Bundle entry too large: app/app.css")
     );
     fs::write(dir.join("app/app.css"), b"body{}").expect("fixture");
+    fs::write(dir.join("sw.js"), original_sw.clone()).expect("fixture");
+    // The shell files the frame head links or awaits keep their own gzipped caps (32 and 64 KiB).
+    for (file, bytes) in [
+        ("status-bar.css", 40 * 1024usize),
+        ("frame-session.mjs", 80 * 1024),
+    ] {
+        // Each case alone: the first cap in order wins when both are oversized.
+        fs::write(dir.join("status-bar.css"), b"body{}").expect("fixture");
+        fs::write(dir.join("frame-session.mjs"), b"export const frame = 0;").expect("fixture");
+        let mut seed = 987_654_321u32;
+        let big = (0..bytes)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed >> 24) as u8
+            })
+            .collect::<Vec<_>>();
+        fs::write(dir.join(file), &big).expect("fixture");
+        let list = aac_xtask::ui::precache_list(
+            &aac_xtask::ui::list_files(&dir).expect("fixture"),
+            b"body{}",
+        );
+        fs::write(
+            dir.join("sw.js"),
+            format!(
+                "var BUILD_ID = '{shell}';\nvar PRECACHE = {};",
+                serde_json::to_string(&list).expect("fixture")
+            ),
+        )
+        .expect("fixture");
+        modes(&dir);
+        let message = format!("Bundle entry too large: {file}");
+        assert!(node_failure(
+            "try{require('./scripts/verify-bundle').verifyBundle(process.argv[1]);process.exit(0)}catch(e){console.error(e.message);process.exit(1)}",
+            &[dir.to_str().expect("fixture")]
+        )
+        .starts_with(&message));
+        assert!(
+            bundle::verify(&dir)
+                .expect_err("an oversized shell file must be rejected")
+                .to_string()
+                .starts_with(&message)
+        );
+    }
+    fs::write(dir.join("status-bar.css"), b"body{}").expect("fixture");
+    fs::write(dir.join("frame-session.mjs"), b"export const frame = 0;").expect("fixture");
     fs::write(dir.join("sw.js"), original_sw).expect("fixture");
     let variants = aac_xtask::ui::precompress_ui(&dir).expect("fixture");
     assert!(!variants.is_empty());
@@ -389,4 +469,169 @@ fn repository_file_policy_matches_node() {
         aac_xtask::file_policy::scan(&files, &policy["allowlist"], &policy["receipt"]),
         expected
     );
+}
+
+#[test]
+fn repository_personal_guard_matches_node() {
+    let expected = node(
+        "console.log(JSON.stringify(require('./scripts/personal-detail-guard').scanRepository(process.argv[1])))",
+        &[root().to_str().expect("fixture")],
+    );
+    assert_eq!(json!(guards::personal(&root()).expect("fixture")), expected);
+}
+#[test]
+fn repository_docs_guard_matches_node() {
+    let o = Command::new("node")
+        .current_dir(root())
+        .arg("tests/docs/documentation-freshness.js")
+        .output()
+        .expect("fixture");
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    let expected: Vec<String> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("    ").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        json!(guards::docs(&root()).expect("fixture")),
+        json!(expected),
+        "oracle stderr: {stderr}"
+    );
+    assert_eq!(o.status.success(), expected.is_empty());
+}
+/// A view of the real tree with only `src/` planted, so the retirement rule can be seen alone.
+#[cfg(unix)]
+#[test]
+fn docs_rejects_a_returning_typescript_tree() {
+    let real = root();
+    let dir = scratch();
+    for entry in fs::read_dir(&real).expect("fixture") {
+        let entry = entry.expect("fixture");
+        std::os::unix::fs::symlink(entry.path(), dir.join(entry.file_name())).expect("fixture");
+    }
+    assert!(guards::docs(&dir).expect("fixture").is_empty());
+    fs::create_dir(dir.join("src")).expect("fixture");
+    assert_eq!(
+        guards::docs(&dir).expect("fixture"),
+        vec!["src/ is retired; the product is Rust, Leptos and the native bars".to_owned()]
+    );
+}
+#[test]
+fn installed_dashboard_matches_postinstall_oracle() {
+    let dir = scratch();
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let mut bin = serde_json::Map::new();
+    for name in aac_xtask::release::COMMANDS {
+        bin.insert(
+            (*name).to_owned(),
+            json!(format!("dist/native/{name}{suffix}")),
+        );
+    }
+    let mut paths: Vec<String> = bin
+        .values()
+        .map(|v| v.as_str().expect("fixture").to_owned())
+        .collect();
+    paths.push(format!("dist/native/aac-http{suffix}"));
+    paths.push("dist/ui/app/index.html".into());
+    for path in &paths {
+        let file = dir.join(path);
+        fs::create_dir_all(file.parent().expect("fixture")).expect("fixture");
+        fs::write(file, "payload").expect("fixture");
+    }
+    fs::write(dir.join("package.json"), json!({ "bin": bin }).to_string()).expect("fixture");
+    let code = "const p=require('./scripts/postinstall');try{p.checkInstalledDashboard(process.argv[1]);console.log(JSON.stringify('ok'))}catch(e){console.log(JSON.stringify(e.message))}";
+    // The retired terminal sign-in entry is no longer a required payload.
+    let expected = node(code, &[dir.to_str().expect("fixture")]);
+    assert_eq!(expected, json!("ok"));
+    aac_xtask::release::installed_dashboard(&dir).expect("fixture");
+    // A present but empty payload is reported the same way by both.
+    fs::write(dir.join("dist/ui/app/index.html"), "").expect("fixture");
+    let expected = node(code, &[dir.to_str().expect("fixture")]);
+    assert_eq!(
+        expected,
+        json!("Incomplete dashboard package: dist/ui/app/index.html")
+    );
+    assert_eq!(
+        aac_xtask::release::installed_dashboard(&dir)
+            .expect_err("fixture")
+            .to_string(),
+        "Incomplete dashboard package: dist/ui/app/index.html"
+    );
+    // A missing payload fails both; the old check lets the stat error through.
+    fs::remove_file(dir.join("dist/ui/app/index.html")).expect("fixture");
+    let o = Command::new("node")
+        .current_dir(root())
+        .arg("-e")
+        .arg(code.replace(
+            "console.log(JSON.stringify(e.message))",
+            "console.error(e.code);process.exit(1)",
+        ))
+        .arg(&dir)
+        .output()
+        .expect("fixture");
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&o.stderr).trim(), "ENOENT");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(aac_xtask::release::installed_dashboard(&dir).is_err());
+}
+#[test]
+fn source_dirty_follows_only_package_inputs() {
+    let dir = scratch();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .expect("fixture");
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-q", "-b", "topic/x"]);
+    git(&[
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
+    fs::create_dir_all(dir.join("scripts")).expect("fixture");
+    fs::write(dir.join("scripts/a.js"), "x").expect("fixture");
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "scripts",
+    ]);
+    let dirty = || lineage::read_source(&dir).expect("source")["dirty"].clone();
+    assert_eq!(dirty(), json!(false));
+    // src/ and tsconfig.json left with the TypeScript server; they are no longer package inputs.
+    fs::create_dir_all(dir.join("src")).expect("fixture");
+    fs::write(dir.join("src/server.ts"), "x").expect("fixture");
+    fs::write(dir.join("tsconfig.json"), "{}").expect("fixture");
+    assert_eq!(dirty(), json!(false));
+    fs::write(dir.join("scripts/b.js"), "x").expect("fixture");
+    assert_eq!(dirty(), json!(true));
+}
+/// The Rust policy is the retained script's own allowlist and receipt, until the script is deleted.
+#[test]
+fn file_policy_data_matches_retained_script() {
+    let policy: Value =
+        serde_json::from_str(include_str!("../src/file-policy.json")).expect("fixture");
+    let allow = node_module(
+        "import {ALLOWLIST} from './scripts/foundation/one-file-policy.mjs';console.log(JSON.stringify(ALLOWLIST));",
+    );
+    assert_eq!(policy["allowlist"], allow);
+    let receipt: Value = serde_json::from_slice(
+        &fs::read(root().join("scripts/foundation/one-file-cut-receipt.json")).expect("fixture"),
+    )
+    .expect("fixture");
+    assert_eq!(policy["receipt"], receipt);
 }

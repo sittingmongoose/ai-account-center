@@ -57,7 +57,6 @@ pub fn read_source(root: &Path) -> Option<Value> {
             "--porcelain",
             "--untracked-files=normal",
             "--",
-            "src",
             "scripts",
             "lib",
             "config",
@@ -71,7 +70,6 @@ pub fn read_source(root: &Path) -> Option<Value> {
             "windows-bar",
             "package.json",
             "bun.lock",
-            "tsconfig.json",
         ],
     )?;
     let name = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;

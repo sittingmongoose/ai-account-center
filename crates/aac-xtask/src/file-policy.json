@@ -21,12 +21,28 @@
       "reason": "Scanner reader comparing two of Claude Code's own transcripts (another tool's data), reached through the walker's admission. Follow-up l2-usage-readers."
     },
     {
+      "path": "native/aac-usage/src/scan_index.rs",
+      "reason": "The scanner's persistent discovery index (CCS_HOME/analytics-scan-index-v1): directory names and traversal progress only, never log contents or credentials. aac-usage is a native crate with its own lock and no aac-files dependency; it writes 0600 with O_NOFOLLOW under its lock, fsyncs and renames, and a busy or damaged index falls back to the bounded walk. Follow-up l2-usage-readers."
+    },
+    {
       "path": "native/aac-usage/src/collector.rs",
       "reason": "Scanner collector reading a tool database file named by the walker (another tool's data). Follow-up l2-usage-readers."
     },
     {
       "path": "native/aac-cursor-account/src/keys.rs",
       "reason": "The Cursor key writer of the NAPI module (account-usage/keys/cursor-*, registry row account-keys, owner ts in process). A native crate with its own lock and build; it stages with create_new 0600, fsyncs and renames. Its load opens with File::open after an lstat (a race the shared read closes). Follow-up l2-cursor-keys: depend on aac-files."
+    },
+    {
+      "path": "crates/aac-agent/src/apps/updater/",
+      "reason": "Update all (W1-W6, ported from app_updates.py and its workers): it installs and moves other apps' files (CLI packages, desktop bundles, ZCode and T3 adapters, the T3 runtime) and reads their manifests, /proc and session files, plus its own worker locks, pending markers and Windows task request files. None is an AAC private store; moving its own locks and markers onto aac-files registry rows is follow-up l2-updater-files."
+    },
+    {
+      "path": "crates/aac-claude-renew/src/",
+      "reason": "The Claude renewal service (signin-works) keeps its own settings, state, run lock and log under ~/.ccs/claude-renew and publishes one status file to the share folder: create_new lock, 0600 state written then renamed, append-only scrubbed log. Like aac-renewal it is a separate service crate; moving it onto aac-files registry rows is follow-up l2-renew-files."
+    },
+    {
+      "path": "crates/aac-snapshot/src/reader/",
+      "reason": "The offline usage reader (P3) reads the published usage snapshot files from the share folder and updates the aac-usage block inside other tools' instruction files in place, so their hard links and line endings survive. Neither is an AAC private file."
     },
     {
       "path": "crates/aac-http/src/identity.rs",
@@ -71,6 +87,33 @@
         "fs::rename:bb02b1fc8bfcda7b3c885bb7328ae7e0af3d3fce974ecace07fd63002d1a0b51",
         "fs::write:1ac4a83eec5e6b6abab7b048f4e303f0885f4841bb8ef00af9001789b339837f",
         "fs::write:d2e174a5c5c7ba40ff5f8013e770d510e742ad17d91e4aaa626ae6f4cd338da3"
+      ]
+    },
+    "crates/aac-agent/src/claude_usage/desktop.rs": {
+      "reason": "Claude Desktop's own cache and config files (another app's data) are read as at most 1 MiB of JSON, exactly as claude_usage.py read_json did; a missing or unreadable file is honestly unavailable.",
+      "uses": [
+        "File::open:89ad66b5d26060bda215badb578aaaf3e869257f1e84c6ab473189fb02cf2b79"
+      ]
+    },
+    "crates/aac-agent/src/claude_usage/keychain_bridge.rs": {
+      "reason": "The macOS GUI-session bridge: the parent writes the one-shot request into its own 0700 temporary folder and reads the answer back; the launchd gui/<uid> child writes that answer into the reply file the parent named, 0600 then rename. No AAC store is read or written.",
+      "uses": [
+        "fs::read:e9f154545841c9b71475422cd526b6fee5717ef067942b74b2eaf02aef064fac",
+        "fs::rename:861b261f36ccb810bc862739270572feb39f71a112035aac66f8d1dd42f9825f",
+        "fs::write:c0362d9e9ba3e6607065b058a0eacdbb04a6f40bace828e37ec826d859b11e98",
+        "fs::write:d0ceef8a540a22acab6a2aaa9f9e8e1b860cd793267d00d8cacb4edf669f9205"
+      ]
+    },
+    "crates/aac-agent/src/key_store.rs": {
+      "reason": "The agent key store stages the encrypted dashboard key in its own private key folder (tempfile_in, write_all, sync_all) and persists it over the target, the same atomic replace the Python key store used.",
+      "uses": [
+        "persist:672a3dfb97fcff7b34ae33a661cc29fe0ee74bbfdbda075c3a18df6649a44dc8"
+      ]
+    },
+    "crates/aac-agent/src/quota.rs": {
+      "reason": "Quota credential discovery reads another tool's binary cookie or credential file (Safari binarycookies, OMP) with a byte cap and a regular-file check; it is not an AAC private file.",
+      "uses": [
+        "File::open:2bf0f6ff1351ef3fbe4a250aef37a4e90e6bf0aca20afca1dc93159fed23efb7"
       ]
     },
     "crates/aac-http/src/account_usage/coordinator.rs": {
@@ -129,12 +172,6 @@
         "File::open:9017099359a43f33fb003af96c9fb73a59aaaaa45c34b43c9c6e40e63926661d"
       ]
     },
-    "crates/aac-http/src/claude_open/remote.rs": {
-      "reason": "The history bridge checks the packaged helper source before passing it to the fixed transport.",
-      "uses": [
-        "fs::read:128e987d162144e5e91c824e84e116b894a738f38de54ef14e6a3ea122f01ed6"
-      ]
-    },
     "crates/aac-http/src/cli/admin.rs": {
       "reason": "The native admin CLI ports hub and snapshot configuration and the deployed packaged Cursor reader.",
       "uses": [
@@ -143,23 +180,6 @@
         "fs::read:9b85ddb988184c8dc046f5af43598ed3e2ab89657e87234f798c5312acffb879",
         "fs::read_to_string:48f6e09cc91e18ff9dd9ad462783a8f5742205b99b827d40f1c4f0ab8f2f4465",
         "fs::rename:b0c02fbbbc3351a813bceff7dad724a3dc8d35b090392d21aafd3d32025f4a00"
-      ]
-    },
-    "crates/aac-http/src/cli/antigravity.rs": {
-      "reason": "The native Antigravity CLI owns its installation pin, profile locks and temporary sign-in home.",
-      "uses": [
-        "File::open:db7f2a3acef157b4b0ef6db72a467048861f32b3ae61a0a61adcb71c90bf1288",
-        "O_NOFOLLOW:d45c4e52b0ee8f1fa4702da45454c9f1314ddedc2d8db92a83ca10a75c630c2f",
-        "O_NOFOLLOW:f19e06cadc5456cf803d2ab6b576a5e33e13e9912e88d82eaea5d0add04adfce",
-        "OpenOptions:12380944888a5d002f10ce4e65dd87efd91771d9429f0df7aff0b57b2a46517f",
-        "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
-        "OpenOptions:85d62e57929530ccb17422316cebb41d7e2a64261638406b4ca0e514d24c615b",
-        "custom_flags:d45c4e52b0ee8f1fa4702da45454c9f1314ddedc2d8db92a83ca10a75c630c2f",
-        "custom_flags:f19e06cadc5456cf803d2ab6b576a5e33e13e9912e88d82eaea5d0add04adfce",
-        "fs::read:20aad536c484c868dc1a145278b044b11d874f61050a542876d613e36fe62202",
-        "fs::read_to_string:5d1a784e651910d5ce98306e247c20b22946a3e2ec95fefbda30c9b308f41df7",
-        "fs::read_to_string:e7448a0f3e48864e2806784715db53b64cd60cd2ef9e0a645d17ab833e31e09f",
-        "fs::rename:68006bd6360f6b155210ecb1a9bee89c2f730458b81a7fdb505e124b90d64e5a"
       ]
     },
     "crates/aac-http/src/cli/bar.rs": {
