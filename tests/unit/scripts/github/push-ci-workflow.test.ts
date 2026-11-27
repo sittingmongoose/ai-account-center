@@ -31,8 +31,8 @@ describe('push ci workflow', () => {
     expect(workflow).not.toContain('bun run typecheck');
     expect(workflow).not.toContain('bun run lint');
     expect(workflow).not.toContain('bun run format:check');
-    expect(workflow).toContain("cmd: 'node scripts/personal-detail-guard.js'");
-    expect(workflow).toContain("cmd: 'node tests/spec/inventory.mjs'");
+    expect(workflow).toContain("cmd: 'cargo run --locked -p aac-xtask -- check personal'");
+    expect(workflow).toContain("cmd: 'cargo run --locked -p aac-xtask -- check inventory'");
     // Every job installs straight from the lockfile: there is no dependency wrapper script.
     expect(workflow).not.toContain('scripts/ensure-deps.sh');
     expect(workflow.split('run: bun install --frozen-lockfile').length - 1).toBe(3);
@@ -45,11 +45,11 @@ describe('push ci workflow', () => {
     expect(workflow).toContain('::warning::test:fast took ${elapsed_seconds}s');
     expect(workflow).toContain('scripts/run-test-bucket.js');
     expect(workflow).toContain('run: bun run test:slow');
-    expect(workflow).toContain('name: Test offline Claude quota collector');
+    expect(workflow).toContain('name: Test offline Qwen plan collector');
     expect(workflow).toContain('env -i PATH="$PATH" HOME="$TEST_FIXTURE_ROOT"');
     expect(workflow).toContain('CCS_HOME="$TEST_FIXTURE_ROOT"');
     expect(workflow).toContain(
-      'PYTHONDONTWRITEBYTECODE=1 python3 tests/unit/account-usage/claude_usage_test.py'
+      'PYTHONDONTWRITEBYTECODE=1 python3 tests/unit/account-usage/plan_usage_test.py'
     );
     expect(workflow).not.toContain('CCS_E2E_SKIP_BUILD');
     expect(workflow).not.toContain('test:e2e');
