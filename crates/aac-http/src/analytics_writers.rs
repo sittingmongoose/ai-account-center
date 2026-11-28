@@ -680,7 +680,7 @@ async fn activity_pass(
         let refresh = Arc::clone(models_dev);
         let now_ms = now as f64;
         tokio::task::spawn_blocking(move || {
-            refresh.refresh(false, now_ms);
+            refresh.ensure(false, now_ms);
         });
     }
     let pricing = ResolverPricing::new(ccs_dir);

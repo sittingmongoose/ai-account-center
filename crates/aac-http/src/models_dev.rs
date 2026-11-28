@@ -36,6 +36,14 @@ impl ModelsDevRefresh {
         self.refresh.start(force, now_ms, || fetch(url))
     }
 
+    /// The same coalesced refresh for a caller that drops the answer (the Analytics activity
+    /// pass): it keeps the cache fresh without re-reading the whole file into a payload.
+    pub fn ensure(&self, force: bool, now_ms: f64) -> bool {
+        self.refresh.ensure(force, now_ms, || {
+            fetch(aac_views::pricing::MODELS_DEV_API_URL)
+        })
+    }
+
     /// The bound cache, for a `Resolver` over the same file.
     pub fn cache(&self) -> &std::sync::Mutex<aac_views::pricing::RegistryCache> {
         self.refresh.cache()

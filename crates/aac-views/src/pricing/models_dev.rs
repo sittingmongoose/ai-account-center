@@ -474,6 +474,62 @@ impl RegistryRefresh {
         self.done.notify_all();
         result
     }
+
+    /// The coalesced refresh for a caller that only needs the cache kept fresh (the Analytics
+    /// activity pass): `true` when a registry (fresh or stale) is usable afterwards. The same
+    /// fetches and cache writes as [`start`](Self::start), but the cache file is never re-read
+    /// into a full payload nobody uses: freshness comes from the shared resident memo, so a
+    /// 6.8 MB cache no longer costs a ~150 MiB JSON tree on every pass.
+    pub fn ensure(
+        &self,
+        force: bool,
+        now: f64,
+        fetch: impl FnOnce() -> Result<Fetched, FetchError>,
+    ) -> bool {
+        let usable = |fresh: bool| lock(&self.cache).read(!fresh, now).is_some();
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *pending {
+            while *pending {
+                pending = self
+                    .done
+                    .wait(pending)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            drop(pending);
+            return usable(false);
+        }
+        if !force && usable(true) {
+            return true;
+        }
+        *pending = true;
+        drop(pending);
+        let written = match fetch() {
+            Ok(Fetched { ok: true, body }) => {
+                let parsed: Option<Value> = serde_json::from_slice(&body).ok();
+                drop(body);
+                match parsed.as_ref().and_then(normalize_registry_payload) {
+                    Some(providers) => {
+                        drop(parsed);
+                        lock(&self.cache).write(&providers, now);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+        let result = written || usable(false);
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *pending = false;
+        self.done.notify_all();
+        result
+    }
 }
 
 // ------------------------------------------------------------- pricing-resolver.ts
