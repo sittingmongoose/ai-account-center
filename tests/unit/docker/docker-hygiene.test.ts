@@ -143,6 +143,21 @@ describe('the image packages the gated release tarball and keeps interpreters ou
     expect(runtime).not.toMatch(/\bNODE_ENV\b/);
     expect(dockerfile).toMatch(/^USER node$/m);
   });
+
+  it('copies from the unpacked release only paths the package ships', () => {
+    const shipped = (JSON.parse(readFileSync('package.json', 'utf8')) as { files: string[] }).files.map(
+      (entry) => entry.replace(/\/+$/, '')
+    );
+    const always = ['package.json', 'README.md', 'LICENSE'];
+    const copied = [...runtime.matchAll(/^COPY --from=unpack \/stage\/(\S+) /gm)].map((m) => m[1]);
+    expect(copied.length).toBeGreaterThan(0);
+    for (const source of copied) {
+      const inPackage =
+        always.includes(source) ||
+        shipped.some((entry) => source === entry || source.startsWith(`${entry}/`));
+      expect({ source, inPackage }).toEqual({ source, inPackage: true });
+    }
+  });
 });
 
 /** Docker's .dockerignore rule: a pattern matches a path or one of its folders; the last match wins. */

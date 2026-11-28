@@ -186,7 +186,6 @@ COPY --from=unpack /stage/config/secret-policy.json ./config/secret-policy.json
 COPY --from=unpack /stage/web-dashboard/public/computers.json ./web-dashboard/public/computers.json
 COPY --from=unpack /stage/docs/agent-reports/schemas ./docs/agent-reports/schemas
 COPY --from=unpack /stage/docs/agent-reports/catalog ./docs/agent-reports/catalog
-COPY --from=unpack /stage/browser-bridge ./browser-bridge
 COPY --from=unpack /stage/README.md ./README.md
 COPY --from=unpack /stage/LICENSE ./LICENSE
 
