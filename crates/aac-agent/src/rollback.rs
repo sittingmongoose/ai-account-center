@@ -521,7 +521,21 @@ fn places_from(
     if !ccs.is_absolute() {
         return Err("the AAC folder must be absolute".into());
     }
+    printable_root(&ccs, cfg!(windows))?;
     Ok(Places { home, ccs })
+}
+
+/// The restore command printed for cmd.exe cannot carry a literal `%`: cmd.exe expands
+/// `%NAME%` even inside double quotes, so the command would name another folder. Such an
+/// AAC folder is refused before anything moves.
+fn printable_root(ccs: &Path, windows: bool) -> Result<(), String> {
+    if windows && ccs.to_string_lossy().contains('%') {
+        return Err(
+            "the AAC folder path contains %, which a printed Windows restore command cannot carry; use a folder without %"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn parse_data_root(args: &[OsString]) -> Result<Option<String>, String> {
@@ -1653,5 +1667,14 @@ mod tests {
             static_token(&places, "default", None).as_deref(),
             Ok("00000002")
         );
+    }
+
+    #[test]
+    fn windows_root_with_percent_is_refused_before_anything_moves() {
+        let root = Path::new(r"C:\fixture\%USERNAME%\aac-data");
+        let refused = printable_root(root, true).unwrap_err();
+        assert!(refused.contains("contains %"), "{refused}");
+        assert!(printable_root(Path::new(r"C:\fixture\aac-data"), true).is_ok());
+        assert!(printable_root(Path::new("/fixture/%x/aac-data"), false).is_ok());
     }
 }
