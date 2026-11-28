@@ -346,6 +346,8 @@ export const tests = {
 		await t.check('Remove wallet sits beside Reconnect wallet', layout.sameLine, JSON.stringify(layout));
 		await t.equal('the key\'s name stays on one line', layout.nameLines, 1);
 		await t.check('no sideways overflow', !layout.overflow, JSON.stringify(layout));
+		await t.page.evaluate((r) => document.querySelector(r)?.scrollIntoView({ block: 'center' }), r);
+		await t.snap('accounts-opencode-go-rows-402x874');
 		await t.crop('accounts-opencode-go-rows-phone-402', '.route:not([hidden]) .prov[data-provider="opencode-go"]', 'phone 402: OpenCode Go key rows, one trash each, Remove wallet beside Reconnect wallet');
 		await t.page.click(`${r} [data-probe="remove-wallet:${id}"]`);
 		await t.until('the removal toast', () => [...document.querySelectorAll('.toast')].some((el) => /wallet session removed/.test(el.textContent)), null, { timeout: 10000, hard: true });
