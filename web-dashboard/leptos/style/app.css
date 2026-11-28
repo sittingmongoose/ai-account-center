@@ -960,6 +960,9 @@ textarea.note::placeholder { color: var(--ink-4); }
 .prov-head .pmark { margin-top: 1px; }
 .pmark { display: inline-grid; place-items: center; flex: none; }
 .pmark .mk { display: block; }
+/* A mark's other-theme layer stays hidden in a box too: `.pmark .mk` is as specific as `.mk.dk` and later, so it showed the
+   dark drawing as a faded copy under light-theme marks (2026-11-28). The dark-theme rules above still win (more specific). */
+.pmark .mk.dk { display: none; }
 .ph-text { min-width: 0; }
 .ph-text h2 { font-size: var(--fs-title); font-weight: 630; font-variation-settings: 'wght' 630; letter-spacing: -.012em; line-height: 1.25; }
 .ph-kind { display: flex; align-items: center; gap: 5px; color: var(--ink-3); font-size: var(--fs-small); }
