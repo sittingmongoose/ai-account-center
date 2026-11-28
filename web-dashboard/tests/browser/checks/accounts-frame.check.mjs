@@ -461,6 +461,27 @@ export const tests = {
 		await t.equal('no change was sent', changes(server).length, 0);
 	},
 
+	async 'accounts: a long name stays on one line with its pencil right after it on a phone'(t) {
+		const server = fakeServer({ rich: true });
+		await open(t, server, { width: 402, height: 874, phone: true });
+		// Device pass r45: the pencil beside a long name keeps the name on one line (an ellipsis when it must) and sits
+		// right after it, not at the far end of the row.
+		const nameLine = await t.page.evaluate((r) => {
+			const name = document.querySelector(`${r} .acc-email`);
+			const pen = document.querySelector(`${r} [data-probe^="rename:"]`);
+			if (!name || !pen) return null;
+			const a = name.getBoundingClientRect();
+			const b = pen.getBoundingClientRect();
+			const lh = parseFloat(getComputedStyle(name).lineHeight) || 18;
+			return { height: a.height, lh, gap: b.left - a.right, title: name.getAttribute('title') };
+		}, row('claude:three'));
+		await t.check('a long name stays on one line beside its pencil', !!nameLine && nameLine.height < nameLine.lh * 1.5, JSON.stringify(nameLine));
+		await t.check('the pencil sits right after the name', !!nameLine && nameLine.gap >= -1 && nameLine.gap <= 8, JSON.stringify(nameLine));
+		await t.equal('the full name is the title of a name cut short', nameLine?.title, 'third-claude-with-a-long-name@example.invalid');
+		await t.crop('accounts-long-name-pencil-phone-402', '.prov[data-provider="claude"]', 'phone 402: Claude rows, each name on one line with its pencil right after it');
+		await t.equal('no request was sent', changes(server).length, 0);
+	},
+
 	async 'accounts: renaming an account sends only the new name and keeps the page on screen'(t) {
 		const server = fakeServer();
 		await open(t, server, { width: 402, height: 874, phone: true });
@@ -487,20 +508,6 @@ export const tests = {
 			const name = document.querySelector(`${s.row} .acc-email`)?.getBoundingClientRect();
 			return !!button && !!name && button.top < name.bottom && button.bottom > name.top;
 		}, sel));
-		// Device pass r45: the pencil beside a long name keeps the name on one line (an ellipsis when it must) and sits
-		// right after it, not at the far end of the row.
-		const nameLine = await t.page.evaluate((r) => {
-			const name = document.querySelector(`${r} .acc-email`);
-			const pen = document.querySelector(`${r} [data-probe^="rename:"]`);
-			if (!name || !pen) return null;
-			const a = name.getBoundingClientRect();
-			const b = pen.getBoundingClientRect();
-			const lh = parseFloat(getComputedStyle(name).lineHeight) || 18;
-			return { height: a.height, lh, gap: b.left - a.right, title: name.getAttribute('title') };
-		}, row('claude:three'));
-		await t.check('a long name stays on one line beside its pencil', !!nameLine && nameLine.height < nameLine.lh * 1.5, JSON.stringify(nameLine));
-		await t.check('the pencil sits right after the name', !!nameLine && nameLine.gap >= -1 && nameLine.gap <= 8, JSON.stringify(nameLine));
-		await t.equal('the full name is the title of a name cut short', nameLine?.title, 'third-claude-with-a-long-name@example.invalid');
 		await pencil('first open');
 		// Device pass r45: iOS zooms the page on a text field under 16px and keeps the zoom after it closes.
 		const field = await t.page.evaluate((s) => {
