@@ -3447,6 +3447,13 @@
       ]
     },
     {
+      "file": "web-dashboard/tests/browser/checks/provider-marks.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "web-dashboard/tests/browser/checks/refresh-button.check.mjs",
       "kind": "HTTP",
       "evidence": [
