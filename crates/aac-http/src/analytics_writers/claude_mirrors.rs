@@ -18,6 +18,7 @@ pub(super) const HISTORY: &str = "history/claude-mirror-owners";
 pub(super) const HISTORY_MIRRORS: &str = "history/claude-published-mirrors";
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
+#[derive(Clone)]
 pub(super) struct Part<'a> {
     pub(super) host: &'a str,
     pub(super) state_index: usize,
@@ -28,7 +29,20 @@ pub(super) struct Part<'a> {
 }
 
 impl Part<'_> {
-    /// The part's priced cells and sessions.
+    /// The part's worker for its live report built with the same `now`: its sessions already in
+    /// the report's form ([`collect::worker_for_report`]).
+    pub(super) fn report_worker(&self, now: i64, pricing: &dyn collect::Pricing) -> Value {
+        collect::worker_for_report(
+            &self.rows.iter().collect::<Vec<_>>(),
+            &self.sessions.iter().collect::<Vec<_>>(),
+            self.host,
+            now,
+            pricing,
+        )
+    }
+
+    /// The part's priced cells and sessions (the flow before spike 8: the tests' oracle).
+    #[cfg(test)]
     pub(super) fn worker(&self, now: i64, pricing: &dyn collect::Pricing) -> Value {
         collect::worker_from_rows(
             &self.rows.iter().collect::<Vec<_>>(),
@@ -105,13 +119,21 @@ impl<'a> Parked<'a> {
 
     /// The part as it was set aside.
     pub(super) fn restore(self) -> Result<Part<'a>> {
+        match self {
+            Parked::Held(part) => Ok(part),
+            aside => aside.read(),
+        }
+    }
+
+    /// A copy of the part as it was set aside; it stays set aside.
+    pub(super) fn read(&self) -> Result<Part<'a>> {
         let (host, state_index, bytes) = match self {
-            Parked::Held(part) => return Ok(part),
+            Parked::Held(part) => return Ok(part.clone()),
             Parked::Aside {
                 host,
                 state_index,
                 bytes,
-            } => (host, state_index, bytes),
+            } => (*host, *state_index, bytes),
         };
         let (owned, _) = aac_store::scan_row::with_interner(Default::default(), || {
             zstd::stream::read::Decoder::new(&bytes[..])
@@ -201,6 +223,7 @@ pub(super) fn row_identity<'a>(
 
 /// A confirmed original always wins. Otherwise retain a prior owner across failures
 /// and partial reads. An authoritative read without the log lets the next holder win.
+#[cfg(test)]
 pub(super) fn select_live(
     store: &Engine,
     parts: &mut [Part<'_>],
@@ -254,51 +277,98 @@ pub(super) fn choose(
     previous: &Owners,
     committed: &Owners,
 ) -> Owners {
-    let configured: HashSet<&str> = states
-        .iter()
-        .filter(|state| state["tool"] == "claude")
-        .filter_map(|state| state["host"].as_str())
-        .collect();
-    let mut complete = HashSet::new();
-    let mut present = HashSet::new();
-    let mut originals = Owners::new();
-    let mut owners = Owners::new();
-    // Parts arrive in registry order, independent of any future scan concurrency.
+    let mut choice = Choice::new(states);
     for part in parts.iter() {
+        choice.observe(part, states);
+    }
+    let owners = choice.owners(previous, committed);
+    for part in parts {
+        choice.keep(&owners, part, states);
+    }
+    owners
+}
+
+/// [`choose`] read one part at a time: every part is observed (in registry order), then the
+/// owners are chosen, then each part keeps only the mirror rows its computer owns. It holds the
+/// parts' names, not their rows.
+pub(super) struct Choice {
+    configured: HashSet<String>,
+    complete: HashSet<String>,
+    /// The names each computer holds (an original or a mirror row).
+    present: HashMap<String, HashSet<Box<str>>>,
+    originals: Owners,
+    owners: Owners,
+}
+
+impl Choice {
+    pub(super) fn new(states: &[Value]) -> Self {
+        Choice {
+            configured: states
+                .iter()
+                .filter(|state| state["tool"] == "claude")
+                .filter_map(|state| state["host"].as_str())
+                .map(str::to_owned)
+                .collect(),
+            complete: HashSet::new(),
+            present: HashMap::new(),
+            originals: Owners::new(),
+            owners: Owners::new(),
+        }
+    }
+
+    /// One part, in registry order (independent of any future scan concurrency).
+    pub(super) fn observe(&mut self, part: &Part<'_>, states: &[Value]) {
         let host = part.host;
         if matches!(
             states[part.state_index]["state"].as_str(),
             Some("ok" | "no_usage" | "not_installed")
         ) {
-            complete.insert(host);
+            self.complete.insert(host.to_owned());
         }
+        let present = self.present.entry(host.to_owned()).or_default();
         for identity in part.identities.values() {
             if let (name, false) = identity {
-                present.insert((host, name));
-                originals.insert_absent(name, host);
+                if !present.contains(name) {
+                    present.insert(Box::from(name));
+                }
+                self.originals.insert_absent(name, host);
             }
         }
         for row in part.rows.iter().chain(&part.sessions) {
             if let Some((name, true)) = row_identity(row, &part.identities) {
-                present.insert((host, name));
-                owners.insert_absent(name, host);
+                if !present.contains(name) {
+                    present.insert(Box::from(name));
+                }
+                self.owners.insert_absent(name, host);
             }
         }
     }
-    for (name, host) in previous.iter() {
-        if configured.contains(host)
-            && (!complete.contains(host) || present.contains(&(host, &*name)))
-        {
-            owners.insert(&name, host);
-        }
-    }
-    owners.extend_from(committed);
-    owners.extend_from(&originals);
 
-    for part in parts {
+    /// The owners, once every part was observed.
+    pub(super) fn owners(&mut self, previous: &Owners, committed: &Owners) -> Owners {
+        let mut owners = std::mem::take(&mut self.owners);
+        for (name, host) in previous.iter() {
+            if self.configured.contains(host)
+                && (!self.complete.contains(host)
+                    || self
+                        .present
+                        .get(host)
+                        .is_some_and(|names| names.contains(&*name)))
+            {
+                owners.insert(&name, host);
+            }
+        }
+        owners.extend_from(committed);
+        owners.extend_from(&self.originals);
+        owners
+    }
+
+    /// The part's rows without the mirrors another computer owns; a read left empty holds no
+    /// usage.
+    pub(super) fn keep(&self, owners: &Owners, part: &mut Part<'_>, states: &mut [Value]) {
         let keep = |row: &ScanRow| match row_identity(row, &part.identities) {
             Some((name, true)) => {
-                !originals.contains_key(name)
+                !self.originals.contains_key(name)
                     && owners.get(name).is_some_and(|host| host == part.host)
             }
             _ => true,
@@ -310,7 +380,6 @@ pub(super) fn choose(
             *state = json!("no_usage");
         }
     }
-    owners
 }
 
 #[cfg(test)]

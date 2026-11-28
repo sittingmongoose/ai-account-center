@@ -423,17 +423,37 @@ pub(super) struct Identities(HashMap<Arc<str>, (Arc<str>, bool)>);
 
 impl Identities {
     pub fn of(prints: &Prints) -> Self {
-        let mut names: HashMap<Arc<str>, Arc<str>> = HashMap::new();
-        Identities(
-            prints
-                .iter()
-                .filter_map(|(file, print)| {
-                    let (name, mirror) = claude_identity(&print.fields())?;
-                    let name = Arc::clone(names.entry(Arc::clone(&name)).or_insert(name));
-                    Some((Arc::clone(file), (name, mirror)))
-                })
-                .collect(),
-        )
+        let mut identities = Identities::default();
+        identities.add(prints, &mut HashMap::new());
+        identities
+    }
+
+    /// Add one print's identity, the print read in place as its JSON text (as [`Print::fields`]
+    /// reads it); `names` holds each name once across calls.
+    pub fn add_text(
+        &mut self,
+        file: Arc<str>,
+        print: &RawValue,
+        names: &mut HashMap<Arc<str>, Arc<str>>,
+    ) {
+        if !print.get().starts_with('{') {
+            return;
+        }
+        let fields: Fields<'_> = serde_json::from_str(print.get()).unwrap_or_default();
+        if let Some((name, mirror)) = claude_identity(&fields) {
+            let name = Arc::clone(names.entry(Arc::clone(&name)).or_insert(name));
+            self.0.insert(file, (name, mirror));
+        }
+    }
+
+    /// Add these prints' identities; `names` holds each name once across calls.
+    pub fn add(&mut self, prints: &Prints, names: &mut HashMap<Arc<str>, Arc<str>>) {
+        for (file, print) in prints.iter() {
+            if let Some((name, mirror)) = claude_identity(&print.fields()) {
+                let name = Arc::clone(names.entry(Arc::clone(&name)).or_insert(name));
+                self.0.insert(Arc::clone(file), (name, mirror));
+            }
+        }
     }
 
     /// Identities of a prints object.

@@ -556,4 +556,77 @@ mod parity {
             );
         }
     }
+
+    #[test]
+    fn spike8_cells_alone_match_the_worker_cells() {
+        let now = 1_795_000_000_000;
+        for seed in 1..=40 {
+            let (rows, srows) = rows(seed, now);
+            let mut interner = crate::scan_row::Interner::default();
+            let typed = |rows: &[serde_json::Value], interner: &mut crate::scan_row::Interner| {
+                rows.iter()
+                    .map(|row| crate::scan_row::ScanRow::from_value(row, interner))
+                    .collect::<Vec<_>>()
+            };
+            let (rows, srows) = (typed(&rows, &mut interner), typed(&srows, &mut interner));
+            let (rows, srows): (Vec<_>, Vec<_>) = (rows.iter().collect(), srows.iter().collect());
+            let worker = super::super::worker_from_rows(&rows, &srows, "ubuntu", now, &Fixture);
+            let cells = super::super::cells_of_rows(&rows, &srows, now, &Fixture);
+            assert_eq!(
+                serde_json::to_string(&cells).unwrap(),
+                serde_json::to_string(&worker["cells"]).unwrap(),
+                "seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn spike8_report_sessions_built_with_the_worker_match_the_report() {
+        use std::collections::{HashMap, HashSet};
+        let now = 1_795_000_000_000;
+        for seed in 1..=40 {
+            let (rows, srows) = rows(seed, now);
+            let mut interner = crate::scan_row::Interner::default();
+            let mut typed = |rows: &[serde_json::Value]| {
+                rows.iter()
+                    .map(|row| crate::scan_row::ScanRow::from_value(row, &mut interner))
+                    .collect::<Vec<_>>()
+            };
+            let (rows, srows) = (typed(&rows), typed(&srows));
+            let (rows, srows): (Vec<_>, Vec<_>) = (rows.iter().collect(), srows.iter().collect());
+            let source = serde_json::json!({"tool": "codex", "host": "nas1", "state": "ok",
+                "lastScanAt": aac_num::ecma::to_iso_string(now).unwrap()});
+            // Once, and a source listed twice (the first report copies the worker's sessions).
+            for states in [vec![source.clone()], vec![source.clone(), source.clone()]] {
+                let report = |worker: serde_json::Value| {
+                    let mut entry = serde_json::Map::new();
+                    entry.insert("tool".into(), serde_json::json!("codex"));
+                    entry.insert("host".into(), serde_json::json!("nas1"));
+                    entry.insert("data".into(), worker);
+                    let (local_complete, owned) = (HashSet::new(), HashSet::new());
+                    crate::report::build_activity_reports_owned(crate::report::OwnedReportArgs {
+                        local: HashMap::new(),
+                        remote: vec![serde_json::Value::Object(entry)],
+                        states: &states,
+                        window_from_ms: now - 31 * 86_400_000,
+                        now,
+                        local_complete: &local_complete,
+                        scanner_owned: &owned,
+                    })
+                };
+                let whole = report(super::super::worker_from_rows(&rows, &srows, "nas1", now, &Fixture));
+                let built = report(super::super::worker_for_report(&rows, &srows, "nas1", now, &Fixture));
+                assert!(
+                    whole
+                        .iter()
+                        .any(|report| report["sessions"].as_array().is_some_and(|s| !s.is_empty()))
+                );
+                assert_eq!(
+                    serde_json::to_string(&built).unwrap(),
+                    serde_json::to_string(&whole).unwrap(),
+                    "seed {seed}"
+                );
+            }
+        }
+    }
 }

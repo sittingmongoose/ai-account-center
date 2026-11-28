@@ -29,6 +29,32 @@ pub(super) struct Answer {
     row_kinds: HashSet<String>,
 }
 
+/// An agent's answer bytes held until the pass applies them, after the computer's last call:
+/// compressed while another call waits.
+pub(super) enum Held {
+    Plain(Vec<u8>),
+    Compressed(Vec<u8>),
+}
+
+impl Held {
+    /// Compress the bytes (kept as they are when they cannot be).
+    pub fn squeeze(&mut self) {
+        if let Held::Plain(bytes) = self
+            && let Ok(compressed) = zstd::bulk::compress(bytes, 1)
+        {
+            *self = Held::Compressed(compressed);
+        }
+    }
+
+    /// The answer bytes.
+    pub fn bytes(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Held::Plain(bytes) => Ok(bytes),
+            Held::Compressed(compressed) => zstd::stream::decode_all(&compressed[..]),
+        }
+    }
+}
+
 /// One tool's read.
 #[derive(Default)]
 pub(super) struct KindRead {

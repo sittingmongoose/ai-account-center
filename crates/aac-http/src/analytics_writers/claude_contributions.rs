@@ -92,8 +92,9 @@ pub(super) fn remember(
     let previous = history.len();
     let mut snapshots = BTreeMap::<u64, Hour>::new();
     for (name, (rows, sessions)) in split(part, true) {
-        let worker = collect::worker_from_rows(&rows, &sessions, part.host, now, pricing);
-        for cell in worker["cells"].as_array().into_iter().flatten() {
+        // Only the cells are kept (the worker's sessions are not built).
+        let cells = collect::cells_of_rows(&rows, &sessions, now, pricing);
+        for cell in &cells {
             let Some(hour) = cell_hour(cell) else {
                 continue;
             };
@@ -149,16 +150,34 @@ fn covered(mirror: &Value, original: &Value) -> bool {
         })
 }
 
-pub(super) fn reconcile(
-    store: &Engine,
-    parts: &[Part<'_>],
-    now: i64,
-    pricing: &dyn collect::Pricing,
-) -> Result<()> {
-    let mirrors = claude_mirrors::load(store, claude_mirrors::HISTORY_MIRRORS)?;
-    let mut history = claude_mirrors::load(store, claude_mirrors::HISTORY)?;
-    let before_history = history.clone();
-    for part in parts {
+/// Mirror cells an original reading now covers, removed from their published snapshots: one
+/// part at a time, in the pass's computer order, with the owner maps read once at the start.
+pub(super) struct Reconcile {
+    mirrors: Arc<claude_mirrors::Owners>,
+    history: Arc<claude_mirrors::Owners>,
+    before_history: Arc<claude_mirrors::Owners>,
+}
+
+impl Reconcile {
+    pub(super) fn start(store: &Engine) -> Result<Self> {
+        let mirrors = claude_mirrors::load(store, claude_mirrors::HISTORY_MIRRORS)?;
+        let history = claude_mirrors::load(store, claude_mirrors::HISTORY)?;
+        let before_history = history.clone();
+        Ok(Reconcile {
+            mirrors,
+            history,
+            before_history,
+        })
+    }
+
+    pub(super) fn part(
+        &mut self,
+        store: &Engine,
+        part: &Part<'_>,
+        now: i64,
+        pricing: &dyn collect::Pricing,
+    ) -> Result<()> {
+        let (mirrors, history) = (&self.mirrors, &mut self.history);
         for (name, (rows, sessions)) in split(part, false) {
             let Some(name) = name else { continue };
             if rows.is_empty() {
@@ -166,13 +185,13 @@ pub(super) fn reconcile(
             }
             let Some(mirror_host) = mirrors.get(name) else {
                 if !history.contains_key(name) {
-                    Arc::make_mut(&mut history).insert(name, part.host);
+                    Arc::make_mut(history).insert(name, part.host);
                 }
                 continue;
             };
-            let worker = collect::worker_from_rows(&rows, &sessions, part.host, now, pricing);
+            let cells = collect::cells_of_rows(&rows, &sessions, now, pricing);
             let mut by_hour = BTreeMap::<u64, Vec<&Value>>::new();
-            for cell in worker["cells"].as_array().into_iter().flatten() {
+            for cell in &cells {
                 if let Some(hour) = cell_hour(cell) {
                     by_hour.entry(hour).or_default().push(cell);
                 }
@@ -210,8 +229,8 @@ pub(super) fn reconcile(
                     }
                     let after = snapshot.projection(mirror_host, now)?;
                     if activity::reconcile_claude_projection(store, &before, &after, &originals)? {
-                        Arc::make_mut(&mut history).insert(name, part.host);
-                        claude_mirrors::save(store, claude_mirrors::HISTORY, &history)?;
+                        Arc::make_mut(history).insert(name, part.host);
+                        claude_mirrors::save(store, claude_mirrors::HISTORY, history)?;
                         snapshot.mirrors.retain(|_, cells| !cells.is_empty());
                         let lookup = key(mirror_host, hour, phase);
                         if snapshot.mirrors.is_empty() {
@@ -223,13 +242,33 @@ pub(super) fn reconcile(
                 }
             }
         }
+        Ok(())
     }
-    if history != before_history {
-        claude_mirrors::save(store, claude_mirrors::HISTORY, &history)?;
+
+    pub(super) fn finish(self, store: &Engine) -> Result<()> {
+        if self.history != self.before_history {
+            claude_mirrors::save(store, claude_mirrors::HISTORY, &self.history)?;
+        }
+        Ok(())
     }
-    Ok(())
 }
 
+pub(super) fn reconcile(
+    store: &Engine,
+    parts: &[Part<'_>],
+    now: i64,
+    pricing: &dyn collect::Pricing,
+) -> Result<()> {
+    let mut reconcile = Reconcile::start(store)?;
+    for part in parts {
+        reconcile.part(store, part, now, pricing)?;
+    }
+    reconcile.finish(store)
+}
+
+/// Reconcile, choose and remember over every part at once (the pass's Claude end before spike 8:
+/// the tests' oracle for `shape_claude`).
+#[cfg(test)]
 pub(super) fn prepare_live(
     store: &Engine,
     parts: &mut [Part<'_>],

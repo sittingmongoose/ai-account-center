@@ -154,73 +154,107 @@ fn session_tokens(session: &Value) -> u64 {
 /// Sessions as the contract's; one that starts after `limit` is left out, a later end is cut to it.
 /// Deduped by key, keeping the greater token sum (insertion order of first appearance).
 pub fn sessions_of(rows: &[Value], limit: i64) -> Vec<Value> {
-    let mut order: Vec<String> = Vec::new();
-    let mut out: HashMap<String, Value> = HashMap::new();
+    let mut sessions = SessionsOf::new(limit);
     for row in rows {
-        let Some(key) = row["sessionId"].as_str() else {
-            continue;
-        };
-        if !is_hex16(key) {
-            continue;
+        sessions.push(row);
+    }
+    sessions.finish()
+}
+
+/// [`sessions_of`] a row at a time: each worker session row is turned into the contract's form
+/// as it comes, so the rows need not all be held. Sessions already in the contract's form (each
+/// one source's [`sessions_of`]) join the same dedup ([`SessionsOf::push_session`]): a key's
+/// session is the first with the greatest token sum either way, in order of first appearance.
+pub struct SessionsOf {
+    limit: i64,
+    order: Vec<String>,
+    out: HashMap<String, Value>,
+}
+
+impl SessionsOf {
+    pub fn new(limit: i64) -> Self {
+        SessionsOf {
+            limit,
+            order: Vec::new(),
+            out: HashMap::new(),
         }
-        let last_raw = row["lastActivity"].as_str().and_then(parse_instant);
-        let Some(last_raw) = last_raw else {
-            continue;
-        };
-        let last = last_raw.min(limit);
-        let first_text = row["firstActivity"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| row["lastActivity"].as_str().unwrap_or(""));
-        let Some(first) = parse_instant(first_text) else {
-            continue;
-        };
-        if first > last {
-            continue;
+    }
+
+    /// One worker session row (`sessionId`, `firstActivity`, `lastActivity`, ...).
+    pub fn push(&mut self, row: &Value) {
+        if let Some((key, session)) = contract_session(row, self.limit) {
+            self.push_session(key, session);
         }
-        let empty = Vec::new();
-        let parts: Vec<Value> = row["modelBreakdowns"]
-            .as_array()
-            .unwrap_or(&empty)
-            .iter()
-            .take(32)
-            .map(|b| {
-                json!({
-                    "route": route(&b["provider"]),
-                    "modelRaw": model_raw(&b["modelName"]),
-                    "inputTokens": count(&b["inputTokens"]),
-                    "outputTokens": count(&b["outputTokens"]),
-                    "cacheCreationTokens": count(&b["cacheCreationTokens"]),
-                    "cacheReadTokens": count(&b["cacheReadTokens"]),
-                    "costUsd": as_f64(&b["cost"]).max(0.0),
-                    "fallbackCostUsd": as_f64(&b["fallbackCost"]).max(0.0),
-                })
-            })
-            .collect();
-        let target = row["target"]
-            .as_str()
-            .filter(|t| is_target(t))
-            .map(Value::from)
-            .unwrap_or(Value::Null);
-        let session = json!({
-            "sessionKey": key,
-            "first": iso(first),
-            "last": iso(last),
-            "parts": parts,
-            "target": target,
-        });
-        let replace = match out.get(key) {
+    }
+
+    /// One session in the contract's form.
+    pub fn push_session(&mut self, key: String, session: Value) {
+        let replace = match self.out.get(&key) {
             Some(prior) => session_tokens(&session) > session_tokens(prior),
             None => {
-                order.push(key.to_string());
+                self.order.push(key.clone());
                 true
             }
         };
         if replace {
-            out.insert(key.to_string(), session);
+            self.out.insert(key, session);
         }
     }
-    order.into_iter().filter_map(|k| out.remove(&k)).collect()
+
+    pub fn finish(mut self) -> Vec<Value> {
+        self.order.into_iter().filter_map(|k| self.out.remove(&k)).collect()
+    }
+}
+
+/// One worker session row in the contract's form, with its key; None for a row the contract
+/// leaves out.
+fn contract_session(row: &Value, limit: i64) -> Option<(String, Value)> {
+    let key = row["sessionId"].as_str()?;
+    if !is_hex16(key) {
+        return None;
+    }
+    let last_raw = row["lastActivity"].as_str().and_then(parse_instant)?;
+    let last = last_raw.min(limit);
+    let first_text = row["firstActivity"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| row["lastActivity"].as_str().unwrap_or(""));
+    let first = parse_instant(first_text)?;
+    if first > last {
+        return None;
+    }
+    let empty = Vec::new();
+    let parts: Vec<Value> = row["modelBreakdowns"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .take(32)
+        .map(|b| {
+            json!({
+                "route": route(&b["provider"]),
+                "modelRaw": model_raw(&b["modelName"]),
+                "inputTokens": count(&b["inputTokens"]),
+                "outputTokens": count(&b["outputTokens"]),
+                "cacheCreationTokens": count(&b["cacheCreationTokens"]),
+                "cacheReadTokens": count(&b["cacheReadTokens"]),
+                "costUsd": as_f64(&b["cost"]).max(0.0),
+                "fallbackCostUsd": as_f64(&b["fallbackCost"]).max(0.0),
+            })
+        })
+        .collect();
+    let target = row["target"]
+        .as_str()
+        .filter(|t| is_target(t))
+        .map(Value::from)
+        .unwrap_or(Value::Null);
+    let session = json!({
+        "sessionKey": key,
+        "first": iso(first),
+        "last": iso(last),
+        "parts": parts,
+        "target": target,
+    });
+    Some((key.to_string(), session))
 }
 
 /// The contract state for one source cell of the "Included usage" grid.
@@ -338,12 +372,14 @@ enum ReportData {
 }
 
 /// One worker result's cells and sessions into a report's reads. The last report to read a result
-/// takes its arrays; an earlier one (a source listed twice) copies them, as every read once did.
+/// takes its cells; an earlier one (a source listed twice) copies them, as every read once did.
+/// Its session rows are turned into the report's sessions as they are read (a worker built for
+/// the report carries them in that form already, `reportSessions`, for the same `limit`).
 fn read_worker(
     entry: &mut Value,
     last: bool,
     read: &mut Vec<Value>,
-    session_rows: &mut Vec<Value>,
+    sessions: &mut SessionsOf,
     derived: &mut bool,
 ) -> u64 {
     if let Some(cells) = entry.get_mut("cells").and_then(Value::as_array_mut) {
@@ -358,11 +394,27 @@ fn read_worker(
         *derived = true;
         read.extend(cells_from_hourly(hourly));
     }
-    if let Some(session) = entry.get_mut("session").and_then(Value::as_array_mut) {
+    if let Some(rows) = entry.get_mut("session").and_then(Value::as_array_mut) {
         if last {
-            session_rows.append(session);
+            for row in std::mem::take(rows) {
+                sessions.push(&row);
+            }
         } else {
-            session_rows.extend(session.iter().cloned());
+            for row in rows.iter() {
+                sessions.push(row);
+            }
+        }
+    }
+    debug_assert!(
+        entry["reportSessions"].is_null() || entry["reportSessionsLimit"].as_i64() == Some(sessions.limit),
+        "a worker's report sessions are cut at the report's limit"
+    );
+    if let Some(ready) = entry.get_mut("reportSessions").and_then(Value::as_array_mut) {
+        let ready: Vec<Value> = if last { std::mem::take(ready) } else { ready.clone() };
+        for session in ready {
+            if let Some(key) = session["sessionKey"].as_str().map(str::to_owned) {
+                sessions.push_session(key, session);
+            }
         }
     }
     count(&entry["futureDated"])
@@ -414,7 +466,7 @@ pub fn build_activity_reports_owned(args: OwnedReportArgs<'_>) -> Vec<Value> {
         let host = source["host"].as_str().unwrap_or("");
         let mut derived = false;
         let mut read: Vec<Value> = Vec::new();
-        let mut session_rows: Vec<Value> = Vec::new();
+        let mut sessions = SessionsOf::new(limit);
         let mut future_dated = 0u64;
         match plan {
             ReportData::Remote(indexes) => {
@@ -423,7 +475,7 @@ pub fn build_activity_reports_owned(args: OwnedReportArgs<'_>) -> Vec<Value> {
                     let last = remote_reads[index] == 0;
                     let mut missing = Value::Null;
                     let entry = remote[index].get_mut("data").unwrap_or(&mut missing);
-                    future_dated += read_worker(entry, last, &mut read, &mut session_rows, &mut derived);
+                    future_dated += read_worker(entry, last, &mut read, &mut sessions, &mut derived);
                 }
             }
             ReportData::Local => {
@@ -432,7 +484,7 @@ pub fn build_activity_reports_owned(args: OwnedReportArgs<'_>) -> Vec<Value> {
                 let last = *reads == 0;
                 if let Some(entries) = local.get_mut(tool) {
                     for entry in entries.iter_mut() {
-                        future_dated += read_worker(entry, last, &mut read, &mut session_rows, &mut derived);
+                        future_dated += read_worker(entry, last, &mut read, &mut sessions, &mut derived);
                     }
                 }
             }
@@ -501,7 +553,7 @@ pub fn build_activity_reports_owned(args: OwnedReportArgs<'_>) -> Vec<Value> {
                 json!([])
             },
         );
-        report.insert("sessions".into(), Value::Array(sessions_of(&session_rows, limit)));
+        report.insert("sessions".into(), Value::Array(sessions.finish()));
         reports.push(Value::Object(report));
     }
     reports

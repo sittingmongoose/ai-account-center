@@ -374,6 +374,13 @@ impl Shaped {
         }
     }
 
+    /// Take in another group's reports.
+    fn merge(&mut self, other: Shaped) {
+        self.reports.extend(other.reports);
+        self.built.extend(other.built);
+        self.refused |= other.refused;
+    }
+
     fn is_built(&self, index: usize) -> bool {
         self.built.contains(&index)
     }
@@ -425,45 +432,118 @@ impl Shaped {
     }
 }
 
-/// The pass's Claude reports: the parts read back, the mirror owners chosen over all of them,
-/// then one computer's worker and reports at a time, the smallest first, each part dropped once
-/// its worker is built (the order changes nothing: each report reads only its own computer's).
-/// When the owners cannot be updated, every part's source is unreadable and no part is read.
+/// A worker result as the report builder reads it, the worker moved in (`json!` would copy it).
+fn worker_entry(tool: &str, host: &str, worker: Value) -> Value {
+    let mut entry = Map::new();
+    entry.insert("tool".into(), json!(tool));
+    entry.insert("host".into(), json!(host));
+    entry.insert("data".into(), worker);
+    Value::Object(entry)
+}
+
+/// A computer's Claude part until the pass's Claude end: read back from the checkpoint the pass
+/// saved (nothing held meanwhile), or set aside compressed when the checkpoint was not saved.
+enum ClaudePart<'h> {
+    Saved {
+        host: &'h str,
+        state_index: usize,
+        parts: scan_state::KeptParts,
+    },
+    Parked(claude_mirrors::Parked<'h>),
+}
+
+impl<'h> ClaudePart<'h> {
+    fn state_index(&self) -> usize {
+        match self {
+            ClaudePart::Saved { state_index, .. } => *state_index,
+            ClaudePart::Parked(parked) => parked.state_index(),
+        }
+    }
+
+    fn read(
+        &self,
+        engine: &aac_store::engine::Engine,
+    ) -> aac_store::error::Result<claude_mirrors::Part<'h>> {
+        match self {
+            ClaudePart::Saved {
+                host,
+                state_index,
+                parts,
+            } => {
+                let (rows, sessions, identities) = scan_state::read_kept(engine, parts)?;
+                Ok(claude_mirrors::Part {
+                    host,
+                    state_index: *state_index,
+                    rows,
+                    sessions,
+                    identities,
+                })
+            }
+            ClaudePart::Parked(parked) => parked.read(),
+        }
+    }
+
+    fn restore(
+        self,
+        engine: &aac_store::engine::Engine,
+    ) -> aac_store::error::Result<claude_mirrors::Part<'h>> {
+        match self {
+            ClaudePart::Parked(parked) => parked.restore(),
+            saved => saved.read(engine),
+        }
+    }
+}
+
+/// The pass's Claude reports, the parts read back one at a time: `prepare_live` (reconcile,
+/// owner choice, remember) taken apart so only one part is decoded at once. Each part is read to
+/// reconcile it and note its names, then the mirror owners are chosen over every part's names,
+/// then, in computer order, each part keeps the rows its computer owns, is remembered, and its
+/// worker and reports are built before the next is read (each report reads only its own
+/// computer's). When the owners cannot be updated, every part's source is unreadable and none of
+/// its reports is kept.
 fn shape_claude(
     engine: &aac_store::engine::Engine,
-    parked: Vec<claude_mirrors::Parked<'_>>,
+    parked: Vec<ClaudePart<'_>>,
     states: &mut [Value],
     pricing: &dyn Pricing,
     frame: &ReportFrame<'_>,
     shaped: &mut Shaped,
     ingestor: &Ingestor,
 ) {
-    let indexes: Vec<usize> = parked
-        .iter()
-        .map(claude_mirrors::Parked::state_index)
-        .collect();
-    let parts = parked
-        .into_iter()
-        .map(claude_mirrors::Parked::restore)
-        .collect::<aac_store::error::Result<Vec<_>>>()
-        .and_then(|mut parts| {
-            claude_contributions::prepare_live(engine, &mut parts, states, frame.now, pricing)?;
-            Ok(parts)
-        });
-    match parts {
-        Ok(mut parts) => {
-            parts.sort_by_key(|part| part.rows.len() + part.sessions.len());
+    let indexes: Vec<usize> = parked.iter().map(ClaudePart::state_index).collect();
+    let mut claude = Shaped::default();
+    let result = (|| -> aac_store::error::Result<()> {
+        let mut reconcile = claude_contributions::Reconcile::start(engine)?;
+        let mut choice = claude_mirrors::Choice::new(states);
+        for part in &parked {
+            let part = part.read(engine)?;
+            reconcile.part(engine, &part, frame.now, pricing)?;
+            choice.observe(&part, states);
+        }
+        reconcile.finish(engine)?;
+        let previous = claude_mirrors::load(engine, claude_mirrors::LIVE)?;
+        let historical = claude_mirrors::load(engine, claude_mirrors::HISTORY)?;
+        let owners = choice.owners(&previous, &historical);
+        if owners != *previous {
+            claude_mirrors::save(engine, claude_mirrors::LIVE, &owners)?;
+        }
+        for part in parked {
+            let mut part = part.restore(engine)?;
+            choice.keep(&owners, &mut part, states);
+            claude_contributions::remember(engine, &part, "live", frame.now, pricing)?;
             // Every Claude source of a computer reads its part (computers are distinct, so
             // each has one part).
-            for part in parts {
-                let group = shaped.claude_sources(states, part.host);
-                let worker = part.worker(frame.now, pricing);
-                let remote = vec![json!({ "tool": "claude", "host": part.host, "data": worker })];
-                drop(part);
-                let built = Shaped::build(frame, states, group, HashMap::new(), remote);
-                shaped.keep(ingestor, built);
-            }
+            let group = shaped.claude_sources(states, part.host);
+            let worker = part.report_worker(frame.now, pricing);
+            let remote = vec![worker_entry("claude", part.host, worker)];
+            drop(part);
+            let built = Shaped::build(frame, states, group, HashMap::new(), remote);
+            claude.keep(ingestor, built);
         }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => shaped.merge(claude),
         Err(error) => {
             tracing::warn!(
                 code = error.code,
@@ -629,14 +709,38 @@ fn answer_incomplete(answer: &Answer, kind: &str) -> bool {
 /// One tool of a valid scanner answer applied to the cache: its source state. The writer reports
 /// the tool's cached rows, read in place from the cache ([`scan_state::of_kind`]).
 /// `flags` are (settled prints packed, source limited, experiment discovery still running).
+#[cfg(test)]
 fn scanned_kind(
     answer: &mut Answer,
     kind: &str,
     host: &str,
     (now, cutoff): (i64, i64),
-    (packed, limited, discovering): (bool, bool, bool),
+    flags: (bool, bool, bool),
     cache: &mut scan_state::Cache,
 ) -> Value {
+    let applied = scanned_kind_with(
+        answer,
+        kind,
+        host,
+        now,
+        flags,
+        cache,
+        |cache, answer, complete| Ok(cache.apply(kind, answer, complete, cutoff)),
+    );
+    applied.expect("an apply in memory does not fail")
+}
+
+/// `scanned_kind` with the apply given: the pass applies a tool's answer to the checkpoint
+/// one bucket at a time ([`scan_state::Change::apply`]); `cache` holds the tool's rows.
+fn scanned_kind_with(
+    answer: &mut Answer,
+    kind: &str,
+    host: &str,
+    now: i64,
+    (packed, limited, discovering): (bool, bool, bool),
+    cache: &mut scan_state::Cache,
+    apply: impl FnOnce(&mut scan_state::Cache, &mut Answer, bool) -> aac_store::error::Result<bool>,
+) -> aac_store::error::Result<Value> {
     let settle = |answer: &Answer, readable: bool| -> (&'static str, Option<&'static str>) {
         let (state, cause) = source_state(answer, kind, readable);
         if limited {
@@ -651,7 +755,7 @@ fn scanned_kind(
     let complete = matches!(state, "ok" | "no_usage");
     let compatible = !packed || answer.read(kind)["settledPacked"] == true;
     let incomplete = answer_incomplete(answer, kind);
-    let applied = cache.apply(kind, answer, complete && compatible && !incomplete, cutoff);
+    let applied = apply(cache, answer, complete && compatible && !incomplete)?;
     // Whether readable usage survives is decided from the cache as the apply left it: a
     // changed file whose cached rows were replaced by none leaves nothing readable, so the
     // scan is a read failure, never "Scanning" with zero published cells (r1 High).
@@ -666,7 +770,7 @@ fn scanned_kind(
     if state == "ok" && !holds(&cache.rows) && !holds(&cache.srows) {
         state = "no_usage";
     }
-    scan_source_state(answer, kind, host, now, state, cause)
+    Ok(scan_source_state(answer, kind, host, now, state, cause))
 }
 
 fn scan_source_state(
@@ -813,6 +917,153 @@ fn failed_scan_states(host: &str, kinds: &[String], agent_missing: bool) -> Vec<
 }
 
 /// The activity scheduler's pass: scan each configured computer, shape and ingest the reports.
+/// One request of a computer's pass: skipped before its call (its prints could not be carried
+/// within the frame), or the call's answer.
+enum Call {
+    Skipped,
+    Answered {
+        packed: HashSet<String>,
+        answer: Result<scan_answer::Held, aac_core::Cause>,
+    },
+}
+
+/// A computer's answers applied: its Claude part (set aside), and the worker results of its
+/// other tools.
+struct Applied<'h> {
+    claude: Option<ClaudePart<'h>>,
+    remote: Vec<Value>,
+}
+
+/// What [`apply_calls`] gave: the applied answers, and the save (None when not saved).
+type Saved = Option<aac_store::error::Result<(scan_state::Written, Option<[u8; 32]>)>>;
+
+/// Apply a computer's answers in request order, one tool at a time, in one store transaction
+/// ([`scan_state::Checkpoint::change`]): each tool's source state, its worker result (Claude's
+/// rows are kept for the mirror owners), and the checkpoint saved when an answer was valid.
+/// `flags` gives a tool's (source limited, experiment discovery still running).
+#[allow(clippy::too_many_arguments)]
+fn apply_calls<'h>(
+    checkpoint: &mut scan_state::Checkpoint,
+    engine: &aac_store::engine::Engine,
+    host: &'h str,
+    (now, cutoff): (i64, i64),
+    calls: Vec<(Vec<String>, Call)>,
+    flags: &dyn Fn(&str) -> (bool, bool),
+    pricing: &dyn Pricing,
+    states: &mut Vec<Value>,
+) -> aac_store::error::Result<(Applied<'h>, Saved)> {
+    checkpoint
+        .change(engine, host, cutoff, Some("claude"), |change| {
+            let mut scanned = false;
+            let mut claude_state = None;
+            let mut applied = Applied {
+                claude: None,
+                remote: Vec::new(),
+            };
+            for (batch, call) in calls {
+                let (packed, answer) = match call {
+                    Call::Skipped => {
+                        for kind in batch {
+                            states.push(json!({
+                                "tool": kind, "host": host, "state": "unreadable",
+                                "cause": "source_limit",
+                            }));
+                        }
+                        continue;
+                    }
+                    Call::Answered { packed, answer } => (packed, answer),
+                };
+                let answer = answer.and_then(|held| {
+                    let bytes = held.bytes().map_err(|_| aac_core::Cause::Damaged)?;
+                    Answer::parse(&bytes, change.strings()).map_err(|_| aac_core::Cause::Damaged)
+                });
+                match answer {
+                    Ok(mut answer) if valid_scan_answer(&answer, &batch) => {
+                        scanned = true;
+                        for kind in &batch {
+                            let (limited, discovering) = flags(kind);
+                            let mut cache = change.tool(kind)?;
+                            let source = scanned_kind_with(
+                                &mut answer,
+                                kind,
+                                host,
+                                now,
+                                (packed.contains(kind), limited, discovering),
+                                &mut cache,
+                                |cache, answer, complete| {
+                                    change.apply(kind, cache, answer, complete)
+                                },
+                            )?;
+                            if kind == "claude" {
+                                claude_state = Some(states.len());
+                            } else {
+                                let worker = collect::worker_for_report(
+                                    &scan_state::of_kind(&cache.rows, kind),
+                                    &scan_state::of_kind(&cache.srows, kind),
+                                    host,
+                                    now,
+                                    pricing,
+                                );
+                                applied.remote.push(worker_entry(kind, host, worker));
+                            }
+                            states.push(source);
+                            change.put(kind, cache)?;
+                            // Set aside, compressed, as soon as it is written back.
+                            if let (Some(state_index), Some(kept)) =
+                                (claude_state, change.take_kept())
+                            {
+                                applied.claude = Some(claude_part(host, state_index, kept));
+                            }
+                        }
+                    }
+                    Err(aac_core::Cause::AgentMissing) => {
+                        states.extend(failed_scan_states(host, &batch, true))
+                    }
+                    _ => states.extend(failed_scan_states(host, &batch, false)),
+                }
+            }
+            Ok(((applied, claude_state), scanned))
+        })
+        .map(|changed| {
+            let ((mut applied, claude_state), kept) = (changed.out, changed.kept);
+            // The save windowed the Claude rows again: their part as the save left them.
+            if let (Some(state_index), Some(kept)) = (claude_state, kept) {
+                applied.claude = Some(claude_part(host, state_index, kept));
+            }
+            // Saved: read back from the store at the Claude end, nothing held meanwhile.
+            if let (Some(state_index), Some(parts)) = (claude_state, changed.kept_parts) {
+                applied.claude = Some(ClaudePart::Saved {
+                    host,
+                    state_index,
+                    parts,
+                });
+            }
+            (applied, changed.saved)
+        })
+}
+
+/// A computer's Claude rows, set aside compressed until the pass's Claude end.
+fn claude_part<'h>(
+    host: &'h str,
+    state_index: usize,
+    (rows, sessions, identities): (
+        Vec<aac_store::scan_row::ScanRow>,
+        Vec<aac_store::scan_row::ScanRow>,
+        claude_mirrors::Identities,
+    ),
+) -> ClaudePart<'h> {
+    ClaudePart::Parked(
+        claude_mirrors::Part {
+            host,
+            state_index,
+            rows,
+            sessions,
+            identities,
+        }
+        .park(),
+    )
+}
+
 async fn activity_pass(
     engine: &aac_store::engine::Engine,
     agents: &Arc<crate::agent_transport::Agents>,
@@ -879,8 +1130,8 @@ async fn activity_pass(
     let mut mapped_complete = false;
     'computers: for computer in &computers {
         let host = computer.id.as_str();
-        let mut cache = match scan_state::Cache::load(engine, host) {
-            Ok(cache) => cache,
+        let mut checkpoint = match scan_state::Checkpoint::load(engine, host) {
+            Ok(checkpoint) => checkpoint,
             Err(error) => {
                 tracing::warn!(
                     code = error.code,
@@ -921,138 +1172,133 @@ async fn activity_pass(
                 .as_ref(),
         );
         let settled_before = activity::settled_before(engine, host).unwrap_or_default();
-        let requests =
-            scan_state::Requests::new(args, &kinds, &cache.fingerprints, &settled_before, now);
-        let mut scanned = false;
-        let mut claude_state = None;
         let start_state = states.len();
-        // This computer's worker results: shaped into its reports once its checkpoint is saved.
-        let mut remote: Vec<Value> = Vec::new();
-        for batch in &requests.batches {
-            let batch = batch.clone();
-            let Some(scan_state::ScanArgs { text, packed }) =
-                requests.args(&batch, &cache.fingerprints)
-            else {
-                for kind in batch {
-                    states.push(json!({
-                        "tool": kind, "host": host, "state": "unreadable", "cause": "source_limit",
-                    }));
-                }
+        // A store failure once the checkpoint is open: nothing of this computer's pass is kept
+        // or saved.
+        let unavailable = |states: &mut Vec<Value>, kinds: &[String]| {
+            states.truncate(start_state);
+            states.extend(kinds.iter().map(|kind| {
+                json!({
+                    "tool": kind, "host": host, "state": "unreadable",
+                    "cause": "store_unavailable",
+                })
+            }));
+        };
+        let requests = match checkpoint.requests(engine, host, args, &kinds, &settled_before, now) {
+            Ok(requests) => requests,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code,
+                    "Stored Analytics scanner state could not be read"
+                );
+                unavailable(&mut states, &kinds);
                 continue;
-            };
-            let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
-            // The checkpoint is not held while the call waits: what this pass changed stays,
-            // compressed, and the rest is read back from the store after it.
-            let parked = cache.park();
-            let answer = scan_host(agents, computer, text, SCAN_DEADLINE_MS, &call_id).await;
-            cache = match parked.restore(engine, host) {
-                Ok(cache) => cache,
+            }
+        };
+        let batch_kinds: Vec<String> = requests.batches.iter().flatten().cloned().collect();
+        // The answers are applied once every call is back: no tool's state is held while a
+        // call waits, only the answers so far (compressed).
+        let mut calls: Vec<(Vec<String>, Call)> = Vec::new();
+        for batch in &requests.batches {
+            let args = match checkpoint.args(engine, host, &requests, batch) {
+                Ok(args) => args,
                 Err(error) => {
                     tracing::warn!(
                         code = error.code,
-                        "Stored Analytics scanner state could not be read back"
+                        "Stored Analytics scanner state could not be read"
                     );
-                    // Nothing of this computer's pass is kept or saved.
-                    states.truncate(start_state);
-                    drop(remote);
-                    states.extend(requests.batches.iter().flatten().map(|kind| {
-                        json!({
-                            "tool": kind, "host": host, "state": "unreadable",
-                            "cause": "store_unavailable",
-                        })
-                    }));
+                    unavailable(&mut states, &batch_kinds);
                     continue 'computers;
                 }
             };
-            let answer = answer.and_then(|bytes| {
-                Answer::parse(&bytes, &mut cache.strings).map_err(|_| aac_core::Cause::Damaged)
-            });
-            match answer {
-                Ok(mut answer) if valid_scan_answer(&answer, &batch) => {
-                    scanned = true;
-                    for kind in &batch {
-                        let packed = packed.contains(kind);
-                        let limited = overflow.contains(kind.as_str())
-                            || experiments.is_some_and(|snapshot| snapshot.limited(kind));
-                        let discovering = local
-                            && experiments.map_or_else(
-                                || experiment_roots::tracks(kind),
-                                |snapshot| snapshot.discovering(kind),
-                            );
-                        let source = scanned_kind(
-                            &mut answer,
-                            kind,
-                            host,
-                            (now, cutoff),
-                            (packed, limited, discovering),
-                            &mut cache,
-                        );
-                        if kind == "claude" {
-                            // Moved out of the cache once its checkpoint is encoded.
-                            claude_state = Some(states.len());
-                        } else {
-                            let worker = collect::worker_from_rows(
-                                &scan_state::of_kind(&cache.rows, kind),
-                                &scan_state::of_kind(&cache.srows, kind),
-                                host,
-                                now,
-                                &pricing,
-                            );
-                            remote.push(json!({ "tool": kind, "host": host, "data": worker }));
-                        }
-                        states.push(source);
-                    }
+            let Some(scan_state::ScanArgs { text, packed }) = args else {
+                calls.push((batch.clone(), Call::Skipped));
+                continue;
+            };
+            for (_, call) in &mut calls {
+                if let Call::Answered {
+                    answer: Ok(held), ..
+                } = call
+                {
+                    held.squeeze();
                 }
-                Err(aac_core::Cause::AgentMissing) => {
-                    states.extend(failed_scan_states(host, &batch, true))
-                }
-                _ => states.extend(failed_scan_states(host, &batch, false)),
             }
+            let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
+            let answer = scan_host(agents, computer, text, SCAN_DEADLINE_MS, &call_id).await;
+            calls.push((
+                batch.clone(),
+                Call::Answered {
+                    packed,
+                    answer: answer.map(scan_answer::Held::Plain),
+                },
+            ));
         }
-        // Saved now, one computer at a time, and only the parts that changed; a superseded pass
-        // leaves the store to the newer one.
-        let current =
-            scanned && state.lock().unwrap_or_else(|p| p.into_inner()).generation == generation;
-        if current {
-            match cache.save(engine, host) {
-                Ok(written) => tracing::debug!(
-                    keys = written.keys,
-                    bytes = written.bytes,
-                    "Analytics scanner state saved"
-                ),
-                Err(error) if error.code != "source_limit" => tracing::warn!(
+        // A superseded pass leaves the store to the newer one, and its results are dropped at
+        // its end: it stops here.
+        if state.lock().unwrap_or_else(|p| p.into_inner()).generation != generation {
+            return;
+        }
+        let flags = |kind: &str| {
+            let limited = overflow.contains(kind)
+                || experiments.is_some_and(|snapshot| snapshot.limited(kind));
+            let discovering = local
+                && experiments.map_or_else(
+                    || experiment_roots::tracks(kind),
+                    |snapshot| snapshot.discovering(kind),
+                );
+            (limited, discovering)
+        };
+        let changed = apply_calls(
+            &mut checkpoint,
+            engine,
+            host,
+            (now, cutoff),
+            calls,
+            &flags,
+            &pricing,
+            &mut states,
+        );
+        let (applied, saved) = match changed {
+            Ok(changed) => changed,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code,
+                    "Stored Analytics scanner state could not be read back"
+                );
+                unavailable(&mut states, &batch_kinds);
+                continue;
+            }
+        };
+        match saved {
+            None => {}
+            Some(Ok((written, _))) => tracing::debug!(
+                keys = written.keys,
+                bytes = written.bytes,
+                "Analytics scanner state saved"
+            ),
+            Some(Err(error)) if error.code != "source_limit" => tracing::warn!(
+                code = error.code,
+                "Analytics scanner state could not be saved"
+            ),
+            Some(Err(error)) => {
+                tracing::warn!(
                     code = error.code,
                     "Analytics scanner state could not be saved"
-                ),
-                Err(error) => {
-                    tracing::warn!(
-                        code = error.code,
-                        "Analytics scanner state could not be saved"
-                    );
-                    for source in &mut states[start_state..] {
-                        if matches!(source["state"].as_str(), Some("ok" | "no_usage")) {
-                            source["state"] = json!("unreadable");
-                            source["cause"] = json!("source_limit");
-                        }
+                );
+                for source in &mut states[start_state..] {
+                    if matches!(source["state"].as_str(), Some("ok" | "no_usage")) {
+                        source["state"] = json!("unreadable");
+                        source["cause"] = json!("source_limit");
                     }
                 }
             }
         }
-        if let Some(state_index) = claude_state {
-            let (rows, sessions, identities) = cache.take_kind("claude");
-            // Set aside, compressed, while the other computers are read.
-            claude.push(
-                claude_mirrors::Part {
-                    host,
-                    state_index,
-                    rows,
-                    sessions,
-                    identities,
-                }
-                .park(),
-            );
-        }
-        drop(cache);
+        let Applied {
+            claude: part,
+            remote,
+        } = applied;
+        claude.extend(part);
+        drop(checkpoint);
         // This computer's reports of the scanner's tools other than Claude, built now and held
         // trimmed and typed: its worker trees are gone before the next computer is read.
         let early = Shaped::computer_sources(&states, start_state, &scanner_owned);
@@ -3114,7 +3360,10 @@ mod shaped_tests {
             let old_states = states;
             // After: the parts set aside, read back, shaped one computer at a time.
             let mut states = claude_states();
-            let parked: Vec<_> = claude_parts().into_iter().map(|part| part.park()).collect();
+            let parked: Vec<_> = claude_parts()
+                .into_iter()
+                .map(|part| ClaudePart::Parked(part.park()))
+                .collect();
             let frame = ReportFrame {
                 window_from_ms: NOW - 31 * DAY,
                 now: NOW,

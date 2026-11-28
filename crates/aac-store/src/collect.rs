@@ -325,6 +325,14 @@ struct SessionBucket {
 /// (key, first/last, target, model breakdowns); the projection's extra labels stay with the front
 /// door.
 fn sessions_from_rows(srows: &[&ScanRow], pricing: &dyn Pricing) -> Vec<Value> {
+    let mut sessions = Vec::new();
+    each_session(srows, pricing, |session| sessions.push(session));
+    sessions
+}
+
+/// [`sessions_from_rows`]' sessions handed to `each` one at a time, in the same order (newest
+/// first): the order is set on the typed buckets before any session is built.
+fn each_session(srows: &[&ScanRow], pricing: &dyn Pricing, mut each: impl FnMut(Value)) {
     let mut order: Vec<SessionBucket> = Vec::new();
     let mut ids: Vec<&str> = Vec::new();
     let mut sessions: HashMap<&str, usize> = HashMap::new();
@@ -386,8 +394,15 @@ fn sessions_from_rows(srows: &[&ScanRow], pricing: &dyn Pricing) -> Vec<Value> {
         }
     }
     let mut resolved: HashMap<(Option<String>, Arc<str>), PricingResolution> = HashMap::new();
-    let mut out: Vec<(String, Value)> = Vec::new();
-    for (session_id, bucket) in ids.into_iter().zip(order) {
+    // Newest session first (the collector's lastActivity localeCompare descending); a stable
+    // sort, so sessions that end together keep their order.
+    let mut sorted: Vec<(String, &str, SessionBucket)> = ids
+        .into_iter()
+        .zip(order)
+        .map(|(session_id, bucket)| (iso(bucket.last_ms), session_id, bucket))
+        .collect();
+    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    for (last, session_id, bucket) in sorted {
         let mut breakdowns: Vec<(f64, Value)> = Vec::new();
         for model in bucket.models {
             let (provider, name) = &model.key;
@@ -412,7 +427,6 @@ fn sessions_from_rows(srows: &[&ScanRow], pricing: &dyn Pricing) -> Vec<Value> {
         }
         // The collector sorts breakdowns by cost descending; sessionsOf keeps that order.
         breakdowns.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let last = iso(bucket.last_ms);
         let mut session = Map::new();
         session.insert("sessionId".into(), json!(session_id));
         session.insert("firstActivity".into(), json!(iso(bucket.first_ms)));
@@ -422,11 +436,8 @@ fn sessions_from_rows(srows: &[&ScanRow], pricing: &dyn Pricing) -> Vec<Value> {
             Value::Array(breakdowns.into_iter().map(|(_, b)| b).collect()),
         );
         session.insert("target".into(), json!(&*bucket.target));
-        out.push((last, Value::Object(session)));
+        each(Value::Object(session));
     }
-    // Newest session first (the collector's lastActivity localeCompare descending).
-    out.sort_by(|a, b| b.0.cmp(&a.0));
-    out.into_iter().map(|(_, session)| session).collect()
 }
 
 /// `toWorkerResult` for the scanner's answer: one tool's cells and session rows read on `host`,
@@ -453,6 +464,51 @@ pub fn worker_from_rows(rows: &[&ScanRow], srows: &[&ScanRow], host: &str, now: 
     result.insert("host".into(), json!(host));
     result.insert("session".into(), Value::Array(session));
     Value::Object(result)
+}
+
+/// [`worker_from_rows`] for one live report built with the same `now`: its sessions come already
+/// in the report's form (`reportSessions`, [`crate::report::SessionsOf`]), each turned as it is
+/// built, so the worker-shaped list is never held. The report reads the same sessions.
+pub fn worker_for_report(rows: &[&ScanRow], srows: &[&ScanRow], host: &str, now: i64, pricing: &dyn Pricing) -> Value {
+    let mut session_of: HashMap<&str, &str> = HashMap::new();
+    for row in srows {
+        if let Some(session) = row.session.as_deref()
+            && !row.file.is_empty()
+            && !session.is_empty()
+        {
+            session_of.insert(&row.file, session);
+        }
+    }
+    let (cells, future) = cells_from_rows(rows, &session_of, now, pricing);
+    drop(session_of);
+    let limit = now + crate::report::FUTURE_SLACK_MS;
+    let mut sessions = crate::report::SessionsOf::new(limit);
+    each_session(srows, pricing, |session| sessions.push(&session));
+    let mut result = Map::new();
+    result.insert("hourly".into(), json!([]));
+    result.insert("cells".into(), Value::Array(cells));
+    if future > 0 {
+        result.insert("futureDated".into(), json!(future));
+    }
+    result.insert("host".into(), json!(host));
+    result.insert("session".into(), json!([]));
+    result.insert("reportSessions".into(), Value::Array(sessions.finish()));
+    result.insert("reportSessionsLimit".into(), json!(limit));
+    Value::Object(result)
+}
+
+/// [`worker_from_rows`]'s cells alone: the same cells, without building its sessions.
+pub fn cells_of_rows(rows: &[&ScanRow], srows: &[&ScanRow], now: i64, pricing: &dyn Pricing) -> Vec<Value> {
+    let mut session_of: HashMap<&str, &str> = HashMap::new();
+    for row in srows {
+        if let Some(session) = row.session.as_deref()
+            && !row.file.is_empty()
+            && !session.is_empty()
+        {
+            session_of.insert(&row.file, session);
+        }
+    }
+    cells_from_rows(rows, &session_of, now, pricing).0
 }
 
 /// [`worker_from_rows`] for rows held as the scanner's JSON objects.

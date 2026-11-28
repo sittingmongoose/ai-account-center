@@ -128,6 +128,59 @@ pub fn replace_many(engine: &Engine, values: &[(String, Vec<u8>)], removed: &[St
     })
 }
 
+/// One write transaction over the cache: what [`rewrite`] hands its caller. Reads see the
+/// transaction's own writes.
+pub struct Rewrite<'t> {
+    table: redb::Table<'t, &'static str, &'static [u8]>,
+    commit: bool,
+}
+
+impl Rewrite<'_> {
+    /// The value at `key`, handed to `read` without a copy.
+    pub fn read<T>(&self, key: &str, read: impl FnOnce(&[u8]) -> T) -> Result<Option<T>> {
+        Ok(self.table.get(key)?.map(|value| read(value.value())))
+    }
+
+    pub fn insert(&mut self, key: &str, bytes: &[u8]) -> Result<()> {
+        self.table.insert(key, bytes)?;
+        Ok(())
+    }
+
+    pub fn remove(&mut self, key: &str) -> Result<()> {
+        self.table.remove(key)?;
+        Ok(())
+    }
+
+    /// Commit the transaction when the caller returns (otherwise every write is dropped).
+    pub fn commit(&mut self) {
+        self.commit = true;
+    }
+}
+
+/// Run `change` in one write transaction: a checkpoint saved in parts changes all at once while
+/// its parts are read, changed and written one at a time. It commits only when `change` asked
+/// for it ([`Rewrite::commit`]) and returned `Ok`; the inner result is the commit's. Other
+/// writers wait while it runs, so `change` holds no await and no other store call.
+pub fn rewrite<T>(engine: &Engine, change: impl FnOnce(&mut Rewrite<'_>) -> Result<T>) -> Result<(T, Result<()>)> {
+    engine.with_db(|db| {
+        let txn = engine::begin(db)?;
+        let (out, commit) = {
+            let mut rewrite = Rewrite {
+                table: txn.open_table(TABLE)?,
+                commit: false,
+            };
+            let out = change(&mut rewrite)?;
+            (out, rewrite.commit)
+        };
+        if commit {
+            Ok((out, txn.commit().map_err(Into::into)))
+        } else {
+            txn.abort()?;
+            Ok((out, Ok(())))
+        }
+    })
+}
+
 /// Drop a consumed scanner checkpoint after its completion receipt commits.
 pub fn remove(engine: &Engine, key: &str) -> Result<()> {
     engine.with_db(|db| {

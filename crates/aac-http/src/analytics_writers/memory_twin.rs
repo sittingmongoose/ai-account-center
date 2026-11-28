@@ -18,15 +18,18 @@
 //!
 //! `cargo test -p aac-http --release --features memory-twin --lib memory_twin_soak -- --ignored --nocapture --test-threads=1`
 //!
-//! The whole pass (spike 7) runs one pass over the seven computers without the transport, then
-//! the pass's end (Claude mirror owners, reports, trim, typed contract, ingest), both the way the
-//! pass runs now and the way it held every worker result to its end, and checks they ingest
-//! the same typed reports. The Linux default allocator feature is left out, so the counter
+//! The whole pass (spike 7, spike 8) runs one pass over the seven computers without the
+//! transport, then the pass's end (Claude mirror owners, reports, trim, typed contract, ingest),
+//! both the way the pass runs now (each checkpoint one tool at a time, each Claude part read back
+//! one at a time) and the way it ran before spike 7 (the whole checkpoint held while it is
+//! applied, every worker result and Claude part held to the end), and checks they ingest the
+//! same typed reports and leave the same source states, checkpoints and mirror owner maps. The Linux default allocator feature is left out, so the counter
 //! sits on mimalloc as the other twins expect:
 //!
 //! `cargo test -p aac-http --no-default-features --features memory-twin --lib memory_twin_whole_pass -- --ignored --nocapture --test-threads=1`
-use super::scan_answer::Answer;
-use super::scan_state::{self, Cache};
+use super::scan_answer::{Answer, Held};
+use super::scan_state::{self, Cache, Checkpoint};
+use super::{Call, apply_calls};
 use aac_store::collect;
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
@@ -366,7 +369,9 @@ fn store(dir: &std::path::Path) -> aac_store::engine::Engine {
         .expect("twin store")
 }
 
-/// One activity pass of the busy computer, as `activity_pass` runs it.
+/// One activity pass of the busy computer, as `activity_pass` runs it: the checkpoint read one
+/// tool at a time, every request built and answered, then the answers applied and the checkpoint
+/// saved in one transaction.
 fn pass(
     engine: &aac_store::engine::Engine,
     twin: &Twin,
@@ -376,45 +381,45 @@ fn pass(
     let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
     let cutoff = twin.now - 31 * DAY;
     let mut meter = Meter::new();
-    let mut cache = meter.step("load checkpoint", || {
-        Cache::load(engine, HOST).expect("load")
+    let mut checkpoint = meter.step("open the checkpoint (header)", || {
+        Checkpoint::load(engine, HOST).expect("load")
     });
     let requests = meter.step("size the scan requests", || {
         let args = super::scan_request(&kinds, cutoff, json!({}), false, None);
-        scan_state::Requests::new(
-            args,
-            &kinds,
-            &cache.fingerprints,
-            &twin.settled_before,
-            twin.now,
-        )
+        checkpoint
+            .requests(engine, HOST, args, &kinds, &twin.settled_before, twin.now)
+            .expect("requests")
     });
-    let mut remote = Vec::new();
-    let mut states = Vec::new();
-    let mut claude_state = None;
+    let mut calls: Vec<(Vec<String>, Call)> = Vec::new();
     for batch in requests.batches.clone() {
         let args = meter
             .step("build one scan request", || {
-                requests.args(&batch, &cache.fingerprints)
+                checkpoint
+                    .args(engine, HOST, &requests, &batch)
+                    .expect("read prints")
             })
             .expect("request fits");
-        let packed: Vec<bool> = batch
-            .iter()
-            .map(|kind| args.packed.contains(kind))
-            .collect();
-        let parked = meter.step("set the checkpoint aside", || cache.park());
+        for (_, call) in &mut calls {
+            if let Call::Answered {
+                answer: Ok(held), ..
+            } = call
+            {
+                held.squeeze();
+            }
+        }
+        let text = args.text;
         let bytes = meter.step("agent call: frame, envelope, answer bytes", || {
             // call_controlled_args: the arguments are checked and written as they are held,
             // inside a small envelope; then the agent's output.
             let inner: BTreeMap<String, &RawValue> =
-                serde_json::from_str(args.text.get()).expect("arguments");
+                serde_json::from_str(text.get()).expect("arguments");
             drop(inner);
             let input = aac_transport::Stdin::default()
                 .part(std::sync::Arc::new(
                     br#"{"protocol":1,"verb":"scan-usage","id":"twin","deadlineMs":120000,"args":"#
                         .to_vec(),
                 ))
-                .part(args.text.clone())
+                .part(text.clone())
                 .part(std::sync::Arc::new(b"}\n"));
             let line = &lines[&format!("{}:{}", twin.pass.get(), batch.join(","))];
             // The streaming buffer and the collected output hold the terminal line.
@@ -432,57 +437,41 @@ fn pass(
             drop(input);
             stdout
         });
-        drop(args);
-        cache = meter.step("read the checkpoint back", || {
-            parked.restore(engine, HOST).expect("restore")
-        });
-        let mut answer = meter.step("read the answer", || {
-            Answer::parse(&bytes, &mut cache.strings).expect("answer")
-        });
-        drop(bytes);
-        meter.step("apply and aggregate", || {
-            assert!(super::valid_scan_answer(&answer, &batch));
-            for (kind, packed) in batch.iter().zip(packed) {
-                let source = super::scanned_kind(
-                    &mut answer,
-                    kind,
-                    HOST,
-                    (twin.now, cutoff),
-                    (packed, false, false),
-                    &mut cache,
-                );
-                assert_eq!(source["state"], "ok", "{kind}: {source}");
-                if kind == "claude" {
-                    claude_state = Some(states.len());
-                } else {
-                    remote.push(collect::worker_from_rows(
-                        &scan_state::of_kind(&cache.rows, kind),
-                        &scan_state::of_kind(&cache.srows, kind),
-                        HOST,
-                        twin.now,
-                        &pricing,
-                    ));
-                }
-                states.push(source);
-            }
-        });
-        drop(answer);
+        drop(text);
+        calls.push((
+            batch,
+            Call::Answered {
+                packed: args.packed,
+                answer: Ok(Held::Plain(bytes)),
+            },
+        ));
     }
-    let written = meter.step("save checkpoint", || {
-        cache.save(engine, HOST).expect("save")
+    let mut states = Vec::new();
+    let (applied, saved) = meter.step("apply, aggregate and save (one transaction)", || {
+        apply_calls(
+            &mut checkpoint,
+            engine,
+            HOST,
+            (twin.now, cutoff),
+            calls,
+            &|_| (false, false),
+            &pricing,
+            &mut states,
+        )
+        .expect("apply")
     });
+    for source in &states {
+        assert_eq!(source["state"], "ok", "{source}");
+    }
+    let (written, _) = saved.expect("saved").expect("save");
     println!(
         "checkpoint written: {} keys, {:.2} MiB",
         written.keys,
         mib(written.bytes)
     );
-    let part = meter.step("Claude part out of the cache", || {
-        claude_state.map(|_| cache.take_kind("claude"))
-    });
-    drop(part);
-    drop(remote);
-    meter.step("drop the cache", || drop(cache));
-    meter.report("pass (typed prints and answer, checkpoint in parts)")
+    drop(applied);
+    meter.step("drop the checkpoint", || drop(checkpoint));
+    meter.report("pass (one tool at a time, answers applied in one transaction)")
 }
 
 #[test]
@@ -630,8 +619,9 @@ async fn soak_call(
     stdout
 }
 
-/// One pass over every soak computer, as `activity_pass` runs it (the workers and Claude parts
-/// are held to the pass's end).
+/// One pass over every soak computer, as `activity_pass` runs it: each computer's requests one
+/// at a time (its checkpoint read one tool at a time), its answers applied once every call is
+/// back (the workers and Claude parts are held to the pass's end).
 async fn soak_pass(
     engine: &aac_store::engine::Engine,
     computer: &aac_transport::Computer,
@@ -647,59 +637,54 @@ async fn soak_pass(
     let mut calls = 0;
     for (host, twin) in twins {
         let cutoff = twin.now - 31 * DAY;
-        let mut cache = Cache::load(engine, host).expect("load");
+        let mut checkpoint = Checkpoint::load(engine, host).expect("load");
         let args = super::scan_request(&kinds, cutoff, json!({}), false, None);
-        let requests = scan_state::Requests::new(
-            args,
-            &kinds,
-            &cache.fingerprints,
-            &twin.settled_before,
-            twin.now,
-        );
-        let mut claude_state = false;
+        let requests = checkpoint
+            .requests(engine, host, args, &kinds, &twin.settled_before, twin.now)
+            .expect("requests");
+        let mut held: Vec<(Vec<String>, Call)> = Vec::new();
         for batch in requests.batches.clone() {
-            let args = requests
-                .args(&batch, &cache.fingerprints)
+            let args = checkpoint
+                .args(engine, host, &requests, &batch)
+                .expect("read prints")
                 .expect("request fits");
-            let packed: Vec<bool> = batch
-                .iter()
-                .map(|kind| args.packed.contains(kind))
-                .collect();
-            let answer = answers.join(format!("{host}-{round}-{}.json", batch.join(",")));
-            let parked = cache.park();
-            let bytes = soak_call(computer, args.text, &answer, wait_ms).await;
-            cache = parked.restore(engine, host).expect("restore");
-            calls += 1;
-            let mut answer = Answer::parse(&bytes, &mut cache.strings).expect("answer");
-            drop(bytes);
-            assert!(super::valid_scan_answer(&answer, &batch));
-            for (kind, packed) in batch.iter().zip(packed) {
-                let source = super::scanned_kind(
-                    &mut answer,
-                    kind,
-                    host,
-                    (twin.now, cutoff),
-                    (packed, false, false),
-                    &mut cache,
-                );
-                assert_eq!(source["state"], "ok", "{host} {kind}: {source}");
-                if kind == "claude" {
-                    claude_state = true;
-                } else {
-                    remote.push(collect::worker_from_rows(
-                        &scan_state::of_kind(&cache.rows, kind),
-                        &scan_state::of_kind(&cache.srows, kind),
-                        host,
-                        twin.now,
-                        &pricing,
-                    ));
+            for (_, call) in &mut held {
+                if let Call::Answered {
+                    answer: Ok(answer), ..
+                } = call
+                {
+                    answer.squeeze();
                 }
             }
+            let answer = answers.join(format!("{host}-{round}-{}.json", batch.join(",")));
+            let bytes = soak_call(computer, args.text, &answer, wait_ms).await;
+            calls += 1;
+            held.push((
+                batch,
+                Call::Answered {
+                    packed: args.packed,
+                    answer: Ok(Held::Plain(bytes)),
+                },
+            ));
         }
-        cache.save(engine, host).expect("save");
-        if claude_state {
-            claude.push(cache.take_kind("claude"));
+        let mut states = Vec::new();
+        let (applied, saved) = apply_calls(
+            &mut checkpoint,
+            engine,
+            host,
+            (twin.now, cutoff),
+            held,
+            &|_| (false, false),
+            &pricing,
+            &mut states,
+        )
+        .expect("apply");
+        for source in &states {
+            assert_eq!(source["state"], "ok", "{host}: {source}");
         }
+        saved.expect("saved").expect("save");
+        remote.extend(applied.remote);
+        claude.extend(applied.claude);
     }
     drop(claude);
     drop(remote);
@@ -872,7 +857,7 @@ fn whole_pass(
     ingestor: &mut aac_store::report::Ingestor,
     round: u64,
     shaped: bool,
-) -> (usize, Vec<u8>) {
+) -> (usize, Vec<u8>, Vec<u8>) {
     use std::collections::HashSet;
     let pricing = super::ResolverPricing::new(std::path::Path::new("/nonexistent-twin"));
     let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
@@ -895,6 +880,63 @@ fn whole_pass(
     for (host, twin) in twins {
         meter.step("one computer (load, apply, save, shape)", || {
             let start_state = states.len();
+            if shaped {
+                // As `activity_pass` runs it (spike 8): the checkpoint one tool at a time, the
+                // answers applied in one transaction once every request is answered.
+                let mut checkpoint = Checkpoint::load(engine, host).expect("load");
+                let args = super::scan_request(&kinds, cutoff, json!({}), false, None);
+                let requests = checkpoint
+                    .requests(engine, host, args, &kinds, &twin.settled_before, twin.now)
+                    .expect("requests");
+                let mut calls: Vec<(Vec<String>, Call)> = Vec::new();
+                for batch in requests.batches.clone() {
+                    let args = checkpoint
+                        .args(engine, host, &requests, &batch)
+                        .expect("read prints")
+                        .expect("request fits");
+                    for (_, call) in &mut calls {
+                        if let Call::Answered {
+                            answer: Ok(held), ..
+                        } = call
+                        {
+                            held.squeeze();
+                        }
+                    }
+                    let line = lines[&format!("{host}:{round}:{}", batch.join(","))].clone();
+                    drop(args.text);
+                    calls.push((
+                        batch,
+                        Call::Answered {
+                            packed: args.packed,
+                            answer: Ok(Held::Plain(line)),
+                        },
+                    ));
+                }
+                let (applied, saved) = apply_calls(
+                    &mut checkpoint,
+                    engine,
+                    host,
+                    (twin.now, cutoff),
+                    calls,
+                    &|_| (false, false),
+                    &pricing,
+                    &mut states,
+                )
+                .expect("apply");
+                for source in &states[start_state..] {
+                    assert_eq!(source["state"], "ok", "{host}: {source}");
+                }
+                saved.expect("saved").expect("save");
+                parked.extend(applied.claude);
+                drop(checkpoint);
+                let early = super::Shaped::computer_sources(&states, start_state, &scanner_owned);
+                let built =
+                    super::Shaped::build(&frame, &states, early, HashMap::new(), applied.remote);
+                held.keep(ingestor, built);
+                return;
+            }
+            // Before spike 7: the whole checkpoint held while each answer is applied, every
+            // worker result held to the pass's end.
             let mut cache = Cache::load(engine, host).expect("load");
             let args = super::scan_request(&kinds, cutoff, json!({}), false, None);
             let requests = scan_state::Requests::new(
@@ -945,30 +987,13 @@ fn whole_pass(
             cache.save(engine, host).expect("save");
             if let Some(state_index) = claude_state {
                 let (rows, sessions, identities) = cache.take_kind("claude");
-                let part = super::claude_mirrors::Part {
+                claude.push(super::claude_mirrors::Part {
                     host,
                     state_index,
                     rows,
                     sessions,
                     identities,
-                };
-                if shaped {
-                    parked.push(part.park());
-                } else {
-                    claude.push(part);
-                }
-            }
-            drop(cache);
-            if shaped {
-                let early = super::Shaped::computer_sources(&states, start_state, &scanner_owned);
-                let built = super::Shaped::build(
-                    &frame,
-                    &states,
-                    early,
-                    HashMap::new(),
-                    std::mem::take(&mut remote),
-                );
-                held.keep(ingestor, built);
+                });
             }
         });
     }
@@ -1042,13 +1067,53 @@ fn whole_pass(
         ingestor.accept(remember, &refused);
         drop(typed);
     });
+    // What else the pass leaves: its source states, each computer's saved checkpoint and the
+    // Claude mirror owner maps.
+    let mut evidence = serde_json::to_vec(&states).expect("states");
     drop(states);
+    for (host, _) in twins {
+        for (key, bytes) in scanner_bytes(engine, host) {
+            evidence.extend_from_slice(key.as_bytes());
+            evidence.extend_from_slice(&bytes);
+        }
+    }
+    for key in [
+        super::claude_mirrors::LIVE,
+        super::claude_mirrors::HISTORY,
+        super::claude_mirrors::HISTORY_MIRRORS,
+    ] {
+        let bytes = aac_store::analytics_cache::get(engine, key).expect("owner map");
+        evidence.extend_from_slice(key.as_bytes());
+        evidence.extend_from_slice(&bytes.unwrap_or_default());
+    }
     let title = if shaped {
-        "whole pass, each computer's reports shaped as it is read"
+        "whole pass, one tool and one Claude part at a time (spike 8)"
     } else {
-        "whole pass, every worker result held to the end (before)"
+        "whole pass, every worker result held to the end (before spike 7)"
     };
-    (meter.report(title), digest)
+    (meter.report(title), digest, evidence)
+}
+
+/// A computer's saved checkpoint: its header and parts, by key.
+fn scanner_bytes(engine: &aac_store::engine::Engine, host: &str) -> Vec<(String, Vec<u8>)> {
+    let header_key = format!("live/scanner2/{host}");
+    let Some(header) = aac_store::analytics_cache::get(engine, &header_key).expect("header") else {
+        return Vec::new();
+    };
+    let parsed: Value = serde_json::from_slice(&header).expect("header json");
+    let mut out = vec![(header_key, header)];
+    for part in parsed["parts"].as_array().into_iter().flatten() {
+        let key = format!(
+            "live/scanner2/{host}/{}/{:02x}",
+            part[0].as_str().expect("kind"),
+            part[1].as_u64().expect("bucket")
+        );
+        let bytes = aac_store::analytics_cache::get(engine, &key)
+            .expect("part")
+            .expect("part bytes");
+        out.push((key, bytes));
+    }
+    out
 }
 
 /// A seeded store, its computers, and every answer of every round by `host:round:batch`.
@@ -1099,9 +1164,11 @@ fn whole_pass_setup(dir: &std::path::Path) -> WholePassSetup {
 
 const WHOLE_PASS_ROUNDS: u64 = 4;
 /// The steady pass's ceiling above its start (live-shaped seven computers). Holding every
-/// worker result to the pass's end peaked at about 94 MiB; the busy computer's own checkpoint
-/// and apply (about 62 MiB) now set the peak.
-const WHOLE_PASS_CEILING_MIB: f64 = 70.0;
+/// worker result to the pass's end peaked at about 94 MiB (before spike 7); holding the busy
+/// computer's whole checkpoint while its answers were applied, and every Claude part back at
+/// once for the mirror owners, about 62 MiB (spike 7); one tool's rows and one Claude part at a
+/// time, about 28 MiB (spike 8).
+const WHOLE_PASS_CEILING_MIB: f64 = 30.0;
 
 /// The whole pass both ways, over two stores seeded alike: the same typed reports are ingested
 /// each round, and the per-computer shaping's peak stays low. The first round sends every cell
@@ -1111,19 +1178,24 @@ const WHOLE_PASS_CEILING_MIB: f64 = 70.0;
 fn memory_twin_whole_pass() {
     let mut peaks = Vec::new();
     let mut digests = Vec::new();
+    let mut evidence = Vec::new();
     for shaped in [false, true] {
         let dir = tempfile::tempdir().expect("twin dir");
         let (engine, twins, lines) = whole_pass_setup(dir.path());
         let mut ingestor = aac_store::report::Ingestor::new();
         let mut run = Vec::new();
         let mut sent = Vec::new();
+        let mut left = Vec::new();
         for round in 1..=WHOLE_PASS_ROUNDS {
-            let (peak, digest) = whole_pass(&engine, &twins, &lines, &mut ingestor, round, shaped);
+            let (peak, digest, rest) =
+                whole_pass(&engine, &twins, &lines, &mut ingestor, round, shaped);
             run.push(peak);
             sent.push(digest);
+            left.push(rest);
         }
         peaks.push(run);
         digests.push(sent);
+        evidence.push(left);
     }
     let line = |run: &[usize]| {
         run.iter()
@@ -1134,15 +1206,24 @@ fn memory_twin_whole_pass() {
     println!("\nRESULT whole pass peaks MiB, before: {}", line(&peaks[0]));
     println!("RESULT whole pass peaks MiB, after:  {}", line(&peaks[1]));
     for (round, (before, after)) in digests[0].iter().zip(&digests[1]).enumerate() {
+        let same_rest = evidence[0][round] == evidence[1][round];
         println!(
-            "round {}: typed reports {:.2} MiB, identical: {}",
+            "round {}: typed reports {:.2} MiB, identical: {}; states, checkpoints and owner maps \
+             {:.2} MiB, identical: {}",
             round + 1,
             mib(before.len()),
-            before == after
+            before == after,
+            mib(evidence[0][round].len()),
+            same_rest
         );
         assert!(
             before == after,
             "round {}: the typed reports differ",
+            round + 1
+        );
+        assert!(
+            same_rest,
+            "round {}: the states, checkpoints or owner maps differ",
             round + 1
         );
     }

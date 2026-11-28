@@ -113,7 +113,9 @@ struct Header {
     migrated_from: Option<String>,
 }
 
-/// One part: the prints and rows of one tool's files in one bucket.
+/// One part: the prints and rows of one tool's files in one bucket (read whole by the tests'
+/// oracle; the pass reads a part's prints and rows apart).
+#[cfg(test)]
 #[derive(Deserialize)]
 struct Part {
     #[serde(default)]
@@ -350,13 +352,8 @@ pub(super) struct Requests {
 }
 
 impl Requests {
-    pub fn new(
-        args: Value,
-        kinds: &[String],
-        fingerprints: &Fingerprints,
-        settled: &HashMap<String, u64>,
-        now: i64,
-    ) -> Self {
+    /// The request arguments without prints, and the store settings sent with them.
+    fn frame(args: Value, settled: &HashMap<String, u64>, now: i64) -> (Map<String, Value>, Value) {
         let slot = now.max(0) as u64 / aac_usage::collector::SETTLED_CHECK_MS;
         let settings = json!({ "settledBefore": settled, "settledSlot": slot });
         let mut args = match args {
@@ -364,10 +361,16 @@ impl Requests {
             _ => Map::new(),
         };
         args.shift_remove("fingerprints");
-        let whole = json_len(&Frame {
-            args: &args,
-            prints: PrintsArg::All(fingerprints, &settings),
-        }) <= REQUEST_BYTES;
+        (args, settings)
+    }
+
+    fn assemble(
+        args: Map<String, Value>,
+        settings: Value,
+        settled: &HashMap<String, u64>,
+        kinds: &[String],
+        whole: bool,
+    ) -> Self {
         let batches = if whole {
             vec![kinds.to_vec()]
         } else {
@@ -380,6 +383,23 @@ impl Requests {
             batches,
             whole,
         }
+    }
+
+    /// The requests from every tool's prints at once (the historical scans; the tests' oracle
+    /// for [`Checkpoint::requests`]).
+    pub fn new(
+        args: Value,
+        kinds: &[String],
+        fingerprints: &Fingerprints,
+        settled: &HashMap<String, u64>,
+        now: i64,
+    ) -> Self {
+        let (args, settings) = Self::frame(args, settled, now);
+        let whole = json_len(&Frame {
+            args: &args,
+            prints: PrintsArg::All(fingerprints, &settings),
+        }) <= REQUEST_BYTES;
+        Self::assemble(args, settings, settled, kinds, whole)
     }
 
     /// The arguments of the request for `batch` (one of [`Self::batches`]), or None when the
@@ -473,129 +493,995 @@ pub(super) struct Cache {
     /// One copy of each row string, for rows this cache reads and gains.
     pub strings: Interner,
     saved: Saved,
-    /// Whether the tools this cache has not changed are what the store holds (it was read from,
-    /// or saved as, parts).
-    backed: bool,
-    /// The tools changed since then.
-    touched: HashSet<String>,
+    /// Whether an apply ran the 31-day window over the rows.
+    windowed: bool,
 }
 
-/// A computer's scanner state set aside while a scan call waits, so the pass does not hold it
-/// (tens of megabytes on a busy computer) for the whole call: the tools this pass changed,
-/// each compressed, and the store's digests of the rest, which [`Parked::restore`] reads back.
-pub(super) enum Parked {
-    /// Kept as it is (it could not be set aside).
-    Held(Box<Cache>),
-    Aside(Box<Aside>),
+/// How the store holds a computer's live checkpoint: in parts (the header read, the parts not),
+/// or as a document or legacy seed read whole (migrated to parts on the next save).
+enum Opened {
+    Parts(Header, [u8; 32]),
+    Whole(Cache),
 }
 
-pub(super) struct Aside {
+/// The computer's live checkpoint as the store holds it: its parts, or a revision 1 document
+/// (migrated on the next save), seeded from a legacy remote cache when it has no current one.
+fn open(store: &Engine, host: &str) -> Result<Opened> {
+    let header = analytics_cache::get(store, &header_key(host))?
+        .map(|bytes| -> Result<_> {
+            Ok((serde_json::from_slice::<Header>(&bytes)?, digest(&bytes)))
+        })
+        .transpose()?;
+    let legacy = match &header {
+        Some((_, sum)) if checked(store, host, sum) => None,
+        _ => analytics_cache::get(store, &legacy_key(host))?,
+    };
+    let legacy_digest = legacy.as_deref().map(|bytes| hex(&digest(bytes)));
+    if let Some((header, sum)) = header {
+        if legacy_digest.is_none() || legacy_digest == header.migrated_from {
+            drop(legacy);
+            mark_checked(store, host, sum);
+            return Ok(Opened::Parts(header, sum));
+        }
+        // A rolled-back build wrote the revision 1 document after the migration: it is the
+        // newer state. Its parts are replaced on the next save.
+        let mut cache = Cache::read_legacy(store, host, legacy.as_deref())?;
+        cache.saved.parts = header
+            .parts
+            .iter()
+            .map(|(kind, bucket)| (part_key(host, kind, *bucket), [0; 32]))
+            .collect();
+        cache.saved.migrated_from = legacy_digest;
+        return Ok(Opened::Whole(cache));
+    }
+    let mut cache = Cache::read_legacy(store, host, legacy.as_deref())?;
+    cache.saved.migrated_from = legacy_digest;
+    Ok(Opened::Whole(cache))
+}
+
+/// One part's prints, its rows skipped unread.
+#[derive(Deserialize)]
+struct PartPrints {
+    #[serde(default)]
+    fingerprints: Prints,
+}
+
+fn changed() -> aac_store::error::Error {
+    aac_store::error::Error::new("changed", "Analytics scanner state changed during a scan")
+}
+
+/// A computer's live checkpoint for one pass, read one tool at a time: the header, then a tool's
+/// prints only while its request is built, and a tool's prints and rows only while its answer
+/// is applied ([`Checkpoint::change`]). The pass never holds the whole checkpoint (tens of
+/// megabytes on a busy computer), only its largest tool. A checkpoint the store does not hold
+/// in parts yet is held whole until that save.
+pub(super) struct Checkpoint {
+    /// The tools of the prints, in the order a whole load holds them.
     kinds: Vec<String>,
     states: Map<String, Value>,
     saved: Saved,
-    backed: bool,
-    touched: HashSet<String>,
-    /// Each set-aside tool's prints and rows in their order, as one compressed part.
-    held: Vec<(String, Vec<u8>)>,
+    /// A checkpoint the store does not hold in parts: a revision 1 document or a legacy seed.
+    whole: Option<Box<Cache>>,
+    /// Every tool's prints while the sizing found they fit one request.
+    held: Option<Fingerprints>,
+    /// The digest of each part when this pass first read it: a part changed by another writer
+    /// before the answers are applied is refused (`changed`).
+    seen: HashMap<String, [u8; 32]>,
+    strings: Interner,
 }
 
-/// Where a part read back comes from.
-enum Source<'a> {
-    Stored(&'a [u8]),
-    Compressed(&'a [u8]),
-}
-
-impl Parked {
-    /// The cache as it was set aside. The parts read back must be the ones the store held then;
-    /// any other content is refused (`changed`).
-    pub fn restore(self, store: &Engine, host: &str) -> Result<Cache> {
-        let aside = match self {
-            Parked::Held(cache) => return Ok(*cache),
-            Parked::Aside(aside) => *aside,
-        };
-        let changed = || {
-            aac_store::error::Error::new("changed", "Analytics scanner state changed during a scan")
-        };
-        let mut cache = Cache {
-            fingerprints: Fingerprints(
-                aside
-                    .kinds
-                    .into_iter()
-                    .map(|kind| (kind, Prints::default()))
-                    .collect(),
-            ),
-            states: aside.states,
-            saved: aside.saved,
-            backed: aside.backed,
-            touched: aside.touched,
-            ..Cache::default()
-        };
-        let mut strings = Interner::default();
-        let mut read = |cache: &mut Cache, kind: &str, source: Source<'_>| -> Result<()> {
-            let (part, held) = with_interner(std::mem::take(&mut strings), || match source {
-                Source::Stored(bytes) => serde_json::from_slice::<Part>(bytes).map_err(Into::into),
-                // Streamed: the part's text is never held whole.
-                Source::Compressed(bytes) => zstd::stream::read::Decoder::new(bytes)
-                    .map_err(aac_store::error::Error::from)
-                    .and_then(|decoder| {
-                        serde_json::from_reader::<_, Part>(std::io::BufReader::new(decoder))
-                            .map_err(Into::into)
-                    }),
-            });
-            strings = held;
-            let part: Part = part?;
-            // A tool's entry is in the set-aside order already; one it did not have (it holds
-            // only rows) is not added.
-            if !part.fingerprints.0.is_empty() {
-                cache
-                    .fingerprints
-                    .entry(kind.to_owned())
-                    .or_default()
-                    .extend(part.fingerprints.0);
+impl Checkpoint {
+    pub fn load(store: &Engine, host: &str) -> Result<Self> {
+        Ok(match open(store, host)? {
+            Opened::Parts(header, sum) => {
+                let mut kinds = header.kinds;
+                for (kind, _) in &header.parts {
+                    if !kinds.contains(kind) {
+                        kinds.push(kind.clone());
+                    }
+                }
+                Checkpoint {
+                    kinds,
+                    states: header.states,
+                    saved: Saved {
+                        header: Some(sum),
+                        migrated_from: header.migrated_from,
+                        listed: header.parts,
+                        ..Saved::default()
+                    },
+                    whole: None,
+                    held: None,
+                    seen: HashMap::new(),
+                    strings: Interner::default(),
+                }
             }
-            cache.rows.extend(part.rows);
-            cache.srows.extend(part.srows);
-            Ok(())
-        };
-        if cache.backed {
-            let header = analytics_cache::get(store, &header_key(host))?;
-            if header.as_deref().map(digest) != cache.saved.header {
+            Opened::Whole(mut cache) => Checkpoint {
+                kinds: cache.fingerprints.keys().cloned().collect(),
+                states: std::mem::take(&mut cache.states),
+                saved: std::mem::take(&mut cache.saved),
+                whole: Some(Box::new(cache)),
+                held: None,
+                seen: HashMap::new(),
+                strings: Interner::default(),
+            },
+        })
+    }
+
+    fn listed_keys(&self, host: &str, kind: &str) -> Vec<String> {
+        self.saved
+            .listed
+            .iter()
+            .filter(|(listed, _)| listed == kind)
+            .map(|(_, bucket)| part_key(host, kind, *bucket))
+            .collect()
+    }
+
+    /// Note a part's digest as read now: the first read of this pass, or the same bytes again.
+    fn note(seen: &mut HashMap<String, [u8; 32]>, key: &str, bytes: &[u8]) -> Result<[u8; 32]> {
+        let sum = digest(bytes);
+        match seen.get(key) {
+            Some(held) if *held != sum => Err(changed()),
+            Some(_) => Ok(sum),
+            None => {
+                seen.insert(key.to_owned(), sum);
+                Ok(sum)
+            }
+        }
+    }
+
+    /// One tool's prints as the store holds them (their rows are not read).
+    fn prints(&mut self, store: &Engine, host: &str, kind: &str) -> Result<Prints> {
+        if let Some(whole) = &self.whole {
+            return Ok(whole.fingerprints.get(kind).cloned().unwrap_or_default());
+        }
+        let keys = self.listed_keys(host, kind);
+        let mut prints = Prints::default();
+        let mut found = 0;
+        let seen = &mut self.seen;
+        let (result, _) = with_interner(Interner::default(), || {
+            analytics_cache::read_each(store, &keys, |key, bytes| {
+                Self::note(seen, key, bytes)?;
+                found += 1;
+                prints.extend(serde_json::from_slice::<PartPrints>(bytes)?.fingerprints.0);
+                Ok(())
+            })
+        });
+        result?;
+        if found != keys.len() {
+            return Err(aac_store::error::Error::new(
+                "io",
+                "Analytics scanner state part missing",
+            ));
+        }
+        Ok(prints)
+    }
+
+    /// The pass's requests, sized one tool at a time: the whole frame is the frame without
+    /// prints plus each tool's entry, so a busy computer's are known to need one request per
+    /// tool once the tools read so far pass the limit. Every tool's prints are kept only when
+    /// they fit one request (the request is built from them).
+    pub fn requests(
+        &mut self,
+        store: &Engine,
+        host: &str,
+        args: Value,
+        kinds: &[String],
+        settled: &HashMap<String, u64>,
+        now: i64,
+    ) -> Result<Requests> {
+        let (args, settings) = Requests::frame(args, settled, now);
+        if let Some(whole) = &self.whole {
+            let whole = json_len(&Frame {
+                args: &args,
+                prints: PrintsArg::All(&whole.fingerprints, &settings),
+            }) <= REQUEST_BYTES;
+            return Ok(Requests::assemble(args, settings, settled, kinds, whole));
+        }
+        let mut total = json_len(&Frame {
+            args: &args,
+            prints: PrintsArg::All(&Fingerprints::default(), &settings),
+        });
+        let mut held = Fingerprints::default();
+        let mut whole = true;
+        for kind in self.kinds.clone() {
+            let prints = self.prints(store, host, &kind)?;
+            // `"<kind>":<prints>,` before the store settings.
+            total += json_len(kind.as_str()) + json_len(&prints) + 2;
+            if total > REQUEST_BYTES {
+                whole = false;
+                break;
+            }
+            held.insert(kind, prints);
+        }
+        self.held = whole.then_some(held);
+        Ok(Requests::assemble(args, settings, settled, kinds, whole))
+    }
+
+    /// The arguments of the request for `batch`, read from the prints as the pass found them;
+    /// None when the tool's prints cannot be carried within the frame.
+    pub fn args(
+        &mut self,
+        store: &Engine,
+        host: &str,
+        requests: &Requests,
+        batch: &[String],
+    ) -> Result<Option<ScanArgs>> {
+        if let Some(whole) = &self.whole {
+            return Ok(requests.args(batch, &whole.fingerprints));
+        }
+        if requests.whole {
+            let held = self.held.take().unwrap_or_default();
+            return Ok(requests.args(batch, &held));
+        }
+        let mut one = Fingerprints::default();
+        if let Some(kind) = batch.first() {
+            one.insert(kind.clone(), self.prints(store, host, kind)?);
+        }
+        Ok(requests.args(batch, &one))
+    }
+
+    /// Apply the pass's answers in one store transaction, one tool at a time ([`Change`]). `run`
+    /// returns its result and whether the checkpoint is saved; a save that cannot be made
+    /// (`source_limit`, a failed commit) changes nothing in the store. `keep`'s rows, session rows
+    /// and identities are moved out as the save leaves them. An error (the checkpoint changed
+    /// since it was read, a part that cannot be read) changes nothing and is returned.
+    pub fn change<T>(
+        &mut self,
+        store: &Engine,
+        host: &str,
+        cutoff: i64,
+        keep: Option<&str>,
+        run: impl FnOnce(&mut Change<'_, '_, '_>) -> Result<(T, bool)>,
+    ) -> Result<Changed<T>> {
+        let (result, committed) = analytics_cache::rewrite(store, |txn| {
+            if self.saved.header.is_some() {
+                let header = txn.read(&header_key(host), digest)?;
+                if header != self.saved.header {
+                    return Err(changed());
+                }
+            }
+            let mut change = Change::new(self, txn, host, cutoff, keep);
+            let (out, save) = run(&mut change)?;
+            let saved = save.then(|| change.finish());
+            if let Some(Ok((written, _))) = &saved
+                && written.keys > 0
+            {
+                change.txn.commit();
+            }
+            let kept_parts = match (&saved, keep.and_then(|kind| change.tools.get(kind))) {
+                (Some(Ok(_)), Some(tool)) => Some(KeptParts {
+                    parts: tool
+                        .parts
+                        .iter()
+                        .map(|(bucket, sum)| {
+                            (part_key(host, keep.unwrap_or_default(), *bucket), *sum)
+                        })
+                        .collect(),
+                    rows: tool.rows,
+                    srows: tool.srows,
+                }),
+                _ => None,
+            };
+            Ok(Changed {
+                out,
+                saved,
+                kept: change.kept.take(),
+                kept_parts,
+            })
+        })?;
+        let mut changed = result;
+        match (&mut changed.saved, committed) {
+            (Some(Ok((_, Some(header)))), Ok(())) => mark_checked(store, host, *header),
+            (Some(saved), Err(error)) => {
+                *saved = Err(error);
+                changed.kept_parts = None;
+            }
+            _ => {}
+        }
+        Ok(changed)
+    }
+}
+
+/// What [`Checkpoint::change`] gave: `run`'s result, the save (None when not saved; the header
+/// digest when it wrote one), and the kept tool's rows.
+pub(super) struct Changed<T> {
+    pub out: T,
+    pub saved: Option<Result<(Written, Option<[u8; 32]>)>>,
+    pub kept: Option<(Vec<ScanRow>, Vec<ScanRow>, Identities)>,
+    /// The kept tool's parts once the store holds them as this pass saved them: [`read_kept`]
+    /// reads its rows back.
+    pub kept_parts: Option<KeptParts>,
+}
+
+/// A tool's saved parts (key, digest), and its row and session row counts.
+pub(super) struct KeptParts {
+    pub parts: Vec<(String, [u8; 32])>,
+    pub rows: usize,
+    pub srows: usize,
+}
+
+/// A tool's rows, session rows and identities read back from the parts a pass saved: what
+/// [`Changed::kept`] held. A part that is not what the pass saved is refused (`changed`).
+pub(super) fn read_kept(
+    store: &Engine,
+    kept: &KeptParts,
+) -> Result<(Vec<ScanRow>, Vec<ScanRow>, Identities)> {
+    let keys: Vec<String> = kept.parts.iter().map(|(key, _)| key.clone()).collect();
+    let sums: HashMap<&str, &[u8; 32]> = kept
+        .parts
+        .iter()
+        .map(|(key, sum)| (key.as_str(), sum))
+        .collect();
+    // Sized as saved: grown a part at a time, the rows would double past their count.
+    let mut rows = Vec::with_capacity(kept.rows);
+    let mut srows = Vec::with_capacity(kept.srows);
+    let mut identities = Identities::default();
+    let mut names = HashMap::new();
+    let mut found = 0;
+    let (result, _) = with_interner(Interner::default(), || {
+        analytics_cache::read_each(store, &keys, |key, bytes| {
+            if sums.get(key).copied() != Some(&digest(bytes)) {
                 return Err(changed());
             }
-            let aside: HashSet<&str> = aside.held.iter().map(|(kind, _)| kind.as_str()).collect();
-            let wanted: Vec<(String, &str)> = cache
+            found += 1;
+            let part: PartKept<'_> = serde_json::from_slice(bytes)?;
+            for (file, print) in part.fingerprints {
+                identities.add_text(aac_store::scan_row::shared(&file), print, &mut names);
+            }
+            rows.extend(part.rows);
+            srows.extend(part.srows);
+            Ok(())
+        })
+    });
+    result?;
+    if found != keys.len() {
+        return Err(changed());
+    }
+    rows.shrink_to_fit();
+    srows.shrink_to_fit();
+    Ok((rows, srows, identities))
+}
+
+/// One tool's parts as the transaction now holds them.
+struct ToolParts {
+    /// (bucket, digest), by bucket.
+    parts: Vec<(u32, [u8; 32])>,
+    rows: usize,
+    srows: usize,
+    prints: usize,
+    bytes: usize,
+}
+
+/// One part read back for its tool's identities and rows: its prints read in place, uncopied.
+#[derive(Deserialize)]
+struct PartKept<'a> {
+    #[serde(borrow, default)]
+    fingerprints: HashMap<std::borrow::Cow<'a, str>, &'a RawValue>,
+    #[serde(default)]
+    rows: Vec<ScanRow>,
+    #[serde(default)]
+    srows: Vec<ScanRow>,
+}
+
+/// One part's rows, its prints skipped unread.
+#[derive(Deserialize)]
+struct PartRows {
+    #[serde(default)]
+    rows: Vec<ScanRow>,
+    #[serde(default)]
+    srows: Vec<ScanRow>,
+}
+
+/// What [`Cache::apply`]'s loop does with one fresh print, given the tool's saved print of that
+/// file (the same decision, taken twice: once for the whole answer, once per bucket).
+enum Outcome {
+    /// A settled print confirmed: the saved one kept (`edit`: with the new check slot).
+    Settled { edit: bool },
+    /// A settled confirmation without a saved print: the read is not complete.
+    Unsaved,
+    /// A continued read that does not continue the saved one.
+    Rejected,
+    /// Accepted: `cursor` (a continued read) leaves the file's rows; `changed` (another file)
+    /// and `whole` (read from its start) replace them.
+    Accepted {
+        cursor: bool,
+        changed: bool,
+        whole: bool,
+    },
+}
+
+fn outcome(print: &Print, old: Option<&Print>) -> Outcome {
+    let fields = print.fields();
+    if scan_print::is_true(fields.settled_confirmed) {
+        let slot = fields.settled_checked_slot.unwrap_or(RawValue::NULL);
+        return match old {
+            Some(saved) if saved.is_object() => Outcome::Settled {
+                edit: saved.fields().settled_checked_slot.map(RawValue::get) != Some(slot.get()),
+            },
+            _ => Outcome::Unsaved,
+        };
+    }
+    if let Some(from) = scan_print::as_u64(fields.read_from) {
+        let matches = old.is_some_and(|old| {
+            let old = old.fields();
+            (scan_print::as_u64(old.read_through) == Some(from)
+                && scan_print::same_file(&old, &fields))
+                || (scan_print::text(old.read_through).is_none()
+                    && old.append_state.is_some()
+                    && scan_print::as_u64(old.size) == Some(from)
+                    && scan_print::is_string(fields.file_identity)
+                    && scan_print::same(old.file_identity, fields.file_identity))
+        });
+        if !matches {
+            return Outcome::Rejected;
+        }
+        return Outcome::Accepted {
+            cursor: true,
+            changed: false,
+            whole: false,
+        };
+    }
+    Outcome::Accepted {
+        cursor: false,
+        changed: !old.is_some_and(|old| scan_print::same_file(&old.fields(), &fields)),
+        whole: scan_print::text(fields.read_from).is_none(),
+    }
+}
+
+/// An applied answer's prints, kept until the tool is written back one bucket at a time.
+struct Plan {
+    /// The answer's prints, by bucket, in the answer's order.
+    fresh: BTreeMap<u32, Vec<(Arc<str>, Print)>>,
+    /// The files whose rows the loop replaced (before the files read whole are added).
+    replace: HashSet<Arc<str>>,
+    rejected: HashSet<Arc<str>>,
+    /// Whether only the answer's prints are kept (otherwise the saved ones it left stay).
+    enumerated: bool,
+}
+
+/// The pass's change to one computer's checkpoint, inside one store transaction: each tool is
+/// read ([`Change::tool`]: its rows), applied by the caller ([`Change::apply`]), then written back
+/// ([`Change::put`]) one file bucket at a time: each bucket's saved prints are read, the answer's
+/// applied to them, and the part written when its bytes changed. A tool's prints are never held
+/// whole. The save ([`Change::finish`]) reads and writes back every tool this pass did not
+/// apply, then the header, so the store holds what one save of the whole checkpoint writes.
+///
+/// One apply runs the 31-day window over every row the checkpoint held then (see
+/// [`Cache::apply`]): a tool read after a windowed apply is windowed as it is read, and one read
+/// before it is read again and windowed by the save.
+pub(super) struct Change<'c, 'r, 't> {
+    checkpoint: &'c mut Checkpoint,
+    txn: &'r mut analytics_cache::Rewrite<'t>,
+    host: &'c str,
+    cutoff: i64,
+    /// Whether an applied answer has run the window over the checkpoint.
+    windowed: bool,
+    /// The tools written back, in order, and whether their rows have been through the window.
+    done: Vec<(String, bool)>,
+    tools: BTreeMap<String, ToolParts>,
+    /// The digest of each part as the transaction holds it.
+    current: HashMap<String, [u8; 32]>,
+    /// The parts read once in this transaction (their digest checked against the pass's reads).
+    verified: HashSet<String>,
+    written: Written,
+    keep: Option<&'c str>,
+    kept: Option<(Vec<ScanRow>, Vec<ScanRow>, Identities)>,
+    /// A tool is read and not yet written back; whether it was windowed as it was read.
+    loaded: bool,
+    /// The read tool's prints by bucket, when the checkpoint is held whole.
+    loose: Option<BTreeMap<u32, Prints>>,
+    plan: Option<Plan>,
+}
+
+impl Change<'_, '_, '_> {
+    fn new<'c, 'r, 't>(
+        checkpoint: &'c mut Checkpoint,
+        txn: &'r mut analytics_cache::Rewrite<'t>,
+        host: &'c str,
+        cutoff: i64,
+        keep: Option<&'c str>,
+    ) -> Change<'c, 'r, 't> {
+        let current = checkpoint.saved.parts.clone();
+        Change {
+            checkpoint,
+            txn,
+            host,
+            cutoff,
+            windowed: false,
+            done: Vec::new(),
+            tools: BTreeMap::new(),
+            current,
+            verified: HashSet::new(),
+            written: Written::default(),
+            keep,
+            kept: None,
+            loaded: false,
+            loose: None,
+            plan: None,
+        }
+    }
+
+    /// The string table an answer's rows share with the tools' rows.
+    pub fn strings(&mut self) -> &mut Interner {
+        &mut self.checkpoint.strings
+    }
+
+    /// The kept tool's rows, session rows and identities, once it is written back (again by the
+    /// save when it windows that tool).
+    pub fn take_kept(&mut self) -> Option<(Vec<ScanRow>, Vec<ScanRow>, Identities)> {
+        self.kept.take()
+    }
+
+    /// The buckets of the tool's parts as the transaction holds them.
+    fn buckets(&self, kind: &str) -> Vec<u32> {
+        match self.tools.get(kind) {
+            Some(tool) => tool.parts.iter().map(|(bucket, _)| *bucket).collect(),
+            None => self
+                .checkpoint
                 .saved
                 .listed
                 .iter()
-                .filter(|(kind, _)| !aside.contains(kind.as_str()))
-                .map(|(kind, bucket)| (part_key(host, kind, *bucket), kind.as_str()))
-                .collect();
-            let kinds: HashMap<String, String> = wanted
-                .iter()
-                .map(|(key, kind)| (key.clone(), (*kind).to_owned()))
-                .collect();
-            let keys: Vec<String> = wanted.into_iter().map(|(key, _)| key).collect();
-            let sums = std::mem::take(&mut cache.saved.parts);
-            let mut found = 0;
-            let result = analytics_cache::read_each(store, &keys, |key, bytes| {
-                if sums.get(key) != Some(&digest(bytes)) {
-                    return Err(changed());
+                .filter(|(listed, _)| listed == kind)
+                .map(|(_, bucket)| *bucket)
+                .collect(),
+        }
+    }
+
+    /// One part's bytes handed to `read`: the first read of a part in this transaction must find
+    /// the bytes this pass read before (`changed` otherwise).
+    fn part<T>(&mut self, key: &str, read: impl FnOnce(&[u8]) -> Result<T>) -> Result<T> {
+        let first = !self.verified.contains(key);
+        let seen = &mut self.checkpoint.seen;
+        let out = self.txn.read(key, |bytes| -> Result<_> {
+            let sum = if first {
+                Some(Checkpoint::note(seen, key, bytes)?)
+            } else {
+                None
+            };
+            Ok((sum, read(bytes)?))
+        })?;
+        let Some(out) = out else {
+            return Err(aac_store::error::Error::new(
+                "io",
+                "Analytics scanner state part missing",
+            ));
+        };
+        let (sum, out) = out?;
+        if let Some(sum) = sum {
+            self.current.insert(key.to_owned(), sum);
+            self.verified.insert(key.to_owned());
+        }
+        Ok(out)
+    }
+
+    /// The tool's saved prints of one bucket.
+    fn prior(&mut self, kind: &str, bucket: u32, held: bool) -> Result<Prints> {
+        if let Some(loose) = &mut self.loose {
+            return Ok(loose.get(&bucket).cloned().unwrap_or_default());
+        }
+        if !held {
+            return Ok(Prints::default());
+        }
+        let key = part_key(self.host, kind, bucket);
+        let (prints, _) = with_interner(Interner::default(), || {
+            self.part(&key, |bytes| {
+                Ok(serde_json::from_slice::<PartPrints>(bytes)?.fingerprints)
+            })
+        });
+        prints
+    }
+
+    /// One tool's rows as a cache of that tool alone (holding the tools' read states while it is
+    /// out; its prints stay in the store), windowed when an earlier apply ran the window.
+    pub fn tool(&mut self, kind: &str) -> Result<Cache> {
+        let mut rows = Vec::new();
+        let mut srows = Vec::new();
+        self.loose = None;
+        self.plan = None;
+        if !self.tools.contains_key(kind)
+            && let Some(whole) = self.checkpoint.whole.as_mut()
+        {
+            let prints = whole
+                .fingerprints
+                .get_mut(kind)
+                .map(std::mem::take)
+                .unwrap_or_default();
+            let mut loose: BTreeMap<u32, Prints> = BTreeMap::new();
+            for (key, print) in prints.0 {
+                loose.entry(bucket(&key)).or_default().insert(key, print);
+            }
+            self.loose = Some(loose);
+            let split = |rows: &mut Vec<ScanRow>| {
+                let (taken, kept): (Vec<_>, Vec<_>) = std::mem::take(rows)
+                    .into_iter()
+                    .partition(|row| &*row.kind == kind);
+                *rows = kept;
+                taken
+            };
+            rows = split(&mut whole.rows);
+            srows = split(&mut whole.srows);
+        } else {
+            let mut strings = std::mem::take(&mut self.checkpoint.strings);
+            let mut result = Ok(());
+            for bucket in self.buckets(kind) {
+                let key = part_key(self.host, kind, bucket);
+                let (part, held) = with_interner(std::mem::take(&mut strings), || {
+                    self.part(&key, |bytes| Ok(serde_json::from_slice::<PartRows>(bytes)?))
+                });
+                strings = held;
+                match part {
+                    Ok(part) => {
+                        rows.extend(part.rows);
+                        srows.extend(part.srows);
+                    }
+                    Err(error) => {
+                        result = Err(error);
+                        break;
+                    }
                 }
-                found += 1;
-                read(&mut cache, &kinds[key], Source::Stored(bytes))
-            });
-            cache.saved.parts = sums;
+            }
+            self.checkpoint.strings = strings;
             result?;
-            if found != keys.len() {
-                return Err(changed());
+        }
+        rows.shrink_to_fit();
+        srows.shrink_to_fit();
+        let mut cache = Cache {
+            rows,
+            srows,
+            states: std::mem::take(&mut self.checkpoint.states),
+            strings: std::mem::take(&mut self.checkpoint.strings),
+            ..Cache::default()
+        };
+        self.loaded = self.windowed;
+        if self.windowed {
+            cache.window(self.cutoff);
+        }
+        Ok(cache)
+    }
+
+    /// [`Cache::apply`] of the read tool, its saved prints read one bucket at a time: the same
+    /// rows, read state and answer, and the same prints once [`Change::put`] writes them.
+    pub fn apply(
+        &mut self,
+        kind: &str,
+        cache: &mut Cache,
+        answer: &mut Answer,
+        mut complete: bool,
+    ) -> Result<bool> {
+        let state = answer.read(kind);
+        if matches!(
+            state["state"].as_str(),
+            Some("pending" | "error" | "unreadable")
+        ) || kind == "antigravity" && state["unreadable"] == true
+        {
+            return Ok(false);
+        }
+        let truncated = answer.truncated.clone();
+        let Some(read) = answer.kinds.as_mut().and_then(|kinds| kinds.get_mut(kind)) else {
+            return Ok(false);
+        };
+        let Some(fresh) = read.fingerprints.take() else {
+            return Ok(false);
+        };
+        let metadata = read.meta.clone();
+        let state = &metadata;
+        let mut replace: HashSet<Arc<str>> = read
+            .replaced
+            .iter()
+            .map(|file| Arc::from(file.as_str()))
+            .collect();
+        let mut by_bucket: BTreeMap<u32, Vec<(Arc<str>, Print)>> = BTreeMap::new();
+        for (key, print) in fresh.0 {
+            by_bucket
+                .entry(bucket(&key))
+                .or_default()
+                .push((key, print));
+        }
+        let held: HashSet<u32> = self.buckets(kind).into_iter().collect();
+        let mut accepted: HashSet<Arc<str>> = HashSet::new();
+        let mut rejected: HashSet<Arc<str>> = HashSet::new();
+        // Accepted files read whole (no `readFrom`): their cached rows are replaced.
+        let mut whole: HashSet<Arc<str>> = HashSet::new();
+        // The files the loop keeps a print of.
+        let mut kept: HashSet<Arc<str>> = HashSet::new();
+        for (bucket, entries) in &by_bucket {
+            let prior = self.prior(kind, *bucket, held.contains(bucket))?;
+            for (key, print) in entries {
+                match outcome(print, prior.get(key)) {
+                    Outcome::Settled { .. } => {
+                        kept.insert(Arc::clone(key));
+                    }
+                    Outcome::Unsaved => complete = false,
+                    Outcome::Rejected => {
+                        replace.remove(key);
+                        rejected.insert(Arc::clone(key));
+                        complete = false;
+                    }
+                    Outcome::Accepted {
+                        cursor,
+                        changed,
+                        whole: read_whole,
+                    } => {
+                        if cursor {
+                            replace.remove(key);
+                        }
+                        if changed {
+                            replace.insert(Arc::clone(key));
+                        }
+                        if read_whole {
+                            whole.insert(Arc::clone(key));
+                        }
+                        accepted.insert(Arc::clone(key));
+                        kept.insert(Arc::clone(key));
+                    }
+                }
             }
         }
-        for (kind, compressed) in aside.held {
-            read(&mut cache, &kind, Source::Compressed(&compressed))?;
+        // Cursor deduplicates run IDs across every database it reads. With a full
+        // inventory, only confirmed paths may contribute, even if some records in
+        // those databases were unreadable. A limited inventory keeps missing paths.
+        let enumerated = complete
+            || kind == "cursor"
+                && truncated == false
+                && state["state"] == "ok"
+                && state["unreadableRecords"].as_u64().is_some_and(|n| n > 0)
+                && ["readFailures", "unreadableFolders"]
+                    .iter()
+                    .all(|field| state[field].as_u64().unwrap_or(0) == 0)
+                && state["searchLimit"].is_null()
+                && state["walUnread"] != true;
+        let (rows, srows) = answer.take_rows(kind, |file| accepted.contains(file));
+        let mut replace_rows = replace.clone();
+        for row in rows.iter().chain(&srows) {
+            if whole.contains(&row.file) {
+                replace_rows.insert(Arc::clone(&row.file));
+            }
         }
-        cache.strings = strings;
+        // Without an enumerated read, the saved prints the loop did not replace stay: their
+        // rows stay with them.
+        let retain = |row: &ScanRow| {
+            &*row.kind != kind
+                || !replace_rows.contains(&row.file) && (!enumerated || kept.contains(&row.file))
+        };
+        let mut window = Window::new(self.cutoff);
+        cache.windowed = true;
+        cache
+            .rows
+            .retain(|row| retain(row) && window.keeps(row, false));
+        cache
+            .srows
+            .retain(|row| retain(row) && window.keeps(row, true));
+        cache.rows.reserve_exact(rows.len());
+        cache.srows.reserve_exact(srows.len());
+        cache
+            .rows
+            .extend(rows.into_iter().filter(|row| window.keeps(row, false)));
+        cache
+            .srows
+            .extend(srows.into_iter().filter(|row| window.keeps(row, true)));
+        fold(&mut cache.rows, false);
+        fold(&mut cache.srows, true);
         cache.order_rows();
-        Ok(cache)
+        cache.strings.prune();
+        cache.states.insert(kind.to_owned(), metadata);
+        self.plan = Some(Plan {
+            fresh: by_bucket,
+            replace,
+            rejected,
+            enumerated,
+        });
+        Ok(complete)
+    }
+
+    /// Write a tool back one bucket at a time: each bucket's prints (its saved prints, with the
+    /// applied answer's) and rows, written when the transaction does not hold those bytes yet;
+    /// then the tool is dropped (the kept tool's rows are moved out first).
+    pub fn put(&mut self, kind: &str, mut cache: Cache) -> Result<()> {
+        let windowed = cache.windowed || self.loaded;
+        if cache.windowed {
+            self.windowed = true;
+            // The apply added the tool's prints entry (a whole cache's map keeps its order).
+            if !self.checkpoint.kinds.iter().any(|held| held == kind) {
+                self.checkpoint.kinds.push(kind.to_owned());
+            }
+        }
+        self.checkpoint.states = std::mem::take(&mut cache.states);
+        self.checkpoint.strings = std::mem::take(&mut cache.strings);
+        let mut plan = self.plan.take();
+        let held: Vec<u32> = match &self.loose {
+            Some(loose) => loose.keys().copied().collect(),
+            None => self.buckets(kind),
+        };
+        let mut rows: BTreeMap<u32, (Vec<&ScanRow>, Vec<&ScanRow>)> = BTreeMap::new();
+        for row in &cache.rows {
+            rows.entry(bucket(&row.file)).or_default().0.push(row);
+        }
+        for row in &cache.srows {
+            rows.entry(bucket(&row.file)).or_default().1.push(row);
+        }
+        let mut buckets: std::collections::BTreeSet<u32> = held.iter().copied().collect();
+        buckets.extend(rows.keys());
+        if let Some(plan) = &plan {
+            buckets.extend(plan.fresh.keys());
+        }
+        let held: HashSet<u32> = held.into_iter().collect();
+        let keep = self.keep == Some(kind);
+        let mut identities = Identities::default();
+        let mut names = HashMap::new();
+        let mut tool = ToolParts {
+            parts: Vec::new(),
+            rows: cache.rows.len(),
+            srows: cache.srows.len(),
+            prints: 0,
+            bytes: 0,
+        };
+        for bucket in buckets {
+            let mut prior = match self.loose.as_mut() {
+                Some(loose) => loose.remove(&bucket).unwrap_or_default(),
+                None => self.prior(kind, bucket, held.contains(&bucket))?,
+            };
+            let prints = match plan.as_mut() {
+                None => prior,
+                Some(plan) => {
+                    let mut prints = Prints::default();
+                    for (key, print) in plan.fresh.remove(&bucket).unwrap_or_default() {
+                        let saved = match outcome(&print, prior.get(&key)) {
+                            Outcome::Settled { edit: true } => {
+                                let slot = print
+                                    .fields()
+                                    .settled_checked_slot
+                                    .unwrap_or(RawValue::NULL);
+                                prior
+                                    .get(&key)
+                                    .map(|saved| saved.with("settledCheckedSlot", slot))
+                            }
+                            Outcome::Settled { edit: false } => prior.swap_remove(&key),
+                            Outcome::Unsaved | Outcome::Rejected => None,
+                            Outcome::Accepted { .. } => {
+                                Some(if print.fields().read_from.is_some() {
+                                    print.without("readFrom")
+                                } else {
+                                    print
+                                })
+                            }
+                        };
+                        if let Some(saved) = saved {
+                            prints.insert(key, saved);
+                        }
+                    }
+                    if !plan.enumerated {
+                        for (key, old) in prior.0 {
+                            if !plan.replace.contains(&key) && !plan.rejected.contains(&key) {
+                                prints.entry(key).or_insert(old);
+                            }
+                        }
+                    }
+                    prints
+                }
+            };
+            let (bucket_rows, bucket_srows) = rows.remove(&bucket).unwrap_or_default();
+            if prints.is_empty() && bucket_rows.is_empty() && bucket_srows.is_empty() {
+                continue;
+            }
+            tool.prints += prints.len();
+            if keep {
+                identities.add(&prints, &mut names);
+            }
+            let mut sorted: Vec<(&Arc<str>, &Print)> = prints.iter().collect();
+            sorted.sort_by(|left, right| left.0.cmp(right.0));
+            let bytes = serde_json::to_vec(&PartRef {
+                fingerprints: PrintRefs(sorted),
+                rows: &bucket_rows,
+                srows: &bucket_srows,
+            })?;
+            tool.bytes += bytes.len();
+            let key = part_key(self.host, kind, bucket);
+            let sum = digest(&bytes);
+            if self.current.get(&key) != Some(&sum) {
+                self.txn.insert(&key, &bytes)?;
+                self.written.keys += 1;
+                self.written.bytes += bytes.len();
+                self.current.insert(key, sum);
+            }
+            tool.parts.push((bucket, sum));
+        }
+        drop(rows);
+        self.loose = None;
+        self.tools.insert(kind.to_owned(), tool);
+        match self.done.iter_mut().find(|(done, _)| done == kind) {
+            Some(done) => done.1 |= windowed,
+            None => self.done.push((kind.to_owned(), windowed)),
+        }
+        if keep {
+            self.kept = Some((
+                std::mem::take(&mut cache.rows),
+                std::mem::take(&mut cache.srows),
+                identities,
+            ));
+        }
+        drop(cache);
+        self.checkpoint.strings.prune();
+        Ok(())
+    }
+
+    /// The save: every tool not windowed yet is windowed when an apply ran the window, every
+    /// tool this pass did not apply is written back as it is, then the limits are checked, the
+    /// emptied parts removed and the header written. Returns what it wrote and the header's
+    /// digest when it wrote one; a `source_limit` error leaves the transaction to be dropped.
+    fn finish(&mut self) -> Result<(Written, Option<[u8; 32]>)> {
+        if self.windowed {
+            let behind: Vec<String> = self
+                .done
+                .iter()
+                .filter(|(_, windowed)| !windowed)
+                .map(|(kind, _)| kind.clone())
+                .collect();
+            for kind in behind {
+                let cache = self.tool(&kind)?;
+                self.put(&kind, cache)?;
+            }
+        }
+        let mut rest: Vec<String> = self.checkpoint.kinds.clone();
+        if let Some(whole) = &self.checkpoint.whole {
+            for row in whole.rows.iter().chain(&whole.srows) {
+                if !rest.iter().any(|kind| **kind == *row.kind) {
+                    rest.push(row.kind.to_string());
+                }
+            }
+        }
+        rest.retain(|kind| !self.tools.contains_key(kind));
+        for kind in rest {
+            let cache = self.tool(&kind)?;
+            self.put(&kind, cache)?;
+        }
+        let total = |count: fn(&ToolParts) -> usize| self.tools.values().map(count).sum::<usize>();
+        if total(|tool| tool.rows) > CACHE_ROWS
+            || total(|tool| tool.srows) > CACHE_ROWS
+            || total(|tool| tool.prints) > CACHE_ROWS
+        {
+            return Err(limit("Analytics scanner row limit"));
+        }
+        if total(|tool| tool.bytes) > CACHE_BYTES {
+            return Err(limit("Analytics scanner state size limit"));
+        }
+        let mut listed = Vec::new();
+        let mut parts = HashMap::new();
+        for (kind, tool) in &self.tools {
+            for (bucket, sum) in &tool.parts {
+                listed.push((kind.clone(), *bucket));
+                parts.insert(part_key(self.host, kind, *bucket), *sum);
+            }
+        }
+        let mut removed: Vec<&String> = self
+            .current
+            .keys()
+            .filter(|key| !parts.contains_key(*key))
+            .collect();
+        removed.sort();
+        for key in &removed {
+            self.txn.remove(key)?;
+        }
+        self.written.keys += removed.len();
+        let header = serde_json::to_vec(&Header {
+            revision: 2,
+            kinds: self.checkpoint.kinds.clone(),
+            parts: listed,
+            states: self.checkpoint.states.clone(),
+            migrated_from: self.checkpoint.saved.migrated_from.clone(),
+        })?;
+        let header_sum = digest(&header);
+        let mut wrote = None;
+        if self.checkpoint.saved.header != Some(header_sum) {
+            self.txn.insert(&header_key(self.host), &header)?;
+            self.written.keys += 1;
+            self.written.bytes += header.len();
+            wrote = Some(header_sum);
+        }
+        if self.written.keys > 0 && wrote.is_none() {
+            // Parts changed under an unchanged header: the check of the next load is by header.
+            wrote = self.checkpoint.saved.header;
+        }
+        Ok((std::mem::take(&mut self.written), wrote))
     }
 }
 
@@ -609,41 +1495,17 @@ fn limit(what: &str) -> aac_store::error::Error {
 }
 
 impl Cache {
-    /// The computer's live checkpoint: its parts, or a revision 1 document (migrated on the next
-    /// save), seeded from a legacy remote cache when it has no current one.
+    /// The computer's live checkpoint read whole (the flow before spike 8, kept as the tests'
+    /// oracle): its parts, or a revision 1 document (migrated on the next save).
+    #[cfg(test)]
     pub fn load(store: &Engine, host: &str) -> Result<Self> {
-        let header = analytics_cache::get(store, &header_key(host))?
-            .map(|bytes| -> Result<_> {
-                Ok((serde_json::from_slice::<Header>(&bytes)?, digest(&bytes)))
-            })
-            .transpose()?;
-        let legacy = match &header {
-            Some((_, sum)) if checked(store, host, sum) => None,
-            _ => analytics_cache::get(store, &legacy_key(host))?,
-        };
-        let legacy_digest = legacy.as_deref().map(|bytes| hex(&digest(bytes)));
-        if let Some((header, sum)) = header {
-            if legacy_digest.is_none() || legacy_digest == header.migrated_from {
-                drop(legacy);
-                mark_checked(store, host, sum);
-                return Self::load_parts(store, host, header, sum);
-            }
-            // A rolled-back build wrote the revision 1 document after the migration: it is the
-            // newer state. Its parts are replaced on the next save.
-            let mut cache = Self::read_legacy(store, host, legacy.as_deref())?;
-            cache.saved.parts = header
-                .parts
-                .iter()
-                .map(|(kind, bucket)| (part_key(host, kind, *bucket), [0; 32]))
-                .collect();
-            cache.saved.migrated_from = legacy_digest;
-            return Ok(cache);
+        match open(store, host)? {
+            Opened::Parts(header, sum) => Self::load_parts(store, host, header, sum),
+            Opened::Whole(cache) => Ok(cache),
         }
-        let mut cache = Self::read_legacy(store, host, legacy.as_deref())?;
-        cache.saved.migrated_from = legacy_digest;
-        Ok(cache)
     }
 
+    #[cfg(test)]
     fn load_parts(store: &Engine, host: &str, header: Header, sum: [u8; 32]) -> Result<Self> {
         let mut cache = Cache {
             fingerprints: Fingerprints(
@@ -660,7 +1522,6 @@ impl Cache {
                 listed: header.parts.clone(),
                 ..Saved::default()
             },
-            backed: true,
             ..Cache::default()
         };
         let keys: Vec<String> = header
@@ -771,7 +1632,9 @@ impl Cache {
 
     /// Save the live checkpoint in parts, writing only the parts (and header) whose bytes
     /// changed, in one transaction. Returns what it wrote. A `source_limit`
-    /// error leaves the store as it was.
+    /// error leaves the store as it was. (The whole-cache save before spike 8: the tests'
+    /// oracle for [`Change`].)
+    #[cfg(test)]
     pub fn save(&mut self, store: &Engine, host: &str) -> Result<Written> {
         self.check_rows()?;
         type Group<'a> = (
@@ -846,8 +1709,6 @@ impl Cache {
         }
         if writes.is_empty() && removed.is_empty() {
             self.saved.listed = listed;
-            self.backed = true;
-            self.touched.clear();
             return Ok(Written::default());
         }
         let written = Written {
@@ -858,59 +1719,14 @@ impl Cache {
         self.saved.header = Some(header_sum);
         self.saved.parts = parts;
         self.saved.listed = listed;
-        self.backed = true;
-        self.touched.clear();
         mark_checked(store, host, header_sum);
         Ok(written)
     }
 
-    /// Set the cache aside for a scan call's wait (see [`Parked`]): only the tools changed since
-    /// it was read or saved (every tool, for a cache the store does not hold) stay in memory,
-    /// compressed; the rest is read back from the store by [`Parked::restore`].
-    pub fn park(self) -> Parked {
-        let mut aside: std::collections::BTreeSet<&str> =
-            self.touched.iter().map(String::as_str).collect();
-        if !self.backed {
-            aside.extend(self.fingerprints.keys().map(String::as_str));
-            aside.extend(self.rows.iter().chain(&self.srows).map(|row| &*row.kind));
-        }
-        let aside: Vec<String> = aside.into_iter().map(str::to_owned).collect();
-        let mut held = Vec::with_capacity(aside.len());
-        for kind in aside {
-            let prints = self
-                .fingerprints
-                .get(&kind)
-                .map(|prints| prints.iter().collect())
-                .unwrap_or_default();
-            let part = PartRef {
-                fingerprints: PrintRefs(prints),
-                rows: &of_kind(&self.rows, &kind),
-                srows: &of_kind(&self.srows, &kind),
-            };
-            let compressed = (|| {
-                let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 1).ok()?;
-                serde_json::to_writer(&mut encoder, &part).ok()?;
-                encoder.finish().ok()
-            })();
-            let Some(compressed) = compressed else {
-                return Parked::Held(Box::new(self));
-            };
-            held.push((kind, compressed));
-        }
-        Parked::Aside(Box::new(Aside {
-            kinds: self.fingerprints.keys().cloned().collect(),
-            states: self.states,
-            saved: self.saved,
-            backed: self.backed,
-            touched: self.touched,
-            held,
-        }))
-    }
-
     /// Move one tool's rows out, with the Claude identities of its prints, for a reader that
     /// outlives this cache.
+    #[cfg(test)]
     pub fn take_kind(&mut self, kind: &str) -> (Vec<ScanRow>, Vec<ScanRow>, Identities) {
-        self.touched.insert(kind.to_owned());
         let split = |rows: &mut Vec<ScanRow>| {
             let (taken, kept) = std::mem::take(rows)
                 .into_iter()
@@ -930,6 +1746,17 @@ impl Cache {
         for rows in [&mut self.rows, &mut self.srows] {
             rows.sort_by_cached_key(|row| (Arc::clone(&row.kind), bucket(&row.file)));
         }
+    }
+
+    /// What an apply of another tool does to these rows: the 31-day window, then the merge and
+    /// order of every apply.
+    fn window(&mut self, cutoff: i64) {
+        let mut window = Window::new(cutoff);
+        self.rows.retain(|row| window.keeps(row, false));
+        self.srows.retain(|row| window.keeps(row, true));
+        fold(&mut self.rows, false);
+        fold(&mut self.srows, true);
+        self.order_rows();
     }
 
     /// Apply one tool's read from the answer, moving its prints and accepted rows into the cache.
@@ -955,7 +1782,6 @@ impl Cache {
         let Some(fresh) = read.fingerprints.take() else {
             return false;
         };
-        self.touched.insert(kind.to_owned());
         let metadata = read.meta.clone();
         let state = &metadata;
         let mut prior = self
@@ -1059,6 +1885,7 @@ impl Cache {
                 || !replace.contains(&row.file) && (!enumerated || prints.contains_key(&row.file))
         };
         let mut window = Window::new(cutoff);
+        self.windowed = true;
         self.rows
             .retain(|row| retain(row) && window.keeps(row, false));
         self.srows
@@ -1119,12 +1946,14 @@ impl Window {
     }
 }
 
-/// Merge rows of one (tool, file, model, provider, hour or session) and logged-cost class.
+/// Merge rows of one (tool, file, model, provider, hour or session) and logged-cost class, in
+/// place: each first row keeps its order and takes the later ones' sums.
 fn fold(rows: &mut Vec<ScanRow>, session: bool) {
     let none: Arc<str> = Arc::from("");
     let mut positions: HashMap<_, usize> = HashMap::new();
-    let mut out: Vec<ScanRow> = Vec::with_capacity(rows.len());
-    for row in rows.drain(..) {
+    let mut write = 0;
+    for read in 0..rows.len() {
+        let row = &rows[read];
         let slot = if session { &row.session } else { &row.hour };
         let key = (
             Arc::clone(&row.kind),
@@ -1134,26 +1963,33 @@ fn fold(rows: &mut Vec<ScanRow>, session: bool) {
             slot.clone().unwrap_or_else(|| Arc::clone(&none)),
             row.cost > 0.0,
         );
-        let position = *positions.entry(key).or_insert(out.len());
-        if let Some(previous) = out.get_mut(position) {
-            for (left, right) in previous.tokens.iter_mut().zip(row.tokens) {
-                *left = left.saturating_add(right);
-            }
-            previous.events = previous.events.saturating_add(row.events);
-            previous.cost += row.cost;
-            if session {
-                if let (Some(left), Some(right)) = (previous.first, row.first) {
-                    previous.first = Some(left.min(right));
+        match positions.get(&key) {
+            Some(&position) => {
+                // Rows before `write` are the first rows kept; the merged ones are dropped.
+                let (kept, rest) = rows.split_at_mut(read);
+                let (previous, row) = (&mut kept[position], &rest[0]);
+                for (left, right) in previous.tokens.iter_mut().zip(row.tokens) {
+                    *left = left.saturating_add(right);
                 }
-                if let (Some(left), Some(right)) = (previous.last, row.last) {
-                    previous.last = Some(left.max(right));
+                previous.events = previous.events.saturating_add(row.events);
+                previous.cost += row.cost;
+                if session {
+                    if let (Some(left), Some(right)) = (previous.first, row.first) {
+                        previous.first = Some(left.min(right));
+                    }
+                    if let (Some(left), Some(right)) = (previous.last, row.last) {
+                        previous.last = Some(left.max(right));
+                    }
                 }
             }
-        } else {
-            out.push(row);
+            None => {
+                positions.insert(key, write);
+                rows.swap(write, read);
+                write += 1;
+            }
         }
     }
-    *rows = out;
+    rows.truncate(write);
 }
 
 #[cfg(test)]
@@ -1788,18 +2624,6 @@ mod tests {
         }
     }
 
-    fn request_text(cache: &Cache, kind: &str) -> String {
-        let kinds: Vec<String> = PARK_KINDS.iter().map(|kind| (*kind).to_owned()).collect();
-        let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
-        let requests = Requests::new(args, &kinds, &cache.fingerprints, &HashMap::new(), 600_000);
-        requests
-            .args(&[kind.to_owned()], &cache.fingerprints)
-            .expect("request")
-            .text
-            .get()
-            .to_owned()
-    }
-
     fn stored(store: &Engine) -> Vec<(String, Vec<u8>)> {
         let header = analytics_cache::get(store, &header_key("fixture"))
             .expect("header")
@@ -1816,108 +2640,261 @@ mod tests {
         out
     }
 
+    /// The kept tool's rows and identities, comparable.
+    fn kept_value(kept: &(Vec<ScanRow>, Vec<ScanRow>, Identities)) -> Value {
+        let mut identities: Vec<(String, String, bool)> = kept
+            .2
+            .entries()
+            .map(|(file, name, mirror)| (file.to_owned(), name.to_owned(), mirror))
+            .collect();
+        identities.sort();
+        json!({
+            "rows": kept.0.iter().map(ScanRow::to_value).collect::<Vec<_>>(),
+            "srows": kept.1.iter().map(ScanRow::to_value).collect::<Vec<_>>(),
+            "identities": identities,
+        })
+    }
+
+    /// One pass's reads applied both ways: the whole cache (the flow before spike 8) to
+    /// `whole`, the checkpoint one tool at a time to `parts`. Each tool's rows before its apply
+    /// (what its source state reads) and each apply's answer must agree, and both stores must
+    /// then hold the same bytes and the same Claude part.
+    fn both_ways(whole: &Engine, parts: &Engine, reads: &[(&str, Value)], cutoff: i64) {
+        let mut cache = Cache::load(whole, "fixture").expect("whole load");
+        let mut expected = Vec::new();
+        for (kind, read) in reads {
+            let before = content(&cache)["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .filter(|row| row["k"] == *kind)
+                .count();
+            expected.push((before, cache.apply_value(kind, read, true, cutoff)));
+        }
+        cache.save(whole, "fixture").expect("whole save");
+        let whole_kept = cache.take_kind("claude");
+        let mut checkpoint = Checkpoint::load(parts, "fixture").expect("checkpoint load");
+        let changed = checkpoint
+            .change(parts, "fixture", cutoff, Some("claude"), |change| {
+                let mut seen = Vec::new();
+                for (kind, read) in reads {
+                    let mut cache = change.tool(kind)?;
+                    let before = cache.rows.len();
+                    let mut answer = Answer::from_value(read);
+                    seen.push((before, change.apply(kind, &mut cache, &mut answer, true)?));
+                    change.put(kind, cache)?;
+                }
+                Ok((seen, true))
+            })
+            .expect("change");
+        assert_eq!(changed.out, expected);
+        changed.saved.expect("saved").expect("save");
+        same_store(&stored(parts), &stored(whole));
+        assert_eq!(
+            kept_value(&changed.kept.expect("kept")),
+            kept_value(&whole_kept)
+        );
+        // The Claude part read back from the saved checkpoint is the same part.
+        let read = read_kept(parts, &changed.kept_parts.expect("kept parts")).expect("read back");
+        assert_eq!(kept_value(&read), kept_value(&whole_kept));
+    }
+
+    /// The two stores' checkpoints, compared key by key (the first difference shown as text).
+    fn same_store(left: &[(String, Vec<u8>)], right: &[(String, Vec<u8>)]) {
+        let keys = |held: &[(String, Vec<u8>)]| {
+            held.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>()
+        };
+        for ((key, left), (_, right)) in left.iter().zip(right) {
+            if left != right {
+                let at = left.iter().zip(right).take_while(|(l, r)| l == r).count();
+                let show = |bytes: &[u8]| {
+                    String::from_utf8_lossy(
+                        &bytes[at.saturating_sub(200)..(at + 300).min(bytes.len())],
+                    )
+                    .into_owned()
+                };
+                panic!(
+                    "{key} differs at {at}:\n  one tool at a time: {}\n  whole cache:        {}",
+                    show(left),
+                    show(right)
+                );
+            }
+        }
+        assert_eq!(keys(left), keys(right));
+    }
+
     #[test]
-    fn mem7_a_parked_cache_comes_back_exactly_as_it_was_and_saves_the_same_bytes() {
+    fn spike8_one_tool_at_a_time_saves_what_the_whole_cache_saves() {
         let (one, two) = (
             tempfile::tempdir().expect("one"),
             tempfile::tempdir().expect("two"),
         );
-        let (parked_store, held_store) = (fixture_store(one.path()), fixture_store(two.path()));
-        seed_parts(&[&parked_store, &held_store]);
-        let mut parked = Cache::load(&parked_store, "fixture").expect("load");
-        let mut held = Cache::load(&held_store, "fixture").expect("load");
-        // A pass's tools one call at a time, as `activity_pass` runs them: the parked cache is
-        // set aside across each call; the held one is the cache as the pass kept it before.
-        for kind in PARK_KINDS {
-            assert_eq!(request_text(&parked, kind), request_text(&held, kind));
-            let aside = parked.park();
-            match &aside {
-                Parked::Aside(aside) => {
-                    let kinds: Vec<&str> = aside.held.iter().map(|(k, _)| k.as_str()).collect();
-                    let mut changed: Vec<&str> = PARK_KINDS
-                        .iter()
-                        .copied()
-                        .take_while(|done| *done != kind)
-                        .collect();
-                    changed.sort_unstable();
-                    assert_eq!(kinds, changed, "only the tools this pass changed stay");
-                }
-                Parked::Held(_) => panic!("a stored cache is set aside"),
-            }
-            parked = aside.restore(&parked_store, "fixture").expect("restore");
-            assert_eq!(
-                parked.encode().expect("parked"),
-                held.encode().expect("held")
-            );
-            let read = tool_read(kind, 95, 2);
-            assert!(parked.apply_value(kind, &read, true, 0));
-            assert!(held.apply_value(kind, &read, true, 0));
-            assert_eq!(
-                parked.encode().expect("parked"),
-                held.encode().expect("held")
-            );
-        }
-        // One last set-aside after every tool changed, then the save writes the same parts.
-        parked = parked
-            .park()
-            .restore(&parked_store, "fixture")
-            .expect("restore");
-        assert_eq!(parked.rows, held.rows);
-        assert_eq!(parked.srows, held.srows);
-        let written = parked.save(&parked_store, "fixture").expect("save parked");
-        assert_eq!(
-            written,
-            held.save(&held_store, "fixture").expect("save held")
+        let (whole, parts) = (fixture_store(one.path()), fixture_store(two.path()));
+        seed_parts(&[&whole, &parts]);
+        // Every tool read again.
+        let all: Vec<(&str, Value)> = PARK_KINDS
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| (*kind, tool_read(kind, 95 + index * 10, 2)))
+            .collect();
+        both_ways(&whole, &parts, &all, 0);
+        // Unchanged: nothing to write.
+        both_ways(&whole, &parts, &all, 0);
+        // The first tool's read is still pending (its apply stops before the window), the second
+        // runs the window over every tool (the hour 03 rows and every session fall out of it),
+        // and Claude has no answer: the save windows the first and the last as the whole
+        // cache's apply did.
+        let mut pending = tool_read("codex", 95, 3);
+        pending["kinds"]["codex"]["state"] = json!("pending");
+        let cutoff = aac_views::js::parse_date("2026-11-03T04:00:00Z")
+            .expect("date")
+            .expect("cutoff");
+        both_ways(
+            &whole,
+            &parts,
+            &[("codex", pending), ("omp", tool_read("omp", 80, 3))],
+            cutoff,
         );
-        assert!(written.keys > 0);
-        assert_eq!(stored(&parked_store), stored(&held_store));
-        let (rows, srows, _) = parked.take_kind("claude");
-        let (held_rows, held_srows, _) = held.take_kind("claude");
-        assert_eq!((rows, srows), (held_rows, held_srows));
+        // A tool new to the checkpoint, and one tool's read only.
+        both_ways(
+            &whole,
+            &parts,
+            &[
+                ("cursor", tool_read("cursor", 12, 1)),
+                ("claude", tool_read("claude", 60, 4)),
+            ],
+            cutoff,
+        );
     }
 
     #[test]
-    fn mem7_a_cache_the_store_does_not_hold_is_set_aside_whole() {
-        let home = tempfile::tempdir().expect("fixture home");
-        let store = fixture_store(home.path());
+    fn spike8_a_document_checkpoint_migrates_one_tool_at_a_time() {
+        let (one, two) = (
+            tempfile::tempdir().expect("one"),
+            tempfile::tempdir().expect("two"),
+        );
+        let (whole, parts) = (fixture_store(one.path()), fixture_store(two.path()));
         let mut old = Cache::default();
-        for kind in PARK_KINDS {
-            assert!(old.apply_value(kind, &tool_read(kind, 40, 1), true, 0));
+        for (index, kind) in PARK_KINDS.iter().enumerate() {
+            assert!(old.apply_value(kind, &tool_read(kind, 30 + index, 1), true, 0));
         }
         let document = old.encode().expect("revision 1 document");
-        analytics_cache::put(&store, &legacy_key("fixture"), &document).expect("old build save");
-        forget_checked();
-        let legacy = Cache::load(&store, "fixture").expect("legacy load");
-        let aside = legacy.park();
-        match &aside {
-            Parked::Aside(aside) => assert_eq!(aside.held.len(), PARK_KINDS.len()),
-            Parked::Held(_) => panic!("set aside"),
+        for store in [&whole, &parts] {
+            analytics_cache::put(store, &legacy_key("fixture"), &document).expect("old save");
         }
-        let back = aside.restore(&store, "fixture").expect("restore");
-        assert_eq!(back.encode().expect("encode"), document);
-        // A computer with no checkpoint yet.
-        let empty = Cache::load(&store, "none")
-            .expect("empty")
-            .park()
-            .restore(&store, "none")
-            .expect("restore empty");
-        assert_eq!(content(&empty), content(&Cache::default()));
+        forget_checked();
+        both_ways(&whole, &parts, &[("omp", tool_read("omp", 33, 2))], 0);
+        assert_eq!(
+            analytics_cache::get(&parts, &legacy_key("fixture")).expect("kept"),
+            Some(document)
+        );
+        both_ways(&whole, &parts, &[("codex", tool_read("codex", 31, 2))], 0);
     }
 
     #[test]
-    fn mem7_a_checkpoint_changed_during_the_wait_is_refused() {
+    fn spike8_requests_sized_one_tool_at_a_time_match_the_whole_frame() {
         let home = tempfile::tempdir().expect("fixture home");
         let store = fixture_store(home.path());
         seed_parts(&[&store]);
+        let kinds: Vec<String> = PARK_KINDS.iter().map(|kind| (*kind).to_owned()).collect();
+        let settled = HashMap::from([("codex".to_owned(), 1_000u64)]);
+        let cache = Cache::load(&store, "fixture").expect("load");
+        let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
+        let whole = Requests::new(args.clone(), &kinds, &cache.fingerprints, &settled, 600_000);
+        let mut checkpoint = Checkpoint::load(&store, "fixture").expect("checkpoint");
+        let sized = checkpoint
+            .requests(&store, "fixture", args.clone(), &kinds, &settled, 600_000)
+            .expect("sized");
+        assert!(whole.whole && sized.whole);
+        assert_eq!(sized.batches, whole.batches);
+        let text = |args: Option<ScanArgs>| args.expect("fits").text.get().to_owned();
+        assert_eq!(
+            text(
+                checkpoint
+                    .args(&store, "fixture", &sized, &kinds)
+                    .expect("args")
+            ),
+            text(whole.args(&kinds, &cache.fingerprints))
+        );
+        // The whole frame's length is the frame without prints plus each tool's entry.
+        let (frame, settings) = Requests::frame(args, &settled, 600_000);
+        let mut total = json_len(&Frame {
+            args: &frame,
+            prints: PrintsArg::All(&Fingerprints::default(), &settings),
+        });
+        for (kind, prints) in cache.fingerprints.iter() {
+            total += json_len(kind.as_str()) + json_len(prints) + 2;
+        }
+        assert_eq!(
+            total,
+            json_len(&Frame {
+                args: &frame,
+                prints: PrintsArg::All(&cache.fingerprints, &settings),
+            })
+        );
+        // One request per tool: each built from that tool's prints alone.
+        let split = Requests::assemble(frame, settings, &settled, &kinds, false);
+        for kind in &kinds {
+            let batch = [kind.clone()];
+            assert_eq!(
+                text(
+                    checkpoint
+                        .args(&store, "fixture", &split, &batch)
+                        .expect("args")
+                ),
+                text(split.args(&batch, &cache.fingerprints))
+            );
+        }
+    }
+
+    #[test]
+    fn spike8_a_checkpoint_changed_during_the_calls_is_refused() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let store = fixture_store(home.path());
+        seed_parts(&[&store]);
+        let kinds: Vec<String> = PARK_KINDS.iter().map(|kind| (*kind).to_owned()).collect();
+        let request = |checkpoint: &mut Checkpoint| {
+            let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
+            let requests = checkpoint
+                .requests(&store, "fixture", args, &kinds, &HashMap::new(), 600_000)
+                .expect("requests");
+            checkpoint
+                .args(&store, "fixture", &requests, &kinds)
+                .expect("args");
+        };
+        let unchanged = |change: &mut Change<'_, '_, '_>| -> Result<((), bool)> {
+            for kind in PARK_KINDS {
+                let cache = change.tool(kind)?;
+                change.put(kind, cache)?;
+            }
+            Ok(((), true))
+        };
         // Another save of this computer (a newer header).
-        let aside = Cache::load(&store, "fixture").expect("load").park();
+        let mut checkpoint = Checkpoint::load(&store, "fixture").expect("load");
+        request(&mut checkpoint);
         let mut other = Cache::load(&store, "fixture").expect("load");
         assert!(other.apply_value("codex", &tool_read("codex", 90, 3), true, 0));
         other.save(&store, "fixture").expect("other save");
-        let refused = aside.restore(&store, "fixture").err().expect("refused");
+        let before = stored(&store);
+        let refused = checkpoint
+            .change(&store, "fixture", 0, None, unchanged)
+            .err()
+            .expect("refused");
         assert_eq!(refused.code, "changed");
-        // One part's bytes replaced under the same header.
-        let aside = Cache::load(&store, "fixture").expect("load").park();
+        assert_eq!(stored(&store), before);
+        // Nothing to save: the store is not written.
+        let mut checkpoint = Checkpoint::load(&store, "fixture").expect("load");
+        let changed = checkpoint
+            .change(&store, "fixture", 0, None, unchanged)
+            .expect("unchanged");
+        assert_eq!(
+            changed.saved.expect("saved").expect("save").0,
+            Written::default()
+        );
+        assert_eq!(stored(&store), before);
+        // One part's bytes replaced under the same header after its request was built.
+        let mut checkpoint = Checkpoint::load(&store, "fixture").expect("load");
+        request(&mut checkpoint);
         let header: Header = serde_json::from_slice(
             &analytics_cache::get(&store, &header_key("fixture"))
                 .expect("header")
@@ -1931,7 +2908,12 @@ mod tests {
             br#"{"fingerprints":{},"rows":[],"srows":[]}"#,
         )
         .expect("replace a part");
-        let refused = aside.restore(&store, "fixture").err().expect("refused");
+        let before = stored(&store);
+        let refused = checkpoint
+            .change(&store, "fixture", 0, None, unchanged)
+            .err()
+            .expect("refused");
         assert_eq!(refused.code, "changed");
+        assert_eq!(stored(&store), before);
     }
 }
