@@ -264,18 +264,13 @@ fn row_view(fact: &Value, providers: &[Value]) -> Admit<Value> {
             Some(Value::Null),
         ),
         "other" => {
-            let id = req(row.get("id").and_then(Value::as_str))?;
-            let wallet = id.starts_with("plan-opencode-go-console-");
-            let running = boolean(fact, "running")?;
+            let _id = req(row.get("id").and_then(Value::as_str))?;
+            let _running = boolean(fact, "running")?;
             account_view(
                 row,
                 Value::Null,
-                actions(wallet, false, boolean(fact, "walletRemove")?, none(), false),
-                Some(if wallet && running {
-                    json!("signin_running")
-                } else {
-                    Value::Null
-                }),
+                actions(false, false, false, none(), false),
+                Some(Value::Null),
             )
         }
         _ => return Err(Refuse),

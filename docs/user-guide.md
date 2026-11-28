@@ -82,7 +82,6 @@ or marked "coming" where the server has no flow or route yet.
 | Muse Code | Re-check is live; sign-in reads "coming" | Re-check | With confirmation |
 | Kimi Code, Z.ai, OpenCode Go | API key in a masked field; only its last 4 are shown afterwards | Replace key | Deletes the stored key |
 | Qwen | Guided browser-extension sign-in on Windows | Guided sign-in, Re-check | With confirmation |
-| OpenCode console wallet | Guided browser-extension on Mac | Guided sign-in | Not served |
 
 Antigravity add and sign-in again run the official CLI as a supervised job on
 the dashboard host, inside the same isolated sign-in home as the terminal
@@ -457,19 +456,22 @@ usage after restart.
 Provider rate limits apply across native collectors and all alternate hosts for
 the same identity. Sign-in warnings stay visible alongside recovered quota.
 A first-ever unavailable source without a known identity stays unavailable.
-Explicit source and lifecycle configuration is unchanged. Qwen Token Plan,
-OpenCode Zen console wallet and Muse Code portal quota use **Paste session** on
-the Accounts page. AAC verifies the pasted cookie header before storing it with
+Explicit source and lifecycle configuration is unchanged. Qwen Token Plan and
+Muse Code portal quota use **Paste session** on the Accounts page, as does each
+OpenCode Go account's own wallet: paste from that account's row and its wallet
+balance shows as an extra line inside its own card. There is no separate
+wallet card. A key without a pasted session shows no wallet line; a failed read
+shows the last balance marked cached, or **Unavailable** when none was read; a
+session whose workspace no longer matches shows nothing. AAC verifies the pasted cookie header before storing it with
 owner-only permissions, then reads usage directly over HTTPS. Missing or expired
 sessions show **needs sign-in**; the browser extensions and native hosts are not
 required. Follow the [provider boundaries](system-architecture/provider-flows.md).
 Do not copy account secrets into this repository or container images.
 
 Claude desktop launch mappings use the private `claude-desktop-profiles.json`
-configuration and the existing profile IDs. The optional
-`opencode-console-wallet-source.json` adds a distinct workspace wallet source.
-These are existing deployment contracts, not generic account creation forms;
-another computer needs its own valid sessions and configured launch mappings.
+configuration and the existing profile IDs. These are existing deployment
+contracts, not generic account creation forms; another computer needs its own
+valid sessions and configured launch mappings.
 
 For native companions, build/install as the target user:
 

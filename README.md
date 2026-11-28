@@ -117,7 +117,7 @@ See every quota at a glance · claim resets before you hit a limit · let your a
 | **Kimi Code** | 5-hour and weekly | — | API key |
 | **Qwen Token Plan** | Monthly credits, packs, plan expiry | — | Console session (browser extension) |
 | **Z.ai Coding Plan** | Token windows, monthly requests, reset packs | — | API key |
-| **OpenCode Go** | 5-hour, weekly, monthly, console wallet | — | API key |
+| **OpenCode Go** | 5-hour, weekly, monthly, wallet per account | — | API key |
 
 <sub>AI Account Center reads usage; it does not switch accounts. Account switching was removed on 2026-11-14: your agents pick their own accounts by burn rate and availability.</sub>
 

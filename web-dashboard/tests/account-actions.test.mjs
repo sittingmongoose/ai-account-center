@@ -203,6 +203,12 @@ test('web-session requests, local validation, and calm error messages cover Qwen
     path: '/api/accounts/web-session/muse',
     body: {},
   });
+  // One OpenCode account's wallet session deletes by account id, never globally.
+  assert.deepEqual(requests.deleteWebSession('opencode-wallet', 'opencode-go:usage'), {
+    method: 'DELETE',
+    path: '/api/accounts/web-session/opencode-wallet',
+    body: { accountId: 'opencode-go:usage' },
+  });
 
   // Local validation catches bad inputs and never echoes secrets
   const secret = 'auth=secret-fixture-value-999';

@@ -261,7 +261,7 @@ fn compositions_answer_valid_inputs_and_refuse_the_rest() -> Result<()> {
              "entry":{"id":"zai:acct:00000001","provider":"zai","platform":"windows","sshHost":null,"label":null},
              "credentialKind":"aac-key","key":{"last4":"x7Qa","fingerprint":"sha256:00","storedOn":"windows"},
              "museSignIn":null,"running":false},
-            {"kind":"other","row":{"id":"plan-opencode-go-console-mac-0123456789ab","provider":"opencode-go","label":"W","email":null,"platform":"mac"},"running":true,"walletRemove":true}
+            {"kind":"other","row":{"id":"other-acct-0001","provider":"zai","label":"W","email":null,"platform":"mac"},"running":true}
         ],
         "jobs": [], "trash": []
     });
@@ -270,10 +270,7 @@ fn compositions_answer_valid_inputs_and_refuse_the_rest() -> Result<()> {
     let value: Value = serde_json::from_str(&body)?;
     assert_eq!(value["accounts"][0]["label"], json!("zai"));
     assert_eq!(value["accounts"][0]["actions"]["replaceKey"], json!(true));
-    assert_eq!(
-        value["accounts"][1]["removeRefusal"],
-        json!("signin_running")
-    );
+    assert_eq!(value["accounts"][1]["removeRefusal"], Value::Null);
     for bad in [
         "not json",
         "{}",

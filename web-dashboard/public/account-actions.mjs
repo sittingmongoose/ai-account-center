@@ -42,7 +42,7 @@ export const requests = Object.freeze({
   replaceKey: (id, key) => ({ method: 'PUT', path: `/api/accounts/${enc(id)}/key`, body: { key } }),
   webSessions: () => ({ method: 'GET', path: '/api/accounts/web-session' }),
   saveWebSession: (surface, body) => ({ method: 'PUT', path: `/api/accounts/web-session/${enc(surface)}`, body }),
-  deleteWebSession: surface => ({ method: 'DELETE', path: `/api/accounts/web-session/${enc(surface)}`, body: {} }),
+  deleteWebSession: (surface, accountId) => ({ method: 'DELETE', path: `/api/accounts/web-session/${enc(surface)}`, body: accountId ? { accountId } : {} }),
   removeAsk: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: {} }),
   removeCommit: (id, confirmationToken, confirm) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: typeof confirm === 'string' ? { confirmationToken, confirm } : { confirmationToken } }),
   openApp: (id, platform) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/open`, body: { platform } }),

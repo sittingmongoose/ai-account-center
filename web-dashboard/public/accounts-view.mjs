@@ -40,7 +40,8 @@ export const LIVE = Object.freeze({
 /**
  * Per provider: how it signs in (the section's kind line and the rows' source column), its row action slots
  * and the footer's how-to line. `slots` and `actsMin` keep every row's actions in fixed, aligned columns.
- * Qwen and the OpenCode console wallet are browser sessions, never API keys (CONTRACT-registry-lifecycle 7).
+ * Qwen is a browser session, never an API key. Each OpenCode Go account pastes its own console
+ * wallet session from its row; the balance shows inside that card (CONTRACT-registry-lifecycle 7).
  */
 export const ACCOUNT_KINDS = {
   claude: { kind: 'desktop', kindLabel: 'Desktop profile', icon: 'laptop', src: 'Claude desktop profile', slots: 3, actsMin: 206,
@@ -59,8 +60,8 @@ export const ACCOUNT_KINDS = {
     how: 'Packs and plan come from the Qwen console session that the browser extension syncs.' },
   zai: { kind: 'apikey', kindLabel: 'API key', icon: 'key', src: 'API key', slots: 2, actsMin: 156,
     how: 'Usage is read with an API key.' },
-  'opencode-go': { kind: 'apikey', kindLabel: 'API key, console wallet by browser session', icon: 'key', src: 'API key', slots: 2, actsMin: 156,
-    how: 'API keys for usage; the console wallet needs a browser session.' },
+  'opencode-go': { kind: 'apikey', kindLabel: 'API key', icon: 'key', src: 'API key', slots: 2, actsMin: 156,
+    how: 'Paste a console session on a key’s row for its wallet balance.' },
 };
 /** Providers with their own sign-in flows sit in the first column on ultra-wide screens. */
 const COL_A = ['claude', 'codex', 'antigravity'];
@@ -73,7 +74,7 @@ const dateTime = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', m
 const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
 const clockFmt = lazyFormat({ hour: 'numeric', minute: '2-digit' });
 const article = word => /^[aeiou]/i.test(word) ? 'an' : 'a';
-const isConsole = account => /console/i.test(text(account?.message)) || /^plan-opencode-go-console-/.test(text(account?.id));
+const hasOpenCodeWallet = account => Array.isArray(account?.windows) && account.windows.some(w => w?.key === 'zen-balance');
 const providerLabel = id => PROVIDER_LABELS[id] || PROVIDER_REGISTRY.find(row => row.id === id)?.label || id;
 
 // ---------------------------------------------------------------- actions
@@ -127,6 +128,17 @@ function gated(fields, g, liveTip = '') {
   if (g.live) return action({ ...fields, enabled: true, tip: liveTip });
   return action({ ...fields, enabled: false, coming: g.coming, tip: g.reason });
 }
+/** One OpenCode Go account's wallet: paste or delete its console session from its own row. */
+function openCodeWalletActions(provider, account, entry) {
+  if (provider !== 'opencode-go') return [];
+  const ws = webSessionGate(entry, provider);
+  if (!ws) return [];
+  const pasted = hasOpenCodeWallet(account);
+  const fields = { act: 'paste-session', value: account.id, label: pasted ? 'Reconnect wallet' : 'Paste wallet session', icon: 'key', style: pasted ? 'accent-line' : 'ghost', probe: `paste-session:${account.id}` };
+  const list = [gated(fields, ws, 'Paste an opencode.ai/console Cookie header once on a trusted connection for Zen prepaid wallet balance; never shown again.')];
+  if (pasted) list.push(action({ act: 'remove-wallet', value: account.id, label: 'Remove wallet session', icon: 'trash', style: 'ghost', probe: `remove-wallet:${account.id}`, enabled: true, tip: 'Remove this account’s pasted console session. The API key is not changed.' }));
+  return list;
+}
 
 /** Where the account was read and how fresh it is ("sampled 1m ago"); the status word appears only for an exception. */
 function rowStatus(account, now, reg) {
@@ -154,9 +166,6 @@ function sourceLines(provider, account, reg) {
     return [def.src, platforms.length ? platforms.map(platformLabel).join(' and ') : hostLabel(account)];
   }
   const pastedSource = text(account?.source).startsWith('Pasted ');
-  if (provider === 'opencode-go' && isConsole(account)) {
-    return pastedSource ? ['Pasted console session', 'Wallet and usage'] : ['Console session in a browser', 'Wallet and usage'];
-  }
   if (provider === 'qwen') return pastedSource ? ['Pasted console session', hostLabel(account)] : [def.src, 'by browser extension'];
   if (provider === 'muse' && pastedSource) return ['Pasted portal session', hostLabel(account)];
   const credential = reg?.credential;
@@ -279,20 +288,7 @@ function rowActions(provider, account, homeRow, ctx) {
       return [signin, removeControl(provider, account, reg, entry)];
     }
     case 'apikey': {
-      if (isConsole(account)) {
-        const ws = webSessionGate(entry, provider);
-        if (ws) {
-          const reconnect = account.status === 'needs_sign_in';
-          const fields = { act: 'paste-session', value: provider, label: reconnect ? 'Reconnect session' : 'Paste session', icon: 'key', style: reconnect ? 'accent-line' : 'default', probe: `paste-session:${provider}` };
-          return [gated(fields, ws, 'Paste a fresh OpenCode console Cookie header; stored privately and never shown again.'),
-            removeControl(provider, account, reg, entry)];
-        }
-        const fields = { act: 'signin', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin:${account.id}` };
-        const live = reg ? reg.actions?.signInAgain === true : false;
-        return [live ? action({ ...fields, enabled: true, tip: 'Open the OpenCode console in the browser with the extension and sign in there.' })
-          : action({ ...fields, enabled: false, tip: reg ? 'Signing in to the console wallet is not available here.' : 'Checking what this account can do' }),
-        removeControl(provider, account, reg, entry)];
-      }
+      const wallet = openCodeWalletActions(provider, account, entry);
       // A key stored on the reading computer outside the dashboard (card OCG1): Re-check reads that one key; it has
       // no key of the dashboard's to replace. Removing a discover entry stops reading every stored key no account
       // names, so that clause appears only when the entry covers more than this one key (N1). An explicit
@@ -310,7 +306,7 @@ function rowActions(provider, account, homeRow, ctx) {
         return [live ? action({ ...check, enabled: true, tip: 'Read this stored key again now.' })
           : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
         action({ kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}`, enabled: false,
-          tip: `Stored on ${host} outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.${unnamed > 1 ? ' Removing it here would stop reading every stored key no account names.' : ''}` })];
+          tip: `Stored on ${host} outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.${unnamed > 1 ? ' Removing it here would stop reading every stored key no account names.' : ''}` }), ...wallet];
       }
       // A key the provider's own app or config holds (never AAC-stored): no key action at all, only Re-check.
       if (reg?.credential?.kind && reg.credential.kind !== 'aac-key') {
@@ -318,7 +314,7 @@ function rowActions(provider, account, homeRow, ctx) {
         const live = LIVE.recheck && reg.actions?.recheck !== false;
         return [live ? action({ ...check, enabled: true, tip: 'Read the session again now.' })
           : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
-        removeControl(provider, account, reg, entry)];
+        removeControl(provider, account, reg, entry), ...wallet];
       }
       const g = gate(entry, 'replaceKey', provider);
       const fields = { act: 'replace-key', value: account.id, label: 'Replace key', icon: 'key', style: 'accent-line', probe: `replace-key:${account.id}` };
@@ -327,7 +323,7 @@ function rowActions(provider, account, homeRow, ctx) {
       else if (!reg) replace = action({ ...fields, enabled: false, tip: 'Checking what this account can do' });
       else if (reg.actions?.replaceKey !== true) replace = action({ ...fields, enabled: false, tip: 'Replacing this key is not possible now.' });
       else replace = action({ ...fields, enabled: true, tip: 'Store a new key; it is checked first and the old one stays if it is refused.' });
-      return [replace, removeControl(provider, account, reg, entry)];
+      return [replace, removeControl(provider, account, reg, entry), ...wallet];
     }
     case 'browser': {
       const ws = webSessionGate(entry, provider);
@@ -393,20 +389,10 @@ function footActions(provider, accounts, ctx) {
       return [signin, recheck];
     }
     case 'apikey': {
-      const hasKey = accounts.some(account => !isConsole(account));
-      const fields = hasKey
+      const fields = accounts.length
         ? { act: 'add-key', value: provider, label: `Add another ${label} key`, icon: 'plus', style: 'ghost', probe: `add-key:${provider}` }
         : { act: 'add-key', value: provider, label: `Add ${article(label)} ${label} key`, icon: 'key', style: 'primary', probe: `add-key:${provider}` };
-      const list = [gated(fields, add, 'Each key becomes its own account; the key is stored on the dashboard computer and never shown again.')];
-      if (provider === 'opencode-go') {
-        const ws = webSessionGate(entry, provider);
-        if (ws) {
-          const hasWallet = accounts.some(isConsole);
-          list.push(gated({ act: 'paste-session', value: provider, label: hasWallet ? 'Reconnect wallet' : 'Paste wallet session', icon: 'key', style: 'ghost', probe: `paste-session:${provider}` }, ws,
-            'Paste an opencode.ai/console Cookie header once on a trusted connection for Zen prepaid wallet balance; never shown again.'));
-        }
-      }
-      return list;
+      return [gated(fields, add, 'Each key becomes its own account; the key is stored on the dashboard computer and never shown again.')];
     }
     default:
       return [];
@@ -617,7 +603,9 @@ export function flowView(provider, f, ctx = {}) {
             cancel,
           ];
         } else if (surface === 'opencode-wallet') {
-          v.title = 'Paste OpenCode console wallet session';
+          const account = f.accountId ? (ctx.data?.accounts || []).find(a => a?.id === f.accountId) : null;
+          const who = text(account?.label) || text(account?.email);
+          v.title = who ? `Paste wallet session for ${who}` : 'Paste OpenCode console wallet session';
           v.body = 'In your browser, sign in at opencode.ai/console, open DevTools Network, copy the Cookie header (containing auth or __Host-console_session), and paste it below. Stored privately and never shown again.';
           Object.assign(v, { inputKind: 'web-session', inputLabel: 'Cookie header', inputPlaceholder: 'auth=...; __Host-console_session=...', inputPassword: true });
           v.actions = [btn('flow-submit', provider, 'Verify and save', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
@@ -1236,14 +1224,13 @@ export function accountsViewModel(data, ctx = {}) {
     const needs = entry.id === 'antigravity' && !addGate.live ? `Needs setup: ${addGate.reason}` : '';
     const wsCap = hasWebSessionCap(server);
     const kindLabel = wsCap && entry.id === 'qwen' ? 'Pasted console session'
-      : wsCap && entry.id === 'opencode-go' ? 'API key, console wallet by pasted session'
         : def.kindLabel;
     const how = needs || (wsCap && entry.id === 'qwen'
       ? 'Paste a Qwen console Cookie header once on a trusted connection; the dashboard reads usage directly over HTTPS.'
       : wsCap && entry.id === 'muse'
         ? 'Paste a dev.meta.ai Cookie header once on a trusted connection for portal quota; never paste a dca: CLI token.'
         : wsCap && entry.id === 'opencode-go'
-          ? 'API keys for Go usage; paste an opencode.ai/console Cookie header once for the Zen prepaid wallet.'
+          ? 'API keys for Go usage; paste an opencode.ai/console Cookie header on a key’s row once for its Zen prepaid wallet.'
           : def.how);
     return {
       id: entry.id, label: entry.longLabel, kindLabel, kindIcon: def.icon, count,

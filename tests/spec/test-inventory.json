@@ -3510,7 +3510,8 @@
       "file": "web-dashboard/tests/browser/checks/web-session-paste.check.mjs",
       "kind": "safety",
       "evidence": [
-        "safety"
+        "safety",
+        "HTTP"
       ]
     },
     {

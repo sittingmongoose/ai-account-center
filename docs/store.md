@@ -110,7 +110,7 @@ imports that file.
 | `bar/accounts-connection.json`, native bar preferences and status | read by the Swift and WPF bars; old `bar.json`, `launch.json` and `server.pid` are ignored and left in place |
 | `deployed-build.json` | read by the package `postinstall` gate |
 | `app-updates/*` from the native updaters, `codex-renewal-status.json`, `antigravity-switching/*` | live coordination state shared with agents or other processes; history from them is recorded as events (phase 5), the state files stay |
-| `cache/*`, `account-usage-failover/*`, `claude-desktop-live-cache/*`, `models-dev-registry-cache.json`, `opencode-console-wallet-*.json` | caches with TTLs, rebuilt from their sources; losing one costs a refresh, not history |
+| `cache/*`, `account-usage-failover/*`, `claude-desktop-live-cache/*`, `models-dev-registry-cache.json` | caches with TTLs, rebuilt from their sources; losing one costs a refresh, not history |
 | `logs/current.jsonl`, `logs/archive/*` | diagnostics, already append-only with rotation |
 | share files (`aac-usage/*`, `agent-reports/*`) | the cross-machine interface; the store exports to them and imports from them (section 8) |
 

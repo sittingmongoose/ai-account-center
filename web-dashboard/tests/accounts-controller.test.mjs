@@ -1153,9 +1153,12 @@ test('write-only paste session flow saves Qwen CN, handles OpenCode multi-worksp
   assert.equal(JSON.stringify(h.ctl.state).includes(qwenSecret), false, 'secret never stored in state');
   assert.match(last(h.toasts).title, /Qwen Token Plan session saved/);
 
-  // OpenCode multi-workspace 409 -> picker -> verified save without echoing cookie into state
+  // OpenCode multi-workspace 409 -> picker -> verified save without echoing cookie into state.
+  // The paste opens from the account's own row, so every PUT names that account.
   const ocSecret = 'auth=opencode-secret-fixture-77';
+  const ocId = 'opencode-go:acct:9f2c41d0';
   const oc = harness({
+    data: { schemaVersion: 1, accounts: [{ id: ocId, provider: 'opencode-go' }], providers: [], settings: { hiddenProviders: [], hiddenAccountIds: [], visibilityAvailable: true } },
     routes: {
       'PUT /api/accounts/web-session/opencode-wallet': body => {
         if (!body.workspaceId) {
@@ -1165,15 +1168,19 @@ test('write-only paste session flow saves Qwen CN, handles OpenCode multi-worksp
       },
     },
   });
-  await oc.ctl.handle('paste-session', 'opencode-go');
+  await oc.ctl.handle('paste-session', ocId);
+  assert.equal(oc.ctl.state.flows['opencode-go'].accountId, ocId);
   await oc.ctl.handle('flow-submit', `opencode-go\n${ocSecret}\n`);
   assert.equal(oc.ctl.state.flows['opencode-go'].step, 'choose');
   assert.equal(oc.ctl.state.flows['opencode-go'].choices.length, 2);
+  const firstPut = oc.sent.filter(r => r.method === 'PUT').at(-1);
+  assert.equal(firstPut?.body?.accountId, ocId);
   assert.equal(JSON.stringify(oc.ctl.state).includes(ocSecret), false, 'secret stays out of state during picker');
   await oc.ctl.handle('web-session-pick', 'opencode-go:wrk_2');
   assert.equal(oc.ctl.state.flows['opencode-go'].step, 'done');
   const putReq = oc.sent.filter(r => r.method === 'PUT').at(-1);
   assert.equal(putReq?.body?.workspaceId, 'wrk_2');
+  assert.equal(putReq?.body?.accountId, ocId);
   assert.equal(JSON.stringify(oc.ctl.state).includes(ocSecret), false);
 
   // Muse rejects dca: token locally without hitting the server

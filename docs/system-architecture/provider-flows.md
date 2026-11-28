@@ -150,12 +150,17 @@ app's own `Claude` folder, in any case) is never removed from the dashboard: Rem
 answers 409 `account_protected` whether the host steps are on or off.
 
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
-the existing profile IDs. Qwen Token Plan, OpenCode Zen console wallet and Muse
-Code portal quota use the dashboard's write-only **Paste session** flow. The
-verified cookie header is stored by `aac-files` with owner-only permissions and
-read directly over HTTPS by Rust; no browser extension or native-messaging host
-participates. Expired or missing sessions report `needs_sign_in` and retain only
-an already verified cached reading.
+the existing profile IDs. Qwen Token Plan and Muse Code portal quota use the
+dashboard's write-only **Paste session** flow. Each OpenCode Go account's Zen
+prepaid wallet is pasted per account from that account's own row and rides
+inside the account's card as its wallet balance line; there is no separate
+wallet card. The verified cookie header is stored by `aac-files` with
+owner-only permissions and read directly over HTTPS by Rust; no browser
+extension or native-messaging host participates. Expired or missing Qwen and
+Muse sessions report `needs_sign_in` and retain only an already verified cached
+reading. An OpenCode Go key without a wallet session has no wallet line; a
+failed wallet read keeps the cached balance or shows an unavailable line, and a
+workspace that cannot be matched to the account shows nothing (logged).
 Native companions store dashboard connections as described in the
 [Mac](../../macos-bar/README.md) and [Windows](../../windows-bar/README.md) guides.
 

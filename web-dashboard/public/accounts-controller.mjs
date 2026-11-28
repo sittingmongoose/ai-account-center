@@ -586,7 +586,11 @@ export function createAccountsController(deps) {
       const cookie = String(input || '').trim();
       const problem = webSessionProblem(cookie, flow.surface);
       if (problem) { put({ error: { title: problem, body: '' } }); return; }
-      const body = flow.surface === 'qwen' ? { cookie, region: flow.region || 'intl' } : { cookie };
+      const body = flow.surface === 'qwen'
+        ? { cookie, region: flow.region || 'intl' }
+        : flow.surface === 'opencode-wallet'
+          ? { cookie, accountId: flow.accountId }
+          : { cookie };
       put({ step: 'checking', busy: true, error: null });
       try {
         const { payload } = await call(requests.saveWebSession(flow.surface, body));
@@ -619,12 +623,28 @@ export function createAccountsController(deps) {
     }
   }
   function openPasteSession(value) {
-    const [rawProvider = '', accountId = ''] = String(value ?? '').split(':');
-    const provider = WEB_SESSION_SURFACES[rawProvider] ? rawProvider : providerOf(value);
+    const raw = String(value ?? '');
+    const account = accountOf(raw);
+    const provider = WEB_SESSION_SURFACES[raw] ? raw : account?.provider || providerOf(value);
     const surface = WEB_SESSION_SURFACES[provider];
     if (!surface) return;
     pendingWebSecrets.delete(provider);
-    setFlow(provider, { type: 'web-session', step: 'paste', surface, region: 'intl', accountId: accountId || null });
+    // A provider word opens an unbound paste; a row id binds the session to that account.
+    setFlow(provider, { type: 'web-session', step: 'paste', surface, region: 'intl', accountId: account ? raw : null });
+  }
+  async function removeWallet(accountId) {
+    const account = accountOf(accountId);
+    if (!account) return;
+    const provider = account.provider || providerOf(accountId);
+    const surface = WEB_SESSION_SURFACES[provider];
+    if (!surface) return;
+    try {
+      const { payload } = await call(requests.deleteWebSession(surface, accountId));
+      toast(payload?.deleted ? 'ok' : 'info', `${label(provider)} wallet session removed`, payload?.deleted ? 'The API key is unchanged.' : 'There was no saved session to remove.');
+      void reload();
+    } catch (error) {
+      toast('error', `${label(provider)} wallet session could not be removed`, errorText(error, { provider }));
+    }
   }
   function setWebSessionRegion(value) {
     const [provider = '', region = ''] = String(value ?? '').split(':');
@@ -646,7 +666,9 @@ export function createAccountsController(deps) {
       put({ step: 'paste', busy: false, error: { title: 'Paste the session cookie again.', body: 'The pasted cookie was cleared for safety.' } });
       return;
     }
-    const body = flow.choiceKind === 'team' ? { cookie, teamId: choiceId } : { cookie, workspaceId: choiceId };
+    const body = flow.choiceKind === 'team'
+      ? { cookie, teamId: choiceId }
+      : { cookie, workspaceId: choiceId, ...(flow.surface === 'opencode-wallet' ? { accountId: flow.accountId } : {}) };
     put({ step: 'checking', busy: true, error: null });
     try {
       const { payload } = await call(requests.saveWebSession(flow.surface, body));
@@ -1086,6 +1108,7 @@ export function createAccountsController(deps) {
       case 'add-key': if (KEY_PROVIDERS.includes(v)) addKey(v); return true;
       case 'replace-key': { const p = providerOf(v); if (KEY_PROVIDERS.includes(p)) setFlow(p, { type: 'key-replace', step: 'key', accountId: v }); return true; }
       case 'paste-session': openPasteSession(v); return true;
+      case 'remove-wallet': await removeWallet(v); return true;
       case 'web-session-region': setWebSessionRegion(v); return true;
       case 'web-session-pick': await pickWebSessionChoice(v); return true;
       case 'signin-again': case 'signin': await signInAgain(v); return true;

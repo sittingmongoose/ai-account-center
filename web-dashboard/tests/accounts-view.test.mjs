@@ -712,14 +712,10 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       provider: 'opencode-go',
       email: 'k@example.test',
       label: 'OpenCode',
-      capabilities: {},
-    }),
-    account({
-      id: 'plan-opencode-go-console-1',
-      provider: 'opencode-go',
-      email: 'w@example.test',
-      label: 'Wallet',
-      message: 'Console workspace',
+      windows: [
+        { key: 'console-fiveHour', label: '5 hours', kind: 'rate_limit', usedPercent: 20, remainingPercent: 80, resetAt: at(120), windowMinutes: 300 },
+        { key: 'zen-balance', label: 'Wallet', kind: 'balance', remaining: 8.25, unit: 'USD' },
+      ],
       capabilities: {},
     }),
     account({
@@ -748,9 +744,6 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       credential: { kind: 'discover' },
       actions: { replaceKey: false, signInAgain: false, recheck: true },
     }),
-    reg('plan-opencode-go-console-1', 'opencode-go', {
-      actions: { signInAgain: true, remove: true },
-    }),
     reg('qwen:usage', 'qwen', { credential: { kind: 'discover' }, actions: { recheck: true } }),
     reg('cursor:usage', 'cursor', {
       credential: { kind: 'discover' },
@@ -778,7 +771,9 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       ['remove', true],
     ]
   );
-  // the discover entry stands for the stored keys no account names (N2): Re-check with Remove
+  // the discover entry stands for the stored keys no account names (N2): Re-check with Remove.
+  // Its wallet controls are per-row too: this fixture advertises no webSession
+  // capability, so the row carries no wallet actions.
   const found = row(vm, 'opencode-go:usage');
   assert.equal(found.src, 'Stored keys no account names');
   assert.deepEqual(
@@ -788,16 +783,6 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       ['remove', 'Remove', true],
     ]
   );
-  // the console wallet signs in through the browser extension; its Remove deletes the stored source
-  const wallet = row(vm, 'plan-opencode-go-console-1');
-  assert.deepEqual(
-    wallet.actions.map((a) => [a.act, a.label, a.enabled, a.coming]),
-    [
-      ['signin', 'Sign in again', true, false],
-      ['remove', 'Remove', true, false],
-    ]
-  );
-  assert.equal(wallet.src, 'Console session in a browser');
   // Qwen is a browser session, never an API key (CONTRACT-registry-lifecycle 7)
   assert.equal(provider(vm, 'qwen').kindLabel, 'Console session by browser extension');
   assert.deepEqual(
@@ -2763,14 +2748,17 @@ test('webSession capability renders write-only paste controls, masked password f
     windows: [{ key: '5h', label: '5 hours', usedPercent: 31, remainingPercent: 69 }],
   });
   const webWallet = account({
-    id: 'plan-opencode-go-console-web-0123456789ab',
+    id: 'opencode-go:acct:9f2c41d0',
     provider: 'opencode-go',
-    label: 'OpenCode console wallet',
-    source: 'Pasted OpenCode console session',
+    label: 'Key 9f2c41d0',
+    source: 'Account on Ubuntu',
     status: 'ok',
     sampledAt: sampled,
     fetchedAt: sampled,
-    windows: [{ key: 'zen-balance', label: 'Zen balance', kind: 'balance', remaining: 14.5, unit: 'USD' }],
+    windows: [
+      { key: 'console-fiveHour', label: '5 hours', kind: 'rate_limit', usedPercent: 20, remainingPercent: 80, resetAt: at(120), windowMinutes: 300 },
+      { key: 'zen-balance', label: 'Wallet', kind: 'balance', remaining: 14.5, unit: 'USD' },
+    ],
   });
   const museAcct = account({
     id: 'muse:usage',
@@ -2793,7 +2781,7 @@ test('webSession capability renders write-only paste controls, masked password f
       now,
       registry: registry([
         reg('qwen:usage', 'qwen', { actions: { signInAgain: true, remove: true, recheck: true } }),
-        reg('plan-opencode-go-console-web-0123456789ab', 'opencode-go', { actions: { signInAgain: true, remove: true, recheck: true } }),
+        reg('opencode-go:acct:9f2c41d0', 'opencode-go', { credential: { kind: 'aac-key', last4: 'x7Qa', storedOn: 'ubuntu' }, actions: { replaceKey: true, remove: true, recheck: true } }),
         reg('muse:usage', 'muse', { actions: { signInAgain: false, remove: true, recheck: true } }),
       ]),
     }
@@ -2805,10 +2793,19 @@ test('webSession capability renders write-only paste controls, masked password f
     ['paste-session', 'Reconnect session', true],
     ['remove', 'Remove', true],
   ]);
-  const walletRow = row(vm, 'plan-opencode-go-console-web-0123456789ab');
-  assert.equal(walletRow.src, 'Pasted console session');
-  assert.equal(walletRow.actions[0].act, 'paste-session');
-  assert.ok(provider(vm, 'opencode-go').foot.some(a => a.act === 'paste-session'));
+  // The wallet balance rides inside the OpenCode Go key's own card, and its
+  // Paste / Remove controls live on that row, never in the provider footer.
+  const walletRow = row(vm, 'opencode-go:acct:9f2c41d0');
+  assert.equal(walletRow.src, 'API key ending x7Qa');
+  assert.deepEqual(walletRow.actions.map(a => [a.act, a.label, a.enabled]), [
+    ['replace-key', 'Replace key', true],
+    ['remove', 'Remove', true],
+    ['paste-session', 'Reconnect wallet', true],
+    ['remove-wallet', 'Remove wallet session', true],
+  ]);
+  assert.ok(walletRow.actions[2].value === 'opencode-go:acct:9f2c41d0');
+  assert.ok(provider(vm, 'opencode-go').foot.every(a => a.act !== 'paste-session'));
+  assert.ok(provider(vm, 'opencode-go').foot.some(a => a.act === 'add-key'));
   const museRow = row(vm, 'muse:usage');
   assert.equal(museRow.src, 'Pasted portal session');
   assert.equal(museRow.actions[0].act, 'paste-session');

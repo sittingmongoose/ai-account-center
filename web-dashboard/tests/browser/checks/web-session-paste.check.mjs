@@ -2,8 +2,21 @@
 // masked password input clears on submit, never echoes secrets into DOM or state, handles
 // Qwen intl/cn region switch, OpenCode multi-workspace picker, and honest "Needs sign-in · cached"
 // status on desktop (1440px) and phone (390px). Synthetic fixtures only.
+import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 
 const at = (minutes) => new Date(Date.parse('2026-11-26T15:00:00Z') + minutes * 60_000).toISOString();
+const OC_CARD = '.hcard[aria-label^="opencode.go@example.invalid"]';
+
+function withWalletDashboard() {
+	const data = homeAccounts();
+	const now = Date.now();
+	const oc = data.accounts.find((a) => a.provider === 'opencode-go');
+	oc.windows = [
+		{ key: 'five_hour', label: 'Five-hour usage', kind: 'rate_limit', usedPercent: 41, remainingPercent: 59, resetAt: new Date(now + 120 * 60_000).toISOString(), windowMinutes: 300, used: null, limit: null, unit: null },
+		{ key: 'zen-balance', label: 'Wallet', kind: 'balance', usedPercent: null, remainingPercent: null, resetAt: null, windowMinutes: null, used: null, limit: null, remaining: 18.25, unit: 'USD' },
+	];
+	return data;
+}
 
 const providerMeta = (id, label, longLabel, order, extraCaps = {}) => ({
 	id,
@@ -61,23 +74,51 @@ const FIXTURE = {
 			lifecycle: { state: 'ready', jobId: null },
 		},
 		{
-			id: 'plan-opencode-go-console-web-0123456789ab',
+			id: 'opencode-go:acct:9f2c41d0',
 			provider: 'opencode-go',
 			providerLabel: 'OpenCode Go',
-			label: 'OpenCode console wallet',
+			label: 'Key 9f2c41d0',
 			email: null,
 			plan: 'Go',
 			platform: 'ubuntu',
 			host: 'ubuntu',
-			source: 'Pasted OpenCode console session',
+			source: 'Account on Ubuntu',
 			status: 'ok',
-			message: 'Console workspace; API-key account identity has not been linked.',
+			message: null,
 			fetchedAt: at(-2),
 			sampledAt: at(-2),
 			isActive: false,
 			hidden: false,
 			trayHidden: false,
-			windows: [{ key: 'zen-balance', label: 'Zen balance', kind: 'balance', remaining: 18.25, unit: 'USD' }],
+			windows: [
+				{ key: 'console-fiveHour', label: '5 hours', kind: 'rate_limit', usedPercent: 41, remainingPercent: 59, resetAt: at(110), windowMinutes: 300 },
+				{ key: 'console-week', label: 'Weekly', kind: 'rate_limit', usedPercent: 12, remainingPercent: 88, resetAt: at(60 * 24 * 3), windowMinutes: 10080 },
+				{ key: 'zen-balance', label: 'Wallet', kind: 'balance', remaining: 18.25, unit: 'USD' },
+			],
+			capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
+			lifecycle: { state: 'ready', jobId: null },
+		},
+		{
+			id: 'opencode-go:acct:2e034ec2',
+			provider: 'opencode-go',
+			providerLabel: 'OpenCode Go',
+			label: 'Key 2e034ec2',
+			email: null,
+			plan: 'Go',
+			platform: 'ubuntu',
+			host: 'ubuntu',
+			source: 'Account on Ubuntu',
+			status: 'ok',
+			message: null,
+			fetchedAt: at(-2),
+			sampledAt: at(-2),
+			isActive: false,
+			hidden: false,
+			trayHidden: false,
+			windows: [
+				{ key: 'console-fiveHour', label: '5 hours', kind: 'rate_limit', usedPercent: 8, remainingPercent: 92, resetAt: at(140), windowMinutes: 300 },
+				{ key: 'console-week', label: 'Weekly', kind: 'rate_limit', usedPercent: 3, remainingPercent: 97, resetAt: at(60 * 24 * 4), windowMinutes: 10080 },
+			],
 			capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
 			lifecycle: { state: 'ready', jobId: null },
 		},
@@ -117,7 +158,8 @@ const REGISTRY = {
 	providers: FIXTURE.providers,
 	accounts: [
 		{ id: 'qwen:usage', provider: 'qwen', label: 'Qwen Token Plan', email: null, platform: 'ubuntu', credential: { kind: 'discover' }, hidden: false, trayHidden: false, lifecycle: { state: 'ready', jobId: null }, actions: { signInAgain: true, replaceKey: false, remove: true, open: [], recheck: true }, removeRefusal: null },
-		{ id: 'plan-opencode-go-console-web-0123456789ab', provider: 'opencode-go', label: 'OpenCode console wallet', email: null, platform: 'ubuntu', credential: null, hidden: false, trayHidden: false, lifecycle: { state: 'ready', jobId: null }, actions: { signInAgain: true, replaceKey: false, remove: true, open: [], recheck: true }, removeRefusal: null },
+		{ id: 'opencode-go:acct:9f2c41d0', provider: 'opencode-go', label: 'Key 9f2c41d0', email: null, platform: 'ubuntu', credential: { kind: 'aac-key', last4: 'x7Qa', storedOn: 'ubuntu' }, hidden: false, trayHidden: false, lifecycle: { state: 'ready', jobId: null }, actions: { signInAgain: false, replaceKey: true, remove: true, open: [], recheck: true }, removeRefusal: null },
+		{ id: 'opencode-go:acct:2e034ec2', provider: 'opencode-go', label: 'Key 2e034ec2', email: null, platform: 'ubuntu', credential: { kind: 'aac-key', last4: 'm3Pz', storedOn: 'ubuntu' }, hidden: false, trayHidden: false, lifecycle: { state: 'ready', jobId: null }, actions: { signInAgain: false, replaceKey: true, remove: true, open: [], recheck: true }, removeRefusal: null },
 		{ id: 'muse:usage', provider: 'muse', label: 'Muse Code', email: 'dev@example.invalid', platform: 'ubuntu', credential: { kind: 'discover' }, hidden: false, trayHidden: false, lifecycle: { state: 'ready', jobId: null }, actions: { signInAgain: false, replaceKey: false, remove: true, open: [], recheck: true }, removeRefusal: null },
 	],
 	jobs: [],
@@ -130,11 +172,21 @@ async function openStubbedAccounts(t) {
 	await t.app.noResets();
 	await t.app.open({ page: 'accounts' });
 	await t.until(
-		'Accounts renders Qwen, OpenCode wallet, and Muse rows',
-		() => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]').length >= 3,
+		'Accounts renders Qwen, two OpenCode Go key rows, and Muse rows',
+		() => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]').length >= 4,
 		null,
 		{ timeout: 45000, hard: true },
 	);
+	const standalone = await t.page.evaluate(() => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row^="plan-opencode-go-console"]').length);
+	await t.check('no standalone console wallet row exists anywhere', standalone === 0, `found ${standalone}`);
+	await t.check(
+		'the key with a wallet session offers Remove wallet session',
+		await t.page.evaluate(() => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row="opencode-go:acct:9f2c41d0"] [data-probe="remove-wallet:opencode-go:acct:9f2c41d0"]').length > 0),
+		'remove-wallet probe missing');
+	await t.check(
+		'the key without a session offers no Remove wallet session',
+		await t.page.evaluate(() => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row="opencode-go:acct:2e034ec2"] [data-probe^="remove-wallet:"]').length === 0),
+		'remove-wallet probe present');
 }
 
 export const tests = {
@@ -221,9 +273,9 @@ export const tests = {
 		await t.check('Qwen PUT sent region=cn', sent[0]?.body?.region === 'cn', JSON.stringify(sent[0]));
 		await t.audit('web-session paste desktop 1440');
 
-		// Open OpenCode wallet paste flow -> trigger intentional 409 workspace picker -> pick Team Zen -> verify save
+		// Open OpenCode wallet paste flow from the account's own row -> 409 workspace picker -> pick Team Zen
 		const ocSecret = 'auth=fixture-secret-opencode-777';
-		await t.page.click('.route:not([hidden]) [data-probe="paste-session:opencode-go"]');
+		await t.page.click('.route:not([hidden]) .acc-item[data-row="opencode-go:acct:9f2c41d0"] [data-probe="paste-session:opencode-go:acct:9f2c41d0"]');
 		await t.page.waitForSelector('.route:not([hidden]) [data-probe="flow-input:opencode-go"]', { timeout: 10000 });
 		await t.page.fill('.route:not([hidden]) [data-probe="flow-input:opencode-go"]', ocSecret);
 		await t.page.click('.route:not([hidden]) [data-probe="flow:opencode-go"] [data-probe="flow-submit:opencode-go"]');
@@ -233,6 +285,8 @@ export const tests = {
 		await t.until('OpenCode workspace saved', () => /wrk_team/.test(document.querySelector('.route:not([hidden]) [data-probe="flow:opencode-go"]')?.textContent || ''), null, { timeout: 10000, hard: true });
 		const ocLeaked = await t.page.evaluate((s) => document.body.innerText.includes(s) || JSON.stringify(window.__aacLastAccounts || {}).includes(s), ocSecret);
 		await t.check('OpenCode cookie is never echoed after picker save', !ocLeaked, 'secret leaked');
+		const ocPuts = sent.filter((s) => String(s.url).endsWith('/opencode-wallet'));
+		await t.check('OpenCode PUTs bind the wallet session to this account', ocPuts.length === 2 && ocPuts.every((s) => s.body.accountId === 'opencode-go:acct:9f2c41d0'), JSON.stringify(ocPuts.map((s) => s.body)));
 		const noOverflow = await t.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 		await t.check('OpenCode workspace picker causes no sideways overflow', noOverflow, 'scrollWidth exceeded innerWidth');
 		await t.noConsoleErrors('only the intentional 409 workspace picker response reached the console', {
@@ -247,5 +301,29 @@ export const tests = {
 		await t.page.waitForSelector('.route:not([hidden]) [data-probe="flow-input:qwen"]', { timeout: 10000 });
 		await t.crop('web-session-paste-phone-390', '.route:not([hidden]) [data-probe="flow:qwen"]', 'phone 390: Qwen write-only paste flow fits without clipping');
 		await t.audit('web-session paste phone 390');
+	},
+
+	// The deliverable screenshots (402x874): one OpenCode Go card with its wallet
+	// balance line inside the card, and the same card with no console session.
+	async 'opencode-go card shows the per-account Wallet line at phone 402x874'(t) {
+		await t.newContext({ viewport: { width: 402, height: 874 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+		await t.app.signIn();
+		await t.app.stub('/api/accounts/dashboard', withWalletDashboard());
+		await t.app.stub('/api/claude/desktop-profiles', homeProfiles());
+		await t.goto('/app/home', { settleMs: 300 });
+		await t.until('Home renders the OpenCode Go card', () => document.querySelectorAll('.hcard').length >= 6, null, { timeout: 60000, hard: true });
+		await t.crop('opencode-go-card-with-wallet-phone-402', OC_CARD, 'phone 402: the OpenCode Go card carries the Wallet $18.25 balance beside its 5-hour usage window');
+		const withText = await t.page.evaluate(() => document.querySelector('.hcard[aria-label^="opencode.go@example.invalid"]')?.textContent || '');
+		await t.check('wallet balance line renders inside the OpenCode Go card', /Wallet/.test(withText) && withText.includes('18.25'), withText.slice(0, 160));
+		const noOverflow = await t.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+		await t.check('OpenCode Go card with a wallet causes no sideways overflow at 402', noOverflow, 'scrollWidth exceeded innerWidth');
+		await t.audit('opencode-go wallet card phone 402');
+
+		await t.app.stub('/api/accounts/dashboard', homeAccounts());
+		await t.goto('/app/home', { settleMs: 300 });
+		await t.until('Home re-renders without the wallet', () => document.querySelectorAll('.hcard').length >= 6, null, { timeout: 60000, hard: true });
+		await t.crop('opencode-go-card-no-wallet-phone-402', OC_CARD, 'phone 402: the same OpenCode Go card with no console session shows no Wallet line');
+		const noText = await t.page.evaluate(() => document.querySelector('.hcard[aria-label^="opencode.go@example.invalid"]')?.textContent || '');
+		await t.check('no Wallet line without a console session', !/Wallet/.test(noText), noText.slice(0, 160));
 	},
 };
