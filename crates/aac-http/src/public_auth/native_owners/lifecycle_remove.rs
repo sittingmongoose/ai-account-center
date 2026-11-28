@@ -64,7 +64,11 @@ impl Refusal {
 /// stored key no account names (N2). Other entries keep the generic review.
 fn remove_effects(source: &Source, computer: &str) -> Vec<String> {
     if key_id(source).is_some() {
-        return vec![format!("The stored key is deleted from {computer}.")];
+        let mut effects = vec![format!("The stored key is deleted from {computer}.")];
+        if source.provider == "opencode-go" {
+            effects.push("Its pasted wallet session, if any, is deleted.".to_owned());
+        }
+        return effects;
     }
     if source.provider == "opencode-go" && matches!(source.credential, Credential::Discover) {
         return vec![
@@ -384,23 +388,6 @@ async fn remove(native: &NativeOwners, source: &Source) -> Result<(), Refusal> {
     if key.is_some() && !KeyStore::configured(source) {
         return Err(Refusal::Failed);
     }
-    // A removed account takes its pasted console session with it. Discover entries
-    // keep the pinned rows' sessions: those belong to rows that still exist.
-    if source.provider == "opencode-go" && key.is_some() {
-        aac_files::web_session::delete_for_account_with_owners(
-            &native.owners,
-            native.agents.root(),
-            aac_files::web_session::Surface::OpencodeWallet,
-            &source.id,
-        )
-        .map_err(|_| Refusal::Failed)?;
-        if let Some(usage) = &native.usage {
-            usage.producer.clear_web_session_cache(
-                aac_files::web_session::Surface::OpencodeWallet,
-                Some(source.id.as_str()),
-            );
-        }
-    }
     let store = KeyStore { native, source };
     let root = native.agents.root();
     // Keep the same registry lease for the mutation and its compensation.
@@ -432,13 +419,163 @@ async fn remove(native: &NativeOwners, source: &Source) -> Result<(), Refusal> {
         }
     })
     .await?;
+    // A removed account takes its pasted console session with it, only once the removal has
+    // committed: a refused or compensated removal keeps the account and its session. Discover
+    // entries keep the pinned rows' sessions: those belong to rows that still exist.
+    if source.provider == "opencode-go" && key.is_some() {
+        forget_wallet_session(native, &source.id);
+    }
     Ok(())
 }
 
+/// Delete one removed account's pasted wallet session. The account is already gone, so a
+/// failed delete does not turn the removal into a failure; it is logged plainly.
+fn forget_wallet_session(native: &NativeOwners, account: &str) {
+    use aac_files::web_session::{Surface, delete_for_account_with_owners};
+    if delete_for_account_with_owners(
+        &native.owners,
+        native.agents.root(),
+        Surface::OpencodeWallet,
+        account,
+    )
+    .is_err()
+    {
+        tracing::warn!(
+            account,
+            "The removed account's wallet session could not be deleted"
+        );
+    }
+    if let Some(usage) = &native.usage {
+        usage
+            .producer
+            .clear_web_session_cache(Surface::OpencodeWallet, Some(account));
+    }
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
-    use super::remove_effects;
-    use crate::account_usage::sources::{Credential, Source};
+    use super::{NativeOwners, Refusal, remove, remove_effects};
+    use crate::account_usage::sources::{self, Credential, Source};
+    use aac_files::web_session::{self, PasteOptions, Surface};
+    use std::path::Path;
+
+    async fn start_native(root: &Path) -> (NativeOwners, super::super::Jobs) {
+        use crate::public_auth::{DashboardEvents, HubCache};
+        NativeOwners::start(
+            root.to_path_buf(),
+            super::super::Groups {
+                writes: true,
+                lifecycle: true,
+                ..Default::default()
+            },
+            HubCache::default(),
+            DashboardEvents(tokio::sync::broadcast::channel(4).0),
+            Default::default(),
+            std::sync::Arc::new(crate::agent_transport::Agents::with_default(
+                root.to_path_buf(),
+                true,
+            )),
+        )
+        .unwrap()
+    }
+
+    fn named_key(platform: &str, ssh_host: Option<&str>) -> Source {
+        Source {
+            id: "opencode-go:acct:52f3251b".to_owned(),
+            provider: "opencode-go".to_owned(),
+            platform: platform.to_owned(),
+            ssh_host: ssh_host.map(str::to_owned),
+            label: Some("Work key".to_owned()),
+            credential: Credential::AacKey {
+                key_id: "52f3251b".to_owned(),
+            },
+            created_at: Some("2026-11-20T00:00:00.000Z".to_owned()),
+            created_by: Some("dashboard".to_owned()),
+        }
+    }
+
+    fn save_wallet(native: &NativeOwners, root: &Path, account: &str) {
+        let mut parsed = web_session::parse_pasted(
+            Surface::OpencodeWallet,
+            "auth=fixture-wallet-cookie",
+            &PasteOptions {
+                workspace_id: Some("wrk_fixture123".into()),
+                ..Default::default()
+            },
+            "2026-11-26T12:00:00Z",
+        )
+        .unwrap();
+        parsed.meta.account_id = Some(account.to_owned());
+        web_session::save_with_owners(&native.owners, root, Surface::OpencodeWallet, &parsed)
+            .unwrap();
+    }
+
+    fn wallet_kept(root: &Path, account: &str) -> bool {
+        web_session::load_for_account(root, Surface::OpencodeWallet, account)
+            .unwrap()
+            .is_some()
+    }
+
+    fn listed(root: &Path, id: &str) -> bool {
+        match sources::read_registry(root).unwrap() {
+            sources::Sources::V2(rows) => rows.iter().any(|row| row.id == id),
+            sources::Sources::Legacy => false,
+        }
+    }
+
+    /// W1: a removal that does not commit (the key delete fails and the registry is put back,
+    /// or the entry changed since the review) keeps the account's wallet session; a removal
+    /// that commits deletes it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_removal_keeps_the_wallet_session_and_a_committed_one_deletes_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let (native, jobs) = start_native(&root).await;
+        let account = "opencode-go:acct:52f3251b";
+
+        // The key lives on a Mac no agent answers for: Discard fails, Publish puts it back.
+        let remote = named_key("mac", Some("fixture-mac"));
+        let (writer, _) = super::claim_registry_async(&root, &native.owners)
+            .await
+            .unwrap();
+        super::save_registry(&writer, std::slice::from_ref(&remote)).unwrap();
+        drop(writer);
+        save_wallet(&native, &root, account);
+        assert!(matches!(
+            remove(&native, &remote).await,
+            Err(Refusal::Failed)
+        ));
+        assert!(
+            listed(&root, account),
+            "the compensated removal keeps the account"
+        );
+        assert!(wallet_kept(&root, account), "and its wallet session");
+
+        // The entry changed since the review: the removal is refused, the session stays.
+        let reviewed = named_key("ubuntu", None);
+        assert!(matches!(
+            remove(&native, &reviewed).await,
+            Err(Refusal::Stale)
+        ));
+        assert!(wallet_kept(&root, account));
+
+        // A committed removal takes the session with it.
+        let (writer, _) = super::claim_registry_async(&root, &native.owners)
+            .await
+            .unwrap();
+        super::save_registry(&writer, std::slice::from_ref(&reviewed)).unwrap();
+        drop(writer);
+        remove(&native, &reviewed).await.unwrap();
+        assert!(!listed(&root, account));
+        assert!(!wallet_kept(&root, account));
+        jobs.stop().await;
+    }
 
     fn source(provider: &str, credential: Credential) -> Source {
         Source {
@@ -474,7 +611,10 @@ mod tests {
         );
         assert_eq!(
             remove_effects(&named, "Ubuntu"),
-            ["The stored key is deleted from Ubuntu."]
+            [
+                "The stored key is deleted from Ubuntu.",
+                "Its pasted wallet session, if any, is deleted.",
+            ]
         );
         // A discover entry of a provider that does not expand stored keys keeps the generic review.
         let zai = source("zai", Credential::Discover);

@@ -55,7 +55,10 @@ pub(super) async fn handle(
     };
     let label = match body.get("label").filter(|_| body.len() == 1) {
         Some(Value::Null) => None,
-        Some(Value::String(label)) if sources::valid_label(label) => Some(label.to_owned()),
+        Some(Value::String(label)) => match route_label(label) {
+            Ok(label) => Some(label),
+            Err(reply) => return reply,
+        },
         _ => return lifecycle::invalid_action_body(),
     };
     if !public_account_id(&json!(id)) {
@@ -165,6 +168,25 @@ pub(super) async fn handle(
         Ok(Err(SaveError::Missing)) => unknown_account(),
         _ => error(500, "write_failed", "The change could not be saved safely."),
     }
+}
+
+/// The name as every kind stores it: trimmed like the Accounts field, then the shared label
+/// rule. A name the Codex registry cannot carry exactly (a non-breaking space, U+FFFE/U+FFFF)
+/// is refused for every kind, before anything is written, so one name never renames some
+/// kinds and fails on others.
+fn route_label(label: &str) -> Result<String, Reply> {
+    let label = label.trim_matches(crate::claude_account_store::is_js_space);
+    if !sources::valid_label(label) {
+        return Err(lifecycle::invalid_action_body());
+    }
+    if codex_registry::scalar(label).is_none() {
+        return Err(error(
+            400,
+            "invalid_label",
+            "That name has a character that cannot be saved, such as a non-breaking space. Use ordinary spaces.",
+        ));
+    }
+    Ok(label.to_owned())
 }
 
 fn unknown_account() -> Reply {
@@ -931,6 +953,54 @@ mod tests {
             meta.iter()
                 .any(|(k, v)| k == "label" && *v == Field::Str("Second account".into())),
             "a refused request changes nothing"
+        );
+
+        // R4: a name the Codex registry cannot carry is refused with the same clear 400 for
+        // every kind, and nothing is written.
+        for id in ["claude:work", "codex:two", "antigravity:profile:alpha"] {
+            let (status, reply) = answer(&native, id, r#"{"label":"Work\u00a0PC"}"#).await;
+            assert_eq!(
+                (status, reply["code"].as_str()),
+                (400, Some("invalid_label")),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            claude_document(&root, "claude-pending").unwrap()["profiles"][0]["label"],
+            "Work Claude"
+        );
+        assert_eq!(
+            runtime::read_state(&root)
+                .unwrap()
+                .profile("alpha")
+                .unwrap()
+                .label
+                .as_deref(),
+            Some("Work Gemini")
+        );
+
+        // R3: the route trims like the Accounts field, and a name of spaces only (any JS
+        // space, a non-breaking one too) is refused.
+        let (status, body) = answer(&native, "codex:two", r#"{"label":"  Work  "}"#).await;
+        assert_eq!((status, &body["account"]["label"]), (200, &json!("Work")));
+        let meta = codex_registry::read(&codex)
+            .unwrap()
+            .get("two")
+            .unwrap()
+            .clone();
+        assert!(
+            meta.iter()
+                .any(|(k, v)| k == "label" && *v == Field::Str("Work".into()))
+        );
+        let (status, body) = answer(&native, "claude:work", r#"{"label":"\tWork Claude "}"#).await;
+        assert_eq!(
+            (status, &body["account"]["label"]),
+            (200, &json!("Work Claude"))
+        );
+        let (status, reply) = answer(&native, "codex:two", r#"{"label":" \u00a0 "}"#).await;
+        assert_eq!(
+            (status, reply["code"].as_str()),
+            (400, Some("invalid_body"))
         );
     }
 }

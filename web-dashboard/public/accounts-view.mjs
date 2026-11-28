@@ -75,6 +75,8 @@ const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
 const clockFmt = lazyFormat({ hour: 'numeric', minute: '2-digit' });
 const article = word => /^[aeiou]/i.test(word) ? 'an' : 'a';
 const hasOpenCodeWallet = account => Array.isArray(account?.windows) && account.windows.some(w => w?.key === 'zen-balance');
+/** A pasted console session is stored for this account, even when its card shows no Wallet line (another workspace, not prepaid). */
+const hasOpenCodeWalletSession = account => hasOpenCodeWallet(account) || account?.capabilities?.openCodeWalletSession === true;
 const providerLabel = id => PROVIDER_LABELS[id] || PROVIDER_REGISTRY.find(row => row.id === id)?.label || id;
 
 // ---------------------------------------------------------------- actions
@@ -133,7 +135,7 @@ function openCodeWalletActions(provider, account, entry) {
   if (provider !== 'opencode-go') return [];
   const ws = webSessionGate(entry, provider);
   if (!ws) return [];
-  const pasted = hasOpenCodeWallet(account);
+  const pasted = hasOpenCodeWalletSession(account);
   const fields = { act: 'paste-session', value: account.id, label: pasted ? 'Reconnect wallet' : 'Paste wallet session', icon: 'key', style: pasted ? 'accent-line' : 'ghost', probe: `paste-session:${account.id}` };
   const list = [gated(fields, ws, 'Paste an opencode.ai/console Cookie header once on a trusted connection for Zen prepaid wallet balance; never shown again.')];
   if (pasted) list.push(action({ act: 'remove-wallet', value: account.id, label: 'Remove wallet session', icon: 'trash', style: 'ghost', probe: `remove-wallet:${account.id}`, enabled: true, tip: 'Remove this account’s pasted console session. The API key is not changed.' }));
@@ -1208,7 +1210,7 @@ export function accountsViewModel(data, ctx = {}) {
       return {
         id: account.id, provider: entry.id, email, meta, srcInline: src, status, sampled, sampledTip, src, srcSub,
         label: text(account.label),
-        canRename: entry.id === 'claude' || entry.id === 'codex' || !!reg || (entry.id === 'antigravity' && !!text(account.capabilities?.antigravityProfileId)),
+        canRename: (entry.id === 'claude' && account.id === `claude:${text(account.capabilities?.claudeProfileId)}` && !!text(account.capabilities?.claudeProfileId)) || entry.id === 'codex' || !!reg || (entry.id === 'antigravity' && !!text(account.capabilities?.antigravityProfileId)),
         profile: homeRow?.profile || '',
         actions: rowActions(entry.id, account, homeRow, c),
         line: lineView(account.id, email, line),

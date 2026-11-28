@@ -259,10 +259,12 @@ pub(super) fn claude(
     if id.is_some() && profile["windows"].is_object() {
         launchers.push("windows");
     }
+    // The account id stays the profile id (or the email of a profile without one), so a
+    // rename never moves its visibility, history or export keys; the label is display only.
     let fallback = id.unwrap_or(&email);
     let label = profile["label"]
         .as_str()
-        .filter(|label| !label.is_empty())
+        .filter(|label| super::sources::valid_label(label))
         .unwrap_or(fallback);
     let place = if desktop == Desktop::Mac {
         "Mac"
@@ -270,7 +272,7 @@ pub(super) fn claude(
         "Windows"
     };
     let mut row = json!({
-        "id":format!("claude:{label}"),"provider":"claude","providerLabel":"Claude","label":label,
+        "id":format!("claude:{fallback}"),"provider":"claude","providerLabel":"Claude","label":label,
         "email":email,"plan":if live { display_text(Some(&raw["plan"]),80) } else {None},
         "platform":desktop.word(),"source":if live && raw.get("profileId").is_none() {
             "Verified quota on Windows".to_owned()
@@ -437,5 +439,34 @@ mod tests {
         assert_eq!(label("zai"), "Z.ai coding plan");
         assert_eq!(label("opencode-go"), "OpenCode Go");
         assert_eq!(label("retired-provider"), "retired-provider");
+    }
+
+    /// R1: the Claude row id never follows the display label; an unnamed profile keeps the
+    /// exact id it had before labels were read (`claude:<id>`, else `claude:<email>`).
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_claude_row_id_stays_the_profile_id_whatever_its_label() {
+        let launcher = json!({"launcherName":"Claude","canOpen":true});
+        let named =
+            json!({"id":"work","email":"w@example.com","label":"Work Claude","mac":launcher});
+        let row = claude(&named, Desktop::Mac, None, None).unwrap();
+        assert_eq!(row["id"], "claude:work");
+        assert_eq!(row["label"], "Work Claude");
+        let unnamed = json!({"id":"work","email":"w@example.com","mac":launcher});
+        let row = claude(&unnamed, Desktop::Mac, None, None).unwrap();
+        assert_eq!(
+            (row["id"].clone(), row["label"].clone()),
+            (json!("claude:work"), json!("work"))
+        );
+        let no_id = json!({"email":"w@example.com","label":"Home","mac":launcher});
+        let row = claude(&no_id, Desktop::Mac, None, None).unwrap();
+        assert_eq!(row["id"], "claude:w@example.com");
+        assert_eq!(row["label"], "Home");
+        // A stored label the rename route would refuse is not shown.
+        let blank = json!({"id":"work","email":"w@example.com","label":"   ","mac":launcher});
+        assert_eq!(
+            claude(&blank, Desktop::Mac, None, None).unwrap()["label"],
+            "work"
+        );
     }
 }

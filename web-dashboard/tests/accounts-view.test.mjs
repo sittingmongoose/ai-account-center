@@ -2872,3 +2872,39 @@ test('every row carries its label, and the rename pencil is offered only where t
   assert.equal(row(regOnly, 'zai:acct:2').label, 'Second');
   assert.equal(row(regOnly, 'zai:acct:2').canRename, true);
 });
+
+test('the rename pencil is not offered on a Claude row the rename route cannot find (no profile id)', () => {
+  // A default-folder Claude profile has no id: its row id falls back to the email and the
+  // route (which looks the profile up by id) would answer 404 on every save.
+  const vm = accountsViewModel(
+    data([
+      claude('work'),
+      account({ id: 'claude:solo@example.test', provider: 'claude', providerLabel: 'Claude', label: 'solo@example.test', email: 'solo@example.test', platform: 'mac', capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: ['mac'] } }),
+    ], { providers: providers() }),
+    { now },
+  );
+  assert.equal(row(vm, 'claude:work').canRename, true);
+  assert.equal(row(vm, 'claude:solo@example.test').canRename, false);
+});
+
+test('a stored wallet session whose card shows no Wallet line can still be reconnected or removed', () => {
+  const wsProviders = providers({ 'opencode-go': { capabilities: { webSession: true, webSessionReason: null } } });
+  const key = account({
+    id: 'opencode-go:acct:9f2c41d0', provider: 'opencode-go', providerLabel: 'OpenCode Go', email: null, label: 'Key',
+    source: 'API key', status: 'ok', sampledAt: at(0), fetchedAt: at(0),
+    windows: [{ key: 'five_hour', label: '5-hour limit', usedPercent: 10, remainingPercent: 90 }],
+    capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [], openCodeWalletSession: true },
+  });
+  const reg = { accounts: [{ id: 'opencode-go:acct:9f2c41d0', provider: 'opencode-go', label: 'Key', email: null, platform: 'ubuntu', credential: { kind: 'aac-key', last4: 'x7Qa', storedOn: 'ubuntu' }, lifecycle: { state: 'ready', jobId: null }, actions: { replaceKey: true, remove: true, recheck: true }, removeRefusal: null }] };
+  const vm = accountsViewModel(data([key], { providers: wsProviders }), { now, registry: reg });
+  assert.deepEqual(row(vm, 'opencode-go:acct:9f2c41d0').actions.filter(a => a.act.includes('wallet') || a.act === 'paste-session').map(a => [a.act, a.label, a.enabled]), [
+    ['paste-session', 'Reconnect wallet', true],
+    ['remove-wallet', 'Remove wallet session', true],
+  ]);
+  // No stored session: only the paste control.
+  const bare = { ...key, capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] } };
+  const plain = accountsViewModel(data([bare], { providers: wsProviders }), { now, registry: reg });
+  assert.deepEqual(row(plain, 'opencode-go:acct:9f2c41d0').actions.filter(a => a.act.includes('wallet') || a.act === 'paste-session').map(a => [a.act, a.label]), [
+    ['paste-session', 'Paste wallet session'],
+  ]);
+});

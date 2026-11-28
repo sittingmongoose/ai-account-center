@@ -201,6 +201,28 @@ async fn handle_put(
         },
         Surface::Qwen | Surface::Muse => None,
     };
+    // A wallet session is kept only for an account the dashboard shows: one naming no
+    // account would never be shown or removed, so it is refused before it is verified or
+    // stored.
+    if let Some(account) = wallet_account.as_deref() {
+        match wallet_account_known(native, account).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return super::no_store(error(
+                    404,
+                    "unknown_account",
+                    "That account was not found.",
+                ));
+            }
+            Err(()) => {
+                return super::no_store(error(
+                    500,
+                    "registry_unavailable",
+                    "Account list could not be read safely.",
+                ));
+            }
+        }
+    }
 
     let Ok(transport) = ReqwestTransport::with_endpoint(Duration::from_secs(15), fixture_endpoint)
     else {
@@ -273,6 +295,21 @@ async fn handle_put(
             "account": sample_row,
         }),
     ))
+}
+
+/// Whether `id` names an OpenCode Go account row: the same lookup as a re-check (a registry
+/// entry or a stored key's own row) when the producer runs, else the registry entry itself.
+async fn wallet_account_known(native: &NativeOwners, id: &str) -> Result<bool, ()> {
+    let found = match &native.usage {
+        Some(usage) => usage.producer.lookup_recheck(id).await,
+        None => {
+            crate::account_usage::producer::recheck::lookup(native.agents.root().to_owned(), id)
+                .await
+        }
+    };
+    found
+        .map(|resolved| resolved.is_some_and(|row| row.source.provider == "opencode-go"))
+        .map_err(|_| ())
 }
 
 async fn verify_before_commit(
@@ -709,7 +746,29 @@ mod tests {
     async fn web_session_routes_enforce_secure_origin_device_and_verify_before_commit() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let (native, jobs) = start_native(&root).await;
+        // The OpenCode Go discover account the wallet pastes below name.
+        let (writer, _) = claim_registry(&root, &native.owners).unwrap();
+        save_registry(
+            &writer,
+            &[sources::Source {
+                id: "opencode-go:usage".into(),
+                provider: "opencode-go".into(),
+                platform: "ubuntu".into(),
+                ssh_host: None,
+                label: None,
+                credential: sources::Credential::Discover,
+                created_at: None,
+                created_by: None,
+            }],
+        )
+        .unwrap();
+        drop(writer);
 
         let secret = "auth=super-secret-fixture-cookie-999";
 
@@ -838,6 +897,36 @@ mod tests {
             web_session::load_for_account(&root, Surface::OpencodeWallet, "opencode-go:usage")
                 .unwrap()
                 .is_none()
+        );
+
+        // 7b. W3: a well-formed account id that names no account is refused before the
+        // session is verified or stored.
+        let req = json_request(
+            Method::PUT,
+            "/api/accounts/web-session/opencode-wallet",
+            json!({ "cookie": secret, "workspaceId": "wrk_b", "accountId": "opencode-go:acct:deadbeef" }),
+            browser_access(true, true),
+        );
+        let reply = handle_put(
+            &native,
+            Surface::OpencodeWallet,
+            req,
+            Some(multi_endpoint.clone()),
+        )
+        .await;
+        assert_eq!(reply.status(), 404);
+        let text =
+            String::from_utf8(to_bytes(reply.into_body(), 8192).await.unwrap().to_vec()).unwrap();
+        assert!(text.contains("unknown_account"));
+        assert!(!text.contains("super-secret-fixture-cookie-999"));
+        assert!(
+            web_session::load_for_account(
+                &root,
+                Surface::OpencodeWallet,
+                "opencode-go:acct:deadbeef"
+            )
+            .unwrap()
+            .is_none()
         );
 
         // 8. Verified PUT with workspaceId and accountId -> 200, saved per account

@@ -297,22 +297,18 @@ impl Producer {
         let mut row = self.failover().collect(&target, &template()).await;
         // Each OpenCode Go account carries its own wallet balance as a line inside
         // its card, from that account's pasted console session. No session, no line.
-        let wallet = if source.provider == "opencode-go" {
-            super::web_sessions::collect_wallet_window(
+        // A stored session whose card shows no line still marks the row, so the
+        // Accounts page offers to remove it.
+        if source.provider == "opencode-go" {
+            let wallet = super::web_sessions::collect_wallet(
                 &self.root,
                 &self.web_sessions,
                 source,
                 now,
                 force,
             )
-            .await
-        } else {
-            None
-        };
-        if let Some(window) = wallet
-            && let Some(windows) = row["windows"].as_array_mut()
-        {
-            windows.push(window)
+            .await;
+            super::web_sessions::attach_wallet(&mut row, wallet);
         }
         row
     }

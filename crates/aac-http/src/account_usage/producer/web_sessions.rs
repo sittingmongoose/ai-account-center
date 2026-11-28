@@ -298,6 +298,7 @@ fn qwen_error_row(
 /// shows the cached window, a failed read with none shows an unavailable line
 /// (no number), and a session whose workspace cannot be matched to the account
 /// shows nothing and logs a plain reason.
+#[cfg(test)]
 pub(super) async fn collect_wallet_window(
     root: &Path,
     state: &WebSessionState,
@@ -305,6 +306,22 @@ pub(super) async fn collect_wallet_window(
     now_ms: i64,
     force: bool,
 ) -> Option<Value> {
+    collect_wallet(root, state, source, now_ms, force)
+        .await
+        .flatten()
+}
+
+/// The account's wallet: `None` when no console session is stored for it, else
+/// `Some(line)`, where `line` is [`collect_wallet_window`]'s answer. A stored
+/// session whose card shows no line (another workspace, not prepaid) is still
+/// `Some(None)`, so the Accounts page can offer to remove it.
+pub(super) async fn collect_wallet(
+    root: &Path,
+    state: &WebSessionState,
+    source: &Source,
+    now_ms: i64,
+    force: bool,
+) -> Option<Option<Value>> {
     let account = source.id.as_str();
     let root_buf = root.to_path_buf();
     let account_buf = account.to_owned();
@@ -316,6 +333,34 @@ pub(super) async fn collect_wallet_window(
         Ok(Ok(Some(stored))) => stored,
         _ => return None,
     };
+    Some(read_wallet(stored, state, account, now_ms, force).await)
+}
+
+/// Mark the row of an account whose wallet session is stored, and add its line.
+pub(super) fn attach_wallet(row: &mut Value, wallet: Option<Option<Value>>) {
+    let Some(window) = wallet else {
+        return;
+    };
+    if row["capabilities"].is_null() {
+        row["capabilities"] = json!({});
+    }
+    if let Some(capabilities) = row["capabilities"].as_object_mut() {
+        capabilities.insert("openCodeWalletSession".into(), json!(true));
+    }
+    if let Some(window) = window
+        && let Some(windows) = row["windows"].as_array_mut()
+    {
+        windows.push(window);
+    }
+}
+
+async fn read_wallet(
+    stored: web_session::StoredSession,
+    state: &WebSessionState,
+    account: &str,
+    now_ms: i64,
+    force: bool,
+) -> Option<Value> {
     let workspace = stored.meta.workspace_id.clone();
     let Some(workspace) = workspace else {
         tracing::warn!(
@@ -914,6 +959,30 @@ mod tests {
             collect_wallet_window(dir.path(), &state, &source_a(&account_a), t0 + 60_000, true)
                 .await
                 .is_none()
+        );
+        // W2: but the row still says a session is stored, so it can be removed.
+        let wallet =
+            collect_wallet(dir.path(), &state, &source_a(&account_a), t0 + 60_000, true).await;
+        assert_eq!(wallet, Some(None));
+        let mut row = json!({"windows":[],"capabilities":{"codexProfile":null}});
+        attach_wallet(&mut row, wallet);
+        assert_eq!(row["capabilities"]["openCodeWalletSession"], true);
+        assert_eq!(row["windows"], json!([]));
+        // No stored session: the row is left exactly as it was.
+        let none = collect_wallet(
+            dir.path(),
+            &state,
+            &source_a("opencode-go:acct:0000aaaa"),
+            t0 + 60_000,
+            true,
+        )
+        .await;
+        assert_eq!(none, None);
+        let mut bare = json!({"windows":[],"capabilities":{"codexProfile":null}});
+        attach_wallet(&mut bare, none);
+        assert_eq!(
+            bare,
+            json!({"windows":[],"capabilities":{"codexProfile":null}})
         );
 
         // Expired session with a cached balance: the stale window, honestly marked.

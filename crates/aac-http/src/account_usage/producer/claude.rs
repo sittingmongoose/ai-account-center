@@ -9,9 +9,11 @@ use crate::account_usage::{Desktop, rows};
 use futures_util::{StreamExt, stream};
 use serde_json::{Map, Value};
 
+/// The failover binding of a profile. The display `label` is not part of it: a rename must
+/// not move the profile's observation key (its cached reading and cooldowns).
 pub(super) fn manifest_profile(profile: &Value) -> Value {
     let mut result = Map::new();
-    for field in ["email", "id", "label"] {
+    for field in ["email", "id"] {
         if let Some(value) = profile.get(field) {
             result.insert(field.into(), value.clone());
         }
@@ -84,6 +86,7 @@ impl Producer {
         // The TS dashboard probed the Mac launcher before publishing the rows; a profile
         // without a Mac launcher answers unknown and never names Mac.
         let mac_signed_out = self.mac_signed_out(private, force).await.unwrap_or(false);
+        let display = &with_label(display, private);
         let mut out: [Option<Value>; 2] = [None, None];
         for (index, desktop) in [Desktop::Mac, Desktop::Windows].into_iter().enumerate() {
             let Some(template) = rows::claude(display, desktop, None, history) else {
@@ -103,6 +106,16 @@ impl Producer {
         }
         out
     }
+}
+
+/// The display projection publishes no `label`; the private manifest row (same profile,
+/// checked at the join) carries the name the rename route and the add flow store.
+fn with_label(display: &Value, private: &Value) -> Value {
+    let mut display = display.clone();
+    if let (Some(label), Some(fields)) = (private["label"].as_str(), display.as_object_mut()) {
+        fields.insert("label".into(), Value::String(label.to_owned()));
+    }
+    display
 }
 
 /// Read pending lifecycle rows from the same private store as the route owner.
@@ -187,15 +200,22 @@ mod tests {
     /// A fake Mac probe also verifies that the same profile supplies the private SSH alias.
     #[tokio::test]
     async fn the_claude_manifest_collects_the_saved_windows_quota_and_mac_sign_in() {
-        assert_saved_windows_quota_and_mac_sign_in(false).await;
+        assert_saved_windows_quota_and_mac_sign_in(false, None).await;
     }
 
     #[tokio::test]
     async fn a_verified_code_read_covers_both_signed_out_desktops() {
-        assert_saved_windows_quota_and_mac_sign_in(true).await;
+        assert_saved_windows_quota_and_mac_sign_in(true, None).await;
     }
 
-    async fn assert_saved_windows_quota_and_mac_sign_in(code_login: bool) {
+    /// R1: a renamed signed-in profile shows its new name on both desktop rows, and its
+    /// account id (and failover key) stay the profile id's.
+    #[tokio::test]
+    async fn a_renamed_signed_in_profile_shows_its_name_and_keeps_its_id() {
+        assert_saved_windows_quota_and_mac_sign_in(false, Some("Work Claude")).await;
+    }
+
+    async fn assert_saved_windows_quota_and_mac_sign_in(code_login: bool, label: Option<&str>) {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         fixture_file(&root, "config.yaml", json!({"agentTransport":"off"}));
@@ -220,6 +240,20 @@ mod tests {
             "windows":{"launcherName":"Claude","profilePath":"C:\\Users\\x\\AppData\\Local\\Claude",
                        "isDefault":true,"sshHost":"fixture-windows"}
         });
+        let unnamed = profile.clone();
+        let mut profile = profile;
+        if let Some(label) = label {
+            profile["label"] = json!(label);
+        }
+        // The observation key does not follow the display name.
+        assert_eq!(
+            producer
+                .failover()
+                .key(&super::super::failover::claude_target(root.as_path(), &unnamed).unwrap()),
+            producer
+                .failover()
+                .key(&super::super::failover::claude_target(root.as_path(), &profile).unwrap())
+        );
         fixture_file(
             &root,
             "claude-desktop-profiles.json",
@@ -287,6 +321,7 @@ mod tests {
                 assert_eq!(row["source"], "Verified quota on Windows");
                 assert_eq!(row["signInNeeded"], json!(["mac"]));
             }
+            assert_eq!(row["label"], label.unwrap_or("livia"));
             assert_eq!(row["status"], "ok");
             assert_eq!(row["plan"], "Max");
             assert_eq!(row["windows"][0]["usedPercent"], 42.0);
