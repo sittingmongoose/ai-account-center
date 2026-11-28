@@ -281,6 +281,7 @@ const SAFE_REASONS: &[&str] = &[
     "refill-windows-unconfirmed",
     "no-weekly-usage",
     "signed-out",
+    "step3-reset-unavailable",
 ];
 
 fn safe_reason(code: &str) -> Option<&str> {

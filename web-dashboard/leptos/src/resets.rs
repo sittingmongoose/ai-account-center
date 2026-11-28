@@ -302,6 +302,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
             "Listed resets need a verified OAuth sign-in on Windows before AAC can use them; a Mac-only sign-in is view-only.".into()
         }
         "credential-host-unavailable" => "AAC can't find this login's saved profile on this computer.".into(),
+        "step3-reset-unavailable" => "Reset claims for this account are not available while Central Logins step 3 is on.".into(),
         "account-changed-usage-unavailable" => "Account changed; usage unavailable. Earlier claim results stay with the previous account.".into(),
         "identity-unconfirmed" | "identity-changed" => {
             "AAC couldn't confirm which account this is, so it won't use this reset.".into()

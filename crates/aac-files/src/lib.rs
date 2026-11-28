@@ -32,6 +32,7 @@ pub mod profile_writes;
 pub mod read;
 pub mod registry;
 pub mod share;
+mod step3_switch;
 pub mod web_session;
 pub mod zoneinfo;
 

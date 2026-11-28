@@ -112,6 +112,42 @@ fn small_json(path: &Path, cap: u64) -> Result<Option<Value>, ()> {
 /// The renewal computers (name, whether it is this computer) and the profiles left alone.
 type RenewalSettings = (Vec<(String, bool)>, Vec<String>);
 
+fn this_os() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "mac"
+    } else {
+        "linux"
+    }
+}
+
+/// The renewal runner's placement contract: the dashboard's registered computer is local even
+/// when its row carries a packaged ssh alias. `AAC_DASHBOARD_COMPUTER` follows the dashboard's
+/// switch; unset keeps the legacy computer for this OS.
+fn this_computer(explicit: Option<&str>, os: &str) -> Option<String> {
+    let rows = aac_status::computers::registry().as_object()?;
+    if let Some(value) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        return rows.iter().find_map(|(id, row)| {
+            (row["os"] == os
+                && (id.eq_ignore_ascii_case(value)
+                    || row["machineId"]
+                        .as_str()
+                        .is_some_and(|machine| machine.eq_ignore_ascii_case(value))))
+            .then(|| id.clone())
+        });
+    }
+    rows.iter()
+        .find_map(|(id, row)| (row["os"] == os && row["legacy"] == true).then(|| id.clone()))
+}
+
+fn renewal_local_computer() -> Option<String> {
+    this_computer(
+        std::env::var("AAC_DASHBOARD_COMPUTER").ok().as_deref(),
+        this_os(),
+    )
+}
+
 /// The computers in the Claude renewal settings (`<ccs>/claude-renew/config.json`): each name and
 /// whether it is this computer (no `ssh`), plus the profile names the renewal leaves alone.
 fn renewal_settings(places: &Places) -> Result<RenewalSettings, String> {
@@ -134,7 +170,10 @@ fn renewal_settings(places: &Places) -> Result<RenewalSettings, String> {
         .flatten()
         .filter_map(|host| {
             let name = host["name"].as_str().filter(|n| rollback::valid_name(n))?;
-            Some((name.to_owned(), host["ssh"].is_null()))
+            Some((
+                name.to_owned(),
+                renewal_local_computer().as_deref() == Some(name),
+            ))
         })
         .collect();
     if hosts.is_empty() {
@@ -322,7 +361,14 @@ fn static_token(places: &Places, profile: &str, named: Option<&str>) -> Result<S
         .filter_map(|(_, read)| read.as_ref().ok())
         .filter(|s| s.kind == aac_files::credential::Kind::ClaudeToken)
         .collect();
-    let Some(token) = tokens.iter().find(|s| accounts.contains(&s.account)) else {
+    let mut reasons = Vec::new();
+    for token in tokens.iter().filter(|s| accounts.contains(&s.account)) {
+        match registry_shows(places, &token.login_id, &token.fingerprint) {
+            Ok(()) => return Ok(token.login_id.clone()),
+            Err(why) => reasons.push(format!("{}: {why}", token.login_id)),
+        }
+    }
+    if reasons.is_empty() {
         let held: Vec<&str> = tokens.iter().map(|s| s.account.as_str()).collect();
         return Err(format!(
             "{profile}: no delivered Claude token for {} reads cleanly on this computer (Claude tokens here: {}); deliver one under Static logins and use it on that instance first, or name its account as {profile}=<account>",
@@ -337,10 +383,11 @@ fn static_token(places: &Places, profile: &str, named: Option<&str>) -> Result<S
                 held.join(", ")
             },
         ));
-    };
-    registry_shows(places, &token.login_id, &token.fingerprint)
-        .map_err(|why| format!("{profile}: {why}"))?;
-    Ok(token.login_id.clone())
+    }
+    Err(format!(
+        "{profile}: no delivered Claude token reads cleanly in the static logins registry ({})",
+        reasons.join("; ")
+    ))
 }
 
 /// The Claude checks of one request: the lines that name what was found, and why it is refused.
@@ -439,35 +486,65 @@ fn check_claude(places: &Places, request: &Request) -> (Vec<String>, Result<(), 
     (lines, verdict)
 }
 
-fn places() -> Result<Places, String> {
+fn environment_roots() -> BTreeMap<String, String> {
+    ["CCS_DIR", "CCS_HOME"]
+        .iter()
+        .filter_map(|key| {
+            std::env::var_os(key).and_then(|value| {
+                value
+                    .to_str()
+                    .map(|value| ((*key).to_owned(), value.to_owned()))
+            })
+        })
+        .collect()
+}
+
+fn places(data_root: Option<&str>) -> Result<Places, String> {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)
         .ok_or("no home folder")?;
-    let ccs = std::env::var_os("CCS_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".ccs"));
-    if !home.is_absolute() || !ccs.is_absolute() {
-        return Err("the home and AAC folders must be absolute".into());
+    if !home.is_absolute() {
+        return Err("the home folder must be absolute".into());
+    }
+    let ccs = rollback::selected_ccs_root(&home, &environment_roots(), data_root)
+        .map_err(|failure| failure.detail.as_str().to_owned())?;
+    if !ccs.is_absolute() {
+        return Err("the AAC folder must be absolute".into());
     }
     Ok(Places { home, ccs })
 }
 
-fn restore_command() -> String {
+fn parse_data_root(args: &[OsString]) -> Result<Option<String>, String> {
+    match args {
+        [] => Ok(None),
+        [flag, root] if flag == "--data-root" => root
+            .to_str()
+            .filter(|root| !root.is_empty())
+            .map(|root| Some(root.to_owned()))
+            .ok_or_else(|| "--data-root takes an ASCII path".into()),
+        _ => Err("use --data-root <path> as the only argument".into()),
+    }
+}
+
+fn shell_quote(text: &str) -> String {
+    if cfg!(windows) {
+        // cmd.exe quoting: wrap the whole argument. A double quote cannot occur in a Windows
+        // filename, so stripping one (should one appear through a Unix-style test path) is safe.
+        format!("\"{}\"", text.replace('"', ""))
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+fn restore_command(places: &Places) -> String {
     let exe = std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "aac-agent".into());
-    if cfg!(windows) {
-        return format!("\"{exe}\" --logins-restore");
-    }
-    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
-    match std::env::var_os("CCS_HOME") {
-        Some(ccs) => format!(
-            "CCS_HOME={} {} --logins-restore",
-            quote(&ccs.to_string_lossy()),
-            quote(&exe)
-        ),
-        None => format!("{} --logins-restore", quote(&exe)),
-    }
+    format!(
+        "{} --logins-restore --data-root {}",
+        shell_quote(&exe),
+        shell_quote(&places.ccs.to_string_lossy())
+    )
 }
 
 fn now_stamp() -> Result<String, String> {
@@ -643,7 +720,7 @@ fn quarantine(args: &[OsString], out: &mut impl std::io::Write) -> i32 {
             return 2;
         }
     };
-    let (places, since) = match places().and_then(|p| now_stamp().map(|at| (p, at))) {
+    let (places, since) = match places(None).and_then(|p| now_stamp().map(|at| (p, at))) {
         Ok(found) => found,
         Err(why) => {
             say(out, &format!("Refused: {why}. Nothing was moved."));
@@ -698,7 +775,7 @@ fn quarantine(args: &[OsString], out: &mut impl std::io::Write) -> i32 {
         report_switch(out, prepared.switch.as_ref(), &prepared.unpinned);
         return 0;
     }
-    let command = restore_command();
+    let command = restore_command(&places);
     match rollback::quarantine(
         &places,
         &prepared.planned,
@@ -746,12 +823,25 @@ fn quarantine(args: &[OsString], out: &mut impl std::io::Write) -> i32 {
                     label(kind)
                 ),
                 Refused::MoveFailed(kind, profile) => format!(
-                    "the {}for {profile} could not be moved (another disk?); every earlier move was put back",
+                    "the {}for {profile} could not be moved (another disk?)",
                     label(kind)
                 ),
                 Refused::Failure(failure) => failure.detail.as_str().to_owned(),
             };
-            say(out, &format!("Refused: {why}. Nothing was moved."));
+            let recovery = rollback::read_manifest(&places.ccs).ok().flatten();
+            if let Some(manifest) = recovery {
+                say(
+                    out,
+                    &format!(
+                        "Refused: {why}. {} file(s) stay quarantined in {}; to put them back, run: {}",
+                        manifest.moved.len(),
+                        places.folder().display(),
+                        manifest.restore
+                    ),
+                );
+            } else {
+                say(out, &format!("Refused: {why}. Nothing was moved."));
+            }
             1
         }
     }
@@ -784,8 +874,8 @@ fn report_switch(out: &mut impl std::io::Write, switch: Option<&Switch>, unpinne
     }
 }
 
-fn restore(out: &mut impl std::io::Write) -> i32 {
-    let places = match places() {
+fn restore(out: &mut impl std::io::Write, data_root: Option<&str>) -> i32 {
+    let places = match places(data_root) {
         Ok(places) => places,
         Err(why) => {
             say(out, &format!("Refused: {why}. Nothing changed."));
@@ -844,8 +934,8 @@ fn restore(out: &mut impl std::io::Write) -> i32 {
     }
 }
 
-fn status(out: &mut impl std::io::Write) -> i32 {
-    let places = match places() {
+fn status(out: &mut impl std::io::Write, data_root: Option<&str>) -> i32 {
+    let places = match places(data_root) {
         Ok(places) => places,
         Err(why) => {
             say(out, &format!("Refused: {why}."));
@@ -893,12 +983,20 @@ pub fn subcommand(flag: &str, args: &[OsString]) -> Option<i32> {
     let mut out = std::io::stdout().lock();
     Some(match flag {
         "--logins-quarantine" => quarantine(args, &mut out),
-        "--logins-restore" if args.is_empty() => restore(&mut out),
-        "--logins-status" if args.is_empty() => status(&mut out),
-        "--logins-restore" | "--logins-status" => {
-            say(&mut out, "Refused: this command takes no arguments.");
-            2
-        }
+        "--logins-restore" => match parse_data_root(args) {
+            Ok(root) => restore(&mut out, root.as_deref()),
+            Err(why) => {
+                say(&mut out, &format!("Refused: {why}"));
+                2
+            }
+        },
+        "--logins-status" => match parse_data_root(args) {
+            Ok(root) => status(&mut out, root.as_deref()),
+            Err(why) => {
+                say(&mut out, &format!("Refused: {why}"));
+                2
+            }
+        },
         _ => return None,
     })
 }
@@ -952,6 +1050,58 @@ mod tests {
         assert!(!both.claude_accounts.contains_key("tokentest"));
     }
 
+    #[test]
+    fn restore_and_status_accept_data_root() {
+        assert_eq!(parse_data_root(&[]).unwrap(), None);
+        assert_eq!(
+            parse_data_root(&[
+                OsString::from("--data-root"),
+                OsString::from("/tmp/aac root")
+            ])
+            .unwrap(),
+            Some("/tmp/aac root".into())
+        );
+        assert!(parse_data_root(&words("--data-root")).is_err());
+        assert!(parse_data_root(&words("--other /tmp/aac")).is_err());
+    }
+
+    #[test]
+    fn the_restore_command_carries_the_selected_root() {
+        let places = Places {
+            home: PathBuf::from("/home/test"),
+            ccs: PathBuf::from("/data/aac root"),
+        };
+        let command = restore_command(&places);
+        assert!(
+            command.contains("--logins-restore --data-root"),
+            "{command}"
+        );
+        if cfg!(windows) {
+            assert!(command.contains("\"/data/aac root\""), "{command}");
+        } else {
+            assert!(
+                command.contains("--data-root '/data/aac root'"),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dashboard_computer_is_local_even_with_an_ssh_alias() {
+        assert_eq!(this_computer(None, "linux").as_deref(), Some("ubuntu"));
+        assert_eq!(
+            this_computer(Some("nas1"), "linux").as_deref(),
+            Some("nas1")
+        );
+        assert_eq!(this_computer(Some("none"), "linux"), None);
+        // The VM's registry row carries the packaged alias ubuntu-vm; localness comes from the
+        // placement contract above, not from whether renewal settings carry an ssh alias.
+        assert_eq!(
+            aac_status::computers::registry()["ubuntu"]["sshAlias"].as_str(),
+            Some("ubuntu-vm")
+        );
+    }
+
     // ---- The three review lows: fixtures for the renewal settings, state and static logins.
 
     const TOKEN: &str = "sk-ant-oat01-TESTONLY-rollback-token-000000000000";
@@ -972,7 +1122,7 @@ mod tests {
         }
         std::fs::write(
             renew.join("config.json"),
-            r#"{"hosts":[{"name":"ubuntu","os":"linux"},{"name":"nas1","os":"linux","ssh":"test-nas1"},{"name":"mac","os":"mac","ssh":"test-mac"}],"ignoreProfiles":["retired"]}"#,
+            r#"{"hosts":[{"name":"ubuntu","os":"linux","ssh":"ubuntu-vm"},{"name":"nas1","os":"linux","ssh":"test-nas1"},{"name":"mac","os":"mac","ssh":"test-mac"}],"ignoreProfiles":["retired"]}"#,
         )
         .unwrap();
         std::fs::write(
@@ -1014,16 +1164,20 @@ mod tests {
     }
 
     /// Deliver a static Claude token for `account` through the agent's own `login-put`.
-    fn deliver(places: &Places, login_id: &str, account: &str) {
+    fn deliver_secret(places: &Places, login_id: &str, account: &str, secret: &str) {
         let key = aac_files::credential::computer_key(&places.ccs).unwrap();
         crate::logins::run(
             "login-put",
             &json!({"loginId":login_id,"kind":"claude-token","provider":"claude",
-                "account":account,"secret":TOKEN,"expiresAt":"2027-11-27T00:00:00Z",
+                "account":account,"secret":secret,"expiresAt":"2027-11-27T00:00:00Z",
                 "expect":"absent","home":places.home.to_str().unwrap(),
                 "nowMs":1_795_000_000_000i64,"computer":key}),
         )
         .unwrap();
+    }
+
+    fn deliver(places: &Places, login_id: &str, account: &str) {
+        deliver_secret(places, login_id, account, TOKEN);
     }
 
     fn request(claude: &[&str], host: Option<&str>) -> Request {
@@ -1381,5 +1535,28 @@ mod tests {
         assert_eq!(back.back.len(), 3);
         assert_eq!(inventory(&places), codex_before);
         assert_eq!(claude_inventory(), claude_before);
+    }
+    #[test]
+    fn an_older_bad_token_does_not_block_a_newer_clean_one() {
+        let (_dir, places) = fixture();
+        let stale = "sk-ant-oat01-TESTONLY-rollback-token-stale-000000000";
+        let fresh_secret = "sk-ant-oat01-TESTONLY-rollback-token-fresh-000000000";
+        deliver_secret(&places, "00000001", "claude:jmtashjian", stale);
+        deliver_secret(&places, "00000002", "claude:jmtashjian", fresh_secret);
+        let key = aac_files::credential::computer_key(&places.ccs).unwrap();
+        let fresh = aac_files::credential::fingerprint(fresh_secret);
+        std::fs::write(
+            places.ccs.join("logins-registry.json"),
+            json!({"version":1,"checkedAt":null,"computers":[{"computer":"ubuntu","key":key,"host":"vm","enrolledAt":"2026-11-27T00:00:00Z","seen":null}],
+                "notes":[],"logins":[{"loginId":"00000002","kind":"claude-token","provider":"claude","account":"claude:jmtashjian",
+                "fingerprint":fresh,"expiresAt":null,"createdAt":"2026-11-27T00:00:00Z",
+                "holders":[{"computer":"ubuntu","fingerprint":fresh,"deliveredAt":"2026-11-27T00:00:00Z","seen":"seen"}]}]})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            static_token(&places, "default", None).as_deref(),
+            Ok("00000002")
+        );
     }
 }

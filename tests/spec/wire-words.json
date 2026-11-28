@@ -3634,6 +3634,13 @@
     ]
   },
   {
+    "word": "step3-reset-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "stopped",
     "cause": null,
     "sources": [

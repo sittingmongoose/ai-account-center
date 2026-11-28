@@ -29,86 +29,8 @@ pub const FOLDER: &str = "disabled-rollback";
 const MAX_LOGIN_FILE: u64 = 1024 * 1024;
 const MAX_MOVES: usize = 256;
 
-/// The identity a saved Codex copy proved before it was moved: the agent inventory's identity key
-/// (a digest of the workspace and principal binding, never a token) and the login's email.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CodexPin {
-    /// 64 lowercase hex digits (`codex-principal-v1` identity key).
-    pub identity: String,
-    /// The login's email, for the row while no T3 login answers.
-    pub email: String,
-}
-
-/// The step 3 switch. Absent: everything reads and renews as before step 3.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Switch {
-    /// Always 1.
-    pub version: u32,
-    /// When the quarantine ran (UTC, seconds).
-    pub since: String,
-    /// Set: Codex accounts are read only through a T3 instance's own login with the pinned
-    /// identity, never through a saved copy. Profiles not named here are shown unavailable.
-    #[serde(default)]
-    pub codex: Option<BTreeMap<String, CodexPin>>,
-    /// Set: the Claude renewal runner renews only this computer's sign-ins, one per account.
-    #[serde(default)]
-    pub claude_renewal_host: Option<String>,
-}
-
-/// A profile or computer name: 1-64 of letters, digits, `.`, `_`, `-`, starting with a letter or
-/// digit (the renewal runner's and the Codex registry's names both fit).
-pub fn valid_name(value: &str) -> bool {
-    (1..=64).contains(&value.len())
-        && value.as_bytes()[0].is_ascii_alphanumeric()
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-}
-
-fn valid_identity(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-fn valid_email(value: &str) -> bool {
-    (3..=254).contains(&value.len())
-        && value.contains('@')
-        && value.bytes().all(|b| b.is_ascii_graphic())
-}
-
-fn valid_stamp(value: &str) -> bool {
-    value.len() == 20
-        && value.ends_with('Z')
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || b"-:TZ".contains(&b))
-}
-
-impl Switch {
-    /// Every field's shape.
-    pub fn valid(&self) -> bool {
-        self.version == 1
-            && valid_stamp(&self.since)
-            && self.codex.as_ref().is_none_or(|pins| {
-                pins.len() <= 64
-                    && pins.iter().all(|(name, pin)| {
-                        valid_name(name) && valid_identity(&pin.identity) && valid_email(&pin.email)
-                    })
-            })
-            && self.claude_renewal_host.as_deref().is_none_or(valid_name)
-    }
-
-    /// Parse and check the switch's bytes.
-    pub fn parse(bytes: &[u8]) -> Option<Self> {
-        serde_json::from_slice::<Self>(bytes)
-            .ok()
-            .filter(Self::valid)
-    }
-}
+use crate::step3_switch::valid_stamp;
+pub use crate::step3_switch::{CodexPin, Switch, valid_name};
 
 /// What kind of login a moved file was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,7 +285,8 @@ pub enum Refused {
     BadName(String),
     /// This file is a link, has a second hard link, belongs to another user or is too large.
     Unsafe(Kind, String),
-    /// A move failed; every earlier move was put back.
+    /// A move failed. Inverse moves were attempted; the recovery record keeps any entry not
+    /// proved restored.
     MoveFailed(Kind, String),
     /// The folder, record or switch could not be written.
     Failure(Failure),
@@ -379,9 +302,36 @@ fn moved_path(places: &Places, id: &str) -> PathBuf {
     places.folder().join(format!("{id}.moved"))
 }
 
+/// Undo the moves that succeeded. The recovery record is removed only when every inverse move
+/// succeeded; otherwise it is rewritten to the entries still quarantined, so a failed recovery
+/// never erases the only map back. Returns false when any entry could not be proved restored.
+fn undo_moves(
+    places: &Places,
+    manifest_store: &crate::OwnedStore,
+    manifest: &Manifest,
+    done: &[(Moved, PathBuf)],
+) -> bool {
+    let mut still = Vec::new();
+    for (m, from) in done.iter().rev() {
+        if std::fs::rename(moved_path(places, &m.id), from).is_err() {
+            still.push(m.clone());
+        }
+    }
+    if still.is_empty() {
+        return manifest_store.remove().is_ok();
+    }
+    let left = Manifest {
+        moved: still,
+        ..manifest.clone()
+    };
+    let _ = encode(&left).and_then(|bytes| manifest_store.write(&bytes));
+    false
+}
+
 /// Move every planned file that exists into the quarantine folder, record it, then write the
-/// switch (when given). All or nothing: any unsafe file, or a failed move, leaves every file where
-/// it was and writes no record and no switch.
+/// switch (when given). An unsafe file leaves every file where it was and writes no record and no
+/// switch. A failed move reverses every move it can; any entry whose inverse move fails stays
+/// quarantined with its recovery record, never silently unrecorded.
 pub fn quarantine(
     places: &Places,
     planned: &[Planned],
@@ -445,12 +395,7 @@ pub fn quarantine(
         moved: moves.iter().map(|(m, _)| m.clone()).collect(),
     };
     manifest_store.write(&encode(&manifest)?)?;
-    let undo = |done: &[(Moved, PathBuf)]| {
-        for (m, from) in done.iter().rev() {
-            let _ = std::fs::rename(moved_path(places, &m.id), from);
-        }
-        let _ = manifest_store.remove();
-    };
+    let undo = |done: &[(Moved, PathBuf)]| undo_moves(places, &manifest_store, &manifest, done);
     for (index, (m, from)) in moves.iter().enumerate() {
         let target = moved_path(places, &m.id);
         // Never over an existing file: a leftover from an earlier run stays and this run stops.
@@ -487,6 +432,8 @@ pub enum Kept {
     Changed,
     /// The record names a place no login lives in; it is never written to.
     NotALoginPlace,
+    /// The destination folder chain contains a link/reparse point or cannot be proved safe.
+    UnsafeDestination,
     /// The move back failed.
     MoveFailed,
 }
@@ -499,6 +446,9 @@ impl Kept {
             Kept::Missing => "the quarantined copy is missing",
             Kept::Changed => "the quarantined copy is not the file that was moved",
             Kept::NotALoginPlace => "the record names a place that is not a login place",
+            Kept::UnsafeDestination => {
+                "the destination folder chain contains a link or is not safe"
+            }
             Kept::MoveFailed => "the move back failed",
         }
     }
@@ -513,6 +463,103 @@ pub struct Restored {
     pub kept: Vec<(Moved, Kept)>,
     /// Whether a switch was removed.
     pub switch_removed: bool,
+}
+
+fn reparse_point(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// Whether every existing folder in `parent` below `root` is a real folder, never a link or
+/// reparse point. The first missing component ends the check: creation below it is done by the
+/// platform-specific mover, never by following a link that was already there.
+fn destination_parent_clear(root: &Path, parent: &Path) -> bool {
+    let Ok(rest) = parent.strip_prefix(root) else {
+        return false;
+    };
+    let mut current = root.to_path_buf();
+    for part in rest.components() {
+        current.push(part.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() || reparse_point(&meta) || !meta.is_dir() {
+                    return false;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// Move `source` to `dest` without replacement. On Linux the destination parent chain is pinned
+/// below `root` with `openat`/`renameat`, and missing folders are made relative to those pinned
+/// directories; a link swapped into the chain cannot redirect the move. Other platforms use the
+/// checked path after the same chain refusal (the pre-existing-link case this restores against).
+#[cfg(target_os = "linux")]
+fn move_back_below(root: &Path, parent: &Path, source: &Path, dest: &Path) -> std::io::Result<()> {
+    use rustix::fs::{self, Mode, OFlags, RenameFlags};
+    let flags = OFlags::RDONLY
+        .union(OFlags::DIRECTORY)
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::CLOEXEC);
+    // The trusted root itself is caller-admitted; every component below it is pinned no-follow.
+    let mut dir = fs::open(
+        root,
+        OFlags::RDONLY
+            .union(OFlags::DIRECTORY)
+            .union(OFlags::CLOEXEC),
+        Mode::empty(),
+    )?;
+    let rest = parent
+        .strip_prefix(root)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "outside root"))?;
+    for part in rest.components() {
+        let name = part.as_os_str();
+        dir = match fs::openat(&dir, name, flags, Mode::empty()) {
+            Ok(next) => next,
+            Err(rustix::io::Errno::NOENT) => {
+                fs::mkdirat(&dir, name, Mode::from_raw_mode(0o700))?;
+                fs::openat(&dir, name, flags, Mode::empty())?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        // A race that made the newly opened entry a link or non-folder is caught by fstat.
+        let stat = fs::fstat(&dir)?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "destination is not a folder",
+            ));
+        }
+    }
+    let leaf = dest.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "destination has no leaf")
+    })?;
+    fs::renameat_with(rustix::fs::CWD, source, &dir, leaf, RenameFlags::NOREPLACE)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn move_back_below(root: &Path, parent: &Path, source: &Path, dest: &Path) -> std::io::Result<()> {
+    let _ = root;
+    if !parent.is_dir() {
+        std::fs::create_dir_all(parent)?;
+        owner_only_folder(parent)?;
+    }
+    // Never replace a file that appeared after the caller's check where the OS offers no
+    // no-replace rename through std; the checked path is still confined by the caller.
+    std::fs::rename(source, dest)
 }
 
 /// Put every quarantined file back where it was (never over a file that is there now), then
@@ -552,17 +599,19 @@ pub fn restore(places: &Places) -> Result<Restored, Failure> {
             out.kept.push((m.clone(), Kept::Changed));
             continue;
         }
+        let Some(parent) = from.parent() else {
+            out.kept.push((m.clone(), Kept::UnsafeDestination));
+            continue;
+        };
+        if !destination_parent_clear(places.root(m.kind), parent) {
+            out.kept.push((m.clone(), Kept::UnsafeDestination));
+            continue;
+        }
         if there {
             out.kept.push((m.clone(), Kept::NewerThere));
             continue;
         }
-        let made = from.parent().is_some_and(|parent| {
-            parent.is_dir()
-                || std::fs::create_dir_all(parent)
-                    .and_then(|()| owner_only_folder(parent))
-                    .is_ok()
-        });
-        if !made || std::fs::rename(&source, &from).is_err() {
+        if move_back_below(places.root(m.kind), parent, &source, &from).is_err() {
             out.kept.push((m.clone(), Kept::MoveFailed));
             continue;
         }
@@ -598,6 +647,7 @@ pub fn restore(places: &Places) -> Result<Restored, Failure> {
 }
 
 /// A folder restore had to make again: owner-only on Unix (Windows folders inherit their ACL).
+#[cfg(not(target_os = "linux"))]
 fn owner_only_folder(folder: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -607,6 +657,40 @@ fn owner_only_folder(folder: &Path) -> std::io::Result<()> {
     #[cfg(not(unix))]
     let _ = folder;
     Ok(())
+}
+
+/// Select the AAC private root with the dashboard's rules: an explicit root (the agent's
+/// `--data-root`, like the dashboard CLI's `config_dir`) over `CCS_DIR` over legacy `CCS_HOME`
+/// (`.ccs` appended) over the home's `.ccs`; empty values are skipped and relative selections
+/// resolve lexically against the process current directory, following no symlink.
+pub fn selected_ccs_root(
+    home: &Path,
+    environment: &BTreeMap<String, String>,
+    explicit: Option<&str>,
+) -> Result<PathBuf, Failure> {
+    let direct = explicit
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            environment
+                .get("CCS_DIR")
+                .filter(|value| !value.is_empty())
+                .map(String::as_str)
+        })
+        .map(PathBuf::from);
+    let selected = direct.unwrap_or_else(|| {
+        environment
+            .get("CCS_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.to_path_buf())
+            .join(".ccs")
+    });
+    let base = if selected.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir()?
+    };
+    crate::path::node::resolve(&base, &selected)
 }
 
 #[cfg(test)]
@@ -851,5 +935,161 @@ mod tests {
             .unwrap()
             .identity = "short".into();
         assert!(!bad.valid());
+    }
+    #[test]
+    fn a_linked_destination_folder_is_never_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let places = Places {
+            home: home.clone(),
+            ccs: home.join(".ccs"),
+        };
+        let alpha = places.ccs.join("codex-instances/alpha");
+        let beta = places.ccs.join("codex-instances/beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for path in [&places.home, &places.ccs] {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        std::fs::write(alpha.join("auth.json"), b"alpha-login").unwrap();
+        std::fs::write(beta.join("auth.json"), b"beta-login").unwrap();
+        let planned = vec![
+            Planned {
+                kind: Kind::CodexSaved,
+                profile: "alpha".into(),
+            },
+            Planned {
+                kind: Kind::CodexSaved,
+                profile: "beta".into(),
+            },
+        ];
+        let done = quarantine(&places, &planned, None, "2026-11-27T18:00:00Z", "restore").unwrap();
+        assert_eq!(done.moved.len(), 2);
+        std::fs::remove_dir(&alpha).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&beta, &alpha).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&beta, &alpha).unwrap();
+
+        let back = restore(&places).unwrap();
+        let alpha_kept = back
+            .kept
+            .iter()
+            .find(|(m, _)| m.profile == "alpha")
+            .map(|(_, kept)| *kept);
+        assert_eq!(alpha_kept, Some(Kept::UnsafeDestination));
+        assert_eq!(
+            std::fs::read(beta.join("auth.json")).unwrap(),
+            b"beta-login"
+        );
+        assert!(
+            places.folder().join("manifest.json").exists(),
+            "the unsafe entry stays quarantined and recorded"
+        );
+        assert!(
+            std::fs::symlink_metadata(&alpha)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "restore must not replace or follow the link"
+        );
+    }
+
+    #[test]
+    fn a_failed_undo_keeps_a_recovery_record_for_what_stays_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let places = Places {
+            ccs: home.join(".ccs"),
+            home,
+        };
+        std::fs::create_dir_all(&places.ccs).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for path in [&places.home, &places.ccs] {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        std::fs::create_dir_all(places.folder()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(places.folder(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        let moved = Moved {
+            id: "0001".into(),
+            kind: Kind::CodexSaved,
+            profile: "gone".into(),
+            from: "codex-instances/gone/auth.json".into(),
+            size: 4,
+            digest: digest(b"data"),
+        };
+        let manifest = Manifest {
+            version: 1,
+            at: "2026-11-27T18:00:00Z".into(),
+            restore: "restore".into(),
+            moved: vec![moved.clone()],
+        };
+        std::fs::write(moved_path(&places, &moved.id), b"data").unwrap();
+        let store = crate::registry::claim_as_agent(MANIFEST_ROW, &places.ccs, None).unwrap();
+        store.write(&encode(&manifest).unwrap()).unwrap();
+        let missing = places.ccs.join("codex-instances/gone/auth.json");
+        assert!(!undo_moves(&places, &store, &manifest, &[(moved, missing)]));
+        let kept = read_manifest(&places.ccs).unwrap().expect("record stays");
+        assert_eq!(kept.moved.len(), 1);
+        assert_eq!(kept.moved[0].profile, "gone");
+    }
+
+    #[test]
+    fn the_agent_root_selector_matches_the_dashboard_rules() {
+        let home = PathBuf::from(if cfg!(windows) {
+            "C:/home"
+        } else {
+            "/home/test"
+        });
+        let mut env = BTreeMap::new();
+        assert_eq!(
+            selected_ccs_root(&home, &env, None).unwrap(),
+            home.join(".ccs")
+        );
+        env.insert(
+            "CCS_HOME".into(),
+            if cfg!(windows) {
+                "C:/legacy".into()
+            } else {
+                "/legacy".into()
+            },
+        );
+        assert_eq!(
+            selected_ccs_root(&home, &env, None).unwrap(),
+            PathBuf::from(env["CCS_HOME"].clone()).join(".ccs")
+        );
+        env.insert(
+            "CCS_DIR".into(),
+            if cfg!(windows) {
+                "D:/direct".into()
+            } else {
+                "/direct".into()
+            },
+        );
+        assert_eq!(
+            selected_ccs_root(&home, &env, None).unwrap(),
+            PathBuf::from(env["CCS_DIR"].clone())
+        );
+        assert_eq!(
+            selected_ccs_root(
+                &home,
+                &env,
+                Some(if cfg!(windows) { "E:/cli" } else { "/cli" })
+            )
+            .unwrap(),
+            PathBuf::from(if cfg!(windows) { "E:/cli" } else { "/cli" })
+        );
     }
 }

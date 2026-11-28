@@ -25,9 +25,16 @@ pub fn document(cfg: &Config, st: &State, runner: &str, now: i64) -> Value {
     let skip: std::collections::HashSet<&str> = cfg.skip.iter().map(String::as_str).collect();
     let within = Config::ms(cfg.renew_within_hours);
     // Step 3: a computer cut from renewal runs on a static token; its sign-in is not renewed.
+    let eligible = |key: &str| {
+        let profile = key.split_once('/').map_or("", |(_, p)| p);
+        !cfg.ignore_profiles.iter().any(|i| i == profile)
+    };
     let renewed = crate::step3::renewed(
         &cfg.step3,
         st.profiles.iter().filter_map(|(key, p)| {
+            if !eligible(key) {
+                return None;
+            }
             let (host, profile) = key.split_once('/')?;
             Some((host, profile, p.email.as_deref()))
         }),
@@ -35,10 +42,7 @@ pub fn document(cfg: &Config, st: &State, runner: &str, now: i64) -> Value {
     let rows: Vec<Value> = st
         .profiles
         .iter()
-        .filter(|(key, _)| {
-            let profile = key.split_once('/').map_or("", |(_, p)| p);
-            !cfg.ignore_profiles.iter().any(|i| i == profile)
-        })
+        .filter(|(key, _)| eligible(key))
         .filter_map(|(key, p)| {
             let (host, profile) = key.split_once('/')?;
             let state = p.state.as_deref().unwrap_or("not_signed_in");
@@ -241,8 +245,46 @@ mod tests {
                 .expect("rows")
                 .iter()
                 .all(|r| r["autoRenew"] == false),
-            "{rows}"
+            "{rows:?}"
         );
+        // A retired profile later added to ignoreProfiles does not win the one-per-account
+        // renewal selection and falsify the active profile's published autoRenew state.
+        let mut ignored = cfg.clone();
+        ignored.step3 = crate::step3::Step3::RenewOnly("mac".into());
+        ignored.ignore_profiles = vec!["aaa".into()];
+        let mut same = st.clone();
+        same.profiles.insert(
+            "mac/aaa".into(),
+            ProfileState {
+                email: Some("p@x.party".into()),
+                ..Default::default()
+            },
+        );
+        same.profiles.insert(
+            "mac/work".into(),
+            ProfileState {
+                email: Some("p@x.party".into()),
+                ..Default::default()
+            },
+        );
+        same.profiles.insert(
+            "mac/party".into(),
+            ProfileState {
+                email: Some("other@example.test".into()),
+                ..same.profiles["mac/party"].clone()
+            },
+        );
+        let rows = document(&ignored, &same, "ubuntu", now)["signIns"].clone();
+        assert_eq!(
+            rows.as_array()
+                .expect("rows")
+                .iter()
+                .find(|r| r["profile"] == "work")
+                .expect("work")["autoRenew"],
+            true,
+            "{rows:?}"
+        );
+
         assert_eq!(doc["needsYou"][0]["reason"], "captcha");
         assert_eq!(doc["browserSessions"][0]["signedIn"], true);
         let text = doc.to_string();
@@ -257,5 +299,34 @@ mod tests {
         )
         .expect("json");
         assert_eq!(back, doc);
+    }
+    #[test]
+    fn an_ignored_historical_profile_does_not_win_renewal_publication() {
+        let mut cfg = Config::parse(
+            r#"{"hosts":[{"name":"mac","os":"mac","ssh":"m"}],"ignoreProfiles":["aaa"]}"#,
+        )
+        .expect("cfg");
+        cfg.step3 = crate::step3::Step3::RenewOnly("mac".into());
+        let now = 1_800_000_000_000;
+        let mut st = State::default();
+        for profile in ["aaa", "work"] {
+            st.profiles.insert(
+                format!("mac/{profile}"),
+                ProfileState {
+                    email: Some("account@example.test".into()),
+                    state: Some("ok".into()),
+                    ends_at: Some(now + 48 * HOUR_MS),
+                    ..Default::default()
+                },
+            );
+        }
+        let rows = document(&cfg, &st, "ubuntu", now)["signIns"].clone();
+        let rows = rows.as_array().expect("rows");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["profile"], "work");
+        assert_eq!(
+            rows[0]["autoRenew"], true,
+            "ignored aaa must not win the one-per-account choice: {rows:?}"
+        );
     }
 }

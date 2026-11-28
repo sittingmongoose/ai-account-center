@@ -32,6 +32,17 @@ fn max1_config_paths_match_ts_in_an_isolated_process() {
             if let Some(cli) = case["cli"].as_str() {
                 options.cli = json!({"config_dir":cli.replace("$ROOT",root.to_str().unwrap())});
             }
+            assert_eq!(
+                aac_files::login_rollback::selected_ccs_root(
+                    &options.ccs_home,
+                    &options.environment,
+                    options.cli["config_dir"].as_str(),
+                )
+                .unwrap(),
+                expected,
+                "agent selector differs: {}",
+                case["name"]
+            );
             let result = Config::load(&options);
             assert!(
                 result.is_ok(),

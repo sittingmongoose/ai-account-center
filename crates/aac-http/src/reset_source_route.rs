@@ -180,6 +180,15 @@ pub(crate) fn resolve(ctx: &SourceContext, account: &str) -> Res<Target> {
 /// them for the adapter: a registered profile with a decodable `chatgpt_account_id`.
 fn codex_profile(ccs: &Path, name: &str) -> Res<(String, String)> {
     let unavailable = "credential-host-unavailable";
+    match aac_files::login_rollback::read_switch(ccs) {
+        Ok(Some(switch)) if switch.codex.is_some() => {
+            // The quarantine retires every saved Codex copy while step 3 is on. Until reset
+            // reads/writes are rebound to the pinned T3 login, refuse honestly and specifically.
+            return Err("step3-reset-unavailable");
+        }
+        Ok(_) => {}
+        Err(_) => return Err(unavailable),
+    }
     let registry = read_file(&ccs.join("codex-profiles.yaml"), 4 * 1024 * 1024)
         .map_err(|()| "registry-unavailable")?;
     let profiles = match registry {
@@ -1636,5 +1645,65 @@ elif action == 'claim':
             json!({"outcome": "not-sent"})
         );
         assert!(!log_file.exists());
+    }
+    #[test]
+    fn step3_quarantine_refuses_the_retired_saved_copy_specifically() {
+        use base64::Engine;
+        let root = tempfile::tempdir().unwrap();
+        let ccs = root.path().to_path_buf();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let instance = ccs.join("codex-instances/work");
+        std::fs::create_dir_all(&instance).unwrap();
+        let account = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(json!({"https://api.openai.com/auth.chatgpt_account_id":account}).to_string());
+        std::fs::write(
+            instance.join("auth.json"),
+            json!({"tokens":{"id_token":format!("header.{payload}.signature")}}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            ccs.join("codex-profiles.yaml"),
+            b"version: '1'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-11-01T00:00:00Z'\n    last_used: null\n",
+        )
+        .unwrap();
+        let places = aac_files::login_rollback::Places {
+            home: root.path().to_path_buf(),
+            ccs: ccs.clone(),
+        };
+        let pin = aac_files::login_rollback::CodexPin {
+            identity: "a".repeat(64),
+            email: "fixture@example.com".into(),
+        };
+        let switch = aac_files::login_rollback::Switch {
+            version: 1,
+            since: "2026-11-27T18:00:00Z".into(),
+            codex: Some(std::collections::BTreeMap::from([("work".to_owned(), pin)])),
+            claude_renewal_host: None,
+        };
+        aac_files::login_rollback::quarantine(
+            &places,
+            &[aac_files::login_rollback::Planned {
+                kind: aac_files::login_rollback::Kind::CodexSaved,
+                profile: "work".into(),
+            }],
+            Some(&switch),
+            "2026-11-27T18:00:00Z",
+            "restore",
+        )
+        .unwrap();
+        assert!(
+            !instance.join("auth.json").exists(),
+            "the saved copy was quarantined"
+        );
+        let ctx = SourceContext::from_env(root.path(), None);
+        assert_eq!(
+            resolve(&ctx, "codex:work").err(),
+            Some("step3-reset-unavailable")
+        );
     }
 }

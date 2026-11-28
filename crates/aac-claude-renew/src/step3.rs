@@ -8,6 +8,9 @@
 
 use std::path::Path;
 
+#[path = "../../aac-files/src/step3_switch.rs"]
+mod step3_switch;
+
 /// Which sign-ins the runner renews.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Step3 {
@@ -27,34 +30,40 @@ pub fn path(ccs_dir: &Path) -> std::path::PathBuf {
     ccs_dir.join("logins-step3.json")
 }
 
-/// Reads the switch.
+/// Reads the switch. Only a genuinely absent file is Off before parsing; a present file that
+/// cannot be admitted or proven against the one schema is Paused, never normal renewal.
 pub fn read(ccs_dir: &Path) -> Step3 {
     let file = path(ccs_dir);
-    match std::fs::symlink_metadata(&file) {
+    let meta = match std::fs::symlink_metadata(&file) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Step3::Off,
-        Ok(meta) if meta.is_file() && meta.len() <= MAX_BYTES => {}
-        _ => return Step3::Paused,
+        Ok(meta) => meta,
+        Err(_) => return Step3::Paused,
+    };
+    if !meta.is_file() || meta.len() > MAX_BYTES {
+        return Step3::Paused;
     }
-    let Ok(text) = std::fs::read_to_string(&file) else {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let root_owner = std::fs::metadata(ccs_dir).map(|root| root.uid()).ok();
+        if meta.mode() & 0o077 != 0 || meta.nlink() != 1 || root_owner != Some(meta.uid()) {
+            return Step3::Paused;
+        }
+    }
+    let Ok(bytes) = std::fs::read(&file) else {
         return Step3::Paused;
     };
-    parse(&text)
+    parse(&String::from_utf8_lossy(&bytes))
 }
 
-/// Parses the switch's text.
+/// Parses the switch's text through the same schema as the dashboard and Codex reader.
 pub fn parse(text: &str) -> Step3 {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+    let Some(switch) = step3_switch::Switch::parse(text.as_bytes()) else {
         return Step3::Paused;
     };
-    if value["version"] != 1 || !value.is_object() {
-        return Step3::Paused;
-    }
-    match value.get("claudeRenewalHost") {
-        None | Some(serde_json::Value::Null) => Step3::Off,
-        Some(serde_json::Value::String(host)) if crate::config::safe_name(host) => {
-            Step3::RenewOnly(host.clone())
-        }
-        Some(_) => Step3::Paused,
+    match switch.claude_renewal_host {
+        None => Step3::Off,
+        Some(host) => Step3::RenewOnly(host),
     }
 }
 
@@ -94,14 +103,38 @@ mod tests {
             r#"{"version":1,"since":"2026-11-27T18:00:00Z","codex":null,"claudeRenewalHost":"ubuntu"}"#,
         )
         .expect("switch");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path(dir.path()), std::fs::Permissions::from_mode(0o600))
+                .expect("private switch mode");
+        }
         assert_eq!(read(dir.path()), Step3::RenewOnly("ubuntu".into()));
-        assert_eq!(parse(r#"{"version":1,"codex":{}}"#), Step3::Off);
+        for damaged in [
+            r#"{"version":1}"#,
+            r#"{"version":1,"since":"2026-11-27T18:00:00Z","claudeRenewalHos":"ubuntu"}"#,
+        ] {
+            std::fs::write(path(dir.path()), damaged).expect("damaged switch");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path(dir.path()), std::fs::Permissions::from_mode(0o600))
+                    .expect("private switch mode");
+            }
+            assert_eq!(read(dir.path()), Step3::Paused, "{damaged}");
+        }
+        assert_eq!(
+            parse(r#"{"version":1,"since":"2026-11-27T18:00:00Z","codex":{}}"#),
+            Step3::Off
+        );
         for bad in [
             "",
             "[]",
-            r#"{"version":2,"claudeRenewalHost":"ubuntu"}"#,
-            r#"{"version":1,"claudeRenewalHost":"bad;name"}"#,
-            r#"{"version":1,"claudeRenewalHost":7}"#,
+            r#"{"version":1}"#,
+            r#"{"version":1,"since":"2026-11-27T18:00:00Z","claudeRenewalHos":"ubuntu"}"#,
+            r#"{"version":2,"since":"2026-11-27T18:00:00Z","claudeRenewalHost":"ubuntu"}"#,
+            r#"{"version":1,"since":"2026-11-27T18:00:00Z","claudeRenewalHost":"bad;name"}"#,
+            r#"{"version":1,"since":"2026-11-27T18:00:00Z","claudeRenewalHost":7}"#,
         ] {
             assert_eq!(parse(bad), Step3::Paused, "{bad}");
         }
