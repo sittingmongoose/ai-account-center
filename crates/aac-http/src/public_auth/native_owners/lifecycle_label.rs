@@ -28,8 +28,10 @@ pub(super) fn route(method: &axum::http::Method, path: &str) -> Option<String> {
     (*method == Method::PATCH || account_segment(&id)).then_some(id)
 }
 
+/// Every renameable account id has a provider prefix. The retired console wallet rows
+/// (`plan-opencode-go-console-*`) are no longer produced, so they are not accepted here.
 fn account_segment(id: &str) -> bool {
-    id.contains(':') || id.starts_with("plan-opencode-go-console-")
+    id.contains(':')
 }
 
 pub(super) async fn handle(
@@ -469,6 +471,21 @@ mod tests {
     use crate::public_auth::{DashboardAccess, DashboardPrincipal};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_route_no_longer_takes_retired_console_wallet_ids() {
+        use axum::http::Method;
+        let console = "/api/accounts/plan-opencode-go-console-web-0123456789ab";
+        assert_eq!(route(&Method::OPTIONS, console), None);
+        assert_eq!(
+            route(&Method::OPTIONS, "/api/accounts/codex%3Atwo").as_deref(),
+            Some("codex:two")
+        );
+        assert!(!account_segment(
+            "plan-opencode-go-console-mac-0123456789ab"
+        ));
+        assert!(account_segment("claude:work"));
+    }
 
     #[test]
     fn label_migrates_the_legacy_registry_and_changes_no_other_entry() {
