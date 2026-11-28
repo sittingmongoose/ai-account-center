@@ -1294,6 +1294,28 @@ mod tests {
         assert!(verdict.unwrap_err().contains("cannot be read"));
     }
 
+    /// The fixture's settings give ubuntu (this Linux build's dashboard computer) the packaged
+    /// alias `ubuntu-vm`, as the VM's real settings do; it is still this computer, the others
+    /// stay remote.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn renewal_settings_place_the_aliased_dashboard_computer_here() {
+        if std::env::var("AAC_DASHBOARD_COMPUTER").is_ok_and(|v| !v.trim().is_empty()) {
+            return;
+        }
+        let (_dir, places) = fixture();
+        let (hosts, ignore) = renewal_settings(&places).unwrap();
+        assert_eq!(
+            hosts,
+            vec![
+                ("ubuntu".to_owned(), true),
+                ("nas1".to_owned(), false),
+                ("mac".to_owned(), false)
+            ]
+        );
+        assert_eq!(ignore, vec!["retired".to_owned()]);
+    }
+
     /// Review low 1: a second profile of an account on the renewal computer is named in the dry
     /// run and blocks switch-on until it is on a static token or listed for quarantine; the
     /// renewed profiles are listed and can never be quarantined there.
