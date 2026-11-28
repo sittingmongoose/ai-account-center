@@ -1262,6 +1262,7 @@ export function accountsViewModel(data, ctx = {}) {
   });
   return {
     version: ACCOUNTS_VIEW_VERSION,
+    loginsStep3: data?.loginsStep3 === true,
     accessMessage: c.check?.accessMode === 'open' ? 'Accounts & Settings needs dashboard sign-in: run `ai-account-center dashboard auth setup` on the dashboard computer.' : '',
     colA: providers.filter(p => p.column === 'a'),
     colB: providers.filter(p => p.column === 'b'),

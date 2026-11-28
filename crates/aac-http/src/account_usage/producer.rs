@@ -138,7 +138,13 @@ impl Producer {
             return Vec::new();
         };
         let entries = self.renewal_entries(now).await;
-        self.codex_rows(profiles, &entries, now).await
+        let root = self.root.clone();
+        let mode = tokio::task::spawn_blocking(move || {
+            codex_instances::mode(Some(aac_files::login_rollback::read_switch(&root)))
+        })
+        .await
+        .unwrap_or(codex_instances::Mode::Damaged);
+        self.codex_rows(profiles, &entries, now, mode).await
     }
 
     /// Build all desktop/transport variants in one pass. Only the presentation
@@ -180,7 +186,9 @@ impl Producer {
         let history = self.mac_history_rows(&disk.claude_private, now).await;
         let claude = self.claude_rows(&disk.claude, &disk.claude_private, &history, force);
         let entries = self.renewal_entries(now).await;
-        let codex = self.codex_rows(disk.codex, &entries, now);
+        let logins_mode = disk.logins_mode.clone();
+        let logins_step3 = logins_mode != codex_instances::Mode::Saved;
+        let codex = self.codex_rows(disk.codex, &entries, now, logins_mode);
         let (additional, codex, claude) = tokio::join!(additional, codex, claude);
 
         let mut samples = Vec::with_capacity(4);
@@ -209,6 +217,7 @@ impl Producer {
                         lifecycle: &companions.lifecycle,
                         signins: companions.signins.as_ref(),
                         server: companions.server.as_ref(),
+                        logins_step3,
                     },
                 )?);
             }
@@ -339,19 +348,14 @@ impl Producer {
         profiles: Vec<SavedCodex>,
         entries: &HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus>,
         now: i64,
+        mode: codex_instances::Mode,
     ) -> Vec<Value> {
         use futures_util::{StreamExt, stream};
         if profiles.is_empty() {
             return vec![];
         }
         // Central Logins step 3: with the switch on, only tool-owned logins are read.
-        let switch = {
-            let root = self.root.clone();
-            tokio::task::spawn_blocking(move || aac_files::login_rollback::read_switch(&root))
-                .await
-                .ok()
-        };
-        match codex_instances::mode(switch) {
+        match mode {
             codex_instances::Mode::Saved => {}
             mode => return self.instance_codex_rows(profiles, mode, now).await,
         }
@@ -740,6 +744,7 @@ struct Disk {
     claude_private: Vec<Value>,
     claude_pending: Vec<Value>,
     codex: Vec<SavedCodex>,
+    logins_mode: codex_instances::Mode,
 }
 
 impl Disk {
@@ -780,6 +785,7 @@ impl Disk {
             claude_private,
             claude_pending: claude::pending(root).unwrap_or_default(),
             codex: codex_names(root)?,
+            logins_mode: codex_instances::mode(Some(aac_files::login_rollback::read_switch(root))),
         })
     }
 }
@@ -892,6 +898,37 @@ mod tests {
             "failed" => CodexRenewalState::Failed,
             _ => CodexRenewalState::Skipped,
         }
+    }
+
+    #[test]
+    fn the_disk_read_carries_the_step_3_switch_state_for_rows_and_the_view() {
+        let dir = tempfile::tempdir().expect("fixture root");
+        let root = fs::canonicalize(dir.path()).expect("canonical root");
+        set_mode(&root, 0o700);
+        assert_eq!(
+            Disk::load(&root).expect("load disk").logins_mode,
+            codex_instances::Mode::Saved
+        );
+
+        let identity = "a".repeat(64);
+        private_bytes(
+            &root.join("logins-step3.json"),
+            format!(
+                r#"{{"version":1,"since":"2026-11-27T18:00:00Z","codex":{{"work":{{"identity":"{identity}","email":"work@example.test"}}}}}}"#
+            )
+            .as_bytes(),
+        );
+        assert!(matches!(
+            Disk::load(&root).expect("load disk").logins_mode,
+            codex_instances::Mode::Instance(_)
+        ));
+
+        private_bytes(&root.join("logins-step3.json"), b"not json");
+        assert_eq!(
+            Disk::load(&root).expect("load disk").logins_mode,
+            codex_instances::Mode::Damaged,
+            "a damaged switch is an error, never off"
+        );
     }
 
     #[test]

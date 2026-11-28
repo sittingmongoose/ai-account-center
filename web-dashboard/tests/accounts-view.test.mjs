@@ -498,6 +498,15 @@ test('the Claude trash lists each profile with Restore; Delete now is live with 
   assert.equal(provider(vm, 'codex').trash.length, 0);
 });
 
+test('Central Logins step 3: the Accounts view carries only the server flag', () => {
+  const vm = accountsViewModel(data([account()], { providers: providers(), loginsStep3: true }), { now });
+  assert.equal(vm.loginsStep3, true);
+  const off = accountsViewModel(data([account()], { providers: providers(), loginsStep3: false }), { now });
+  assert.equal(off.loginsStep3, false);
+  const missing = accountsViewModel(data([account()], { providers: providers() }), { now });
+  assert.equal(missing.loginsStep3, false);
+});
+
 test('Antigravity: an account row has Sign in again and Remove, and no switch slot or policy', () => {
   const ag = account({
     id: 'antigravity:one',

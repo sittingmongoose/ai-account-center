@@ -13,6 +13,8 @@ pub const ACCOUNTS_VIEW_VERSION: u64 = 4;
 #[serde(default, rename_all = "camelCase")]
 pub struct AccountsView {
     pub version: u64,
+    /// The server dashboard's Central Logins step-3 state for Codex.
+    pub logins_step3: bool,
     #[serde(deserialize_with = "nullable")]
     pub access_message: String,
     #[serde(deserialize_with = "nullable")]

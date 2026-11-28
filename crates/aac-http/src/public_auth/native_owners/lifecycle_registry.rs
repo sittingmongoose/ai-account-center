@@ -414,6 +414,7 @@ mod tests {
                 lifecycle: &lifecycle,
                 signins: None,
                 server: None,
+                logins_step3: false,
             },
         )
         .expect("dashboard sample");

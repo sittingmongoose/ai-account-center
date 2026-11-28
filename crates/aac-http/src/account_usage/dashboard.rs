@@ -236,6 +236,8 @@ pub struct Input<'a> {
     pub signins: Option<&'a Value>,
     /// Safe listener facts, if mounted by composition.
     pub server: Option<&'a Value>,
+    /// Central Logins step 3 is on for Codex on this computer.
+    pub logins_step3: bool,
 }
 
 /// Produce the requested desktop and transport generation.
@@ -259,7 +261,8 @@ pub fn build(desktop: Desktop, secure: bool, input: Input<'_>) -> Result<Dashboa
     }
     settings["visibilityAvailable"] = json!(input.visibility_available);
     let mut dashboard = json!({
-        "schemaVersion":1,"updatedAt":"","settings":settings,"providers":providers,"accounts":accounts
+        "schemaVersion":1,"updatedAt":"","settings":settings,"providers":providers,"accounts":accounts,
+        "loginsStep3":input.logins_step3
     });
     if let Some(server) = input.server {
         dashboard["server"] = server.clone();
@@ -295,6 +298,7 @@ mod tests {
                 lifecycle: &lifecycle,
                 signins: None,
                 server: None,
+                logins_step3: false,
             },
         )
         .unwrap();
@@ -302,5 +306,29 @@ mod tests {
             sample.dashboard.get("codexAutoSwitch").is_none(),
             "retired codexAutoSwitch wire block must be absent"
         );
+    }
+
+    #[test]
+    fn the_view_carries_the_central_logins_step_3_flag() {
+        let visibility = empty_visibility();
+        let lifecycle = Lifecycle::default();
+        for flag in [false, true] {
+            let sample = build(
+                Desktop::Mac,
+                true,
+                Input {
+                    rows: Vec::new(),
+                    visibility: &visibility,
+                    visibility_available: true,
+                    refresh_seconds: 60,
+                    lifecycle: &lifecycle,
+                    signins: None,
+                    server: None,
+                    logins_step3: flag,
+                },
+            )
+            .unwrap();
+            assert_eq!(sample.dashboard["loginsStep3"], json!(flag));
+        }
     }
 }

@@ -333,6 +333,7 @@ mod tests {
                         lifecycle: &dashboard::Lifecycle::default(),
                         signins: None,
                         server: None,
+                        logins_step3: false,
                     },
                 )
                 .expect("fixture generation");

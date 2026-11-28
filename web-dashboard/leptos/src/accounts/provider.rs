@@ -8,7 +8,7 @@
 use super::Page;
 use super::actions::{ActionControl, ReasonLine, RowLine, icon_name};
 use super::flow::FlowPanel;
-use super::model::{Provider, Row};
+use super::model::{Action, Provider, Row};
 use crate::ui::*;
 use leptos::prelude::*;
 
@@ -179,12 +179,47 @@ pub fn ProviderCard(page: Page, id: String) -> impl IntoView {
     }
 }
 
+/// A row's actions as the server view's Central Logins state draws them. With step 3 on, AAC's own Codex
+/// device-code sign-in is not offered: the account signs in through T3 on this computer, and Remove stays where it was.
+fn shown_actions(row: &Row, logins_step3: bool) -> Vec<Action> {
+    let actions = row.actions.clone();
+    if !logins_step3 || row.provider != "codex" {
+        return actions;
+    }
+    let mut replaced = false;
+    actions
+        .into_iter()
+        .map(|action| {
+            if action.act == "signin-again" && !replaced {
+                replaced = true;
+                Action {
+                    kind: "quiet".into(),
+                    label: "Signs in through T3 on this computer".into(),
+                    ..Action::default()
+                }
+            } else {
+                action
+            }
+        })
+        .collect()
+}
+
 /// One account row with its lines: the remove / restore / refusal line, and the reason a tap on an off control
 /// opened.
 #[component]
 fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
     let reason = RwSignal::new(String::new());
     let get = move || row.get().unwrap_or_default();
+    let actions = Memo::new(move |_| {
+        let step3 = page
+            .view
+            .with(|view| view.as_ref().is_some_and(|view| view.logins_step3));
+        row.with(|row| {
+            row.as_ref()
+                .map(|row| shown_actions(row, step3))
+                .unwrap_or_default()
+        })
+    });
     let id = Memo::new(move |_| row.with(|r| r.as_ref().map(|r| r.id.clone()).unwrap_or_default()));
     let line = Signal::derive(move || {
         row.with(|r| r.as_ref().map(|r| r.line.clone()).unwrap_or_default())
@@ -235,18 +270,17 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
                 </div>
                 <div class="acc-acts">
                     {move || {
-                        let r = get();
-                        let n = r.actions.len();
+                        let acts = actions.get();
+                        let n = acts.len();
                         // the remove control has its own cell (beside the name on narrow cards)
-                        r.actions.iter().cloned().enumerate().filter(|(i, a)| !(i + 1 == n && a.icon == "trash"))
+                        acts.iter().cloned().enumerate().filter(|(i, a)| !(i + 1 == n && a.icon == "trash"))
                             .map(|(_, a)| view! { <ActionControl a=a page=page reason=set_reason/> })
                             .collect_view()
                     }}
                 </div>
                 <div class="acc-trash">
                     {move || {
-                        let r = get();
-                        r.actions.last().filter(|a| a.icon == "trash").cloned().map(|a| view! { <ActionControl a=a page=page reason=set_reason/> })
+                        actions.with(|acts| acts.last().filter(|a| a.icon == "trash").cloned().map(|a| view! { <ActionControl a=a page=page reason=set_reason/> }))
                     }}
                 </div>
             </div>
@@ -263,6 +297,74 @@ fn email_parts(email: String) -> impl IntoView {
             view! { {local.to_string()}<wbr/>{format!("@{domain}")} }.into_any()
         }
         None => view! { {email} }.into_any(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::accounts::model::Action;
+
+    fn signin() -> Action {
+        Action {
+            act: "signin-again".into(),
+            value: "codex:one".into(),
+            label: "Sign in again".into(),
+            icon: "login".into(),
+            enabled: true,
+            probe: "signin-again:codex:one".into(),
+            ..Action::default()
+        }
+    }
+
+    fn remove() -> Action {
+        Action {
+            kind: "icon".into(),
+            act: "remove".into(),
+            value: "codex:one".into(),
+            icon: "trash".into(),
+            enabled: true,
+            probe: "remove:codex:one".into(),
+            ..Action::default()
+        }
+    }
+
+    #[test]
+    fn step_3_replaces_a_codex_sign_in_with_the_t3_note() {
+        let row = Row {
+            provider: "codex".into(),
+            actions: vec![signin(), remove()],
+            ..Row::default()
+        };
+        let shown = shown_actions(&row, true);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[0].kind, "quiet");
+        assert_eq!(shown[0].label, "Signs in through T3 on this computer");
+        assert!(!shown.iter().any(|a| a.act == "signin-again"));
+        assert_eq!(shown[1].icon, "trash");
+
+        let unchanged = shown_actions(&row, false);
+        assert_eq!(unchanged[0].act, "signin-again");
+        assert_eq!(unchanged[0].label, "Sign in again");
+    }
+
+    #[test]
+    fn step_3_never_rewrites_another_provider_or_a_missing_action() {
+        let antigravity = Row {
+            provider: "antigravity".into(),
+            actions: vec![signin(), remove()],
+            ..Row::default()
+        };
+        assert_eq!(shown_actions(&antigravity, true)[0].act, "signin-again");
+
+        let codex = Row {
+            provider: "codex".into(),
+            actions: vec![remove()],
+            ..Row::default()
+        };
+        let shown = shown_actions(&codex, true);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].icon, "trash");
     }
 }
 

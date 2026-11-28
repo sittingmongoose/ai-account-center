@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// How the Codex rows are read on this computer.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Mode {
     /// No switch (or a switch without Codex pins): AAC's saved copies, as before step 3.
     Saved,

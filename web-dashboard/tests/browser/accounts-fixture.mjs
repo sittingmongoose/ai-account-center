@@ -14,7 +14,7 @@ const caps = (more = {}) => ({ add: true, signInAgain: true, replaceKey: true, r
 const provider = (id, accountCount, more = {}) => ({ id, accountCount, signIn: { available: true }, capabilities: caps(more) });
 
 /** The dashboard response: every provider, long made-up names, one hidden account. `rich` adds the other providers' accounts. */
-export function dashboard({ rich = false } = {}) {
+export function dashboard({ rich = false, loginsStep3 = false } = {}) {
 	const accounts = [
 		account('claude:one', 'claude', 'one.claude@example.invalid', 'max', [quota('five_hour', 'Five-hour usage', 30, 300, 120), quota('seven_day', 'Weekly usage', 20, 10080, 3000)], { capabilities: { claudeProfileId: 'one', claudePlatforms: ['mac', 'windows'] } }),
 		account('codex:one', 'codex', 'codex.active@example.invalid', 'pro', [quota('five_hour', '5h', 55, 300, 130), quota('seven_day', 'week', 44, 10080, 2300)], { isActive: true, capabilities: { codexProfile: 'one' } }),
@@ -39,6 +39,7 @@ export function dashboard({ rich = false } = {}) {
 	return {
 		schemaVersion: 1,
 		updatedAt: at(-1),
+		loginsStep3,
 		accounts,
 		providers: ['claude', 'codex', 'antigravity', 'cursor', 'muse', 'kimi-code', 'qwen', 'zai', 'opencode-go'].map((id) => provider(id, count(id))),
 		settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: rich ? ['cursor:c2'] : [], trayHiddenProviders: [], trayHiddenAccountIds: [] },
@@ -134,12 +135,13 @@ export function fakeServer(over = {}) {
 		removed: new Set(),
 		runningJobs: [],
 		rich: false,
+		loginsStep3: false,
 		update: null,
 		...over,
 	};
 	const registry = () => ({
 		providers: [],
-		accounts: dashboard({ rich: s.rich }).accounts.map((a) => regAccount(a.id, a.provider,
+		accounts: dashboard({ rich: s.rich, loginsStep3: s.loginsStep3 }).accounts.map((a) => regAccount(a.id, a.provider,
 			// The live logins: only their Remove is refused (they sign in again in place).
 			a.id === 'codex:one' || a.id === 'antigravity:a1' ? { removeRefusal: 'account_active' }
 				: a.provider === 'kimi-code' ? { credential: { kind: 'aac-key', last4: '9f3a' } } : {}))
@@ -149,7 +151,7 @@ export function fakeServer(over = {}) {
 	});
 	const json = (status, payload) => ({ status, contentType: 'application/json', body: JSON.stringify(payload) });
 	const routes = [
-		['GET', /^\/api\/accounts\/dashboard$/, () => { const d = dashboard({ rich: s.rich }); d.accounts = d.accounts.filter((a) => !s.removed.has(a.id)); return json(200, d); }],
+		['GET', /^\/api\/accounts\/dashboard$/, () => { const d = dashboard({ rich: s.rich, loginsStep3: s.loginsStep3 }); d.accounts = d.accounts.filter((a) => !s.removed.has(a.id)); return json(200, d); }],
 		['GET', /^\/api\/accounts\/registry$/, () => json(200, registry())],
 		// Accounts reads these two at entry; an empty fixture home has no native profile store.
 		['GET', /^\/api\/claude\/desktop-profiles$/, () => json(200, { profiles: [] })],

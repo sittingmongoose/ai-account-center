@@ -384,6 +384,17 @@ export const tests = {
 		await t.equal('no refusal line', await t.page.$$eval(`${row('codex:one')} .row-line.refuse`, (els) => els.length), 0);
 	},
 
+	async 'accounts: Logins step 3 hides AAC Codex sign-in behind the T3 note'(t) {
+		const server = fakeServer({ loginsStep3: true });
+		await open(t, server);
+		for (const id of ['codex:one', 'codex:two']) {
+			await t.until(`${id} names T3`, (rowId) => document.querySelector(`.acc-item[data-row="${rowId}"] .acc-acts .quiet`)?.textContent === 'Signs in through T3 on this computer', id, { timeout: 15000, hard: true });
+			await t.equal(`${id} has no AAC sign-in control`, await t.page.$$eval(`${row(id)} [data-probe^="signin-again:"]`, (els) => els.length), 0);
+			await t.equal(`${id} keeps Remove`, await t.page.$$eval(`${row(id)} [data-probe="remove:${id}"]`, (els) => els.length), 1);
+		}
+		await t.check('no Codex sign-in request was made', !changes(server).some((r) => r.path.includes('signin-again')));
+	},
+
 	async 'accounts: the live Antigravity login signs in again in place'(t) {
 		// The Antigravity row is one of the rich fixture's accounts.
 		const server = fakeServer({ rich: true });
