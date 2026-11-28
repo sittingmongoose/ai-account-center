@@ -1130,7 +1130,14 @@ mod tests {
 
     #[test]
     fn the_agent_commands_select_the_dashboard_root() {
-        let home = PathBuf::from("/fixture/home");
+        // An absolute fixture root on this OS (`/fixture` is not absolute on Windows).
+        let root = if cfg!(windows) {
+            "C:/fixture"
+        } else {
+            "/fixture"
+        };
+        let at = |rel: &str| format!("{root}/{rel}");
+        let home = PathBuf::from(at("home"));
         let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
             pairs
                 .iter()
@@ -1143,21 +1150,21 @@ mod tests {
         assert_eq!(ccs(&env(&[]), None), home.join(".ccs"));
         // CCS_DIR is the AAC folder itself.
         assert_eq!(
-            ccs(&env(&[("CCS_DIR", "/fixture/aac-data")]), None),
-            PathBuf::from("/fixture/aac-data")
+            ccs(&env(&[("CCS_DIR", &at("aac-data"))]), None),
+            PathBuf::from(at("aac-data"))
         );
         // Legacy CCS_HOME is a home: the AAC folder is its .ccs.
         assert_eq!(
-            ccs(&env(&[("CCS_HOME", "/fixture/alternate-home")]), None),
-            PathBuf::from("/fixture/alternate-home/.ccs")
+            ccs(&env(&[("CCS_HOME", &at("alternate-home"))]), None),
+            PathBuf::from(at("alternate-home")).join(".ccs")
         );
         // CCS_DIR wins over CCS_HOME; empty values are skipped.
         assert_eq!(
             ccs(
-                &env(&[("CCS_DIR", "/fixture/aac-data"), ("CCS_HOME", "/x")]),
+                &env(&[("CCS_DIR", &at("aac-data")), ("CCS_HOME", &at("x"))]),
                 None
             ),
-            PathBuf::from("/fixture/aac-data")
+            PathBuf::from(at("aac-data"))
         );
         assert_eq!(
             ccs(&env(&[("CCS_DIR", ""), ("CCS_HOME", "")]), None),
@@ -1165,11 +1172,8 @@ mod tests {
         );
         // --data-root (printed in the restore command) wins over both.
         assert_eq!(
-            ccs(
-                &env(&[("CCS_DIR", "/fixture/aac-data")]),
-                Some("/fixture/printed")
-            ),
-            PathBuf::from("/fixture/printed")
+            ccs(&env(&[("CCS_DIR", &at("aac-data"))]), Some(&at("printed"))),
+            PathBuf::from(at("printed"))
         );
     }
 
@@ -1333,7 +1337,9 @@ mod tests {
     /// Review low 1: a second profile of an account on the renewal computer is named in the dry
     /// run and blocks switch-on until it is on a static token or listed for quarantine; the
     /// renewed profiles are listed and can never be quarantined there.
+    /// The fixture names ubuntu, the Linux build's dashboard computer, as the renewal computer.
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_second_profile_on_the_renewal_computer_is_named_and_refused() {
         let (_dir, places) = fixture();
         let (lines, verdict) = check_claude(&places, &request(&[], Some("ubuntu")));
