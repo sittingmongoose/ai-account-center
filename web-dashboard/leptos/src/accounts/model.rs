@@ -487,6 +487,19 @@ pub struct About {
     pub version: String,
 }
 
+/// The view, or why it can't be drawn: empty (nothing pushed yet), unreadable, or another version.
+pub fn parse(json: &str) -> Result<Option<AccountsView>, &'static str> {
+    if json.is_empty() {
+        return Ok(None);
+    }
+    let view: AccountsView = serde_json::from_str(json)
+        .map_err(|_| "The Accounts & Settings view could not be read.")?;
+    if view.version != ACCOUNTS_VIEW_VERSION {
+        return Err("This dashboard sent an Accounts & Settings view this page does not know.");
+    }
+    Ok(Some(view))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,17 +515,4 @@ mod tests {
         assert_eq!(plain.label, "");
         assert!(!plain.can_rename);
     }
-}
-
-/// The view, or why it can't be drawn: empty (nothing pushed yet), unreadable, or another version.
-pub fn parse(json: &str) -> Result<Option<AccountsView>, &'static str> {
-    if json.is_empty() {
-        return Ok(None);
-    }
-    let view: AccountsView = serde_json::from_str(json)
-        .map_err(|_| "The Accounts & Settings view could not be read.")?;
-    if view.version != ACCOUNTS_VIEW_VERSION {
-        return Err("This dashboard sent an Accounts & Settings view this page does not know.");
-    }
-    Ok(Some(view))
 }
