@@ -5,15 +5,19 @@
 import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 
 const at = (minutes) => new Date(Date.parse('2026-11-26T15:00:00Z') + minutes * 60_000).toISOString();
-const OC_CARD = '.hcard[aria-label^="opencode.go@example.invalid"]';
+// The card's aria-label is "<card label> <identity> details", so match the identity anywhere in it.
+const OC_CARD = '.hcard[aria-label*="opencode.go@example.invalid"]';
+const WALLET = { key: 'zen-balance', label: 'Wallet', kind: 'balance', usedPercent: null, remainingPercent: null, resetAt: null, windowMinutes: null, used: null, limit: null, remaining: 18.25, unit: 'USD' };
+const WALLET_UNAVAILABLE = { ...WALLET, remaining: null, status: 'unavailable' };
 
-function withWalletDashboard() {
+/** Home with the fixture's OpenCode Go card holding its 5-hour window plus, when given, its wallet window. */
+function withWalletDashboard(wallet) {
 	const data = homeAccounts();
 	const now = Date.now();
 	const oc = data.accounts.find((a) => a.provider === 'opencode-go');
 	oc.windows = [
 		{ key: 'five_hour', label: 'Five-hour usage', kind: 'rate_limit', usedPercent: 41, remainingPercent: 59, resetAt: new Date(now + 120 * 60_000).toISOString(), windowMinutes: 300, used: null, limit: null, unit: null },
-		{ key: 'zen-balance', label: 'Wallet', kind: 'balance', usedPercent: null, remainingPercent: null, resetAt: null, windowMinutes: null, used: null, limit: null, remaining: 18.25, unit: 'USD' },
+		...(wallet ? [wallet] : []),
 	];
 	return data;
 }
@@ -305,25 +309,33 @@ export const tests = {
 
 	// The deliverable screenshots (402x874): one OpenCode Go card with its wallet
 	// balance line inside the card, and the same card with no console session.
+	// A pasted session whose read failed with nothing cached reads Wallet Unavailable.
 	async 'opencode-go card shows the per-account Wallet line at phone 402x874'(t) {
 		await t.newContext({ viewport: { width: 402, height: 874 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
 		await t.app.signIn();
-		await t.app.stub('/api/accounts/dashboard', withWalletDashboard());
 		await t.app.stub('/api/claude/desktop-profiles', homeProfiles());
-		await t.goto('/app/home', { settleMs: 300 });
-		await t.until('Home renders the OpenCode Go card', () => document.querySelectorAll('.hcard').length >= 6, null, { timeout: 60000, hard: true });
-		await t.crop('opencode-go-card-with-wallet-phone-402', OC_CARD, 'phone 402: the OpenCode Go card carries the Wallet $18.25 balance beside its 5-hour usage window');
-		const withText = await t.page.evaluate(() => document.querySelector('.hcard[aria-label^="opencode.go@example.invalid"]')?.textContent || '');
+		const cardText = () => t.page.evaluate((sel) => document.querySelector(sel)?.textContent || '', OC_CARD);
+		const show = async (data, what) => {
+			await t.app.stub('/api/accounts/dashboard', data);
+			await t.goto('/app/home', { settleMs: 300 });
+			await t.until(`Home renders the OpenCode Go card (${what})`, (sel) => !!document.querySelector(sel), OC_CARD, { timeout: 60000, hard: true });
+		};
+
+		await show(withWalletDashboard(WALLET), 'wallet');
+		await t.crop('opencode-go-card-with-wallet-phone-402', OC_CARD, 'phone 402: the OpenCode Go card carries the Wallet $18.25 balance under its 5-hour usage window');
+		const withText = await cardText();
 		await t.check('wallet balance line renders inside the OpenCode Go card', /Wallet/.test(withText) && withText.includes('18.25'), withText.slice(0, 160));
 		const noOverflow = await t.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 		await t.check('OpenCode Go card with a wallet causes no sideways overflow at 402', noOverflow, 'scrollWidth exceeded innerWidth');
 		await t.audit('opencode-go wallet card phone 402');
 
-		await t.app.stub('/api/accounts/dashboard', homeAccounts());
-		await t.goto('/app/home', { settleMs: 300 });
-		await t.until('Home re-renders without the wallet', () => document.querySelectorAll('.hcard').length >= 6, null, { timeout: 60000, hard: true });
+		await show(withWalletDashboard(null), 'no session');
 		await t.crop('opencode-go-card-no-wallet-phone-402', OC_CARD, 'phone 402: the same OpenCode Go card with no console session shows no Wallet line');
-		const noText = await t.page.evaluate(() => document.querySelector('.hcard[aria-label^="opencode.go@example.invalid"]')?.textContent || '');
+		const noText = await cardText();
 		await t.check('no Wallet line without a console session', !/Wallet/.test(noText), noText.slice(0, 160));
+
+		await show(withWalletDashboard(WALLET_UNAVAILABLE), 'failed read');
+		const failText = await cardText();
+		await t.check('a failed read with nothing cached reads Wallet Unavailable, never $0', /Wallet/.test(failText) && /Unavailable/.test(failText) && !/\$?0\.00/.test(failText), failText.slice(0, 160));
 	},
 };
