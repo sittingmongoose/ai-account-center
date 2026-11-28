@@ -35,6 +35,7 @@ export const requests = Object.freeze({
   addClaude: (profileId, name, email) => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId, ...(name ? { label: name } : {}), ...(email ? { email } : {}) } }),
   openClaude: (profileId, platform) => ({ method: 'POST', path: `/api/claude/desktop-profiles/${enc(profileId)}/open`, body: { platform } }),
   addKey: (provider, key, name) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, key, ...(name ? { label: name } : {}) } }),
+  renameAccount: (id, newLabel) => ({ method: 'PATCH', path: `/api/accounts/${enc(id)}`, body: { label: newLabel } }),
   addSession: provider => ({ method: 'POST', path: '/api/accounts/add', body: { provider } }),
   addSupervised: (provider, profileName) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, profileName } }),
   signInAgain: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/signin-again`, body: {} }),
@@ -131,6 +132,18 @@ export function webSessionProblem(raw, surface) {
       return 'Paste the Cookie header from the Qwen console (name=value; ...).';
     }
   }
+  return '';
+}
+/**
+ * The display name an account row's rename asks for, checked the same way the server
+ * checks an account label (1 to 48 characters, something non-space, no control
+ * characters). '' when it is acceptable.
+ */
+export function labelProblem(name) {
+  const value = String(name ?? '').trim();
+  if (!value) return 'Name the account first.';
+  if (Array.from(value).length > 48) return 'Keep it within 48 characters.';
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) return 'That name has a character a name cannot contain.';
   return '';
 }
 /** A suggested name for a new profile that is not taken: "codex-4". */

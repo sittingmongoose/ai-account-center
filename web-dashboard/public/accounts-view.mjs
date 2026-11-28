@@ -750,6 +750,9 @@ export function lineView(rowId, label, l, ctx = {}) {
   const none = { shown: false, kind: '', icon: '', lead: '', text: '', actions: [] };
   if (!l) return none;
   const keep = btn('line-cancel', rowId, 'Keep', { style: 'ghost' });
+  if (l.kind === 'rename') {
+    return { shown: true, kind: 'refuse', icon: 'alert', lead: text(l.title), text: text(l.body), actions: [btn('line-cancel', rowId, 'OK')] };
+  }
   if (l.kind === 'refused') {
     return { shown: true, kind: 'refuse', icon: 'alert', lead: label, text: REFUSAL_LINE[l.code] || 'cannot be removed now.', actions: [btn('line-cancel', rowId, 'OK')] };
   }
@@ -1216,6 +1219,8 @@ export function accountsViewModel(data, ctx = {}) {
       const line = c.lines?.[account.id];
       return {
         id: account.id, provider: entry.id, email, meta, srcInline: src, status, sampled, sampledTip, src, srcSub,
+        label: text(account.label),
+        canRename: entry.id === 'claude' || entry.id === 'codex' || !!reg || (entry.id === 'antigravity' && !!text(account.capabilities?.antigravityProfileId)),
         profile: homeRow?.profile || '',
         actions: rowActions(entry.id, account, homeRow, c),
         line: lineView(account.id, email, line),

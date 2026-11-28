@@ -461,6 +461,67 @@ export const tests = {
 		await t.equal('no change was sent', changes(server).length, 0);
 	},
 
+	async 'accounts: renaming an account sends only the new name and keeps the page on screen'(t) {
+		const server = fakeServer();
+		await open(t, server, { width: 402, height: 874, phone: true });
+		// the selectors travel into the page as arguments: page functions see only the page
+		const sel = {
+			row: row('codex:two'),
+			pencil: `${row('codex:two')} [data-probe="rename:codex:two"]`,
+			input: `${row('codex:two')} [data-probe="rename-input:codex:two"]`,
+			error: `${row('codex:two')} .acc-rename-err`,
+			refusal: `${row('codex:two')} .row-line.refuse`,
+			meta: `${row('codex:two')} .acc-meta`,
+		};
+		const pencil = async (why) => {
+			try {
+				await t.page.click(sel.pencil, { timeout: 5000 });
+			} catch (error) {
+				const state = await t.page.evaluate((s) => document.querySelector(s.row)?.outerHTML.slice(0, 1500) || 'no row', sel);
+				throw new Error(`the pencil could not be pressed (${why}): ${error.message.split('\n')[0]} | row: ${state}`);
+			}
+			await t.page.waitForSelector(sel.input, { timeout: 5000 });
+		};
+		await t.check('the pencil sits on the name line, not on a line of its own', await t.page.evaluate((s) => {
+			const button = document.querySelector(s.pencil)?.getBoundingClientRect();
+			const name = document.querySelector(`${s.row} .acc-email`)?.getBoundingClientRect();
+			return !!button && !!name && button.top < name.bottom && button.bottom > name.top;
+		}, sel));
+		await pencil('first open');
+		await t.snap('accounts-rename-open-402x874');
+		// an empty name is refused where it is typed, sending nothing
+		await t.page.fill(sel.input, '   ');
+		await t.page.keyboard.press('Enter');
+		await t.until('the inline refusal', (s) => document.querySelector(s.error)?.textContent === 'Name the account first.', sel, { timeout: 5000 });
+		await t.equal('no request was sent', changes(server).length, 0);
+		await t.check('Enter in the field never opens the row\'s Details', await t.page.evaluate((s) => !document.querySelector('.details') && !document.querySelector(s.row)?.classList.contains('sel'), sel));
+		// Escape cancels the field
+		await t.page.fill(sel.input, 'Second account');
+		await t.page.keyboard.press('Escape');
+		await t.until('Escape closes the field', (s) => !document.querySelector(s.input) && !!document.querySelector(s.pencil), sel, { timeout: 5000 });
+		await t.equal('still no request was sent', changes(server).length, 0);
+		// a server refusal says why under the row, and the old name stays
+		await pencil('after Escape');
+		await t.page.fill(sel.input, 'Busy name');
+		await t.page.keyboard.press('Enter');
+		await t.until('the server refusal under the row', (s) => /Another change to these saved logins is running/.test(document.querySelector(s.refusal)?.textContent || ''), sel, { timeout: 10000 });
+		// Enter saves through the label route
+		await pencil('after the server refusal');
+		await t.page.fill(sel.input, 'Second account');
+		await t.page.keyboard.press('Enter');
+		await t.until('the rename toast', () => [...document.querySelectorAll('.toast')].some((el) => /Renamed to Second account/.test(el.textContent)), null, { timeout: 10000 });
+		const patches = changes(server);
+		await t.equal('the refused name, then the new name, each sent once', JSON.stringify(patches.map((r) => [r.method, r.path, r.body.label])), JSON.stringify([['PATCH', '/api/accounts/codex%3Atwo', 'Busy name'], ['PATCH', '/api/accounts/codex%3Atwo', 'Second account']]));
+		await t.until('the field closes and the new name shows', (s) => !document.querySelector(s.input) && /Second account/.test(document.querySelector(s.meta)?.textContent || ''), sel, { timeout: 15000 });
+		await t.check('the refusal line is gone after the save', await t.page.evaluate((s) => !document.querySelector(s.refusal), sel));
+		await t.noConsoleErrors('only the injected rename refusal reached the console', {
+			allow: [/^Failed to load resource: the server responded with a status of 409 \(Conflict\) http:\/\/127\.0\.0\.1:\d+\/api\/accounts\/codex%3Atwo$/],
+		});
+		await t.snap('accounts-rename-saved-402x874');
+		// nothing runs past either edge of the phone page while the field is open or after the save
+		await t.check('the phone page never scrolls sideways', await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), await t.page.evaluate(() => `${document.documentElement.scrollWidth} vs ${innerWidth}`));
+	},
+
 	async 'accounts: a refused control says why under its row and sends nothing'(t) {
 		const server = fakeServer();
 		await open(t, server);

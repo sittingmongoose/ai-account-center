@@ -125,6 +125,11 @@ pub struct Row {
     pub src_sub: String,
     #[serde(deserialize_with = "nullable")]
     pub profile: String,
+    /// The account's display name, as the dashboard row carries it (the rename seed).
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    /// Whether the row's name can be edited (the server PATCH supports this account kind).
+    pub can_rename: bool,
     #[serde(deserialize_with = "nullable")]
     pub actions: Vec<Action>,
     pub line: Line,
@@ -480,6 +485,23 @@ pub struct Fact {
 pub struct About {
     #[serde(deserialize_with = "nullable")]
     pub version: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_row_keeps_its_label_and_whether_it_can_be_renamed() {
+        let row: Row =
+            serde_json::from_str(r#"{"id":"zai:acct:1","label":"Work","canRename":true}"#).unwrap();
+        assert_eq!(row.label, "Work");
+        assert!(row.can_rename);
+        // an older server sends neither: the row reads them as no name and no rename
+        let plain: Row = serde_json::from_str(r#"{"id":"antigravity:profile:a1"}"#).unwrap();
+        assert_eq!(plain.label, "");
+        assert!(!plain.can_rename);
+    }
 }
 
 /// The view, or why it can't be drawn: empty (nothing pushed yet), unreadable, or another version.

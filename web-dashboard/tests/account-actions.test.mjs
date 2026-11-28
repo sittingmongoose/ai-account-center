@@ -1,7 +1,7 @@
 // What each control sends and what each answer means (public/account-actions.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText, terminalCommand } from '../public/account-actions.mjs';
+import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText, terminalCommand, labelProblem } from '../public/account-actions.mjs';
 
 const err = (status, code, extra = {}) => ({ status, payload: { error: 'server sentence', code, ...extra } });
 
@@ -18,6 +18,7 @@ test('every request goes to the route and body the CLIENT API SHEET names', () =
   assert.deepEqual(requests.agyProfiles(), { method: 'GET', path: '/api/antigravity/profiles' });
   assert.deepEqual(requests.addKey('zai', 'k-12345678', '').body, { provider: 'zai', key: 'k-12345678' });
   assert.deepEqual(requests.addKey('zai', 'k-12345678', 'Work').body, { provider: 'zai', key: 'k-12345678', label: 'Work' });
+  assert.deepEqual(requests.renameAccount('codex:one', 'Second account'), { method: 'PATCH', path: '/api/accounts/codex%3Aone', body: { label: 'Second account' } });
   assert.deepEqual(requests.addSession('cursor').body, { provider: 'cursor' });
   assert.deepEqual(requests.signInAgain('codex:one'), { method: 'POST', path: '/api/accounts/codex%3Aone/signin-again', body: {} });
   assert.deepEqual(requests.replaceKey('zai:acct:9f2c41d0', 'k'), { method: 'PUT', path: '/api/accounts/zai%3Aacct%3A9f2c41d0/key', body: { key: 'k' } });
@@ -120,6 +121,14 @@ test('job failures, unavailable reasons and the local checks', () => {
   assert.match(keyProblem('x'.repeat(513)), /too long/);
   assert.match(keyProblem('ключ-12345678'), /character/);
   assert.equal(suggestName('codex', ['codex-2', 'one']), 'codex-3');
+
+  // The rename name follows the server's account-label rule: 1 to 48 characters, something non-space.
+  assert.equal(labelProblem('Work'), '');
+  assert.equal(labelProblem('x'.repeat(48)), '');
+  assert.equal(labelProblem(''), 'Name the account first.');
+  assert.equal(labelProblem('   '), 'Name the account first.');
+  assert.equal(labelProblem('x'.repeat(49)), 'Keep it within 48 characters.');
+  assert.equal(labelProblem('a\bb'), 'That name has a character a name cannot contain.');
   assert.deepEqual(passwordProblem({ current: 'a', next: 'abcdefgh', confirm: 'abcdefgh' }), null);
   assert.deepEqual(passwordProblem({ current: '', next: 'abcdefgh', confirm: 'abcdefgh' })[0], 'cur');
   assert.deepEqual(passwordProblem({ current: 'a', next: 'x'.repeat(73), confirm: 'x'.repeat(73) })[0], 'new');

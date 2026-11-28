@@ -19,7 +19,7 @@ import { COMPUTERS } from './computers.mjs';
 //   storage                                     localStorage, for the one-time migration of "Show on dashboard"
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
-import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
+import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS, labelProblem } from './account-actions.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord, platformLabel } from './view-model.mjs';
@@ -43,7 +43,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
  * not among them.
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([
-  'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
+  'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'account-rename', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
   'flow-open-app', 'flow-recheck', 'web-session-pick', 'claude-host', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
   'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
@@ -285,6 +285,35 @@ export function createAccountsController(deps) {
     });
   }
   /** One account's "Show in tray": only `trayHiddenAccountIds` is sent, so its dashboard switch is never touched. */
+  /** One account's display name ("<id>\n<new label>"); the id never changes. */
+  async function renameAccount(value) {
+    const [id = '', raw = ''] = value.split('\n');
+    const next = String(raw).trim();
+    const problem = labelProblem(next);
+    if (!id || problem) {
+      if (id) state.lines[id] = { kind: 'rename', title: problem, body: '' };
+      changed();
+      return;
+    }
+    delete state.lines[id];
+    changed();
+    try {
+      await call(requests.renameAccount(id, next));
+      delete state.lines[id];
+      toast('ok', `Renamed to ${next}`, 'It shows under that name everywhere.');
+      await reload();
+    } catch (error) {
+      if (error?.payload?.code === 'unknown_account') {
+        delete state.lines[id];
+        toast('info', 'Account not found', 'It may have been removed in another browser. The list is refreshed.');
+        await reload();
+        return;
+      }
+      const t = errorText(error, { provider: providerOf(id) });
+      state.lines[id] = { kind: 'rename', title: t.title, body: t.body };
+      changed();
+    }
+  }
   function setAccountTrayShown(id, show) {
     if (!ACCOUNT_ID.test(id) || !Array.isArray(data()?.settings?.trayHiddenAccountIds)) return;
     return queueVisibility(`acct-tray:${id}`, async () => {
@@ -1052,6 +1081,7 @@ export function createAccountsController(deps) {
       // one account: "<account id>|show" or "<account id>|hide" (ids hold ':' but never '|')
       case 'account-show': { const [id, mode] = v.split('|'); if (mode === 'show' || mode === 'hide') await setAccountShown(id, mode === 'show'); return true; }
       case 'account-tray': { const [id, mode] = v.split('|'); if (mode === 'show' || mode === 'hide') await setAccountTrayShown(id, mode === 'show'); return true; }
+      case 'account-rename': await renameAccount(v); return true;
       case 'add': await begin(v); return true;
       case 'add-key': if (KEY_PROVIDERS.includes(v)) addKey(v); return true;
       case 'replace-key': { const p = providerOf(v); if (KEY_PROVIDERS.includes(p)) setFlow(p, { type: 'key-replace', step: 'key', accountId: v }); return true; }

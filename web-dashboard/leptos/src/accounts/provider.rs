@@ -229,6 +229,46 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
         !id.is_empty() && page.selected.get() == id
     });
     let set_reason = Callback::new(move |r: String| reason.set(r));
+    // The inline rename: the pencil beside the name opens an input in the same place; Enter saves, Esc cancels.
+    let editing = RwSignal::new(false);
+    let draft = RwSignal::new(String::new());
+    let rename_error = RwSignal::new(String::new());
+    let can_rename = Memo::new(move |_| row.with(|r| r.as_ref().is_some_and(|r| r.can_rename)));
+    let gone = Memo::new(move |_| row.with(|r| r.as_ref().is_some_and(|r| r.gone)));
+    let open_rename = Callback::new(move |e: web_sys::MouseEvent| {
+        e.stop_propagation();
+        reason.set(String::new());
+        let r = get();
+        draft.set(if r.label.is_empty() {
+            r.email.clone()
+        } else {
+            r.label.clone()
+        });
+        rename_error.set(String::new());
+        editing.set(true);
+    });
+    let save_rename = Callback::new(move |_: ()| {
+        let trimmed = draft.get_untracked().trim().to_string();
+        if trimmed.is_empty() {
+            rename_error.set("Name the account first.".to_string());
+            return;
+        }
+        if trimmed.chars().count() > 48 {
+            rename_error.set("Keep it within 48 characters.".to_string());
+            return;
+        }
+        rename_error.set(String::new());
+        editing.set(false);
+        page.send(
+            "account-rename",
+            &format!("{}\n{}", id.get_untracked(), trimmed),
+        );
+    });
+    let cancel_rename = Callback::new(move |e: web_sys::MouseEvent| {
+        e.stop_propagation();
+        rename_error.set(String::new());
+        editing.set(false);
+    });
     view! {
         <div class="acc-item" class:sel=move || selected.get()
             class:gone=move || row.with(|r| r.as_ref().is_some_and(|r| r.gone))
@@ -239,7 +279,48 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
                 on:click=move |_| { reason.set(String::new()); page.send("details", &id.get_untracked()); }
                 on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { page.send("details", &id.get_untracked()); }>
                 <div class="acc-id" class:dim=move || row.with(|r| r.as_ref().is_some_and(|r| !r.shown_dash))>
-                    <span class="acc-email">{move || email_parts(get().email)}</span>
+                    <Show when=move || editing.get()>
+                        <span class="acc-rename" on:click=|e: web_sys::MouseEvent| e.stop_propagation()>
+                            <input class="acc-rename-input" type="text" placeholder="Name" autocomplete="off"
+                                autocapitalize="off" spellcheck="false" maxlength="48" autofocus
+                                data-probe=move || format!("rename-input:{}", id.get())
+                                disabled=move || page.busy.get()
+                                prop:value=move || draft.get()
+                                on:input=move |e| { draft.set(event_target_value(&e)); rename_error.set(String::new()); }
+                                on:keydown=move |e: web_sys::KeyboardEvent| {
+                                    // keys typed here belong to the field: Enter on the row opens Details
+                                    e.stop_propagation();
+                                    if e.key() == "Enter" {
+                                        e.prevent_default();
+                                        if !page.busy.get_untracked() { save_rename.run(()); }
+                                    } else if e.key() == "Escape" {
+                                        e.prevent_default();
+                                        rename_error.set(String::new());
+                                        editing.set(false);
+                                    }
+                                }/>
+                            <button type="button" class="btn sm" data-probe=move || format!("rename-save:{}", id.get())
+                                disabled=move || page.busy.get()
+                                on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); if !page.busy.get_untracked() { save_rename.run(()); } }>"Save"</button>
+                            <button type="button" class="btn sm ghost" data-probe=move || format!("rename-cancel:{}", id.get())
+                                on:click=move |e: web_sys::MouseEvent| cancel_rename.run(e)>"Cancel"</button>
+                        </span>
+                        {move || { let e = rename_error.get(); (!e.is_empty()).then(|| view! { <span class="acc-rename-err" role="note">{e}</span> }) }}
+                    </Show>
+                    <Show when=move || !editing.get()>
+                        <span class="acc-name-line">
+                            <span class="acc-email">{move || email_parts(get().email)}</span>
+                            {move || (can_rename.get() && !gone.get()).then(|| view! {
+                                <button type="button" class="icon-btn bare acc-rename-btn"
+                                    aria-label="Rename account" title="Rename"
+                                    data-probe=move || format!("rename:{}", id.get())
+                                    disabled=move || page.busy.get()
+                                    on:click=move |e: web_sys::MouseEvent| open_rename.run(e)>
+                                    <Icon name="pencil"/>
+                                </button>
+                            })}
+                        </span>
+                    </Show>
                 </div>
                 <div class="acc-info">
                     {move || { let m = get().meta; (!m.is_empty()).then(|| view! { <span class="acc-meta">{m}</span> }) }}

@@ -836,6 +836,42 @@ test('the actions that send a change are named, so a pending account switch can 
   assert.deepEqual(quiet.sent, []);
 });
 
+test('account rename sends the new name to the account route and reloads; a refusal shows under the row', async () => {
+  const registry = { accounts: [], jobs: [], trash: [] };
+  const h = harness({
+    routes: {
+      'PATCH /api/accounts/codex%3Atwo': { account: { id: 'codex:two', label: 'Second account' } },
+      'GET /api/accounts/registry': registry,
+    },
+  });
+  assert.equal(await h.ctl.handle('account-rename', 'codex:two\nSecond account'), true);
+  assert.deepEqual(h.sent[0], { method: 'PATCH', path: '/api/accounts/codex%3Atwo', body: { label: 'Second account' } });
+  assert.equal(last(h.toasts).title, 'Renamed to Second account');
+  assert.equal(h.refreshes, 1);
+  assert.deepEqual(h.ctl.state.lines, {});
+  // An account removed elsewhere refreshes the list instead of showing a refusal line.
+  const gone = harness({
+    routes: {
+      'PATCH /api/accounts/codex%3Agone': refusal(404, 'unknown_account'),
+      'GET /api/accounts/registry': registry,
+    },
+  });
+  await gone.ctl.handle('account-rename', 'codex:gone\nX');
+  assert.deepEqual(gone.ctl.state.lines, {});
+  assert.equal(gone.refreshes, 1);
+  // A server refusal shows the server's words under the row.
+  const refused = harness({ routes: { 'PATCH /api/accounts/zai%3Ausage': refusal(400, 'invalid_body') } });
+  await refused.ctl.handle('account-rename', 'zai:usage\n旅行');
+  assert.deepEqual(refused.ctl.state.lines, {
+    'zai:usage': { kind: 'rename', title: 'That was not accepted', body: 'Something in the request was not in the expected form. Check what you typed and try again.' },
+  });
+  // An empty name sends nothing and says why under the row.
+  const empty = harness();
+  await empty.ctl.handle('account-rename', 'codex:two\n   ');
+  assert.equal(empty.sent.length, 0);
+  assert.deepEqual(empty.ctl.state.lines, { 'codex:two': { kind: 'rename', title: 'Name the account first.', body: '' } });
+});
+
 test('the session lifetime saves on the server and the page follows it without a reload', async () => {
   const session = { username: 'owner', sessionTimeoutHours: 720, sessionLifetimeDays: 30, otherBrowsers: 0 };
   const h = harness({

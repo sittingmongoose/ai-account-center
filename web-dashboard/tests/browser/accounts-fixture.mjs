@@ -133,6 +133,7 @@ export function fakeServer(over = {}) {
 		jobs: new Map(),
 		trash: [{ trashId: 'tr_0123456789abcdef', provider: 'claude', label: 'old-profile', state: 'trashed', trashedAt: at(-60 * 24), purgeAfter: at(60 * 24 * 29) }],
 		removed: new Set(),
+		labels: new Map(),
 		runningJobs: [],
 		rich: false,
 		loginsStep3: false,
@@ -151,7 +152,12 @@ export function fakeServer(over = {}) {
 	});
 	const json = (status, payload) => ({ status, contentType: 'application/json', body: JSON.stringify(payload) });
 	const routes = [
-		['GET', /^\/api\/accounts\/dashboard$/, () => { const d = dashboard({ rich: s.rich, loginsStep3: s.loginsStep3 }); d.accounts = d.accounts.filter((a) => !s.removed.has(a.id)); return json(200, d); }],
+		['GET', /^\/api\/accounts\/dashboard$/, () => {
+			const d = dashboard({ rich: s.rich, loginsStep3: s.loginsStep3 });
+			d.accounts = d.accounts.filter((a) => !s.removed.has(a.id));
+			for (const a of d.accounts) if (s.labels.has(a.id)) a.label = s.labels.get(a.id);
+			return json(200, d);
+		}],
 		['GET', /^\/api\/accounts\/registry$/, () => json(200, registry())],
 		// Accounts reads these two at entry; an empty fixture home has no native profile store.
 		['GET', /^\/api\/claude\/desktop-profiles$/, () => json(200, { profiles: [] })],
@@ -222,6 +228,17 @@ export function fakeServer(over = {}) {
 			if (!body.confirmationToken) return json(200, { confirmation: { token: 'tok-restore', effects: ['Its Claude data moves back on Mac and Windows.'] } });
 			s.trash = s.trash.filter((t) => t.trashId !== m[1]);
 			return json(200, { restored: true, accountId: 'claude:old-profile' });
+		}],
+		// The rename route (PATCH /api/accounts/:id): the server's label rule, kept in s.labels.
+		// PATCH /api/accounts/visibility and /api/accounts/preferences are its neighbours, never renamed here.
+		['PATCH', /^\/api\/accounts\/(?!visibility$|preferences$)([^/]+)$/, (body, m) => {
+			const id = decodeURIComponent(m[1]);
+			const label = typeof body?.label === 'string' ? body.label.trim() : '';
+			if (!label || [...label].length > 48) return json(400, { code: 'invalid_body', error: 'That was not accepted' });
+			// a name the fixture refuses the way the server refuses a rename during another change
+			if (label === 'Busy name') return json(409, { code: 'activation_running', error: 'Another change to these saved logins is running. Wait for it to finish.' });
+			s.labels.set(id, label);
+			return json(200, { account: { id, label } });
 		}],
 	];
 	return { s, routes };

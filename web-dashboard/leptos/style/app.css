@@ -987,6 +987,14 @@ textarea.note::placeholder { color: var(--ink-4); }
 .acc-item.sel .acc-row { background: var(--row-sel); }
 .acc-id { grid-area: id; min-width: 0; }
 .acc-email { display: block; font-weight: 560; font-variation-settings: 'wght' 560; color: var(--ink); overflow-wrap: break-word; line-height: 1.3; }
+/* The inline rename: the pencil beside the name and the input that replaces it. */
+.acc-name-line { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.acc-name-line .acc-email { flex: 1 1 0; min-width: 0; }
+.acc-rename-btn { width: 26px; height: 26px; flex: none; }
+.acc-rename-btn .ic { width: 13px; height: 13px; }
+.acc-rename { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.acc-rename-input { flex: 1 1 0; min-width: 0; height: 28px; border: 1px solid var(--rule); border-radius: var(--r-ctl); background: var(--paper); padding: 0 8px; font-size: 12.5px; color: var(--ink); }
+.acc-rename-err { display: block; font-size: var(--fs-small); color: var(--crit-text); margin-top: 2px; }
 .acc-id.dim, .acc-id.dim + .acc-info { opacity: .55; }
 .acc-info { grid-area: info; min-width: 0; font-size: var(--fs-small); color: var(--ink-3); line-height: 1.4; }
 .acc-info > span, .acc-state > span, .acc-src > span { display: inline; }

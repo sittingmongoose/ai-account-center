@@ -13,7 +13,7 @@ export const PAGE_ACTIONS = Object.freeze(new Set([
   // Details and Home rows
   'details', 'details-closed', 'launch',
   // Accounts & Settings (accounts-controller.mjs handle())
-  'accounts-show', 'accounts-tray', 'account-show', 'account-tray',
+  'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'account-rename',
   'add', 'add-key', 'replace-key', 'paste-session', 'web-session-region', 'web-session-pick', 'signin-again', 'signin', 'session-signin', 'recheck',
   'flow-submit', 'flow-cancel', 'flow-done', 'flow-retry', 'flow-copy', 'flow-open-url', 'flow-open-app', 'flow-recheck',
   'claude-host', 'claude-open',

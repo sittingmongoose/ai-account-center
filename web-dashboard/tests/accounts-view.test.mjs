@@ -2176,6 +2176,10 @@ test('the line under a row: a remove to confirm with its effects, a refusal with
       ['line-cancel']
     );
   }
+  // a rename refusal shows the server's words under the row
+  const renamed = lineView('r', 'x', { kind: 'rename', title: 'That was not accepted', body: 'Check what you typed.' });
+  assert.deepEqual([renamed.shown, renamed.kind, renamed.lead, renamed.text], [true, 'refuse', 'That was not accepted', 'Check what you typed.']);
+  assert.deepEqual(renamed.actions.map((a) => a.act), ['line-cancel']);
   assert.equal(lineView('r', 'x', { kind: 'removing' }).kind, 'busy');
   assert.equal(lineView('r', 'x', null).shown, false);
   // a row being removed fades
@@ -2839,4 +2843,35 @@ test('webSession capability renders write-only paste controls, masked password f
   });
   assert.match(saved.done, /wrk_main/);
   assert.match(saved.body, /never|no longer has it/i);
+});
+
+test('every row carries its label, and the rename pencil is offered only where the server stores one', () => {
+  const vm = accountsViewModel(
+    data([
+      account({ id: 'codex:one', label: 'Party' }),
+      claude('work'),
+      account({ id: 'zai:acct:1', provider: 'zai', providerLabel: 'Z.ai', label: 'Work', email: 'work@example.test', capabilities: {} }),
+      account({ id: 'antigravity:profile:a1', provider: 'antigravity', providerLabel: 'Antigravity', label: 'a@example.test', email: 'a@example.test', capabilities: { antigravityProfileId: 'a1' } }),
+    ], { providers: providers() }),
+    { now, registry: { accounts: [
+      { id: 'zai:acct:1', provider: 'zai', label: 'Work', email: 'work@example.test', credential: { kind: 'aac-key' }, actions: {}, removeRefusal: null },
+    ] } },
+  );
+  assert.equal(row(vm, 'codex:one').label, 'Party');
+  assert.equal(row(vm, 'codex:one').canRename, true);
+  assert.equal(row(vm, 'claude:work').label, 'Claude work');
+  assert.equal(row(vm, 'claude:work').canRename, true);
+  assert.equal(row(vm, 'zai:acct:1').label, 'Work');
+  assert.equal(row(vm, 'zai:acct:1').canRename, true);
+  // An Antigravity saved profile keeps its display name in the profile registry.
+  assert.equal(row(vm, 'antigravity:profile:a1').canRename, true);
+  // A registry-only row takes its label and rename from the registry entry.
+  const regOnly = accountsViewModel(
+    data([], { providers: providers() }),
+    { now, registry: { accounts: [
+      { id: 'zai:acct:2', provider: 'zai', label: 'Second', email: null, platform: 'ubuntu', credential: { kind: 'aac-key' }, lifecycle: { state: 'ready', jobId: null }, actions: {}, removeRefusal: null },
+    ] } },
+  );
+  assert.equal(row(regOnly, 'zai:acct:2').label, 'Second');
+  assert.equal(row(regOnly, 'zai:acct:2').canRename, true);
 });
