@@ -6,6 +6,15 @@ use aac_store::scan_row::{Interner, ScanRow};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 
+/// One scanner kind from the shared table. The parity case chooses its representative kinds by
+/// name, but the string the scanner compares is the table's own id.
+fn scanner_kind(id: &str) -> String {
+    aac_providers::scanner_kinds()
+        .find(|kind| *kind == id)
+        .unwrap_or_else(|| panic!("{id} is not in the scanner tool table"))
+        .to_owned()
+}
+
 #[derive(Default)]
 pub(super) struct Oracle {
     pub fingerprints: Map<String, Value>,
@@ -393,11 +402,10 @@ mod parity {
 
     #[test]
     fn typed_scanner_state_applies_and_requests_as_the_json_oracle() {
-        let kinds = [
-            "codex".to_owned(),
-            "cursor".to_owned(),
-            "antigravity".to_owned(),
-        ];
+        let mut kinds = Vec::new();
+        kinds.push(scanner_kind("codex"));
+        kinds.push(scanner_kind("cursor"));
+        kinds.push(scanner_kind("antigravity"));
         let mut rng = Rng(0x5eed_1234_abcd_0001);
         for case in 0..400 {
             let mut oracle = Oracle::default();

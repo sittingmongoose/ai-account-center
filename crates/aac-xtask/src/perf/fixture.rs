@@ -163,38 +163,110 @@ const ANTIGRAVITY_MODELS: &[ModelSpec] = &[
     },
 ];
 
-const PROVIDER_SPECS: [ProviderSpec; 3] = [
+fn providers_table() -> &'static serde_json::Value {
+    static TABLE: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../../../config/tables/providers.json"))
+            .expect("providers table")
+    });
+    &TABLE
+}
+
+fn tools_table() -> &'static serde_json::Value {
+    static TABLE: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../../../config/tables/tools.json"))
+            .expect("tools table")
+    });
+    &TABLE
+}
+
+fn table_provider(id: &'static str) -> &'static str {
+    let rows = providers_table()["providers"]
+        .as_object()
+        .expect("providers");
+    if rows.contains_key(id) {
+        id
+    } else {
+        panic!("{id} is not in the shared provider table")
+    }
+}
+
+fn provider_tool(provider: &str) -> &'static str {
+    tools_table()["toolProviders"]
+        .as_object()
+        .expect("toolProviders")
+        .iter()
+        .find(|(_, row)| row.as_str() == Some(provider))
+        .map(|(tool, _)| tool.as_str())
+        .unwrap_or_else(|| panic!("{provider} has no usage-log tool in the shared table"))
+}
+
+fn provider_route(provider: &str) -> &'static str {
+    providers_table()["usageRoutes"]
+        .as_object()
+        .expect("usageRoutes")
+        .iter()
+        .find(|(_, row)| row.as_str() == Some(provider))
+        .map(|(route, _)| route.as_str())
+        .unwrap_or_else(|| panic!("{provider} has no usage route in the shared table"))
+}
+
+fn provider_spec(
+    provider: &'static str,
+    platform: &'static str,
+    source: &'static str,
+    plan: &'static str,
+    share: usize,
+    models: &'static [ModelSpec],
+) -> ProviderSpec {
+    let id = table_provider(provider);
     ProviderSpec {
-        id: "claude",
-        tool: "claude",
-        route: "anthropic",
-        platform: "mac",
-        source: "Claude quota on Mac",
-        plan: "max",
-        share: 7,
-        models: CLAUDE_MODELS,
-    },
-    ProviderSpec {
-        id: "codex",
-        tool: "codex",
-        route: "openai",
-        platform: "ubuntu",
-        source: "Codex quota on Ubuntu",
-        plan: "pro",
-        share: 6,
-        models: CODEX_MODELS,
-    },
-    ProviderSpec {
-        id: "antigravity",
-        tool: "antigravity",
-        route: "google-antigravity",
-        platform: "ubuntu",
-        source: "Antigravity quota on Ubuntu",
-        plan: "pro",
-        share: 6,
-        models: ANTIGRAVITY_MODELS,
-    },
-];
+        id,
+        tool: provider_tool(id),
+        route: provider_route(id),
+        platform,
+        source,
+        plan,
+        share,
+        models,
+    }
+}
+
+fn claude_spec() -> ProviderSpec {
+    provider_spec(
+        "claude",
+        "mac",
+        "Claude quota on Mac",
+        "max",
+        7,
+        CLAUDE_MODELS,
+    )
+}
+
+fn codex_spec() -> ProviderSpec {
+    provider_spec(
+        "codex",
+        "ubuntu",
+        "Codex quota on Ubuntu",
+        "pro",
+        6,
+        CODEX_MODELS,
+    )
+}
+
+fn antigravity_spec() -> ProviderSpec {
+    provider_spec(
+        "antigravity",
+        "ubuntu",
+        "Antigravity quota on Ubuntu",
+        "pro",
+        6,
+        ANTIGRAVITY_MODELS,
+    )
+}
+
+fn provider_specs() -> [ProviderSpec; 3] {
+    [claude_spec(), codex_spec(), antigravity_spec()]
+}
 
 /// Default options matching `DEFAULT_OPTIONS` in `scripts/perf/memory-fixture.mjs`.
 #[derive(Debug, Clone, PartialEq)]
@@ -326,7 +398,7 @@ pub struct SyntheticAccount {
 
 impl SyntheticAccount {
     fn models(&self) -> &'static [ModelSpec] {
-        PROVIDER_SPECS
+        provider_specs()
             .iter()
             .find(|spec| spec.id == self.provider)
             .map_or(&[], |spec| spec.models)
@@ -708,12 +780,13 @@ fn seed_deterministic_status_answers(
 
 /// Build `total_accounts` synthetic accounts distributed across `claude`, `codex`, and `antigravity`.
 pub fn build_synthetic_accounts(total_accounts: usize) -> Vec<SyntheticAccount> {
-    let total_share: usize = PROVIDER_SPECS.iter().map(|s| s.share).sum();
-    let mut allocations: Vec<usize> = PROVIDER_SPECS
+    let specs = provider_specs();
+    let total_share: usize = specs.iter().map(|s| s.share).sum();
+    let mut allocations: Vec<usize> = specs
         .iter()
         .enumerate()
         .map(|(idx, spec)| {
-            if idx == PROVIDER_SPECS.len() - 1 {
+            if idx == specs.len() - 1 {
                 0
             } else {
                 let raw = ((total_accounts * spec.share) as f64) / (total_share as f64);
@@ -722,7 +795,7 @@ pub fn build_synthetic_accounts(total_accounts: usize) -> Vec<SyntheticAccount> 
         })
         .collect();
     let allocated: usize = allocations.iter().sum();
-    allocations[PROVIDER_SPECS.len() - 1] = total_accounts.saturating_sub(allocated).max(1);
+    allocations[specs.len() - 1] = total_accounts.saturating_sub(allocated).max(1);
     while allocations.iter().sum::<usize>() > total_accounts {
         if let Some((max_idx, _)) = allocations.iter().enumerate().max_by_key(|&(_, v)| v) {
             allocations[max_idx] = allocations[max_idx].saturating_sub(1);
@@ -730,7 +803,7 @@ pub fn build_synthetic_accounts(total_accounts: usize) -> Vec<SyntheticAccount> 
     }
 
     let mut accounts = Vec::with_capacity(total_accounts);
-    for (p_idx, spec) in PROVIDER_SPECS.iter().enumerate() {
+    for (p_idx, spec) in specs.iter().enumerate() {
         let count = allocations[p_idx];
         for i in 1..=count {
             let id = format!("{}:synth-{i:02}", spec.id);
@@ -1267,7 +1340,13 @@ fn generate_mail_registry(
         .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
         .count();
     let to_create = total_entries.saturating_sub(existing);
-    let kinds = ["claude", "codex", "omp", "muse", "zcode"];
+    let kinds: Vec<&str> = tools_table()["analyticsTools"]
+        .as_object()
+        .expect("analyticsTools")
+        .keys()
+        .take(5)
+        .map(String::as_str)
+        .collect();
 
     for i in 0..to_create {
         let name = format!("synth-mail-{:05}", i + 1);
@@ -1713,7 +1792,7 @@ fn generate_analytics_usage_logs(
     }
 
     let mut sessions_per_provider: BTreeMap<&str, Vec<SynthSession>> = BTreeMap::new();
-    for spec in &PROVIDER_SPECS {
+    for spec in provider_specs() {
         sessions_per_provider.insert(spec.id, Vec::new());
     }
     for s in 0..activity_sessions {
@@ -1746,9 +1825,9 @@ fn generate_analytics_usage_logs(
     }
 
     let mut total_activity_events = 0;
-    let mut activity_files = Vec::with_capacity(PROVIDER_SPECS.len());
+    let mut activity_files = Vec::with_capacity(provider_specs().len());
 
-    for spec in &PROVIDER_SPECS {
+    for spec in provider_specs() {
         let provider_accounts = accounts_by_provider
             .get(spec.id)
             .map(Vec::as_slice)
@@ -2501,7 +2580,7 @@ pub fn generate_memory_fixture(
             run_writers: writer_res.run_writers.len(),
             runs: total_runs,
             registry_entries: total_registry,
-            providers: PROVIDER_SPECS.len(),
+            providers: provider_specs().len(),
             accounts: accounts.len(),
             legacy_source_accounts: analytics_res.legacy_source_accounts,
             days: options.days,

@@ -280,6 +280,16 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
     let corpus = load_corpus();
     let scenarios = corpus.as_array().expect("scenarios");
     let mut checked = 0;
+    // The corpus's cache keys are bound to this fixed fixture root. Serialize cooperating test
+    // processes instead of moving the root: concurrent runs otherwise share coordinator state.
+    let lock_path = std::env::temp_dir().join("aac-g4-parity.lock");
+    let _lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)
+        .expect("g4 lock");
+    _lock_file.lock().expect("g4 lock");
     let mut diffs: Vec<String> = Vec::new();
     for scenario in scenarios {
         let name = scenario["name"].as_str().unwrap_or("?");

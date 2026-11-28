@@ -146,13 +146,17 @@ fn hex(seed: u64, len: usize) -> String {
     out
 }
 
-/// The twin's tools: (kind, prints, settled share in percent, hour rows per used file).
-const TOOLS: [(&str, usize, usize, usize); 4] = [
-    ("claude", 16_000, 92, 4),
-    ("codex", 6_000, 90, 6),
-    ("omp", 1_200, 85, 3),
-    ("muse", 800, 85, 3),
-];
+/// The twin's tools: the shared table's first four analytics tools, with each one's fixture
+/// shape in that table order (prints, settled share in percent, hour rows per used file).
+fn tools() -> [(&'static str, usize, usize, usize); 4] {
+    let mut ids = aac_providers::ANALYTICS_TOOLS.iter().map(|tool| tool.id);
+    [
+        (ids.next().expect("first analytics tool"), 16_000, 92, 4),
+        (ids.next().expect("second analytics tool"), 6_000, 90, 6),
+        (ids.next().expect("third analytics tool"), 1_200, 85, 3),
+        (ids.next().expect("fourth analytics tool"), 800, 85, 3),
+    ]
+}
 /// Files changed since the last pass (re-read whole), per tool.
 const CHANGED: usize = 40;
 
@@ -178,9 +182,9 @@ impl Twin {
             pass: std::cell::Cell::new(1),
             now,
             slot: now as u64 / aac_usage::collector::SETTLED_CHECK_MS,
-            settled_before: TOOLS
-                .iter()
-                .map(|(kind, ..)| ((*kind).to_owned(), (now - 3 * DAY) as u64))
+            settled_before: tools()
+                .into_iter()
+                .map(|(kind, ..)| (kind.to_owned(), (now - 3 * DAY) as u64))
                 .collect(),
         }
     }
@@ -260,7 +264,7 @@ impl Twin {
         let mut rows = Vec::new();
         let mut srows = Vec::new();
         let mut states = Map::new();
-        for (kind, count, share, per_file) in TOOLS {
+        for (kind, count, share, per_file) in tools() {
             let count = self.count(count);
             let mut prints = Map::new();
             for index in 0..count {
@@ -288,7 +292,7 @@ impl Twin {
         let mut srows = Vec::new();
         let mut discovery = Map::new();
         let mut sessions = Map::new();
-        for (kind, count, share, per_file) in TOOLS {
+        for (kind, count, share, per_file) in tools() {
             if !kinds.iter().any(|k| k == kind) {
                 continue;
             }
@@ -361,7 +365,7 @@ fn pass(
     lines: &HashMap<String, Vec<u8>>,
 ) -> usize {
     let pricing = super::ResolverPricing::new(std::path::Path::new("/nonexistent-twin"));
-    let kinds: Vec<String> = TOOLS.iter().map(|(k, ..)| (*k).to_owned()).collect();
+    let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
     let cutoff = twin.now - 31 * DAY;
     let mut meter = Meter::new();
     let mut cache = meter.step("load checkpoint", || {
@@ -485,7 +489,7 @@ fn memory_twin_busy_computer_pass() {
         .expect("seed checkpoint");
     drop(checkpoint);
     // The answers the agent gives each request of this pass, prepared before the meter starts.
-    let kinds: Vec<String> = TOOLS.iter().map(|(k, ..)| (*k).to_owned()).collect();
+    let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
     let mut lines = HashMap::new();
     {
         let cache = Cache::load(&engine, HOST).expect("load");
@@ -629,7 +633,7 @@ async fn soak_pass(
     wait_ms: u64,
 ) -> usize {
     let pricing = super::ResolverPricing::new(std::path::Path::new("/nonexistent-twin"));
-    let kinds: Vec<String> = TOOLS.iter().map(|(k, ..)| (*k).to_owned()).collect();
+    let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
     let mut remote = Vec::new();
     let mut claude = Vec::new();
     let mut calls = 0;
@@ -723,7 +727,7 @@ fn memory_twin_soak() {
     let engine = store(dir.path());
     let answers = dir.path().join("answers");
     std::fs::create_dir_all(&answers).expect("answers");
-    let kinds: Vec<String> = TOOLS.iter().map(|(k, ..)| (*k).to_owned()).collect();
+    let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
     let twins: Vec<(&str, Twin)> = SOAK_HOSTS
         .iter()
         .map(|(host, scale)| (*host, Twin::scaled(*scale)))

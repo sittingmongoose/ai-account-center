@@ -1344,10 +1344,10 @@ pub(super) fn view(
     accounts: Vec<DeliveryAccount>,
     at: i64,
 ) -> DeliveryView {
-    let mut key_providers: Vec<String> = ["kimi-code", "zai", "opencode-go", "qwen", "cursor"]
-        .into_iter()
-        .filter(|p| aac_providers::provider(p).is_some_and(|row| row.key_store))
-        .map(str::to_owned)
+    let mut key_providers: Vec<String> = aac_providers::PROVIDERS
+        .iter()
+        .filter(|row| row.key_store)
+        .map(|row| row.id.as_str().to_owned())
         .collect();
     key_providers.sort();
     let label = |id: &str| {

@@ -13,18 +13,13 @@ const DAY_MS: i64 = 86_400_000;
 const HOUR_MS: i64 = 3_600_000;
 /// A sign-in nobody renews by itself counts as ending soon this many days ahead.
 const EXPIRING_DAYS: i64 = 7;
-/// The Accounts page's order of providers.
-const ORDER: [&str; 9] = [
-    "claude",
-    "codex",
-    "antigravity",
-    "muse",
-    "cursor",
-    "kimi-code",
-    "qwen",
-    "zai",
-    "opencode-go",
-];
+/// The Accounts page's order of providers: the shared table's Analytics order.
+static ORDER: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+    aac_providers::analytics_provider_table()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect()
+});
 
 fn text(value: Option<&Value>, max: usize) -> Option<String> {
     display_text_value(value, max)
