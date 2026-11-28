@@ -29,7 +29,7 @@ pub struct Writer {
 }
 
 /// True when `key` is an array index as JavaScript orders it: a canonical integer from 0 to 2^32 - 2.
-fn array_index(key: &str) -> Option<u32> {
+pub fn array_index(key: &str) -> Option<u32> {
     let bytes = key.as_bytes();
     if bytes.is_empty() || bytes.len() > 10 || (bytes[0] == b'0' && bytes.len() > 1) {
         return None;
@@ -159,20 +159,24 @@ impl Writer {
                 }
                 self.raw(b"]");
             }
-            Value::Object(map) => {
-                let mut object = self.object();
-                if map.keys().any(|k| array_index(k).is_some()) {
-                    for (key, member) in ordered(map) {
-                        object.member(key, |w| w.value(member));
-                    }
-                } else {
-                    for (key, member) in map {
-                        object.member(key, |w| w.value(member));
-                    }
-                }
-                object.end();
+            Value::Object(map) => self.map(map),
+        }
+    }
+
+    /// An object, written from its map (no `Value` wrapper is needed, so a borrowed map is
+    /// written without a clone).
+    pub fn map(&mut self, map: &Map<String, Value>) {
+        let mut object = self.object();
+        if map.keys().any(|k| array_index(k).is_some()) {
+            for (key, member) in ordered(map) {
+                object.member(key, |w| w.value(member));
+            }
+        } else {
+            for (key, member) in map {
+                object.member(key, |w| w.value(member));
             }
         }
+        object.end();
     }
 
     /// Start an object; members follow through [`Object::member`].

@@ -48,42 +48,48 @@ pub fn normalize_registry_payload(payload: &Value) -> Option<Map<String, Value>>
     let object = payload.as_object()?;
     let mut providers = Map::new();
     for (key, value) in object {
-        let Some(entry) = value.as_object() else {
-            continue;
-        };
-        let id = entry
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty())
-            .map(|id| id.trim())
-            .unwrap_or(key);
-        let Some(models_payload) = entry.get("models").and_then(Value::as_object) else {
-            continue;
-        };
-        let mut models = Map::new();
-        for (model_key, model_value) in models_payload {
-            let Some(model_entry) = model_value.as_object() else {
-                continue;
-            };
-            let model_id = model_entry
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.trim().is_empty())
-                .map(|id| id.trim())
-                .unwrap_or(model_key);
-            let mut model = model_entry.clone();
-            model.insert("id".into(), Value::String(model_id.to_owned()));
-            models.insert(model_key.clone(), Value::Object(model));
+        if let Some((id, provider)) = normalize_provider(key, value.clone()) {
+            providers.insert(id, Value::Object(provider));
         }
-        if models.is_empty() {
-            continue;
-        }
-        let mut provider = entry.clone();
-        provider.insert("id".into(), Value::String(id.to_owned()));
-        provider.insert("models".into(), Value::Object(models));
-        providers.insert(id.to_owned(), Value::Object(provider));
     }
     (!providers.is_empty()).then_some(providers)
+}
+
+/// The id `normalizeRegistryPayload` files an entry under: its trimmed, non-blank `id`, else
+/// the payload key.
+fn entry_id<'a>(id: Option<&'a Value>, key: &'a str) -> &'a str {
+    id.and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| id.trim())
+        .unwrap_or(key)
+}
+
+/// One provider of `normalizeRegistryPayload`, taking the entry by value: its normalized id and
+/// the provider with `id` set and its malformed models dropped (each kept model gets its `id`),
+/// or `None` when the entry is not an object or keeps no model.
+fn normalize_provider(key: &str, value: Value) -> Option<(String, Map<String, Value>)> {
+    let Value::Object(mut provider) = value else {
+        return None;
+    };
+    let id = entry_id(provider.get("id"), key).to_owned();
+    let Some(Value::Object(listed)) = provider.get_mut("models") else {
+        return None;
+    };
+    let mut models = Map::new();
+    for (model_key, model_value) in std::mem::take(listed) {
+        let Value::Object(mut model) = model_value else {
+            continue;
+        };
+        let model_id = entry_id(model.get("id"), &model_key).to_owned();
+        model.insert("id".into(), Value::String(model_id));
+        models.insert(model_key, Value::Object(model));
+    }
+    if models.is_empty() {
+        return None;
+    }
+    provider.insert("id".into(), Value::String(id.clone()));
+    provider.insert("models".into(), Value::Object(models));
+    Some((id, provider))
 }
 
 /// `normalizeCachePayload`: `{version: 1, fetchedAt: number, providers}` with a usable provider
@@ -107,6 +113,7 @@ pub fn normalize_cache_payload(payload: &Value) -> Option<(f64, Map<String, Valu
 /// collision, like the TS `Map.set`). The catalog's other fields (names, limits, modalities,
 /// dates) and the JSON tree itself are not kept resident; the cache file and the refresh return
 /// payload keep them, since the write path serializes the full normalized map.
+#[derive(Debug, PartialEq)]
 pub struct CachedRegistry {
     /// `fetchedAt` as parsed.
     pub fetched_at: f64,
@@ -115,6 +122,7 @@ pub struct CachedRegistry {
     keys: HashMap<Box<str>, usize>,
 }
 
+#[derive(Debug, PartialEq)]
 struct ProviderEntry {
     key: Box<str>,
     id: Box<str>,
@@ -123,6 +131,7 @@ struct ProviderEntry {
     index: HashMap<Box<str>, usize>,
 }
 
+#[derive(Debug, PartialEq)]
 struct ModelEntry {
     id: Option<Box<str>>,
     /// `toPricing` of the model's `cost`, None when it has no usable input and output rates.
@@ -185,6 +194,28 @@ impl CachedRegistry {
     }
 }
 
+/// The cache file text `JSON.stringify({version: 1, fetchedAt, providers})` writes, with the
+/// providers member written by `providers`; `capacity` presizes the buffer.
+fn cache_text(
+    fetched_at: f64,
+    capacity: usize,
+    providers: impl FnOnce(&mut crate::js_json::Writer),
+) -> Vec<u8> {
+    let mut writer = crate::js_json::Writer::plain(capacity);
+    let mut object = writer.object();
+    object.member("version", |w| w.value(&Value::Number(1u64.into())));
+    object.member("fetchedAt", |w| {
+        w.value(
+            &serde_json::Number::from_f64(fetched_at)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        );
+    });
+    object.member("providers", providers);
+    object.end();
+    writer.into_bytes()
+}
+
 /// The parsed identity of one cache file (size and mtime; the TS key also has the inode, which is
 /// not observable through it).
 type StatKey = (u64, Option<SystemTime>);
@@ -239,9 +270,8 @@ impl RegistryCache {
                 Some(cached) => cached,
                 None => {
                     let text = read_cache_text(&self.path)?;
-                    let payload: Value = serde_json::from_str(&text).ok()?;
-                    let (fetched_at, providers) = normalize_cache_payload(&payload)?;
-                    let cached = Arc::new(CachedRegistry::new(fetched_at, providers));
+                    let cached = Arc::new(stream::read_cache(&text)?);
+                    drop(text);
                     let mut held = shared_lock();
                     let map = held.get_or_insert_with(HashMap::new);
                     if map.len() >= SHARED_PATHS {
@@ -263,16 +293,11 @@ impl RegistryCache {
     /// `setCachedModelsDevRegistry`: best-effort write of the cache bytes `JSON.stringify` would
     /// produce, then the memo drops.
     pub fn write(&mut self, providers: &Map<String, Value>, fetched_at: f64) {
-        let mut cache = Map::new();
-        cache.insert("version".into(), Value::Number(1u64.into()));
-        cache.insert(
-            "fetchedAt".into(),
-            serde_json::Number::from_f64(fetched_at)
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
-        );
-        cache.insert("providers".into(), Value::Object(providers.clone()));
-        let bytes = crate::js_json::write(&Value::Object(cache));
+        self.store(cache_text(fetched_at, 0, |w| w.map(providers)));
+    }
+
+    /// Store cache bytes already written (the fetch transcoder's output), then drop the memo.
+    fn store(&mut self, bytes: Vec<u8>) {
         if let Some(parent) = self.path.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -479,7 +504,9 @@ impl RegistryRefresh {
     /// activity pass): `true` when a registry (fresh or stale) is usable afterwards. The same
     /// fetches and cache writes as [`start`](Self::start), but the cache file is never re-read
     /// into a full payload nobody uses: freshness comes from the shared resident memo, so a
-    /// 6.8 MB cache no longer costs a ~150 MiB JSON tree on every pass.
+    /// 6.8 MB cache no longer costs a ~150 MiB JSON tree on every pass. A fetched body is
+    /// normalized one provider at a time straight into the cache text (`stream::cache_bytes`),
+    /// so the daily fetch never holds the whole registry as a tree either.
     pub fn ensure(
         &self,
         force: bool,
@@ -508,12 +535,11 @@ impl RegistryRefresh {
         drop(pending);
         let written = match fetch() {
             Ok(Fetched { ok: true, body }) => {
-                let parsed: Option<Value> = serde_json::from_slice(&body).ok();
+                let bytes = stream::cache_bytes(&body, now);
                 drop(body);
-                match parsed.as_ref().and_then(normalize_registry_payload) {
-                    Some(providers) => {
-                        drop(parsed);
-                        lock(&self.cache).write(&providers, now);
+                match bytes {
+                    Some(bytes) => {
+                        lock(&self.cache).store(bytes);
                         true
                     }
                     None => false,
@@ -529,6 +555,296 @@ impl RegistryRefresh {
         *pending = false;
         self.done.notify_all();
         result
+    }
+}
+
+/// The cache read and the fetch write without the whole JSON tree. Both walk the document with
+/// serde's visitors on the one `serde_json` deserializer, so syntax, numbers, nesting limits and
+/// trailing text fail exactly as `serde_json::from_str::<Value>` fails; every value they do not
+/// walk is still parsed as a `Value` (one model, one provider at most) and dropped. Duplicate
+/// object keys keep `preserve_order`'s rule (the last value, at the first key's position), at
+/// the payload level first and then per normalized id, like the two maps of the tree path.
+mod stream {
+    use std::collections::HashMap;
+    use std::fmt;
+
+    use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+    use serde_json::Value;
+
+    use super::{
+        CachedRegistry, ModelEntry, ProviderEntry, cache_text, entry_id, normalize_id,
+        normalize_provider, to_pricing,
+    };
+
+    /// What one JSON object turns into while it is read.
+    trait ObjectVisit<'de> {
+        type Out;
+        fn visit<A: MapAccess<'de>>(self, map: A) -> Result<Self::Out, A::Error>;
+    }
+
+    /// One JSON value: an object goes to the inner visit; any other value is parsed (a `Value`
+    /// for each array element) and answers `None`.
+    struct ObjectOr<V>(V);
+
+    impl<'de, V: ObjectVisit<'de>> DeserializeSeed<'de> for ObjectOr<V> {
+        type Value = Option<V::Out>;
+        fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+            d.deserialize_any(self)
+        }
+    }
+
+    impl<'de, V: ObjectVisit<'de>> Visitor<'de> for ObjectOr<V> {
+        type Value = Option<V::Out>;
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("any JSON value")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            self.0.visit(map).map(Some)
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            while seq.next_element::<Value>()?.is_some() {}
+            Ok(None)
+        }
+        fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+
+    /// An object's members by key with the last value at the first key's position.
+    struct Members<T> {
+        entries: Vec<(String, T)>,
+        at: HashMap<String, usize>,
+    }
+
+    impl<T> Members<T> {
+        fn new() -> Self {
+            Members {
+                entries: Vec::new(),
+                at: HashMap::new(),
+            }
+        }
+        fn insert(&mut self, key: String, value: T) {
+            match self.at.get(&key) {
+                Some(&i) => self.entries[i].1 = value,
+                None => {
+                    self.at.insert(key.clone(), self.entries.len());
+                    self.entries.push((key, value));
+                }
+            }
+        }
+    }
+
+    /// Parse `text` as `serde_json::from_str` would, then hand the top-level object to `visit`.
+    fn top<'de, V: ObjectVisit<'de>>(text: &'de [u8], visit: V) -> Option<V::Out> {
+        let mut de = serde_json::Deserializer::from_slice(text);
+        let out = ObjectOr(visit).deserialize(&mut de).ok()?;
+        de.end().ok()?;
+        out
+    }
+
+    // ------------------------------------------------------------------- the cache read
+
+    /// `normalizeCachePayload` of the cache text, indexed as [`CachedRegistry::new`] indexes it,
+    /// keeping per model only its id and rates.
+    pub(super) fn read_cache(text: &str) -> Option<CachedRegistry> {
+        let (version, fetched_at, providers) = top(text.as_bytes(), CacheFile)?;
+        if version.as_ref().and_then(Value::as_f64) != Some(1.0) {
+            return None;
+        }
+        let fetched_at = fetched_at.as_ref().and_then(Value::as_f64)?;
+        let (providers, keys) = providers??;
+        if providers.is_empty() {
+            return None;
+        }
+        Some(CachedRegistry {
+            fetched_at,
+            providers,
+            keys,
+        })
+    }
+
+    type Indexed = (Vec<ProviderEntry>, HashMap<Box<str>, usize>);
+
+    struct CacheFile;
+    impl<'de> ObjectVisit<'de> for CacheFile {
+        type Out = (Option<Value>, Option<Value>, Option<Option<Indexed>>);
+        fn visit<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Out, A::Error> {
+            let (mut version, mut fetched_at, mut providers) = (None, None, None);
+            while let Some(key) = map.next_key::<String>()? {
+                match key.as_str() {
+                    "version" => version = Some(map.next_value::<Value>()?),
+                    "fetchedAt" => fetched_at = Some(map.next_value::<Value>()?),
+                    "providers" => providers = Some(map.next_value_seed(ObjectOr(Providers))?),
+                    _ => drop(map.next_value::<Value>()?),
+                }
+            }
+            Ok((version, fetched_at, providers))
+        }
+    }
+
+    /// A provider as read: its last `id` value and its last `models` member (`Some(None)` when
+    /// that is not an object).
+    type RawProvider = (Option<Value>, Option<Option<Members<Option<ModelEntry>>>>);
+
+    struct Providers;
+    impl<'de> ObjectVisit<'de> for Providers {
+        type Out = Indexed;
+        fn visit<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Out, A::Error> {
+            let mut raw: Members<Option<RawProvider>> = Members::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let provider = map.next_value_seed(ObjectOr(Provider))?;
+                raw.insert(key, provider);
+            }
+            let mut providers: Vec<ProviderEntry> = Vec::new();
+            let mut keys: HashMap<Box<str>, usize> = HashMap::new();
+            for (key, provider) in raw.entries {
+                let Some((id, Some(Some(models)))) = provider else {
+                    continue;
+                };
+                let id: Box<str> = Box::from(entry_id(id.as_ref(), &key));
+                let models: Vec<(String, ModelEntry)> = models
+                    .entries
+                    .into_iter()
+                    .filter_map(|(key, model)| model.map(|model| (key, model)))
+                    .collect();
+                if models.is_empty() {
+                    continue;
+                }
+                let mut index = HashMap::with_capacity(models.len() * 2);
+                let mut entries = Vec::with_capacity(models.len());
+                for (model_key, model) in models {
+                    index.insert(normalize_id(&model_key).into_boxed_str(), entries.len());
+                    if let Some(model_id) = &model.id {
+                        index.insert(normalize_id(model_id).into_boxed_str(), entries.len());
+                    }
+                    entries.push(model);
+                }
+                let entry = ProviderEntry {
+                    key: id.clone(),
+                    id: id.clone(),
+                    models: entries,
+                    index,
+                };
+                match keys.get(&id) {
+                    Some(&i) => providers[i] = entry,
+                    None => {
+                        keys.insert(id, providers.len());
+                        providers.push(entry);
+                    }
+                }
+            }
+            Ok((providers, keys))
+        }
+    }
+
+    struct Provider;
+    impl<'de> ObjectVisit<'de> for Provider {
+        type Out = RawProvider;
+        fn visit<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Out, A::Error> {
+            let (mut id, mut models) = (None, None);
+            while let Some(key) = map.next_key::<String>()? {
+                match key.as_str() {
+                    "id" => id = Some(map.next_value::<Value>()?),
+                    "models" => models = Some(map.next_value_seed(ObjectOr(Models))?),
+                    _ => drop(map.next_value::<Value>()?),
+                }
+            }
+            Ok((id, models))
+        }
+    }
+
+    struct Models;
+    impl<'de> ObjectVisit<'de> for Models {
+        type Out = Members<Option<ModelEntry>>;
+        fn visit<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Out, A::Error> {
+            let mut models = Members::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let value = map.next_value::<Value>()?;
+                let model = value.is_object().then(|| ModelEntry {
+                    id: Some(Box::from(entry_id(value.get("id"), &key))),
+                    rates: to_pricing(value.get("cost")),
+                });
+                models.insert(key, model);
+            }
+            Ok(models)
+        }
+    }
+
+    // ------------------------------------------------------------------ the fetch write
+
+    /// The cache text [`super::RegistryCache::write`] would write for
+    /// `normalizeRegistryPayload` of a fetched `body`, built one provider at a time: each
+    /// provider is parsed, normalized and written to its own bytes before the next is read.
+    /// `None` when the body is not a JSON object or no provider survives.
+    pub(super) fn cache_bytes(body: &[u8], fetched_at: f64) -> Option<Vec<u8>> {
+        let written = top(body, Written)?;
+        let mut by_id: Members<Vec<u8>> = Members::new();
+        for (_, provider) in written.entries {
+            if let Some((id, bytes)) = provider {
+                by_id.insert(id, bytes);
+            }
+        }
+        if by_id.entries.is_empty() {
+            return None;
+        }
+        let mut members = by_id.entries;
+        // `JSON.stringify` writes array-index keys first (see `js_json::ordered`).
+        if members
+            .iter()
+            .any(|(id, _)| crate::js_json::array_index(id).is_some())
+        {
+            let (mut indices, rest): (Vec<_>, Vec<_>) = members
+                .into_iter()
+                .partition(|(id, _)| crate::js_json::array_index(id).is_some());
+            indices.sort_by_key(|(id, _)| crate::js_json::array_index(id));
+            indices.extend(rest);
+            members = indices;
+        }
+        let capacity = 96
+            + members
+                .iter()
+                .map(|(id, bytes)| id.len() + bytes.len() + 4)
+                .sum::<usize>();
+        Some(cache_text(fetched_at, capacity, |w| {
+            let mut object = w.object();
+            for (id, bytes) in members {
+                object.member(&id, |w| w.raw(&bytes));
+            }
+            object.end();
+        }))
+    }
+
+    struct Written;
+    impl<'de> ObjectVisit<'de> for Written {
+        type Out = Members<Option<(String, Vec<u8>)>>;
+        fn visit<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Out, A::Error> {
+            let mut written = Members::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let value = map.next_value::<Value>()?;
+                let provider = normalize_provider(&key, value).map(|(id, provider)| {
+                    let mut writer = crate::js_json::Writer::plain(0);
+                    writer.map(&provider);
+                    (id, writer.into_bytes())
+                });
+                written.insert(key, provider);
+            }
+            Ok(written)
+        }
     }
 }
 
@@ -858,6 +1174,150 @@ mod tests {
             refresh_models_dev_registry(&cache, false, 2.0, || unreachable!("fresh cache"))
                 .expect("fresh answer");
         assert_eq!(returned["openai"]["name"], json!("OpenAI"));
+    }
+
+    /// The tree path the streaming read replaced: parse, normalize, index.
+    fn tree_read(text: &str) -> Option<CachedRegistry> {
+        let payload: Value = serde_json::from_str(text).ok()?;
+        let (fetched_at, providers) = normalize_cache_payload(&payload)?;
+        Some(CachedRegistry::new(fetched_at, providers))
+    }
+
+    /// The tree path the streaming fetch write replaced: parse, normalize, clone into the cache
+    /// object, write.
+    fn tree_bytes(body: &[u8], fetched_at: f64) -> Option<Vec<u8>> {
+        let payload: Value = serde_json::from_slice(body).ok()?;
+        let providers = normalize_registry_payload(&payload)?;
+        let mut cache = Map::new();
+        cache.insert("version".into(), Value::Number(1u64.into()));
+        cache.insert(
+            "fetchedAt".into(),
+            serde_json::Number::from_f64(fetched_at)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        );
+        cache.insert("providers".into(), Value::Object(providers));
+        Some(crate::js_json::write(&Value::Object(cache)))
+    }
+
+    /// Registries that exercise every normalization rule: duplicate keys at each level (the last
+    /// value at the first position), ids that move a provider onto another's id, blank and
+    /// non-string ids, non-object providers, models and model entries, array-index keys, escaped
+    /// keys and numbers JavaScript writes differently.
+    const REGISTRIES: &[&str] = &[
+        r#"{"openai":{"id":"openai","models":{"gpt-5.5":{"id":"gpt-5.5","cost":{"input":5,"output":30}}}}}"#,
+        r#"{"a":{"id":"X","models":{"m":{}}},"b":{"id":"Y","models":{"m":{"cost":{"input":1,"output":2}}}},"a":{"id":"Y","models":{"n":{"cost":{"input":3,"output":4}}}}}"#,
+        r#"{"a":{"id":" Same ","models":{"m":{"id":" M1 "}}},"b":{"id":"Same","models":{"k":{"id":"","cost":{"input":1e21,"output":-0}}}}}"#,
+        r#"{"p":{"id":7,"models":{"m":{"id":["x"],"cost":{"input":"1","output":2}}}},"q":{"id":"   ","models":{"z":1,"y":null,"x":{"id":"X"}}}}"#,
+        r#"{"p":{"models":{"m":{"id":"a"},"n":{"id":"b"},"m":5}},"q":{"models":{"m":{}},"models":[1,2]},"r":{"models":7,"models":{"m":{"id":"r"}}}}"#,
+        r#"{"10":{"models":{"2":{},"1":{}}},"2":{"id":"0","models":{"m":{}}},"x":{"id":"01","models":{"b":{},"a":{}}}}"#,
+        r#"{"e\"sc\\":{"id":"tab\there","name":"é\u0001","models":{"m\n":{"cost":{"input":9007199254740993,"output":1.5e-7,"cache_read":0.1,"cache_write":null}}}}}"#,
+        r#"{"p":"not an object","q":[{"models":{}}],"r":{"models":{}}}"#,
+        r#"{"p":{"id":"p","models":{"M":{"id":"m"},"m":{"id":"M2","cost":{"input":1,"output":1}}}}}"#,
+        r#"{}"#,
+        r#"[]"#,
+        r#""text""#,
+        r#"{"p":{"models":{"m":{}}}} trailing"#,
+        r#"{"p":{"models":{"m":{"x":1e999}}}}"#,
+        r#"{"p":{"models":{"m":{"x":"\ud800"}}}}"#,
+        r#"{"p":{"models":{"m":{}}},"#,
+    ];
+
+    fn deep(depth: usize) -> String {
+        format!(
+            r#"{{"p":{{"models":{{"m":{{"x":{}1{}}}}}}}}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+    }
+
+    #[test]
+    fn the_streaming_fetch_write_matches_the_tree_path_byte_for_byte() {
+        let deep_ok = deep(100);
+        let deep_bad = deep(200);
+        let mut cases: Vec<&[u8]> = REGISTRIES.iter().map(|r| r.as_bytes()).collect();
+        cases.push(deep_ok.as_bytes());
+        cases.push(deep_bad.as_bytes());
+        cases.push(b"{\"p\":{\"models\":{\"m\":{\"x\":\"\xff\"}}}}");
+        for case in cases {
+            for fetched_at in [NOW_MS, 1.5, f64::INFINITY] {
+                assert_eq!(
+                    stream::cache_bytes(case, fetched_at),
+                    tree_bytes(case, fetched_at),
+                    "{}",
+                    String::from_utf8_lossy(case)
+                );
+            }
+        }
+        assert!(stream::cache_bytes(deep_ok.as_bytes(), 1.0).is_some());
+        assert!(stream::cache_bytes(deep_bad.as_bytes(), 1.0).is_none());
+    }
+
+    const NOW_MS: f64 = 1_800_000_000_123.5;
+
+    #[test]
+    fn the_streaming_read_matches_the_tree_path() {
+        let mut texts = Vec::new();
+        for registry in REGISTRIES {
+            texts.push(format!(
+                r#"{{"version":1,"fetchedAt":{NOW_MS},"providers":{registry}}}"#
+            ));
+        }
+        for registry in [REGISTRIES[0], REGISTRIES[1]] {
+            for wrapper in [
+                format!(r#"{{"version":1.0,"fetchedAt":5,"providers":{registry}}}"#),
+                format!(r#"{{"version":"1","fetchedAt":5,"providers":{registry}}}"#),
+                format!(r#"{{"version":2,"fetchedAt":5,"providers":{registry}}}"#),
+                format!(r#"{{"version":1,"fetchedAt":"5","providers":{registry}}}"#),
+                format!(r#"{{"version":1,"providers":{registry}}}"#),
+                r#"{"version":1,"fetchedAt":5}"#.to_owned(),
+                format!(r#"{{"providers":[],"version":1,"fetchedAt":5,"providers":{registry}}}"#),
+                format!(r#"{{"providers":{registry},"version":1,"fetchedAt":5,"providers":7}}"#),
+                format!(
+                    r#"{{"version":3,"fetchedAt":1e400,"version":1,"fetchedAt":-0.5,"x":{{"y":[1,{{}}]}},"providers":{registry}}}"#
+                ),
+                format!(r#"[{{"version":1,"fetchedAt":5,"providers":{registry}}}]"#),
+                format!(r#"  {{"version":1,"fetchedAt":5,"providers":{registry}}}  "#),
+                format!(r#"{{"version":1,"fetchedAt":5,"providers":{registry}}}x"#),
+            ] {
+                texts.push(wrapper);
+            }
+        }
+        texts.push(format!(
+            r#"{{"version":1,"fetchedAt":5,"providers":{}}}"#,
+            deep(100)
+        ));
+        texts.push(format!(
+            r#"{{"version":1,"fetchedAt":5,"providers":{}}}"#,
+            deep(200)
+        ));
+        let mut some = 0;
+        for text in &texts {
+            let streamed = stream::read_cache(text);
+            some += usize::from(streamed.is_some());
+            assert_eq!(streamed, tree_read(text), "{text}");
+        }
+        assert!(some > 10, "the cases include usable registries ({some})");
+    }
+
+    #[test]
+    fn the_cache_write_without_the_clone_keeps_its_bytes() {
+        for registry in REGISTRIES {
+            let Some(providers) = serde_json::from_str::<Value>(registry)
+                .ok()
+                .and_then(|payload| normalize_registry_payload(&payload))
+            else {
+                continue;
+            };
+            let root = tempfile::tempdir().expect("tempdir");
+            let mut cache = RegistryCache::new(root.path().join(CACHE_FILE_NAME));
+            cache.write(&providers, NOW_MS);
+            assert_eq!(
+                Some(fs::read(cache.path()).expect("cache file")),
+                tree_bytes(registry.as_bytes(), NOW_MS),
+                "{registry}"
+            );
+        }
     }
 
     #[test]

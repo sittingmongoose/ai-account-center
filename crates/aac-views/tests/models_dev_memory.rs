@@ -57,11 +57,16 @@ fn peak<T>(run: impl FnOnce() -> T) -> (T, isize) {
 }
 
 const MIB: isize = 1 << 20;
+
+#[allow(clippy::cast_precision_loss)]
+fn mib(bytes: isize) -> f64 {
+    bytes as f64 / MIB as f64
+}
 const NOW: f64 = 1_800_000_000_000.0;
 
-/// A live-shaped models.dev cache (the real one is about 6.8 MB): 120 providers of 120 models,
-/// each with the catalog fields the live registry carries.
-fn write_cache(dir: &Path, fetched_at: f64) -> usize {
+/// A live-shaped models.dev registry (the real cache is about 6.8 MB): 120 providers of 120
+/// models, each with the catalog fields the live registry carries.
+fn registry() -> Map<String, Value> {
     let mut providers = Map::new();
     for p in 0..120 {
         let mut models = Map::new();
@@ -78,7 +83,7 @@ fn write_cache(dir: &Path, fetched_at: f64) -> usize {
                     "release_date": "2025-10-29", "last_updated": "2025-10-29",
                     "modalities": {"input": ["text"], "output": ["text"]},
                     "open_weights": true, "limit": {"context": 131072, "output": 4096},
-                    "cost": {"input": 0.15, "output": 0.6},
+                    "cost": {"input": 0.15 + f64::from(m) / 1000.0, "output": 0.6},
                 }),
             );
         }
@@ -88,12 +93,22 @@ fn write_cache(dir: &Path, fetched_at: f64) -> usize {
             json!({"id": key, "env": ["KEY"], "name": key, "models": models}),
         );
     }
+    providers
+}
+
+/// The live-shaped registry written as a cache file.
+fn write_cache(dir: &Path, fetched_at: f64) -> usize {
     let bytes = serde_json::to_vec(&json!({
-        "version": 1, "fetchedAt": fetched_at, "providers": Value::Object(providers),
+        "version": 1, "fetchedAt": fetched_at, "providers": Value::Object(registry()),
     }))
     .expect("fixture serializes");
     std::fs::write(cache_path(dir), &bytes).expect("fixture written");
     bytes.len()
+}
+
+/// The live-shaped registry as the models.dev response body.
+fn body() -> Vec<u8> {
+    serde_json::to_vec(&Value::Object(registry())).expect("fixture serializes")
 }
 
 fn no_fetch() -> Result<Fetched, ()> {
@@ -175,5 +190,109 @@ fn the_pass_refresh_keeps_the_refresh_outcomes() {
     assert_eq!(
         ensured,
         std::fs::read(cache_path(dir.path())).expect("cache file")
+    );
+}
+
+/// The peak ceiling for a step over the live-sized cache: a few copies of the text, never the
+/// tree (which is about 25 times the text).
+const CEILING: isize = 32 * MIB;
+
+#[test]
+fn the_first_read_after_start_does_not_build_the_tree() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let size = write_cache(dir.path(), NOW - 60_000.0);
+    let mut cache = RegistryCache::new(cache_path(dir.path()));
+    let (found, bytes) = peak(|| {
+        cache
+            .read(false, NOW)
+            .map(|cached| cached.provider_keys().count())
+    });
+    eprintln!(
+        "first read after start: {:.1} MiB peak ({size} byte cache)",
+        mib(bytes)
+    );
+    assert_eq!(found, Some(120));
+    assert!(
+        bytes < CEILING,
+        "the first read peaked at {} MiB",
+        bytes / MIB
+    );
+    let cached = cache.read(false, NOW).expect("resident");
+    let (_, model, rates) =
+        aac_views::pricing::models_dev::resolve_provider_model(cached, "provider-7", "MODEL-7-9")
+            .expect("priced");
+    assert_eq!(model, "model-7-9");
+    assert_eq!(rates.input_per_million, 0.15 + 9.0 / 1000.0);
+}
+
+#[test]
+fn the_read_after_a_registry_write_does_not_build_the_tree() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    write_cache(dir.path(), NOW - 2.0 * aac_views::pricing::CACHE_TTL_MS);
+    let refresh = RegistryRefresh::new(dir.path());
+    let mut cache = RegistryCache::new(cache_path(dir.path()));
+    assert!(cache.read(true, NOW).is_some(), "the memo is warm");
+    let fetched = body();
+    assert!(refresh.ensure(false, NOW, move || Ok(Fetched {
+        ok: true,
+        body: fetched
+    })));
+    let (fresh, bytes) = peak(|| cache.read(false, NOW).is_some());
+    eprintln!("read after a registry write: {:.1} MiB peak", mib(bytes));
+    assert!(fresh, "the write's fetchedAt reads fresh");
+    assert!(
+        bytes < CEILING,
+        "the read after a write peaked at {} MiB",
+        bytes / MIB
+    );
+}
+
+#[test]
+fn a_successful_fetch_and_write_does_not_build_the_tree() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    write_cache(dir.path(), NOW - 2.0 * aac_views::pricing::CACHE_TTL_MS);
+    let refresh = RegistryRefresh::new(dir.path());
+    assert!(
+        refresh
+            .cache()
+            .lock()
+            .expect("cache")
+            .read(true, NOW)
+            .is_some()
+    );
+    let fetched = body();
+    let size = fetched.len();
+    // The response body is counted: it is allocated inside the measured step, as the live
+    // fetch allocates it.
+    let (written, bytes) = peak(|| {
+        refresh.ensure(false, NOW, || {
+            Ok(Fetched {
+                ok: true,
+                body: fetched.clone(),
+            })
+        })
+    });
+    eprintln!(
+        "successful fetch and write: {:.1} MiB peak ({size} byte body)",
+        mib(bytes)
+    );
+    assert!(written);
+    assert!(
+        bytes < CEILING,
+        "the fetch and write peaked at {} MiB",
+        bytes / MIB
+    );
+    // The bytes are the ones the tree path writes.
+    let other = tempfile::tempdir().expect("temp dir");
+    let mut tree = RegistryCache::new(cache_path(other.path()));
+    let payload: Value = serde_json::from_slice(&fetched).expect("body parses");
+    tree.write(
+        &aac_views::pricing::normalize_registry_payload(&payload).expect("normalizes"),
+        NOW,
+    );
+    assert!(
+        std::fs::read(cache_path(dir.path())).expect("cache file")
+            == std::fs::read(cache_path(other.path())).expect("cache file"),
+        "the streamed cache file differs from the tree path's"
     );
 }
